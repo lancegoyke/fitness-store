@@ -1,0 +1,5 @@
+{
+    "python.pythonPath": "env/bin/python",
+    "git.ignoreLimitWarning": true,
+    "python.formatting.provider": "black"
+}
