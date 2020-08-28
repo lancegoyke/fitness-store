@@ -14,7 +14,9 @@ import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve(strict=True).parent.parent
+ROOT_DIR = Path(__file__).resolve(strict=True).parent.parent.parent
+APP_DIR = ROOT_DIR / "app"
+PROJECT_DIR = APP_DIR / "store_project"
 
 
 # Quick-start development settings - unsuitable for production
@@ -38,7 +40,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "upload",
+    "store_project.upload",
 ]
 
 MIDDLEWARE = [
@@ -51,7 +53,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = "store_project.urls"
+ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [
     {
@@ -69,7 +71,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "store_project.wsgi.application"
+WSGI_APPLICATION = "config.wsgi.application"
 
 
 # Database
@@ -78,7 +80,7 @@ WSGI_APPLICATION = "store_project.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": os.environ.get("SQL_ENGINE", "django.db.backends.sqlite3"),
-        "NAME": os.environ.get("SQL_DATABASE", BASE_DIR / "db.sqlite3"),
+        "NAME": os.environ.get("SQL_DATABASE", APP_DIR / "db.sqlite3"),
         "USER": os.environ.get("SQL_USER", "user"),
         "PASSWORD": os.environ.get("SQL_PASSWORD", "password"),
         "HOST": os.environ.get("SQL_HOST", "localhost"),
@@ -124,6 +126,6 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/3.1/howto/static-files/
 
 STATIC_URL = "/staticfiles/"
-STATIC_ROOT = BASE_DIR / "staticfiles"
+STATIC_ROOT = ROOT_DIR / "staticfiles"
 MEDIA_URL = "/mediafiles/"
-MEDIA_ROOT = BASE_DIR / "mediafiles"
+MEDIA_ROOT = ROOT_DIR / "mediafiles"

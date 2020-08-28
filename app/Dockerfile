@@ -1,5 +1,5 @@
 # pull official base image
-FROM python:3.8.3-alpine
+FROM python:3.8-alpine
 
 # set work directory
 WORKDIR /usr/src/app
@@ -14,8 +14,9 @@ RUN apk update \
 
 # install dependencies
 RUN pip install --upgrade pip
-COPY ./requirements.txt .
-RUN pip install -r requirements.txt
+COPY ./requirements/base.txt .
+COPY ./requirements/local.txt .
+RUN pip install -r local.txt
 
 # copy entrypoint.sh
 COPY ./entrypoint.sh .

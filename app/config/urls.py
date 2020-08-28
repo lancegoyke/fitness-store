@@ -18,7 +18,7 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path
 
-from upload.views import image_upload
+from store_project.upload.views import image_upload
 
 urlpatterns = [
     path("", image_upload, name="upload"),

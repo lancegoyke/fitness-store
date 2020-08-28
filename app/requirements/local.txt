@@ -1,0 +1,4 @@
+-r base.txt
+
+pylint==2.6.0
+isort==5.4.2
