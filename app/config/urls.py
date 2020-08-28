@@ -16,12 +16,13 @@ Including another URLconf
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, include
 
 from store_project.upload.views import image_upload
 
 urlpatterns = [
     path("", image_upload, name="upload"),
+    path("users/", include("store_project.users.urls")),
     path("admin/", admin.site.urls),
 ]
 
