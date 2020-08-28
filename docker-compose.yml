@@ -19,7 +19,7 @@ services:
         environment:
             - POSTGRES_USER=lance
             - POSTGRES_PASSWORD=892h4uhk4h329f4
-            - POSTGRES_DB=postgres
+            - POSTGRES_DB=store_dev
 
 volumes:
     postgres_data:
