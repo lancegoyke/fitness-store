@@ -3,3 +3,4 @@ env/
 mediafiles/
 .vscode/
 app/db.sqlite3
+staticfiles/
