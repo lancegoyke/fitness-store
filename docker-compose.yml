@@ -15,11 +15,11 @@ services:
     db:
         image: postgres:12-alpine
         volumes:
-            - postgres_data:/var/lib/postgresql/data/
+            - postgres_data_dev:/var/lib/postgresql/data/
         environment:
-            - POSTGRES_USER=lance
+            - POSTGRES_USER=lance_dev
             - POSTGRES_PASSWORD=892h4uhk4h329f4
             - POSTGRES_DB=store_dev
 
 volumes:
-    postgres_data:
+    postgres_data_dev:
