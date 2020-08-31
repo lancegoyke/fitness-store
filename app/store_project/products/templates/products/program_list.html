@@ -1,0 +1,24 @@
+<h1>Programs</h1>
+
+
+{% if user.is_superuser %}
+<a href="{% url 'admin:index' %}">Admin</a>
+{% endif %}
+
+
+<p>Here are all the programs</p>
+
+
+{% if object_list %}
+<ul>
+    {% for program in object_list %}
+    <li>
+        <a href="{% url 'products:program_detail' program.slug %}">
+            {{ program.name }}
+        </a>
+    </li>
+    {% endfor %}
+</ul>
+{% else %}
+<p>No programs!</p>
+{% endif %}

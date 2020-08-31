@@ -22,6 +22,7 @@ from store_project.upload.views import image_upload
 
 urlpatterns = [
     path("", image_upload, name="upload"),
+    path("", include("store_project.products.urls")),
     path("users/", include("store_project.users.urls")),
     path("admin/", admin.site.urls),
 ]

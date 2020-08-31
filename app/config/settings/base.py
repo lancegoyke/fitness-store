@@ -13,6 +13,10 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 import os
 from pathlib import Path
 
+# Custom Project settings
+# ------------------------------------------------------------------------------
+PRODUCT_NAME_MAX_LENGTH = 80
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 ROOT_DIR = Path(__file__).resolve(strict=True).parent.parent.parent
 APP_DIR = ROOT_DIR / "app"
@@ -40,8 +44,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Local
     "store_project.upload",
     "store_project.users.apps.UsersConfig",
+    "store_project.products.apps.ProductsConfig",
 ]
 
 MIDDLEWARE = [
