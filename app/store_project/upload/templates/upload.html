@@ -1,19 +1,20 @@
 {% extends '_base.html' %} {% block content %}
 
 <div class="content">
-  <div class="box">This is a box.</div>
-
-  <div class="box invert">This is an inverted box.</div>
-
-  <form action="{% url 'upload' %}" method="post" enctype="multipart/form-data">
-    {% csrf_token %}
-    <input type="file" name="image_file" />
-    <input type="submit" value="submit" />
-  </form>
+  <div class="box">
+    <form action="{% url 'upload' %}" method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <input type="file" name="image_file" />
+      <input type="submit" value="submit" />
+    </form>
+  </div>
 
   {% if image_url %}
-  <p>File uploaded at: <a href="{{ image_url }}">{{ image_url }}</a></p>
+  <div class="box invert">
+    <p>File uploaded at: <a href="{{ image_url }}">{{ image_url }}</a></p>
+  </div>
   {% endif %}
+
 </div>
 <!-- .content -->
 {% endblock content %}

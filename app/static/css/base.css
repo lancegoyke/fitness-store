@@ -20,6 +20,7 @@
 * {
   max-width: var(--measure);
   box-sizing: border-box;
+  margin: 0;
 }
 
 html,
@@ -59,20 +60,28 @@ h6 {
 /* 
     THE STACK
 */
-.stack {
-  --space: 1.5rem;
+.stack-page {
+  --space: 0rem;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
 }
 
-.stack > * {
+.stack-page > * {
   margin-top: 0;
   margin-bottom: 0;
 }
 
-.stack > * + * {
+.stack-page > * + * {
   margin-top: var(--space);
+}
+
+.stack-page:only-child {
+    height: 100%;
+}
+
+.stack-page > :nth-child(1) {
+    margin-bottom: auto;
 }
 
 /*
@@ -107,6 +116,69 @@ h6 {
 }
 
 /*
+    THE SIDEBAR
+*/
+.with-sidebar {
+    overflow: hidden;
+}
+
+.with-sidebar > * {
+    display: flex;
+    flex-wrap: wrap;
+    margin: calc(var(--s1) / 2 * -1);
+}
+
+.with-sidebar > * > * {
+    margin: calc(var(--s1) / 2);
+    flex-grow: 1;
+}
+
+.with-sidebar > * > :last-child {
+    flex-basis: 0;
+    flex-grow: 999;
+    min-width: calc(50% - var(--s1));
+}
+
+
+/*
+    THE CLUSTER
+*/
+.nav-cluster {
+    --space: var(--s2);
+    overflow: hidden;
+}
+
+.nav-cluster > * {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    margin: calc(var(--space) / 2);
+}
+
+.nav-cluster > * > * {
+    margin: calc(var(--space) / 2);
+}
+
+.menu-cluster {
+    --space: var(--s0);
+    overflow: hidden;
+}
+
+.menu-cluster > * {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: center;
+    margin: calc(var(--space) / 2);
+}
+
+.menu-cluster > * > * {
+    margin: calc(var(--space) / 2);
+}
+
+
+/*
     UTILITY CLASSES
 */
 .max-width\:measure {
@@ -125,11 +197,30 @@ h6 {
   background: lightcoral;
 }
 
+.nav-menu ul {
+    list-style-type: none;
+    /* margin: 0; */
+}
+
+.logo {
+    font-family: serif;
+    font-weight: 700;
+    letter-spacing: .2ch;
+}
+
 .content {
   background: lightgoldenrodyellow;
+  padding-top: var(--s1);
+  padding-bottom: var(--s1);
 }
 
 .footer {
   color: wheat;
   background: darkorchid;
+  padding-top: var(--s1);
+  padding-bottom: var(--s1);
+}
+
+.footer a {
+    color: whitesmoke;
 }

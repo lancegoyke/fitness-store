@@ -16,17 +16,28 @@
 </head>
 
 <body>
-    <div class="stack">
+    <div class="stack-page">
         <!-- THE NAVBAR -->
-        <div class="navbar">
-            <div class="center">
-                NAVBAR HERE
+        <div class="navbar nav-cluster">
+            <!-- intermediary wrapper -->
+            <div>
+                <div class="logo">
+                    Lance Fitness Store
+                </div>
+                <div class="nav-menu menu-cluster">
+                    <!-- intermediary wrapper -->
+                    <nav>
+                        <div>Menu one</div>
+                        <div>Menu two</div>
+                        <div>Menu three</div>
+                    </nav>
+                </div>
             </div>
         </div> <!-- .navbar -->
 
         <!-- THE CONTENT -->
         <div class="content">
-            <div class="center">
+            <div class="stack center">
                 {% block content %}
                 <!-- No content available -->
                 {% endblock content %}
@@ -43,16 +54,10 @@
 
                 <!-- Footer -->
                 {% block footer %}
-                <!-- No footer available -->
+                Powered by <a href="https://lancegoyke.com/">Lance Goyke</a>
                 {% endblock footer %}
             </div>
         </div> <!-- .footer -->
-
-
-
-
-
-
     </div>
 </body>
 
