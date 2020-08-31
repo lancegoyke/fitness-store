@@ -18,7 +18,7 @@ from pathlib import Path
 PRODUCT_NAME_MAX_LENGTH = 80
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-ROOT_DIR = Path(__file__).resolve(strict=True).parent.parent.parent
+ROOT_DIR = Path(__file__).resolve(strict=True).parent.parent.parent.parent
 APP_DIR = ROOT_DIR / "app"
 PROJECT_DIR = APP_DIR / "store_project"
 
@@ -65,7 +65,7 @@ ROOT_URLCONF = "config.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [PROJECT_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -133,9 +133,12 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/3.1/howto/static-files/
 
 STATIC_URL = "/staticfiles/"
-STATIC_ROOT = ROOT_DIR / "staticfiles"
+STATIC_ROOT = APP_DIR / "staticfiles"
 MEDIA_URL = "/mediafiles/"
-MEDIA_ROOT = ROOT_DIR / "mediafiles"
+MEDIA_ROOT = APP_DIR / "mediafiles"
+STATICFILES_DIRS = [
+    APP_DIR / "static",
+]
 
 
 # User Management

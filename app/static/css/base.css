@@ -1,0 +1,117 @@
+:root {
+    --measure: 60ch;
+    font-family: sans-serif;
+
+    --ratio: 1.5;
+    --s-5: calc(var(--s-4) / var(--ratio));
+    --s-4: calc(var(--s-3) / var(--ratio));
+    --s-3: calc(var(--s-2) / var(--ratio));
+    --s-2: calc(var(--s-1) / var(--ratio));
+    --s-1: calc(var(--s0) / var(--ratio));
+    --s0: 1rem;
+    --s1: calc(var(--s0) * var(--ratio));
+    --s2: calc(var(--s1) * var(--ratio));
+    --s3: calc(var(--s2) * var(--ratio));
+    --s4: calc(var(--s3) * var(--ratio));
+    --s5: calc(var(--s4) * var(--ratio));
+    line-height: 1.5;
+}
+
+* {
+    max-width: var(--measure);
+    box-sizing: border-box;
+}
+
+html,
+body,
+div,
+header,
+nav,
+main,
+footer {
+    max-width: none;
+}
+
+h1 {
+    font-size: var(--s5);
+}
+
+h2 {
+    font-size: var(--s4);
+}
+
+h3 {
+    font-size: var(--s3);
+}
+
+h4 {
+    font-size: var(--s2);
+}
+
+h5 {
+    font-size: var(--s1);
+}
+
+h6 {
+    font-size: var(--s0);
+}
+
+
+/* 
+    THE STACK
+*/
+.stack {
+    --space: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+}
+
+.stack > * {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.stack > * + * {
+    margin-top: var(--space);
+}
+
+/*
+    THE CENTER
+*/
+.center {
+    box-sizing: content-box;
+    margin-left: auto;
+    margin-right: auto;
+    max-width: var(--measure);
+}
+
+
+/*
+    UTILITY CLASSES
+*/
+.max-width\:measure {
+    max-width: var(--measure);
+}
+
+.max-width\:measure\/2 {
+    max-width: calc(var(--measure) / 2);
+}
+
+
+/*
+    CUSTOMIZING ELEMENTS
+*/
+
+.navbar {
+    background: lightcoral;
+}
+
+.content {
+    background: lightgoldenrodyellow;
+}
+
+.footer {
+    color: wheat;
+    background: darkorchid;
+}

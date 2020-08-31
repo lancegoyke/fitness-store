@@ -1,5 +1,8 @@
-<h1>Programs</h1>
+{% extends '_base.html' %}
 
+{% block content %}
+
+<h2>Programs</h2>
 
 {% if user.is_superuser %}
 <a href="{% url 'admin:index' %}">Admin</a>
@@ -22,3 +25,10 @@
 {% else %}
 <p>No programs!</p>
 {% endif %}
+
+{% endblock content %}
+
+
+{% block footer %}
+Overridden the footer
+{% endblock footer %}
