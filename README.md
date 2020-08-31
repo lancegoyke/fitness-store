@@ -11,6 +11,12 @@ I then adapted the directory structure to look more like a Two Scoops of Django 
 ## Features
 
 Current features:
+  - Easily extendable Product abstract base class for creating different products
+  - List Programs to sell in the database
+
+## Tech
+
+Current features:
   - Docker
   - Docker Compose
   - Nginx
