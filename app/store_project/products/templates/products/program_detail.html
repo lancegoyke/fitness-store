@@ -1,5 +1,14 @@
-<p><a href="{% url 'products:program_list' %}">Back to Programs</a></p>
+{% extends '_base.html' %} {% block content %}
+<p><a href="{% url 'products:program_list' %}">< Back to Programs</a></p>
 
-<h1>Program Info</h1>
+{% if program.featured_image %}
+<div class="frame">
+  <img src="{{ program.featured_image.url }}" alt="" />
+</div>
+{% endif %}
 
-<p>This here is a <strong>very</strong> special program made just for you!</p>
+<h1>{{ program.name }}</h1>
+
+<p>{{ program.description }}</p>
+
+{% autoescape off %} {{ content }} {% endautoescape %} {% endblock content %}

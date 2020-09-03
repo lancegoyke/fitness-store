@@ -1,29 +1,28 @@
-{% extends '_base.html' %}
-
-{% block content %}
+{% extends '_base.html' %} {% block content %}
 
 <h2>Programs</h2>
 
 {% if user.is_superuser %}
-<a href="{% url 'admin:index' %}">Admin</a>
-{% endif %}
-
-
-<p>Here are all the programs</p>
-
-
-{% if object_list %}
-<ul>
-    {% for program in object_list %}
-    <li>
+<a href="{% url 'admin:products_program_changelist' %}">Admin</a>
+{% endif %} {% if object_list %}
+<div class="grid">
+  {% for program in object_list %}
+  <div class="card">
+    <div class="frame">
+      <img src="{{ program.featured_image.url }}" alt="{{ program.name }}" />
+    </div>
+    <div class="box">
+      <h3>
         <a href="{% url 'products:program_detail' program.slug %}">
-            {{ program.name }}
+          {{ program.name }}
         </a>
-    </li>
-    {% endfor %}
-</ul>
+      </h3>
+      <p>{{ program.description }}</p>
+      <small>By {{ program.author.name }}</small>
+    </div>
+  </div>
+  {% endfor %}
+</div>
 {% else %}
 <p>No programs!</p>
-{% endif %}
-
-{% endblock content %}
+{% endif %} {% endblock content %}

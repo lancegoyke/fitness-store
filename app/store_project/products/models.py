@@ -8,6 +8,10 @@ from django.urls import reverse
 from django.utils.text import slugify
 from django.utils.translation import ugettext_lazy as _
 
+from markdownx.models import MarkdownxField
+
+from store_project.pages.models import Page
+
 
 class Product(models.Model):
     """An abstract base class model for creating new products."""
@@ -39,6 +43,9 @@ class Product(models.Model):
         _("Featured product image"),
         upload_to="products/images/",
         blank=True,
+    )
+    page_content = MarkdownxField(
+        _("Page content, in markdown"), default="", blank=True
     )
 
     class Meta:

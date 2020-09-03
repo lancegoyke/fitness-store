@@ -33,6 +33,10 @@ footer {
   max-width: none;
 }
 
+img {
+  max-width: 100%;
+}
+
 h1 {
   font-size: var(--s3);
 }
@@ -72,9 +76,36 @@ p {
 
 /* 
     THE STACK
+
+    Description: use with modular scale system for consistent appearance
+
+    Usage: place children inside div.stack
+
+    Ex:
+      <div class="stack">
+        <div><!-- child --></div>
+        <div><!-- child --></div>
+        <div><!-- child --></div>
+      </div>
 */
+.stack {
+  --space: var(--s1);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.stack > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.stack > * + * {
+  margin-top: var(--space);
+}
+
 .stack-page {
-  --space: 0rem;
+  --page-space: 0rem;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
@@ -86,7 +117,7 @@ p {
 }
 
 .stack-page > * + * {
-  margin-top: var(--space);
+  margin-top: var(--page-space);
 }
 
 .stack-page:only-child {
@@ -109,10 +140,23 @@ p {
 
 /*
     THE BOX
+
+    Description: the best box is one that fits the content and no more. Padding should
+    be applied evenly to all sides. Use utility class margin to get specific
+    placement.
+
+    Usage: place contents inside div.box
+
+    Ex:
+      <div class="box">
+        <!-- content here -->
+      </div>
 */
 .box {
   padding: var(--s1);
-  border: var(--border-thin) solid;
+  border: 0 solid;
+  outline: var(--border-thin) solid transparent; /* for high contrast mode */
+  outline-offset: calc(var(--border-thin) * -1);
   --color-light: #fff;
   --color-dark: #000;
   color: var(--color-dark);
@@ -124,6 +168,32 @@ p {
 }
 
 .box.invert {
+  color: var(--color-light);
+  background-color: var(--color-dark);
+}
+
+/*
+    THE CARD
+
+    Description: just a box with no padding and an outline
+
+    Usage: see above
+*/
+.card {
+  --border-thin: var(--s-5);
+  padding: 0;
+  border: var(--border-thin) solid;
+  --color-light: #fff;
+  --color-dark: #000;
+  color: var(--color-dark);
+  background-color: var(--color-light);
+}
+
+.card * {
+  color: inherit;
+}
+
+.card.invert {
   color: var(--color-light);
   background-color: var(--color-dark);
 }
@@ -187,6 +257,65 @@ p {
 
 .menu-cluster > * > * {
   margin: calc(var(--space) / 2);
+}
+
+/*
+    THE GRID
+
+    Usage: place child elements inside div.grid
+
+    Ex:
+      <div class="grid">
+        <div class="box">One</div>
+        <div class="box">Two</div>
+        <div class="box">Three</div>
+      </div>
+*/
+.grid {
+  display: grid;
+  grid-gap: var(--s0);
+}
+
+@supports (width: min(250px, 100%)) {
+  .grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr));
+  }
+}
+
+/*
+    THE FRAME
+
+    Usage: place the image or video inside a div.frame
+
+    Ex:
+      <div class="frame">
+        <img src="image.png">
+      </div>
+*/
+.frame {
+  --n: 9;
+  --d: 16;
+  padding-bottom: calc(var(--n) / var(--d) * 100%);
+  position: relative;
+}
+
+.frame > * {
+  overflow: hidden;
+  position: absolute; /* ok bc bound to frame */
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.frame > img,
+.frame > video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 /*
