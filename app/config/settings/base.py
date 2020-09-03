@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     # Local
     "store_project.upload",
     "store_project.users.apps.UsersConfig",
+    "store_project.pages.apps.PagesConfig",
     "store_project.products.apps.ProductsConfig",
 ]
 

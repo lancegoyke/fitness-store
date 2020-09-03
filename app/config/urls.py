@@ -21,10 +21,12 @@ from django.urls import path, include
 from store_project.upload.views import image_upload
 
 urlpatterns = [
-    path("", image_upload, name="upload"),
-    path("", include("store_project.products.urls")),
+    path("upload/", image_upload, name="upload"),
+    path("markdownx/", include("markdownx.urls")),
     path("users/", include("store_project.users.urls")),
     path("admin/", admin.site.urls),
+    path("", include("store_project.products.urls")),
+    path("", include("store_project.pages.urls")),
 ]
 
 if bool(settings.DEBUG):
