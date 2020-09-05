@@ -1,8 +1,14 @@
 :root {
+  /* typography */
   --measure: 60ch;
   font-family: sans-serif;
   line-height: 1.5;
 
+  /* colors */
+  --main-color-light: #fff;
+  --main-color-dark: #1d1d1d;
+
+  /* modular scale */
   --ratio: 1.5;
   --s-5: calc(var(--s-4) / var(--ratio));
   --s-4: calc(var(--s-3) / var(--ratio));
@@ -21,6 +27,7 @@
   max-width: var(--measure);
   box-sizing: border-box;
   margin: 0;
+  padding: 0;
 }
 
 html,
@@ -173,29 +180,102 @@ p {
 }
 
 /*
-    THE CARD
+    THE CARD BOX
 
-    Description: just a box with no padding and an outline
+    Description: just a BOX with no padding and an outline
 
     Usage: see above
+
+    Adapted from: 
+    * https://inclusive-components.design/cards/
+    * https://every-layout.dev/layouts/box/
 */
-.card {
+.card-box {
   --border-thin: var(--s-5);
-  padding: 0;
-  border: var(--border-thin) solid;
   --color-light: #fff;
   --color-dark: #000;
+  padding: 0;
+  border: var(--border-thin) solid;
   color: var(--color-dark);
   background-color: var(--color-light);
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--s-2);
 }
 
-.card * {
+.card-box * {
   color: inherit;
 }
 
-.card.invert {
+.card-box.invert {
   color: var(--color-light);
   background-color: var(--color-dark);
+}
+
+.card-box a {
+  text-decoration: none;
+}
+
+/* make the whole card clickable */
+.card-box a::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+/* affordance - show user that the whole card is clickable */
+.card-box:hover {
+  box-shadow: 0 0 0 var(--s-5);
+}
+
+/* a fallback for old browers */
+.card-box:focus {
+  text-decoration: underline;
+}
+
+/* add fancy outline */
+.card-box:focus-within {
+  box-shadow: 0 0 0 var(--s-5);
+}
+
+/* remove fallback style if browser is new and hip */
+.card-box:focus-within a:focus {
+  text-decoration: none;
+}
+
+/*
+    THE CARD STACK
+
+    Description: get the less important things to line up on the bottom
+*/
+.card-stack h3 {
+  margin: 0;
+}
+
+.card-stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.card-stack * {
+  margin-top: 0;
+  margin-bottom: 0;
+} 
+
+.card-stack * + * {
+  margin-top: var(--s-1);
+}
+
+.card-stack:only-child {
+  height: 100%;
+}
+
+.card-stack > :nth-child(2) {
+  margin-bottom: auto;
 }
 
 /*
@@ -224,7 +304,39 @@ p {
 
 /*
     THE CLUSTER
+
+    Description: a group of items that should stay close together
+
+    Usage: use intermediary wrapper between items and the outer div.cluster
+
+    Ex:
+      <div class="cluster">
+        <div> <!-- intermediary wrapper -->
+          <div><!-- child --></div>
+          <div><!-- child --></div>
+          <div><!-- etc --></div>
+        </div>
+      </div>
 */
+/* generic cluster */
+.cluster {
+  --space: var(--s0);
+  overflow: hidden;
+}
+
+.cluster > * {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: center;
+  margin: calc(var(--space) / 2 * -1);
+}
+
+.cluster > * > * {
+  margin: calc(var(--space) / 2);
+}
+
+/* logo and right-aligned menu */
 .nav-cluster {
   --space: var(--s2);
   overflow: hidden;
@@ -242,6 +354,7 @@ p {
   margin: calc(var(--space) / 2);
 }
 
+/* the <a> tags in nav bar */
 .menu-cluster {
   --space: var(--s0);
   overflow: hidden;
@@ -271,6 +384,10 @@ p {
         <div class="box">Three</div>
       </div>
 */
+ul.grid {
+  padding: 0;
+}
+
 .grid {
   display: grid;
   grid-gap: var(--s0);
@@ -318,6 +435,10 @@ p {
   object-fit: cover;
 }
 
+.frame > img {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 calc(100% - 1rem));
+}
+
 /*
     UTILITY CLASSES
 */
@@ -325,16 +446,36 @@ p {
   max-width: var(--measure);
 }
 
+.max-width\:measure\*2 {
+  max-width: calc(var(--measure) * 2);
+}
+
 .max-width\:measure\/2 {
   max-width: calc(var(--measure) / 2);
+}
+
+.padding\:s0 {
+  padding: var(--s0);
+}
+
+.padding\:s-1 {
+  padding: var(--s-1);
+}
+
+.padding\:s-2 {
+  padding: var(--s-2);
 }
 
 /*
     CUSTOMIZING ELEMENTS
 */
-
 .navbar {
-  background: lightcoral;
+  background-color: var(--main-color-dark);
+  color: var(--main-color-light);
+}
+
+.navbar a {
+  color: var(--main-color-light);
 }
 
 .nav-menu ul {
@@ -349,18 +490,19 @@ p {
 }
 
 .content {
-  background: lightgoldenrodyellow;
+  background-color: var(--main-color-light);
   padding-top: var(--s1);
   padding-bottom: var(--s1);
+  min-height: 66.666vh;
 }
 
 .footer {
-  color: wheat;
-  background: darkorchid;
+  color: var(--main-color-light);
+  background: var(--main-color-dark);
   padding-top: var(--s1);
   padding-bottom: var(--s1);
 }
 
 .footer a {
-  color: whitesmoke;
+  color: var(--main-color-light);
 }

@@ -1,0 +1,42 @@
+{% extends '_base.html' %}
+{% load static %}
+
+{% block content %}
+
+<div class="cluster">
+  <!-- intermediary wrapper -->
+  <p>
+    <a class="box padding:s-1" href="{% url 'products:program_list' %}">
+      < Back to Programs 
+    </a>
+    {% if user.is_superuser %}
+    <a class="box padding:s-1" href="{% url 'admin:products_program_change' program.id %}">
+      Admin
+    </a>
+    {% endif %}
+  </p>
+</div>
+
+{% if program.featured_image %}
+<div class="frame">
+  <img src="{{ program.featured_image.url }}" alt="" />
+</div>
+{% endif %}
+
+<h1>{{ program.name }}</h1>
+
+<p>{{ program.description }}</p>
+
+<p>
+  <button class="box invert" id="submitButton">Purchase!</button>
+</p>
+
+{% autoescape off %} {{ content }} {% endautoescape %}
+
+{% endblock content %}
+
+<!-- JavaScript -->
+{% block javascript %}
+<script src="{% static 'js/payments.js' %}"></script>
+<script src="https://js.stripe.com/v3/"></script>
+{% endblock javascript %}

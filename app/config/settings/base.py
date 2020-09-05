@@ -16,6 +16,7 @@ from pathlib import Path
 # Custom Project settings
 # ------------------------------------------------------------------------------
 PRODUCT_NAME_MAX_LENGTH = 80
+DOMAIN_URL = os.environ.get("DOMAIN_URL")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 ROOT_DIR = Path(__file__).resolve(strict=True).parent.parent.parent.parent
@@ -49,6 +50,7 @@ INSTALLED_APPS = [
     "store_project.users.apps.UsersConfig",
     "store_project.pages.apps.PagesConfig",
     "store_project.products.apps.ProductsConfig",
+    "store_project.payments.apps.PaymentsConfig",
 ]
 
 MIDDLEWARE = [
@@ -145,3 +147,9 @@ STATICFILES_DIRS = [
 # User Management
 
 AUTH_USER_MODEL = "users.User"
+
+
+# Payments
+
+STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY")
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")

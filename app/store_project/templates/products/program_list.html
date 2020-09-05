@@ -1,13 +1,17 @@
-{% extends '_base.html' %} {% block content %}
+{% extends '_base_wide.html' %}
+
+{% block content %}
 
 <h2>Programs</h2>
 
 {% if user.is_superuser %}
 <a href="{% url 'admin:products_program_changelist' %}">Admin</a>
-{% endif %} {% if object_list %}
-<div class="grid">
+{% endif %}
+
+{% if object_list %}
+<ul class="grid max-width:measure*2">
   {% for program in object_list %}
-  <div class="card">
+  <li class="card-box card-stack">
     <div class="frame">
       <img src="{{ program.featured_image.url }}" alt="{{ program.name }}" />
     </div>
@@ -18,11 +22,14 @@
         </a>
       </h3>
       <p>{{ program.description }}</p>
+    </div>
+    <div class="box">
       <small>By {{ program.author.name }}</small>
     </div>
-  </div>
+  </li>
   {% endfor %}
-</div>
+</ul>
 {% else %}
 <p>No programs!</p>
-{% endif %} {% endblock content %}
+{% endif %}
+{% endblock content %}
