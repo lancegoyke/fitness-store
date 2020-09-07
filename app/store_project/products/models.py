@@ -3,6 +3,7 @@ import uuid
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.urls import reverse
 from django.utils.text import slugify
@@ -86,23 +87,46 @@ class Product(LifecycleModelMixin, models.Model):
         Update changed product info in Stripe.
         """
         stripe.api_key = settings.STRIPE_SECRET_KEY
-        stripe.Product.modify(
-            sid=str(self.id),
-            name=self.name,
-            description=self.description,
-        )
+        try:
+            stripe.Product.modify(
+                sid=str(self.id),
+                name=self.name,
+                description=self.description,
+            )
+        except:
+            stripe.Product.create(
+                id=self.id, name=self.name, description=self.description, type="good"
+            )
+            stripe.Price.create(
+                unit_amount_decimal=self.price * 100,
+                currency="usd",
+                product=self.id,
+                lookup_key="current",
+            )
 
     @hook(AFTER_UPDATE, when="price", has_changed=True)
     def update_price_in_stripe(self):
         stripe.api_key = settings.STRIPE_SECRET_KEY
         # stripe.Price.modify()
-        stripe.Price.create(
-            unit_amount_decimal=self.price * 100,
-            currency="usd",
-            product=self.id,
-            lookup_key="current",
-            transfer_lookup_key=True,
-        )
+        try:
+            stripe.Price.create(
+                unit_amount_decimal=self.price * 100,
+                currency="usd",
+                product=self.id,
+                lookup_key="current",
+                transfer_lookup_key=True,
+            )
+        except:
+            stripe.Product.create(
+                id=self.id, name=self.name, description=self.description, type="good"
+            )
+            stripe.Price.create(
+                unit_amount_decimal=self.price * 100,
+                currency="usd",
+                product=self.id,
+                lookup_key="current",
+                transfer_lookup_key=True,
+            )
 
     @hook(AFTER_DELETE)
     def delete_product_and_price_in_stripe(self):
@@ -119,6 +143,20 @@ class Program(Product):
     """A model for creating new programs. Extend Product model base functionality."""
 
     # equipment = models.ManyToManyField(Equipment, verbose_name=_("Required equipment"))
+    duration = models.IntegerField(
+        _("Number of weeks"),
+        default=None,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+    )
+    frequency = models.IntegerField(
+        _("Training sessions per week"),
+        default=None,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+    )
     program_file = models.FileField(_("File containing program"), null=True, blank=True)
 
     def get_absolute_url(self):
