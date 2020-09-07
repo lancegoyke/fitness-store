@@ -8,12 +8,20 @@ from django.urls import reverse
 from django.utils.text import slugify
 from django.utils.translation import ugettext_lazy as _
 
+from django_lifecycle import (
+    AFTER_CREATE,
+    AFTER_DELETE,
+    AFTER_UPDATE,
+    hook,
+    LifecycleModelMixin,
+)
 from markdownx.models import MarkdownxField
+import stripe
 
 from store_project.pages.models import Page
 
 
-class Product(models.Model):
+class Product(LifecycleModelMixin, models.Model):
     """An abstract base class model for creating new products."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -30,6 +38,7 @@ class Product(models.Model):
     description = models.CharField(
         _("Short description of product"), blank=True, max_length=255
     )
+    price = models.DecimalField(_("Price"), default=0, max_digits=10, decimal_places=2)
     views = models.PositiveIntegerField(_("Number of times viewed"), default=0)
     created = models.DateTimeField(_("Time created"), auto_now_add=True)
     modified = models.DateTimeField(_("Time last modified"), auto_now=True)
@@ -53,6 +62,57 @@ class Product(models.Model):
 
     def __str__(self):
         return self.name
+
+    @hook(AFTER_CREATE)
+    def add_product_to_stripe(self):
+        """
+        Send basic product info to Stripe account.
+        """
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        stripe.Product.create(
+            id=self.id, name=self.name, description=self.description, type="good"
+        )
+        stripe.Price.create(
+            unit_amount_decimal=self.price * 100,
+            currency="usd",
+            product=self.id,
+            lookup_key="current",
+        )
+
+    @hook(AFTER_UPDATE, when="name", has_changed=True)
+    @hook(AFTER_UPDATE, when="description", has_changed=True)
+    def update_product_in_stripe(self):
+        """
+        Update changed product info in Stripe.
+        """
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        stripe.Product.modify(
+            sid=str(self.id),
+            name=self.name,
+            description=self.description,
+        )
+
+    @hook(AFTER_UPDATE, when="price", has_changed=True)
+    def update_price_in_stripe(self):
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        # stripe.Price.modify()
+        stripe.Price.create(
+            unit_amount_decimal=self.price * 100,
+            currency="usd",
+            product=self.id,
+            lookup_key="current",
+            transfer_lookup_key=True,
+        )
+
+    @hook(AFTER_DELETE)
+    def delete_product_and_price_in_stripe(self):
+        """
+        Mark Product and Price as inactive in Stripe. Keeping the item around
+        in case it is needed in the future.
+        """
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        stripe.Product.modify(sid=str(self.id), active=False)
+        stripe.Price.modify(sid=str(self.id), active=False)
 
 
 class Program(Product):
