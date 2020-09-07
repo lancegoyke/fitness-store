@@ -18,6 +18,11 @@ def stripe_config(request):
 
 @csrf_exempt
 def create_checkout_session(request):
+    """
+    A Checkout Session is the programmatic representation of what your
+    customer sees when they’re redirected to the payment form.
+    Src: https://stripe.com/docs/payments/checkout/accept-a-payment#create-a-checkout-session
+    """
     if request.method == "GET":
         domain_url = settings.DOMAIN_URL + "payments/"
         stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -33,7 +38,9 @@ def create_checkout_session(request):
             # ?session_id={CHECKOUT_SESSION_ID} means the redirect will have the session ID set as a query param
             checkout_session = stripe.checkout.Session.create(
                 # Set client_reference_id to identify the user making the purchase
-                # client_reference_id = request.user.id if request.user.is_authenticated else
+                client_reference_id=request.user.id
+                if request.user.is_authenticated
+                else None,
                 success_url=domain_url + "success?session_id={CHECKOUT_SESSION_ID}",
                 cancel_url=domain_url + "cancelled/",
                 payment_method_types=["card"],
@@ -73,14 +80,30 @@ def stripe_webhook(request):
 
     # Handle the checkout.session.completed event
     if event["type"] == "checkout.session.completed":
-        print("[payments.views.stripe_webook] Payment was successful.")
+        print("[payments.views.stripe_webhook] Payment was successful.")
         # TODO: run some custom code here
+        # create an order in the database
+        # give customer account permissions for purchased product
+        # send customer a success email
 
     return HttpResponse(status=200)
 
 
 class SuccessView(TemplateView):
     template_name = "payments/success.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        session_id = self.request.GET.get("session_id", "")
+        line_items = stripe.checkout.Session.list_line_items(session_id)  # dict
+        context["products"] = []
+        context["amount"] = ""
+        for product in line_items.data:
+            context["products"].append(product.description)  # return str
+            amount = float(product.amount_total / 100)
+            context["amount"] = f"{amount:.2f}"  # return in USD
+        return context
 
 
 class CancellationView(TemplateView):

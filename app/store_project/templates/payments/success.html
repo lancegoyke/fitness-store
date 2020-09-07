@@ -1,4 +1,15 @@
 {% extends '_base.html' %} {% block content %}
 <h2>Payment Successful</h2>
 <p>This is most wonderful news!</p>
+
+<h3>Line Items</h3>
+{% for product in products %}
+<p>
+    {{ product }}
+</p>
+
+<p><strong>
+    Total: ${{ amount }} USD
+</strong></p>
+{% endfor %}
 {% endblock content %}
