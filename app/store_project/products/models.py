@@ -22,6 +22,18 @@ import stripe
 from store_project.pages.models import Page
 
 
+class Category(models.Model):
+    name = models.CharField(max_length=30)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Category"
+        verbose_name_plural = "Categories"
+
+    def __str__(self):
+        return self.name
+
+
 class Product(LifecycleModelMixin, models.Model):
     """An abstract base class model for creating new products."""
 
@@ -60,6 +72,7 @@ class Product(LifecycleModelMixin, models.Model):
 
     class Meta:
         abstract = True
+        ordering = ["-created"]
 
     def __str__(self):
         return self.name
@@ -157,6 +170,7 @@ class Program(Product):
         blank=True,
         validators=[MinValueValidator(0)],
     )
+    categories = models.ManyToManyField(Category)
     program_file = models.FileField(_("File containing program"), null=True, blank=True)
 
     def get_absolute_url(self):
