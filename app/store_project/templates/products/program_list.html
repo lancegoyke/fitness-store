@@ -15,18 +15,21 @@
     <div class="frame">
       <img src="{{ program.featured_image.url }}" alt="{{ program.name }}" />
     </div>
-    <div class="box">
+    <div class="box stack">
       <h3>
         <a href="{% url 'products:program_detail' program.slug %}">
           {{ program.name }}
         </a>
       </h3>
       <p>{{ program.description }}</p>
-      <p>{{ program.duration }} weeks</p>
-      <p>{{ program.frequency }} workouts/week</p>
     </div>
-    <div class="box">
-      <small>By {{ program.author.name }}</small>
+    <div class="box space-between">
+      <div class="small">
+        <span class="tag price">${{ program.price|floatformat:"0" }}</span>
+      </div>
+      <div class="small font-size:small">
+        <span>By {{ program.author.name }}</span>
+      </div>
     </div>
   </li>
   {% endfor %}

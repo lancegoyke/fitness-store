@@ -40,6 +40,10 @@ footer {
   max-width: none;
 }
 
+button {
+  cursor: pointer;
+}
+
 img {
   max-width: 100%;
 }
@@ -261,12 +265,12 @@ p {
   justify-content: flex-start;
 }
 
-.card-stack * {
+.card-stack > * {
   margin-top: 0;
   margin-bottom: 0;
 } 
 
-.card-stack * + * {
+.card-stack > * + * {
   margin-top: var(--s-1);
 }
 
@@ -440,6 +444,26 @@ ul.grid {
 }
 
 /*
+    THE TAG
+
+    Description: small text with a fun color background
+
+    Usage: just wrap in span.tag
+*/
+.tag {
+  color: var(--main-color-light);
+  background-color: var(--main-color-dark);
+  padding: var(--s-5) var(--s-3);
+  border-radius: var(--s0);
+  font-size: var(--s-1);
+}
+
+.tag.price {
+  --main-color-money: #5f9341;
+  background-color: var(--main-color-money);
+}
+
+/*
     UTILITY CLASSES
 */
 .max-width\:measure {
@@ -464,6 +488,16 @@ ul.grid {
 
 .padding\:s-2 {
   padding: var(--s-2);
+}
+
+.space-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.font-size\:small {
+  font-size: var(--s-1);
 }
 
 /*
