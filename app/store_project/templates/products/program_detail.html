@@ -1,4 +1,4 @@
-{% extends '_base.html' %}
+{% extends '_base_wide.html' %}
 {% load static %}
 
 {% block content %}
@@ -17,21 +17,42 @@
   </p>
 </div>
 
-{% if program.featured_image %}
-<div class="frame">
-  <img src="{{ program.featured_image.url }}" alt="" />
+<div class="product-switcher">
+  <div class="box"> <!-- intermediary wrapper -->
+    <div>
+      <div class="frame portrait">
+      {% if program.featured_image %}
+        <img src="{{ program.featured_image.url }}" alt="" />
+      {% else %}
+        <img style="background-color: var(--main-color-dark);">
+      {% endif %}
+      </div>
+    </div>
+    <div class="stack">
+      <div>
+        <h1>{{ program.name }}</h1>
+        <div class="cluster">
+          <div> <!-- intermediary wrapper -->
+            <div class="money">${{ program.price|floatformat }}</div>
+            <div class="tag duration">{{ program.duration }} weeks</div>
+            <div class="tag frequency">{{ program.frequency }} days/wk</div>
+          </div>
+        </div>
+      </div>
+
+
+      <p>{{ program.description }}</p>
+
+      <p>
+        <button class="box purchase" id="submitButton">Purchase!</button>
+      </p>
+    </div>
+  </div>
 </div>
-{% endif %}
 
-<h1>{{ program.name }}</h1>
-
-<p>{{ program.description }}</p>
-
-<p>
-  <button class="box invert" id="submitButton">Purchase!</button>
-</p>
-
-{% autoescape off %} {{ content }} {% endautoescape %}
+<div class="center">
+  {% autoescape off %} {{ content }} {% endautoescape %}
+</div>
 
 {% endblock content %}
 

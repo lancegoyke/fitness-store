@@ -12,8 +12,13 @@
 <ul class="grid max-width:measure*2">
   {% for program in object_list %}
   <li class="card-box card-stack">
-    <div class="frame">
-      <img src="{{ program.featured_image.url }}" alt="{{ program.name }}" />
+    <div class="frame landscape">
+      
+      {% if program.featured_image %}
+        <img src="{{ program.featured_image.url }}" alt="{{ program.name }}" />
+      {% else %}
+        <img style="background-color: var(--main-color-dark);">
+      {% endif %}
     </div>
     <div class="box stack">
       <h3>

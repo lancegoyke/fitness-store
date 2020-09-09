@@ -37,6 +37,20 @@ class Category(models.Model):
 class Product(LifecycleModelMixin, models.Model):
     """An abstract base class model for creating new products."""
 
+    PUBLIC = "pb"
+    PRIVATE = "pr"
+    DRAFT = "dr"
+    STATUS_CHOICES = [
+        (PUBLIC, "Public"),
+        (PRIVATE, "Private"),
+        (DRAFT, "Draft"),
+    ]
+    status = models.CharField(
+        max_length=2,
+        choices=STATUS_CHOICES,
+        default=DRAFT,
+    )
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(
         _("Name of product"), max_length=settings.PRODUCT_NAME_MAX_LENGTH
@@ -77,6 +91,9 @@ class Product(LifecycleModelMixin, models.Model):
     def __str__(self):
         return self.name
 
+    def is_public(self):
+        return self.status in {self.PUBLIC}
+
     @hook(AFTER_CREATE)
     def add_product_to_stripe(self):
         """
@@ -84,13 +101,15 @@ class Product(LifecycleModelMixin, models.Model):
         """
         stripe.api_key = settings.STRIPE_SECRET_KEY
         stripe.Product.create(
-            id=self.id, name=self.name, description=self.description, type="good"
+            id=self.id,
+            name=self.name,
+            description=self.description,
+            type="good",
         )
         stripe.Price.create(
             unit_amount_decimal=self.price * 100,
             currency="usd",
             product=self.id,
-            lookup_key="current",
         )
 
     @hook(AFTER_UPDATE, when="name", has_changed=True)
@@ -108,13 +127,15 @@ class Product(LifecycleModelMixin, models.Model):
             )
         except:
             stripe.Product.create(
-                id=self.id, name=self.name, description=self.description, type="good"
+                id=self.id,
+                name=self.name,
+                description=self.description,
+                type="good",
             )
             stripe.Price.create(
                 unit_amount_decimal=self.price * 100,
                 currency="usd",
                 product=self.id,
-                lookup_key="current",
             )
 
     @hook(AFTER_UPDATE, when="price", has_changed=True)
@@ -126,8 +147,6 @@ class Product(LifecycleModelMixin, models.Model):
                 unit_amount_decimal=self.price * 100,
                 currency="usd",
                 product=self.id,
-                lookup_key="current",
-                transfer_lookup_key=True,
             )
         except:
             stripe.Product.create(
@@ -137,8 +156,6 @@ class Product(LifecycleModelMixin, models.Model):
                 unit_amount_decimal=self.price * 100,
                 currency="usd",
                 product=self.id,
-                lookup_key="current",
-                transfer_lookup_key=True,
             )
 
     @hook(AFTER_DELETE)

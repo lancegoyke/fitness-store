@@ -7,6 +7,10 @@
   /* colors */
   --main-color-light: #fff;
   --main-color-dark: #1d1d1d;
+  --main-color-light-gray: #1d1d1d8c;
+  --main-color-dark-gray: #1d1d1de0;
+  --main-color-money: #5f9341;
+  --main-color-accent: #31759d;
 
   /* modular scale */
   --ratio: 1.5;
@@ -181,6 +185,15 @@ p {
 .box.invert {
   color: var(--color-light);
   background-color: var(--color-dark);
+}
+
+.box.purchase {
+  letter-spacing: 0.2ch;
+  font-family: monospace;
+  font-size: var(--s0);
+  font-weight: 700;
+  color: var(--main-color-light);
+  background-color: var(--main-color-accent);
 }
 
 /*
@@ -377,6 +390,78 @@ p {
 }
 
 /*
+    THE SIDEBAR
+
+    Description: Sidebar has suggested width, main content adapts width until
+    it becomes too thin to tolerate.
+    
+    Usage: div.with-sidebar, intemediary wrapper, then side bar and non-sidebar 
+    as children
+
+    Ex: 
+    <div class="with-sidebar">
+      <div> <!-- intermediary wrapper -->
+        <div><!-- sidebar --></div>
+        <div><!-- non-sidebar --></div>
+      </div>
+    </div>
+*/
+.with-sidebar {
+  overflow: hidden;
+}
+
+.with-sidebar > * {
+  display: flex;
+  flex-wrap: wrap;
+  margin: calc(var(--s5) / 2 * -1);
+}
+
+.with-sidebar > * > * {
+  margin: calc(var(--s5) / 2);
+  flex-basis: 40vw;
+  flex-grow: 1;
+}
+
+.with-sidebar > * > :last-child {
+  flex-basis: 0;
+  flex-grow: 999;
+  min-width: calc(50% - var(--s5));
+}
+
+/*
+    THE SWITCHER
+
+    Description: switch between horizontal and vertical layouts
+    
+    Usage: use intermediary wrapper between div.product-switcher and child elements
+
+    Ex:
+      <div class="product-switcher">
+        <div> <!-- intermediary wrapper -->
+          <div><!-- child element --></div>
+          <div><!-- another child element --></div>
+          <div><!-- etc --></div>
+        </div>
+      </div>
+*/
+.product-switcher > * {
+  display: flex;
+  flex-wrap: wrap;
+  margin: calc((var(--s3) / 2) * -1);
+}
+
+.product-switcher > * > * {
+  flex-grow: 1;
+  flex-basis: calc((var(--measure) - (100% - var(--s3))) * 999);
+  margin: calc(var(--s3) / 2);
+}
+
+.product-switcher > * > :nth-last-child(n+3),
+.product-switcher > * > :nth-last-child(n+3) ~ * {
+  flex-basis: 100%;
+}
+
+/*
     THE GRID
 
     Usage: place child elements inside div.grid
@@ -406,16 +491,32 @@ ul.grid {
 /*
     THE FRAME
 
-    Usage: place the image or video inside a div.frame
+    Usage: place the image or video inside a div.frame. Must be used in
+    conjunction with a size declaration, such as .landscape or .portrait.
 
     Ex:
       <div class="frame">
         <img src="image.png">
       </div>
 */
-.frame {
+.landscape.frame {
   --n: 9;
   --d: 16;
+}
+
+.movie.frame {
+  --n: 9;
+  --d: 24;
+}
+
+.portrait.frame {
+  --n: 4;
+  --d: 3;
+}
+
+.frame {
+  /* --n: 9; */
+  /* --d: 16; */
   padding-bottom: calc(var(--n) / var(--d) * 100%);
   position: relative;
 }
@@ -459,8 +560,15 @@ ul.grid {
 }
 
 .tag.price {
-  --main-color-money: #5f9341;
   background-color: var(--main-color-money);
+}
+
+.tag.duration {
+  background-color: var(--main-color-dark-gray);
+}
+
+.tag.frequency {
+  background-color: var(--main-color-dark-gray);
 }
 
 /*
@@ -498,6 +606,11 @@ ul.grid {
 
 .font-size\:small {
   font-size: var(--s-1);
+}
+
+.money {
+  color: var(--main-color-money);
+  font-weight: 700;
 }
 
 /*

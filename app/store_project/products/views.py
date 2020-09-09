@@ -10,6 +10,7 @@ from .models import Program
 
 class ProgramListView(ListView):
     model = Program
+    queryset = Program.objects.filter(status=Program.PUBLIC)
 
 
 class ProgramDetailView(DetailView):
