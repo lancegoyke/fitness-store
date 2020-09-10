@@ -2,14 +2,13 @@
 <h2>Payment Successful</h2>
 <p>This is most wonderful news!</p>
 
-<h3>Line Items</h3>
 {% for product in products %}
-<p>
-    {{ product }}
-</p>
+<h3>{{ product }}</h3>
 
 <p><strong>
     Total: ${{ amount }} USD
 </strong></p>
+
+<a class="box invert" href="{{ product.program_file }}">Click here to retrieve your program</a>
 {% endfor %}
 {% endblock content %}
