@@ -14,3 +14,4 @@ django-markdownx==3.0.1
 Markdown==3.2.2
 stripe==2.51.0
 django-lifecycle==0.7.7
+django-allauth==0.42.0

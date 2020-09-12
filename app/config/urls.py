@@ -23,9 +23,10 @@ from store_project.upload.views import image_upload
 urlpatterns = [
     path("upload/", image_upload, name="upload"),
     path("markdownx/", include("markdownx.urls")),
-    path("users/", include("store_project.users.urls")),
     path("admin/", admin.site.urls),
     path("payments/", include("store_project.payments.urls")),
+    path("users/", include("store_project.users.urls")),
+    path("accounts/", include("allauth.urls")),
     path("", include("store_project.products.urls")),
     path("", include("store_project.pages.urls")),
 ]

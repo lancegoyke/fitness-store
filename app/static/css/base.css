@@ -1,8 +1,6 @@
 :root {
   /* typography */
   --measure: 60ch;
-  font-family: sans-serif;
-  line-height: 1.5;
 
   /* colors */
   --main-color-light: #fff;
@@ -11,6 +9,8 @@
   --main-color-dark-gray: #1d1d1de0;
   --main-color-money: #5f9341;
   --main-color-accent: #31759d;
+  --google-blue: #4c8bf5;
+  --facebook-blue: #1877F2;
 
   /* modular scale */
   --ratio: 1.5;
@@ -32,8 +32,13 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  font-family: sans-serif;
+  line-height: 1.5;
+  font-size: 16px;
 }
 
+a,
+button,
 html,
 body,
 div,
@@ -194,6 +199,25 @@ p {
   font-weight: 700;
   color: var(--main-color-light);
   background-color: var(--main-color-accent);
+}
+
+.box.login {
+  padding: var(--s-2);
+  text-align: center;
+  border-radius: var(--s-2);
+  border: var(--s-5) solid;
+  text-decoration: none;
+}
+
+.box.login.facebook {
+  color: var(--main-color-light);
+  background-color: var(--facebook-blue);
+}
+
+.box.login.google {
+  color: var(--google-blue);
+  background-color: var(--main-color-light);
+  border-radius: var(--s-2);
 }
 
 /*
