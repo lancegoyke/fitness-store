@@ -4,37 +4,48 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{% block head_title %}{% endblock %} | Lance Fitness Store</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block head_title %}{% endblock %} | Lance Fitness Store</title>
 
-    <!-- CSS -->
-    <link rel="stylesheet" href="{% static 'css/base.css' %}" />
-    {% block header %}
-    <!-- No extra header code included -->
-    {% endblock header %}
+  <!-- CSS -->
+  <link rel="stylesheet" href="{% static 'css/base.css' %}" />
+  {% block header %}
+  <!-- No extra header code included -->
+  {% endblock header %}
 </head>
 
 <body>
 
-{% include 'nav.html' %}
+  {% include 'nav.html' %}
 
-<!-- THE CONTENT -->
-<div class="box content">
-  <div class="stack center">
-    {% block content %}
-    <!-- No content available -->
-    {% endblock content %}
+  <!-- THE CONTENT -->
+  <div class="box content">
+    <div class="stack center">
+      {% if messages %}
+        <div>
+          <strong>Messages:</strong>
+          <ul>
+            {% for message in messages %}
+            <li>{{message}}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {% block content %}
+      <!-- No content available -->
+      {% endblock content %}
+    </div>
   </div>
-</div>
-<!-- .content -->
+  <!-- .content -->
 
-{% include 'footer.html' %}
+  {% include 'footer.html' %}
 
-<!-- JavaScript -->
-{% block javascript %}
-<!-- No JavaScript available -->
-{% endblock javascript %}
+  <!-- JavaScript -->
+  {% block javascript %}
+  <!-- No JavaScript available -->
+  {% endblock javascript %}
 
 </div>
 </body>
