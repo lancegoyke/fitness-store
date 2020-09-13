@@ -1,13 +1,13 @@
-{% extends 'account/_base.html' %}
+{% extends '_base.html' %}
 
 {% load i18n %}
+{% load static %}
 {% load account socialaccount %}
 
 {% block content %}
 
 <h1>Login</h1>
 
-{% providers_media_js %}
 <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" %}">Login with Facebook</a>
 <a class="box login google" id="google" href="{% provider_login_url "google" %}">Sign in with Google</a>
 <button class="box login email" id="email" onclick="showForm()">Sign in with Email</button>
@@ -25,14 +25,6 @@
 {% endblock content %}
 
 {% block javascript %}
-<script>
-  function showForm() {
-    let x = document.getElementById("email-form");
-    if (x.style.display === "none") {
-      x.style.display = "block";
-    } else {
-      x.style.display = "none";
-    }
-  }
-</script>
+{% providers_media_js %}
+<script src="{% static 'js/showForm.js' %}"></script>
 {% endblock javascript %}
