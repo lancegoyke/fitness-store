@@ -5,7 +5,7 @@
   /* colors */
   --main-color-light: #fff;
   --main-color-dark: #1d1d1d;
-  --main-color-light-gray: #1d1d1d8c;
+  --main-color-light-gray: #eee;
   --main-color-dark-gray: #1d1d1de0;
   --main-color-money: #5f9341;
   --main-color-accent: #31759d;
@@ -25,6 +25,8 @@
   --s3: calc(var(--s2) * var(--ratio));
   --s4: calc(var(--s3) * var(--ratio));
   --s5: calc(var(--s4) * var(--ratio));
+
+  --stack-space: var(--s1);
 }
 
 * {
@@ -61,8 +63,8 @@ button,
   border: 0 solid;
   outline: var(--border-thin) solid transparent; /* for high contrast mode */
   outline-offset: calc(var(--border-thin) * -1);
-  color: var(--main-color-light);
-  background-color: var(--main-color-dark);
+  color: var(--main-color-light-gray);
+  background-color: var(--main-color-dark-gray);
 }
 
 img {
@@ -71,6 +73,35 @@ img {
 
 ul {
   padding: revert;
+}
+
+/*
+    FORMS
+*/
+input[type="radio"] {
+  color: var(--main-color-accent);
+  font-size: var(--s4);
+}
+
+fieldset {
+  border: none;
+}
+
+.stack-form fieldset {
+  margin-top: 0;
+  padding: var(--s1);
+  border: var(--s-5) solid var(--main-color-dark-gray);
+}
+
+/* make sure .stack-form doesn't combine with .box padding */
+.stack-form fieldset div:first-of-type {
+  margin-top: 0;
+}
+
+legend {
+  background: var(--main-color-dark-gray);
+  color: var(--main-color-light-gray);
+  padding: var(--s-3);
 }
 
 
@@ -114,6 +145,10 @@ p {
   margin-bottom: var(--s0);
 }
 
+a {
+  color: var(--main-color-accent);
+}
+
 /* 
     THE STACK
 
@@ -129,7 +164,6 @@ p {
       </div>
 */
 .stack {
-  --space: var(--s1);
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
@@ -141,7 +175,22 @@ p {
 }
 
 .stack > * + * {
-  margin-top: var(--space);
+  margin-top: var(--stack-space);
+}
+
+.stack-form {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.stack-form * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.stack-form * + * {
+  margin-top: var(--stack-space);
 }
 
 .stack-page {
