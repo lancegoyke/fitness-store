@@ -49,8 +49,20 @@ footer {
   max-width: none;
 }
 
-button {
+/*
+    THE BUTTON
+
+    Based off of THE BOX
+*/
+button,
+.button {
   cursor: pointer;
+  padding: var(--s-2);
+  border: 0 solid;
+  outline: var(--border-thin) solid transparent; /* for high contrast mode */
+  outline-offset: calc(var(--border-thin) * -1);
+  color: var(--main-color-light);
+  background-color: var(--main-color-dark);
 }
 
 img {
@@ -61,6 +73,10 @@ ul {
   padding: revert;
 }
 
+
+/*
+    TYPOGRAPHY
+*/
 h1 {
   font-size: var(--s3);
 }
