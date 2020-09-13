@@ -187,7 +187,7 @@ p {
   background-color: var(--color-light);
 }
 
-.box * {
+.box > * {
   color: inherit;
 }
 
@@ -666,8 +666,7 @@ ul.grid {
 
 .content {
   background-color: var(--main-color-light);
-  padding-top: var(--s1);
-  padding-bottom: var(--s1);
+  padding: var(--s1);
   min-height: 66.666vh;
 }
 
