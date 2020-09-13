@@ -11,6 +11,14 @@
           <div>
             <a href="{% url 'products:program_list' %}">Programs</a>
           </div>
+          
+          {% if user.is_authenticated %}
+            <a href="{% url 'account_logout' %}">Logout</a>
+          {% else %}
+            <a href="{% url 'account_login' %}">Login</a>
+            <a href="{% url 'account_signup' %}">Signup</a>
+          {% endif %}
+            
         </nav>
       </div>
     </div>
