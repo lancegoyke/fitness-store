@@ -57,6 +57,10 @@ img {
   max-width: 100%;
 }
 
+ul {
+  padding: revert;
+}
+
 h1 {
   font-size: var(--s3);
 }
