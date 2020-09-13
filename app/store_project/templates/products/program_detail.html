@@ -1,5 +1,8 @@
 {% extends '_base_wide.html' %}
-{% load static %}
+
+{% load static i18n %}
+
+{% block head_title %}{% trans program.name %}{% endblock head_title %}
 
 {% block content %}
 
