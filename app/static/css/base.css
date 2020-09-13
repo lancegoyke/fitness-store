@@ -134,21 +134,15 @@ h6 {
   font-size: var(--s-2);
 }
 
-h2,
-h3,
-h4,
-h5,
-h6 {
-  margin-top: var(--s1);
-  margin-bottom: var(--s-3);
-}
-
-p {
-  margin-bottom: var(--s0);
-}
-
 a {
   color: var(--main-color-accent);
+}
+
+/*
+    TYPOGRAPHY EXCEPTIONS
+*/
+.product-switcher h1 {
+  text-align: unset;
 }
 
 /* 
