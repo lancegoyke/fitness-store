@@ -22,3 +22,6 @@ INTERNAL_IPS += [".".join(ip.split(".")[:-1] + ["1"]) for ip in ips]
 
 # https://docs.djangoproject.com/en/dev/ref/settings/#test-runner
 TEST_RUNNER = "django.test.runner.DiscoverRunner"
+
+# Email
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
