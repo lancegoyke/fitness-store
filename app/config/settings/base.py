@@ -150,12 +150,6 @@ STATICFILES_DIRS = [
     APP_DIR / "static",
 ]
 
-
-# Email
-
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-
-
 # User Management
 
 SITE_ID = 1

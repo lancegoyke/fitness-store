@@ -170,7 +170,8 @@ class Product(LifecycleModelMixin, models.Model):
 
 
 class Program(Product):
-    """A model for creating new programs. Extend Product model base functionality."""
+    """A model for creating new programs. Extend Product model base
+    functionality."""
 
     # equipment = models.ManyToManyField(Equipment, verbose_name=_("Required equipment"))
     duration = models.IntegerField(
