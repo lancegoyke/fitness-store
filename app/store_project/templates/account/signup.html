@@ -11,17 +11,29 @@
 
 <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" %}">Continue with Facebook</a>
 <a class="box login google" id="google" href="{% provider_login_url "google" %}">Sign up with Google</a>
-<button class="box login email" id="email" onclick="showForm()">Sign up with Email</button>
 
-<form class="login" id="email-form" method="POST" action="{% url 'account_login' %}" style="display: none;">
-  {% csrf_token %}
-  {{ form.as_p }}
-  {% if redirect_field_value %}
-  <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
-  {% endif %}
-  <a class="button secondaryAction" href="{% url 'account_reset_password' %}">{% trans "Forgot Password?" %}</a>
-  <button class="primaryAction" type="submit">{% trans "Sign Up" %}</button>
-</form>
+<div class="or-separator">
+  <div></div>
+  <i>or</i>
+  <div></div>
+</div>
+
+<div class="stack-login-form">
+  <h2 class="text-center font-size:smallish">Sign up with Email</h2>
+  <form class="login center" id="email-form" method="POST" action="{% url 'account_login' %}">
+    {% csrf_token %}
+    {{ form.as_p }}
+    {% if redirect_field_value %}
+    <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
+    {% endif %}
+    <p>
+      <a class="secondaryAction" href="{% url 'account_reset_password' %}">{% trans "Forgot Password?" %}</a>
+    </p>
+    <p>
+      <button class="primaryAction" type="submit">{% trans "Sign Up" %}</button>
+    </p>
+  </form>
+</div>
 
 {% endblock content %}
 
