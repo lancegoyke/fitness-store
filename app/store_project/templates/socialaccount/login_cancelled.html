@@ -1,4 +1,4 @@
-{% extends "socialaccount/base.html" %}
+{% extends "_base.html" %}
 
 {% load i18n %}
 
@@ -10,6 +10,6 @@
 
 {% url 'account_login' as login_url %}
 
-<p>{% blocktrans %}You decided to cancel logging in to our site using one of your existing accounts. If this was a mistake, please proceed to <a href="{{login_url}}">sign in</a>.{% endblocktrans %}</p>
+<p>{% blocktrans %}Logging in to our site using one of your existing social accounts has been cancelled. If this was a mistake, please proceed to <a href="{{login_url}}">sign in</a>.{% endblocktrans %}</p>
 
 {% endblock %}
