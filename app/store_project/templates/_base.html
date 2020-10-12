@@ -23,11 +23,10 @@
   <div class="content">
     <div class="stack center">
       {% if messages %}
-        <div>
-          <strong>Messages:</strong>
+        <div class="messages">
           <ul>
             {% for message in messages %}
-            <li>{{message}}</li>
+            <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
             {% endfor %}
           </ul>
         </div>

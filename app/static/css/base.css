@@ -11,6 +11,11 @@
   --main-color-accent: #31759d;
   --google-blue: #4c8bf5;
   --facebook-blue: #1877F2;
+  --debug: #ddccff;
+  --info: #cceeff;
+  --success: #ccffdd;
+  --warning: #ffddcc;
+  --error: #ffcccc;
 
   /* modular scale */
   --ratio: 1.5;
@@ -721,6 +726,27 @@ ul.grid {
   font-weight: 700;
 }
 
+.debug {
+  background-color: var(--debug);
+}
+
+.info {
+  background-color: var(--info);
+}
+
+.success {
+  background-color: var(--success);
+}
+
+.warning {
+  background-color: var(--warning);
+}
+
+.error {
+  background-color: var(--error);
+}
+
+
 /*
     CUSTOMIZING ELEMENTS
 */
@@ -776,4 +802,17 @@ ul.grid {
 .footer a:active {
   color: var(--main-color-dark);
   background-color: var(--main-color-light-gray);
+}
+
+.messages ul {
+  list-style-type: none;
+  padding: 0;
+}
+
+.messages li {
+  margin-bottom: var(--s1);
+}
+
+.messages li:last-child {
+  margin-bottom: 0;
 }
