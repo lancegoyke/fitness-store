@@ -2,32 +2,58 @@
 
 {% load i18n %}
 {% load static account socialaccount %}
+{% get_providers as socialaccount_providers %}
 
 {% block head_title %}{% trans "Login" %}{% endblock head_title %}
+
+{% block header %}
+  <meta name="google-signin-client_id" content="739106151618-nvu2uigcvc2rmc5n0esia8doc42ialfo.apps.googleusercontent.com.apps.googleusercontent.com">
+{% endblock header %}
 
 {% block content %}
 
   <h1>{% trans "Login" %}</h1>
 
-  <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" %}">Login with Facebook</a>
-  <a class="box login google" id="google" href="{% provider_login_url "google" %}">Sign in with Google</a>
-  <button class="box login email" id="email" onclick="showForm()">Sign in with Email</button>
+  <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" %}">
+    <h2>
+      Login with Facebook
+    </h2>
+  </a>
 
-  <form class="login" id="email-form" method="POST" action="{% url 'account_login' %}" style="display: none;">
-    {% csrf_token %}
-    {{ form.as_p }}
-    {% if redirect_field_value %}
-    <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
-    {% endif %}
-    <a class="button secondaryAction" href="{% url 'account_reset_password' %}">{% trans "Forgot Password?" %}</a>
-    <button class="primaryAction" type="submit">{% trans "Sign In" %}</button>
-  </form>
+  <a class="box login google" id="google" href="{% provider_login_url "google" %}">
+    <h2>
+      Sign in with Google
+    </h2>
+  </a>
+  
+  <div class="or-separator">
+    <div></div>
+    <i>or</i>
+    <div></div>
+  </div>
+
+  <div class="stack-login-form">
+    <h2 class="text-center font-size:smallish">Sign in with Email</h2>
+    <form class="login center" id="email-form" method="POST" action="{% url 'account_login' %}">
+      {% csrf_token %}
+      {{ form.as_p }}
+      {% if redirect_field_value %}
+      <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
+      {% endif %}
+      <p>
+        <a class="secondaryAction" href="{% url 'account_reset_password' %}">{% trans "Forgot Password?" %}</a>
+      </p>
+      <p>
+        <button class="primaryAction" type="submit">{% trans "Sign In" %}</button>
+      </p>
+    </form>
+  </div>
 
 {% endblock content %}
 
 {% block javascript %}
 
   {% providers_media_js %}
-  <script src="{% static 'js/showForm.js' %}"></script>
+  {% comment %} <script src="{% static 'js/showForm.js' %}"></script> {% endcomment %}
 
 {% endblock javascript %}

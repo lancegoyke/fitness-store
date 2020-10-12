@@ -58,6 +58,23 @@ footer {
   max-width: none;
 }
 
+input {
+  padding: var(--s-1);
+  border: var(--border-thin) solid;
+  color: var(--main-color-dark-gray);
+  background-color: var(--main-color-light);
+  box-shadow: 2px 3px var(--main-color-dark-gray);
+}
+
+input * {
+  color: inherit;
+}
+
+input.invert {
+  color: var(--color-light);
+  background-color: var(--color-dark);
+}
+
 /*
     THE BUTTON
 
@@ -71,12 +88,14 @@ button,
   outline: var(--border-thin) solid transparent; /* for high contrast mode */
   outline-offset: calc(var(--border-thin) * -1);
   color: var(--main-color-light-gray);
-  background-color: var(--main-color-dark-gray);
+  background-color: var(--main-color-dark);
+  box-shadow: 2px 3px var(--main-color-dark-gray)
 }
 
 button:hover,
 button:focus {
-  box-shadow: 0 0 0 10px var(--main-color-dark);
+  /* box-shadow: 0 0 0 10px var(--main-color-dark); */
+  text-decoration: underline;
 }
 
 img {
@@ -193,6 +212,21 @@ a:active {
   margin-top: var(--stack-space);
 }
 
+.stack-login-form {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.stack-login-form * {
+  margin-top: 0;
+  margin-bottom: 0;
+} 
+
+.stack-login-form * + * {
+  margin-top: var(--s-1);
+}
+
 .stack-form {
   display: flex;
   flex-direction: column;
@@ -287,20 +321,52 @@ a:active {
 .box.login {
   padding: var(--s-2);
   text-align: center;
-  border-radius: var(--s-2);
-  border: var(--s-5) solid;
+  border: var(--s-5) solid var(--main-color-dark-gray);
   text-decoration: none;
+  box-shadow: 3px 2px var(--main-color-dark-gray);
+}
+
+.box.login h2 {
+  font-size: unset;
+  font-weight: unset;
+}
+
+a.box.login:hover,
+a.box.login:focus {
+  color: unset;
+  background-color: unset;
+  text-decoration: underline;
+}
+
+a.box.login:active {
+  opacity: 0.8;
+}
+
+.or-separator {
+  display: flex;
+  align-items: center;
+}
+
+.or-separator i {
+  padding: 3px;
+  font-size: 18px;
+  color: #6f6f6f;
+}
+
+.or-separator > div {
+  flex: 1;
+  height: 1px;
+  background-color: #cac7c7;
 }
 
 .box.login.facebook {
-  color: var(--main-color-light);
-  background-color: var(--facebook-blue);
+  /* color: var(--facebook-blue); */
+  /* background-color: var(--facebook-blue); */
 }
 
 .box.login.google {
-  color: var(--google-blue);
-  background-color: var(--main-color-light);
-  border-radius: var(--s-2);
+  /* color: var(--google-blue); */
+  /* background-color: var(--main-color-light); */
 }
 
 /*
@@ -717,8 +783,16 @@ ul.grid {
   align-items: baseline;
 }
 
+.font-size\:smallish {
+  font-size: var(--s1);
+}
+
 .font-size\:small {
   font-size: var(--s-1);
+}
+
+.text-center {
+  text-align: center;
 }
 
 .money {
