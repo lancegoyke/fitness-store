@@ -156,6 +156,7 @@ SITE_ID = 1
 AUTH_USER_MODEL = "users.User"
 ACCOUNT_LOGOUT_REDIRECT_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "/accounts/email/"
+ACCOUNT_USER_DISPLAY = "store_project.users.display.get_email"
 ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 ACCOUNT_EMAIL_REQUIRED = True
 ACCOUNT_USERNAME_REQUIRED = False
