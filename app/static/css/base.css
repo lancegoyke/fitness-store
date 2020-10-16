@@ -109,6 +109,7 @@ ul {
 /*
     FORMS
 */
+
 input[type="radio"] {
   color: var(--main-color-accent);
   font-size: var(--s4);
@@ -212,19 +213,38 @@ a:active {
   margin-top: var(--stack-space);
 }
 
-.stack-login-form {
+.stack-all {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
 }
 
-.stack-login-form * {
+.stack-all * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.stack-all * + * {
+  margin-top: var(--stack-space);
+}
+
+.stack-auth-form {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.stack-auth-form * {
   margin-top: 0;
   margin-bottom: 0;
 } 
 
-.stack-login-form * + * {
-  margin-top: var(--s-1);
+.stack-auth-form * + * {
+  margin-top: var(--s-5);
+}
+
+.stack-auth-form > form > * + * {
+  margin-top: var(--s1);
 }
 
 .stack-form {
@@ -289,7 +309,8 @@ a:active {
         <!-- content here -->
       </div>
 */
-.box {
+.box,
+.errorlist li {
   padding: var(--s1);
   border: 0 solid;
   outline: var(--border-thin) solid transparent; /* for high contrast mode */
@@ -300,8 +321,13 @@ a:active {
   background-color: var(--color-light);
 }
 
-.box > * {
+.box > *,
+.errorlist li > * {
   color: inherit;
+}
+
+.errorlist li {
+  background-color: var(--error);
 }
 
 .box.invert {
@@ -889,4 +915,8 @@ ul.grid {
 
 .messages li:last-child {
   margin-bottom: 0;
+}
+
+.messages .errorlist {
+  background-color: var(--error);
 }

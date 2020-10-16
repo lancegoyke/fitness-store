@@ -32,11 +32,41 @@
     <div></div>
   </div>
 
-  <div class="stack-login-form">
-    <h2 class="text-center font-size:smallish">Sign in with Email</h2>
+  <div class="stack-auth-form">
+    <h2 class="text-center font-size:smallish">Sign in with email</h2>
     <form class="login center" id="email-form" method="POST" action="{% url 'account_login' %}">
       {% csrf_token %}
-      {{ form.as_p }}
+      
+      <div class="messages">
+        {{ form.non_field_errors }}
+      </div>
+
+      <p>
+        <label class="stack" for="{{ form.login.id_for_label }}">
+          <span>Email</span>
+          {{ form.login }}
+          {{ form.login.errors }}
+        </label>
+      </p>
+
+      <p>
+        <label class="stack" for="{{ form.password.id_for_label }}">
+          <span>Password</span>
+          {{ form.password }}
+          {{ form.password.errors }}
+        </label>
+      </p>
+
+      <p>
+        <label for="{{ form.remember.id_for_label }}">
+          {{ form.remember }}
+          <span>Remember me?</span>
+          {{ form.remember.errors }}
+        </label>
+      </p>
+
+
+
       {% if redirect_field_value %}
       <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
       {% endif %}
