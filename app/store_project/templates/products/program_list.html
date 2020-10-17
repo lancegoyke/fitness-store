@@ -9,7 +9,9 @@
 <h1>Programs</h1>
 
 {% if user.is_superuser %}
-<a href="{% url 'admin:products_program_changelist' %}">Admin</a>
+<p>
+  <a class="button" href="{% url 'admin:products_program_changelist' %}">Admin</a>
+</p>
 {% endif %}
 
 {% if object_list %}

@@ -83,6 +83,7 @@ input.invert {
 button,
 .button {
   display: inline-block;
+  text-decoration: none;
   cursor: pointer;
   padding: var(--s-2);
   border: 0 solid;
@@ -94,7 +95,9 @@ button,
 }
 
 button:hover,
-button:focus {
+button:focus,
+.button:hover,
+.button:focus {
   /* box-shadow: 0 0 0 10px var(--main-color-dark); */
   text-decoration: underline;
 }
