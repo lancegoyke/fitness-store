@@ -10,6 +10,8 @@ from django.views.generic.base import TemplateView
 
 import stripe
 
+from store_project.products.models import Program
+
 
 def login_before_purchase(request, product_slug):
     if request.method == "GET":
@@ -37,6 +39,7 @@ def create_checkout_session(request):
     if request.method == "GET":
         domain_url = settings.DOMAIN_URL + "payments/"
         stripe.api_key = settings.STRIPE_SECRET_KEY
+        program = Program.objects.get(slug=request.GET.get("program-slug"))
 
         try:
             # Create a new Checkout Session for the order
@@ -48,21 +51,33 @@ def create_checkout_session(request):
             # For full details see https://stripe.com/docs/api/checkout/sessions/create
 
             # ?session_id={CHECKOUT_SESSION_ID} means the redirect will have the session ID set as a query param
+            print(f"[PRINT] {program.featured_image.url}")
             checkout_session = stripe.checkout.Session.create(
-                # Set client_reference_id to identify the user making the purchase
-                client_reference_id=request.user.id
-                if request.user.is_authenticated
-                else None,
+                customer_email=request.user.email,
+                client_reference_id=request.user.id,
                 success_url=domain_url + "success?session_id={CHECKOUT_SESSION_ID}",
-                cancel_url=domain_url + "cancelled/",
+                cancel_url=domain_url + "cancellation/",
                 payment_method_types=["card"],
                 mode="payment",
                 line_items=[
                     {
-                        "name": "Program",
+                        # "name": f"{program.name}",
+                        # "quantity": 1,
+                        # "currency": "usd",
+                        # "amount": f"{int(program.price*100)}",
+                        "price_data": {
+                            "currency": "usd",
+                            "unit_amount": f"{int(program.price*100)}",
+                            "product_data": {
+                                "name": f"{program.name}",
+                                # This needs to be disabled until media files are no longer local
+                                # "images": [f"{program.featured_image.url}"],
+                                "images": [
+                                    "https://lancegoyke.com/wp-content/uploads/2020/07/adult-architecture-athlete-boardwalk-221210-676x483.jpg",
+                                ],
+                            },
+                        },
                         "quantity": 1,
-                        "currency": "usd",
-                        "amount": "1000",
                     }
                 ],
             )

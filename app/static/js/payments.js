@@ -12,9 +12,13 @@ fetch("/payments/config/")
     const stripe = Stripe(data.publicKey);
 
     // Event handler
-    document.querySelector("#submitButton").addEventListener("click", () => {
+    const button = document.querySelector("#submitButton");
+    
+    button.addEventListener("click", () => {
       // Get Checkout Session ID
-      fetch("/payments/create-checkout-session/")
+      const url = `/payments/create-checkout-session/?program-slug=${button.dataset.programSlug}`;
+
+      fetch(url)
         .then((result) => {
           return result.json();
         })
