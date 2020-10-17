@@ -1,4 +1,11 @@
-{% extends '_base.html' %} {% block content %}
+{% extends '_base.html' %}
+
+{% load i18n %}
+
+{% block head_title %}{% trans "Payment Cancelled" %}{% endblock head_title %}
+
+{% block content %}
 <h2>Payment Cancelled</h2>
 <p>It's okay. I, too, have problems with commitment.</p>
+<p><a class="button" href="{% url 'products:program_list' %}">Return to store</a></p>
 {% endblock content %}
