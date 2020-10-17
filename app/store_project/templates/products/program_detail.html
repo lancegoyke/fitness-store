@@ -47,7 +47,14 @@
       <p>{{ program.description }}</p>
 
       <p>
-        <button class="box purchase" id="submitButton">Purchase!</button>
+        
+        {% if user.is_authenticated %}
+          <button class="box purchase" id="submitButton">Purchase!</button>
+        {% else %}
+          {% comment %} <a class="button box purchase" href="{% url 'account_login' %}?next={{ request.path }}">Purchase!</a> {% endcomment %}
+          <a class="button box purchase" href="{% url 'payments:login_to_purchase' product_slug=program.slug %}">Purchase!</a>
+        {% endif %}
+          
       </p>
     </div>
   </div>

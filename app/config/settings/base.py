@@ -154,6 +154,7 @@ STATICFILES_DIRS = [
 
 SITE_ID = 1
 AUTH_USER_MODEL = "users.User"
+LOGIN_URL = "/accounts/login/"
 ACCOUNT_LOGOUT_REDIRECT_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "/accounts/email/"
 ACCOUNT_USER_DISPLAY = "store_project.users.display.get_email"

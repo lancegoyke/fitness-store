@@ -1,11 +1,22 @@
 import os
 
 from django.conf import settings
+from django.contrib import messages
 from django.http.response import HttpResponse, JsonResponse
+from django.shortcuts import redirect
+from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic.base import TemplateView
 
 import stripe
+
+
+def login_before_purchase(request, product_slug):
+    if request.method == "GET":
+        messages.error(request, "You must be logged in to purchase.")
+        return redirect(
+            f"{settings.LOGIN_URL}?next={reverse('products:program_detail', args=[product_slug])}"
+        )
 
 
 @csrf_exempt
@@ -26,6 +37,7 @@ def create_checkout_session(request):
     if request.method == "GET":
         domain_url = settings.DOMAIN_URL + "payments/"
         stripe.api_key = settings.STRIPE_SECRET_KEY
+
         try:
             # Create a new Checkout Session for the order
             # Other optional params include:
