@@ -49,10 +49,19 @@
       <p>
         
         {% if user.is_authenticated %}
-          <button class="box purchase" id="submitButton">Purchase!</button>
+          <button
+            class="box purchase"
+            id="submitButton"
+            data-program-slug="{{ program.slug }}">
+              Purchase!
+          </button>
         {% else %}
           {% comment %} <a class="button box purchase" href="{% url 'account_login' %}?next={{ request.path }}">Purchase!</a> {% endcomment %}
-          <a class="button box purchase" href="{% url 'payments:login_to_purchase' product_slug=program.slug %}">Purchase!</a>
+          <a
+            class="button box purchase"
+            href="{% url 'payments:login_to_purchase' product_slug=program.slug %}">
+            Purchase!
+          </a>
         {% endif %}
           
       </p>
