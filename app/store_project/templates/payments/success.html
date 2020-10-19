@@ -1,14 +1,27 @@
-{% extends '_base.html' %} {% block content %}
-<h2>Payment Successful</h2>
-<p>This is most wonderful news!</p>
+{% extends '_base.html' %}
+
+{% load i18n static %}
+
+{% block head_title %}{% trans "Payment Successful" %}{% endblock head_title %}
+
+{% block content %}
+<h2>{% trans "Payment Successful" %}</h2>
 
 {% for product in products %}
 <h3>{{ product }}</h3>
 
 <p><strong>
-    Total: ${{ amount }} USD
+    {% trans "Total" %}: ${{ amount }} USD
 </strong></p>
 
-<a class="box invert" href="{{ product.program_file }}">Click here to retrieve your program</a>
+<a class="box invert download" href="{{ product.program_file }}">
+  <span class="with-icon font-size:biggish">
+    <svg class="icon" xmlns="http://www.w3.org/2000/svg" height="0.75rem" viewBox="0 0 24 24" width="0.75rem" stroke="none" fill="currentColor">
+      <path d="M0 0h24v24H0V0z" fill="none"/>
+      <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+    </svg>
+    {% trans "Download Program" %}
+  </span>
+</a>
 {% endfor %}
 {% endblock content %}

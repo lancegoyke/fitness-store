@@ -58,6 +58,10 @@ footer {
   max-width: none;
 }
 
+span {
+  font-size: 1em;
+}
+
 input {
   padding: var(--s-1);
   border: var(--border-thin) solid;
@@ -337,6 +341,10 @@ a:active {
 .box.invert {
   color: var(--color-light);
   background-color: var(--color-dark);
+}
+
+.box.invert.download:hover {
+  background: repeating-linear-gradient(-45deg, var(--color-dark), var(--color-dark) 5px, var(--main-color-dark) 5px, var(--main-color-dark) 10px);
 }
 
 .box.purchase {
@@ -754,6 +762,36 @@ ul.grid {
 }
 
 /*
+    THE ICON
+
+    Description: proper sizing and spacing for icons
+
+    Usage: 
+    <span class="with-icon">
+      <svg class="icon">
+        <use href="/path/to/icons.svg#my-icon"></use>
+      </svg>
+      Download
+    </span>
+*/
+.icon {
+  width: 0.75em;
+  width: 1cap;
+  height: 0.75em;
+  height: 1cap;
+}
+
+.with-icon {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.with-icon .icon {
+  margin-inline-end: 1rem;
+  font-size: 100%;
+}
+
+/*
     THE TAG
 
     Description: small text with a fun color background
@@ -811,6 +849,14 @@ ul.grid {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+}
+
+.font-size\:big {
+  font-size: var(--s3);
+}
+
+.font-size\:biggish {
+  font-size: var(--s2);
 }
 
 .font-size\:smallish {
