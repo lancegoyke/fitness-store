@@ -5,7 +5,23 @@ from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import DetailView, RedirectView, UpdateView
 
+from store_project.products.models import Program
+
 User = get_user_model()
+
+
+class UserProfileView(LoginRequiredMixin, DetailView):
+    model = User
+    template_name = "users/profile.html"
+    extra_context = {
+        "programs": Program.objects.all(),
+    }
+
+    def get_object(self):
+        return User.objects.get(username=self.request.user.username)
+
+
+user_profile_view = UserProfileView.as_view()
 
 
 class UserDetailView(LoginRequiredMixin, DetailView):

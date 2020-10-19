@@ -3,6 +3,8 @@ import uuid
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.models import ContentType
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.urls import reverse
@@ -198,3 +200,28 @@ class Program(Product):
             str: URL for product detail.
         """
         return reverse("products:program_detail", kwargs={"slug": self.slug})
+
+    @hook(AFTER_CREATE)
+    def add_program_permission(self):
+        """
+        Create a permission for users who have access to this program and add it
+        to the "comped" group.
+        """
+        permission = Permission.objects.create(
+            codename=f"can_view_{self.slug}",
+            name=f"Can view {self.name}",
+            content_type=ContentType.objects.get_for_model(Program),
+        )
+        comped_group = Group.objects.get(name="comped")
+        comped_group.permissions.add(permission)
+
+    @hook(AFTER_DELETE)
+    def remove_program_permission(self):
+        """
+        Remove the can_view_{program.slug} permission for associated program.
+        """
+        permission = Permission.objects.get(
+            codename=f"can_view_{self.slug}",
+            name=f"Can view {self.name}",
+            content_type=ContentType.objects.get_for_model(Program),
+        ).delete()

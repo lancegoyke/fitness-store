@@ -1,0 +1,31 @@
+{% extends '_base.html' %}
+
+{% load i18n products_extras %}
+
+{% block head_title %}{% trans "User Profile" %}{% endblock head_title %}
+
+{% block content %}
+
+<h1>Account</h1>
+
+<p>
+    Email: {{ user.email }}
+</p>
+
+<h2>Programs</h2>
+
+<ul>
+    {% for program in programs %}
+    <li>
+        {{ program }}
+        
+        {% with "products.can_view_"|concat:program.slug as can_view_program %}
+            {% if can_view_program in perms %}
+                <a href="{{ program.program_file }}">LINK</a>
+            {% endif %}
+        {% endwith %}
+    </li>
+    {% endfor %}
+</ul>
+
+{% endblock content %}
