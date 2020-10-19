@@ -1,6 +1,6 @@
 {% extends '_base_wide.html' %}
 
-{% load i18n %}
+{% load i18n products_extras %}
 
 {% block head_title %}{% trans "Programs" %}{% endblock head_title %}
 
@@ -36,7 +36,15 @@
     </div>
     <div class="box space-between">
       <div class="small">
-        <span class="tag price">${{ program.price|floatformat:"0" }}</span>
+        
+        {% with "products.can_view_"|concat:program.slug as can_view_program %}
+          {% if can_view_program in perms %}
+            <span class="tag">Owned</span>
+          {% else %}
+            <span class="tag price">${{ program.price|floatformat:"0" }}</span>
+          {% endif %}
+        {% endwith %}
+
       </div>
       <div class="small font-size:small">
         <span>By {{ program.author.name }}</span>
