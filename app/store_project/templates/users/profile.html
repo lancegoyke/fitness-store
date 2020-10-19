@@ -9,23 +9,25 @@
 <h1>Account</h1>
 
 <p>
-    Email: {{ user.email }}
+  Email: {{ user.email }}
 </p>
 
 <h2>Programs</h2>
 
 <ul>
-    {% for program in programs %}
-    <li>
-        {{ program }}
-        
-        {% with "products.can_view_"|concat:program.slug as can_view_program %}
-            {% if can_view_program in perms %}
-                <a href="{{ program.program_file }}">LINK</a>
-            {% endif %}
-        {% endwith %}
-    </li>
-    {% endfor %}
+  {% for program in programs %}
+  <li>
+    {{ program }}
+    
+    {% with "products.can_view_"|concat:program.slug as can_view_program %}
+      {% if can_view_program in perms %}
+        <a href="{{ program.program_file }}">
+          {% trans "[Download]" %}
+        </a>
+      {% endif %}
+    {% endwith %}
+  </li>
+  {% endfor %}
 </ul>
 
 {% endblock content %}
