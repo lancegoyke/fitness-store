@@ -1,4 +1,5 @@
 import itertools
+import logging
 import uuid
 
 from django.conf import settings
@@ -22,6 +23,9 @@ from markdownx.models import MarkdownxField
 import stripe
 
 from store_project.pages.models import Page
+
+
+logger = logging.getLogger(__name__)
 
 
 class Category(models.Model):
@@ -102,17 +106,19 @@ class Product(LifecycleModelMixin, models.Model):
         Send basic product info to Stripe account.
         """
         stripe.api_key = settings.STRIPE_SECRET_KEY
-        stripe.Product.create(
+        product = stripe.Product.create(
             id=self.id,
             name=self.name,
             description=self.description,
             type="good",
         )
-        stripe.Price.create(
+        price = stripe.Price.create(
             unit_amount_decimal=self.price * 100,
             currency="usd",
             product=self.id,
         )
+        logger.info(f"Product {product} added to Stripe.")
+        logger.info(f"Price {price} added to Stripe.")
 
     @hook(AFTER_UPDATE, when="name", has_changed=True)
     @hook(AFTER_UPDATE, when="description", has_changed=True)
@@ -127,7 +133,10 @@ class Product(LifecycleModelMixin, models.Model):
                 name=self.name,
                 description=self.description,
             )
-        except:
+        except stripe.error.InvalidRequestError as e:
+            logger.error("ERROR: Product could not be modified.")
+            logger.error("ERROR: Creating Product and Price instead.")
+            logger.error(f"ERROR: {e}")
             stripe.Product.create(
                 id=self.id,
                 name=self.name,
@@ -150,7 +159,10 @@ class Product(LifecycleModelMixin, models.Model):
                 currency="usd",
                 product=self.id,
             )
-        except:
+        except stripe.error.InvalidRequestError as e:
+            logger.error("ERROR: Price could not be modified.")
+            logger.error("ERROR: Creating Product and Price instead.")
+            logger.error(f"ERROR: {e}")
             stripe.Product.create(
                 id=self.id, name=self.name, description=self.description, type="good"
             )
@@ -167,8 +179,10 @@ class Product(LifecycleModelMixin, models.Model):
         in case it is needed in the future.
         """
         stripe.api_key = settings.STRIPE_SECRET_KEY
-        stripe.Product.modify(sid=str(self.id), active=False)
-        stripe.Price.modify(sid=str(self.id), active=False)
+        product = stripe.Product.modify(sid=str(self.id), active=False)
+        price = stripe.Price.modify(sid=str(self.id), active=False)
+        logger.info(f"Product {product} has been marked inactive in Stripe.")
+        logger.info(f"Price {price} has been marked inactive in Stripe.")
 
 
 class Program(Product):
@@ -212,8 +226,10 @@ class Program(Product):
             name=f"Can view {self.name}",
             content_type=ContentType.objects.get_for_model(Program),
         )
+        logger.info(f"Permission {permission} created.")
         comped_group = Group.objects.get(name="comped")
         comped_group.permissions.add(permission)
+        logger.info(f"Permission {permission} added to comped_group.")
 
     @hook(AFTER_DELETE)
     def remove_program_permission(self):
@@ -225,3 +241,4 @@ class Program(Product):
             name=f"Can view {self.name}",
             content_type=ContentType.objects.get_for_model(Program),
         ).delete()
+        logger.info(f"Permission {permission} deleted.")
