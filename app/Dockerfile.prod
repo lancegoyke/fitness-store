@@ -14,10 +14,9 @@ ENV PYTHONUNBUFFERED 1
 
 # install psycopg2 dependencies
 RUN apk update \
-    && apk add postgresql-dev gcc python3-dev musl-dev
-
-# install Pillow dependencies
-RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev
+    && apk add postgresql-dev gcc python3-dev musl-dev\
+    # install Pillow dependencies
+    && apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev
 
 # lint
 RUN pip install --upgrade pip
@@ -40,13 +39,14 @@ FROM python:3.8-alpine
 
 # create directory for the app user
 RUN mkdir -p /home/app
+RUN mkdir -p /home/app/web
 
 # create the app user
 RUN addgroup -S app && adduser -S app -G app
 
 # create the appropriate directories
 ENV HOME=/home/app
-ENV APP_HOME=/home/app/web
+ENV APP_HOME=/home/app/web/app
 RUN mkdir $APP_HOME
 RUN mkdir $APP_HOME/staticfiles
 RUN mkdir $APP_HOME/mediafiles
@@ -54,6 +54,8 @@ WORKDIR $APP_HOME
 
 # install dependencies
 RUN apk update && apk add libpq
+# install Pillow dependencies
+RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/base.txt .
 COPY --from=builder /usr/src/app/production.txt .
@@ -72,4 +74,4 @@ RUN chown -R app:app $APP_HOME
 USER app
 
 # run entrypoint.prod.sh
-ENTRYPOINT ["/home/app/web/entrypoint.prod.sh"]
+ENTRYPOINT ["/home/app/web/app/entrypoint.prod.sh"]
