@@ -1,12 +1,14 @@
+import socket
+
 from .base import *  # noqa
 
 # ALLOWED_HOSTS in .env.dev
 
-INSTALLED_APPS += [
+INSTALLED_APPS += [  # noqa F405
     "debug_toolbar",
 ]
 
-MIDDLEWARE += [
+MIDDLEWARE += [  # noqa F405
     "debug_toolbar.middleware.DebugToolbarMiddleware",
 ]
 
@@ -14,8 +16,6 @@ INTERNAL_IPS = [
     "127.0.0.1",
 ]
 
-# and since we're using Docker
-import socket
 
 hostname, _, ips = socket.gethostbyname_ex(socket.gethostname())
 INTERNAL_IPS += [".".join(ip.split(".")[:-1] + ["1"]) for ip in ips]
