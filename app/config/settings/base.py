@@ -17,6 +17,12 @@ from pathlib import Path
 # ------------------------------------------------------------------------------
 PRODUCT_NAME_MAX_LENGTH = 80
 DOMAIN_URL = os.environ.get("DOMAIN_URL")
+ADMINS = [
+    ("Lance Goyke", "lance@lancegoyke.com"),
+]
+DEFAULT_FROM_EMAIL = "Lance Goyke <lance@lancegoyke.com>"
+MANAGERS = ADMINS
+SERVER_EMAIL = "Webmaster <lance@lancegoyke.com>"
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 ROOT_DIR = Path(__file__).resolve(strict=True).parent.parent.parent.parent
@@ -58,6 +64,7 @@ INSTALLED_APPS = [
     "store_project.pages.apps.PagesConfig",
     "store_project.products.apps.ProductsConfig",
     "store_project.payments.apps.PaymentsConfig",
+    "store_project.marketing.apps.MarketingConfig",
 ]
 
 MIDDLEWARE = [

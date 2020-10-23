@@ -2,4 +2,4 @@
 
 gunicorn==20.0.4
 boto3==1.16.1
-django-ses==1.0.3
+django-ses[bounce]==1.0.3
