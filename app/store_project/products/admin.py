@@ -10,13 +10,16 @@ class ProgramAdmin(admin.ModelAdmin):
         "name",
         "created",
         "views",
+        "status",
     ]
     prepopulated_fields = {"slug": ("name",)}
     ordering = [
         "-created",
     ]
     actions = [
-        "make_public",
+        # Disabled because bulk updates don't trigger django-lifecycle
+        # AFTER_SAVE marketing emails.
+        # "make_public",
         "make_draft",
         "make_private",
     ]
