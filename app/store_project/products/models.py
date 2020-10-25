@@ -227,7 +227,7 @@ class Program(Product):
             content_type=ContentType.objects.get_for_model(Program),
         )
         logger.info(f"Permission {permission} created.")
-        comped_group = Group.objects.get(name="comped")
+        comped_group, created = Group.objects.get_or_create(name="comped")
         comped_group.permissions.add(permission)
         logger.info(f"Permission {permission} added to comped_group.")
 
