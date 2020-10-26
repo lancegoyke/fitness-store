@@ -544,6 +544,36 @@ a.box.login:active {
 }
 
 /*
+    THE FORM SIDEBAR
+*/
+
+.form-with-sidebar {
+  overflow: hidden;
+}
+
+.form-with-sidebar > * {
+  display: flex;
+  flex-wrap: wrap;
+  margin: calc(0px / 2 * -1);
+}
+
+.form-with-sidebar > * > * {
+  margin: calc(0px / 2);
+  flex-grow: 1;
+}
+
+.form-with-sidebar > * > :first-child {
+  flex-basis: 0;
+  flex-grow: 999;
+  min-width: calc(70% - var(--s1));
+}
+
+.form-with-sidebar input,
+.form-with-sidebar button {
+  box-shadow: none;
+}
+
+/*
     THE CLUSTER
 
     Description: a group of items that should stay close together
@@ -934,6 +964,10 @@ ul.grid {
   background-color: var(--main-color-light);
   padding: var(--s1);
   min-height: 66.666vh;
+}
+
+.pre-footer {
+  background: var(--main-color-light-gray);
 }
 
 .footer {
