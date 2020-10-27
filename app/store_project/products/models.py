@@ -24,7 +24,6 @@ from markdownx.models import MarkdownxField
 import stripe
 
 from store_project.pages.models import Page
-from store_project.marketing.models import Email
 
 
 User = get_user_model()
@@ -245,27 +244,3 @@ class Program(Product):
             content_type=ContentType.objects.get_for_model(Program),
         ).delete()
         logger.info(f"Permission {permission} deleted.")
-
-    @hook(AFTER_SAVE, when="status", changes_to=Product.PUBLIC)
-    def email_subscribers(self):
-        """
-        Email everyone who wants notified when a new product is released.
-        Will trigger again if product is taken down and then posted up again
-        as public at a later date.
-        """
-
-        # Set variables
-        subject = f"[NEW] {self.name}"
-        msg = "You might like to know... there's a new product!"
-
-        # Get subscribers
-        subscribers = User.objects.filter(groups__name="subscribers")
-
-        # Compose emails
-        for subscriber in subscribers:
-            e = Email.objects.create(
-                recipient=subscriber, subject=subject, text_body=msg
-            )
-
-            # Send emails
-            e.send()
