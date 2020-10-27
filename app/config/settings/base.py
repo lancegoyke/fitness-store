@@ -64,7 +64,6 @@ INSTALLED_APPS = [
     "store_project.pages.apps.PagesConfig",
     "store_project.products.apps.ProductsConfig",
     "store_project.payments.apps.PaymentsConfig",
-    "store_project.marketing.apps.MarketingConfig",
 ]
 
 MIDDLEWARE = [
