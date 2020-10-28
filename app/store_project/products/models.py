@@ -139,6 +139,7 @@ class Product(LifecycleModelMixin, models.Model):
                 name=self.name,
                 description=self.description,
             )
+            logger.info(f"Product modified: id={self.id}")
         except stripe.error.InvalidRequestError as e:
             logger.error("ERROR: Product could not be modified.")
             logger.error("ERROR: Creating Product and Price instead.")
@@ -165,6 +166,8 @@ class Product(LifecycleModelMixin, models.Model):
                 currency="usd",
                 product=self.id,
             )
+            logger.info(f"Old price: {old_price}")
+            logger.info(f"New price: {new_price}")
             self.stripe_price_id = new_price.id
         except stripe.error.InvalidRequestError as e:
             logger.error("ERROR: Price could not be modified.")
