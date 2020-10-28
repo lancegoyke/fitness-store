@@ -4,17 +4,22 @@
     <div class="center stack">
       <h2 class="text-center">Build Lifelong Fitness</h2>
       <p>
-        Get emailed every time we launch a new program.
+        Get emailed every time we release something new.
       </p>
 
-      <form method="post" action="https://sendfox.com/form/1ylzgw/3l69xl" class="sendfox-form stack" id="3l69xl" data-async="true" data-recaptcha="true">
-        <div class="form-with-sidebar">
-          <div><!-- intermediary wrapper -->
-            <input type="email" placeholder="Email" name="email" required />
-            <button type="submit">Submit</button>
-          </div><!-- END intermediary wrapper -->
+      <form class="sendfox-form" method="post" action="https://sendfox.com/form/1ylzgw/3l69xl" id="3l69xl" data-async="true" data-recaptcha="true">
+        <label for="id_newsletter_email">
+          Email
+        </label>
+        <div class="stack">
+          <div class="form-with-sidebar">
+            <div><!-- intermediary wrapper -->
+              <input type="email" id="id_newsletter_email" placeholder="Email" name="email" required />
+              <button type="submit">Submit</button>
+            </div><!-- END intermediary wrapper -->
+          </div>
+          <p><label><input type="checkbox" name="gdpr" value="1" required /> I agree to receive email updates and promotions.</label></p>
         </div>
-        <p><label><input type="checkbox" name="gdpr" value="1" required /> I agree to receive email updates and promotions.</label></p>
         <!-- no botz please -->
         <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="a_password" tabindex="-1" value="" autocomplete="off" /></div>
       </form>
