@@ -13,9 +13,11 @@ from django.utils.text import slugify
 from django.utils.translation import ugettext_lazy as _
 
 from django_lifecycle import (
+    BEFORE_CREATE,
     AFTER_CREATE,
     AFTER_DELETE,
     AFTER_SAVE,
+    BEFORE_UPDATE,
     AFTER_UPDATE,
     hook,
     LifecycleModelMixin,
@@ -74,6 +76,7 @@ class Product(LifecycleModelMixin, models.Model):
         _("Short description of product"), blank=True, max_length=255
     )
     price = models.DecimalField(_("Price"), default=0, max_digits=10, decimal_places=2)
+    stripe_price_id = models.CharField(_("Stripe Price ID"), max_length=100, blank=True)
     views = models.PositiveIntegerField(_("Number of times viewed"), default=0)
     created = models.DateTimeField(_("Time created"), auto_now_add=True)
     modified = models.DateTimeField(_("Time last modified"), auto_now=True)
@@ -102,7 +105,7 @@ class Product(LifecycleModelMixin, models.Model):
     def is_public(self):
         return self.status in {self.PUBLIC}
 
-    @hook(AFTER_CREATE)
+    @hook(BEFORE_CREATE)
     def add_product_to_stripe(self):
         """
         Send basic product info to Stripe account.
@@ -119,6 +122,7 @@ class Product(LifecycleModelMixin, models.Model):
             currency="usd",
             product=self.id,
         )
+        self.stripe_price_id = price.id  # save to database for easy reference
         logger.info(f"Product {product} added to Stripe.")
         logger.info(f"Price {price} added to Stripe.")
 
@@ -151,16 +155,17 @@ class Product(LifecycleModelMixin, models.Model):
                 product=self.id,
             )
 
-    @hook(AFTER_UPDATE, when="price", has_changed=True)
+    @hook(BEFORE_UPDATE, when="price", has_changed=True)
     def update_price_in_stripe(self):
         stripe.api_key = settings.STRIPE_SECRET_KEY
-        # stripe.Price.modify()
         try:
-            stripe.Price.create(
+            old_price = stripe.Price.modify(self.stripe_price_id, active=False)
+            new_price = stripe.Price.create(
                 unit_amount_decimal=self.price * 100,
                 currency="usd",
                 product=self.id,
             )
+            self.stripe_price_id = new_price.id
         except stripe.error.InvalidRequestError as e:
             logger.error("ERROR: Price could not be modified.")
             logger.error("ERROR: Creating Product and Price instead.")
@@ -168,11 +173,12 @@ class Product(LifecycleModelMixin, models.Model):
             stripe.Product.create(
                 id=self.id, name=self.name, description=self.description, type="good"
             )
-            stripe.Price.create(
+            price = stripe.Price.create(
                 unit_amount_decimal=self.price * 100,
                 currency="usd",
                 product=self.id,
             )
+            self.stripe_price_id = price.id
 
     @hook(AFTER_DELETE)
     def delete_product_and_price_in_stripe(self):
