@@ -1,0 +1,42 @@
+{% load account i18n %} {% user_display user as user_display %} {% autoescape off %}
+{% blocktrans with site_name=current_site.name site_domain=current_site.domain %}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order Confirmation from {{ site_name }}</title>
+</head>
+<body>
+    <p>
+        Thank you for your order at {{ site_domain }}.
+    </p>
+
+    <p>
+        Order details:
+        <ul>
+            <li>
+                {{ user_display }}
+            </li>
+            <li>
+                {{ product }}
+            </li>
+            <li>
+                Total: ${{ price }}
+            </li>
+            <li>
+                Download: {{ product_url }}
+            </li>
+        </ul>
+    </p>
+
+    <p>
+        Thank you from {{ site_name }}!<br />
+        {{ site_domain }}
+    </p>
+
+</body>
+</html>
+{% endblocktrans %}
+{% endautoescape %}

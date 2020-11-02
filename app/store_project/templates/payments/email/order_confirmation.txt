@@ -1,0 +1,12 @@
+{% load account i18n %} {% user_display user as user_display %} {% autoescape off %}
+{% blocktrans with site_name=current_site.name site_domain=current_site.domain %}Thank you for your order at {{ site_domain }}.
+
+Order details:
+- {{ user_display }}
+- {{ product }}
+- Total: ${{ price }}
+- Download: {{ product_url }}
+
+{% endblocktrans %}{% blocktrans with site_name=current_site.name site_domain=current_site.domain %}Thank you from {{ site_name }}!
+{{ site_domain }}{% endblocktrans %}
+{% endautoescape %}
