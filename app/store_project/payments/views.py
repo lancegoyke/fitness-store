@@ -144,6 +144,10 @@ def stripe_webhook(request):
         metadata = checkout_session.metadata
         user = User.objects.get(email=user_email)
 
+        # store Stripe customer ID if new customer
+        if not user.stripe_customer_id:
+            user.stripe_customer_id = checkout_session.customer
+
         # get program name from Stripe Checkout Session metadata
         try:
             program_name = metadata["program_name"]
@@ -153,7 +157,7 @@ def stripe_webhook(request):
 
         # get Program object from database or create new if testing
         try:
-            program = Program.objects.get(name=program_name)  # noqa F841
+            program = Program.objects.get(name=program_name)
         except Program.DoesNotExist:
             program = Program.objects.create(
                 name="Test Program",
