@@ -3,8 +3,10 @@ import random
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from store_project.products.models import Program
+from store_project.pages.factories import PageFactory
+from store_project.pages.models import Page
 from store_project.products.factories import ProgramFactory
+from store_project.products.models import Program
 from store_project.users.models import User
 from store_project.users.factories import UserFactory, SuperAdminFactory
 
@@ -19,7 +21,7 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **kwargs):
         self.stdout.write("Deleting old data...")
-        models = [User, Program]
+        models = [User, Program, Page]
         for m in models:
             m.objects.all().delete()
 
@@ -32,6 +34,9 @@ class Command(BaseCommand):
         for _ in range(NUM_USERS):
             person = UserFactory()
             people.append(person)
+
+        # Create the About page
+        PageFactory()
 
         # Create the programs
         for _ in range(NUM_PROGRAMS):
