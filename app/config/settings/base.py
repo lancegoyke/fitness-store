@@ -164,11 +164,10 @@ LOGIN_URL = "/accounts/login/"
 ACCOUNT_LOGOUT_REDIRECT_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "/users/profile/"
 ACCOUNT_USER_DISPLAY = "store_project.users.display.get_email"
-ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 ACCOUNT_EMAIL_REQUIRED = True
 ACCOUNT_UNIQUE_EMAIL = True
-ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 ACCOUNT_USERNAME_REQUIRED = False
+ACCOUNT_SESSION_REMEMBER = True
 ACCOUNT_AUTHENTICATION_METHOD = "email"
 ACCOUNT_EMAIL_CONFIRMATION_EXPIRE_DAYS = 7
 ACCOUNT_LOGIN_ATTEMPTS_LIMIT = 9
@@ -183,6 +182,10 @@ AUTHENTICATION_BACKENDS = [
 ]
 SOCIALACCOUNT_PROVIDERS = {
     "facebook": {
+        "APP": {
+            "client_id": os.environ.get("FB_APP_ID"),
+            "secret": os.environ.get("FB_SECRET_KEY"),
+        },
         "METHOD": "js_sdk",
         "SCOPE": [
             "email",
@@ -192,6 +195,10 @@ SOCIALACCOUNT_PROVIDERS = {
         "VERIFIED_EMAIL": False,
     },
     "google": {
+        "APP": {
+            "client_id": os.environ.get("GOOGLE_CLIENT_ID"),
+            "secret": os.environ.get("GOOGLE_CLIENT_SECRET"),
+        },
         "SCOPE": [
             "profile",
             "email",
