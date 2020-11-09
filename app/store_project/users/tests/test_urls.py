@@ -8,7 +8,7 @@ pytestmark = pytest.mark.django_db
 
 
 def test_profile():
-    assert reverse("users:profile") == f"/users/profile/"
+    assert reverse("users:profile") == "/users/profile/"
     assert resolve(f"/users/profile/").view_name == "users:profile"
 
 
