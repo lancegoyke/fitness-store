@@ -27,7 +27,11 @@ user_profile_view = UserProfileView.as_view()
 class UserUpdateView(LoginRequiredMixin, UpdateView):
 
     model = User
-    fields = ["name"]
+    fields = [
+        "name",
+        "email",
+    ]
+    template_name = "users/profile_update.html"
 
     def get_success_url(self):
         return reverse("users:profile")
