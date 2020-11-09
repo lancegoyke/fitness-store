@@ -28,16 +28,20 @@ class Command(BaseCommand):
         self.stdout.write("Creating new data...")
         # Create the superuser
         superuser = SuperAdminFactory()
+        self.stdout.write(f"  - new superuser {superuser.username}")
 
         # Create the other users
         people = []
         for _ in range(NUM_USERS):
             person = UserFactory()
             people.append(person)
+        self.stdout.write(f"  - {NUM_USERS} new users")
 
         # Create the About page
         PageFactory()
+        self.stdout.write(f"  - new About page")
 
         # Create the programs
         for _ in range(NUM_PROGRAMS):
             ProgramFactory()
+        self.stdout.write(f"  - {NUM_PROGRAMS} new programs")
