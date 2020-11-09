@@ -1,7 +1,7 @@
 import pytest
 
 from store_project.users.models import User
-from store_project.users.tests.factories import UserFactory
+from store_project.users.factories import UserFactory
 
 
 @pytest.fixture(autouse=True)
