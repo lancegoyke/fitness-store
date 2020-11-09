@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from django.views.generic import DetailView, RedirectView, UpdateView
+from django.views.generic import DetailView, UpdateView
 
 from store_project.products.models import Program
 
@@ -30,7 +30,7 @@ class UserUpdateView(LoginRequiredMixin, UpdateView):
     fields = ["name"]
 
     def get_success_url(self):
-        return reverse("users:detail", kwargs={"email": self.request.user.email})
+        return reverse("users:profile")
 
     def get_object(self):
         return User.objects.get(email=self.request.user.email)
@@ -43,14 +43,3 @@ class UserUpdateView(LoginRequiredMixin, UpdateView):
 
 
 user_update_view = UserUpdateView.as_view()
-
-
-class UserRedirectView(LoginRequiredMixin, RedirectView):
-
-    permanent = False
-
-    def get_redirect_url(self):
-        return reverse("users:detail", kwargs={"email": self.request.user.email})
-
-
-user_redirect_view = UserRedirectView.as_view()
