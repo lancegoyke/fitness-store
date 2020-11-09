@@ -1,3 +1,5 @@
+import os
+
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
@@ -18,14 +20,14 @@ urlpatterns = [
     path("", include("store_project.pages.urls")),
 ]
 
-if bool(settings.DEBUG):
+if os.environ.get("ENVIRONMENT") == "DEVELOPMENT":
     import debug_toolbar
 
     urlpatterns += [
         path("__debug__/", include(debug_toolbar.urls)),
     ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
-if not bool(settings.DEBUG):
+if os.environ.get("ENVIRONMENT") == "PRODUCTION":
     from django_ses.views import handle_bounce
 
     urlpatterns += [
