@@ -74,6 +74,11 @@ input * {
   color: inherit;
 }
 
+input:disabled {
+  background: var(--main-color-light-gray);
+  font-style: italic;
+}
+
 input.invert {
   color: var(--color-light);
   background-color: var(--color-dark);
