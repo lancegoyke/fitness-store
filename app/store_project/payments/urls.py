@@ -9,9 +9,13 @@ urlpatterns = [
         views.login_before_purchase,
         name="login_to_purchase",
     ),
-    path("config/", views.stripe_config),
-    path("create-checkout-session/", views.create_checkout_session),
+    path("config/", views.stripe_config, name="stripe_config"),
+    path(
+        "create-checkout-session/",
+        views.create_checkout_session,
+        name="stripe_create_checkout_session",
+    ),
     path("success/", views.SuccessView.as_view(), name="success"),
     path("cancellation/", views.CancellationView.as_view(), name="cancellation"),
-    path("webhook/", views.stripe_webhook),
+    path("webhook/", views.stripe_webhook, name="webhook"),
 ]
