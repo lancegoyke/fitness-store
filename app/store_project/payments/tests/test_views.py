@@ -50,5 +50,7 @@ def test_create_checkout_session_view(user: User, program: Program, rf: RequestF
     assert b"sessionId" in response.content
 
 
-def test_stripe_webhook_view():
+def test_stripe_webhook_view(rf: RequestFactory):
     request = rf.get(f"/payments/webhook/")
+    with pytest.raises(KeyError):
+        response = views.stripe_webhook(request)
