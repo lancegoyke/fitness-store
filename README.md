@@ -55,6 +55,12 @@ docker-compose logs -f
 
 ## Tests
 
+To setup test data:
+
+```
+docker-compose exec web python manage.py setup_test_data
+```
+
 Short tests have been made for most of the project.
 
 To run tests:
