@@ -40,9 +40,18 @@ My intention is to deploy on Heroku with a container.
 
 ## Run Locally
 
-Navigate to the base folder and run `docker-compose up -d --build` to build containers and detach the console.
+To build containers and detach the console:
 
-`docker-compose logs -f` to see running logs from containers.
+```
+cd fitness-store
+docker-compose up -d --build
+```
+
+To see running container logs:
+
+```
+docker-compose logs -f
+```
 
 ## Tests
 
@@ -50,7 +59,9 @@ Short tests have been made for most of the project.
 
 To run tests:
 
-`docker-compose exec web pytest`
+```
+docker-compose exec web pytest
+```
 
 To see coverage report:
 
