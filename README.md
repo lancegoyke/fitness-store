@@ -47,6 +47,12 @@ cd fitness-store
 docker-compose up -d --build
 ```
 
+To migrate database:
+
+```
+docker-compose exec web python manage.py migrate
+```
+
 To see running container logs:
 
 ```
