@@ -21,6 +21,7 @@ import stripe
 
 from store_project.payments.utils import int_to_price
 from store_project.products.models import Category, Program
+from store_project.users.factories import UserFactory
 
 
 User = get_user_model()
@@ -114,7 +115,7 @@ def create_checkout_session(request):
 
 @csrf_exempt
 def stripe_webhook(request):
-    print("STRIPE WEBHOOK")
+    print("[payments.views.stripe_webhook] BEGIN")
     stripe.api_key = settings.STRIPE_SECRET_KEY
     endpoint_secret = os.environ.get("STRIPE_ENDPOINT_SECRET")
     payload = request.body
@@ -140,9 +141,14 @@ def stripe_webhook(request):
 
         # set variables
         checkout_session = event.data.object
-        user_email = checkout_session.customer_email
-        metadata = checkout_session.metadata
-        user = User.objects.get(email=user_email)
+        user_email = checkout_session.customer_email  # CLI test: null
+        metadata = checkout_session.metadata  # CLI test: {}
+        if user_email:
+            user = User.objects.get(email=user_email)
+        else:
+            user = UserFactory(
+                username="lancegoyke", email="lancegoyke@gmail.com"
+            )  # user for testing
 
         # store Stripe customer ID if new customer
         if not user.stripe_customer_id:
@@ -155,10 +161,10 @@ def stripe_webhook(request):
             # if metadata not supplied, we're testing
             program_name = "Test Program"
 
-        # get Program object from database or create new if testing
         try:
             program = Program.objects.get(name=program_name)
         except Program.DoesNotExist:
+            # create new for testing
             program = Program.objects.create(
                 name="Test Program",
                 description="Test description.",
@@ -167,8 +173,11 @@ def stripe_webhook(request):
                 author=User.objects.get(email="lance@lancegoyke.com"),
                 duration=1,
                 frequency=3,
-                categories=Category.objects.get_or_create(name="Test Category"),
             )
+            test_category, created = Category.objects.get_or_create(
+                name="Test Category"
+            )
+            program.categories.add(test_category)
 
         # give customer account permissions for purchased product
         try:
@@ -180,9 +189,12 @@ def stripe_webhook(request):
                 content_type=ContentType.objects.get_for_model(Program),
             )
         user.user_permissions.add(permission)
+        print(
+            f"[payments.views.stripe_webhook] Customer permissions set for {user.email}."
+        )
 
-        # send customer a success email
         try:
+            # send customer a success email
             current_site = Site.objects.get_current()
             product_url = program.program_file.url if program.program_file else None
 
@@ -210,19 +222,20 @@ def stripe_webhook(request):
                 message=msg_plain,
                 html_message=msg_html,
                 from_email=None,  # will default to settings.DEFAULT_FROM_EMAIL
-                recipient_list=[user_email],
+                recipient_list=[user.email],
                 fail_silently=False,  # raises smtplib.SMTPException
             )
+            print(f"[payments.views.stripe_webhook] Email sent to {user.email}.")
+            logger.info("Successful order.")
+            logger.info(f"- User: {user.email}")
+
         except smtplib.SMTPException as e:
             logger.error("Could not email user's order.")
             logger.error(f"{e}")
             logger.error("Be sure to follow up with user")
-            logger.error(f"- User = {user_email}")
+            logger.error(f"- User = {user.email}")
             # logger.error(f"- Program Name = {program_name}")
             return HttpResponse(status=500)
-
-        logger.info("Successful order.")
-        logger.info(f"- User: {user_email}")
 
     return HttpResponse(status=200)
 
