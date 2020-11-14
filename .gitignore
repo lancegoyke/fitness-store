@@ -5,3 +5,4 @@ mediafiles/
 app/db.sqlite3
 staticfiles/
 .pytest_cache/
+tmp/
