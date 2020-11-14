@@ -7,11 +7,8 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.sites.models import Site
-from django.core.mail import send_mail
 from django.http.response import HttpResponse, JsonResponse
 from django.shortcuts import redirect
-from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
@@ -19,7 +16,7 @@ from django.views.generic.base import TemplateView
 
 import stripe
 
-from store_project.payments.utils import int_to_price
+from store_project.payments.utils import int_to_price, order_confirmation_email
 from store_project.products.models import Category, Program
 from store_project.users.factories import UserFactory
 
@@ -58,12 +55,7 @@ def create_checkout_session(request):
 
         try:
             # Create a new Checkout Session for the order
-            # Other optional params include:
-            #   [billing_address_collection] - to display billing address details on the page
-            #   [customer] - if you have an existing Stripe Customer ID
-            #   [payment_intent_data] - lets you capture the payment later
-            #   [customer_email] - lets you prefill the email input in the form
-            # For full details see https://stripe.com/docs/api/checkout/sessions/create
+            # For more, see https://stripe.com/docs/api/checkout/sessions/create
 
             # ?session_id={CHECKOUT_SESSION_ID} means the redirect will have the session ID set as a query param
             line_items = []
@@ -77,10 +69,6 @@ def create_checkout_session(request):
             else:
                 line_items = [
                     {
-                        # "name": f"{program.name}",
-                        # "quantity": 1,
-                        # "currency": "usd",
-                        # "amount": f"{int(program.price*100)}",
                         "price_data": {
                             "currency": "usd",
                             "unit_amount": f"{int(program.price*100)}",
@@ -194,47 +182,14 @@ def stripe_webhook(request):
         )
 
         try:
-            # send customer a success email
-            current_site = Site.objects.get_current()
-            product_url = program.program_file.url if program.program_file else None
-
-            context = {
-                "product": program_name,
-                "price": int_to_price(checkout_session.amount_total),
-                "product_url": product_url,
-                "current_site": current_site,
-                "user": user,
-            }
-
-            # msg_plain = "Here's a super plain message."
-            msg_plain = render_to_string(
-                "payments/email/order_confirmation.txt",
-                context,
-            )
-            # msg_html = None
-            msg_html = render_to_string(
-                "payments/email/order_confirmation.html",
-                context,
-            )
-
-            send_mail(
-                subject="Your order was successful!",
-                message=msg_plain,
-                html_message=msg_html,
-                from_email=None,  # will default to settings.DEFAULT_FROM_EMAIL
-                recipient_list=[user.email],
-                fail_silently=False,  # raises smtplib.SMTPException
-            )
-            print(f"[payments.views.stripe_webhook] Email sent to {user.email}.")
-            logger.info("Successful order.")
-            logger.info(f"- User: {user.email}")
+            order_confirmation_email(checkout_session, program, user)
 
         except smtplib.SMTPException as e:
             logger.error("Could not email user's order.")
             logger.error(f"{e}")
             logger.error("Be sure to follow up with user")
             logger.error(f"- User = {user.email}")
-            # logger.error(f"- Program Name = {program_name}")
+            logger.error(f"- Program Name = {program_name}")
             return HttpResponse(status=500)
 
     return HttpResponse(status=200)
