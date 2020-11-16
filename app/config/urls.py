@@ -11,7 +11,7 @@ from store_project.upload.views import image_upload
 urlpatterns = [
     path("upload/", image_upload, name="upload"),
     path("markdownx/", include("markdownx.urls")),
-    path("admin/", admin.site.urls),
+    path("backside/", admin.site.urls),
     path("payments/", include("store_project.payments.urls")),
     path("users/", include("store_project.users.urls")),
     path("feed/", include("store_project.feed.urls")),
@@ -32,5 +32,6 @@ if os.environ.get("ENVIRONMENT") == "PRODUCTION":
 
     urlpatterns += [
         path("ses/bounce/", csrf_exempt(handle_bounce)),
-        path("admin/django-ses/", include("django_ses.urls")),
+        path("backside/django-ses/", include("django_ses.urls")),
+        path("admin/", include("admin_honeypot.urls", namespace="admin_honeypot")),
     ]

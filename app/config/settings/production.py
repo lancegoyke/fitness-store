@@ -6,6 +6,7 @@ from .base import *  # noqa
 
 INSTALLED_APPS += [  # noqa
     "django_ses",
+    "admin_honeypot",
 ]
 
 # Email, django-ses
@@ -44,5 +45,8 @@ SECURE_HSTS_SECONDS = 60  # 31536000 is one year, common when things are known t
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 SECURE_SSL_REDIRECT = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+SECURE_BROWSER_XSS_FILTER = True
+X_FRAME_OPTIONS = "DENY"
