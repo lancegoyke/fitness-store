@@ -39,7 +39,7 @@ class Command(BaseCommand):
 
         # Create the About page
         PageFactory()
-        self.stdout.write(f"  - new About page")
+        self.stdout.write("  - new About page")
 
         # Create the programs
         for _ in range(NUM_PROGRAMS):

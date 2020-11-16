@@ -51,6 +51,6 @@ def test_create_checkout_session_view(user: User, program: Program, rf: RequestF
 
 
 def test_stripe_webhook_view(rf: RequestFactory):
-    request = rf.get(f"/payments/webhook/")
+    request = rf.get("/payments/webhook/")
     with pytest.raises(KeyError):
-        response = views.stripe_webhook(request)
+        views.stripe_webhook(request)

@@ -9,7 +9,7 @@ pytestmark = pytest.mark.django_db
 
 def test_profile():
     assert reverse("users:profile") == "/users/profile/"
-    assert resolve(f"/users/profile/").view_name == "users:profile"
+    assert resolve("/users/profile/").view_name == "users:profile"
 
 
 def test_update():

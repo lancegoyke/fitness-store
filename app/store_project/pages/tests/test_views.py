@@ -11,7 +11,7 @@ pytestmark = pytest.mark.django_db
 
 
 def test_home_page_view(rf: RequestFactory):
-    request = rf.get(f"/")
+    request = rf.get("/")
 
     response = HomePageView.as_view()(request)
 
