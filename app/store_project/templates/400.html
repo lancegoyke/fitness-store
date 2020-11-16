@@ -1,0 +1,12 @@
+{% extends '_base.html' %}
+
+{% load i18n %}
+
+{% block head_title %}{% trans "Uh Oh 400" %}{% endblock head_title %}
+
+{% block content %}
+  <h1>400 "Bad Request" Error</h1>
+
+  <p>We're sorry, but something went wrong in how your browser asked for resources. Perhaps try again?</p>
+
+{% endblock content %}

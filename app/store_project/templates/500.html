@@ -1,0 +1,12 @@
+{% extends '_base.html' %}
+
+{% load i18n %}
+
+{% block head_title %}{% trans "Uh Oh 500" %}{% endblock head_title %}
+
+{% block content %}
+  <h1>Uh Oh 500 Error</h1>
+
+  <p>We're sorry, but something on the server went wrong. This will send an email to the site administrator, so we will have a better idea of what's going on. We'll do our best to get things up and running as quickly as possible!</p>
+
+{% endblock content %}
