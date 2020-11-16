@@ -1,6 +1,7 @@
+from http import HTTPStatus
 import pytest
 
-from django.test import RequestFactory
+from django.test import RequestFactory, TestCase
 
 from store_project.pages.models import Page
 from store_project.pages.factories import PageFactory
@@ -29,3 +30,18 @@ def test_single_page_view(rf: RequestFactory):
     assert "pages/single.html" in response.template_name
     assert "<h3>Markdown Title</h3>" in response.rendered_content
     assert f"<h1>{page.title}</h1>" in response.rendered_content
+
+
+class RobotsTxtTests(TestCase):
+    def test_get(self):
+        response = self.client.get("/robots.txt")
+
+        assert response.status_code == 200
+        assert response["content-type"] == "text/plain"
+        lines = response.content.decode().splitlines()
+        assert lines[0] == "User-Agent: *"
+
+    def test_post_disallowed(self):
+        response = self.client.post("/robots.txt")
+
+        assert response.status_code == HTTPStatus.METHOD_NOT_ALLOWED

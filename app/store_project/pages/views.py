@@ -1,3 +1,5 @@
+from django.http import HttpResponse
+from django.views.decorators.http import require_GET
 from django.views.generic.base import TemplateView
 from django.views.generic.detail import DetailView
 
@@ -19,3 +21,12 @@ class SinglePageView(DetailView):
         context = super(SinglePageView, self).get_context_data(**kwargs)
         context["content"] = markdownify(self.object.content)
         return context
+
+
+@require_GET
+def robots_txt(request):
+    lines = [
+        "User-Agent: *",
+        "Disallow: /backside/",
+    ]
+    return HttpResponse("\n".join(lines), content_type="text/plain")
