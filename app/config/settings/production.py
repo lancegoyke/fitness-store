@@ -37,3 +37,12 @@ LOGGING = {
     },
     "loggers": {"django": {"level": "DEBUG", "handlers": ["console", "file"]}},
 }
+
+# Security
+
+SECURE_HSTS_SECONDS = 60  # 31536000 is one year, common when things are known to work
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
+SECURE_SSL_REDIRECT = True
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
