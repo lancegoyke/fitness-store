@@ -8,6 +8,19 @@ from markdownx.models import MarkdownxField
 
 
 class Page(models.Model):
+    PUBLIC = "pb"
+    PRIVATE = "pr"
+    DRAFT = "dr"
+    STATUS_CHOICES = [
+        (PUBLIC, "Public"),
+        (PRIVATE, "Private"),
+        (DRAFT, "Draft"),
+    ]
+    status = models.CharField(
+        max_length=2,
+        choices=STATUS_CHOICES,
+        default=DRAFT,
+    )
     title = models.CharField(
         _("Page title"), max_length=settings.PRODUCT_NAME_MAX_LENGTH
     )
@@ -20,6 +33,8 @@ class Page(models.Model):
         max_length=settings.PRODUCT_NAME_MAX_LENGTH,
     )
     author = models.ForeignKey(get_user_model(), null=True, on_delete=models.SET_NULL)
+    created = models.DateTimeField(_("Time created"), auto_now_add=True)
+    modified = models.DateTimeField(_("Time last modified"), auto_now=True)
 
     def __str__(self):
         return self.title
