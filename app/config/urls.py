@@ -3,13 +3,28 @@ import os
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
+from django.contrib.sitemaps.views import sitemap
 from django.urls import path, include
 from django.views.decorators.csrf import csrf_exempt
 
+from store_project.pages.sitemaps import PageSitemap
+from store_project.products.sitemaps import ProgramSitemap
 from store_project.upload.views import image_upload
+
+
+sitemaps = {
+    "programs": ProgramSitemap,
+    "pages": PageSitemap,
+}
 
 urlpatterns = [
     path("upload/", image_upload, name="upload"),
+    path(
+        "sitemap.xml",
+        sitemap,
+        {"sitemaps": sitemaps},
+        name="django.contrib.sitemaps.views.sitemap",
+    ),
     path("markdownx/", include("markdownx.urls")),
     path("backside/", admin.site.urls),
     path("payments/", include("store_project.payments.urls")),
