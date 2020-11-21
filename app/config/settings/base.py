@@ -34,15 +34,18 @@ PROJECT_DIR = APP_DIR / "store_project"
 # See https://docs.djangoproject.com/en/3.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get("SECRET_KEY")
+SECRET_KEY = os.environ.get("SECRET_KEY", "defaultsecretkeyfordoingsecretthings")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = int(os.environ.get("DEBUG", default=0))
 
-CORS_ALLOWED_ORIGINS = [i for i in os.environ.get("CORS_ALLOWED_ORIGINS").split(" ")]
+CORS_ALLOWED_ORIGINS = [
+    i
+    for i in os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:8000").split(" ")
+]
 ATOMIC_REQUESTS = True
 
-ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS").split(" ")
+ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost:8000").split(" ")
 
 
 # Application definition
@@ -74,6 +77,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -161,6 +165,8 @@ MEDIA_ROOT = APP_DIR / "mediafiles"
 STATICFILES_DIRS = [
     APP_DIR / "static",
 ]
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
 
 # User Management
 
@@ -189,8 +195,8 @@ AUTHENTICATION_BACKENDS = [
 SOCIALACCOUNT_PROVIDERS = {
     "facebook": {
         "APP": {
-            "client_id": os.environ.get("FB_APP_ID"),
-            "secret": os.environ.get("FB_SECRET_KEY"),
+            "client_id": os.environ.get("FB_APP_ID", "facebooknotgoingtowork"),
+            "secret": os.environ.get("FB_SECRET_KEY", "facebooknotsosecretsecret"),
         },
         "METHOD": "js_sdk",
         "SCOPE": [
@@ -202,8 +208,8 @@ SOCIALACCOUNT_PROVIDERS = {
     },
     "google": {
         "APP": {
-            "client_id": os.environ.get("GOOGLE_CLIENT_ID"),
-            "secret": os.environ.get("GOOGLE_CLIENT_SECRET"),
+            "client_id": os.environ.get("GOOGLE_CLIENT_ID", "googlenotgoingtowork"),
+            "secret": os.environ.get("GOOGLE_CLIENT_SECRET", "googlenotsosecretsecret"),
         },
         "SCOPE": [
             "profile",
@@ -217,5 +223,7 @@ SOCIALACCOUNT_PROVIDERS = {
 
 # Payments
 
-STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY")
-STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
+STRIPE_PUBLISHABLE_KEY = os.environ.get(
+    "STRIPE_PUBLISHABLE_KEY", "stripenotgoingtowork"
+)
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "stripenotsosecretsecret")
