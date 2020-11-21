@@ -10,6 +10,19 @@
 
   <!-- CSS -->
   <link rel="stylesheet" href="{% static 'css/base.css' %}" />
+
+  <!-- Google Analytics | Global site tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-341TNQY35X"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-341TNQY35X', {
+      {% if request.user.id %}'user_id': '{{ request.user.id }}',{% endif %}
+    });
+  </script>
+  
   {% block header %}
   <!-- No extra header code included -->
   {% endblock header %}
