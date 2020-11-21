@@ -40,6 +40,7 @@ SECRET_KEY = os.environ.get("SECRET_KEY")
 DEBUG = int(os.environ.get("DEBUG", default=0))
 
 CORS_ALLOWED_ORIGINS = [i for i in os.environ.get("CORS_ALLOWED_ORIGINS").split(" ")]
+ATOMIC_REQUESTS = True
 
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS").split(" ")
 
