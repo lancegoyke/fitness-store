@@ -341,6 +341,11 @@ nav a:active {
   background-color: var(--color-light);
 }
 
+ul.errorlist {
+  list-style-type: none;
+  padding: 0;
+}
+
 .box > *,
 .errorlist li > * {
   color: inherit;
