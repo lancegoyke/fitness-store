@@ -215,7 +215,7 @@ class Program(Product):
         blank=True,
         validators=[MinValueValidator(0)],
     )
-    categories = models.ManyToManyField(Category)
+    categories = models.ManyToManyField(Category, blank=True)
     program_file = models.FileField(_("File containing program"), null=True, blank=True)
 
     def get_absolute_url(self):
