@@ -27,5 +27,8 @@ COPY ./entrypoint.sh .
 # copy project
 COPY . .
 
+# collect static files
+RUN python3.8 manage.py collectstatic --noinput
+
 # run entrypoint.sh
 ENTRYPOINT ["/usr/src/app/entrypoint.sh"]
