@@ -19,6 +19,7 @@ import dj_database_url
 
 # Custom Project settings
 # ------------------------------------------------------------------------------
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "PRODUCTION")
 PRODUCT_NAME_MAX_LENGTH = 80
 DOMAIN_URL = os.environ.get("DOMAIN_URL")
 ADMINS = [
