@@ -9,5 +9,11 @@ with open(".env.prod", "r") as env_file:
     for line in env_file:
         key, value = line.split("=")
         subprocess.call(
-            ["heroku", "config:set", f"{key}={value}", "-a", "mastering-fitness"]
+            [
+                "heroku",
+                "config:set",
+                f"{key}={value.strip()}",
+                "-a",
+                "mastering-fitness",
+            ]
         )
