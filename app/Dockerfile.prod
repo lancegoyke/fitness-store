@@ -14,9 +14,11 @@ ENV PYTHONUNBUFFERED 1
 
 # install psycopg2 dependencies
 RUN apk update \
-    && apk add postgresql-dev gcc python3-dev musl-dev\
+    && apk add postgresql-dev gcc python3-dev musl-dev \
     # install Pillow dependencies
-    && apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev
+    && apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
+    # install brotli dependency
+    && apk --no-cache add build-base
 
 # lint
 RUN pip install --upgrade pip
