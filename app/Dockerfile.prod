@@ -69,6 +69,9 @@ COPY ./entrypoint.prod.sh $APP_HOME
 # copy project
 COPY . $APP_HOME
 
+# migrate the database
+RUN python manage.py migrate --noinput
+
 # collect static files
 RUN python manage.py collectstatic --noinput
 
