@@ -59,15 +59,6 @@
         </label>
       </p>
 
-      <p>
-        <label for="{{ form.remember.id_for_label }}">
-          {{ form.remember }}
-          <span>Remember me?</span>
-          {{ form.remember.errors }}
-        </label>
-      </p>
-
-
 
       {% if redirect_field_value %}
       <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
@@ -84,8 +75,5 @@
 {% endblock content %}
 
 {% block javascript %}
-
   {% providers_media_js %}
-  {% comment %} <script src="{% static 'js/showForm.js' %}"></script> {% endcomment %}
-
 {% endblock javascript %}
