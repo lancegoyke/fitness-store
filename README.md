@@ -7,11 +7,13 @@ This will be an e-commerce platform for delivering my fitness products and servi
 Current features:
 
 - Layout powered by [Every Layout](https://every-layout.dev/) and basic CSS
-- Payments Django app powered by Stripe with syncing from Django Admin dashboard
-- Pages Django app for making new markdown-powered pages
-- Product Django app with extendable Product abstract base class
-- Users Django app for authentication and authorization
-- Feed Django app for RSS feed
+- `payments` Django app powered by Stripe with syncing from Django Admin dashboard
+- `pages` Django app for making new markdown-powered pages
+- `product` Django app with extendable Product abstract base class
+- `users` Django app for authentication and authorization
+- `feed` Django app for RSS feed
+- `robots.txt` for search engines
+- `sitemap.xml` for search engines; tracks `pages` and `products`
 
 ## Tech
 
@@ -28,15 +30,31 @@ This is emulated in docker-compose.prod.yml.
 
 ## Deployment
 
+This app runs in a container on Heroku with a heroku-postgresql database addon.
+
 To deploy:
 
-- Get managed relational database
-- Marketing
-- Marketing
-- Sales
-- Marketing
+```
+git push heroku master
+```
 
-My intention is to deploy on Heroku with a container.
+If a new feature requires changes to the database schema:
+
+```
+heroku run python manage.py migrate
+```
+
+Static files are copied automatically when pushing code to Heroku.
+
+## Users
+
+To create a superuser:
+
+```
+heroku run python manage.py createsuperuser
+```
+
+This should ask for username (hidden), email, and password. You must head to Django Admin and then add the superuser's full name.
 
 ## Run Locally
 
