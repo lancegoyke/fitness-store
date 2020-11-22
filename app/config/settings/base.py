@@ -21,7 +21,7 @@ import dj_database_url
 # ------------------------------------------------------------------------------
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "PRODUCTION")
 PRODUCT_NAME_MAX_LENGTH = 80
-DOMAIN_URL = os.environ.get("DOMAIN_URL")
+DOMAIN_URL = os.environ.get("DOMAIN_URL", "https://mastering-fitness.herokuapp.com/")
 ADMINS = [
     ("Lance Goyke", "lance@lancegoyke.com"),
 ]
