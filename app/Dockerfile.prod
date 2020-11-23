@@ -2,6 +2,8 @@
 # BUILDER #
 ###########
 
+# a temporary image that's used for building the Python wheels
+
 # pull official base image
 FROM python:3.8-alpine as builder
 
@@ -57,7 +59,9 @@ WORKDIR $APP_HOME
 # install dependencies
 RUN apk update && apk add libpq
 # install Pillow dependencies
-RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev libffi-dev gcc
+RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
+    # install scout-apm dependencies
+    && apk add gcc musl-dev python3-dev libffi-dev openssl-dev
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/base.txt .
 COPY --from=builder /usr/src/app/production.txt .
