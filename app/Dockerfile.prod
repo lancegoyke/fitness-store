@@ -20,9 +20,7 @@ RUN apk update \
     # install Pillow dependencies
     && apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
     # install brotli dependency
-    && apk --no-cache add build-base \
-    # install scout-apm dependencies
-    && apk add gcc musl-dev python3-dev libffi-dev openssl-dev
+    && apk --no-cache add build-base
 
 # lint
 RUN pip install --upgrade pip
@@ -61,7 +59,9 @@ WORKDIR $APP_HOME
 # install dependencies
 RUN apk update && apk add libpq
 # install Pillow dependencies
-RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev
+RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
+    # install scout-apm dependencies
+    && apk add gcc musl-dev python3-dev libffi-dev openssl-dev
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/base.txt .
 COPY --from=builder /usr/src/app/production.txt .
