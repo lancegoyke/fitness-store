@@ -38,17 +38,27 @@ To deploy:
 git push heroku master
 ```
 
-If a new feature requires changes to the database schema:
+## Database Migrations
+
+If a new feature requires changes to the database schema, it may be taken care of in `heroku.yml` Release phase. This is untested.
+
+If the release command does not work, run it manually:
 
 ```
 heroku run python manage.py migrate
 ```
+
+## Static files
 
 Static files must be copied in a similar fashion if updated:
 
 ```
 heroku run python manage.py collectstatic
 ```
+
+## Media files
+
+Currently no solution for user-uploaded media, but the app does not accept user-uploaded media.
 
 ## Users
 
