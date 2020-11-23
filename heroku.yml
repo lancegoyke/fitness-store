@@ -7,6 +7,6 @@ build:
 release:
   image: web
   command:
-    - python app/manage.py collectstatic --noinput
+    - python ./app/manage.py collectstatic --noinput
 run:
   web: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
