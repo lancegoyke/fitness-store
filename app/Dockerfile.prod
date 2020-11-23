@@ -18,7 +18,9 @@ RUN apk update \
     # install Pillow dependencies
     && apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
     # install brotli dependency
-    && apk --no-cache add build-base
+    && apk --no-cache add build-base \
+    # install scout-apm dependency
+    && apk --no-cache add libffi-dev
 
 # lint
 RUN pip install --upgrade pip
