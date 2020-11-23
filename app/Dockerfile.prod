@@ -59,7 +59,7 @@ WORKDIR $APP_HOME
 # install dependencies
 RUN apk update && apk add libpq
 # install Pillow dependencies
-RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev libffi-dev openssl-dev
+RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev libffi-dev gcc
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/base.txt .
 COPY --from=builder /usr/src/app/production.txt .
