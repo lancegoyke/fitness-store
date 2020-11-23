@@ -14,7 +14,7 @@
 
   <h1>{% trans "Login" %}</h1>
 
-  <p>{% blocktrans %}No account? Then please <a href="{{ account_signup }}">sign up</a>.{% endblocktrans %}</p>
+  <p>{% blocktrans %}No account? Then please <a href="{% url 'account_signup' %}">sign up</a>.{% endblocktrans %}</p>
 
   <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" %}">
     <h2>
