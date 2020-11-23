@@ -44,7 +44,11 @@ If a new feature requires changes to the database schema:
 heroku run python manage.py migrate
 ```
 
-Static files are copied automatically when pushing code to Heroku.
+Static files must be copied in a similar fashion if updated:
+
+```
+heroku run python manage.py collectstatic
+```
 
 ## Users
 
