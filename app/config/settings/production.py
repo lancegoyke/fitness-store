@@ -1,5 +1,8 @@
 import os
 
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
+
 from .base import *  # noqa
 
 # ALLOWED_HOSTS in .env.prod
@@ -9,7 +12,7 @@ INSTALLED_APPS += [  # noqa
     "admin_honeypot",
 ]
 
-# Email, django-ses
+# Email [django-ses]
 
 EMAIL_BACKEND = "django_ses.SESBackend"
 AWS_SES_ACCESS_KEY_ID = os.environ.get("AWS_SES_ACCESS_KEY_ID", "fake598234752934")
@@ -22,7 +25,7 @@ AWS_SES_REGION_ENDPOINT = os.environ.get(
 )
 AWS_SES_CONFIGURATION_SET = os.environ.get("AWS_SES_CONFIGURATION_SET", "Tracking")
 
-# Logging
+# Logging [view in logentries]
 
 LOGGING = {
     "version": 1,
@@ -42,6 +45,10 @@ LOGGING = {
     },
     "loggers": {"django": {"level": "DEBUG", "handlers": ["console", "file"]}},
 }
+
+# Error monitoring [Sentry]
+
+sentry_sdk.init(dsn=os.environ["SENTRY_DSN"], integrations=[DjangoIntegration()])
 
 # Security
 
