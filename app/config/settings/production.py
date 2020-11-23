@@ -49,7 +49,7 @@ LOGGING = {
 # Error monitoring [Sentry]
 
 sentry_sdk.init(
-    dsn=os.environ.get(["SENTRY_DSN"], "https://fakefakefakefakedoesnotwork"),
+    dsn=os.environ.get("SENTRY_DSN", "https://fakefakefakefakedoesnotwork"),
     integrations=[DjangoIntegration()],
 )
 
