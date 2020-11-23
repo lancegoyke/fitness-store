@@ -12,6 +12,12 @@ INSTALLED_APPS += [  # noqa
     "admin_honeypot",
 ]
 
+# Application performance monitoring (Scout)
+
+INSTALLED_APPS.insert(0, "scout_apm.django")  # should be listed first
+SCOUT_NAME = "Mastering Fitness"
+# SCOUT_KEY & SCOUT_MONITOR configured by Heroku Addon
+
 # Email [django-ses]
 
 EMAIL_BACKEND = "django_ses.SESBackend"
