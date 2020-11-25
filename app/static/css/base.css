@@ -62,7 +62,7 @@ span {
   font-size: 1em;
 }
 
-input {
+input, textarea {
   padding: var(--s-1);
   border: var(--border-thin) solid;
   color: var(--main-color-dark-gray);
@@ -70,16 +70,19 @@ input {
   box-shadow: 2px 3px var(--main-color-dark-gray);
 }
 
-input * {
+input *,
+textarea * {
   color: inherit;
 }
 
-input:disabled {
+input:disabled,
+textarea:disabled {
   background: var(--main-color-light-gray);
   font-style: italic;
 }
 
-input.invert {
+input.invert,
+textarea.invert {
   color: var(--color-light);
   background-color: var(--color-dark);
 }
