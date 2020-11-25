@@ -1,0 +1,65 @@
+{% extends '_base.html' %} 
+
+{% load i18n %}
+
+{% block head_title %}{% trans "Contact" %}{% endblock head_title %}
+
+{% block content %}
+<h1>{% trans "Contact" %}</h1>
+<div class="stack-auth-form">
+  <form class="center" method="POST">
+    {% csrf_token %}
+    
+    <div class="messages">
+      {{ form.non_field_errors}}
+    </div>
+  
+    <p>
+      <label class="stack" for="{{ form.subject.id_for_label }}">
+        <span>{% trans "Subject" %}</span>
+        {{ form.subject }}
+        
+        {% if form.subject.errors %}
+          <ul class="errorlist">
+          {% for error in form.subject.errors %}
+            <li><strong>Subject:</strong> {{ error|escape }}</li>
+          {% endfor %}
+          </ul>
+        {% endif %}
+      </label>
+    </p>
+    <p>
+      <label class="stack" for="{{ form.from_email.id_for_label }}">
+        <span>{% trans "Your Email" %}</span>
+        {{ form.from_email }}
+
+        {% if form.from_email.errors %}
+          <ul class="errorlist">
+          {% for error in form.from_email.errors %}
+            <li><strong>Your Email:</strong> {{ error|escape }}</li>
+          {% endfor %}
+          </ul>
+        {% endif %}
+      </label>
+    </p>
+    <p>
+      <label class="stack" for="{{ form.message.id_for_label }}">
+        <span>{% trans "Message" %}</span>
+        {{ form.message }}
+        
+        {% if form.message.errors %}
+          <ul class="errorlist">
+          {% for error in form.message.errors %}
+            <li><strong>Message:</strong> {{ error|escape }}</li>
+          {% endfor %}
+          </ul>
+        {% endif %}
+          
+      </label>
+    </p>
+  
+    <button type="submit">{% trans "Send Message" %}</button>
+  </form>
+</div>
+
+{% endblock content %}

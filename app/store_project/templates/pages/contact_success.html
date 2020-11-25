@@ -1,0 +1,13 @@
+{% extends '_base.html' %} 
+
+{% load i18n %}
+
+{% block head_title %}{% trans "Contact Success" %}{% endblock head_title %}
+
+{% block content %}
+<h1>{% trans "Contact Success" %}</h1>
+<p>
+    {% blocktrans %}
+    Your message was sent! Thanks for the feedback. If needed, someone from our team will reach out to you.</p>
+    {% endblocktrans %}
+{% endblock content %}

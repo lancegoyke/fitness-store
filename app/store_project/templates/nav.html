@@ -9,6 +9,7 @@
         <nav>
           <a href="{% url 'pages:single' 'about' %}">About</a>
           <a href="{% url 'products:program_list' %}">Programs</a>
+          <a href="{% url 'pages:contact' %}">Contact</a>
           
           {% if user.is_authenticated %}
             <a href="{% url 'users:profile' %}">Account</a>

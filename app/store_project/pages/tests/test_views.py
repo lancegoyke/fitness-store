@@ -1,7 +1,7 @@
 from http import HTTPStatus
 import pytest
 
-from django.test import RequestFactory, TestCase
+from django.test import Client, RequestFactory, TestCase
 
 from store_project.pages.models import Page
 from store_project.pages.factories import PageFactory
@@ -30,6 +30,44 @@ def test_single_page_view(rf: RequestFactory):
     assert "pages/single.html" in response.template_name
     assert "<h3>Markdown Title</h3>" in response.rendered_content
     assert f"<h1>{page.title}</h1>" in response.rendered_content
+
+
+class ContactViewTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+    def test_get(self):
+        response = self.client.get("/contact/")
+
+        assert response.status_code == HTTPStatus.OK
+        assert b"<h1>Contact</h1>" in response.content
+        assert b"subject" in response.content
+        assert b"from_email" in response.content
+        assert b"message" in response.content
+
+    def test_post_success(self):
+        response = self.client.post(
+            "/contact/",
+            data={
+                "subject": "Subject",
+                "from_email": "email@example.com",
+                "message": "This is a test message.",
+            },
+        )
+        assert response.status_code == HTTPStatus.FOUND
+        assert response["Location"], "/contact/"
+
+    def test_post_error(self):
+        response = self.client.post(
+            "/contact/",
+            data={
+                "subject": "Subject",
+                "from_email": "email@example.com",
+                "message": "",
+            },
+        )
+        assert response.status_code == HTTPStatus.OK
+        assert b"<strong>Message:</strong> This field is required." in response.content
 
 
 class RobotsTxtTests(TestCase):
