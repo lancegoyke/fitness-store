@@ -1,12 +1,95 @@
-{% extends '_base.html' %} 
+{% load static %}
 
-{% load i18n %}
+<!DOCTYPE html>
+<html lang="en">
 
-{% block head_title %}{% trans "Home" %}{% endblock head_title %}
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block head_title %}{% endblock head_title %} | Lance Fitness Store</title>
+  <link rel="shortcut icon" href="{% static 'png/favicon-black.png' %}">
 
-{% block content %}
-<h1>Welcome to the Store!</h1>
+  <!-- CSS -->
+  <link rel="stylesheet" href="{% static 'css/base.css' %}" />
 
-{% lorem 5 p random %}
+  <!-- Google Analytics | Global site tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-341TNQY35X"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
 
-{% endblock content %}
+    gtag('config', 'G-341TNQY35X', {
+      {% if request.user.id %}'user_id': '{{ request.user.id }}',{% endif %}
+    });
+  </script>
+
+  {% block header %}
+  <!-- No extra header code included -->
+  {% endblock header %}
+</head>
+
+<body>
+  <div class="cover">
+    <!-- THE NAVBAR -->
+    <div class="box invert navbar nav-cluster">
+      <!-- intermediary wrapper -->
+      <div>
+        <a class="logo" href="{% url 'pages:home' %}">Lance Fitness Store</a>
+        <div class="nav-menu menu-cluster">
+          <!-- intermediary wrapper -->
+          <nav>
+            <a href="{% url 'pages:single' 'about' %}">About</a>
+            <a href="{% url 'products:program_list' %}">Programs</a>
+            <a href="{% url 'pages:contact' %}">Contact</a>
+            
+            {% if user.is_authenticated %}
+              <a href="{% url 'users:profile' %}">Account</a>
+              <a href="{% url 'account_logout' %}">Logout</a>
+            {% else %}
+              <a href="{% url 'account_login' %}">Login</a>
+              <a href="{% url 'account_signup' %}">Signup</a>
+            {% endif %}
+              
+          </nav>
+        </div>
+      </div>
+    </div>
+    <!-- .navbar -->
+    <h1 class="text-center">Become a fitness master.</h1>
+    <div class="box inherit-colors text-center">
+      Scroll down to learn more
+    </div>
+  </div>
+
+  <!-- THE CONTENT -->
+  <div class="content">
+    <div class="stack center">
+      {% if messages %}
+        <div class="messages">
+          <ul>
+            {% for message in messages %}
+            <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {% block content %}
+      <!-- No content available -->
+      {% endblock content %}
+    </div>
+  </div>
+  <!-- .content -->
+
+  {% include 'footer.html' %}
+
+  <!-- JavaScript -->
+  {% block javascript %}
+  <!-- No JavaScript available -->
+  {% endblock javascript %}
+
+</div>
+</body>
+
+</html>

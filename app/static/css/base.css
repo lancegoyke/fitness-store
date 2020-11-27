@@ -756,6 +756,45 @@ ul.grid {
 }
 
 /*
+    THE COVER
+
+    Usage:
+
+    Ex:
+      <div class="cover">
+        <div><!-- header --></div>
+        <div><!-- centered --></div>
+        <div><!-- footer --></div>
+      </div>
+*/
+.cover {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 0;
+  background-color: #000;
+  color: #fff;
+}
+
+.cover > * {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+
+.cover > :first-child:not(h1) {
+  margin-top: 0;
+}
+
+.cover > :last-child:not(h1) {
+  margin-bottom: 0;
+}
+
+.cover > h1 {
+  margin-top: auto;
+  margin-bottom: auto;
+}
+
+/*
     THE FRAME
 
     Usage: place the image or video inside a div.frame. Must be used in
@@ -944,6 +983,11 @@ ul.grid {
 
 .error {
   background-color: var(--error);
+}
+
+.inherit-colors {
+  color: inherit;
+  background-color: inherit;
 }
 
 
