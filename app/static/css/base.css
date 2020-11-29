@@ -9,6 +9,7 @@
   --main-color-dark-gray: #1d1d1de0;
   --main-color-money: #5f9341;
   --main-color-accent: #31759d;
+  --main-color-dark-accent: #134461;
   --google-blue: #4c8bf5;
   --facebook-blue: #1877F2;
   --debug: #ddccff;
@@ -184,20 +185,26 @@ h6 {
 
 a {
   color: var(--main-color-accent);
+  text-decoration: none;
 }
 
 a:hover,
 a:focus,
 a:active {
-  color: var(--main-color-light-gray);
-  background-color: var(--main-color-dark);
+  text-decoration: underline;
 }
 
-nav a:hover,
-nav a:focus,
-nav a:active {
+.navbar a {
+  color: var(--main-color-light-gray);
+  text-decoration: none;
+}
+
+.navbar a:hover,
+.navbar a:focus,
+.navbar a:active {
   color: var(--main-color-light-gray);
   background-color: unset;
+  text-decoration: underline;
 }
 
 /*
@@ -997,16 +1004,6 @@ ul.grid {
 .navbar {
   background-color: var(--main-color-dark);
   color: var(--main-color-light-gray);
-}
-
-.navbar a {
-  color: var(--main-color-light-gray);
-  text-decoration: none;
-}
-
-.navbar a:hover {
-  color: var(--main-color-light);
-  text-decoration: underline;
 }
 
 .nav-menu ul {
