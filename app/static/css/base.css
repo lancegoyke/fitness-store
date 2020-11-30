@@ -68,7 +68,8 @@ input, textarea {
   border: var(--border-thin) solid;
   color: var(--main-color-dark-gray);
   background-color: var(--main-color-light);
-  box-shadow: 2px 3px var(--main-color-dark-gray);
+  /* The following is a cool effect, but difficult to implement sitewide */
+  /* box-shadow: 2px 3px var(--main-color-dark-gray); */
 }
 
 input *,
@@ -104,14 +105,12 @@ button,
   outline-offset: calc(var(--border-thin) * -1);
   color: var(--main-color-light-gray);
   background-color: var(--main-color-dark);
-  box-shadow: 2px 3px var(--main-color-dark-gray)
 }
 
 button:hover,
 button:focus,
 .button:hover,
 .button:focus {
-  /* box-shadow: 0 0 0 10px var(--main-color-dark); */
   text-decoration: underline;
 }
 
@@ -885,6 +884,11 @@ ul.grid {
 .with-icon .icon {
   margin-inline-end: 1rem;
   font-size: 100%;
+}
+
+.with-icon .icon-right {
+  margin-inline-end: unset;
+  margin-inline-start: 1rem;
 }
 
 /*

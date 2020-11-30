@@ -1,4 +1,5 @@
 {% load static %}
+{% load i18n %}
 
 <!DOCTYPE html>
 <html lang="en">
@@ -56,9 +57,21 @@
       </div>
     </div>
     <!-- .navbar -->
+
     <h1 class="center text-center">Become a fitness master.</h1>
+    
     <div class="center box inherit-colors text-center">
-      Scroll down to learn more
+      <span class="with-icon">
+        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="18px" height="18px">
+          <path d="M0 0h24v24H0V0z" fill="none"/>
+          <path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/>
+        </svg>
+        {% trans "Scroll down" %}
+        <svg class="icon icon-right" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="18px" height="18px">
+          <path d="M0 0h24v24H0V0z" fill="none"/>
+          <path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/>
+        </svg>
+      </span>
     </div>
   </div>
 
