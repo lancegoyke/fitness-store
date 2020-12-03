@@ -1098,6 +1098,19 @@ ul.grid {
 .cta h2,
 .cta h3 {
   background: var(--main-color-light);
+  margin: auto;
+  padding: 0 var(--s-1);
+}
+
+.cta .button {
+  box-shadow: white 0px 0px 12px 5px;
+}
+
+.cta .button:hover,
+.cta .button:focus,
+.cta .button:active {
+  box-shadow: white 0px 0px 20px 5px;
+  transition-duration: 0.2s;
 }
 
 .pre-footer {
