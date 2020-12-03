@@ -4,7 +4,7 @@
 
   /* colors */
   --main-color-light: #fff;
-  --main-color-dark: #1d1d1d;
+  --main-color-dark: #000;
   --main-color-light-gray: #ededed;
   --main-color-dark-gray: #1d1d1de0;
   --main-color-money: #5f9341;
@@ -87,6 +87,13 @@ input.invert,
 textarea.invert {
   color: var(--color-light);
   background-color: var(--color-dark);
+}
+
+::-moz-selection,
+::selection {
+  color: var(--main-color-light);
+  background-color: var(--main-color-dark);
+  
 }
 
 /*
@@ -506,6 +513,11 @@ a.box.login:active {
   text-decoration: none;
 }
 
+/* pretty styles for photo */
+.card-box .frame > img {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 calc(100% - 1rem));
+}
+
 /*
     THE CARD STACK
 
@@ -540,6 +552,15 @@ a.box.login:active {
 
 /*
     THE SIDEBAR
+
+    Ex:
+
+    <div class="with-sidebar">
+      <div> <!-- intermediary wrapper -->
+        <div><!-- non-sidebar --></div>
+        <div><!-- sidebar --></div>
+      </div>
+    </div>
 */
 .with-sidebar {
   overflow: hidden;
@@ -557,6 +578,28 @@ a.box.login:active {
 }
 
 .with-sidebar > * > :last-child {
+  flex-basis: 0;
+  flex-grow: 999;
+  min-width: calc(50% - var(--s1));
+}
+
+.with-sidebar-right {
+  overflow: hidden;
+}
+
+.with-sidebar-right > * {
+  display: flex;
+  flex-wrap: wrap;
+  margin: calc(var(--s1) / 2 * -1);
+}
+
+.with-sidebar-right > * > * {
+  margin: calc(var(--s1) / 2);
+  flex-basis: 33%;
+  flex-grow: 1;
+}
+
+.with-sidebar-right > * > :first-child {
   flex-basis: 0;
   flex-grow: 999;
   min-width: calc(50% - var(--s1));
@@ -720,17 +763,35 @@ a.box.login:active {
 .product-switcher > * {
   display: flex;
   flex-wrap: wrap;
-  margin: calc((var(--s3) / 2) * -1);
+  margin: calc((var(--s5) / 2) * -1);
 }
 
 .product-switcher > * > * {
   flex-grow: 1;
-  flex-basis: calc((var(--measure) - (100% - var(--s3))) * 999);
-  margin: calc(var(--s3) / 2);
+  flex-basis: calc((var(--measure) - (100% - var(--s5))) * 999);
+  margin: calc(var(--s5) / 2);
 }
 
 .product-switcher > * > :nth-last-child(n+3),
 .product-switcher > * > :nth-last-child(n+3) ~ * {
+  flex-basis: 100%;
+}
+
+/* Max two children in a row */
+.two-switcher > * {
+  display: flex;
+  flex-wrap: wrap;
+  margin: calc((var(--s5) / 2) * -1);
+}
+
+.two-switcher > * > * {
+  flex-grow: 1;
+  flex-basis: calc((var(--measure) - (100% - var(--s5))) * 999);
+  margin: calc(var(--s5) / 2);
+}
+
+.two-switcher > * > :nth-last-child(n+3),
+.two-switcher > * > :nth-last-child(n+3) ~ * {
   flex-basis: 100%;
 }
 
@@ -850,10 +911,6 @@ ul.grid {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.frame > img {
-  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 calc(100% - 1rem));
 }
 
 /*
@@ -1001,6 +1058,10 @@ ul.grid {
   background-color: inherit;
 }
 
+.edgy {
+  filter: saturate(0) contrast(2);
+}
+
 
 /*
     CUSTOMIZING ELEMENTS
@@ -1021,7 +1082,7 @@ ul.grid {
 .content {
   background-color: var(--main-color-light);
   padding: var(--s1);
-  min-height: 66.666vh;
+  /* min-height: 66.666vh; */
 }
 
 .pre-footer {
