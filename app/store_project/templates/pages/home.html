@@ -57,7 +57,7 @@
         </div>
       </div>
     </div>
-    <!-- .navbar -->
+    <!-- END .navbar -->
 
     <h1 class="center text-center">Become a fitness master.</h1>
     
@@ -78,7 +78,7 @@
   <!-- .cover -->
 
   <!-- THE CONTENT -->
-  <div class="stack content">
+  <main class="stack content">
     {% if messages %}
       <div class="center messages">
         <ul>
@@ -118,19 +118,20 @@
         </div>
       </div>
     </div>
-    
-    {% endblock content %}
-  </div>
+  </main>
   <!-- .content -->
 
-  {% include 'footer.html' %}
+  {% include '_newsletter.html' %}
+
+  {% include '_footer.html' %}
+  
+  {% endblock content %}
+
 
   <!-- JavaScript -->
   {% block javascript %}
   <!-- No JavaScript available -->
   {% endblock javascript %}
-
-</div>
 
 </body>
 

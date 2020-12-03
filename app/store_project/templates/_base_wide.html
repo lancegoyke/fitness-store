@@ -31,10 +31,10 @@
 
 <body>
 
-{% include 'nav.html' %}
+{% include '_nav.html' %}
 
 <!-- THE CONTENT -->
-<div class="content">
+<main class="content">
   <div class="stack center max-width:measure*2">
     {% if messages %}
       <div class="messages">
@@ -50,17 +50,20 @@
     <!-- No content available -->
     {% endblock content %}
   </div>
-</div>
+</main>
 <!-- .content -->
 
-{% include 'footer.html' %}
+<div>
+  {% include '_newsletter.html' %}
+  
+  {% include '_footer.html' %}
+</div>
 
 <!-- JavaScript -->
 {% block javascript %}
 <!-- No JavaScript available -->
 {% endblock javascript %}
 
-</div>
 </body>
 
 </html>
