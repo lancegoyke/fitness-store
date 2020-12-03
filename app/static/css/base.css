@@ -394,7 +394,6 @@ ul.errorlist {
   text-align: center;
   border: var(--s-5) solid var(--main-color-dark-gray);
   text-decoration: none;
-  box-shadow: 3px 2px var(--main-color-dark-gray);
 }
 
 .box.login h2 {
