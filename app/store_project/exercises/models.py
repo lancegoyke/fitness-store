@@ -50,9 +50,9 @@ class Exercise(models.Model):
     explanation = models.URLField(
         _("Explanation link"), max_length=200, default="", blank=True
     )
-    category = models.ManyToManyField(
+    categories = models.ManyToManyField(
         "Category",
-        verbose_name=_("Exercise category"),
+        verbose_name=_("Exercise categories"),
         blank=True,
     )
 
