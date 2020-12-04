@@ -1,0 +1,41 @@
+{% extends '_base.html' %}
+
+{% load i18n %}
+
+{% block head_title %}{% trans exercise.name %}{% endblock head_title %}
+
+{% block content %}
+<h1>{% trans exercise.name %}</h1>
+
+<h2>{% trans "Video Links" %}</h2>
+{% if exercise.demonstration %}
+  <p><a href="{{ exercise.demonstration }}" target="_blank">Demonstration</a></p>
+{% endif %}
+{% if exercise.explanation %}
+  <p><a href="{{ exercise.explanation }}" target="_blank">Explanation</a></p>
+{% endif %}
+
+{% if alternatives %}
+  <h2>Alternatives</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Reason</th>
+        <th>Alternative</th>
+      </tr>
+    </thead>
+
+    <tbody>
+      {% for alternate in alternatives %}
+      <tr>
+        <td>{{ alternate.problem }}</td>
+        <td><a href="{% url 'exercises:detail' slug=alternate.alternate.slug %}">{{ alternate.alternate }}</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+<p><a href="{% url 'exercises:list' %}"><- Back to exercises</a></p>
+
+{% endblock content %}

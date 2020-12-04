@@ -1,0 +1,16 @@
+{% extends '_base.html' %}
+
+{% load i18n %}
+
+{% block head_title %}{% trans "Exercises" %}{% endblock head_title %}
+
+
+{% block content %}
+<h1>Exercises</h1>
+
+<ul>
+  {% for exercise in exercises %}
+  <li><a href="{% url 'exercises:detail' slug=exercise.slug %}">{% trans exercise.name %}</a></li>
+  {% endfor %}
+</ul>
+{% endblock content %}
