@@ -6,6 +6,8 @@ from store_project.pages.models import Page
 from store_project.pages.factories import PageFactory
 from store_project.products.models import Program
 from store_project.products.factories import ProgramFactory
+from store_project.exercises.models import Exercise
+from store_project.exercises.factories import ExerciseFactory
 
 
 @pytest.fixture(autouse=True)
@@ -31,3 +33,8 @@ def program() -> Program:
 @pytest.fixture
 def page() -> Page:
     return PageFactory()
+
+
+@pytest.fixture
+def exercise() -> Exercise:
+    return ExerciseFactory()
