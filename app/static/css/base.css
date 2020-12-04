@@ -1103,7 +1103,7 @@ ul.grid {
 
 .cta .button {
   box-shadow: white 0px 0px 12px 5px;
-  line-height: 0.7;
+  line-height: 1;
   padding: var(--s1) var(--s0);
 }
 
