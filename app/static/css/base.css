@@ -1081,7 +1081,7 @@ ul.grid {
 .content {
   background-color: var(--main-color-light);
   padding: var(--s1);
-  /* min-height: 66.666vh; */
+  padding-bottom: var(--s5);
 }
 
 .cta {
@@ -1112,8 +1112,15 @@ ul.grid {
   transition-duration: 0.2s;
 }
 
-.pre-footer {
+.newsletter {
   background-color: var(--main-color-light-gray);
+}
+
+.about,
+.newsletter,
+.cta {  
+  padding-top: var(--s5);
+  padding-bottom: var(--s5);
 }
 
 .footer {
