@@ -4,7 +4,7 @@ from store_project.products.models import Program
 
 
 class ProgramSitemap(Sitemap):
-    changefreq = "never"
+    changefreq = "daily"
     priority = 0.5
 
     def items(self):

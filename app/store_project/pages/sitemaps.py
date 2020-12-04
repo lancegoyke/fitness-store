@@ -4,8 +4,8 @@ from store_project.pages.models import Page
 
 
 class PageSitemap(Sitemap):
-    priority = 0.5
     changefreq = "daily"
+    priority = 0.5
 
     def items(self):
         return Page.objects.filter(status=Page.PUBLIC)
