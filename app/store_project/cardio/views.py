@@ -2,7 +2,7 @@ from django.shortcuts import render
 
 from .forms import CardioCreateForm
 
-# Create your views here.
+
 def cardio_create(request):
     submitted = request.GET.get("submit")
     if submitted:
@@ -43,7 +43,7 @@ def cardio_create(request):
             # get slice from PROTOCOL_CHOICES str
             # str length must be divisible by two
             work = int(protocol[: int(len(protocol) / 2)])  # in seconds
-            rest = int(protocol[int(len(protocol) / 2) :])  # in seconds
+            rest = int(protocol[int(len(protocol) / 2):])  # in seconds
             duration_of_round = work + rest  # in seconds
             time_under_duress = duration - warm_up - cool_down  # in minutes
 
