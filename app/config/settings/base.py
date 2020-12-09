@@ -80,6 +80,7 @@ INSTALLED_APPS = [
     "store_project.products.apps.ProductsConfig",
     "store_project.payments.apps.PaymentsConfig",
     "store_project.exercises.apps.ExercisesConfig",
+    "store_project.cardio.apps.CardioConfig",
 ]
 
 MIDDLEWARE = [

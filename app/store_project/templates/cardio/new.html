@@ -1,0 +1,79 @@
+{% extends '_base.html' %}
+
+{% load i18n static %}
+
+{% block head_title %}{% trans "Cardio Workout" %}{% endblock %}
+
+{% block content %}
+    <h1>{% trans "Cardio Workout" %}</h1>
+    <div class="stack-auth-form">
+      <p>
+        {% blocktrans %}Enter your details to get a new workout.{% endblocktrans %}
+      </p>
+  
+      <form>
+        <p>
+          {{ form.non_field_errors }}
+        </p>
+      
+        <p>
+          <label class="stack" for="{{ form.mode.id_for_label }}">
+            <span>{% trans "Exercise" %}</span>
+            {{ form.mode }}
+            {{ form.mode.errors }}
+          </label>
+        </p>
+
+        <p>
+          <label class="stack" for="{{ form.duration.id_for_label }}">
+            <span>{% trans "Duration" %}</span>
+            {{ form.duration }}
+            {{ form.duration.errors }}
+          </label>
+        </p>
+
+        <p>
+          <label class="stack" for="{{ form.protocol.id_for_label }}">
+            <span>{% trans "Protocol" %}</span>
+            {{ form.protocol }}
+            {{ form.protocol.errors }}
+          </label>
+        </p>
+
+        <input class="button" type="submit" name="submit" value="Submit" />
+      </form>
+    </div>
+
+    {% if submitted %}
+    <h2>{% trans "Your Workout" %}</h2>
+    <p>{{ mode }}</p>
+
+    {% if warm_up != 0 %}
+    <p style="color:green;">
+      {{ warm_up }} {% trans "minute warm up" %}
+    </p>
+    {% endif %}
+
+    {% if num_of_rounds == 0 %}
+    <p>
+      {% trans "Go as far as you can in" %} {{ time_under_duress }} {% trans "minute" %}{{ time_under_duress|pluralize }}        
+    </p>
+    {% else %}
+    <p>
+      {% trans "Go hard for" %} {{ work }} {{ time_unit }}{{ work|pluralize }}</p>
+    <p>
+      {% trans "Go easy for" %} {{ rest }} {{ time_unit }}{{ rest|pluralize }}
+    </p>
+    <p>
+      {% trans "Repeat for" %} {{ num_of_rounds}} {% trans "round" %}{{ num_of_rounds|pluralize }}
+    </p>
+    {% endif %}
+
+    {% if cool_down != 0 %}
+    <p style="color:red;">
+      {{ cool_down }} {% trans "minute cool down" %}
+    </p>
+    {% endif %}
+
+  {% endif %}
+{% endblock %}

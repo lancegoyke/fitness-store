@@ -29,6 +29,7 @@ urlpatterns = [
     ),
     path("markdownx/", include("markdownx.urls")),
     path("backside/", admin.site.urls),
+    path("cardio/", include("store_project.cardio.urls")),
     path("exercises/", include("store_project.exercises.urls")),
     path("payments/", include("store_project.payments.urls")),
     path("users/", include("store_project.users.urls")),
