@@ -15,3 +15,4 @@ class ExerciseDetailView(DetailView):
 class ExerciseListView(ListView):
     model = Exercise
     context_object_name = "exercises"
+    ordering = "name"
