@@ -39,6 +39,15 @@
             <div class="money">${{ program.price|floatformat }}</div>
             <div class="tag duration">{{ program.duration }} weeks</div>
             <div class="tag frequency">{{ program.frequency }} days/wk</div>
+            
+            {% if program.status == "pr" %}
+              <div class="tag private">PRIVATE</div>
+            {% endif %}
+
+            {% if program.status == "dr" %}
+              <div class="tag draft">DRAFT</div>
+            {% endif %}
+              
           </div>
         </div>
       </div>

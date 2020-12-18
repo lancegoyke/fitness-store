@@ -31,8 +31,21 @@
         <a href="{% url 'products:program_detail' program.slug %}">
           {{ program.name }}
         </a>
+        {% if program.status == "pr" %}
+          <span class="tag private">PRIVATE</span>
+        {% endif %}
+        {% if program.status == "dr" %}
+          <span class="tag draft">DRAFT</span>
+        {% endif %}
       </h3>
       <p>{{ program.description }}</p>
+      
+      
+
+      {% if program.status == "dr" %}
+        <p>DRAFT</p>
+      {% endif %}
+      
     </div>
     <div class="box space-between">
       <div class="small">

@@ -17,6 +17,8 @@
   --success: #ccffdd;
   --warning: #ffddcc;
   --error: #ffcccc;
+  --color-draft: #995331;
+  --color-private: #b82828;
 
   /* modular scale */
   --ratio: 1.5;
@@ -972,6 +974,14 @@ ul.grid {
 
 .tag.frequency {
   background-color: var(--main-color-dark-gray);
+}
+
+.tag.draft {
+  background-color: var(--color-draft);
+}
+
+.tag.private {
+  background-color: var(--color-private);
 }
 
 /*
