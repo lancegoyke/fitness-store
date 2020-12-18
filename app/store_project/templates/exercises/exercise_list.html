@@ -8,6 +8,8 @@
 {% block content %}
 <h1>Exercises</h1>
 
+<p>Use <span style="padding: 2px 4px; background-color: lightgray;">Ctrl + F</span> to search for an exercise name.</p>
+
 <ul>
   {% for exercise in exercises %}
   <li><a href="{% url 'exercises:detail' slug=exercise.slug %}">{% trans exercise.name %}</a></li>
