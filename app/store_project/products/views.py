@@ -16,7 +16,6 @@ class ProgramListView(ListView):
             return Program.objects.all()
         else:
             return Program.objects.filter(status=Program.PUBLIC)
-    
 
 
 class ProgramDetailView(DetailView):

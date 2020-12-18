@@ -22,7 +22,6 @@ class ExerciseListView(ListView):
         context = super().get_context_data(**kwargs)
         context["categories"] = Category.objects.all()
         return context
-    
 
 
 class ExerciseFilteredListView(ListView):
@@ -40,5 +39,3 @@ class ExerciseFilteredListView(ListView):
         self.category = get_object_or_404(Category, slug=self.kwargs["category"])
         context["category"] = self.category.name
         return context
-    
-    
