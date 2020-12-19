@@ -196,6 +196,7 @@ class Product(LifecycleModelMixin, models.Model):
             logger.info(f"Product {product} has been marked inactive in Stripe.")
             logger.info(f"Price {price} has been marked inactive in Stripe.")
         except stripe.error.InvalidRequestError as e:
+            logger.error(f"ERROR: {e}")
             logger.error("ERROR: Product and Price could not be marked inactive in Stripe.")
 
 
