@@ -15,7 +15,7 @@ from django.utils.translation import ugettext_lazy as _
 from django_lifecycle import (
     BEFORE_CREATE,
     AFTER_CREATE,
-    AFTER_DELETE,
+    BEFORE_DELETE,
     AFTER_SAVE,
     BEFORE_UPDATE,
     AFTER_UPDATE,
@@ -183,17 +183,20 @@ class Product(LifecycleModelMixin, models.Model):
             )
             self.stripe_price_id = price.id
 
-    @hook(AFTER_DELETE)
+    @hook(BEFORE_DELETE)
     def delete_product_and_price_in_stripe(self):
         """
         Mark Product and Price as inactive in Stripe. Keeping the item around
         in case it is needed in the future.
         """
         stripe.api_key = settings.STRIPE_SECRET_KEY
-        product = stripe.Product.modify(sid=str(self.id), active=False)
-        price = stripe.Price.modify(sid=str(self.id), active=False)
-        logger.info(f"Product {product} has been marked inactive in Stripe.")
-        logger.info(f"Price {price} has been marked inactive in Stripe.")
+        try:
+            product = stripe.Product.modify(sid=str(self.id), active=False)
+            price = stripe.Price.modify(sid=str(self.id), active=False)
+            logger.info(f"Product {product} has been marked inactive in Stripe.")
+            logger.info(f"Price {price} has been marked inactive in Stripe.")
+        except stripe.error.InvalidRequestError as e:
+            logger.error("ERROR: Product and Price could not be marked inactive in Stripe.")
 
 
 class Program(Product):
@@ -242,7 +245,7 @@ class Program(Product):
         comped_group.permissions.add(permission)
         logger.info(f"Permission {permission} added to comped_group.")
 
-    @hook(AFTER_DELETE)
+    @hook(BEFORE_DELETE)
     def remove_program_permission(self):
         """
         Remove the can_view_{program.slug} permission for associated program.
