@@ -1,7 +1,6 @@
 -r base.txt
 
 gunicorn==20.0.4
-boto3==1.16.1
 django-ses[bounce]==1.0.3
 django-admin-honeypot==1.1.0
 sentry-sdk==0.19.4
