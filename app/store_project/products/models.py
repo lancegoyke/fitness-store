@@ -220,7 +220,12 @@ class Program(Product):
         validators=[MinValueValidator(0)],
     )
     categories = models.ManyToManyField(Category, blank=True)
-    program_file = models.FileField(_("File containing program"), null=True, blank=True)
+    program_file = models.FileField(
+        _("File containing program"),
+        upload_to="products/programs/",
+        null=True,
+        blank=True
+    )
 
     def get_absolute_url(self):
         """Get URL for product's detail view.
