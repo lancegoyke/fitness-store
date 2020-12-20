@@ -878,6 +878,11 @@ ul.grid {
         <img src="image.png">
       </div>
 */
+.square.frame {
+  --n: 1;
+  --d: 1;
+}
+
 .landscape.frame {
   --n: 9;
   --d: 16;

@@ -23,7 +23,7 @@
 <div class="product-switcher">
   <div> <!-- intermediary wrapper -->
     <div>
-      <div class="frame portrait">
+      <div class="frame square">
       {% if program.featured_image %}
         <img src="{{ program.featured_image.url }}" alt="" />
       {% else %}
@@ -78,7 +78,7 @@
   </div>
 </div>
 
-<div class="stack center">
+<div class="stack center" style="margin-top: var(--s5);">
   {% autoescape off %} {{ content }} {% endautoescape %}
 </div>
 
