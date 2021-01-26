@@ -1,6 +1,6 @@
 {% extends '_base.html' %}
 
-{% load i18n %}
+{% load i18n static %}
 
 {% block head_title %}{% trans "Exercises" %}{% endblock head_title %}
 
@@ -23,7 +23,29 @@
 
 <ul>
   {% for exercise in exercises %}
-  <li><a href="{% url 'exercises:detail' slug=exercise.slug %}">{% trans exercise.name %}</a></li>
+  <li>
+    <a href="{% url 'exercises:detail' slug=exercise.slug %}">{% trans exercise.name %}</a>
+    
+    {% if exercise.demonstration %}
+      <button
+        class="clear copy-btn tag"
+        id="copy-{{ exercise.slug }}" 
+        data-clipboard-text="{{ exercise.demonstration }}">
+          copy video
+      </button>
+    {% endif %}
+  </li>
   {% endfor %}
 </ul>
 {% endblock content %}
+
+{% block javascript %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.6/clipboard.min.js"></script>
+<script>
+  var clipboard = new ClipboardJS('.copy-btn');
+
+  clipboard.on('success', function(e) {
+    console.log(e);
+  });
+</script>
+{% endblock javascript %}

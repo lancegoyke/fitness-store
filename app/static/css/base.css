@@ -61,6 +61,11 @@ footer {
   max-width: none;
 }
 
+.clear {
+  border: none;
+  background-color: inherit;
+}
+
 span {
   font-size: 1em;
 }
@@ -108,7 +113,6 @@ td {
 
     Based off of THE BOX
 */
-button,
 .button {
   display: inline-block;
   text-decoration: none;
@@ -121,8 +125,17 @@ button,
   background-color: var(--main-color-dark);
 }
 
-button:hover,
-button:focus,
+.copy-btn {
+  cursor: pointer;
+  font-size: var(--s-1);
+
+}
+
+.copy-btn:hover,
+.copy-btn:focus {
+  text-decoration: underline;
+}
+
 .button:hover,
 .button:focus {
   text-decoration: underline;
@@ -944,6 +957,13 @@ ul.grid {
   height: 1cap;
 }
 
+.icon-large {
+  width: 1.25em;
+  width: 1cap;
+  height: 1.25em;
+  height: 1cap;
+}
+
 .with-icon {
   display: inline-flex;
   align-items: baseline;
@@ -951,6 +971,11 @@ ul.grid {
 
 .with-icon .icon {
   margin-inline-end: 1rem;
+  font-size: 100%;
+}
+
+.with-icon .icon-large {
+  margin-inline-end: var(--s-2);
   font-size: 100%;
 }
 
