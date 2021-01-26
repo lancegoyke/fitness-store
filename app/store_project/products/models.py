@@ -262,3 +262,12 @@ class Program(Product):
             content_type=ContentType.objects.get_for_model(Program),
         ).delete()
         logger.info(f"Permission {permission} deleted.")
+
+
+class Book(Product):
+    """A model for digital books. Extend Product model base functionality."""
+
+    # self.name will contain title and subtitle
+    pdf = models.FileField(_("PDF"), upload_to="products/books/pdf/", max_length=100, blank=True)
+    epub = models.FileField(_("EPUB"), upload_to="products/books/epub/", max_length=100, blank=True)
+    mobi = models.FileField(_("MOBI"), upload_to="products/books/mobi/", max_length=100, blank=True)
