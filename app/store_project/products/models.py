@@ -271,3 +271,6 @@ class Book(Product):
     pdf = models.FileField(_("PDF"), upload_to="products/books/pdf/", max_length=100, blank=True)
     epub = models.FileField(_("EPUB"), upload_to="products/books/epub/", max_length=100, blank=True)
     mobi = models.FileField(_("MOBI"), upload_to="products/books/mobi/", max_length=100, blank=True)
+
+    def get_absolute_url(self):
+        return reverse('products:book_detail', kwargs={"slug": self.slug})

@@ -2,58 +2,58 @@
 
 {% load i18n products_extras %}
 
-{% block head_title %}{% trans "Programs" %}{% endblock head_title %}
+{% block head_title %}{% trans "Books" %}{% endblock head_title %}
 
 {% block content %}
 
-<h1>Programs</h1>
+<h1>Books</h1>
 
 {% if user.is_superuser %}
 <p>
-  <a class="button" href="{% url 'admin:products_program_changelist' %}">Admin</a>
+  <a class="button" href="{% url 'admin:products_book_changelist' %}">Admin</a>
 </p>
 {% endif %}
 
-{% if programs %}
+{% if books %}
 <ul class="grid max-width:measure*2">
-  {% for program in programs %}
+  {% for book in books %}
   <li class="card-box card-stack">
     <div class="frame landscape">
       
-      {% if program.featured_image %}
-        <img src="{{ program.featured_image.url }}" alt="{{ program.name }}" />
+      {% if book.featured_image %}
+        <img src="{{ book.featured_image.url }}" alt="{{ book.name }}" />
       {% else %}
         <img style="background-color: var(--main-color-dark);">
       {% endif %}
     </div>
     <div class="box stack">
       <h3>
-        <a href="{% url 'products:program_detail' program.slug %}">
-          {{ program.name }}
+        <a href="{% url 'products:book_detail' book.slug %}">
+          {{ book.name }}
         </a>
-        {% if program.status == "pr" %}
+        {% if book.status == "pr" %}
           <span class="tag private">PRIVATE</span>
         {% endif %}
-        {% if program.status == "dr" %}
+        {% if book.status == "dr" %}
           <span class="tag draft">DRAFT</span>
         {% endif %}
       </h3>
-      <p>{{ program.description }}</p>
+      <p>{{ book.description }}</p>
     </div>
     <div class="box space-between">
       <div class="small">
         
-        {% with "products.can_view_"|concat:program.slug as can_view_program %}
-          {% if can_view_program in perms %}
+        {% with "products.can_view_"|concat:book.slug as can_view_book %}
+          {% if can_view_book in perms %}
             <span class="tag">Owned</span>
           {% else %}
-            <span class="tag price">${{ program.price|floatformat:"0" }}</span>
+            <span class="tag price">${{ book.price|floatformat:"0" }}</span>
           {% endif %}
         {% endwith %}
 
       </div>
       <div class="small font-size:small">
-        <span>By {{ program.author.name }}</span>
+        <span>By {{ book.author.name }}</span>
       </div>
     </div>
   </li>

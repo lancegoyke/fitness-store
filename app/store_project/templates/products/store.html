@@ -2,11 +2,11 @@
 
 {% load i18n products_extras %}
 
-{% block head_title %}{% trans "Programs" %}{% endblock head_title %}
+{% block head_title %}{% trans "Store" %}{% endblock head_title %}
 
 {% block content %}
 
-<h1>Programs</h1>
+<h1>Store</h1>
 
 {% if user.is_superuser %}
 <p>
@@ -14,46 +14,46 @@
 </p>
 {% endif %}
 
-{% if programs %}
+{% if products %}
 <ul class="grid max-width:measure*2">
-  {% for program in programs %}
+  {% for product in products %}
   <li class="card-box card-stack">
     <div class="frame landscape">
       
-      {% if program.featured_image %}
-        <img src="{{ program.featured_image.url }}" alt="{{ program.name }}" />
+      {% if product.featured_image %}
+        <img src="{{ product.featured_image.url }}" alt="{{ product.name }}" />
       {% else %}
         <img style="background-color: var(--main-color-dark);">
       {% endif %}
     </div>
     <div class="box stack">
       <h3>
-        <a href="{% url 'products:program_detail' program.slug %}">
-          {{ program.name }}
+        <a href="{{ product.get_absolute_url }}">
+          {{ product.name }}
         </a>
-        {% if program.status == "pr" %}
+        {% if product.status == "pr" %}
           <span class="tag private">PRIVATE</span>
         {% endif %}
-        {% if program.status == "dr" %}
+        {% if product.status == "dr" %}
           <span class="tag draft">DRAFT</span>
         {% endif %}
       </h3>
-      <p>{{ program.description }}</p>
+      <p>{{ product.description }}</p>
     </div>
     <div class="box space-between">
       <div class="small">
         
-        {% with "products.can_view_"|concat:program.slug as can_view_program %}
-          {% if can_view_program in perms %}
+        {% with "products.can_view_"|concat:product.slug as can_view_product %}
+          {% if can_view_product in perms %}
             <span class="tag">Owned</span>
           {% else %}
-            <span class="tag price">${{ program.price|floatformat:"0" }}</span>
+            <span class="tag price">${{ product.price|floatformat:"0" }}</span>
           {% endif %}
         {% endwith %}
 
       </div>
       <div class="small font-size:small">
-        <span>By {{ program.author.name }}</span>
+        <span>By {{ product.author.name }}</span>
       </div>
     </div>
   </li>
@@ -62,6 +62,6 @@
 
 <p class="center text-center" style="margin-top: var(--s5);">Want something else? <a target="_blank" href="https://docs.google.com/forms/d/e/1FAIpQLSfqlmSwj1UW3anIIgP0uBEv31W41AhGH-5FYeGVly90dwkMVw/viewform?usp=sf_link">Request it.</a></p>
 {% else %}
-<p>Oh no! The store is empty!</p>
+<p>No products!</p>
 {% endif %}
 {% endblock content %}

@@ -2,7 +2,7 @@
 
 {% load static i18n %}
 
-{% block head_title %}{% trans program.name %}{% endblock head_title %}
+{% block head_title %}{% trans book.name %}{% endblock head_title %}
 
 {% block content %}
 
@@ -13,7 +13,7 @@
       < Back to Store
     </a>
     {% if user.is_superuser %}
-    <a class="box padding:s-1" href="{% url 'admin:products_program_change' program.id %}">
+    <a class="box padding:s-1" href="{% url 'admin:products_book_change' book.id %}">
       Admin
     </a>
     {% endif %}
@@ -24,8 +24,8 @@
   <div> <!-- intermediary wrapper -->
     <div>
       <div class="frame square">
-      {% if program.featured_image %}
-        <img src="{{ program.featured_image.url }}" alt="" />
+      {% if book.featured_image %}
+        <img src="{{ book.featured_image.url }}" alt="" />
       {% else %}
         <img style="background-color: var(--main-color-dark);">
       {% endif %}
@@ -33,18 +33,18 @@
     </div>
     <div class="stack">
       <div>
-        <h1>{{ program.name }}</h1>
+        <h1>{{ book.name }}</h1>
         <div class="cluster">
           <div> <!-- intermediary wrapper -->
-            <div class="money">${{ program.price|floatformat }}</div>
-            <div class="tag duration">{{ program.duration }} weeks</div>
-            <div class="tag frequency">{{ program.frequency }} days/wk</div>
+            <div class="money">${{ book.price|floatformat }}</div>
+            <div class="tag duration">{{ book.duration }} weeks</div>
+            <div class="tag frequency">{{ book.frequency }} days/wk</div>
             
-            {% if program.status == "pr" %}
+            {% if book.status == "pr" %}
               <div class="tag private">PRIVATE</div>
             {% endif %}
 
-            {% if program.status == "dr" %}
+            {% if book.status == "dr" %}
               <div class="tag draft">DRAFT</div>
             {% endif %}
               
@@ -53,7 +53,7 @@
       </div>
 
 
-      <p>{{ program.description }}</p>
+      <p>{{ book.description }}</p>
 
       <p>
         
@@ -61,14 +61,14 @@
           <button
             class="box purchase"
             id="submitButton"
-            data-program-slug="{{ program.slug }}">
+            data-book-slug="{{ book.slug }}">
               Purchase!
           </button>
         {% else %}
           {% comment %} <a class="button box purchase" href="{% url 'account_login' %}?next={{ request.path }}">Purchase!</a> {% endcomment %}
           <a
             class="button box purchase"
-            href="{% url 'payments:login_to_purchase' product_slug=program.slug %}">
+            href="{% url 'payments:login_to_purchase' product_slug=book.slug %}">
             Purchase!
           </a>
         {% endif %}
