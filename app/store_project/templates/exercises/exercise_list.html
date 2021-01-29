@@ -8,18 +8,15 @@
 {% block content %}
 <h1>Exercises</h1>
 
-<p>Use <span style="padding: 2px 4px; background-color: lightgray;">Ctrl + F</span> to search for an exercise name.</p>
-
-
-{% if request.user.is_staff %}
-  <div class="cluster categories">
-    <div> <!-- intermediary wrapper -->
-      {% for category in categories %}
-        <div><a class="tag filter-btn" href="{% url 'exercises:filtered_list' category.slug %}">{{ category.name }}</a></div>
-      {% endfor %}
-    </div>
+<div class="cluster categories">
+  <div> <!-- intermediary wrapper -->
+    {% for category in categories %}
+      <div><a class="tag filter-btn" href="{% url 'exercises:filtered_list' category.slug %}">{{ category.name }}</a></div>
+    {% endfor %}
   </div>
-{% endif %}
+</div>
+
+<p>Use <span style="padding: 2px 4px; background-color: lightgray;">Ctrl + F</span> to search for an exercise name.</p>
 
 <ul>
   {% for exercise in exercises %}

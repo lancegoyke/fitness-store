@@ -1018,13 +1018,16 @@ ul.grid {
 .tag.filter-btn {
   padding: 2px var(--s0);
   font-size: var(--s0);
-  border-radius: 5px;
+  color: var(--main-color-light);
+  background-color: var(--main-color-dark-gray);
+  border-radius: 0;
 }
 
 .tag.copy-btn {
   padding: 1px var(--s-1);
   font-size: 0.8rem;
-  align-self: normal;
+  color: var(--main-color-dark-gray);
+  background-color: lightgray;
 }
 
 .tag.price {
