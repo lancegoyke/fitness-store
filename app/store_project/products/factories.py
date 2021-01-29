@@ -7,7 +7,22 @@ import factory
 from factory.django import DjangoModelFactory
 
 from store_project.users.factories import UserFactory, SuperAdminFactory
-from .models import Product, Program
+from .models import Book, Product, Program
+
+
+class BookFactory(DjangoModelFactory):
+    class Meta:
+        model = Book
+
+    name = factory.Faker("sentence", nb_words=5, variable_nb_words=True)
+    description = factory.Faker("paragraph", nb_sentences=2, variable_nb_sentences=True)
+    slug = factory.LazyAttribute(lambda o: slugify(o.name))
+    status = Product.PUBLIC
+    price = 10.00
+    author = factory.SubFactory(SuperAdminFactory)
+    page_content = factory.Faker(
+        "paragraph", nb_sentences=5, variable_nb_sentences=True
+    )
 
 
 class ProgramFactory(DjangoModelFactory):

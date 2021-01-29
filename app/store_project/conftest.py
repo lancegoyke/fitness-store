@@ -4,8 +4,8 @@ from store_project.users.models import User
 from store_project.users.factories import SuperAdminFactory, UserFactory
 from store_project.pages.models import Page
 from store_project.pages.factories import PageFactory
-from store_project.products.models import Program
-from store_project.products.factories import ProgramFactory
+from store_project.products.models import Book, Program
+from store_project.products.factories import BookFactory, ProgramFactory
 from store_project.exercises.models import Exercise
 from store_project.exercises.factories import ExerciseFactory
 
@@ -23,6 +23,11 @@ def user() -> User:
 @pytest.fixture
 def superuser() -> User:
     return SuperAdminFactory()
+
+
+@pytest.fixture
+def book() -> Book:
+    return BookFactory()
 
 
 @pytest.fixture
