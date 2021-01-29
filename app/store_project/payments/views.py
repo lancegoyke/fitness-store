@@ -42,6 +42,7 @@ def stripe_config(request):
 
 
 @csrf_exempt
+@login_required
 def create_checkout_session(request):
     """
     A Checkout Session is the programmatic representation of what your
