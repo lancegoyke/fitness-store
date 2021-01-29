@@ -162,6 +162,10 @@ fieldset {
   border: none;
 }
 
+form label {
+  font-weight: 700;
+}
+
 .stack-form fieldset {
   margin-top: 0;
   padding: var(--s1);
