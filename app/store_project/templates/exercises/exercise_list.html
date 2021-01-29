@@ -15,7 +15,7 @@
   <div class="cluster categories">
     <div> <!-- intermediary wrapper -->
       {% for category in categories %}
-        <div><a class="tag" href="{% url 'exercises:filtered_list' category.slug %}">{{ category.name }}</a></div>
+        <div><a class="tag filter-btn" href="{% url 'exercises:filtered_list' category.slug %}">{{ category.name }}</a></div>
       {% endfor %}
     </div>
   </div>
