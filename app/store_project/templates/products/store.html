@@ -10,7 +10,8 @@
 
 {% if user.is_superuser %}
 <p>
-  <a class="button" href="{% url 'admin:products_program_changelist' %}">Admin</a>
+  <a class="button" href="{% url 'admin:products_book_changelist' %}">Book Admin</a>
+  <a class="button" href="{% url 'admin:products_program_changelist' %}">Program Admin</a>
 </p>
 {% endif %}
 

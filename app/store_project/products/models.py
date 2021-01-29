@@ -274,3 +274,31 @@ class Book(Product):
 
     def get_absolute_url(self):
         return reverse('products:book_detail', kwargs={"slug": self.slug})
+
+    @hook(AFTER_CREATE)
+    def add_book_permission(self):
+        """
+        Create a permission for users who have access to this book and add it
+        to the "comped" group.
+        """
+        permission = Permission.objects.create(
+            codename=f"can_view_{self.slug}",
+            name=f"Can view {self.name}",
+            content_type=ContentType.objects.get_for_model(Book),
+        )
+        logger.info(f"Permission {permission} created.")
+        comped_group, created = Group.objects.get_or_create(name="comped")
+        comped_group.permissions.add(permission)
+        logger.info(f"Permission {permission} added to comped_group.")
+
+    @hook(BEFORE_DELETE)
+    def remove_book_permission(self):
+        """
+        Remove the can_view_{book.slug} permission for associated book.
+        """
+        permission = Permission.objects.get(
+            codename=f"can_view_{self.slug}",
+            name=f"Can view {self.name}",
+            content_type=ContentType.objects.get_for_model(Book),
+        ).delete()
+        logger.info(f"Permission {permission} deleted.")
