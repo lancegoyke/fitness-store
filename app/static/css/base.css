@@ -409,6 +409,13 @@ ul.errorlist {
   background-color: var(--main-color-accent);
 }
 
+.box.purchase:active,
+.box.purchase:hover,
+.box.purchase:focus {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .box.login {
   padding: var(--s-2);
   text-align: center;
