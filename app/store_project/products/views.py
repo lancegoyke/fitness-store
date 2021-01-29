@@ -11,7 +11,6 @@ from markdownx.utils import markdownify
 from .models import Book, Product, Program
 
 
-
 class StoreView(TemplateView):
     template_name = 'products/store.html'
 
@@ -36,8 +35,7 @@ class StoreView(TemplateView):
                 key=lambda product: product.created, reverse=True
             )
             context["products"] = products
-        
-        context["products"] = products
+
         return context
 
 
