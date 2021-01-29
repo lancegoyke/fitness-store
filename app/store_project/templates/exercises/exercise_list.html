@@ -24,16 +24,18 @@
 <ul>
   {% for exercise in exercises %}
   <li>
-    <a href="{% url 'exercises:detail' slug=exercise.slug %}">{% trans exercise.name %}</a>
-    
-    {% if exercise.demonstration %}
-      <button
-        class="clear copy-btn tag"
-        id="copy-{{ exercise.slug }}" 
-        data-clipboard-text="{{ exercise.demonstration }}">
-          copy video
-      </button>
-    {% endif %}
+    <div class="inline-tag">
+      <a href="{% url 'exercises:detail' slug=exercise.slug %}">{% trans exercise.name %}</a>
+      
+      {% if exercise.demonstration %}
+        <button
+          class="clear copy-btn tag"
+          id="copy-{{ exercise.slug }}" 
+          data-clipboard-text="{{ exercise.demonstration }}">
+            copy demo
+        </button>
+      {% endif %}
+    </div>
   </li>
   {% endfor %}
 </ul>

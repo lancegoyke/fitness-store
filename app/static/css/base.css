@@ -957,6 +957,13 @@ ul.grid {
   height: 1cap;
 }
 
+.icon-medium {
+  width: 1.00rem;
+  width: 1cap;
+  height: 1.00rem;
+  height: 1cap;
+}
+
 .icon-large {
   width: 1.25em;
   width: 1cap;
@@ -970,6 +977,11 @@ ul.grid {
 }
 
 .with-icon .icon {
+  margin-inline-end: 1rem;
+  font-size: 100%;
+}
+
+.with-icon .icon-medium {
   margin-inline-end: 1rem;
   font-size: 100%;
 }
@@ -999,6 +1011,11 @@ ul.grid {
   font-size: var(--s-1);
 }
 
+.tag.copy-btn {
+  padding: 2px 4px;
+  font-size: 0.9rem;
+}
+
 .tag.price {
   background-color: var(--main-color-money);
 }
@@ -1017,6 +1034,15 @@ ul.grid {
 
 .tag.private {
   background-color: var(--color-private);
+}
+
+.inline-tag {
+  display: inline-flex;
+  align-items: center;
+}
+
+.inline-tag > :first-child {
+  margin-right: var(--s-2);
 }
 
 /*
