@@ -74,13 +74,13 @@ def create_checkout_session(request):
                         "price_data": {
                             "currency": "usd",
                             "unit_amount": f"{int(program.price*100)}",
-                            "product_data": {
+                            "program_data": {
                                 "name": f"{program.name}",
-                                # This needs to be disabled until media files are no longer local
+                                # This needs to be disabled if media files are local
                                 # "images": [f"{program.featured_image.url}"],
-                                "images": [
-                                    "https://lancegoyke.com/wp-content/uploads/2020/07/adult-architecture-athlete-boardwalk-221210-676x483.jpg",
-                                ],
+                                # "images": [
+                                #     "https://lancegoyke.com/wp-content/uploads/2020/07/adult-architecture-athlete-boardwalk-221210-676x483.jpg",
+                                # ],
                             },
                         },
                         "quantity": 1,
@@ -94,6 +94,7 @@ def create_checkout_session(request):
                 payment_method_types=["card"],
                 mode="payment",
                 line_items=line_items,
+                allow_promotion_codes=True,
                 metadata={
                     "program_name": program.name,
                 },
@@ -209,6 +210,8 @@ class SuccessView(TemplateView):
         context["amount"] = ""
         for product in line_items.data:
             context["products"].append(product.description)  # str
+            # this is broken
+            # not returning a product object, only it's name
         context["amount"] = int_to_price(product.amount_total)  # in USD with 2 decimals
         return context
 
