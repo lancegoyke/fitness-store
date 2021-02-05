@@ -1,6 +1,6 @@
 {% extends '_base.html' %}
 
-{% load i18n static %}
+{% load i18n static account %}
 
 {% block head_title %}{% trans "Payment Successful" %}{% endblock head_title %}
 
@@ -14,13 +14,13 @@
     {% trans "Total" %}: ${{ amount }} USD
 </strong></p>
 
-<a class="box invert download" href="{{ product.program_file.url }}">
+<a class="box invert download" href="{% url 'users:profile' %}">
   <span class="with-icon font-size:biggish">
     <svg class="icon" xmlns="http://www.w3.org/2000/svg" height="0.75rem" viewBox="0 0 24 24" width="0.75rem" stroke="none" fill="currentColor">
       <path d="M0 0h24v24H0V0z" fill="none"/>
       <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
     </svg>
-    {% trans "Download Program" %}
+    {% trans "Download Program in Account" %}
   </span>
 </a>
 {% endfor %}
