@@ -3,6 +3,7 @@
 ###########
 
 # a temporary image that's used for building the Python wheels
+# quick adjustment to see if Heroku can build this
 
 # pull official base image
 FROM python:3.8-alpine as builder
