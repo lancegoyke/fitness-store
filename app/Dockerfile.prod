@@ -23,15 +23,15 @@ RUN apk update \
     && apk --no-cache add build-base
 
 # lint
-RUN python3 -m pip install --upgrade pip
-RUN python3 -m pip install flake8
+RUN pip install --upgrade pip
+RUN pip install flake8
 COPY . .
 RUN flake8 --ignore=E501,F401,W503 .
 
 # install dependencies
 COPY ./requirements/base.txt .
 COPY ./requirements/production.txt .
-RUN python3 -m pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r production.txt
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r production.txt
 
 
 #########
@@ -58,6 +58,8 @@ WORKDIR $APP_HOME
 
 # install dependencies
 RUN apk update && apk add libpq
+# get Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # install Pillow dependencies
 RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
     # install scout-apm dependencies
@@ -65,7 +67,7 @@ RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/base.txt .
 COPY --from=builder /usr/src/app/production.txt .
-RUN python3 -m pip install --no-cache /wheels/*
+RUN pip install --no-cache /wheels/*
 
 # copy entrypoint-prod.sh
 COPY ./entrypoint.prod.sh $APP_HOME
@@ -74,7 +76,7 @@ COPY ./entrypoint.prod.sh $APP_HOME
 COPY . $APP_HOME
 
 # collect static files
-RUN python3 manage.py collectstatic --noinput
+RUN python manage.py collectstatic --noinput
 
 # chown all the files to the app user
 RUN chown -R app:app $APP_HOME
