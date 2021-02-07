@@ -32,17 +32,8 @@ def test_stripe_config_view():
     assert b"publicKey" in response.content
 
 
-def test_create_checkout_session_view_error(program: Program):
-    response = Client().get(
-        f"/payments/create-checkout-session/?program-slug={program.slug}"
-    )
-    assert response.status_code == 200
-    assert isinstance(response, JsonResponse)
-    assert b"error" in response.content
-
-
 def test_create_checkout_session_view(user: User, program: Program, rf: RequestFactory):
-    request = rf.get(f"/payments/create-checkout-session/?program-slug={program.slug}")
+    request = rf.get(f"/payments/create-checkout-session/?product-slug={program.slug}&product-type=program")
     request.user = user
     response = views.create_checkout_session(request)
     assert response.status_code == 200

@@ -104,7 +104,8 @@ class TestProgramDetailView:
 
         login_to_purchase_link = f'href="/payments/login-to-purchase/{program.slug}/">'
         purchase_button_id = 'id="submitButton"'
-        purchase_button_data = f'data-program-slug="{program.slug}"'
+        purchase_button_data_product_slug = f'data-product-slug="{program.slug}"'
+        purchase_button_data_product_type = f'data-product-type="program"'
         admin_link = reverse("admin:products_program_change", args=(program.id,))
 
         assert response.status_code == 200
@@ -112,7 +113,8 @@ class TestProgramDetailView:
         assert response.context_data["content"]
         assert response.context_data["program"]
         assert purchase_button_id in response.rendered_content
-        assert purchase_button_data in response.rendered_content
+        assert purchase_button_data_product_slug in response.rendered_content
+        assert purchase_button_data_product_type in response.rendered_content
         assert login_to_purchase_link not in response.rendered_content
         assert admin_link not in response.rendered_content
 
@@ -124,7 +126,8 @@ class TestProgramDetailView:
 
         login_to_purchase_link = f'href="/payments/login-to-purchase/{program.slug}/">'
         purchase_button_id = 'id="submitButton"'
-        purchase_button_data = f'data-program-slug="{program.slug}"'
+        purchase_button_data_product_slug = f'data-product-slug="{program.slug}"'
+        purchase_button_data_product_type = f'data-product-type="program"'
 
         assert response.status_code == 200
         assert "products/program_detail.html" in response.template_name
@@ -132,7 +135,8 @@ class TestProgramDetailView:
         assert response.context_data["program"]
         assert login_to_purchase_link in response.rendered_content
         assert purchase_button_id not in response.rendered_content
-        assert purchase_button_data not in response.rendered_content
+        assert purchase_button_data_product_slug not in response.rendered_content
+        assert purchase_button_data_product_type not in response.rendered_content
 
     def test_super_authenticated(
         self, superuser: User, program: Program, rf: RequestFactory
@@ -144,7 +148,8 @@ class TestProgramDetailView:
 
         login_to_purchase_link = f'href="/payments/login-to-purchase/{program.slug}/">'
         purchase_button_id = 'id="submitButton"'
-        purchase_button_data = f'data-program-slug="{program.slug}"'
+        purchase_button_data_product_slug = f'data-product-slug="{program.slug}"'
+        purchase_button_data_product_type = f'data-product-type="program"'
         admin_link = reverse("admin:products_program_change", args=(program.id,))
 
         assert response.status_code == 200
@@ -152,7 +157,8 @@ class TestProgramDetailView:
         assert response.context_data["content"]
         assert response.context_data["program"]
         assert purchase_button_id in response.rendered_content
-        assert purchase_button_data in response.rendered_content
+        assert purchase_button_data_product_slug in response.rendered_content
+        assert purchase_button_data_product_type in response.rendered_content
         assert login_to_purchase_link not in response.rendered_content
         assert admin_link in response.rendered_content
 
@@ -221,7 +227,8 @@ class TestBookDetailView:
 
         login_to_purchase_link = f'href="/payments/login-to-purchase/{book.slug}/">'
         purchase_button_id = 'id="submitButton"'
-        purchase_button_data = f'data-book-slug="{book.slug}"'
+        purchase_button_data_product_slug = f'data-product-slug="{book.slug}"'
+        purchase_button_data_product_type = f'data-product-type="book"'
         admin_link = reverse("admin:products_book_change", args=(book.id,))
 
         assert response.status_code == 200
@@ -229,7 +236,8 @@ class TestBookDetailView:
         assert response.context_data["content"]
         assert response.context_data["book"]
         assert purchase_button_id in response.rendered_content
-        assert purchase_button_data in response.rendered_content
+        assert purchase_button_data_product_slug in response.rendered_content
+        assert purchase_button_data_product_type in response.rendered_content
         assert login_to_purchase_link not in response.rendered_content
         assert admin_link not in response.rendered_content
 
@@ -241,7 +249,8 @@ class TestBookDetailView:
 
         login_to_purchase_link = f'href="/payments/login-to-purchase/{book.slug}/">'
         purchase_button_id = 'id="submitButton"'
-        purchase_button_data = f'data-book-slug="{book.slug}"'
+        purchase_button_data_product_slug = f'data-product-slug="{book.slug}"'
+        purchase_button_data_product_type = f'data-product-type="book"'
 
         assert response.status_code == 200
         assert "products/book_detail.html" in response.template_name
@@ -249,7 +258,8 @@ class TestBookDetailView:
         assert response.context_data["book"]
         assert login_to_purchase_link in response.rendered_content
         assert purchase_button_id not in response.rendered_content
-        assert purchase_button_data not in response.rendered_content
+        assert purchase_button_data_product_slug not in response.rendered_content
+        assert purchase_button_data_product_type not in response.rendered_content
 
     def test_super_authenticated(
         self, superuser: User, book: Book, rf: RequestFactory
@@ -261,7 +271,8 @@ class TestBookDetailView:
 
         login_to_purchase_link = f'href="/payments/login-to-purchase/{book.slug}/">'
         purchase_button_id = 'id="submitButton"'
-        purchase_button_data = f'data-book-slug="{book.slug}"'
+        purchase_button_data_product_slug = f'data-product-slug="{book.slug}"'
+        purchase_button_data_product_type = 'data-product-type="book"'
         admin_link = reverse("admin:products_book_change", args=(book.id,))
 
         assert response.status_code == 200
@@ -269,7 +280,8 @@ class TestBookDetailView:
         assert response.context_data["content"]
         assert response.context_data["book"]
         assert purchase_button_id in response.rendered_content
-        assert purchase_button_data in response.rendered_content
+        assert purchase_button_data_product_slug in response.rendered_content
+        assert purchase_button_data_product_type in response.rendered_content
         assert login_to_purchase_link not in response.rendered_content
         assert admin_link in response.rendered_content
 
