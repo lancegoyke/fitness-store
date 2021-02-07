@@ -27,9 +27,41 @@
     
     {% with "products.can_view_"|concat:program.slug as can_view_program %}
       {% if can_view_program in perms %}
-        <a href="{{ program.program_file }}">
+        <a href="{{ program.program_file.url }}">
           {% trans "[Download]" %}
         </a>
+      {% endif %}
+    {% endwith %}
+  </li>
+  {% endfor %}
+</ul>
+
+
+<h2>Books</h2>
+
+<ul>
+  {% for book in books %}
+  <li>
+    {{ book }}
+    
+    {% with "products.can_view_"|concat:book.slug as can_view_book %}
+      {% if can_view_book in perms %}
+        
+        {% if book.pdf %}
+          <a href="{{ book.pdf.url }}">
+            {% trans "[PDF]" %}
+          </a>
+        {% endif %}
+        {% if book.epub %}
+          <a href="{{ book.epub.url }}">
+            {% trans "[EPUB]" %}
+          </a>
+        {% endif %}
+        {% if book.mobi %}
+          <a href="{{ book.mobi.url }}">
+            {% trans "[MOBI]" %}
+          </a>
+        {% endif %}
       {% endif %}
     {% endwith %}
   </li>
