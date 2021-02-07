@@ -18,7 +18,7 @@ from django.views.generic.base import TemplateView
 import stripe
 
 from store_project.payments.utils import int_to_price, order_confirmation_email
-from store_project.products.models import Category, Program
+from store_project.products.models import Book, Category, Program
 from store_project.users.factories import UserFactory
 
 
