@@ -191,7 +191,7 @@ def stripe_webhook(request):
                 test_category, created = Category.objects.get_or_create(
                     name="Test Category"
                 )
-                program.categories.add(test_category)
+                product.categories.add(test_category)
         elif product_type == "book":
             product = Book.objects.get(name=product_name)
 
