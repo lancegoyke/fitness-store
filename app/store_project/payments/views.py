@@ -112,6 +112,8 @@ def create_checkout_session(request):
                 allow_promotion_codes=True,
                 metadata={
                     "product_name": product.name,
+                    "product_type": product_type,
+                    "product_slug": product_slug,
                     # add other pertinent links to download, etc...
                 },
             )
@@ -156,10 +158,6 @@ def stripe_webhook(request):
             user = UserFactory(
                 username="lancegoyke", email="lancegoyke@gmail.com"
             )  # user for testing
-
-        # store Stripe customer ID if new customer
-        if not user.stripe_customer_id:
-            user.stripe_customer_id = checkout_session.customer
 
         # get program name from Stripe Checkout Session metadata
         try:
