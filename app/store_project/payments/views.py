@@ -144,33 +144,35 @@ def stripe_webhook(request):
         print(f"ERROR: {e}")
         return HttpResponse(status=400)
 
-    # Handle the checkout.session.completed event
     if event["type"] == "checkout.session.completed":
         print("[payments.views.stripe_webhook] Payment was successful.")
 
-        # set variables
         checkout_session = event.data.object
         user_email = checkout_session.customer_email  # CLI test: null
         metadata = checkout_session.metadata  # CLI test: {}
-        if user_email:
-            user = User.objects.get(email=user_email)
-        else:
+        try:
+            user = User.objects.get(stripe_customer_id=checkout_session.customer.id)
+            # Current bug: if user changes email address in Stripe, it's not
+            # changed in Django. So we're finding User object with
+            # `stripe_customer_id` instead.
+        except User.DoesNotExist:
             user = UserFactory(
                 username="lancegoyke", email="lancegoyke@gmail.com"
             )  # user for testing
 
-        # get program name from Stripe Checkout Session metadata
         try:
-            program_name = metadata["program_name"]
+            product_name = metadata["product_name"]
         except KeyError:
             # if metadata not supplied, we're testing
-            program_name = "Test Program"
+            product_name = "Test Product"
 
-        try:
-            program = Program.objects.get(name=program_name)
-        except Program.DoesNotExist:
-            # create new for testing
-            program = Program.objects.create(
+        if metadata["product_type"] == "program":
+            product = Program.objects.get(name=product_name)
+        elif metadata["product_type"] == "book":
+            product = Book.objects.get(name=product_name)
+        else:
+            # create new Program for testing
+            product = Program.objects.create(
                 name="Test Program",
                 description="Test description.",
                 slug="test-program",
@@ -186,27 +188,26 @@ def stripe_webhook(request):
 
         # give customer account permissions for purchased product
         try:
-            permission = Permission.objects.get(name=f"Can view {program_name}")
+            permission = Permission.objects.get(name=f"Can view {product_name}")
         except Permission.DoesNotExist:
             permission = Permission.objects.create(
-                codename=f"can_view_{slugify(program_name)}",
-                name=f"Can view {program_name}",
-                content_type=ContentType.objects.get_for_model(Program),
+                codename=f"can_view_{slugify(product_name)}",
+                name=f"Can view {product_name}",
+                content_type=ContentType.objects.get_for_model(product.__class__),
             )
         user.user_permissions.add(permission)
-        print(
+        logger.info(
             f"[payments.views.stripe_webhook] Customer permissions set for {user.email}."
         )
 
         try:
-            order_confirmation_email(checkout_session, program, user)
-
+            order_confirmation_email(checkout_session, product, user)
         except smtplib.SMTPException as e:
             logger.error("Could not email user's order.")
             logger.error(f"{e}")
             logger.error("Be sure to follow up with user")
             logger.error(f"- User = {user.email}")
-            logger.error(f"- Program Name = {program_name}")
+            logger.error(f"- Product Name = {product_name}")
             return HttpResponse(status=500)
 
     return HttpResponse(status=200)
