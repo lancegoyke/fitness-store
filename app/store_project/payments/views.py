@@ -124,7 +124,7 @@ def create_checkout_session(request):
 
 @csrf_exempt
 def stripe_webhook(request):
-    print("[payments.views.stripe_webhook] BEGIN")
+    print("[payments.views.stripe_webhook] BEGIN HANDLING WEBHOOKS")
     stripe.api_key = settings.STRIPE_SECRET_KEY
     endpoint_secret = os.environ.get("STRIPE_ENDPOINT_SECRET")
     payload = request.body
@@ -148,10 +148,9 @@ def stripe_webhook(request):
         print("[payments.views.stripe_webhook] Payment was successful.")
 
         checkout_session = event.data.object
-        user_email = checkout_session.customer_email  # CLI test: null
         metadata = checkout_session.metadata  # CLI test: {}
         try:
-            user = User.objects.get(stripe_customer_id=checkout_session.customer.id)
+            user = User.objects.get(stripe_customer_id=checkout_session.customer)
             # Current bug: if user changes email address in Stripe, it's not
             # changed in Django. So we're finding User object with
             # `stripe_customer_id` instead.
@@ -160,31 +159,43 @@ def stripe_webhook(request):
                 username="lancegoyke", email="lancegoyke@gmail.com"
             )  # user for testing
 
+        print(f"[payments.views.stripe_webhook] User = {user}")
+
         try:
             product_name = metadata["product_name"]
         except KeyError:
             # if metadata not supplied, we're testing
-            product_name = "Test Product"
+            product_name = "Test Program"
 
-        if metadata["product_type"] == "program":
-            product = Program.objects.get(name=product_name)
-        elif metadata["product_type"] == "book":
+        try:
+            product_type = metadata["product_type"]
+        except KeyError:
+            # if metadata not supplied, we're testing
+            product_type = "program"
+
+        # THE PROBLEM IS HERE IT SEEMS
+        if product_type == "program":
+            try:
+                product = Program.objects.get(name=product_name)
+            except Program.DoesNotExist:
+                # create new Program for testing
+                product = Program.objects.create(
+                    name="Test Program",
+                    description="Test description.",
+                    slug="test-program",
+                    price=1100,
+                    author=User.objects.get(email="lance@lancegoyke.com"),
+                    duration=1,
+                    frequency=3,
+                )
+                test_category, created = Category.objects.get_or_create(
+                    name="Test Category"
+                )
+                program.categories.add(test_category)
+        elif product_type == "book":
             product = Book.objects.get(name=product_name)
-        else:
-            # create new Program for testing
-            product = Program.objects.create(
-                name="Test Program",
-                description="Test description.",
-                slug="test-program",
-                price=1100,
-                author=User.objects.get(email="lance@lancegoyke.com"),
-                duration=1,
-                frequency=3,
-            )
-            test_category, created = Category.objects.get_or_create(
-                name="Test Category"
-            )
-            program.categories.add(test_category)
+
+        print(f"[payments.views.stripe_webhook] Product = {product.name}")
 
         # give customer account permissions for purchased product
         try:
@@ -196,8 +207,8 @@ def stripe_webhook(request):
                 content_type=ContentType.objects.get_for_model(product.__class__),
             )
         user.user_permissions.add(permission)
-        logger.info(
-            f"[payments.views.stripe_webhook] Customer permissions set for {user.email}."
+        print(
+            f'[payments.views.stripe_webhook] Permission "{permission.name}" given to {user.email}'
         )
 
         try:
@@ -210,6 +221,7 @@ def stripe_webhook(request):
             logger.error(f"- Product Name = {product_name}")
             return HttpResponse(status=500)
 
+        print("[payments.views.stripe_webhook] Successful payment webhook handled properly.")
     return HttpResponse(status=200)
 
 
