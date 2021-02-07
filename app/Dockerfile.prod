@@ -3,7 +3,6 @@
 ###########
 
 # a temporary image that's used for building the Python wheels
-# quick adjustment to see if Heroku can build this
 
 # pull official base image
 FROM python:3.8-alpine as builder
@@ -22,6 +21,10 @@ RUN apk update \
     && apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
     # install brotli dependency
     && apk --no-cache add build-base
+
+# Get Rust
+RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 # lint
 RUN pip install --upgrade pip
