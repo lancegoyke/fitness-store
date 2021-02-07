@@ -53,41 +53,56 @@ def create_checkout_session(request):
     if request.method == "GET":
         domain_url = settings.DOMAIN_URL + "payments/"
         stripe.api_key = settings.STRIPE_SECRET_KEY
-        program = Program.objects.get(slug=request.GET.get("program-slug"))
+        product_type = request.GET.get("product-type")
+        product_slug = request.GET.get("product-slug")
+        if product_type == "program":
+            product = Program.objects.get(slug=product_slug)
+        elif product_type == "book":
+            product = Book.objects.get(slug=product_slug)
 
         try:
             # Create a new Checkout Session for the order
             # For more, see https://stripe.com/docs/api/checkout/sessions/create
-
-            # ?session_id={CHECKOUT_SESSION_ID} means the redirect will have the session ID set as a query param
             line_items = []
-            if program.stripe_price_id:
+            if product.stripe_price_id:
                 line_items = [
                     {
-                        "price": program.stripe_price_id,
+                        # Use the Price already in Stripe
+                        "price": product.stripe_price_id,
                         "quantity": 1,
                     },
                 ]
             else:
                 line_items = [
                     {
+                        # Generate a new Price in Stripe
                         "price_data": {
                             "currency": "usd",
-                            "unit_amount": f"{int(program.price*100)}",
-                            "program_data": {
-                                "name": f"{program.name}",
-                                # This needs to be disabled if media files are local
-                                # "images": [f"{program.featured_image.url}"],
-                                # "images": [
-                                #     "https://lancegoyke.com/wp-content/uploads/2020/07/adult-architecture-athlete-boardwalk-221210-676x483.jpg",
-                                # ],
+                            "unit_amount": f"{int(product.price*100)}",
+                            "product_data": {
+                                "name": f"{product.name}",
                             },
                         },
                         "quantity": 1,
                     },
                 ]
+
+            if request.user.stripe_customer_id:
+                try:
+                    stripe_customer = stripe.Customer.retrieve(id=request.user.stripe_customer_id)
+                except stripe.error.InvalidRequestError:
+                    logger.info("Could not find Stripe Customer with ID={stripe_customer_id}. Creating now.")
+                    stripe_customer = stripe.Customer.create(
+                        id=request.user.stripe_customer_id,
+                        email=request.user.email
+                    )
+            else:
+                stripe_customer = stripe.Customer.create(email=request.user.email)
+                request.user.stripe_customer_id = stripe_customer.id
+                request.user.save(update_fields=["stripe_customer_id"])
+
             checkout_session = stripe.checkout.Session.create(
-                customer_email=request.user.email,
+                customer=stripe_customer,
                 client_reference_id=request.user.id,
                 success_url=domain_url + "success/?session_id={CHECKOUT_SESSION_ID}",
                 cancel_url=domain_url + "cancellation/",
@@ -96,7 +111,8 @@ def create_checkout_session(request):
                 line_items=line_items,
                 allow_promotion_codes=True,
                 metadata={
-                    "program_name": program.name,
+                    "product_name": product.name,
+                    # add other pertinent links to download, etc...
                 },
             )
             return JsonResponse({"sessionId": checkout_session["id"]})
