@@ -105,7 +105,7 @@ class TestProgramDetailView:
         login_to_purchase_link = f'href="/payments/login-to-purchase/{program.slug}/">'
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{program.slug}"'
-        purchase_button_data_product_type = f'data-product-type="program"'
+        purchase_button_data_product_type = 'data-product-type="program"'
         admin_link = reverse("admin:products_program_change", args=(program.id,))
 
         assert response.status_code == 200
@@ -127,7 +127,7 @@ class TestProgramDetailView:
         login_to_purchase_link = f'href="/payments/login-to-purchase/{program.slug}/">'
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{program.slug}"'
-        purchase_button_data_product_type = f'data-product-type="program"'
+        purchase_button_data_product_type = 'data-product-type="program"'
 
         assert response.status_code == 200
         assert "products/program_detail.html" in response.template_name
@@ -149,7 +149,7 @@ class TestProgramDetailView:
         login_to_purchase_link = f'href="/payments/login-to-purchase/{program.slug}/">'
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{program.slug}"'
-        purchase_button_data_product_type = f'data-product-type="program"'
+        purchase_button_data_product_type = 'data-product-type="program"'
         admin_link = reverse("admin:products_program_change", args=(program.id,))
 
         assert response.status_code == 200
@@ -228,7 +228,7 @@ class TestBookDetailView:
         login_to_purchase_link = f'href="/payments/login-to-purchase/{book.slug}/">'
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{book.slug}"'
-        purchase_button_data_product_type = f'data-product-type="book"'
+        purchase_button_data_product_type = 'data-product-type="book"'
         admin_link = reverse("admin:products_book_change", args=(book.id,))
 
         assert response.status_code == 200
@@ -250,7 +250,7 @@ class TestBookDetailView:
         login_to_purchase_link = f'href="/payments/login-to-purchase/{book.slug}/">'
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{book.slug}"'
-        purchase_button_data_product_type = f'data-product-type="book"'
+        purchase_button_data_product_type = 'data-product-type="book"'
 
         assert response.status_code == 200
         assert "products/book_detail.html" in response.template_name
