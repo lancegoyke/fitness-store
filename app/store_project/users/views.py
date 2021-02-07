@@ -14,8 +14,8 @@ class UserProfileView(LoginRequiredMixin, DetailView):
     model = User
     template_name = "users/profile.html"
     extra_context = {
-        "programs": Program.objects.all(),
-        "books": Book.objects.all(),
+        "programs": Program.objects.filter(status=Book.PUBLIC),
+        "books": Book.objects.filter(status=Book.PUBLIC),
     }
 
     def get_object(self):

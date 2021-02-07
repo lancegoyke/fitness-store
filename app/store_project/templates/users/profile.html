@@ -27,9 +27,11 @@
     
     {% with "products.can_view_"|concat:program.slug as can_view_program %}
       {% if can_view_program in perms %}
-        <a href="{{ program.program_file.url }}">
-          {% trans "[Download]" %}
-        </a>
+        {% if program.program_file %}
+          <a href="{{ program.program_file.url }}">
+            {% trans "[Download]" %}
+          </a>
+        {% endif %}
       {% endif %}
     {% endwith %}
   </li>
