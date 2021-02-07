@@ -5,7 +5,7 @@ Order details:
 - {{ user_display }}
 - {{ product }}
 - Total: ${{ price }}
-- Download: {{ product_url }}
+- Download from your account: {{ site_domain }}{{ account_url }}
 
 {% endblocktrans %}{% blocktrans with site_name=current_site.name site_domain=current_site.domain %}Thank you from {{ site_name }}!
 {{ site_domain }}{% endblocktrans %}

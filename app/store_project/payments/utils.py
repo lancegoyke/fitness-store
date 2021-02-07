@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.sites.models import Site
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
+from django.urls import reverse
 
 import stripe
 
@@ -26,9 +27,9 @@ def order_confirmation_email(
     context = {
         "product": product.name,
         "price": int_to_price(checkout_session.amount_total),
-        "product_url": product.program_file.url if product.program_file else None,
         "current_site": Site.objects.get_current(),
         "user": user,
+        "account_url": reverse("users:profile"),
     }
     msg_plain = render_to_string(
         "payments/email/order_confirmation.txt",
