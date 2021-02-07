@@ -12,6 +12,7 @@ User = get_user_model()
 class UserAdmin(auth_admin.UserAdmin):
     form = UserChangeForm
     add_form = UserCreationForm
+    readonly_fields = ("stripe_customer_id",)
     fieldsets = (
         (
             _("Personal info"),
@@ -20,6 +21,7 @@ class UserAdmin(auth_admin.UserAdmin):
                     "email",
                     "name",
                     "password",
+                    "stripe_customer_id",
                 )
             },
         ),
