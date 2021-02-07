@@ -57,13 +57,13 @@ RUN mkdir $APP_HOME/mediafiles
 WORKDIR $APP_HOME
 
 # install dependencies
-RUN apk update && apk add libpq curl
-# get Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+RUN apk update && apk add libpq
 # install Pillow dependencies
 RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
     # install scout-apm dependencies
-    && apk add gcc musl-dev python3-dev libffi-dev openssl-dev
+    && apk add gcc musl-dev python3-dev libffi-dev openssl-dev \
+    # install rust
+    && apk add --no-cache rust cargo
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/base.txt .
 COPY --from=builder /usr/src/app/production.txt .
