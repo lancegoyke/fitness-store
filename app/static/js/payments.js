@@ -16,7 +16,7 @@ fetch("/payments/config/")
     
     button.addEventListener("click", () => {
       // Get Checkout Session ID
-      const url = `/payments/create-checkout-session/?program-slug=${button.dataset.productSlug}&product-type=${button.dataset.productType}`;
+      const url = `/payments/create-checkout-session/?product-slug=${button.dataset.productSlug}&product-type=${button.dataset.productType}`;
 
       fetch(url)
         .then((result) => {
