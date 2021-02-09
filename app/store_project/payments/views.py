@@ -17,7 +17,9 @@ from django.views.generic.base import TemplateView
 
 import stripe
 
-from store_project.payments.utils import int_to_price, order_confirmation_email
+from store_project.payments.utils import (
+    int_to_price, order_confirmation_email, stripe_price_get_or_create,
+)
 from store_project.products.models import Book, Category, Program
 from store_project.users.factories import UserFactory
 
@@ -67,8 +69,8 @@ def create_checkout_session(request):
             if product.stripe_price_id:
                 line_items = [
                     {
-                        # Use the Price already in Stripe
-                        "price": product.stripe_price_id,
+                        # Use the Price ID we already have
+                        "price": stripe_price_get_or_create(product),
                         "quantity": 1,
                     },
                 ]

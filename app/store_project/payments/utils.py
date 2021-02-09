@@ -1,5 +1,7 @@
 import logging
+import os
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.sites.models import Site
 from django.core.mail import send_mail
@@ -8,7 +10,7 @@ from django.urls import reverse
 
 import stripe
 
-from store_project.products.models import Product, Program
+from store_project.products.models import Product
 
 
 User = get_user_model()
@@ -49,3 +51,23 @@ def order_confirmation_email(
     )
     print(f"[payments.views.stripe_webhook] Email sent to {user.email}.")
     logger.info(f"Successful order: {user.email}")
+
+
+def stripe_price_get_or_create(product: Product) -> str:
+    """
+    Because sometimes the Django Postgres database is not synced with the Products
+    and Prices in Stripe.
+    """
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+
+    try:
+        price_object = stripe.Price.retrieve(product.stripe_price_id)
+    except stripe.error.InvalidRequestError:
+        price_object = stripe.Price.create(
+            id=product.stripe_price_id,
+            currency="USD",
+            unit_amount=f"{int(product.price*100)}",
+            product=product.id,
+        )
+
+    return price_object.id
