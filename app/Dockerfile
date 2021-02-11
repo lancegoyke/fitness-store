@@ -15,6 +15,11 @@ RUN apk update \
 # install Pillow dependencies
 RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev
 
+# install rust
+RUN apk --no-cache add curl
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 # install dependencies
 RUN pip install --upgrade pip
 COPY ./requirements/base.txt .
