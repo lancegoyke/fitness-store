@@ -28,11 +28,6 @@ RUN pip install flake8
 COPY . .
 RUN flake8 --ignore=E501,F401,W503 .
 
-# install rust ($HOME can't be different than `getpwuid(geteuid())`)
-RUN apk --no-cache add curl
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-
 # install dependencies
 COPY ./requirements/base.txt .
 COPY ./requirements/production.txt .
@@ -60,6 +55,9 @@ RUN mkdir $APP_HOME
 RUN mkdir $APP_HOME/staticfiles
 RUN mkdir $APP_HOME/mediafiles
 WORKDIR $APP_HOME
+
+# temporary solution because I can't get Rust to install
+ENV CRYPTOGRAPHY_DONT_BUILD_RUST=1
 
 # install dependencies
 RUN apk update && apk add libpq
