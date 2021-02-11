@@ -48,6 +48,11 @@ RUN mkdir -p /home/app/web
 # create the app user
 RUN addgroup -S app && adduser -S app -G app
 
+# install rust ($HOME can't be different than `getpwuid(geteuid())`)
+RUN apk --no-cache add curl
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
 # create the appropriate directories
 ENV HOME=/home/app
 ENV APP_HOME=/home/app/web/app
@@ -62,11 +67,6 @@ RUN apk update && apk add libpq
 RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
     # install scout-apm dependencies
     && apk add gcc musl-dev python3-dev libffi-dev openssl-dev
-
-# install rust
-RUN apk --no-cache add curl
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
 
 COPY --from=builder /usr/src/app/wheels /wheels
 COPY --from=builder /usr/src/app/base.txt .
