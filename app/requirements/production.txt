@@ -3,5 +3,5 @@
 gunicorn==20.0.4
 django-ses[bounce]==1.0.3
 django-admin-honeypot==1.1.0
-sentry-sdk==0.19.4
-scout-apm==2.17.0
+sentry-sdk==0.20.0
+scout-apm==2.18.0
