@@ -61,7 +61,7 @@ RUN apk update && apk add libpq
 # install Pillow dependencies
 RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev \
     # install scout-apm dependencies
-    && apk add gcc musl-dev python3-dev libffi-dev openssl-dev \
+    && apk add gcc musl-dev python3-dev libffi-dev openssl-dev
 
 # install rust
 RUN apk --no-cache add curl
