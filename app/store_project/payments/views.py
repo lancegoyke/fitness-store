@@ -94,7 +94,7 @@ def create_checkout_session(request):
 
             checkout_session = stripe.checkout.Session.create(
                 customer=stripe_customer,
-                client_reference_id=request.user.id,
+                client_reference_id=str(request.user.id),
                 success_url=domain_url + "success/?session_id={CHECKOUT_SESSION_ID}",
                 cancel_url=domain_url + "cancellation/",
                 payment_method_types=["card"],
