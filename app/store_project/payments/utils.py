@@ -88,7 +88,6 @@ def stripe_price_get_or_create(product: Product) -> str:
         price_object = stripe.Price.retrieve(product.stripe_price_id)
     except stripe.error.StripeError:
         price_object = stripe.Price.create(
-            # id=product.stripe_price_id,
             currency="USD",
             unit_amount=f"{int(product.price*100)}",
             product=product.id,
