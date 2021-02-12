@@ -93,7 +93,7 @@ def create_checkout_session(request):
                 try:
                     stripe_customer = stripe.Customer.retrieve(id=request.user.stripe_customer_id)
                 except stripe.error.InvalidRequestError:
-                    logger.info(f"Could not find Stripe Customer with ID={stripe_customer_id}. Creating now.")
+                    logger.info(f"Could not find Stripe Customer with ID={request.user.stripe_customer_id}. Creating now.")
                     stripe_customer = stripe.Customer.create(
                         id=request.user.stripe_customer_id,
                         email=request.user.email
