@@ -110,7 +110,7 @@ def stripe_price_get_or_create(product: Product) -> str:
         price_object = stripe.Price.create(
             currency="USD",
             unit_amount=f"{int(product.price*100)}",
-            product=product.id,
+            product=str(product.id),
         )
 
     return price_object.id
