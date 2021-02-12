@@ -87,7 +87,7 @@ def stripe_price_get_or_create(product: Product) -> str:
     try:
         price_object = stripe.Price.retrieve(product.stripe_price_id)
         try:
-            product_object = stripe.Product.retrieve(product.id)
+            stripe.Product.retrieve(product.id)
         except stripe.error.InvalidRequestError:
             stripe.Product.create(
                 id=product.id,
