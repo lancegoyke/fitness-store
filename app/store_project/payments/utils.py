@@ -89,10 +89,10 @@ def stripe_price_get_or_create(product: Product) -> str:
         try:
             product_object = stripe.Product.retrieve(product.id)
         except stripe.error.InvalidRequestError:
-            product_object = stripe.Product.create(
+            stripe.Product.create(
                 id=product.id,
                 name=product.name,
-                description=self.description,
+                description=product.description,
                 type="good",
             )
     except stripe.error.StripeError:
@@ -101,10 +101,10 @@ def stripe_price_get_or_create(product: Product) -> str:
             unit_amount=f"{int(product.price*100)}",
             product=product.id,
         )
-        product_object = stripe.Product.create(
+        stripe.Product.create(
             id=product.id,
             name=product.name,
-            description=self.description,
+            description=product.description,
             type="good",
         )
 
