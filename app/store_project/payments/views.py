@@ -18,7 +18,8 @@ from django.views.generic.base import TemplateView
 import stripe
 
 from store_project.payments.utils import (
-    int_to_price, order_confirmation_email, stripe_price_get_or_create,
+    int_to_price, order_confirmation_email, stripe_customer_get_or_create,
+    stripe_price_get_or_create,
 )
 from store_project.products.models import Book, Category, Program
 from store_project.users.factories import UserFactory
@@ -89,19 +90,7 @@ def create_checkout_session(request):
                     },
                 )
 
-            if request.user.stripe_customer_id:
-                try:
-                    stripe_customer = stripe.Customer.retrieve(id=request.user.stripe_customer_id)
-                except stripe.error.InvalidRequestError:
-                    logger.info(f"Could not find Stripe Customer with ID={request.user.stripe_customer_id}. Creating now.")
-                    stripe_customer = stripe.Customer.create(
-                        id=request.user.stripe_customer_id,
-                        email=request.user.email
-                    )
-            else:
-                stripe_customer = stripe.Customer.create(email=request.user.email)
-                request.user.stripe_customer_id = stripe_customer.id
-                request.user.save(update_fields=["stripe_customer_id"])
+            stripe_customer = stripe_customer_get_or_create(request.user)
 
             checkout_session = stripe.checkout.Session.create(
                 customer=stripe_customer,

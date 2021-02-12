@@ -53,6 +53,31 @@ def order_confirmation_email(
     logger.info(f"Successful order: {user.email}")
 
 
+def stripe_customer_get_or_create(user: User) -> Stripe.Customer:
+    """
+    A customer might be in our Django database, but not in Stripe.
+    """
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+
+    if user.stripe_customer_id:
+        try:
+            stripe_customer = stripe.Customer.retrieve(id=user.stripe_customer_id)
+        except stripe.error.InvalidRequestError:
+            logger.info(f"Could not find Stripe Customer with ID={user.stripe_customer_id}. Creating now.")
+            stripe_customer = stripe.Customer.create(
+                id=user.stripe_customer_id,
+                email=user.email
+            )
+    else:
+        stripe_customer = stripe.Customer.create(email=user.email)
+        user.stripe_customer_id = stripe_customer.id
+        user.save(update_fields=["stripe_customer_id"])
+        logger.info(f"New Stripe Customer with ID={user.stripe_customer_id}.")
+
+    return stripe_customer
+
+
+
 def stripe_price_get_or_create(product: Product) -> str:
     """
     Because sometimes the Django Postgres database is not synced with the Products
