@@ -62,7 +62,7 @@ def stripe_price_get_or_create(product: Product) -> str:
 
     try:
         price_object = stripe.Price.retrieve(product.stripe_price_id)
-    except stripe.error.IntegrationError:
+    except stripe.error.StripeError:
         price_object = stripe.Price.create(
             id=product.stripe_price_id,
             currency="USD",
