@@ -67,15 +67,15 @@ def create_checkout_session(request):
             # For more, see https://stripe.com/docs/api/checkout/sessions/create
             line_items = []
             if product.stripe_price_id:
-                line_items = [
+                line_items.append(
                     {
                         # Use the Price ID we already have
                         "price": stripe_price_get_or_create(product),
                         "quantity": 1,
                     },
-                ]
+                )
             else:
-                line_items = [
+                line_items.append(
                     {
                         # Generate a new Price in Stripe
                         "price_data": {
@@ -87,13 +87,13 @@ def create_checkout_session(request):
                         },
                         "quantity": 1,
                     },
-                ]
+                )
 
             if request.user.stripe_customer_id:
                 try:
                     stripe_customer = stripe.Customer.retrieve(id=request.user.stripe_customer_id)
                 except stripe.error.InvalidRequestError:
-                    logger.info("Could not find Stripe Customer with ID={stripe_customer_id}. Creating now.")
+                    logger.info(f"Could not find Stripe Customer with ID={stripe_customer_id}. Creating now.")
                     stripe_customer = stripe.Customer.create(
                         id=request.user.stripe_customer_id,
                         email=request.user.email
