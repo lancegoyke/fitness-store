@@ -53,7 +53,7 @@ def order_confirmation_email(
     logger.info(f"Successful order: {user.email}")
 
 
-def stripe_customer_get_or_create(user: User) -> Stripe.Customer:
+def stripe_customer_get_or_create(user: User) -> stripe.Customer:
     """
     A customer might be in our Django database, but not in Stripe.
     """
@@ -75,7 +75,6 @@ def stripe_customer_get_or_create(user: User) -> Stripe.Customer:
         logger.info(f"New Stripe Customer with ID={user.stripe_customer_id}.")
 
     return stripe_customer
-
 
 
 def stripe_price_get_or_create(product: Product) -> str:
