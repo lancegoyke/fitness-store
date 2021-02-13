@@ -7,6 +7,7 @@ from django.contrib.sitemaps.views import sitemap
 from django.urls import path, include
 from django.views.decorators.csrf import csrf_exempt
 
+from config.sitemaps import StaticViewSitemap
 from store_project.exercises.sitemaps import ExerciseSitemap
 from store_project.pages.sitemaps import PageSitemap
 from store_project.products.sitemaps import BookSitemap, ProgramSitemap
@@ -18,6 +19,7 @@ sitemaps = {
     "programs": ProgramSitemap,
     "pages": PageSitemap,
     "exercises": ExerciseSitemap,
+    "static": StaticViewSitemap,
 }
 
 urlpatterns = [
