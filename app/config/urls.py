@@ -9,11 +9,12 @@ from django.views.decorators.csrf import csrf_exempt
 
 from store_project.exercises.sitemaps import ExerciseSitemap
 from store_project.pages.sitemaps import PageSitemap
-from store_project.products.sitemaps import ProgramSitemap
+from store_project.products.sitemaps import BookSitemap, ProgramSitemap
 from store_project.upload.views import image_upload
 
 
 sitemaps = {
+    "books": BookSitemap,
     "programs": ProgramSitemap,
     "pages": PageSitemap,
     "exercises": ExerciseSitemap,
