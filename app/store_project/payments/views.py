@@ -232,7 +232,3 @@ class SuccessView(TemplateView):
             # not returning a product object, only it's name
         context["amount"] = int_to_price(product.amount_total)  # in USD with 2 decimals
         return context
-
-
-class CancellationView(TemplateView):
-    template_name = "payments/cancellation.html"
