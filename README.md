@@ -72,6 +72,8 @@ This should ask for username (hidden), email, and password. You must head to Dja
 
 ## Run Locally
 
+Be sure to include test publishable and secret keys from Stripe in `.env.dev`.
+
 To build containers and detach the console:
 
 ```
@@ -90,6 +92,15 @@ To see running container logs:
 ```
 docker-compose logs -f
 ```
+
+To test if a purchase gives a user the permission to view a purchased product, you'll need to [forward those events from Stripe to the local server](https://stripe.com/docs/webhooks/test) instead of the live server in production. Make sure to list the appropriate webhook URL for handling the triggered events.
+
+```
+stripe login
+stripe listen --forward-to localhost:8000/payments/webhook/
+```
+
+Once listening, you must trigger the event by performing the corresponding actions on your site or by using the Stripe CLI, e.g. `stripe trigger checkout.session.completed`.
 
 ## Tests
 
