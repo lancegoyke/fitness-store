@@ -7,7 +7,7 @@
 {% block content %}
 <h1>{% trans "Sign Up" %}</h1>
 
-<p>{% blocktrans %}Already have an account? Then please <a href="{{ login_url }}">sign in</a>.{% endblocktrans %}</p>
+<p class="text-center">{% blocktrans %}Already have an account? Then please <a href="{{ login_url }}">sign in</a>.{% endblocktrans %}</p>
 
 <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" %}">Continue with Facebook</a>
 <a class="box login google" id="google" href="{% provider_login_url "google" %}">Sign up with Google</a>
