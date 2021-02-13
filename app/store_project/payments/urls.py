@@ -16,6 +16,5 @@ urlpatterns = [
         name="stripe_create_checkout_session",
     ),
     path("success/", views.SuccessView.as_view(), name="success"),
-    path("cancellation/", views.CancellationView.as_view(), name="cancellation"),
     path("webhook/", views.stripe_webhook, name="webhook"),
 ]
