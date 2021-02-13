@@ -54,7 +54,7 @@ def create_checkout_session(request):
     Src: https://stripe.com/docs/payments/checkout/accept-a-payment#create-a-checkout-session
     """
     if request.method == "GET":
-        domain_url = settings.DOMAIN_URL + "payments/"
+        domain_url = settings.DOMAIN_URL
         stripe.api_key = settings.STRIPE_SECRET_KEY
         product_type = request.GET.get("product-type")
         product_slug = request.GET.get("product-slug")
@@ -95,8 +95,8 @@ def create_checkout_session(request):
             checkout_session = stripe.checkout.Session.create(
                 customer=stripe_customer,
                 client_reference_id=str(request.user.id),
-                success_url=domain_url + "success/?session_id={CHECKOUT_SESSION_ID}",
-                cancel_url=domain_url + "cancellation/",
+                success_url=domain_url + "payments/success/?session_id={CHECKOUT_SESSION_ID}",
+                cancel_url=domain_url + product.get_absolute_url()[1:],
                 payment_method_types=["card"],
                 mode="payment",
                 line_items=line_items,
