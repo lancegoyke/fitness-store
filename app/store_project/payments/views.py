@@ -225,10 +225,9 @@ class SuccessView(TemplateView):
         session_id = self.request.GET.get("session_id", "")
         line_items = stripe.checkout.Session.list_line_items(session_id)  # dict
         context["products"] = []
-        context["amount"] = ""
+        amount = 0
         for product in line_items.data:
-            context["products"].append(product.description)  # str
-            # this is broken
-            # not returning a product object, only it's name
+            context["products"].append(product.description)  # str of title
+            amount += product.amount_total
         context["amount"] = int_to_price(product.amount_total)  # in USD with 2 decimals
         return context
