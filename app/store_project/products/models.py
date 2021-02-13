@@ -73,7 +73,7 @@ class Product(LifecycleModelMixin, models.Model):
         max_length=settings.PRODUCT_NAME_MAX_LENGTH,
     )
     description = models.CharField(
-        _("Short description of product"), blank=True, max_length=255
+        _("Short description of product"), max_length=255
     )
     price = models.DecimalField(_("Price"), default=0, max_digits=10, decimal_places=2)
     stripe_price_id = models.CharField(_("Stripe Price ID"), max_length=100, blank=True)
