@@ -9,6 +9,7 @@ from django.http.response import HttpResponse
 from django.template.loader import render_to_string
 from django.urls import reverse
 
+import botocore
 import stripe
 
 from store_project.products.models import Product
@@ -51,7 +52,7 @@ def order_confirmation_email(
             recipient_list=[user.email],
             fail_silently=False,  # raises smtplib.SMTPException
         )
-    except ClientError as e:
+    except botocore.exceptions.ClientError as e:
         print(f"Send email error: {e}")
         return HttpResponse(status=500)
     print(f"[payments.views.stripe_webhook] Email sent to {user.email}.")
