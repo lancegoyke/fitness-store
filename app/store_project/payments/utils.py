@@ -5,6 +5,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.sites.models import Site
 from django.core.mail import send_mail
+from django.http.response import HttpResponse
 from django.template.loader import render_to_string
 from django.urls import reverse
 
@@ -41,14 +42,18 @@ def order_confirmation_email(
         "payments/email/order_confirmation.html",
         context,
     )
-    send_mail(
-        subject="Your order was successful!",
-        message=msg_plain,
-        html_message=msg_html,
-        from_email=None,  # will default to settings.DEFAULT_FROM_EMAIL
-        recipient_list=[user.email],
-        fail_silently=False,  # raises smtplib.SMTPException
-    )
+    try:
+        send_mail(
+            subject="Your order was successful!",
+            message=msg_plain,
+            html_message=msg_html,
+            from_email=None,  # will default to settings.DEFAULT_FROM_EMAIL
+            recipient_list=[user.email],
+            fail_silently=False,  # raises smtplib.SMTPException
+        )
+    except ClientError as e:
+        print(f"Send email error: {e}")
+        return HttpResponse(status=500)
     print(f"[payments.views.stripe_webhook] Email sent to {user.email}.")
     logger.info(f"Successful order: {user.email}")
 

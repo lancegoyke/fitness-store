@@ -175,7 +175,7 @@ def stripe_webhook(request):
                     description="Test description.",
                     slug="test-program",
                     price=1100,
-                    author=User.objects.get(email="lance@lancegoyke.com"),
+                    author=User.objects.filter(email="lance@lancegoyke.com").first(),
                     duration=1,
                     frequency=3,
                 )
