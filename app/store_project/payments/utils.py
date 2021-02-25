@@ -28,7 +28,7 @@ def order_confirmation_email(
 ):
     context = {
         "product": product.name,
-        "price": int_to_price(checkout_session.amount_total),
+        "price": int_to_price(checkout_session["amount_total"]),
         "current_site": Site.objects.get_current(),
         "user": user,
         "account_url": reverse("users:profile"),

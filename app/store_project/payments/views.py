@@ -141,7 +141,7 @@ def stripe_webhook(request):
         checkout_session = event.data.object
         metadata = checkout_session.metadata  # CLI test: {}
         try:
-            user = User.objects.get(stripe_customer_id=checkout_session.customer)
+            user = User.objects.get(stripe_customer_id=checkout_session["customer"])
             # Current bug: if user changes email address in Stripe, it's not
             # changed in Django. So we're finding User object with
             # `stripe_customer_id` instead.
@@ -186,7 +186,7 @@ def stripe_webhook(request):
         elif product_type == "book":
             product = Book.objects.get(name=product_name)
 
-        print(f"[payments.views.stripe_webhook] Product = {product.name}")
+        print(f"[payments.views.stripe_webhook] Product = {product_name}")
 
         # give customer account permissions for purchased product
         try:
@@ -205,11 +205,8 @@ def stripe_webhook(request):
         try:
             order_confirmation_email(checkout_session, product, user)
         except smtplib.SMTPException as e:
-            logger.error("Could not email user's order.")
             logger.error(f"{e}")
-            logger.error("Be sure to follow up with user")
-            logger.error(f"- User = {user.email}")
-            logger.error(f"- Product Name = {product_name}")
+            logger.error("Could not email order of {product_name} to {user.email}.")
             return HttpResponse(status=500)
 
         print("[payments.views.stripe_webhook] Successful payment webhook handled properly.")
