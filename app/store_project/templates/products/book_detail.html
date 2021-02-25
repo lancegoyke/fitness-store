@@ -69,7 +69,7 @@
           {% comment %} <a class="button box purchase" href="{% url 'account_login' %}?next={{ request.path }}">Purchase!</a> {% endcomment %}
           <a
             class="button box purchase"
-            href="{% url 'payments:login_to_purchase' product_slug=book.slug %}">
+            href="{% url 'payments:login_to_purchase' product_type='book' product_slug=book.slug %}">
             Purchase!
           </a>
         {% endif %}

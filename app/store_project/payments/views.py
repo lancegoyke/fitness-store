@@ -29,11 +29,18 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
-def login_before_purchase(request, product_slug):
+def login_to_purchase(request, product_type: str, product_slug: str):
     if request.method == "GET":
         messages.error(request, "You must be logged in to purchase.")
+        next_url = ""
+        if product_type == "program":
+            next_url = reverse('products:program_detail', args=[product_slug])
+        elif product_type == "book":
+            next_url = reverse('products:book_detail', args=[product_slug])
+        else:
+            redirect(f"{settings.LOGIN_URL}")
         return redirect(
-            f"{settings.LOGIN_URL}?next={reverse('products:program_detail', args=[product_slug])}"
+            f"{settings.LOGIN_URL}?next={next_url}"
         )
 
 
