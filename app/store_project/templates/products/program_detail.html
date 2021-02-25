@@ -1,6 +1,6 @@
 {% extends '_base_wide.html' %}
 
-{% load static i18n %}
+{% load static i18n products_extras %}
 
 {% block head_title %}{% trans program.name %}{% endblock head_title %}
 
@@ -52,19 +52,23 @@
         </div>
       </div>
 
-
       <p>{{ program.description }}</p>
 
       <p>
-        
         {% if user.is_authenticated %}
-          <button
-            class="button box purchase"
-            id="submitButton"
-            data-product-type="program"
-            data-product-slug="{{ program.slug }}">
-              Purchase!
-          </button>
+          {% with "products.can_view_"|concat:program.slug as can_view_program %}
+            {% if can_view_program in perms %}
+              <a class="button purchase box owned" href="{% url 'users:profile' %}">View in Account</a>
+            {% else %}
+              <button
+                class="button box purchase"
+                id="submitButton"
+                data-product-type="program"
+                data-product-slug="{{ program.slug }}">
+                  Purchase!
+              </button>
+            {% endif %}
+          {% endwith %}
         {% else %}
           <a
             class="button box purchase"
@@ -72,7 +76,6 @@
             Purchase!
           </a>
         {% endif %}
-          
       </p>
     </div>
   </div>

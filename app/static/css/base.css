@@ -423,6 +423,27 @@ ul.errorlist {
   text-decoration: underline;
 }
 
+.box.owned {
+  color: black;
+  background: linear-gradient(150deg, rgba(193, 0, 0, 0.8), rgba(191, 127, 63, 0.8), rgba(191, 191, 63, 0.8),
+  rgba(127, 191, 63, 0.8), rgba(63, 127, 191, 0.6), rgba(63, 63, 191, 0.6), rgba(127, 63, 191, 0.6),
+  rgba(191, 63, 191, 0.6));
+  background-size: 400% 400%;
+  animation: gradient 15s ease infinite;
+}
+
+@keyframes gradient {
+  0% {
+      background-position: 0% 50%;
+  }
+  50% {
+      background-position: 100% 50%;
+  }
+  100% {
+      background-position: 0% 50%;
+  }
+}
+
 .box.login {
   padding: var(--s-2);
   text-align: center;
