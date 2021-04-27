@@ -1,3 +1,5 @@
+import os
+
 from django.conf import settings
 from django.contrib import messages
 from django.core.mail import BadHeaderError, send_mail
@@ -8,6 +10,7 @@ from django.views.generic.base import TemplateView
 from django.views.generic.detail import DetailView
 
 from markdownx.utils import markdownify
+import requests
 
 from store_project.pages.forms import ContactForm
 from store_project.pages.models import Page
@@ -29,30 +32,47 @@ class SinglePageView(DetailView):
 
 
 def contact_view(request):
+    G_RECAPTCHA_SITE_KEY = os.environ.get("G_RECAPTCHA_SITE_KEY")
+    G_RECAPTCHA_SECRET_KEY = os.environ.get("G_RECAPTCHA_SECRET_KEY")
+    G_RECAPTCHA_ENDPOINT = os.environ.get("G_RECAPTCHA_ENDPOINT")
     if request.method == "GET":
         # Render the form
         form = ContactForm()
     else:
-        # Send the email
         form = ContactForm(request.POST)
         if form.is_valid():
-            subject = "[MF] Contact Form: " + form.cleaned_data["subject"]
-            user_email = form.cleaned_data["user_email"]
-            message = form.cleaned_data["message"]
-            try:
-                send_mail(subject, message, settings.SERVER_EMAIL, [settings.SERVER_EMAIL, user_email,])
-            except BadHeaderError:
-                messages.error(
-                    request,
-                    "The server couldn't send the email because it found an invalid header.",
-                )
-                return render(request, "pages/contact.html", {"form": form})
-            return redirect("pages:contact_success")
-    return render(request, "pages/contact.html", {"form": form})
+            # Check if they are a bot
+            g_recaptcha_token = request.POST.get("g-recaptcha-response")
+            data = {
+                "secret": G_RECAPTCHA_SECRET_KEY,
+                "response": g_recaptcha_token,
+            }
+            g_recaptcha_response = requests.post(G_RECAPTCHA_ENDPOINT, data=data).json()
+            if g_recaptcha_response["success"] is True:
+                # Send the email
+                subject = "[MF] Contact Form: " + form.cleaned_data["subject"]
+                user_email = form.cleaned_data["user_email"]
+                message = form.cleaned_data["message"]
+                try:
+                    send_mail(subject, message, settings.SERVER_EMAIL, [settings.SERVER_EMAIL, user_email])
+                    messages.success(
+                        request,
+                        "Your message was sent! Thanks for the feedback. We emailed you a copy for your records. If needed, someone from our team will reach out to you."
+                    )
+                except BadHeaderError:
+                    messages.error(
+                        request,
+                        "The server couldn't send the email because it found an invalid header.",
+                    )
+            elif g_recaptcha_response["error-codes"]:
+                for error in g_recaptcha_response["error-codes"]:
+                    messages.error(request, f"Something went wrong with Google reCAPTCHA ({error})")
+            else:
+                messages.error(request, "Google reCAPTCHA said you were a bot! If you're not, maybe try again? Or email me directly: lance [at] lancegoyke [dot] com")
+        else:
+            messages.error(request, "Sorry, the form you filled out was invalid. Maybe try again?")
 
-
-def contact_success_view(request):
-    return render(request, "pages/contact_success.html")
+    return render(request, "pages/contact.html", {"form": form, "G_RECAPTCHA_SITE_KEY": G_RECAPTCHA_SITE_KEY})
 
 
 @require_GET

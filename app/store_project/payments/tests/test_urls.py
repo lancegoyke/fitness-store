@@ -10,11 +10,11 @@ pytestmark = pytest.mark.django_db
 
 def test_login_to_purchase(program: Program):
     assert (
-        reverse("payments:login_to_purchase", kwargs={"product_slug": program.slug})
-        == f"/payments/login-to-purchase/{program.slug}/"
+        reverse("payments:login_to_purchase", kwargs={"product_type": "program", "product_slug": program.slug})
+        == f"/payments/login-to-purchase/program/{program.slug}/"
     )
     assert (
-        resolve(f"/payments/login-to-purchase/{program.slug}/").view_name
+        resolve(f"/payments/login-to-purchase/program/{program.slug}/").view_name
         == "payments:login_to_purchase"
     )
 
@@ -38,11 +38,6 @@ def test_stripe_create_checkout_session():
 def test_success():
     assert reverse("payments:success") == "/payments/success/"
     assert resolve("/payments/success/").view_name == "payments:success"
-
-
-def test_cancellation():
-    assert reverse("payments:cancellation") == "/payments/cancellation/"
-    assert resolve("/payments/cancellation/").view_name == "payments:cancellation"
 
 
 def test_webhook():

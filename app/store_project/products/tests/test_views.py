@@ -124,7 +124,7 @@ class TestProgramDetailView:
 
         response = ProgramDetailView.as_view()(request, slug=program.slug)
 
-        login_to_purchase_link = f'href="/payments/login-to-purchase/{program.slug}/">'
+        login_to_purchase_link = f'href="/payments/login-to-purchase/program/{program.slug}/">'
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{program.slug}"'
         purchase_button_data_product_type = 'data-product-type="program"'
@@ -146,7 +146,7 @@ class TestProgramDetailView:
 
         response = ProgramDetailView.as_view()(request, slug=program.slug)
 
-        login_to_purchase_link = f'href="/payments/login-to-purchase/{program.slug}/">'
+        login_to_purchase_link = f'href="/payments/login-to-purchase/program/{program.slug}/">'
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{program.slug}"'
         purchase_button_data_product_type = 'data-product-type="program"'
@@ -156,9 +156,9 @@ class TestProgramDetailView:
         assert "products/program_detail.html" in response.template_name
         assert response.context_data["content"]
         assert response.context_data["program"]
-        assert purchase_button_id in response.rendered_content
-        assert purchase_button_data_product_slug in response.rendered_content
-        assert purchase_button_data_product_type in response.rendered_content
+        assert purchase_button_id not in response.rendered_content
+        assert purchase_button_data_product_slug not in response.rendered_content
+        assert purchase_button_data_product_type not in response.rendered_content
         assert login_to_purchase_link not in response.rendered_content
         assert admin_link in response.rendered_content
 
@@ -247,7 +247,7 @@ class TestBookDetailView:
 
         response = BookDetailView.as_view()(request, slug=book.slug)
 
-        login_to_purchase_link = f'href="/payments/login-to-purchase/{book.slug}/">'
+        login_to_purchase_link = f'href="/payments/login-to-purchase/book/{book.slug}/">'
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{book.slug}"'
         purchase_button_data_product_type = 'data-product-type="book"'
@@ -269,7 +269,7 @@ class TestBookDetailView:
 
         response = BookDetailView.as_view()(request, slug=book.slug)
 
-        login_to_purchase_link = f'href="/payments/login-to-purchase/{book.slug}/">'
+        login_to_purchase_link = f'href="/payments/login-to-purchase/book/{book.slug}/">'
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{book.slug}"'
         purchase_button_data_product_type = 'data-product-type="book"'
@@ -279,9 +279,9 @@ class TestBookDetailView:
         assert "products/book_detail.html" in response.template_name
         assert response.context_data["content"]
         assert response.context_data["book"]
-        assert purchase_button_id in response.rendered_content
-        assert purchase_button_data_product_slug in response.rendered_content
-        assert purchase_button_data_product_type in response.rendered_content
+        assert purchase_button_id not in response.rendered_content
+        assert purchase_button_data_product_slug not in response.rendered_content
+        assert purchase_button_data_product_type not in response.rendered_content
         assert login_to_purchase_link not in response.rendered_content
         assert admin_link in response.rendered_content
 

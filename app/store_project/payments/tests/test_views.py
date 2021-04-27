@@ -15,7 +15,7 @@ pytestmark = pytest.mark.django_db
 
 
 def test_login_before_purchase_view(program: Program):
-    response = Client().get(f"/payments/login-to-purchase/{program.slug}/")
+    response = Client().get(f"/payments/login-to-purchase/program/{program.slug}/")
     messages = list(get_messages(response.wsgi_request))
 
     assert len(messages) == 1

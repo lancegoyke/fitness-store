@@ -1,4 +1,5 @@
 from http import HTTPStatus
+import os
 import pytest
 
 from django.test import Client, RequestFactory, TestCase
@@ -42,7 +43,7 @@ class ContactViewTests(TestCase):
         assert response.status_code == HTTPStatus.OK
         assert b"<h1>Contact</h1>" in response.content
         assert b"subject" in response.content
-        assert b"from_email" in response.content
+        assert b"user_email" in response.content
         assert b"message" in response.content
 
     def test_post_success(self):
@@ -50,24 +51,28 @@ class ContactViewTests(TestCase):
             "/contact/",
             data={
                 "subject": "Subject",
-                "from_email": "email@example.com",
+                "user_email": "email@example.com",
                 "message": "This is a test message.",
             },
         )
-        assert response.status_code == HTTPStatus.FOUND
-        assert response["Location"], "/contact/"
+        assert response.status_code == HTTPStatus.OK
 
     def test_post_error(self):
         response = self.client.post(
             "/contact/",
             data={
                 "subject": "Subject",
-                "from_email": "email@example.com",
+                "user_email": "email@example.com",
                 "message": "",
             },
         )
         assert response.status_code == HTTPStatus.OK
         assert b"<strong>Message:</strong> This field is required." in response.content
+
+    def test_env_vars_set(self):
+        assert os.environ.get("G_RECAPTCHA_SITE_KEY")
+        assert os.environ.get("G_RECAPTCHA_SECRET_KEY")
+        assert os.environ.get("G_RECAPTCHA_ENDPOINT")
 
 
 class RobotsTxtTests(TestCase):

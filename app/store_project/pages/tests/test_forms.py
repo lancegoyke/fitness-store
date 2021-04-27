@@ -11,7 +11,7 @@ class TestContactForm:
         valid_form = ContactForm(
             data={
                 "subject": "Subject",
-                "from_email": "email@example.com",
+                "user_email": "email@example.com",
                 "message": "Here is a test message.",
             }
         )
