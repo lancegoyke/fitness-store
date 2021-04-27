@@ -37,10 +37,10 @@ def contact_view(request):
         form = ContactForm(request.POST)
         if form.is_valid():
             subject = "[MF] Contact Form: " + form.cleaned_data["subject"]
-            from_email = form.cleaned_data["from_email"]
+            user_email = form.cleaned_data["user_email"]
             message = form.cleaned_data["message"]
             try:
-                send_mail(subject, message, from_email, [settings.SERVER_EMAIL])
+                send_mail(subject, message, settings.SERVER_EMAIL, [settings.SERVER_EMAIL, user_email,])
             except BadHeaderError:
                 messages.error(
                     request,

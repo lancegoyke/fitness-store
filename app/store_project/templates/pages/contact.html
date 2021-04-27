@@ -29,13 +29,13 @@
       </label>
     </p>
     <p>
-      <label class="stack" for="{{ form.from_email.id_for_label }}">
+      <label class="stack" for="{{ form.user_email.id_for_label }}">
         <span>{% trans "Your Email" %}</span>
-        {{ form.from_email }}
+        {{ form.user_email }}
 
-        {% if form.from_email.errors %}
+        {% if form.user_email.errors %}
           <ul class="errorlist">
-          {% for error in form.from_email.errors %}
+          {% for error in form.user_email.errors %}
             <li><strong>Your Email:</strong> {{ error|escape }}</li>
           {% endfor %}
           </ul>
@@ -58,8 +58,14 @@
       </label>
     </p>
   
-    <button class="button" type="submit">{% trans "Send Message" %}</button>
+    <div class="g-recaptcha" data-sitekey="6Lf1IbsaAAAAACSnU7X_RU4LsOc0a0HZlT-yIozm"></div>
+
+    <button class="button g-recaptcha" type="submit">{% trans "Send Message" %}</button>
   </form>
 </div>
 
 {% endblock content %}
+
+{% block javascript %}
+<script src="https://www.google.com/recaptcha/api.js" async defer></script>
+{% endblock javascript %}
