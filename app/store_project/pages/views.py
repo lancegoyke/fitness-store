@@ -51,7 +51,7 @@ def contact_view(request):
             g_recaptcha_response = requests.post(G_RECAPTCHA_ENDPOINT, data=data).json()
             if g_recaptcha_response["success"] is True:
                 # Send the email
-                subject = "Mastering Fitness Contact Form: " + form.cleaned_data["subject"]
+                subject = form.cleaned_data["subject"]
                 message = form.cleaned_data["message"]
                 user_email = form.cleaned_data["user_email"]
                 try:

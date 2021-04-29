@@ -10,9 +10,10 @@ Text to let you know we're listening.
 
 Here's the message from the user:
 
-*{{ msg }}*
+{{ msg }}
 
-Thanks for the feedback!
+Make sure to respond if necessary :)
+
 Lance Goyke
 Mastering Fitness
 https://mastering.fitness/
