@@ -1,6 +1,8 @@
 from django.conf import settings
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
+
+from markdownx.utils import markdownify
 
 
 def send_contact_emails(subject: str, message: str, user_email: str) -> None:
@@ -10,25 +12,27 @@ def send_contact_emails(subject: str, message: str, user_email: str) -> None:
         2. A notification email to the DEFAULT_FROM_EMAIL located in settings.
     """
     subject = f"Mastering Fitness Contact Form: {subject}"
-    body = message
-    from_email = settings.SERVER_EMAIL
 
     # Email the admin
-    email_for_admin = EmailMessage(
+    admin_text_msg = render_to_string("notifications/contact_admin.md", {"msg": message})
+    email_for_admin = EmailMultiAlternatives(
         subject,
-        body,
-        from_email,
+        admin_text_msg,
+        settings.SERVER_EMAIL,
         [settings.DEFAULT_FROM_EMAIL, ],
         reply_to=[user_email],
     )
+    email_for_admin.attach_alternative(markdownify(admin_text_msg), "text/html")
     email_for_admin.send()
 
     # TODO: Email the user
-    email_for_user = EmailMessage(
+    user_text_msg = render_to_string("notifications/contact_user.md", {"msg": message})
+    email_for_user = EmailMultiAlternatives(
         subject,
-        body,
-        from_email,
+        user_text_msg,
+        settings.SERVER_EMAIL,
         [user_email, ],
         reply_to=[settings.DEFAULT_FROM_EMAIL, ],
     )
+    email_for_user.attach_alternative(markdownify(user_text_msg), "text/html")
     email_for_user.send()
