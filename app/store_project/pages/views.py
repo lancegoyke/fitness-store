@@ -2,7 +2,7 @@ import os
 
 from django.conf import settings
 from django.contrib import messages
-from django.core.mail import BadHeaderError, send_mail
+from django.core.mail import BadHeaderError, EmailMessage
 from django.http import HttpResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_GET
@@ -50,11 +50,18 @@ def contact_view(request):
             g_recaptcha_response = requests.post(G_RECAPTCHA_ENDPOINT, data=data).json()
             if g_recaptcha_response["success"] is True:
                 # Send the email
-                subject = "[MF] Contact Form: " + form.cleaned_data["subject"]
+                subject = "Mastering Fitness Contact Form: " + form.cleaned_data["subject"]
                 user_email = form.cleaned_data["user_email"]
                 message = form.cleaned_data["message"]
                 try:
-                    send_mail(subject, message, settings.SERVER_EMAIL, [settings.SERVER_EMAIL, user_email])
+                    email = EmailMessage(
+                        subject,
+                        message,
+                        settings.SERVER_EMAIL,
+                        [settings.DEFAULT_FROM_EMAIL, user_email, ],
+                        reply_to=[settings.DEFAULT_FROM_EMAIL]
+                    )
+                    email.send()
                     messages.success(
                         request,
                         "Your message was sent! Thanks for the feedback. We emailed you a copy for your records. If needed, someone from our team will reach out to you."
