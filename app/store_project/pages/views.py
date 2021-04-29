@@ -12,6 +12,7 @@ from django.views.generic.detail import DetailView
 from markdownx.utils import markdownify
 import requests
 
+from store_project.notifications.emails import send_contact_emails
 from store_project.pages.forms import ContactForm
 from store_project.pages.models import Page
 
@@ -51,17 +52,10 @@ def contact_view(request):
             if g_recaptcha_response["success"] is True:
                 # Send the email
                 subject = "Mastering Fitness Contact Form: " + form.cleaned_data["subject"]
-                user_email = form.cleaned_data["user_email"]
                 message = form.cleaned_data["message"]
+                user_email = form.cleaned_data["user_email"]
                 try:
-                    email = EmailMessage(
-                        subject,
-                        message,
-                        settings.SERVER_EMAIL,
-                        [settings.DEFAULT_FROM_EMAIL, user_email, ],
-                        reply_to=[settings.DEFAULT_FROM_EMAIL]
-                    )
-                    email.send()
+                    send_contact_emails(subject, message, user_email)
                     messages.success(
                         request,
                         "Your message was sent! Thanks for the feedback. We emailed you a copy for your records. If needed, someone from our team will reach out to you."

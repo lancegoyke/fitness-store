@@ -27,7 +27,7 @@ ADMINS = [
 ]
 DEFAULT_FROM_EMAIL = "Lance Goyke <lance@lancegoyke.com>"
 MANAGERS = ADMINS
-SERVER_EMAIL = "Webmaster <lance@lancegoyke.com>"
+SERVER_EMAIL = "robots@mastering.fitness"
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 ROOT_DIR = Path(__file__).resolve(strict=True).parent.parent.parent.parent
@@ -75,12 +75,13 @@ INSTALLED_APPS = [
     "markdownx",
     # Local
     "store_project.upload",
-    "store_project.users.apps.UsersConfig",
-    "store_project.pages.apps.PagesConfig",
-    "store_project.products.apps.ProductsConfig",
-    "store_project.payments.apps.PaymentsConfig",
-    "store_project.exercises.apps.ExercisesConfig",
     "store_project.cardio.apps.CardioConfig",
+    "store_project.exercises.apps.ExercisesConfig",
+    "store_project.notifications.apps.NotificationsConfig",
+    "store_project.pages.apps.PagesConfig",
+    "store_project.payments.apps.PaymentsConfig",
+    "store_project.products.apps.ProductsConfig",
+    "store_project.users.apps.UsersConfig",
 ]
 
 MIDDLEWARE = [
