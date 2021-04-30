@@ -1,19 +1,16 @@
-# Heading 1
+This is just a confirmation that your contact form has been sent. Someone will reach out to you if your message requires it.
 
-Introduction for the user.
+For your records, here's what you sent us:
 
-## Heading 2
-
-Text to let you know we're listening.
-
-## Heading 3
-
-Your message here:
+=====
 
 {{ msg }}
 
-Thanks for the feedback!
+=====
+
+Thanks for the feedback! Hope you're having and continue to have a swell day.
 
 Lance Goyke
 Mastering Fitness
 https://mastering.fitness/
+lance@lancegoyke.com
