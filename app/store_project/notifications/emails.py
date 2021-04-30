@@ -12,7 +12,7 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
         2. A notification email to the DEFAULT_FROM_EMAIL located in settings.
     """
     subject = render_to_string("notifications/contact_email_subject.txt", {"subject": message_subject})
-    msg = f"```\n{message}\n```"
+    msg = message
 
     # Email the admin
     admin_text_msg = render_to_string("notifications/contact_admin.md", {"msg": msg})
