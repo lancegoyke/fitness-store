@@ -2,7 +2,7 @@ Someone filled out the contact form! Here's the message:
 
 =====
 
-{{ msg }}
+{{ msg|safe }}
 
 =====
 

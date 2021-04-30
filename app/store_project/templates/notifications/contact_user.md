@@ -4,7 +4,7 @@ For your records, here's what you sent us:
 
 =====
 
-{{ msg }}
+{{ msg|safe }}
 
 =====
 
