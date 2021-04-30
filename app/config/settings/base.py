@@ -27,7 +27,7 @@ ADMINS = [
 ]
 DEFAULT_FROM_EMAIL = "Lance Goyke <lance@lancegoyke.com>"
 MANAGERS = ADMINS
-SERVER_EMAIL = "robots@mastering.fitness"
+SERVER_EMAIL = "Mastering Fitness <robot@mastering.fitness>"
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 ROOT_DIR = Path(__file__).resolve(strict=True).parent.parent.parent.parent
