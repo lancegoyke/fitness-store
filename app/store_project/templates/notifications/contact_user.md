@@ -11,6 +11,6 @@ For your records, here's what you sent us:
 Thanks for the feedback! Hope you're having and continue to have a swell day.
 
 Lance Goyke
+lance@lancegoyke.com
 Mastering Fitness
 https://mastering.fitness/
-lance@lancegoyke.com
