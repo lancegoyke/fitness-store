@@ -11,7 +11,7 @@
   --main-color-accent: #31759d;
   --main-color-dark-accent: #134461;
   --google-blue: #4c8bf5;
-  --facebook-blue: #1877F2;
+  --facebook-blue: #1877f2;
   --debug: #ddccff;
   --info: #cceeff;
   --success: #ccffdd;
@@ -70,7 +70,8 @@ span {
   font-size: 1em;
 }
 
-input, textarea {
+input,
+textarea {
   padding: var(--s-1);
   border: var(--border-thin) solid;
   color: var(--main-color-dark-gray);
@@ -131,7 +132,6 @@ td {
 .copy-btn {
   cursor: pointer;
   font-size: var(--s-1);
-
 }
 
 .copy-btn:hover,
@@ -186,7 +186,6 @@ legend {
   padding: var(--s-3);
   font-size: var(--s-1);
 }
-
 
 /*
     TYPOGRAPHY
@@ -300,7 +299,7 @@ a:active {
 .stack-auth-form * {
   margin-top: 0;
   margin-bottom: 0;
-} 
+}
 
 .stack-auth-form * + * {
   margin-top: var(--s-5);
@@ -404,7 +403,13 @@ ul.errorlist {
 }
 
 .box.invert.download:hover {
-  background: repeating-linear-gradient(-45deg, var(--color-dark), var(--color-dark) 5px, var(--main-color-dark) 5px, var(--main-color-dark) 10px);
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--color-dark),
+    var(--color-dark) 5px,
+    var(--main-color-dark) 5px,
+    var(--main-color-dark) 10px
+  );
 }
 
 .box.purchase {
@@ -425,22 +430,30 @@ ul.errorlist {
 
 .box.owned {
   color: black;
-  background: linear-gradient(150deg, rgba(193, 0, 0, 0.8), rgba(191, 127, 63, 0.8), rgba(191, 191, 63, 0.8),
-  rgba(127, 191, 63, 0.8), rgba(63, 127, 191, 0.6), rgba(63, 63, 191, 0.6), rgba(127, 63, 191, 0.6),
-  rgba(191, 63, 191, 0.6));
+  background: linear-gradient(
+    150deg,
+    rgba(193, 0, 0, 0.8),
+    rgba(191, 127, 63, 0.8),
+    rgba(191, 191, 63, 0.8),
+    rgba(127, 191, 63, 0.8),
+    rgba(63, 127, 191, 0.6),
+    rgba(63, 63, 191, 0.6),
+    rgba(127, 63, 191, 0.6),
+    rgba(191, 63, 191, 0.6)
+  );
   background-size: 400% 400%;
   animation: gradient 15s ease infinite;
 }
 
 @keyframes gradient {
   0% {
-      background-position: 0% 50%;
+    background-position: 0% 50%;
   }
   50% {
-      background-position: 100% 50%;
+    background-position: 100% 50%;
   }
   100% {
-      background-position: 0% 50%;
+    background-position: 0% 50%;
   }
 }
 
@@ -590,7 +603,7 @@ a.box.login:active {
 .card-stack > * {
   margin-top: 0;
   margin-bottom: 0;
-} 
+}
 
 .card-stack > * + * {
   margin-top: var(--s-1);
@@ -830,8 +843,8 @@ a.box.login:active {
   margin: calc(var(--s5) / 2);
 }
 
-.product-switcher > * > :nth-last-child(n+3),
-.product-switcher > * > :nth-last-child(n+3) ~ * {
+.product-switcher > * > :nth-last-child(n + 3),
+.product-switcher > * > :nth-last-child(n + 3) ~ * {
   flex-basis: 100%;
 }
 
@@ -848,8 +861,8 @@ a.box.login:active {
   margin: calc(var(--s5) / 2);
 }
 
-.two-switcher > * > :nth-last-child(n+3),
-.two-switcher > * > :nth-last-child(n+3) ~ * {
+.two-switcher > * > :nth-last-child(n + 3),
+.two-switcher > * > :nth-last-child(n + 3) ~ * {
   flex-basis: 100%;
 }
 
@@ -895,7 +908,7 @@ ul.grid {
 .cover {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-height: 90vh;
   padding: 0;
   background-color: #000;
   color: #fff;
@@ -997,9 +1010,9 @@ ul.grid {
 }
 
 .icon-medium {
-  width: 1.00rem;
+  width: 1rem;
   width: 1cap;
-  height: 1.00rem;
+  height: 1rem;
   height: 1cap;
 }
 
@@ -1181,7 +1194,6 @@ ul.grid {
   filter: saturate(0) contrast(2);
 }
 
-
 /*
     CUSTOMIZING ELEMENTS
 */
@@ -1240,7 +1252,7 @@ ul.grid {
 
 .about,
 .newsletter,
-.cta {  
+.cta {
   padding-top: var(--s5);
   padding-bottom: var(--s5);
 }
