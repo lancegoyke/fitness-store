@@ -1,6 +1,7 @@
 env/
 .env*
 mediafiles/
+.devcontainer/
 .vscode/
 app/db.sqlite3
 staticfiles/
