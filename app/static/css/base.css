@@ -594,6 +594,10 @@ a.box.login:active {
   margin: 0;
 }
 
+.card-stack h3 > a {
+  font-size: var(--s1);
+}
+
 .card-stack {
   display: flex;
   flex-direction: column;
