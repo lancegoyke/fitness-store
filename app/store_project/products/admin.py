@@ -1,7 +1,11 @@
 from django.contrib import admin, messages
+from django.contrib.auth import get_user_model
 from django.utils.translation import ngettext
 
 from store_project.products.models import Category, Program, Book
+
+
+User = get_user_model()
 
 
 @admin.register(Program)
@@ -23,6 +27,11 @@ class ProgramAdmin(admin.ModelAdmin):
         "make_draft",
         "make_private",
     ]
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "author":
+            kwargs["queryset"] = User.objects.filter(is_staff=True)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def make_public(self, request, queryset):
         updated = queryset.update(status=Program.PUBLIC)
@@ -84,6 +93,11 @@ class BookAdmin(admin.ModelAdmin):
         "make_draft",
         "make_private",
     ]
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "author":
+            kwargs["queryset"] = User.objects.filter(is_staff=True)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def make_public(self, request, queryset):
         updated = queryset.update(status=Book.PUBLIC)

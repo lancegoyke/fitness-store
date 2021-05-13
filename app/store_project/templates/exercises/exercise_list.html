@@ -24,7 +24,7 @@
     <div class="inline-tag">
       <a href="{% url 'exercises:detail' slug=exercise.slug %}">{% trans exercise.name %}</a>
       
-      {% if exercise.demonstration %}
+      {% if exercise.demonstration and user.is_staff %}
         <button
           class="clear copy-btn tag"
           id="copy-{{ exercise.slug }}" 
