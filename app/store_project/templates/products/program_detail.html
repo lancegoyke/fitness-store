@@ -4,6 +4,15 @@
 
 {% block head_title %}{% trans program.name %}{% endblock head_title %}
 
+{% block header %}
+<meta name="description" property="og:description" content="{{ program.description }}">
+<meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+<meta name="author" content="{{ program.author.name }}">
+<meta property="og:title" content="{{ program.name }}" />
+<meta property="og:image" content="{{ program.featured_image.url }}" />
+<meta property="og:image:alt" content="{{ program.name }}" />
+{% endblock header %}
+
 {% block content %}
 
 <div class="cluster">

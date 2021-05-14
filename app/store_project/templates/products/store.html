@@ -1,8 +1,16 @@
 {% extends '_base_wide.html' %}
 
-{% load i18n products_extras %}
+{% load static i18n products_extras %}
 
 {% block head_title %}{% trans "Store" %}{% endblock head_title %}
+
+{% block header %}
+<meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
+<meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+<meta property="og:title" content="Mastering Fitness" />
+<meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+<meta property="og:image:alt" content="Mastering Fitness" />
+{% endblock header %}
 
 {% block content %}
 

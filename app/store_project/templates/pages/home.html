@@ -8,7 +8,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Mastering Fitness</title>
-  <link rel="shortcut icon" href="{% static 'png/favicon-black.png' %}">
+  <link rel="shortcut icon" type="image/x-icon" href="{% static 'png/favicon-black.png' %}">
 
   <!-- CSS -->
   <link rel="stylesheet" href="{% static 'css/base.css' %}" />
@@ -26,8 +26,13 @@
   </script>
 
   {% block header %}
-  <!-- No extra header code included -->
+  <meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
+  <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+  <meta property="og:title" content="Mastering Fitness" />
+  <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+  <meta property="og:image:alt" content="Mastering Fitness" />
   {% endblock header %}
+
 </head>
 
 <body>
