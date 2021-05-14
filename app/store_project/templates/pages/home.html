@@ -55,7 +55,8 @@
   <!-- .cover -->
 
   <!-- THE CONTENT -->
-  <main class="stack content about">
+  <div class="stack-page full-width">
+
     {% if messages %}
       <div class="center messages">
         <ul>
@@ -67,46 +68,14 @@
     {% endif %}
 
     {% block content %}
-    <div class="stack center max-width:measure*2">
-      <div>
-        <h2 class="text-center">Hey, I'm Lance!</h2>
-      </div>
-  
-      <div class="two-switcher">
-        <div> <!-- intermediary wrapper -->
-          <div class="stack">
-            <!-- non-sidebar -->
-            <p>
-              I've been a personal trainer for over a decade now and I'm here to help you <em>master your fitness.</em>
-            </p>
-            <p>
-              I have so many people come to me for the first time and get HUGE optimizations in their training after just a couple sessions. It really can be <strong>life-changing.</strong>
-            </p>
-            <p>
-              The frustrating part is that these people have been living with these inefficiencies all their lives. If our paths had crossed sooner, they would have gained back so much time and energy to live the life they want to live.
-            </p>
-            <p>
-              So that's why I created this website: to give you the fitness answers (and body) you've been searching for.
-            </p>
-            <p>
-              Mastering Fitness is about training <em>smart</em>. It's time to fix your dysfunctions, free up your time, an get in the best shape of your life.
-            </p>
-          </div>
-          <div>
-            <div class="portrait frame">
-              <!-- sidebar -->
-              <img class="" src="{% static 'jpg/Lance-Goyke-headshot.jpeg' %}" alt="Lance Goyke headshot" />
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </main>
+    
+
+    {% include '_about.html' %}
+    {% include '_testimonials.html' %}
+    {% include '_newsletter.html' %}
+    {% include '_cta.html' %}
+  </div>
   <!-- .content -->
-
-  {% include '_newsletter.html' %}
-
-  {% include '_cta.html' %}
 
   {% include '_footer.html' %}
   

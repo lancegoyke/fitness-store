@@ -6,6 +6,7 @@
   --main-color-light: #fff;
   --main-color-dark: #000;
   --main-color-light-gray: #ededed;
+  --main-color-gray: #696969;
   --main-color-dark-gray: #1d1d1de0;
   --main-color-money: #5f9341;
   --main-color-accent: #31759d;
@@ -35,7 +36,7 @@
   --s5: calc(var(--s4) * var(--ratio));
 
   --stack-space: var(--s1);
-  --stack-page-space: var(--s0);
+  --stack-page-space: var(--s5);
   --border-thin: var(--s-5);
 }
 
@@ -331,20 +332,17 @@ a:active {
 }
 
 .stack-page > * {
+  padding-top: var(--stack-page-space);
+  padding-bottom: var(--stack-page-space);
   margin-top: 0;
   margin-bottom: 0;
+  margin-left: 0;
+  margin-right: 0;
 }
 
 .stack-page > * + * {
-  margin-top: var(--stack-page-space);
-}
-
-.stack-page:only-child {
-  height: 100%;
-}
-
-.stack-page > :nth-child(1) {
-  margin-bottom: auto;
+  padding-top: var(--stack-page-space);
+  padding-bottom: var(--stack-page-space);
 }
 
 /*
@@ -410,6 +408,10 @@ ul.errorlist {
     var(--main-color-dark) 5px,
     var(--main-color-dark) 10px
   );
+}
+
+.box.transparent {
+  background-color: unset;
 }
 
 .box.purchase {
@@ -870,6 +872,24 @@ a.box.login:active {
   flex-basis: 100%;
 }
 
+/* Max three children in a row */
+.three-switcher > * {
+  display: flex;
+  flex-wrap: wrap;
+  margin: calc((var(--s5) / 3) * -1);
+}
+
+.three-switcher > * > * {
+  flex-grow: 1;
+  flex-basis: calc((var(--measure) - (100% - var(--s5))) * 999);
+  margin: calc(var(--s5) / 3);
+}
+
+.three-switcher > * > :nth-last-child(n + 4),
+.three-switcher > * > :nth-last-child(n + 4) ~ * {
+  flex-basis: 100%;
+}
+
 /*
     THE GRID
 
@@ -912,7 +932,7 @@ ul.grid {
 .cover {
   display: flex;
   flex-direction: column;
-  min-height: 90vh;
+  min-height: 80vh;
   padding: 0;
   background-color: #000;
   color: #fff;
@@ -1220,6 +1240,11 @@ ul.grid {
   padding-bottom: var(--s5);
 }
 
+.content.full-width {
+  padding-left: 0;
+  padding-right: 0;
+}
+
 .cta {
   background: repeating-linear-gradient(
     45deg,
@@ -1231,7 +1256,7 @@ ul.grid {
 }
 
 .cta h2,
-.cta h3 {
+.testimonials h2 {
   background: var(--main-color-light);
   margin: auto;
   padding: 0 var(--s-1);
@@ -1252,13 +1277,6 @@ ul.grid {
 
 .newsletter {
   background-color: var(--main-color-light-gray);
-}
-
-.about,
-.newsletter,
-.cta {
-  padding-top: var(--s5);
-  padding-bottom: var(--s5);
 }
 
 .footer {
@@ -1305,4 +1323,55 @@ ul.grid {
 
 .alternatives th {
   text-align: left;
+}
+
+.testimonials {
+  background: repeating-linear-gradient(-45deg, var(--main-color-dark), var(--main-color-dark) 10px, var(--main-color-dark-gray) 10px, var(--main-color-dark-gray) 20px );
+}
+
+.about .box,
+.cta .box,
+.newsletter .box,
+.testimonials .box {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.testimonial {
+  background: var(--main-color-light);
+  padding: 1rem;
+  box-shadow: 0px 0px 40px 5px var(--main-color-light-gray);
+  border: 1px solid black;
+}
+
+.testimonial-footer {
+  display: flex;
+  flex-direction: row;
+  align-items: end;
+}
+
+.testimonial-footer > * {
+  margin-top: 0;
+}
+
+.testimonial-footer img {
+  border-radius: 50%;
+  margin-right: var(--s-1)
+}
+
+.testimonial-footer .byline {
+  display: flex;
+  flex-direction: column;
+}
+
+.testimonial-footer .byline > * {
+  margin-top: 0;
+}
+
+.testimonial-footer .name {
+  font-weight: 700;
+}
+
+.testimonial-footer .job-title {
+  color: var(--main-color-gray);
 }
