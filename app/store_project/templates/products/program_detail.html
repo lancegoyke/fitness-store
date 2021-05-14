@@ -9,8 +9,15 @@
 <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
 <meta name="author" content="{{ program.author.name }}">
 <meta property="og:title" content="{{ program.name }}" />
-<meta property="og:image" content="{{ program.featured_image.url }}" />
+
+{% if program.featured_image %}
+  <meta property="og:image" content="{{ program.featured_image.url }}" />
+{% else %}
+  <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+{% endif %}
 <meta property="og:image:alt" content="{{ program.name }}" />
+  
+  
 {% endblock header %}
 
 {% block content %}

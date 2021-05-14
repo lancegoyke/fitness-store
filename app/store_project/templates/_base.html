@@ -25,7 +25,10 @@
   </script>
 
   {% block header %}
-  <!-- No extra header code included -->
+  <meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
+  <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+  <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+  <meta property="og:image:alt" content="Mastering Fitness" />
   {% endblock header %}
 </head>
 
@@ -53,9 +56,8 @@
   </main>
   <!-- .content -->
 
-  <div>
+  <div class="stack-page">
     {% include '_newsletter.html' %}
-  
     {% include '_footer.html' %}
   </div>
 
