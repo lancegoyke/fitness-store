@@ -10,9 +10,44 @@
 
 {% block content %}
     <h1>{% trans "Cardio Workout" %}</h1>
+
+    {% if submitted %}
+      <h2>{% trans "Your Workout" %}</h2>
+      <p>{{ mode }}</p>
+
+      {% if warm_up != 0 %}
+      <p style="color:green;">
+        {{ warm_up }} {% trans "minute warm up" %}
+      </p>
+      {% endif %}
+
+      {% if num_of_rounds == 0 %}
+      <p>
+        {% trans "Go as far as you can in" %} {{ time_under_duress }} {% trans "minute" %}{{ time_under_duress|pluralize }}        
+      </p>
+      {% else %}
+      <p>
+        {% trans "Go hard for" %} {{ work }} {{ time_unit }}{{ work|pluralize }}</p>
+      <p>
+        {% trans "Go easy for" %} {{ rest }} {{ time_unit }}{{ rest|pluralize }}
+      </p>
+      <p>
+        {% trans "Repeat for" %} {{ num_of_rounds}} {% trans "round" %}{{ num_of_rounds|pluralize }}
+      </p>
+      {% endif %}
+
+      {% if cool_down != 0 %}
+      <p style="color:red;">
+        {{ cool_down }} {% trans "minute cool down" %}
+      </p>
+      {% endif %}
+
+      <hr>
+    {% endif %}
+
     <p>
       {% blocktrans %}
-        Enter your details to get a new workout.
+        <h2>Enter your details to get a new workout</h2>
       {% endblocktrans %}
     </p>
     <div class="stack" x-data="{ open: false }">
@@ -65,37 +100,4 @@
         <input class="button" type="submit" name="submit" value="Submit" />
       </form>
     </div>
-
-    {% if submitted %}
-    <h2>{% trans "Your Workout" %}</h2>
-    <p>{{ mode }}</p>
-
-    {% if warm_up != 0 %}
-    <p style="color:green;">
-      {{ warm_up }} {% trans "minute warm up" %}
-    </p>
-    {% endif %}
-
-    {% if num_of_rounds == 0 %}
-    <p>
-      {% trans "Go as far as you can in" %} {{ time_under_duress }} {% trans "minute" %}{{ time_under_duress|pluralize }}        
-    </p>
-    {% else %}
-    <p>
-      {% trans "Go hard for" %} {{ work }} {{ time_unit }}{{ work|pluralize }}</p>
-    <p>
-      {% trans "Go easy for" %} {{ rest }} {{ time_unit }}{{ rest|pluralize }}
-    </p>
-    <p>
-      {% trans "Repeat for" %} {{ num_of_rounds}} {% trans "round" %}{{ num_of_rounds|pluralize }}
-    </p>
-    {% endif %}
-
-    {% if cool_down != 0 %}
-    <p style="color:red;">
-      {{ cool_down }} {% trans "minute cool down" %}
-    </p>
-    {% endif %}
-
-  {% endif %}
 {% endblock %}
