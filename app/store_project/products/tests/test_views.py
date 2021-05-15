@@ -31,7 +31,7 @@ class TestStoreView:
         programs_admin_link = reverse("admin:products_program_changelist")
 
         assert response.status_code == 200
-        assert "products/store.html" in response.template_name
+        assert "products/product_list.html" in response.template_name
         assert response.context_data["products"]
         assert book.name in response.rendered_content
         assert book.description in response.rendered_content
@@ -56,7 +56,7 @@ class TestStoreView:
         programs_admin_link = reverse("admin:products_program_changelist")
 
         assert response.status_code == 200
-        assert "products/store.html" in response.template_name
+        assert "products/product_list.html" in response.template_name
         assert response.context_data["products"]
         assert book.name in response.rendered_content
         assert book.description in response.rendered_content
@@ -81,7 +81,7 @@ class TestStoreView:
         programs_admin_link = reverse("admin:products_program_changelist")
 
         assert response.status_code == 200
-        assert "products/store.html" in response.template_name
+        assert "products/product_list.html" in response.template_name
         assert response.context_data["products"]
         assert book.name in response.rendered_content
         assert book.description in response.rendered_content
