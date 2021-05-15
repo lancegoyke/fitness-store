@@ -20,6 +20,7 @@ import dj_database_url
 # Custom Project settings
 # ------------------------------------------------------------------------------
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "PRODUCTION")
+DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 PRODUCT_NAME_MAX_LENGTH = 80
 DOMAIN_URL = os.environ.get("DOMAIN_URL", "https://mastering-fitness.herokuapp.com/")
 ADMINS = [
