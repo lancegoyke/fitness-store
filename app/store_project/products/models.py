@@ -9,14 +9,12 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.urls import reverse
-from django.utils.text import slugify
 from django.utils.translation import ugettext_lazy as _
 
 from django_lifecycle import (
     BEFORE_CREATE,
     AFTER_CREATE,
     BEFORE_DELETE,
-    AFTER_SAVE,
     BEFORE_UPDATE,
     AFTER_UPDATE,
     hook,
