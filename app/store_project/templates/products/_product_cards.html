@@ -1,0 +1,50 @@
+{% load products_extras %}
+{% if products %}
+<ul class="grid max-width:measure*2">
+  {% for product in products %}
+  <li class="card-box card-stack">
+    <div class="frame landscape">
+      
+      {% if product.featured_image %}
+        <img src="{{ product.featured_image.url }}" alt="{{ product.name }}" />
+      {% else %}
+        <img style="background-color: var(--main-color-dark);">
+      {% endif %}
+    </div>
+    <div class="box stack">
+      <h3>
+        <a href="{{ product.get_absolute_url }}">
+          {{ product.name }}
+        </a>
+        {% if product.status == "pr" %}
+          <span class="tag private">PRIVATE</span>
+        {% endif %}
+        {% if product.status == "dr" %}
+          <span class="tag draft">DRAFT</span>
+        {% endif %}
+      </h3>
+      <p>{{ product.description }}</p>
+    </div>
+    <div class="box space-between">
+      <div class="small">
+        
+        {% with "products.can_view_"|concat:product.slug as can_view_product %}
+          {% if can_view_product in perms %}
+            <span class="tag">Owned</span>
+          {% else %}
+            <span class="tag price">${{ product.price|floatformat:"0" }}</span>
+          {% endif %}
+        {% endwith %}
+
+      </div>
+      <div class="small font-size:small">
+        <span></span>
+      </div>
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+
+{% else %}
+<p>No products!</p>
+{% endif %}

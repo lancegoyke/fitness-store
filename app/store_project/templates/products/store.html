@@ -1,6 +1,6 @@
 {% extends '_base_wide.html' %}
 
-{% load static i18n products_extras %}
+{% load static i18n %}
 
 {% block head_title %}{% trans "Store" %}{% endblock head_title %}
 
@@ -23,54 +23,12 @@
 </p>
 {% endif %}
 
-{% if products %}
-<ul class="grid max-width:measure*2">
-  {% for product in products %}
-  <li class="card-box card-stack">
-    <div class="frame landscape">
-      
-      {% if product.featured_image %}
-        <img src="{{ product.featured_image.url }}" alt="{{ product.name }}" />
-      {% else %}
-        <img style="background-color: var(--main-color-dark);">
-      {% endif %}
-    </div>
-    <div class="box stack">
-      <h3>
-        <a href="{{ product.get_absolute_url }}">
-          {{ product.name }}
-        </a>
-        {% if product.status == "pr" %}
-          <span class="tag private">PRIVATE</span>
-        {% endif %}
-        {% if product.status == "dr" %}
-          <span class="tag draft">DRAFT</span>
-        {% endif %}
-      </h3>
-      <p>{{ product.description }}</p>
-    </div>
-    <div class="box space-between">
-      <div class="small">
-        
-        {% with "products.can_view_"|concat:product.slug as can_view_product %}
-          {% if can_view_product in perms %}
-            <span class="tag">Owned</span>
-          {% else %}
-            <span class="tag price">${{ product.price|floatformat:"0" }}</span>
-          {% endif %}
-        {% endwith %}
+<h2>{% trans "Programs" %}</h2>
+{% include "products/_product_cards.html" with products=programs %}
 
-      </div>
-      <div class="small font-size:small">
-        <span></span>
-      </div>
-    </div>
-  </li>
-  {% endfor %}
-</ul>
+<h2>{% trans "Books" %}</h2>
+{% include "products/_product_cards.html" with products=books %}
 
 <p class="center text-center" style="margin-top: var(--s5);">Want something else? <a target="_blank" href="https://docs.google.com/forms/d/e/1FAIpQLSfqlmSwj1UW3anIIgP0uBEv31W41AhGH-5FYeGVly90dwkMVw/viewform?usp=sf_link">Request it.</a></p>
-{% else %}
-<p>No products!</p>
-{% endif %}
+
 {% endblock content %}

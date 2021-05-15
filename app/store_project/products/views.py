@@ -15,24 +15,17 @@ class StoreView(TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
-        # Staff should see everything
         if self.request.user.is_staff:
-            programs = Program.objects.all()
-            books = Book.objects.all()
-            products = sorted(
-                chain(programs, books),
-                key=lambda product: product.created, reverse=True
-            )
-            context["products"] = products
-        # Users should only see public items
+            # Staff should see everything
+            programs = Program.objects.all().order_by("name")
+            books = Book.objects.all().order_by("name")
         else:
-            programs = Program.objects.filter(status=Program.PUBLIC)
-            books = Book.objects.filter(status=Book.PUBLIC)
-            products = sorted(
-                chain(programs, books),
-                key=lambda product: product.created, reverse=True
-            )
-            context["products"] = products
+            # Users should only see public items
+            programs = Program.objects.filter(status=Program.PUBLIC).order_by("name")
+            books = Book.objects.filter(status=Book.PUBLIC).order_by("name")
+
+        context["programs"] = programs
+        context["books"] = books
 
         return context
 
