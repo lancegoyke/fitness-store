@@ -1,7 +1,6 @@
 -r base.txt
 
-gunicorn==20.0.4
-django-ses[bounce]==1.0.3
+gunicorn==20.1.0
+django-ses[bounce]==2.0.0
 django-admin-honeypot==1.1.0
-sentry-sdk==0.20.0
-scout-apm==2.18.0
+sentry-sdk==1.1.0
