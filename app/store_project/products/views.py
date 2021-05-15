@@ -2,13 +2,11 @@ from itertools import chain
 
 from django.views.generic.base import TemplateView
 from django.views.generic.detail import DetailView
-from django.views.generic.edit import CreateView
 from django.views.generic.list import ListView
-from django.shortcuts import render
 
 from markdownx.utils import markdownify
 
-from .models import Book, Product, Program
+from .models import Book, Program
 
 
 class StoreView(TemplateView):
