@@ -37,8 +37,18 @@ class CardioCreateForm(forms.Form):
         ),
     )
 
-    mode = forms.CharField(label="Exercise")
-    duration = forms.IntegerField(help_text="in minutes")
+    mode = forms.CharField(
+        label="Exercise",
+        widget=forms.TextInput(
+            attrs={"placeholder": "e.g., running, biking, hiking, etc."}
+        )
+    )
+    duration = forms.IntegerField(
+        help_text="in minutes",
+        widget=forms.NumberInput(
+            attrs={"placeholder": "...in minutes"}
+        )
+    )
     protocol = forms.ChoiceField(
         choices=PROTOCOL_CHOICES,
         label="Interval",

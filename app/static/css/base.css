@@ -1209,6 +1209,15 @@ ul.grid {
   background-color: var(--error);
 }
 
+
+.button.debug,
+.button.info,
+.button.success,
+.button.warning,
+.button.error {
+  color: var(--main-color-dark);
+}
+
 .inherit-colors {
   color: inherit;
   background-color: inherit;
