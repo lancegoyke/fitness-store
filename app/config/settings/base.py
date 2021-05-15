@@ -75,7 +75,6 @@ INSTALLED_APPS = [
     "corsheaders",
     "markdownx",
     # Local
-    "store_project.upload",
     "store_project.cardio.apps.CardioConfig",
     "store_project.exercises.apps.ExercisesConfig",
     "store_project.notifications.apps.NotificationsConfig",

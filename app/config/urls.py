@@ -11,7 +11,6 @@ from config.sitemaps import StaticViewSitemap
 from store_project.exercises.sitemaps import ExerciseSitemap
 from store_project.pages.sitemaps import PageSitemap
 from store_project.products.sitemaps import BookSitemap, ProgramSitemap
-from store_project.upload.views import image_upload
 
 
 sitemaps = {
@@ -23,7 +22,6 @@ sitemaps = {
 }
 
 urlpatterns = [
-    path("upload/", image_upload, name="upload"),
     path(
         "sitemap.xml",
         sitemap,
