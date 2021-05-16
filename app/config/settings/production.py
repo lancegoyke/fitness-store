@@ -36,7 +36,6 @@ AWS_SES_CONFIGURATION_SET = os.environ.get("AWS_SES_CONFIGURATION_SET", "Trackin
 AWS_IS_GZIPPED = True
 AWS_S3_OBJECT_PARAMETERS = {
     "CacheControl": 604800,
-    
 }
 
 # Logging [view in logentries]
