@@ -14,3 +14,4 @@ boto3==1.17.73
 django-storages==1.11.1
 scout-apm==2.19.0
 django-redis==4.12.1
+django-clearcache==1.2.1

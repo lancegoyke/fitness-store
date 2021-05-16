@@ -29,6 +29,7 @@ urlpatterns = [
         name="django.contrib.sitemaps.views.sitemap",
     ),
     path("markdownx/", include("markdownx.urls")),
+    path("backside/clearcache/", include("clearcache.urls")),
     path("backside/", admin.site.urls),
     path("cardio/", include("store_project.cardio.urls")),
     path("exercises/", include("store_project.exercises.urls")),
