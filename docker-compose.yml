@@ -20,6 +20,11 @@ services:
             - POSTGRES_USER=lance_dev
             - POSTGRES_PASSWORD=892h4uhk4h329f4
             - POSTGRES_DB=store_dev
+    redis:
+        restart: always
+        image: redis:6.2.3
+        expose:
+            - "6379"
 
 volumes:
     postgres_data_dev:
