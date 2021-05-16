@@ -31,6 +31,10 @@ AWS_SES_REGION_ENDPOINT = os.environ.get(
 )
 AWS_SES_CONFIGURATION_SET = os.environ.get("AWS_SES_CONFIGURATION_SET", "Tracking")
 
+# Staticfiles
+
+AWS_IS_GZIPPED = True
+
 # Logging [view in logentries]
 
 LOGGING = {
