@@ -12,8 +12,16 @@ from store_project.pages.views import (
 
 app_name = "pages"
 urlpatterns = [
-    path("", cache_page(settings.DEFAULT_CACHE_TIMEOUT)(HomePageView.as_view()), name="home"),
-    path("contact/", contact_view, name="contact"),
+    path(
+        "",
+        cache_page(settings.DEFAULT_CACHE_TIMEOUT)(HomePageView.as_view()),
+        name="home"
+    ),
+    path(
+        "contact/",
+        cache_page(settings.DEFAULT_CACHE_TIMEOUT)(contact_view),
+        name="contact"
+    ),
     path("robots.txt", robots_txt, name="robots_txt"),
     path(
         "<str:slug>/",

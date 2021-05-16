@@ -1,9 +1,7 @@
 import os
 
-from django.conf import settings
 from django.contrib import messages
 from django.core.mail import BadHeaderError, EmailMessage
-from django.views.decorators.cache import cache_page
 from django.http import HttpResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_GET
@@ -33,7 +31,6 @@ class SinglePageView(DetailView):
         return context
 
 
-@cache_page(settings.DEFAULT_CACHE_TIMEOUT)
 def contact_view(request):
     G_RECAPTCHA_SITE_KEY = os.environ.get("G_RECAPTCHA_SITE_KEY")
     G_RECAPTCHA_SECRET_KEY = os.environ.get("G_RECAPTCHA_SECRET_KEY")
