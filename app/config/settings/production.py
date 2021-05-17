@@ -38,7 +38,6 @@ AWS_S3_OBJECT_PARAMETERS = {
     'ACL': 'None',
     'CacheControl': 'max-age=86400',
 }
-AWS_QUERYSTRING_AUTH = False
 
 # Logging [view in logentries]
 
