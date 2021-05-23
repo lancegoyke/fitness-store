@@ -32,3 +32,41 @@
 <p class="center text-center" style="margin-top: var(--s5);">Want something else? <a target="_blank" href="https://docs.google.com/forms/d/e/1FAIpQLSfqlmSwj1UW3anIIgP0uBEv31W41AhGH-5FYeGVly90dwkMVw/viewform?usp=sf_link">Request it.</a></p>
 
 {% endblock content %}
+
+{% block javascript %}
+<script>
+  let products = [];
+  {% for program in programs %}
+    products.push({
+      item_id: '{{ program.id }}',
+      item_name: '{{ program.name }}',
+      index: {{ forloop.counter }},
+      item_list_name: 'Store',
+      item_list_id: 'store',
+      item_brand: '{{ program.author }}',
+      item_category: 'programs',
+      price: {{ program.price }},
+      currency: 'USD',
+    });
+  {% endfor %}
+
+  {% for book in books %}
+    products.push({
+      item_id: '{{ book.id }}',
+      item_name: '{{ book.name }}',
+      index: {{ forloop.counter }},
+      item_list_name: 'Store',
+      item_list_id: 'store',
+      item_brand: '{{ book.author }}',
+      item_category: 'books',
+      price: {{ book.price }},
+      currency: 'USD',
+    });
+  {% endfor %}
+  gtag('event', 'view_item_list', {
+    items: products,
+    item_list_name: 'Store',
+    item_list_id: 'store'
+  });
+</script>
+{% endblock javascript %}
