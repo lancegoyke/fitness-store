@@ -171,7 +171,6 @@ def stripe_webhook(request):
             # if metadata not supplied, we're testing
             product_type = "program"
 
-        # THE PROBLEM IS HERE IT SEEMS
         if product_type == "program":
             try:
                 product = Program.objects.get(name=product_name)
