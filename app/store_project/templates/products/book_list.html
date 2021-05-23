@@ -74,8 +74,8 @@
       item_id: '{{ book.id }}',
       item_name: '{{ book.name }}',
       index: {{ forloop.counter }},
-      item_list_name: 'Store',
-      item_list_id: 'store',
+      item_list_name: 'Books',
+      item_list_id: 'books',
       item_brand: '{{ book.author }}',
       item_category: 'books',
       price: {{ book.price }},
@@ -84,8 +84,8 @@
   {% endfor %}
   gtag('event', 'view_item_list', {
     items: products,
-    item_list_name: 'Store',
-    item_list_id: 'store'
+    item_list_name: 'Books',
+    item_list_id: 'books'
   });
 </script>
 {% endblock javascript %}

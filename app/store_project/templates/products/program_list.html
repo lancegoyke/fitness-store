@@ -74,8 +74,8 @@
       item_id: '{{ program.id }}',
       item_name: '{{ program.name }}',
       index: {{ forloop.counter }},
-      item_list_name: 'Store',
-      item_list_id: 'store',
+      item_list_name: 'Programs',
+      item_list_id: 'programs',
       item_brand: '{{ program.author }}',
       item_category: 'programs',
       price: {{ program.price }},
@@ -84,8 +84,8 @@
   {% endfor %}
   gtag('event', 'view_item_list', {
     items: products,
-    item_list_name: 'Store',
-    item_list_id: 'store'
+    item_list_name: 'Programs',
+    item_list_id: 'programs'
   });
 </script>
 {% endblock javascript %}
