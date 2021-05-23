@@ -13,13 +13,13 @@
   <link rel="stylesheet" href="{% static 'css/base.css' %}" />
 
   <!-- Google Analytics | Global site tag (gtag.js) -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-341TNQY35X"></script>
+  <script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_ANALYTICS_GTAG_PROPERTY_ID }}"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
     function gtag(){dataLayer.push(arguments);}
     gtag('js', new Date());
 
-    gtag('config', 'G-341TNQY35X', {
+    gtag('config', '{{ GOOGLE_ANALYTICS_GTAG_PROPERTY_ID }}', {
       {% if request.user.id %}'user_id': '{{ request.user.id }}',{% endif %}
     });
   </script>
