@@ -65,3 +65,27 @@
 <p>Oh no! The store is empty!</p>
 {% endif %}
 {% endblock content %}
+
+{% block javascript %}
+<script>
+  let products = [];
+  {% for book in books %}
+    products.push({
+      item_id: '{{ book.id }}',
+      item_name: '{{ book.name }}',
+      index: {{ forloop.counter }},
+      item_list_name: 'Store',
+      item_list_id: 'store',
+      item_brand: '{{ book.author }}',
+      item_category: 'books',
+      price: {{ book.price }},
+      currency: 'USD',
+    });
+  {% endfor %}
+  gtag('event', 'view_item_list', {
+    items: products,
+    item_list_name: 'Store',
+    item_list_id: 'store'
+  });
+</script>
+{% endblock javascript %}
