@@ -83,6 +83,7 @@ INSTALLED_APPS = [
     "store_project.payments.apps.PaymentsConfig",
     "store_project.products.apps.ProductsConfig",
     "store_project.users.apps.UsersConfig",
+    "store_project.analytics.apps.AnalyticsConfig",
 ]
 
 MIDDLEWARE = [
@@ -110,6 +111,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "store_project.analytics.context_processors.google_analytics",
             ],
         },
     },
