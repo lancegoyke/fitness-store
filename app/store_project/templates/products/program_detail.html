@@ -107,4 +107,19 @@
 {% block javascript %}
 <script src="{% static 'js/payments.js' %}"></script>
 <script src="https://js.stripe.com/v3/"></script>
+
+<script>
+  gtag('event', 'view_item', {
+    items: [{
+      item_id: '{{ program.id }}',
+      item_name: '{{ program.name }}',
+      item_brand: '{{ program.author }}',
+      item_category: 'programs',
+      price: {{ program.price }},
+      currency: 'USD',
+    }],
+    currency: 'USD',
+    value: {{ program.price }},
+  });
+</script>
 {% endblock javascript %}

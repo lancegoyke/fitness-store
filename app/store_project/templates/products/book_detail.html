@@ -106,4 +106,19 @@
 {% block javascript %}
 <script src="{% static 'js/payments.js' %}"></script>
 <script src="https://js.stripe.com/v3/"></script>
+
+<script>
+  gtag('event', 'view_item', {
+    items: [{
+      item_id: '{{ book.id }}',
+      item_name: '{{ book.name }}',
+      item_brand: '{{ book.author }}',
+      item_category: 'books',
+      price: {{ book.price }},
+      currency: 'USD',
+    }],
+    currency: 'USD',
+    value: {{ book.price }},
+  });
+</script>
 {% endblock javascript %}
