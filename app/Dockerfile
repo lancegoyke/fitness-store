@@ -1,5 +1,5 @@
 # pull official base image
-FROM python:3.8-alpine
+FROM python:3.9-alpine
 
 # set work directory
 WORKDIR /usr/src/app
@@ -33,7 +33,7 @@ COPY ./entrypoint.sh .
 COPY . .
 
 # collect static files
-RUN python3.8 manage.py collectstatic --noinput
+RUN python3 manage.py collectstatic --noinput
 
 # run entrypoint.sh
 ENTRYPOINT ["/usr/src/app/entrypoint.sh"]

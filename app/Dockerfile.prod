@@ -5,7 +5,7 @@
 # a temporary image that's used for building the Python wheels
 
 # pull official base image
-FROM python:3.8-alpine as builder
+FROM python:3.9-alpine as builder
 
 # set work directory
 WORKDIR /usr/src/app
@@ -39,7 +39,7 @@ RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r produc
 #########
 
 # pull official base image
-FROM python:3.8-alpine
+FROM python:3.9-alpine
 
 # create directory for the app user
 RUN mkdir -p /home/app
