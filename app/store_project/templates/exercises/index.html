@@ -24,25 +24,21 @@
   </div>
 </div>
 
-<p>Use <span style="padding: 2px 4px; background-color: lightgray;">Ctrl + F</span> to search for an exercise name.</p>
+<div>
+  <input
+    type="text"
+    name="search"
+    hx-post="/exercises/search/"
+    hx-trigger="keyup changed delay:250ms"
+    hx-indicator=".htmx-indicator"
+    hx-target="#exercises"
+    placeholder="Search"
+  >
+  <span class="htmx-indicator">Searching...</span>
+</div>
 
-<ul>
-  {% for exercise in exercises %}
-  <li>
-    <div class="inline-tag">
-      <a href="{% url 'exercises:detail' slug=exercise.slug %}">{% trans exercise.name %}</a>
-      
-      {% if exercise.demonstration and user.is_staff %}
-        <button
-          class="clear copy-btn tag"
-          id="copy-{{ exercise.slug }}" 
-          data-clipboard-text="{{ exercise.demonstration }}">
-            copy demo
-        </button>
-      {% endif %}
-    </div>
-  </li>
-  {% endfor %}
+<ul id="exercises">
+  {% include "exercises/exercises.html" %}
 </ul>
 {% endblock content %}
 
@@ -55,4 +51,12 @@
     console.log(e);
   });
 </script>
+
+<script src="https://unpkg.com/htmx.org@1.5.0" integrity="sha384-oGA+prIp5Vchu6we2YkI51UtVzN9Jpx2Z7PnR1I78PnZlN8LkrCT4lqqqmDkyrvI" crossorigin="anonymous"></script>
+<script>
+  document.body.addEventListener('htmx:configRequest', (event) => {
+    event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
+  })
+</script>
+
 {% endblock javascript %}

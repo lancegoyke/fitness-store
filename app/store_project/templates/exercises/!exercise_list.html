@@ -1,0 +1,79 @@
+{% extends '_base.html' %}
+
+{% load i18n static %}
+
+{% block head_title %}{% trans "Exercises" %}{% endblock head_title %}
+
+
+{% block content %}
+<h1>Exercises</h1>
+
+{% if user.is_superuser %}
+  <p>
+    <a class="button" href="{% url 'admin:exercises_exercise_changelist' %}">
+      Edit in Admin
+    </a>
+  </p>
+{% endif %}
+
+<div class="cluster categories">
+  <div> <!-- intermediary wrapper -->
+    {% for category in categories %}
+      <div><a class="tag filter-btn" href="{% url 'exercises:filtered_list' category.slug %}">{{ category.name }}</a></div>
+    {% endfor %}
+  </div>
+</div>
+
+<div>
+  <input
+    type="text"
+    name="search"
+    hx-post="/exercises/search/"
+    hx-trigger="keyup changed delay:250ms"
+    hx-indicator=".htmx-indicator"
+    hx-target="#exercises"
+    placeholder="Search"
+  >
+  <span class="htmx-indicator">Searching...</span>
+</div>
+
+<p>Use <span style="padding: 2px 4px; background-color: lightgray;">Ctrl + F</span> to search for an exercise name.</p>
+
+<ul id="exercises">
+  {% for exercise in exercises %}
+  <li>
+    <div class="inline-tag">
+      <a href="{% url 'exercises:detail' slug=exercise.slug %}">{% trans exercise.name %}</a>
+      
+      {% if exercise.demonstration and user.is_staff %}
+        <button
+          class="clear copy-btn tag"
+          id="copy-{{ exercise.slug }}" 
+          data-clipboard-text="{{ exercise.demonstration }}">
+            copy demo
+        </button>
+      {% endif %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% endblock content %}
+
+{% block javascript %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.6/clipboard.min.js"></script>
+<script>
+  var clipboard = new ClipboardJS('.copy-btn');
+
+  clipboard.on('success', function(e) {
+    console.log(e);
+  });
+</script>
+
+<script src="https://unpkg.com/htmx.org@1.5.0" integrity="sha384-oGA+prIp5Vchu6we2YkI51UtVzN9Jpx2Z7PnR1I78PnZlN8LkrCT4lqqqmDkyrvI" crossorigin="anonymous"></script>
+<script>
+  document.body.addEventListener('htmx:configRequest', (event) => {
+    event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
+  })
+</script>
+
+{% endblock javascript %}
