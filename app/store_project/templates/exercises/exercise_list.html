@@ -8,6 +8,14 @@
 {% block content %}
 <h1>Exercises</h1>
 
+{% if user.is_superuser %}
+  <p>
+    <a class="button" href="{% url 'admin:exercises_exercise_changelist' %}">
+      Edit in Admin
+    </a>
+  </p>
+{% endif %}
+
 <div class="cluster categories">
   <div> <!-- intermediary wrapper -->
     {% for category in categories %}

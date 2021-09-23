@@ -8,6 +8,13 @@
 <h1>{% trans exercise.name %}</h1>
 
 <h2>{% trans "Video Links" %}</h2>
+{% if user.is_superuser %}
+  <p>
+    <a class="button" href="{% url 'admin:exercises_exercise_change' exercise.id %}">
+      Edit in Admin
+    </a>
+  </p>
+{% endif %}
 {% if exercise.demonstration %}
   <p><a href="{{ exercise.demonstration }}" target="_blank">Demonstration</a></p>
 {% endif %}
