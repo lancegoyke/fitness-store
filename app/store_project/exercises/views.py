@@ -45,7 +45,6 @@ class ExerciseFilteredListView(ListView):
 
 @require_http_methods(["POST"])
 def search(request):
-    e_list = []
     search = request.POST["search"]
     if len(search) == 0:
         return render(
@@ -54,12 +53,9 @@ def search(request):
             {
                 "exercises": Exercise.objects.all().order_by("name"),
             })
-    for e in Exercise.objects.all():
-        if search.lower() in e.name.lower():
-            e_list.append(e)
     return render(
         request,
         "exercises/exercises.html",
         {
-            "exercises": e_list,
+            "exercises": Exercise.objects.filter(name__search=search),
         })

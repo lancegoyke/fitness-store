@@ -67,6 +67,7 @@ INSTALLED_APPS = [
     "django.contrib.sites",
     "whitenoise.runserver_nostatic",
     "django.contrib.staticfiles",
+    "django.contrib.postgres",
     # 3rd party
     "allauth",
     "allauth.account",
