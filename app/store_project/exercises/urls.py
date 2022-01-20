@@ -10,7 +10,6 @@ from store_project.exercises.views import (
 app_name = "exercises"
 urlpatterns = [
     path("", ExerciseListView.as_view(), name="list"),
-    # path("", exercise_list, name="list"),
     path(
         "category/<str:category>/",
         ExerciseFilteredListView.as_view(),
