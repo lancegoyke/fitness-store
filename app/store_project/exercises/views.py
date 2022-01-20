@@ -30,7 +30,7 @@ class ExerciseFilteredListView(ListView):
     model = Exercise
     context_object_name = "exercises"
     ordering = "name"
-    template_name = "exercises/exercise_filtered_list.html"
+    template_name = "exercises/index.html"
 
     def get_queryset(self):
         self.category = get_object_or_404(Category, slug=self.kwargs["category"])
@@ -45,17 +45,25 @@ class ExerciseFilteredListView(ListView):
 
 @require_http_methods(["POST"])
 def search(request):
-    search = request.POST["search"]
+    search = request.POST.get("search", "")
+    category = request.POST.get("category", None)
+
+    if category:
+        exercises = Exercise.objects.filter(categories__name=category)
+    else:
+        exercises = Exercise.objects.all()
+
     if len(search) == 0:
         return render(
             request,
             "exercises/exercises.html",
             {
-                "exercises": Exercise.objects.all().order_by("name"),
+                "exercises": exercises.order_by("name"),
             })
+
     return render(
         request,
         "exercises/exercises.html",
         {
-            "exercises": Exercise.objects.filter(name__search=search),
+            "exercises": exercises.filter(name__search=search),
         })
