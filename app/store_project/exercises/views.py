@@ -40,6 +40,7 @@ class ExerciseFilteredListView(ListView):
         context = super().get_context_data(**kwargs)
         self.category = get_object_or_404(Category, slug=self.kwargs["category"])
         context["category"] = self.category.name
+        context["categories"] = Category.objects.all()
         return context
 
 
