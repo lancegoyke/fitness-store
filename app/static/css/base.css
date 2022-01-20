@@ -1384,3 +1384,17 @@ ul.grid {
 .testimonial-footer .job-title {
   color: var(--main-color-gray);
 }
+
+.search {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.search input[name=search] {
+  flex-grow: 1;
+}
+
+.search .htmx-indicator {
+  margin-left: 10px;
+}

@@ -26,7 +26,7 @@
 </div>
 {% endif %}
 
-<div class="stack" style="display:flex; flex-direction:row; justify-content:space-between;">
+<div class="stack search">
   <input
     type="text"
     name="search"
@@ -36,7 +36,6 @@
     hx-target="#exercises"
     hx-include="#category"
     placeholder="Search"
-    style="flex-grow:3;"
   >
   <input 
     id="category"
@@ -44,7 +43,7 @@
     name="category"
     value="{{ category }}"
   >
-  <span class="htmx-indicator" style="margin-left: 10px;">...</span>
+  <span class="htmx-indicator">...</span>
 </div>
 
 <ul id="exercises">
