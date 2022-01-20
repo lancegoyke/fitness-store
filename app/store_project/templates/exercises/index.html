@@ -15,6 +15,9 @@
   </p>
 {% endif %}
 
+{% if category %}
+<p><a href="{% url 'exercises:list' %}"><-- all exercises</a></p>
+{% endif %}
 
 {% if categories %}
 <div class="cluster categories">
