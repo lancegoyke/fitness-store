@@ -23,8 +23,7 @@
   </div>
 </div>
 
-<div class="stack">
-  <span class="htmx-indicator">Searching...</span>
+<div class="stack" style="display:flex; flex-direction:row; justify-content:space-between;">
   <input
     type="text"
     name="search"
@@ -34,6 +33,7 @@
     hx-target="#exercises"
     hx-include="#category"
     placeholder="Search"
+    style="flex-grow:3;"
   >
   <input 
     id="category"
@@ -41,6 +41,7 @@
     name="category"
     value="{{ category }}"
   >
+  <span class="htmx-indicator" style="margin-left: 10px;">...</span>
 </div>
 
 <ul id="exercises">
