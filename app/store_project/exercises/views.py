@@ -11,6 +11,7 @@ class ExerciseDetailView(DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["yt_demo_id"] = self.object.get_yt_demo_id()
+        context["yt_explan_id"] = self.object.get_yt_explan_id()
         context["alternatives"] = Alternative.objects.filter(original=self.get_object())
         return context
 

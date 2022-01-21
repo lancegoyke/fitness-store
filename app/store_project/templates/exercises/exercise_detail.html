@@ -26,7 +26,14 @@
   </div>
 {% endif %}
 {% if exercise.explanation %}
-  <p><a href="{{ exercise.explanation }}" target="_blank">Explanation</a></p>
+  <div class="video">
+    <iframe
+      src="https://www.youtube.com/embed/{{ yt_explan_id }}?&modestbranding=1"
+      title="YouTube video player"
+      frameborder="0"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+      allowfullscreen></iframe>
+  </div>
 {% endif %}
 
 {% if alternatives %}

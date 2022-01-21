@@ -72,16 +72,32 @@ class Exercise(models.Model):
         Returns `None` if there is no demonstration URL in the database.
         """
 
-        if not self.demonstration:
-            return None
         url = self.demonstration
+
+        if not url:
+            return None
         m = re.search(r'\?v\=([a-zA-Z0-9\-\_]{11})', url)
         if not m:
             m = re.search(r'youtu.be/([a-zA-Z0-9\-\_]{11})', url)
         return m.group(1)
 
     def get_yt_explan_id(self):
-        pass
+        """Returns the 11-character video ID from a link of one of these styles:
+            - youtu.be/###########
+            - youtube.com/watch?v=###########
+            - youtube.com/watch?v=###########&list=...
+
+        Returns `None` if there is no explanation URL in the database.
+        """
+
+        url = self.explanation
+
+        if not url:
+            return None
+        m = re.search(r'\?v\=([a-zA-Z0-9\-\_]{11})', url)
+        if not m:
+            m = re.search(r'youtu.be/([a-zA-Z0-9\-\_]{11})', url)
+        return m.group(1)
 
 
 class Alternative(models.Model):
