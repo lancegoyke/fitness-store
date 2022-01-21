@@ -75,9 +75,9 @@ class Exercise(models.Model):
         if not self.demonstration:
             return None
         url = self.demonstration
-        m = re.search('\?v\=([a-zA-Z0-9\-\_]{11})', url)
+        m = re.search(r'\?v\=([a-zA-Z0-9\-\_]{11})', url)
         if not m:
-            m = re.search('youtu.be/([a-zA-Z0-9\-\_]{11})', url)
+            m = re.search(r'youtu.be/([a-zA-Z0-9\-\_]{11})', url)
         return m.group(1)
 
     def get_yt_explan_id(self):
