@@ -1338,6 +1338,11 @@ ul.grid {
   background: repeating-linear-gradient(-45deg, var(--main-color-dark), var(--main-color-dark) 10px, var(--main-color-dark-gray) 10px, var(--main-color-dark-gray) 20px );
 }
 
+.testimonials > * {
+  /* max-width: 1000px; */
+  margin: auto;
+}
+
 .about .box,
 .cta .box,
 .newsletter .box,
