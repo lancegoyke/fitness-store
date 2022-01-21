@@ -31,6 +31,7 @@
 
 <div class="stack search">
   <input
+    id="search"
     type="text"
     name="search"
     hx-post="/exercises/search/"
@@ -74,6 +75,16 @@
   document.body.addEventListener('htmx:configRequest', (event) => {
     event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
   })
+</script>
+
+<script>
+  document.addEventListener("keyup", e => {
+    if (e.key !== "/" || e.ctrlKey || e.metaKey) return;
+    if (/^(?:input|textarea|select|button)$/i.test(e.target.tagName)) return;
+  
+    e.preventDefault();
+    document.getElementById("search").focus();
+  });
 </script>
 
 {% endblock javascript %}
