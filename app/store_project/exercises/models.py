@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from django.db import models
@@ -61,6 +62,26 @@ class Exercise(models.Model):
 
     def get_absolute_url(self):
         return reverse("exercises:detail", kwargs={"slug": self.slug})
+
+    def get_yt_demo_id(self):
+        """Returns the 11-character video ID from a link of one of these styles:
+            - youtu.be/###########
+            - youtube.com/watch?v=###########
+            - youtube.com/watch?v=###########&list=...
+
+        Returns `None` if there is no demonstration URL in the database.
+        """
+
+        if not self.demonstration:
+            return None
+        url = self.demonstration
+        m = re.search('\?v\=([a-zA-Z0-9\-\_]{11})', url)
+        if not m:
+            m = re.search('youtu.be/([a-zA-Z0-9\-\_]{11})', url)
+        return m.group(1)
+
+    def get_yt_explan_id(self):
+        pass
 
 
 class Alternative(models.Model):
