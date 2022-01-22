@@ -32,7 +32,8 @@ class TestStoreView:
 
         assert response.status_code == 200
         assert "products/product_list.html" in response.template_name
-        assert response.context_data["products"]
+        assert response.context_data["books"]
+        assert response.context_data["programs"]
         assert book.name in response.rendered_content
         assert book.description in response.rendered_content
         assert book.author.name in response.rendered_content
@@ -57,7 +58,8 @@ class TestStoreView:
 
         assert response.status_code == 200
         assert "products/product_list.html" in response.template_name
-        assert response.context_data["products"]
+        assert response.context_data["books"]
+        assert response.context_data["programs"]
         assert book.name in response.rendered_content
         assert book.description in response.rendered_content
         assert book.author.name in response.rendered_content
@@ -82,7 +84,8 @@ class TestStoreView:
 
         assert response.status_code == 200
         assert "products/product_list.html" in response.template_name
-        assert response.context_data["products"]
+        assert response.context_data["books"]
+        assert response.context_data["programs"]
         assert book.name in response.rendered_content
         assert book.description in response.rendered_content
         assert book.author.name in response.rendered_content
