@@ -7,6 +7,29 @@ from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
 
+class Alternative(models.Model):
+    """An alternative exercise."""
+
+    id = models.UUIDField(
+        _("Alternative ID"), primary_key=True, default=uuid.uuid4, editable=False
+    )
+    original = models.ForeignKey(
+        "Exercise",
+        verbose_name=_("Original exercise"),
+        related_name="original",
+        on_delete=models.CASCADE,
+    )
+    alternate = models.ForeignKey(
+        "Exercise",
+        verbose_name=_("Alternative exercise"),
+        related_name="alternate",
+        on_delete=models.CASCADE,
+    )
+    problem = models.CharField(
+        _("Problem with original exercise"), max_length=200, default="", blank=True
+    )
+
+    
 class Category(models.Model):
     """The kind of exercise. Ex: squat, single leg, hinge, etc."""
 
@@ -98,26 +121,3 @@ class Exercise(models.Model):
         if not m:
             m = re.search(r'youtu.be/([a-zA-Z0-9\-\_]{11})', url)
         return m.group(1)
-
-
-class Alternative(models.Model):
-    """An alternative exercise."""
-
-    id = models.UUIDField(
-        _("Alternative ID"), primary_key=True, default=uuid.uuid4, editable=False
-    )
-    original = models.ForeignKey(
-        "Exercise",
-        verbose_name=_("Original exercise"),
-        related_name="original",
-        on_delete=models.CASCADE,
-    )
-    alternate = models.ForeignKey(
-        "Exercise",
-        verbose_name=_("Alternative exercise"),
-        related_name="alternate",
-        on_delete=models.CASCADE,
-    )
-    problem = models.CharField(
-        _("Problem with original exercise"), max_length=200, default="", blank=True
-    )

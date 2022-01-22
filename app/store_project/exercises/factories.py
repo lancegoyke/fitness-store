@@ -3,7 +3,7 @@ from django.utils.text import slugify
 import factory
 from factory.django import DjangoModelFactory
 
-from .models import Category, Exercise
+from .models import Alternative, Category, Exercise
 
 
 class CategoryFactory(DjangoModelFactory):
@@ -22,3 +22,23 @@ class ExerciseFactory(DjangoModelFactory):
     slug = factory.LazyAttribute(lambda o: slugify(o.name))
     demonstration = "https://youtu.be/5DQgXXkNMOk"
     explanation = "https://www.youtube.com/watch?v=7NCF7hS3CCE"
+
+    @factory.post_generation
+    def categories(self, create, extracted, **kwargs):
+        if not create:
+            # Simple build, do nothing.
+            return
+        
+        if extracted:
+            # A list of categories were passed in, use them
+            for one_category in extracted:
+                self.categories.add(one_category)
+
+
+class AlternativeFactory(DjangoModelFactory):
+    class Meta:
+        model = Alternative
+
+    original = factory.SubFactory(ExerciseFactory)
+    alternate = factory.SubFactory(ExerciseFactory)
+    problem = factory.Faker("sentence", nb_words=3, variable_nb_words=True)

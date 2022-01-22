@@ -1,7 +1,5 @@
 import pytest
 from django.contrib.auth.models import AnonymousUser
-from django.http.response import Http404
-from django.shortcuts import render
 from django.test import RequestFactory
 from django.urls import reverse
 
@@ -23,7 +21,7 @@ class TestStoreView:
         self, user: User, program: Program, book: Book, rf: RequestFactory
     ):
         request = rf.get("/store/")
-        request.user = AnonymousUser()
+        request.user = user
 
         response = StoreView.as_view()(request)
 
@@ -49,7 +47,7 @@ class TestStoreView:
         self, user: User, program: Program, book: Book, rf: RequestFactory
     ):
         request = rf.get("/store/")
-        request.user = user
+        request.user = AnonymousUser()
 
         response = StoreView.as_view()(request)
 
