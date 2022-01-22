@@ -28,7 +28,7 @@ class ExerciseFactory(DjangoModelFactory):
         if not create:
             # Simple build, do nothing.
             return
-        
+
         if extracted:
             # A list of categories were passed in, use them
             for one_category in extracted:

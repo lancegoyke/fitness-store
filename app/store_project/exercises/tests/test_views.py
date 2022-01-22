@@ -30,8 +30,9 @@ class TestExerciseDetailView:
         assert exercise.get_yt_explan_id() in response.rendered_content
         assert admin_link not in response.rendered_content
 
-
-    def test_super_authenticated(self, superuser: User, exercise: Exercise, rf: RequestFactory):
+    def test_super_authenticated(
+        self, superuser: User, exercise: Exercise, rf: RequestFactory
+    ):
         request = rf.get(f"/exercises/{exercise.slug}/")
         request.user = superuser
 
@@ -44,7 +45,6 @@ class TestExerciseDetailView:
         assert exercise.get_yt_demo_id() in response.rendered_content
         assert exercise.get_yt_explan_id() in response.rendered_content
         assert admin_link in response.rendered_content
-
 
     def test_not_authenticated(self, exercise: Exercise, rf: RequestFactory):
         request = rf.get(f"/exercises/{exercise.slug}/")
@@ -66,7 +66,7 @@ class TestExerciseListView:
         ex1 = ExerciseFactory()
         ex2 = ExerciseFactory()
         ex3 = ExerciseFactory()
-        
+
         request = rf.get("/exercises/")
         request.user = user
 
@@ -85,7 +85,7 @@ class TestExerciseListView:
         ex1 = ExerciseFactory()
         ex2 = ExerciseFactory()
         ex3 = ExerciseFactory()
-        
+
         request = rf.get("/exercises/")
         request.user = superuser
 
@@ -100,12 +100,11 @@ class TestExerciseListView:
         assert ex3.name in response.rendered_content
         assert exercises_admin_link in response.rendered_content
 
-
     def test_not_authenticated(self, rf: RequestFactory):
         ex1 = ExerciseFactory()
         ex2 = ExerciseFactory()
         ex3 = ExerciseFactory()
-        
+
         request = rf.get("/exercises/")
         request.user = AnonymousUser()
 

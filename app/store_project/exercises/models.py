@@ -29,7 +29,7 @@ class Alternative(models.Model):
         _("Problem with original exercise"), max_length=200, default="", blank=True
     )
 
-    
+
 class Category(models.Model):
     """The kind of exercise. Ex: squat, single leg, hinge, etc."""
 
@@ -99,9 +99,9 @@ class Exercise(models.Model):
 
         if not url:
             return None
-        m = re.search(r'\?v\=([a-zA-Z0-9\-\_]{11})', url)
+        m = re.search(r"\?v\=([a-zA-Z0-9\-\_]{11})", url)
         if not m:
-            m = re.search(r'youtu.be/([a-zA-Z0-9\-\_]{11})', url)
+            m = re.search(r"youtu.be/([a-zA-Z0-9\-\_]{11})", url)
         return m.group(1)
 
     def get_yt_explan_id(self):
@@ -117,7 +117,7 @@ class Exercise(models.Model):
 
         if not url:
             return None
-        m = re.search(r'\?v\=([a-zA-Z0-9\-\_]{11})', url)
+        m = re.search(r"\?v\=([a-zA-Z0-9\-\_]{11})", url)
         if not m:
-            m = re.search(r'youtu.be/([a-zA-Z0-9\-\_]{11})', url)
+            m = re.search(r"youtu.be/([a-zA-Z0-9\-\_]{11})", url)
         return m.group(1)
