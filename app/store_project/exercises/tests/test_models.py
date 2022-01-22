@@ -1,7 +1,11 @@
 import pytest
 
 from store_project.exercises.models import Category, Exercise
-from store_project.exercises.factories import AlternativeFactory, CategoryFactory, ExerciseFactory
+from store_project.exercises.factories import (
+    AlternativeFactory,
+    CategoryFactory,
+    ExerciseFactory,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -10,6 +14,7 @@ yt_links = [
     "https://www.youtube.com/watch?v=rTLSGke1AuA",
     "https://www.youtube.com/watch?v=rTLSGke1AuA&list=PLHaGRfu0X0CJ1LBdXg-atqsLsKd7rYO0V&index=54",
 ]
+
 
 @pytest.mark.parametrize("demonstration", yt_links)
 def test_exercise_ytdemoid(demonstration):
@@ -29,8 +34,7 @@ def test_exercise_get_absolute_url(exercise: Exercise):
 
 def test_alternative():
     alternative = AlternativeFactory(
-        original=ExerciseFactory(),
-        alternate=ExerciseFactory()
+        original=ExerciseFactory(), alternate=ExerciseFactory()
     )
     assert alternative.original
     assert alternative.alternate
@@ -42,7 +46,5 @@ def test_exercise_no_category(exercise: Exercise):
 
 
 def test_exercise_category(category: Category):
-    exercise: Exercise = ExerciseFactory.create(
-        categories=(category, )
-    )
+    exercise: Exercise = ExerciseFactory.create(categories=(category,))
     assert exercise.categories.exists()
