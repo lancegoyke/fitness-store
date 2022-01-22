@@ -1,7 +1,6 @@
-from decimal import Decimal
 import pytest
 
-from django.contrib.auth.models import Group, Permission
+from django.contrib.auth.models import Permission
 
 from store_project.products.factories import BookFactory, ProgramFactory
 from store_project.products.models import Book, Product, Program
