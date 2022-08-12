@@ -26,10 +26,10 @@ class MacroForm(forms.Form):
         (SEX_F, _("Female")),
     ]
 
-    SEDENTARY = 0
-    LOWACTIVE = 1
-    ACTIVE = 2
-    HIGHACTIVE = 3
+    SEDENTARY = "sed"
+    LOWACTIVE = "low"
+    ACTIVE = "mid"
+    HIGHACTIVE = "hi"
     ACTIVITY_LEVEL_CHOICES = [
         (SEDENTARY, _("Sedentary")),
         (LOWACTIVE, _("Low active")),
@@ -37,18 +37,18 @@ class MacroForm(forms.Form):
         (HIGHACTIVE, _("High active")),
     ]
 
-    FAT_LOSS = 0
-    MAINTENANCE = 1
-    MUSCLE_GAIN = 2
+    FAT_LOSS = "lose"
+    MAINTENANCE = "keep"
+    MUSCLE_GAIN = "gain"
     GOAL_CHOICES = [
         (FAT_LOSS, _("Fat loss")),
         (MAINTENANCE, _("Maintenance")),
         (MUSCLE_GAIN, _("Muscle gain")),
     ]
 
-    height = forms.DecimalField()
+    height = forms.FloatField()
     height_unit = forms.ChoiceField(choices=HEIGHT_UNIT_CHOICES)
-    weight = forms.DecimalField()
+    weight = forms.FloatField()
     weight_unit = forms.ChoiceField(choices=WEIGHT_UNIT_CHOICES)
     age = forms.IntegerField()
     sex = forms.ChoiceField(choices=SEX_CHOICES)
