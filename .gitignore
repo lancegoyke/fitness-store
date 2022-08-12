@@ -10,3 +10,4 @@ tmp/
 *.venv*
 *.pyc
 *.dump
+app/store_project/courses/build/
