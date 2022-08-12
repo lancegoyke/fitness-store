@@ -20,7 +20,7 @@ import dj_database_url
 # Custom Project settings
 # ------------------------------------------------------------------------------
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "PRODUCTION")
-DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
+DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 PRODUCT_NAME_MAX_LENGTH = 80
 DOMAIN_URL = os.environ.get("DOMAIN_URL", "https://mastering-fitness.herokuapp.com/")
 ADMINS = [
@@ -76,6 +76,7 @@ INSTALLED_APPS = [
     "allauth.socialaccount.providers.google",
     "corsheaders",
     "markdownx",
+    "sphinx_view",
     # Local
     "store_project.cardio.apps.CardioConfig",
     "store_project.exercises.apps.ExercisesConfig",
@@ -187,12 +188,10 @@ STATICFILES_DIRS = [
     APP_DIR / "static",
 ]
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
-DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
 AWS_STORAGE_BUCKET_NAME = "masterfit"
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "fake598234752934")
-AWS_SECRET_ACCESS_KEY = os.environ.get(
-    "AWS_SECRET_ACCESS_KEY", "fake423456j234h6k2j5h"
-)
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "fake423456j234h6k2j5h")
 
 
 # User Management

@@ -1,0 +1,66 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}{% endblock title %} | Mastering Fitness</title>
+  <link rel="shortcut icon" href="{% static 'png/favicon-black.png' %}">
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="{% static 'css/base.css' %}" />
+
+  <!-- Google Analytics | Global site tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_ANALYTICS_GTAG_PROPERTY_ID }}"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', '{{ GOOGLE_ANALYTICS_GTAG_PROPERTY_ID }}', {
+      {% if request.user.id %}'user_id': '{{ request.user.id }}',{% endif %}
+    });
+  </script>
+
+  {% block header %}
+  <meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
+  <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+  <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+  <meta property="og:image:alt" content="Mastering Fitness" />
+  {% endblock header %}
+</head>
+
+<body>
+
+  {% include '_nav.html' %}
+
+  <style>
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 3fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+  </style>
+  
+  <div class="grid">
+    <div class="left">{% block global_toc %}Other stuff{% endblock global_toc %}</div>
+    <div class="middle stack-all">{% block doc %}{% endblock doc %}</div>
+    <div class="right">{% block toc %}{% endblock toc %}</div>
+  </div>
+
+
+  <div class="stack-page">
+    {% include '_footer.html' %}
+  </div>
+
+  <!-- JavaScript -->
+  {% block javascript %}
+  <!-- No JavaScript available -->
+  {% endblock javascript %}
+
+</body>
+
+</html>

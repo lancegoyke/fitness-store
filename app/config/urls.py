@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from django.conf import settings
 from django.conf.urls.static import static
@@ -6,6 +7,8 @@ from django.contrib import admin
 from django.contrib.sitemaps.views import sitemap
 from django.urls import path, include
 from django.views.decorators.csrf import csrf_exempt
+
+from sphinx_view import DocumentationView
 
 from config.sitemaps import StaticViewSitemap
 from store_project.exercises.sitemaps import ExerciseSitemap
@@ -27,6 +30,14 @@ urlpatterns = [
         sitemap,
         {"sitemaps": sitemaps},
         name="django.contrib.sitemaps.views.sitemap",
+    ),
+    path(
+        "docs<path:path>",
+        DocumentationView.as_view(
+            json_build_dir=Path("store_project/courses/build/json"),
+            base_template_name="courses/base.html",
+        ),
+        name="documentation",
     ),
     path("markdownx/", include("markdownx.urls")),
     path("backside/clearcache/", include("clearcache.urls")),
