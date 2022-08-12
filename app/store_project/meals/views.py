@@ -5,7 +5,7 @@ from store_project.meals.forms import MacroForm
 
 
 def macro_calculator(request):
-    """Allow user to calculate daily nutrition requirements"""
+    """Calculate daily nutrition requirements"""
 
     if request.method == "POST":
         form = MacroForm(request.POST)
