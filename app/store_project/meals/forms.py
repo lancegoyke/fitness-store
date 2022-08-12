@@ -3,7 +3,7 @@ from django.utils.translation import gettext_lazy as _
 
 
 class MacroForm(forms.Form):
-    """Calculate macros"""
+    """How we calculate macros"""
 
     WEIGHT_METRIC = "kg"
     WEIGHT_IMPERIAL = "lbs"
