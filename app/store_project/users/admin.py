@@ -59,6 +59,7 @@ class UserAdmin(auth_admin.UserAdmin):
     list_display = [
         "email",
         "date_joined",
+        "is_coach",
         "is_superuser",
     ]
     search_fields = [
