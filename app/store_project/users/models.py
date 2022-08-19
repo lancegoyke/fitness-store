@@ -1,7 +1,7 @@
 import uuid
 
 from django.contrib.auth.models import AbstractUser
-from django.db.models import CharField, EmailField, UUIDField
+from django.db.models import BooleanField, CharField, EmailField, UUIDField
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
@@ -13,6 +13,7 @@ class User(AbstractUser):
     # First and last name do not cover name patterns around the globe
     name = CharField(_("Name of User"), blank=True, max_length=255)
     stripe_customer_id = CharField(_("Stripe Customer ID"), max_length=100, blank=True)
+    is_coach = BooleanField(_("Is the user a coach?"), null=True, blank=False)
 
     def __str__(self):
         return self.email
