@@ -85,6 +85,7 @@ INSTALLED_APPS = [
     "store_project.products.apps.ProductsConfig",
     "store_project.users.apps.UsersConfig",
     "store_project.analytics.apps.AnalyticsConfig",
+    "store_project.analytics.apps.TrackingConfig",
 ]
 
 MIDDLEWARE = [
