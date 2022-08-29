@@ -3,7 +3,7 @@ import pytest
 from django.contrib.auth.models import Permission
 
 from store_project.products.factories import BookFactory, ProgramFactory
-from store_project.products.models import Book, Product, Program
+from store_project.products.models import Book, Price, Product, Program
 
 pytestmark = pytest.mark.django_db
 
@@ -60,3 +60,11 @@ def test_book_remove_permission(book: Book):
     with pytest.raises(Permission.DoesNotExist):
         assert Permission.objects.get(codename=f"can_view_{book.slug}")
         assert Permission.objects.get(name=f"Can view {book.name}")
+
+
+def test_price_fixed_unit_create(price_fixed_unit: Price):
+    assert Price.objects.count() == 1
+
+
+def test_fixed_monthly_subscription_create(price_fixed_monthly_subscription: Price):
+    assert Price.objects.count() == 1
