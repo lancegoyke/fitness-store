@@ -10,3 +10,4 @@ tmp/
 *.venv*
 *.pyc
 *.dump
+testdata_*
