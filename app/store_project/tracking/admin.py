@@ -1,3 +1,15 @@
 from django.contrib import admin
 
-# Register your models here.
+from store_project.tracking.models import Category, Test
+
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug")
+    prepopulated_fields = {"slug": ("name",)}
+
+
+@admin.register(Test)
+class TestAdmin(admin.ModelAdmin):
+    list_display = ("name", "created", "modified")
+    prepopulated_fields = {"slug": ("name",)}
