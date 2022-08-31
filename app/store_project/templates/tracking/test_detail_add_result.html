@@ -1,0 +1,30 @@
+{% extends '_base.html' %}
+
+{% load static i18n %}
+
+{% block head_title %}{% trans test.name %} - {% trans "Add Result" %}{% endblock head_title %}
+
+{% block header %}
+<meta name="description" property="og:description" content="Add a test result">
+<meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+<meta name="author" content="{{ test.author }}">
+<meta property="og:title" content="{{ test.name }}" />
+{% endblock header %}
+
+{% block content %}
+
+<h1>{{ test.name }}</h1>
+
+<p>{{ test.description }}</p>
+
+<form action="" method="post">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button type="submit">Add Result</button>
+</form>
+
+{% endblock content %}
+
+<!-- JavaScript -->
+{% block javascript %}
+{% endblock javascript %}

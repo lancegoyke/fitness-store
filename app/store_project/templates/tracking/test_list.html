@@ -1,0 +1,31 @@
+{% extends '_base.html' %}
+
+{% load static i18n %}
+
+{% block head_title %}{% trans "Testing" %}{% endblock head_title %}
+
+{% block header %}
+<meta name="description" property="og:description" content="A variety of tests to measure fitness">
+<meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+<meta name="author" content="Lance Goyke">
+<meta property="og:title" content="Fitness Testing" />
+{% endblock header %}
+
+{% block content %}
+
+<h1>Fitness Tests</h1>
+
+<ul>
+  
+  {% for test in tests %}
+    <li><a href="{{ test.get_absolute_url }}">{{ test.name }}</a></li>
+  {% endfor %}
+
+</ul>
+
+
+{% endblock content %}
+
+<!-- JavaScript -->
+{% block javascript %}
+{% endblock javascript %}
