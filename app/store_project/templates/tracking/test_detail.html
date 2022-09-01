@@ -17,11 +17,26 @@
 
 <p>{{ test.description }}</p>
 
-<ul>
-  {% for result in test_results %}
-    <li>{{ result.user }} - {{ result.value }} {{ result.unit }}</li>
-  {% endfor %}
-</ul>
+<table id="results">
+  <thead>
+    <tr>
+      <th id="date" scope="col">Date</th>
+      <th id="user" scope="col">User</th>
+      <th id="result" scope="col">Result</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+    {% for result in test_results %}
+      <tr>
+        <td>{{ result.created|date:"Y M d" }}</td>
+        <td>{{ result.user.name }}</td>
+        <td>{{ result.value }} {{ result.unit }}</td>
+      </tr>
+    {% endfor %}
+      
+  </tbody>
+</table>
 
 {% endblock content %}
 
