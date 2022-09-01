@@ -63,8 +63,14 @@ class Test(models.Model):
     def get_absolute_url(self):
         return reverse("tracking:test_detail", kwargs={"pk": self.pk})
 
-    def get_measurement_form(self):
+    def get_measure_base_form_cls(self):
         return self.measurement_type.model_class()().get_form()
+
+    def get_measure_staff_form_cls(self):
+        return self.measurement_type.model_class()().get_staff_form()
+
+    def get_measure_athlete_form_cls(self):
+        return self.measurement_type.model_class()().get_athlete_form()
 
 
 class AbstractMeasure(models.Model):
@@ -82,9 +88,19 @@ class AbstractMeasure(models.Model):
     class Meta:
         abstract = True
 
-    def get_form(self):
+    def get_base_form(self):
         raise NotImplementedError(
-            "Make sure the subclass implements its own MeasureForm"
+            "Make sure the subclass implements its own MeasureBaseForm"
+        )
+
+    def get_staff_form(self):
+        raise NotImplementedError(
+            "Make sure the subclass implements its own MeasureStaffForm"
+        )
+
+    def get_athlete_form(self):
+        raise NotImplementedError(
+            "Make sure the subclass implements its own MeasureTestForm"
         )
 
     def __str__(self):
@@ -99,10 +115,20 @@ class UnitsOfLoad(models.TextChoices):
 class LoadMeasure(AbstractMeasure):
     unit = models.CharField(max_length=2, choices=UnitsOfLoad.choices)
 
-    def get_form(self):
-        from .forms import LoadMeasureForm
+    def get_base_form(self):
+        from .forms import LoadMeasureBaseForm
 
-        return LoadMeasureForm()
+        return LoadMeasureBaseForm
+
+    def get_staff_form(self):
+        from .forms import LoadMeasureStaffForm
+
+        return LoadMeasureStaffForm
+
+    def get_athlete_form(self):
+        from .forms import LoadMeasureTestForm
+
+        return LoadMeasureTestForm
 
 
 class UnitsOfPower(models.TextChoices):
@@ -112,10 +138,20 @@ class UnitsOfPower(models.TextChoices):
 class PowerMeasure(AbstractMeasure):
     unit = models.CharField(max_length=2, choices=UnitsOfPower.choices)
 
-    def get_form(self):
-        from .forms import PowerMeasureForm
+    def get_base_form(self):
+        from .forms import PowerMeasureBaseForm
 
-        return PowerMeasureForm()
+        return PowerMeasureBaseForm
+
+    def get_staff_form(self):
+        from .forms import PowerMeasureStaffForm
+
+        return PowerMeasureStaffForm
+
+    def get_athlete_form(self):
+        from .forms import PowerMeasureTestForm
+
+        return PowerMeasureTestForm
 
 
 class UnitsOfTime(models.TextChoices):
@@ -134,10 +170,20 @@ class DurationMeasure(AbstractMeasure):
         default=UnitsOfTime.DURATION,
     )
 
-    def get_form(self):
-        from .forms import DurationMeasureForm
+    def get_base_form(self):
+        from .forms import DurationMeasureBaseForm
 
-        return DurationMeasureForm()
+        return DurationMeasureBaseForm
+
+    def get_staff_form(self):
+        from .forms import DurationMeasureStaffForm
+
+        return DurationMeasureStaffForm
+
+    def get_athlete_form(self):
+        from .forms import DurationMeasureTestForm
+
+        return DurationMeasureTestForm
 
 
 class UnitsOfDistance(models.TextChoices):
@@ -153,7 +199,17 @@ class DistanceMeasure(AbstractMeasure):
 
     unit = models.CharField(max_length=2, choices=UnitsOfDistance.choices)
 
-    def get_form(self):
-        from .forms import DistanceMeasureForm
+    def get_base_form(self):
+        from .forms import DistanceMeasureBaseForm
 
-        return DistanceMeasureForm()
+        return DistanceMeasureBaseForm
+
+    def get_staff_form(self):
+        from .forms import DistanceMeasureStaffForm
+
+        return DistanceMeasureStaffForm
+
+    def get_athlete_form(self):
+        from .forms import DistanceMeasureTestForm
+
+        return DistanceMeasureTestForm
