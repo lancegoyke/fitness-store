@@ -16,7 +16,7 @@ class TestForm(forms.ModelForm):
             "name",
             "slug",
             "description",
-            "video_link",
+            "video",
             "author",
             "category",
         )

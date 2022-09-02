@@ -41,6 +41,7 @@ def test_result_create(request, pk):
     if request.method == "POST":
         if request.user.is_staff:
             form = test.get_measure_staff_form_cls()(request.POST)
+            user = None
         else:
             form = test.get_measure_athlete_form_cls()(request.POST)
             user = request.user  # the logged in  user
@@ -62,4 +63,19 @@ def test_result_create(request, pk):
         "test": test,
         "form": form,
     }
-    return render(request, "tracking/test_detail_add_result.html", context)
+    return render(request, "tracking/test_result_create.html", context)
+
+
+@login_required
+def test_result_bulk(request, pk):
+    """Allows a coach to bulk add results for a single test"""
+    test = Test.objects.get(pk=pk)
+
+    if request.method == "POST":
+        # process the form
+        return redirect(test)
+
+    context = {
+        "test": test,
+    }
+    return render(request, "tracking/test_result_bulk.html", context)

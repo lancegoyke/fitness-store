@@ -12,4 +12,8 @@ urlpatterns = [
         views.test_result_create,
         name="test_result_create"
     ),
+    path("<int:pk>/results/bulk/",
+        views.test_result_bulk,
+        name="test_result_bulk",
+    ),
 ]
