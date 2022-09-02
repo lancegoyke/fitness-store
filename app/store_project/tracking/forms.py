@@ -1,4 +1,5 @@
 from django import forms
+from django.forms.models import inlineformset_factory
 
 from .models import (
     DistanceMeasure,
@@ -75,6 +76,14 @@ class LoadMeasureStaffForm(_MeasureForm):
         fields = ("user", "value", "unit")
 
 
+LoadMeasureTestFormSet = inlineformset_factory(
+    Test,
+    LoadMeasure,
+    form=LoadMeasureStaffForm,
+    can_delete=False,
+)
+
+
 class PowerMeasureBaseForm(_MeasureForm):
     class Meta(_MeasureForm.Meta):
         model = PowerMeasure
@@ -90,6 +99,14 @@ class PowerMeasureStaffForm(_MeasureForm):
     class Meta(_MeasureForm.Meta):
         model = PowerMeasure
         fields = ("user", "value", "unit")
+
+
+PowerMeasureTestFormSet = inlineformset_factory(
+    Test,
+    PowerMeasure,
+    form=PowerMeasureStaffForm,
+    can_delete=False,
+)
 
 
 class DistanceMeasureBaseForm(_MeasureForm):
@@ -109,6 +126,14 @@ class DistanceMeasureStaffForm(_MeasureForm):
         fields = ("user", "value", "unit")
 
 
+DistanceMeasureTestFormSet = inlineformset_factory(
+    Test,
+    DistanceMeasure,
+    form=DistanceMeasureStaffForm,
+    can_delete=False,
+)
+
+
 class DurationMeasureBaseForm(_MeasureForm):
     class Meta(_MeasureForm.Meta):
         model = DurationMeasure
@@ -124,3 +149,11 @@ class DurationMeasureStaffForm(_MeasureForm):
     class Meta(_MeasureForm.Meta):
         model = DurationMeasure
         fields = ("user", "value", "unit")
+
+
+DurationMeasureTestFormSet = inlineformset_factory(
+    Test,
+    DurationMeasure,
+    form=DurationMeasureStaffForm,
+    can_delete=False,
+)

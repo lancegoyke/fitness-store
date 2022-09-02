@@ -1,4 +1,5 @@
 from django.contrib.auth.decorators import login_required
+from django.contrib import messages
 from django.shortcuts import redirect, render
 
 from store_project.tracking.models import Test
@@ -70,12 +71,23 @@ def test_result_create(request, pk):
 def test_result_bulk(request, pk):
     """Allows a coach to bulk add results for a single test"""
     test = Test.objects.get(pk=pk)
+    if not request.user.is_staff:
+        messages.error("Only coaches have access to bulk add test results")
+        return redirect(test)
+
+    test_results = test.measurement_type.model_class().objects.filter(test=test)
 
     if request.method == "POST":
-        # process the form
-        return redirect(test)
+        formset = test.get_measure_test_bulk_form_cls()(request.POST)
+        if formset.is_valid():
+            formset.instance = test
+            formset.save()
+            return redirect(test)
+
+    formset = test.get_measure_test_bulk_form_cls()()
 
     context = {
         "test": test,
+        "formset": formset,
     }
     return render(request, "tracking/test_result_bulk.html", context)

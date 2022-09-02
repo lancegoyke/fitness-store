@@ -74,6 +74,9 @@ class Test(models.Model):
     def get_measure_athlete_form_cls(self):
         return self.measurement_type.model_class()().get_athlete_form()
 
+    def get_measure_test_bulk_form_cls(self):
+        return self.measurement_type.model_class()().get_test_bulk_form()
+
 
 class AbstractMeasure(models.Model):
     """
@@ -105,6 +108,11 @@ class AbstractMeasure(models.Model):
             "Make sure the subclass implements its own MeasureTestForm"
         )
 
+    def get_test_bulk_form(self):
+        raise NotImplementedError(
+            "Make sure the subclass implements its own MeasureTestFormSet"
+        )
+
     def __str__(self):
         return f"{self.test} for {self.user} - {self.value} {self.unit}"
 
@@ -132,6 +140,11 @@ class LoadMeasure(AbstractMeasure):
 
         return LoadMeasureTestForm
 
+    def get_test_bulk_form(self):
+        from .forms import LoadMeasureTestFormSet
+
+        return LoadMeasureTestFormSet
+
 
 class UnitsOfPower(models.TextChoices):
     WATTS = "W", _("Watts")
@@ -154,6 +167,11 @@ class PowerMeasure(AbstractMeasure):
         from .forms import PowerMeasureTestForm
 
         return PowerMeasureTestForm
+
+    def get_test_bulk_form(self):
+        from .forms import PowerMeasureTestFormSet
+
+        return PowerMeasureTestFormSet
 
 
 class UnitsOfTime(models.TextChoices):
@@ -187,6 +205,11 @@ class DurationMeasure(AbstractMeasure):
 
         return DurationMeasureTestForm
 
+    def get_test_bulk_form(self):
+        from .forms import DurationMeasureTestFormSet
+
+        return DurationMeasureTestFormSet
+
 
 class UnitsOfDistance(models.TextChoices):
     MILES = "mi", _("Miles")
@@ -215,3 +238,8 @@ class DistanceMeasure(AbstractMeasure):
         from .forms import DistanceMeasureTestForm
 
         return DistanceMeasureTestForm
+
+    def get_test_bulk_form(self):
+        from .forms import DistanceMeasureTestFormSet
+
+        return DistanceMeasureTestFormSet
