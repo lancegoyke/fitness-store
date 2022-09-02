@@ -11,5 +11,5 @@ class CategoryAdmin(admin.ModelAdmin):
 
 @admin.register(Test)
 class TestAdmin(admin.ModelAdmin):
-    list_display = ("name", "created", "modified")
+    list_display = ("name", "category", "created")
     prepopulated_fields = {"slug": ("name",)}

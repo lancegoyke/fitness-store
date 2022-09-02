@@ -3,6 +3,8 @@ from django.db import models
 from django.urls import reverse
 from django.utils.translation import gettext as _
 
+from embed_video.fields import EmbedVideoField
+
 from store_project.users.models import User
 
 
@@ -29,7 +31,7 @@ class Test(models.Model):
     name = models.CharField(max_length=200)
     slug = models.SlugField(max_length=200, unique=True)
     description = models.TextField(null=True, default=None)
-    video_link = models.URLField(blank=True, default=None)
+    video = EmbedVideoField(blank=True, default=None)
     measurement_type = models.ForeignKey(
         ContentType,
         on_delete=models.CASCADE,

@@ -101,6 +101,7 @@ textarea.invert {
 }
 
 th {
+  text-align: left;
   padding: var(--s0) var(--s3);
   background-color: #000;
   color: #fff;
@@ -1330,10 +1331,6 @@ ul.grid {
 
 .messages .errorlist {
   background-color: var(--error);
-}
-
-th {
-  text-align: left;
 }
 
 .testimonials {
