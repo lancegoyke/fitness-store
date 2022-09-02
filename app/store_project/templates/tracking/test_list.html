@@ -1,6 +1,6 @@
-{% extends '_base.html' %}
+{% extends '_base_wide.html' %}
 
-{% load static i18n %}
+{% load static i18n embed_video_tags %}
 
 {% block head_title %}{% trans "Testing" %}{% endblock head_title %}
 
@@ -15,13 +15,50 @@
 
 <h1>Fitness Tests</h1>
 
-<ul>
-  
-  {% for test in tests %}
-    <li><a href="{{ test.get_absolute_url }}">{{ test.name }}</a></li>
-  {% endfor %}
+{% if user.is_superuser %}
+<p>
+  <a class="button" href="{% url 'admin:tracking_test_changelist' %}">Admin</a>
+</p>
+{% endif %}
 
+{% if tests %}
+<ul class="grid max-width:measure*2">
+  {% for test in tests %}
+  <li class="card-box card-stack">
+    <div class="frame landscape">
+      
+      {% if test.video %}
+        {% video test.video as vid %}
+        <img src="{{ vid.thumbnail }}" alt="{{ test.name }} video instructions" />
+        {% endvideo %}
+      {% else %}
+        <img style="background-color: var(--main-color-dark);">
+      {% endif %}
+    </div>
+    <div class="box stack">
+      <h3>
+        <a href="{% url 'tracking:test_detail' test.pk %}">
+          {{ test.name }}
+        </a>
+      </h3>
+      <p>{{ test.description }}</p>
+    </div>
+    <div class="box space-between">
+      <div class="small">
+        <span class="tag">{{ test.category.name }}</span>
+      </div>
+      <div class="small font-size:small">
+        <span>Added by {{ test.author.name }}</span>
+      </div>
+    </div>
+  </li>
+  {% endfor %}
 </ul>
+
+{% else %}
+<p>Oh no! There are no tests to show!</p>
+{% endif %}
+
 
 
 {% endblock content %}
