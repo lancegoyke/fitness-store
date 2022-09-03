@@ -1444,3 +1444,8 @@ table tr:nth-child(even) {
   color: var(--main-color-gray);
   margin-top: var(--s-5);
 }
+
+.breadcrumbs,
+.breadcrumbs a {
+  font-size: var(--s-1);
+}

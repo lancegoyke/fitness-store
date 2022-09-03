@@ -13,6 +13,8 @@
 
 {% block content %}
 
+<p><a href="{% url 'tracking:test_list' %}"><-- Back to all tests</a></p>
+
 <h1>{{ test.name }}</h1>
 
 <p>{{ test.description }}</p>

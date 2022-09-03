@@ -13,6 +13,8 @@
 
 {% block content %}
 
+<p class="breadcrumbs"><a href="{% url 'tracking:test_list' %}">Tests</a> > {{ test.name }}</p>
+
 <h1>{{ test.name }}</h1>
 
 <p>{{ test.description }}</p>
