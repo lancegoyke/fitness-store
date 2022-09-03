@@ -1,6 +1,6 @@
 {% extends '_base.html' %}
 
-{% load static i18n embed_video_tags %}
+{% load static i18n %}
 
 {% block head_title %}{% trans test.name %}{% endblock head_title %}
 
@@ -15,15 +15,15 @@
 
 <p class="breadcrumbs"><a href="{% url 'tracking:test_list' %}">Tests</a> > {{ test.name }}</p>
 
-<h1>{{ test.name }}</h1>
+{% include 'tracking/partials/test_info.html' %}
 
-<p>{{ test.description }}</p>
-
-{% if test.video %}
-<div class="video">
-  {% video test.video '100% x 100%' %}
-</div>
-{% endif %}
+<p>
+  {% if user.is_staff %}
+    <a class="button" href="{% url 'tracking:test_result_bulk' pk=test.pk %}">Bulk Record Results 📝</a>
+  {% else %}
+    <a class="button" href="{% url 'tracking:test_result_create' pk=test.pk %}">Record Result ✍️</a>
+  {% endif %}
+</p>
 
 <table id="results">
   <thead>

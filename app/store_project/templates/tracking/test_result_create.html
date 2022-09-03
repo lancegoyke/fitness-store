@@ -13,9 +13,9 @@
 
 {% block content %}
 
-<h1>{{ test.name }}</h1>
+<p class="breadcrumbs"><a href="{% url 'tracking:test_list' %}">Tests</a> > <a href="{{ test.get_absolute_url }}">{{ test.name }}</a> > Record Result</p>
 
-<p>{{ test.description }}</p>
+{% include 'tracking/partials/test_info.html' %}
 
 {% include 'tracking/partials/result_form.html' %}
 

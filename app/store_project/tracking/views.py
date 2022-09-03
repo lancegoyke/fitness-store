@@ -121,24 +121,3 @@ def result_create_form(request, pk):
         "tracking/partials/result_form.html",
         context,
     )
-
-
-def create_result(request, pk):
-    test = Test.objects.get(pk=pk)
-    form = test.get_measure_staff_form_cls()(request.POST or None)
-
-    if request.method == "POST":
-        if form.is_valid():
-            result = form.save(commit=False)
-            result.test = test
-            result.save()
-            return HttpResponse("success")
-        else:
-            return render(request, "tracking/partials/result_form.html", context={"form": form})
-
-    context = {
-        "test": test,
-        "form": form,
-    }
-
-    return render(request, "tracking/result_create.html", context)
