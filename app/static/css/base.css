@@ -101,6 +101,46 @@ textarea.invert {
   background-color: var(--color-dark);
 }
 
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: #fff;
+  margin: 0;
+  font: inherit;
+  color: var(--main-color-dark);
+  width: 1.15em;
+  height: 1.15em;
+  transform: translateY(-0.175em);
+  display: grid;
+  place-content: center;
+}
+
+input[type="checkbox"]::before {
+  content: "";
+  width: 1em;
+  height: 1em;
+  transform: scale(0);
+  transition: 120ms transform ease-in-out;
+  box-shadow: inset 1em 1em var(--main-color-dark);
+  background-color: var(--main-color-dark);
+  transform-origin: bottom left;
+  clip-path: polygon(6% 61%, 19% 45%, 40% 64%, 78% 8%, 94% 20%, 43% 94%);
+}
+
+input[type="checkbox"]:checked::before {
+  transform: scale(1);
+}
+
+input[type="checkbox"]:focus {
+  outline: max(2px, var(--s-5)) solid currentColor;
+  outline-offset: max(2px, var(--s-5));
+}
+
+input[type="checkbox"]:disabled {
+  color: #959495;
+  cursor: not-allowed;
+}
+
 th {
   text-align: left;
   padding: var(--s0) var(--s3);
@@ -187,6 +227,12 @@ fieldset {
 
 form label {
   font-weight: 700;
+}
+
+.form-control {
+  display: grid;
+  grid-template-columns: 1em auto;
+  gap: var(--s1);
 }
 
 .stack-form fieldset {
