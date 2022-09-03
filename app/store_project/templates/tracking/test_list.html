@@ -41,7 +41,7 @@
           {{ test.name }}
         </a>
       </h3>
-      <p>{{ test.description }}</p>
+      <p>{{ test.description|truncatechars:100 }}</p>
     </div>
     <div class="box space-between">
       <div class="small">

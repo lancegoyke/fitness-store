@@ -34,20 +34,9 @@
     </tr>
   </thead>
   <tbody>
-    
-    {% comment %} {% for result in test_results %}
-      <tr>
-        <td>{{ result.created|date:"Y M d" }}</td>
-        <td>{{ result.user.name }}</td>
-        <td>{{ result.value }} {{ result.unit }}</td>
-      </tr>
-    {% endfor %} {% endcomment %}
-
-    
     {% for result in test_results %}
       {% include "tracking/partials/result_row.html" with result=result %}
     {% endfor %}
-      
   </tbody>
 </table>
 

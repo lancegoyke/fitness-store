@@ -77,19 +77,8 @@ def test_result_bulk(request, pk):
         return redirect(test)
 
     test_results = test.measurement_type.model_class().objects.filter(test=test)
-
-    # FORMSET
-    # if request.method == "POST":
-    #     formset = test.get_measure_test_bulk_form_cls()(request.POST)
-    #     if formset.is_valid():
-    #         formset.instance = test
-    #         formset.save()
-    #         return redirect(test)
-
-    # formset = test.get_measure_test_bulk_form_cls()()
-
-    # FORM
     form = test.get_measure_staff_form_cls()(request.POST or None)
+
     if request.method == "POST":
         if form.is_valid():
             result = form.save(commit=False)
@@ -110,10 +99,13 @@ def test_result_bulk(request, pk):
     context = {
         "test": test,
         "test_results": test_results,
-        # "formset": formset,
         "form": form,
     }
-    return render(request, "tracking/test_result_bulk_form.html", context)
+    return render(
+        request,
+        "tracking/test_result_bulk_create.html",
+        context,
+    )
 
 
 def result_create_form(request, pk):

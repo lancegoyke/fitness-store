@@ -17,11 +17,7 @@
 
 <p>{{ test.description }}</p>
 
-<form method="post">
-  {% csrf_token %}
-  {{ form.as_p }}
-  <button type="submit">Add Result</button>
-</form>
+{% include 'tracking/partials/result_form.html' %}
 
 {% endblock content %}
 
