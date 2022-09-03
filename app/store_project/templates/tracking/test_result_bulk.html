@@ -19,10 +19,17 @@
 
 <form action="" method="post">
   {% csrf_token %}
-  {{ formset.management_form }}
   {{ formset.as_p }}
   <button type="submit">Add Result</button>
 </form>
+
+<hr>
+
+<button type="button" hx-get="{% url 'tracking:result_create_form' pk=test.pk %}" hx-target="#resultforms" hx-swap="beforeend">
+    Add form
+</button>
+
+<div id="resultforms"></div>
 
 {% endblock content %}
 

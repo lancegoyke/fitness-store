@@ -197,6 +197,10 @@ legend {
   font-size: var(--s-1);
 }
 
+.stack-form button {
+  width: fit-content;
+}
+
 /*
     TYPOGRAPHY
 */
@@ -1432,4 +1436,11 @@ table tr:nth-child(even) {
 
 .box-shadow {
   box-shadow: 0px 0px 40px 5px var(--main-color-light-gray);
+}
+
+.help-text {
+  font-size: var(--s-1);
+  font-weight: normal;
+  color: var(--main-color-gray);
+  margin-top: var(--s-5);
 }

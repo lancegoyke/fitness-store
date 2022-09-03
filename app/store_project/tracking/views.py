@@ -1,5 +1,6 @@
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
+from django.http import HttpResponse
 from django.shortcuts import redirect, render
 
 from store_project.tracking.models import Test
@@ -77,17 +78,75 @@ def test_result_bulk(request, pk):
 
     test_results = test.measurement_type.model_class().objects.filter(test=test)
 
-    if request.method == "POST":
-        formset = test.get_measure_test_bulk_form_cls()(request.POST)
-        if formset.is_valid():
-            formset.instance = test
-            formset.save()
-            return redirect(test)
+    # FORMSET
+    # if request.method == "POST":
+    #     formset = test.get_measure_test_bulk_form_cls()(request.POST)
+    #     if formset.is_valid():
+    #         formset.instance = test
+    #         formset.save()
+    #         return redirect(test)
 
-    formset = test.get_measure_test_bulk_form_cls()()
+    # formset = test.get_measure_test_bulk_form_cls()()
+
+    # FORM
+    form = test.get_measure_staff_form_cls()(request.POST or None)
+    if request.method == "POST":
+        if form.is_valid():
+            result = form.save(commit=False)
+            result.test = test
+            result.save()
+            return render(
+                request,
+                "tracking/partials/result_row.html",
+                context={"result": result},
+            )
+        else:
+            return render(
+                request,
+                "tracking/partials/result_form.html",
+                context={"form": form},
+            )
 
     context = {
         "test": test,
-        "formset": formset,
+        "test_results": test_results,
+        # "formset": formset,
+        "form": form,
     }
-    return render(request, "tracking/test_result_bulk.html", context)
+    return render(request, "tracking/test_result_bulk_form.html", context)
+
+
+def result_create_form(request, pk):
+    test = Test.objects.get(pk=pk)
+    form = test.get_measure_staff_form_cls()()
+
+    context = {
+        "test": test,
+        "form": form,
+    }
+    return render(
+        request,
+        "tracking/partials/result_form.html",
+        context,
+    )
+
+
+def create_result(request, pk):
+    test = Test.objects.get(pk=pk)
+    form = test.get_measure_staff_form_cls()(request.POST or None)
+
+    if request.method == "POST":
+        if form.is_valid():
+            result = form.save(commit=False)
+            result.test = test
+            result.save()
+            return HttpResponse("success")
+        else:
+            return render(request, "tracking/partials/result_form.html", context={"form": form})
+
+    context = {
+        "test": test,
+        "form": form,
+    }
+
+    return render(request, "tracking/result_create.html", context)

@@ -16,4 +16,14 @@ urlpatterns = [
         views.test_result_bulk,
         name="test_result_bulk",
     ),
+    path(
+        "<int:pk>/htmx/create-result-form/",
+        views.result_create_form,
+        name="result_create_form",
+    ),
+    path(
+        "<int:pk>/results/htmx-create/",
+        views.create_result,
+        name="htmx_result_create",
+    ),
 ]
