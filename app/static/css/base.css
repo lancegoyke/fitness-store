@@ -74,7 +74,8 @@ span {
 }
 
 input,
-textarea {
+textarea,
+select {
   padding: var(--s-1);
   border: var(--border-thin) solid;
   color: var(--main-color-dark-gray);
@@ -169,6 +170,15 @@ ul {
 input[type="radio"] {
   color: var(--main-color-accent);
   font-size: var(--s4);
+}
+
+select {
+  border: var(--border-thin) solid var(--main-color-dark);
+}
+
+input:focus,
+select:focus {
+  outline: var(--border-thin) solid var(--main-color-dark);
 }
 
 fieldset {
@@ -476,7 +486,7 @@ ul.errorlist {
 .box.login {
   padding: var(--s-2);
   text-align: center;
-  border: var(--s-5) solid var(--main-color-dark-gray);
+  border: var(--border-thin) solid var(--main-color-dark-gray);
   text-decoration: none;
 }
 
