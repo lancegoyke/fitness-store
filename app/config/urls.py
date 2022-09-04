@@ -38,6 +38,7 @@ urlpatterns = [
     path("users/", include("store_project.users.urls")),
     path("feed/", include("store_project.feed.urls")),
     path("accounts/", include("allauth.urls")),
+    path("tracking/", include("store_project.tracking.urls")),
     path("", include("store_project.products.urls")),
     path("", include("store_project.pages.urls")),
 ]

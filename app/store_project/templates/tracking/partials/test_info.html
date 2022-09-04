@@ -1,0 +1,11 @@
+{% load embed_video_tags %}
+
+<h1>{{ test.name }}</h1>
+
+<p>{{ test.description }}</p>
+
+{% if test.video %}
+<div class="video">
+  {% video test.video '100% x 100%' %}
+</div>
+{% endif %}

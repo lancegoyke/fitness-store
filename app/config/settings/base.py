@@ -76,6 +76,7 @@ INSTALLED_APPS = [
     "allauth.socialaccount.providers.google",
     "corsheaders",
     "markdownx",
+    "embed_video",
     # Local
     "store_project.cardio.apps.CardioConfig",
     "store_project.exercises.apps.ExercisesConfig",
@@ -85,6 +86,7 @@ INSTALLED_APPS = [
     "store_project.products.apps.ProductsConfig",
     "store_project.users.apps.UsersConfig",
     "store_project.analytics.apps.AnalyticsConfig",
+    "store_project.tracking.apps.TrackingConfig",
 ]
 
 MIDDLEWARE = [

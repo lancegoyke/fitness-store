@@ -65,12 +65,7 @@
   });
 </script>
 
-<script 
-  src="https://unpkg.com/htmx.org@1.5.0" 
-  integrity="sha384-oGA+prIp5Vchu6we2YkI51UtVzN9Jpx2Z7PnR1I78PnZlN8LkrCT4lqqqmDkyrvI" 
-  crossorigin="anonymous">
-</script>
-
+<script src="{% static 'js/htmx.min.js' %}"></script>
 <script>
   document.body.addEventListener('htmx:configRequest', (event) => {
     event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';

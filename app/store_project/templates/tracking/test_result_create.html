@@ -1,0 +1,26 @@
+{% extends '_base.html' %}
+
+{% load static i18n %}
+
+{% block head_title %}{% trans test.name %} - {% trans "Add Result" %}{% endblock head_title %}
+
+{% block header %}
+<meta name="description" property="og:description" content="Add a test result">
+<meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+<meta name="author" content="{{ test.author }}">
+<meta property="og:title" content="{{ test.name }}" />
+{% endblock header %}
+
+{% block content %}
+
+<p class="breadcrumbs"><a href="{% url 'tracking:test_list' %}">Tests</a> > <a href="{{ test.get_absolute_url }}">{{ test.name }}</a> > Record Result</p>
+
+{% include 'tracking/partials/test_info.html' %}
+
+{% include 'tracking/partials/result_form.html' %}
+
+{% endblock content %}
+
+<!-- JavaScript -->
+{% block javascript %}
+{% endblock javascript %}

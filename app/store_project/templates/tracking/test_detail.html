@@ -1,0 +1,47 @@
+{% extends '_base.html' %}
+
+{% load static i18n %}
+
+{% block head_title %}{% trans test.name %}{% endblock head_title %}
+
+{% block header %}
+<meta name="description" property="og:description" content="{{ test.description }}">
+<meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+<meta name="author" content="{{ test.author }}">
+<meta property="og:title" content="{{ test.name }}" />
+{% endblock header %}
+
+{% block content %}
+
+<p class="breadcrumbs"><a href="{% url 'tracking:test_list' %}">Tests</a> > {{ test.name }}</p>
+
+{% include 'tracking/partials/test_info.html' %}
+
+<p>
+  {% if user.is_staff %}
+    <a class="button" href="{% url 'tracking:test_result_bulk' pk=test.pk %}">Bulk Record Results 📝</a>
+  {% else %}
+    <a class="button" href="{% url 'tracking:test_result_create' pk=test.pk %}">Record Result ✍️</a>
+  {% endif %}
+</p>
+
+<table id="results">
+  <thead>
+    <tr>
+      <th id="date" scope="col">Date</th>
+      <th id="user" scope="col">User</th>
+      <th id="result" scope="col">Result</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for result in test_results %}
+      {% include "tracking/partials/result_row.html" with result=result %}
+    {% endfor %}
+  </tbody>
+</table>
+
+{% endblock content %}
+
+<!-- JavaScript -->
+{% block javascript %}
+{% endblock javascript %}
