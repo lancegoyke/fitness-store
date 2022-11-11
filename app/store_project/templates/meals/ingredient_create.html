@@ -1,0 +1,52 @@
+<div id="modal" _="on closeModal add .closing then wait for animationend then remove me">
+  <div class="modal-underlay" _="on click trigger closeModal"></div>
+  <div class="modal-content">
+    <h2>Add Ingredient</h2>
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      {{form.errors}}
+      <div>
+          <label for="name">name: </label>
+          <input id="name" type="text" name="name" value="{{ object.name }}">
+      </div>
+      <div>
+          <label for="amount">amount: </label>
+          <input id="amount" type="number" name="amount" value="{{ object.amount }}">
+      </div>
+      <div>
+          <label for="unit">unit: </label>
+          <input id="unit" type="text" name="unit" value="{{ object.unit }}">
+      </div>
+      <div>
+          <label for="cals">cals: </label>
+          <input id="cals" type="text" name="cals" value="{{ object.cals }}">
+      </div>
+      <div>
+          <label for="net_cals">net_cals: </label>
+          <input id="net_cals" type="text" name="net_cals" value="{{ object.net_cals }}">
+      </div>
+      <div>
+          <label for="fat">fat: </label>
+          <input id="fat" type="text" name="fat" value="{{ object.fat }}">
+      </div>
+      <div>
+          <label for="carbs">carbs: </label>
+          <input id="carbs" type="text" name="carbs" value="{{ object.carbs }}">
+      </div>
+      <div>
+          <label for="fiber">fiber: </label>
+          <input id="fiber" type="text" name="fiber" value="{{ object.fiber }}">
+      </div>
+      <div>
+          <label for="net_carbs">net_carbs: </label>
+          <input id="net_carbs" type="text" name="net_carbs" value="{{ object.net_carbs }}">
+      </div>
+      <div>
+          <label for="protein">protein: </label>
+          <input id="protein" type="text" name="protein" value="{{ object.protein }}">
+      </div>
+      <button type="submit" class="button">Save</button>
+      <button class="button invert" _="on click trigger closeModal">Close</button>
+    </form>
+  </div>
+</div>

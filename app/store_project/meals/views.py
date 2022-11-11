@@ -1,7 +1,11 @@
+from django.conf import settings
 from django.contrib import messages
 from django.shortcuts import render
 from django.urls import reverse_lazy
 from django.views import generic
+from django.views.decorators.http import require_http_methods
+
+import requests
 
 from store_project.meals import models
 from store_project.meals import forms
@@ -88,6 +92,11 @@ class IngredientListView(generic.ListView):
 class IngredientCreateView(generic.CreateView):
     model = models.Ingredient
     form_class = forms.IngredientForm
+    template_name = "meals/ingredient_create.html"
+
+# class IngredientCreateView(generic.CreateView):
+#     model = models.Ingredient
+#     form_class = forms.IngredientForm
 
 
 class IngredientDetailView(generic.DetailView):
@@ -103,4 +112,34 @@ class IngredientUpdateView(generic.UpdateView):
 
 class IngredientDeleteView(generic.DeleteView):
     model = models.Ingredient
-    success_url = reverse_lazy("meals_Ingredient_list")
+    success_url = reverse_lazy("meals:ingredient_list")
+
+
+class IngredientListSearchView(generic.ListView):
+    model = models.Ingredient
+    template_name = "meals/ingredient_search.html"
+
+
+@require_http_methods(["POST"])
+def ingredient_search(request):
+    search = request.POST.get("ingredient-search", "")
+
+    # results come from ESHA nutrition database API
+    endpoint = "https://nutrition-api.esha.com/foods"
+    headers = {
+        "Accept": "application/json",
+        "Ocp-Apim-Subscription-Key": settings.ESHA_SUB_KEY,
+    }
+    params = {
+        "query": search,
+        "start": 0,
+        "count": 25,
+        "spell": True,
+    }
+    r = requests.get(endpoint, headers=headers, params=params)
+    results = r.json()["items"]
+
+    if len(search) == 0:
+        return render(request, "meals/ingredients.html", {"results": None})
+
+    return render(request, "meals/ingredients.html", {"results": results})

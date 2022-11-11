@@ -1,0 +1,17 @@
+<div id="modal" _="on closeModal add .closing then wait for animationend then remove me">
+  <div class="modal-underlay" _="on click trigger closeModal"></div>
+  <div class="modal-content">
+    <h2>Add New Ingredient</h2>
+    <input
+      type="text"
+      name="ingredient-search"
+      id="ingredient-search"
+      placeholder="🔎 ingredient name"
+      hx-post="{% url 'meals:ingredient_search' %}"
+      hx-trigger="keyup changed delay:250ms"
+      hx-target="#ingredients"
+    >
+    <span class="htmx-indicator">...</span>
+    <ul id="ingredients"></ul>
+  </div>
+</div>

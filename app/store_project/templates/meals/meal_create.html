@@ -18,7 +18,13 @@
   <form method="get">
     <input type="text" name="search" id="search" placeholder="🔎 search" />
   </form>
-  <button id="addIngredient" class="button">+ add</button>
+  <button
+    id="addIngredient"
+    class="button"
+    hx-get="{% url 'meals:ingredient_search_modal' %}"
+    hx-target="body"
+    hx-swap="beforeend"
+  >+ add</button>
 </div>
 
 <ul class="ingredients">
@@ -31,4 +37,11 @@
 
 <!-- JavaScript -->
 {% block javascript %}
+<script src="{% static 'js/htmx.min.js' %}"></script>
+<script src="https://unpkg.com/hyperscript.org@0.9.7"></script>
+<script>
+  document.body.addEventListener('htmx:configRequest', (event) => {
+    event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
+  })
+</script>
 {% endblock javascript %}

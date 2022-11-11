@@ -275,3 +275,7 @@ CACHES = {
 
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
+
+# Nutrition Database API
+
+ESHA_SUB_KEY = os.environ.get("ESHA_SUB_KEY", "subkeynotset")
