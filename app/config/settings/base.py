@@ -77,6 +77,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "markdownx",
     "embed_video",
+    "rest_framework",
     # Local
     "store_project.cardio.apps.CardioConfig",
     "store_project.exercises.apps.ExercisesConfig",

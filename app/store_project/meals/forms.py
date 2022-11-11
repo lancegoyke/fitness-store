@@ -1,6 +1,7 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
+from store_project.meals import models
 
 class MacroForm(forms.Form):
     """Calculate macros"""
@@ -54,3 +55,36 @@ class MacroForm(forms.Form):
     sex = forms.ChoiceField(choices=SEX_CHOICES)
     activity_level = forms.ChoiceField(choices=ACTIVITY_LEVEL_CHOICES)
     goal = forms.ChoiceField(choices=GOAL_CHOICES)
+
+
+class MealForm(forms.ModelForm):
+    class Meta:
+        model = models.Meal
+        fields = [
+            "ingredients",
+            "net_cals",
+            "description",
+            "fat",
+            "cals",
+            "carbs",
+            "net_carbs",
+            "fiber",
+            "protein",
+        ]
+
+
+class IngredientForm(forms.ModelForm):
+    class Meta:
+        model = models.Ingredient
+        fields = [
+            "fiber",
+            "carbs",
+            "amount",
+            "fat",
+            "name",
+            "net_carbs",
+            "cals",
+            "unit",
+            "net_cals",
+            "protein",
+        ]

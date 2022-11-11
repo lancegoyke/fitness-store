@@ -1,0 +1,27 @@
+
+{% extends "_base.html" %}
+{% load static %}
+{% block content %}
+    
+<p>
+    <a class="btn btn-light" href="{% url 'meals:meal_list' %}">
+    Meal Listing
+    </a>
+</p>
+    
+<table class="table">
+    <tr><td>ingredients</td><td>{{ object.ingredients }}</td></tr>
+    <tr><td>net_cals</td><td>{{ object.net_cals }}</td></tr>
+    <tr><td>description</td><td>{{ object.description }}</td></tr>
+    <tr><td>fat</td><td>{{ object.fat }}</td></tr>
+    <tr><td>cals</td><td>{{ object.cals }}</td></tr>
+    <tr><td>created</td><td>{{ object.created }}</td></tr>
+    <tr><td>last_updated</td><td>{{ object.last_updated }}</td></tr>
+    <tr><td>carbs</td><td>{{ object.carbs }}</td></tr>
+    <tr><td>net_carbs</td><td>{{ object.net_carbs }}</td></tr>
+    <tr><td>fiber</td><td>{{ object.fiber }}</td></tr>
+    <tr><td>protein</td><td>{{ object.protein }}</td></tr>
+</table>
+<a class="btn btn-primary" href="{{object.get_update_url}}">Edit</a>
+
+{% endblock %}

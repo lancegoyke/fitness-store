@@ -26,10 +26,10 @@ class Ingredient(models.Model):
         return str(self.name)
 
     def get_absolute_url(self):
-        return reverse("meals_ingredient_detail", args=(self.pk,))
+        return reverse("meals:ingredient_detail", args=(self.pk,))
 
     def get_update_url(self):
-        return reverse("meals_ingredient_update", args=(self.pk,))
+        return reverse("meals:ingredient_update", args=(self.pk,))
 
 
 class Meal(models.Model):
@@ -54,7 +54,7 @@ class Meal(models.Model):
         return str(self.pk)
 
     def get_absolute_url(self):
-        return reverse("meals_Meal_detail", args=(self.pk,))
+        return reverse("meals:meal_detail", args=(self.pk,))
 
     def get_update_url(self):
-        return reverse("meals_Meal_update", args=(self.pk,))
+        return reverse("meals:meal_update", args=(self.pk,))

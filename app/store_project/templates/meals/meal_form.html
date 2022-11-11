@@ -1,0 +1,62 @@
+
+{% extends "_base.html" %}
+{% load static %}
+{% block content %}
+    
+<p>
+    <a class="btn btn-light" href="{% url 'meals:meal_list' %}">
+    Meal Listing
+    </a>
+</p>
+    
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  {{form.errors}}
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="ingredients">ingredients: </label>
+      <input class="form-control col-sm-10" id="ingredients" type="text" name="ingredients" value="{{ object.ingredients }}">
+  </div>
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="net_cals">net_cals: </label>
+      <input class="form-control col-sm-10" id="net_cals" type="text" name="net_cals" value="{{ object.net_cals }}">
+  </div>
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="description">description: </label>
+      <input class="form-control col-sm-10" id="description" type="text" name="description" value="{{ object.description }}">
+  </div>
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="fat">fat: </label>
+      <input class="form-control col-sm-10" id="fat" type="text" name="fat" value="{{ object.fat }}">
+  </div>
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="cals">cals: </label>
+      <input class="form-control col-sm-10" id="cals" type="text" name="cals" value="{{ object.cals }}">
+  </div>
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="created">created: </label>
+      <input class="form-control col-sm-10" id="created" type="datetime-local" name="created" value="{{ object.created }}" disabled>
+  </div>
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="last_updated">last_updated: </label>
+      <input class="form-control col-sm-10" id="last_updated" type="datetime-local" name="last_updated" value="{{ object.last_updated }}" disabled>
+  </div>
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="carbs">carbs: </label>
+      <input class="form-control col-sm-10" id="carbs" type="text" name="carbs" value="{{ object.carbs }}">
+  </div>
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="net_carbs">net_carbs: </label>
+      <input class="form-control col-sm-10" id="net_carbs" type="text" name="net_carbs" value="{{ object.net_carbs }}">
+  </div>
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="fiber">fiber: </label>
+      <input class="form-control col-sm-10" id="fiber" type="text" name="fiber" value="{{ object.fiber }}">
+  </div>
+  <div class="form-group row">
+      <label class="col-sm-2 col-form-label" for="protein">protein: </label>
+      <input class="form-control col-sm-10" id="protein" type="text" name="protein" value="{{ object.protein }}">
+  </div>
+  <input type="submit" value="Save" class="btn btn-primary">
+</form>
+
+{% endblock %}
