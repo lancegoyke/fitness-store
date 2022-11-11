@@ -1,0 +1,34 @@
+{% extends "_base.html" %}
+{% load static i18n %}
+
+{% block head_title %}{% trans "Meal Builder" %}{% endblock head_title %}
+
+{% block header %}
+<meta property="og:title" content="Meal Builder" />
+<meta name="description" property="og:description" content="Compose a meal to be reused in the meal plan builder to meet macros and transform bodies">
+<meta name="keywords" content="nutrition, fitness, health, weight loss, muscle gain">
+{% endblock header %}
+
+{% block content %}
+<h1>Meal Builder</h1>
+
+<h2>Recipe Name</h2>
+<h2>Ingredients</h2>
+<div class="row">
+  <form method="get">
+    <input type="text" name="search" id="search" placeholder="🔎 search" />
+  </form>
+  <button id="addIngredient" class="button">+ add</button>
+</div>
+
+<ul class="ingredients">
+{% for ingredient in ingredients %}
+  <li>{{ ingredient }}</li>
+{% endfor %}
+</ul>
+
+{% endblock content %}
+
+<!-- JavaScript -->
+{% block javascript %}
+{% endblock javascript %}

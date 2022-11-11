@@ -13,6 +13,7 @@ app_name = "meals"
 urlpatterns = [
     path("api/v1/", include(router.urls)),
     path("macro-calculator/", views.macro_calculator, name="macro_calculator"),
+    path("meal-plan-builder/", views.MealPlanBuilderView.as_view(), name="meal_plan_builder"),
     path("meal/", views.MealListView.as_view(), name="meal_list"),
     path("meal/create/", views.MealCreateView.as_view(), name="meal_create"),
     path("meal/detail/<int:pk>/", views.MealDetailView.as_view(), name="meal_detail"),

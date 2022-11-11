@@ -23,7 +23,7 @@ class Ingredient(models.Model):
         pass
 
     def __str__(self):
-        return str(self.name)
+        return f"{self.amount} {self.unit} of {self.name}"
 
     def get_absolute_url(self):
         return reverse("meals:ingredient_detail", args=(self.pk,))

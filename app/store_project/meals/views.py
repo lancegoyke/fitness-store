@@ -39,6 +39,12 @@ def macro_calculator(request):
     return render(request, "meals/macro_calculator.html", context)
 
 
+class MealPlanBuilderView(generic.CreateView):
+    model = models.Meal
+    form_class = forms.MealForm
+    template_name = "meals/meal_plan_builder.html"
+
+
 class MealListView(generic.ListView):
     model = models.Meal
     form_class = forms.MealForm
@@ -47,6 +53,15 @@ class MealListView(generic.ListView):
 class MealCreateView(generic.CreateView):
     model = models.Meal
     form_class = forms.MealForm
+    template_name = "meals/meal_create.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["ingredients"] = models.Ingredient.objects.all()
+
+# class MealCreateView(generic.CreateView):
+#     model = models.Meal
+#     form_class = forms.MealForm
 
 
 class MealDetailView(generic.DetailView):
