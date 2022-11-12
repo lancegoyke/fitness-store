@@ -3,6 +3,33 @@ from django.db import models
 from django.urls import reverse
 
 
+class Unit(models.Model):
+
+    # Fields
+    id = models.UUIDField(primary_key=True)
+    description = models.CharField(max_length=100)
+    abbr = models.CharField(max_length=10)
+    created = models.DateTimeField(auto_now_add=True, editable=False)
+    last_updated = models.DateTimeField(auto_now=True, editable=False)
+
+    def __str__(self):
+        return self.description
+
+
+class Nutrient(models.Model):
+
+    # Fields
+    id = models.UUIDField(primary_key=True)
+    description = models.CharField(max_length=100)
+    unit = models.CharField(max_length=10, null=True)
+    unit_id = models.UUIDField(null=True)
+    created = models.DateTimeField(auto_now_add=True, editable=False)
+    last_updated = models.DateTimeField(auto_now=True, editable=False)
+
+    def __str__(self):
+        return f"{self.description}"
+
+
 class Ingredient(models.Model):
 
     # Fields
