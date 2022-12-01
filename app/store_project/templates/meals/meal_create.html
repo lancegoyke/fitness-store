@@ -16,7 +16,15 @@
 <h2>Ingredients</h2>
 <div class="row">
   <form method="get">
-    <input type="text" name="search" id="search" placeholder="🔎 search" />
+    <input
+      id="search"
+      type="text"
+      name="q"
+      placeholder="🔎 search"
+      hx-get="{% url 'meals:ingredient_search_local' %}"
+      hx-trigger="keyup changed delay:250ms"
+      hx-target="#ingredients"
+    >
   </form>
   <button
     id="addIngredient"
@@ -28,7 +36,7 @@
   >+ add</button>
 </div>
 
-<ul class="ingredients">
+<ul id="ingredients" class="ingredients">
 {% for ingredient in ingredients %}
   <li>{{ ingredient }}</li>
 {% empty %}

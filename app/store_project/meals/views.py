@@ -128,7 +128,19 @@ class IngredientListSearchView(generic.ListView):
 
 
 @require_http_methods(["GET"])
-def ingredient_search(request):
+def ingredient_search_local(request):
+    search = request.GET.get("q")
+
+    if len(search) > 0:
+        ingredients = models.Ingredient.objects.filter(name__search=search)
+    else:
+        ingredients = models.Ingredient.objects.all().order_by("-created")
+        
+    return render(request, "meals/ingredients.html", {"ingredients": ingredients})
+
+
+@require_http_methods(["GET"])
+def ingredient_search_remote(request):
     search = request.GET.get("ingredient-search", "")
 
     # results come from Spoonacular nutrition database API
