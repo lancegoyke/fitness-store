@@ -77,14 +77,34 @@ class IngredientForm(forms.ModelForm):
     class Meta:
         model = models.Ingredient
         fields = [
-            "fiber",
-            "carbs",
-            "amount",
-            "fat",
+            "spoon_id",
             "name",
-            "net_carbs",
-            "cals",
+            "amount",
             "unit",
+            "cals",
             "net_cals",
+            "fat",
+            "carbs",
+            "fiber",
+            "net_carbs",
             "protein",
         ]
+
+
+class UnitAmountForm(forms.Form):
+    ingredient_id = forms.CharField(widget=forms.HiddenInput())
+    name = forms.CharField(widget=forms.HiddenInput())
+    amount = forms.IntegerField()
+    unit = forms.ChoiceField()
+
+    def __init__(self, *args, **kwargs):
+        ingredient_id = kwargs.pop("ingredient_id", None)
+        name = kwargs.pop("name", None)
+        units = kwargs.pop("units", None)
+        super(UnitAmountForm, self).__init__(*args, **kwargs)
+        if ingredient_id:
+            self.fields["ingredient_id"].initial = ingredient_id
+        if name:
+            self.fields["name"].initial = name
+        if units:
+            self.fields["unit"].choices = units

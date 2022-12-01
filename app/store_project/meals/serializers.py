@@ -26,6 +26,7 @@ class IngredientSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.Ingredient
         fields = [
+            "spoon_id",
             "fiber",
             "carbs",
             "amount",

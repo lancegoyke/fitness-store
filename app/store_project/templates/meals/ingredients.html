@@ -1,9 +1,0 @@
-{% load i18n static %}
-
-{% for result in results %}
-  <li>
-    <div class="inline-tag">{% trans result.description %}</div>
-  </li>
-{% empty %}
-  <li>No results!</li>
-{% endfor %}

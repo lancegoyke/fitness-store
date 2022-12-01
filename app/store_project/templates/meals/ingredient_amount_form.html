@@ -1,0 +1,33 @@
+{% load i18n %}
+
+<form
+  class="row"
+  hx-get="{% url 'meals:ingredient_nutrition_lookup' %}"
+  hx-target="#nutrition"
+  hx-swap="innerHTML"
+>
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  {{ form.ingredient_id }}
+  {{ form.name }}
+  
+  <label for="{{ form.amount.id_for_label }}" class="stack">
+    {{ form.amount.errors }}
+    Amount
+    {{ form.amount }}
+  </label>
+
+  <label for="{{ form.unit.id_for_label }}" class="stack">
+    {{ form.unit.errors }}
+    Unit
+    {{ form.unit }}
+  </label>
+
+  <button
+    class="button"
+    type="submit"
+    style="flex:1;align-self:flex-end;"
+  >{% trans 'Lookup' %}</button>
+</form>
+
+<div id="nutrition" class="row"></div>

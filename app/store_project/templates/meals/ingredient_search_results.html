@@ -1,0 +1,22 @@
+{% load i18n %}
+
+{% for result in results %}
+  <li>
+    <form
+      hx-get="{% url 'meals:ingredient_amount_form' %}"
+      hx-target="#results"
+      hx-swap="outerHTML"
+    >
+      <input type="hidden" name="ingredient-id" value="{{ result.id }}">
+      <input type="hidden" name="name" value="{{ result.name }}">
+      <input
+        type="hidden"
+        name="possible-units"
+        value="{% for unit in result.possibleUnits %}{{ unit }},{% endfor %}"
+      >
+      <button type="submit">{% trans result.name %}</button>
+    </form>
+  </li>
+{% empty %}
+  <li>No results!</li>
+{% endfor %}

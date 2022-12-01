@@ -1,7 +1,10 @@
+from typing import Dict, List
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth.mixins import PermissionRequiredMixin
+from django.http import HttpResponseServerError
 from django.shortcuts import render
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.views import generic
 from django.views.decorators.http import require_http_methods
 
@@ -54,14 +57,17 @@ class MealListView(generic.ListView):
     form_class = forms.MealForm
 
 
-class MealCreateView(generic.CreateView):
+class MealCreateView(PermissionRequiredMixin, generic.CreateView):
     model = models.Meal
     form_class = forms.MealForm
     template_name = "meals/meal_create.html"
+    permission_required = "meals.add_meal"
+    permission_denied_message = "You don't have permission to access that page"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["ingredients"] = models.Ingredient.objects.all()
+        return context
 
 # class MealCreateView(generic.CreateView):
 #     model = models.Meal
@@ -89,14 +95,15 @@ class IngredientListView(generic.ListView):
     form_class = forms.IngredientForm
 
 
-class IngredientCreateView(generic.CreateView):
-    model = models.Ingredient
-    form_class = forms.IngredientForm
-    template_name = "meals/ingredient_create.html"
-
 # class IngredientCreateView(generic.CreateView):
 #     model = models.Ingredient
 #     form_class = forms.IngredientForm
+#     template_name = "meals/ingredient_create.html"
+
+class IngredientCreateView(generic.CreateView):
+    model = models.Ingredient
+    form_class = forms.IngredientForm
+    success_url = reverse_lazy("meals:meal_create")
 
 
 class IngredientDetailView(generic.DetailView):
@@ -120,26 +127,122 @@ class IngredientListSearchView(generic.ListView):
     template_name = "meals/ingredient_search.html"
 
 
-@require_http_methods(["POST"])
+@require_http_methods(["GET"])
 def ingredient_search(request):
-    search = request.POST.get("ingredient-search", "")
+    search = request.GET.get("ingredient-search", "")
 
-    # results come from ESHA nutrition database API
-    endpoint = "https://nutrition-api.esha.com/foods"
+    # results come from Spoonacular nutrition database API
+    endpoint = "https://api.spoonacular.com/food/ingredients/search"
     headers = {
-        "Accept": "application/json",
-        "Ocp-Apim-Subscription-Key": settings.ESHA_SUB_KEY,
+        "Content-Type": "application/json",
+        "x-api-key": settings.SPOONACULAR_API_KEY,
     }
     params = {
         "query": search,
-        "start": 0,
-        "count": 25,
-        "spell": True,
+        "metaInformation": True,
     }
     r = requests.get(endpoint, headers=headers, params=params)
-    results = r.json()["items"]
+    results = r.json()["results"]
 
+    context = {}
     if len(search) == 0:
-        return render(request, "meals/ingredients.html", {"results": None})
+        context["results"] = None
+    else:
+        context["results"] = results
 
-    return render(request, "meals/ingredients.html", {"results": results})
+    return render(request, "meals/ingredient_search_results.html", context)
+
+
+@require_http_methods(["GET"])
+def ingredient_amount_form(request):
+    ingredient_id = request.GET.get("ingredient-id")
+    name = request.GET.get("name")
+    possible_units = request.GET.get("possible-units")[:-1].split(",")
+    units = [(unit, unit) for unit in possible_units]
+    form = forms.UnitAmountForm(
+        ingredient_id=ingredient_id,
+        name=name,
+        units=units
+    )
+
+    context = {
+        "form": form,
+        "ingredient_id": ingredient_id,
+        "name": name,
+    }
+
+    return render(request, "meals/ingredient_amount_form.html", context)
+
+
+@require_http_methods(["GET"])
+def ingredient_nutrition_lookup(request):
+    form = forms.UnitAmountForm(request.GET, units=[(x, x) for x in request.GET["unit"]])
+    if form.is_valid():
+        ingredient_id = form.cleaned_data["ingredient_id"]
+        name = form.cleaned_data["name"]
+        amount = form.cleaned_data["amount"]
+        unit = form.cleaned_data["unit"]
+        
+        endpoint = f"https://api.spoonacular.com/food/ingredients/{ingredient_id}/information"
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": settings.SPOONACULAR_API_KEY,
+        }
+        params = {
+            "amount": amount,
+            "unit": unit,
+        }
+        r = requests.get(endpoint, headers=headers, params=params)
+        nutrients: List[Dict] = r.json()["nutrition"]["nutrients"]
+        
+        desired = [
+            "Calories",
+            "Net Calories",
+            "Fat",
+            "Carbohydrates",
+            "Fiber",
+            "Net Carbohydrates",
+            "Protein",
+        ]
+
+        # filter for only desired results
+        nutrients = [n for n in nutrients if n["name"] in desired]
+        cals = next(c for c in nutrients if c["name"] == "Calories")["amount"]
+        fat = next(f for f in nutrients if f["name"] == "Fat")["amount"]
+        carbs = next(c for c in nutrients if c["name"] == "Carbohydrates")["amount"]
+        fiber = next(f for f in nutrients if f["name"] == "Fiber")["amount"]
+        net_carbs = next(nc for nc in nutrients if nc["name"] == "Net Carbohydrates")["amount"]
+        protein = next(p for p in nutrients if p["name"] == "Protein")["amount"]
+        net_cals = cals - fiber * 4
+        nutrients.append({
+            "name": "Net Calories",
+            "amount": net_cals,
+            "unit": "kcal",
+        })
+
+        # add index to desired results
+        for n in nutrients:
+            n["index"] = desired.index(n["name"])
+
+        # sort by index
+        sorted_nutrients = sorted(nutrients, key=lambda n: n["index"])
+
+        context = {
+            "nutrients": sorted_nutrients,
+            "ingredient_id": ingredient_id,
+            "name": name,
+            "amount": round(amount),
+            "unit": unit,
+            "cals": round(cals),
+            "net_cals": round(net_cals),
+            "fat": round(fat),
+            "carbs": round(carbs),
+            "fiber": round(fiber),
+            "net_carbs": round(net_carbs),
+            "protein": round(protein),
+        }
+            
+        return render(request, "meals/nutrition_facts.html", context)
+
+    else:
+        return HttpResponseServerError("Form invalid")

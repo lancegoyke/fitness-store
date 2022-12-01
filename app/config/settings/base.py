@@ -278,4 +278,4 @@ SESSION_CACHE_ALIAS = "default"
 
 # Nutrition Database API
 
-ESHA_SUB_KEY = os.environ.get("ESHA_SUB_KEY", "subkeynotset")
+SPOONACULAR_API_KEY = os.environ.get("SPOONACULAR_API_KEY", None)

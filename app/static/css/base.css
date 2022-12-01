@@ -142,17 +142,6 @@ input[type="checkbox"]:disabled {
   cursor: not-allowed;
 }
 
-th {
-  text-align: left;
-  padding: var(--s0) var(--s3);
-  background-color: #000;
-  color: #fff;
-}
-
-td {
-  padding: var(--s0) var(--s3);
-}
-
 ::selection {
   color: var(--main-color-light);
   background-color: var(--main-color-dark);
@@ -226,8 +215,12 @@ fieldset {
   border: none;
 }
 
-form label {
+label {
   font-weight: 700;
+}
+
+label.stack>* {
+  flex: 1;
 }
 
 .form-control {
@@ -325,6 +318,7 @@ a:active {
 .row {
   display: flex;
   gap: var(--s0);
+  flex-wrap: wrap;
 }
 
 /* 
@@ -1431,8 +1425,28 @@ table {
   border: none;
 }
 
+th {
+  text-align: left;
+  padding: var(--s0) var(--s3);
+  background-color: #000;
+  color: #fff;
+}
+
+td {
+  padding: var(--s0) var(--s3);
+}
+
 table tr:nth-child(even) {
   background: var(--main-color-light-gray);
+}
+
+table.compact {
+  padding: 0;
+  width: fit-content;
+}
+
+.compact td {
+  padding: var(--s-5) var(--s-3);
 }
 
 .testimonial-footer {

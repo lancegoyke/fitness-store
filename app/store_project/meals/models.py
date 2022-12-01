@@ -35,15 +35,16 @@ class Ingredient(models.Model):
     # Fields
     created = models.DateTimeField(auto_now_add=True, editable=False)
     last_updated = models.DateTimeField(auto_now=True, editable=False)
+    spoon_id = models.CharField(max_length=25)  # from API
     name = models.CharField(max_length=100)
-    amount = models.IntegerField()
+    amount = models.PositiveSmallIntegerField()
     unit = models.CharField(max_length=30)
-    fiber = models.PositiveSmallIntegerField()
     cals = models.PositiveSmallIntegerField()
+    net_cals = models.PositiveSmallIntegerField()
     fat = models.PositiveSmallIntegerField()
     carbs = models.PositiveSmallIntegerField()
+    fiber = models.PositiveSmallIntegerField()
     net_carbs = models.PositiveSmallIntegerField()
-    net_cals = models.PositiveSmallIntegerField()
     protein = models.PositiveSmallIntegerField()
 
     class Meta:

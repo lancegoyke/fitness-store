@@ -24,12 +24,15 @@
     hx-get="{% url 'meals:ingredient_search_modal' %}"
     hx-target="body"
     hx-swap="beforeend"
+    style="line-height:1;"
   >+ add</button>
 </div>
 
 <ul class="ingredients">
 {% for ingredient in ingredients %}
   <li>{{ ingredient }}</li>
+{% empty %}
+  <li>No ingredients!</li>
 {% endfor %}
 </ul>
 

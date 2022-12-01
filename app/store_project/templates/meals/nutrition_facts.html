@@ -1,0 +1,28 @@
+<table class="compact" style="flex:3">
+  {% for nutrient in nutrients %}
+    <tr>
+      <td>{{ nutrient.name }}</td>
+      <td>{{ nutrient.amount|floatformat:1 }} {{ nutrient.unit }}</td>
+    </tr>
+  {% endfor %}
+</table>
+
+<form method="post" action="{% url 'meals:ingredient_create' %}">
+  {% csrf_token %}
+  <input type="hidden" name="spoon_id" value="{{ ingredient_id }}">
+  <input type="hidden" name="name" value="{{ name }}">
+  <input type="hidden" name="amount" value="{{ amount }}">
+  <input type="hidden" name="unit" value="{{ unit }}">
+  <input type="hidden" name="cals" value="{{ cals }}">
+  <input type="hidden" name="net_cals" value="{{ net_cals }}">
+  <input type="hidden" name="fat" value="{{ fat }}">
+  <input type="hidden" name="carbs" value="{{ carbs }}">
+  <input type="hidden" name="fiber" value="{{ fiber }}">
+  <input type="hidden" name="net_carbs" value="{{ net_carbs }}">
+  <input type="hidden" name="protein" value="{{ protein }}">
+  <button
+    class="button"
+    type="submit"
+    style="flex:1;align-self:center;"
+  >Save</button>
+</form>
