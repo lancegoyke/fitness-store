@@ -1,19 +1,23 @@
 # Fitness Store
 
-This will be an e-commerce platform for delivering my fitness products and services.
+This is an e-commerce platform for delivering fitness products and services.
+
+🌍 [Mastering Fitness](https://mastering.fitness/)
 
 ## Features
 
 Current features:
 
 - Layout powered by [Every Layout](https://every-layout.dev/) and basic CSS
-- `payments` Django app powered by Stripe with syncing from Django Admin dashboard
-- `pages` Django app for making new markdown-powered pages
-- `product` Django app with extendable Product abstract base class
-- `users` Django app for authentication and authorization
-- `feed` Django app for RSS feed
-- `robots.txt` for search engines
-- `sitemap.xml` for search engines; tracks `pages` and `products`
+- `payments` – powered by Stripe Checkout with information synced from Django Admin dashboard
+- `pages` – markdown-powered pages (ex: [About page](https://mastering.fitness/about/))
+- `product` – foundation of the shop with extendable Product abstract base class (ex: [30 Days of Fitness](https://mastering.fitness/programs/30-days-fitness-challenge/))
+- `exercises` – exercise database with instruction videos and alternative suggestions (ex: [Exercises](https://mastering.fitness/exercises/))
+- `cardio` – self-generated cardio workouts (ex: [Cardio](https://mastering.fitness/cardio/))
+- `users` – user authentication and authorization
+- `feed` – RSS feed (ex: [Product Feed](https://mastering.fitness/feed/products/))
+- `robots.txt` – for search engines
+- `sitemap.xml` – for search engines (ex: [Sitemap](https://mastering.fitness/sitemap.xml))
 
 ## Tech
 
@@ -48,6 +52,10 @@ If the release command does not work, run it manually:
 heroku run python manage.py migrate
 ```
 
+## Django Admin
+
+The address of Django's admin backend has been changed from `/admin/` to `/backside/`.
+
 ## Static files
 
 Static files must be copied in a similar fashion if updated:
@@ -55,10 +63,6 @@ Static files must be copied in a similar fashion if updated:
 ```
 heroku run python manage.py collectstatic
 ```
-
-## Media files
-
-Currently no solution for user-uploaded media, but the app does not accept user-uploaded media.
 
 ## Users
 
@@ -68,9 +72,22 @@ To create a superuser:
 heroku run python manage.py createsuperuser
 ```
 
-This should ask for username (hidden), email, and password. You must head to Django Admin and then add the superuser's full name.
+This should ask for username, email, and password.
 
-## Run Locally
+You can edit the user's full name in the Django shell...
+
+```
+docker-compose exec web python manage.py shell
+>>> from django.contrib.auth import get_user_model
+>>> User = get_user_model()
+>>> me = User.objects.get(username="<the username you typed")
+>>> me.full_name = "<Desired Name>"
+>>> me.save()
+```
+
+...or in the Django admin at `http://localhost:8000/backside/users/user/`
+
+## Local Development
 
 Be sure to include test publishable and secret keys from Stripe in `.env.dev`.
 
@@ -81,7 +98,7 @@ cd fitness-store
 docker-compose up -d --build
 ```
 
-To migrate database:
+To update the database schema:
 
 ```
 docker-compose exec web python manage.py migrate
