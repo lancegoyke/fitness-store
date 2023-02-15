@@ -93,9 +93,3 @@ def cardio_create(request):
     # Else display blank form
     form = CardioCreateForm()
     return render(request, "cardio/new.html", {"form": form, "submitted": submitted})
-
-
-# Helper functions
-def is_aerobic(protocol):
-    if protocol:
-        return True
