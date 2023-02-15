@@ -1,9 +1,9 @@
 import os
 
 from django.contrib import messages
-from django.core.mail import BadHeaderError, EmailMessage
+from django.core.mail import BadHeaderError
 from django.http import HttpResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import render
 from django.views.decorators.http import require_GET
 from django.views.generic.base import TemplateView
 from django.views.generic.detail import DetailView

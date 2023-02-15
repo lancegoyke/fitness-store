@@ -3,7 +3,6 @@ import pytest
 from store_project.exercises.models import Category, Exercise
 from store_project.exercises.factories import (
     AlternativeFactory,
-    CategoryFactory,
     ExerciseFactory,
 )
 

@@ -4,7 +4,6 @@ import pytest
 
 from django.test import Client, RequestFactory, TestCase
 
-from store_project.pages.models import Page
 from store_project.pages.factories import PageFactory
 from store_project.pages.views import HomePageView, SinglePageView
 

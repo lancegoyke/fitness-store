@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from store_project.meals.forms import MacroForm
 
 

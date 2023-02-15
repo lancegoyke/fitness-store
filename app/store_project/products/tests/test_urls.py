@@ -3,7 +3,6 @@ import pytest
 from django.urls import resolve, reverse
 
 from store_project.products.models import Book, Program
-from store_project.users.models import User
 
 pytestmark = pytest.mark.django_db
 

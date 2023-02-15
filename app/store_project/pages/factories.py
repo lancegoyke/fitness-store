@@ -4,7 +4,6 @@ import factory
 from factory.django import DjangoModelFactory
 
 from store_project.users.factories import SuperAdminFactory
-from store_project.users.models import User
 from .models import Page
 
 
