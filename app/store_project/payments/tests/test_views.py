@@ -1,13 +1,11 @@
 import pytest
 
-from django.contrib.auth.models import AnonymousUser
 from django.contrib.messages import get_messages
 from django.http import HttpResponseRedirect, JsonResponse
 from django.test import Client, RequestFactory
 
 from store_project.payments import views
 from store_project.products.models import Program
-from store_project.users.factories import UserFactory
 from store_project.users.models import User
 
 

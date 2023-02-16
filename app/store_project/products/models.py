@@ -1,4 +1,3 @@
-import itertools
 import logging
 import uuid
 
@@ -22,8 +21,6 @@ from django_lifecycle import (
 )
 from markdownx.models import MarkdownxField
 import stripe
-
-from store_project.pages.models import Page
 
 
 User = get_user_model()

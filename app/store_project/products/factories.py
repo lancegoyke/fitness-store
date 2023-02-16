@@ -1,4 +1,3 @@
-from decimal import Decimal
 import random
 
 from django.utils.text import slugify
@@ -6,7 +5,7 @@ from django.utils.text import slugify
 import factory
 from factory.django import DjangoModelFactory
 
-from store_project.users.factories import UserFactory, SuperAdminFactory
+from store_project.users.factories import SuperAdminFactory
 from .models import Book, Product, Program
 
 

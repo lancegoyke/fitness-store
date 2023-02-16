@@ -1,13 +1,7 @@
 import uuid
 
-from django.contrib.contenttypes.fields import ContentType
 from django.db import models
-from django.urls import reverse
 from django.utils.translation import gettext as _
-
-from embed_video.fields import EmbedVideoField
-
-from store_project.users.models import User
 
 
 class Category(models.Model):
@@ -38,7 +32,7 @@ class Result(models.Model):
     """
     The test result
     """
-    
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     scheduled = models.DateTimeField(auto_now_add=True)
     completed = models.DateTimeField(null=True, default=None)

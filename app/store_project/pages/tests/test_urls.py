@@ -1,10 +1,8 @@
 import pytest
 
-from django.test import RequestFactory
 from django.urls import reverse, resolve
 
 from store_project.pages.models import Page
-from store_project.pages.factories import PageFactory
 
 
 pytestmark = pytest.mark.django_db

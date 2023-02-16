@@ -1,5 +1,3 @@
-import pytest
-
 from store_project.payments.utils import int_to_price
 
 
