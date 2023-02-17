@@ -63,17 +63,18 @@ class Ingredient(models.Model):
 class Meal(models.Model):
 
     # Fields
-    fat = models.PositiveSmallIntegerField()
+    name = models.CharField(max_length=100, blank=True, default=None)
+    description = models.TextField(max_length=2000, blank=True, default=None)
     created = models.DateTimeField(auto_now_add=True, editable=False)
-    ingredients = models.CharField(validators=[validate_comma_separated_integer_list], max_length=200)
-    cals = models.PositiveSmallIntegerField()
-    fiber = models.PositiveSmallIntegerField()
-    protein = models.PositiveSmallIntegerField()
-    net_carbs = models.PositiveSmallIntegerField()
     last_updated = models.DateTimeField(auto_now=True, editable=False)
-    description = models.TextField(max_length=2000)
-    net_cals = models.PositiveSmallIntegerField()
-    carbs = models.PositiveSmallIntegerField()
+    ingredients = models.CharField(validators=[validate_comma_separated_integer_list], max_length=200)
+    cals = models.PositiveSmallIntegerField(blank=True, default=None)
+    net_cals = models.PositiveSmallIntegerField(blank=True, default=None)
+    fat = models.PositiveSmallIntegerField(blank=True, default=None)
+    carbs = models.PositiveSmallIntegerField(blank=True, default=None)
+    fiber = models.PositiveSmallIntegerField(blank=True, default=None)
+    net_carbs = models.PositiveSmallIntegerField(blank=True, default=None)
+    protein = models.PositiveSmallIntegerField(blank=True, default=None)
 
     class Meta:
         pass
