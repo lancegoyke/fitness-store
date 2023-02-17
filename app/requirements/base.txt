@@ -1,5 +1,5 @@
 Django==4.0.10
-psycopg2-binary==2.9.3
+psycopg2-binary==2.9.5
 Pillow==9.4.0
 django-markdownx @ git+https://github.com/neutronX/django-markdownx.git@adcaa9e375a4691bbd16c4e27f8cdfb985366088
 Markdown==3.3.6
