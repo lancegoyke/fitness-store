@@ -1,4 +1,4 @@
-{% extends "_base.html" %}
+{% extends "_base_wide.html" %}
 {% load static i18n %}
 
 {% block head_title %}{% trans "Meal Builder" %}{% endblock head_title %}
@@ -12,37 +12,55 @@
 {% block content %}
 <h1>Meal Builder</h1>
 
-<h2>Recipe Name</h2>
-<h2>Ingredients</h2>
-<div class="row">
-  <form method="get">
-    <input
-      id="search"
-      type="text"
-      name="q"
-      placeholder="🔎 search"
-      hx-get="{% url 'meals:ingredient_search_local' %}"
-      hx-trigger="keyup changed delay:250ms"
-      hx-target="#ingredients"
-    >
-  </form>
-  <button
-    id="addIngredient"
-    class="button"
-    hx-get="{% url 'meals:ingredient_search_modal' %}"
-    hx-target="body"
-    hx-swap="beforeend"
-    style="line-height:1;"
-  >+ add</button>
-</div>
+<div class="row" style="justify-content:space-between;">
+  <div class="stack">
+    <div id="recipe-meta" class="stack">
+      <h2>Recipe Name</h2>
+      <p>Description</p>
+      <a
+        hx-get="{% url 'meals:meal_meta_update_form' %}"
+        hx-target="#recipe-meta"
+      >
+        Edit
+      </a>
+    </div>
+    <h3>Ingredients</h3>
+    <p>to be filled</p>
+  </div>
 
-<ul id="ingredients" class="ingredients">
-{% for ingredient in ingredients %}
-  <li>{{ ingredient }}</li>
-{% empty %}
-  <li>No ingredients!</li>
-{% endfor %}
-</ul>
+  <div class="stack">
+    <div class="row">
+      <form method="get">
+        <input
+          id="search"
+          type="text"
+          name="q"
+          placeholder="🔎 search"
+          hx-get="{% url 'meals:ingredient_search_local' %}"
+          hx-trigger="keyup changed delay:250ms"
+          hx-target="#ingredients"
+        >
+      </form>
+      <button
+        id="addIngredient"
+        class="button"
+        hx-get="{% url 'meals:ingredient_search_modal' %}"
+        hx-target="body"
+        hx-swap="beforeend"
+        style="line-height:1;"
+      >+ add</button>
+    </div>
+
+    <ul id="ingredients" class="ingredients">
+    {% for ingredient in ingredients %}
+      <li>{{ ingredient }}</li>
+    {% empty %}
+      <li>No ingredients!</li>
+    {% endfor %}
+    </ul>
+
+  </div>
+</div>
 
 {% endblock content %}
 

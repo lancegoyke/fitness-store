@@ -1,0 +1,8 @@
+<h2>{{ name }}</h2>
+<p>{{ description }}</p>
+<a
+  hx-get="{% url 'meals:meal_meta_update_form' %}"
+  hx-target="#recipe-meta"
+>
+  Edit
+</a>

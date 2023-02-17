@@ -1,0 +1,24 @@
+<form
+  class="stack"
+  hx-post="{% url 'meals:meal_meta_session' %}"
+  hx-target="#recipe-meta"
+>
+  {% csrf_token %}
+  <label for="recipe-name" class="stack">
+    Name
+    <input
+      id="recipe-name"
+      type="text"
+      name="name"
+    >
+  </label>
+  <label for="recipe-description" class="stack">
+    Description
+    <input
+      type="text"
+      name="description"
+      id="recipe-description"
+    >
+  </label>
+  <input class="button" type="submit" value="Save">
+</form>

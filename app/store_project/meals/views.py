@@ -69,10 +69,6 @@ class MealCreateView(PermissionRequiredMixin, generic.CreateView):
         context["ingredients"] = models.Ingredient.objects.all()
         return context
 
-# class MealCreateView(generic.CreateView):
-#     model = models.Meal
-#     form_class = forms.MealForm
-
 
 class MealDetailView(generic.DetailView):
     model = models.Meal
@@ -135,7 +131,7 @@ def ingredient_search_local(request):
         ingredients = models.Ingredient.objects.filter(name__search=search)
     else:
         ingredients = models.Ingredient.objects.all().order_by("-created")
-        
+
     return render(request, "meals/ingredients.html", {"ingredients": ingredients})
 
 
@@ -258,3 +254,24 @@ def ingredient_nutrition_lookup(request):
 
     else:
         return HttpResponseServerError("Form invalid")
+
+
+@require_http_methods(["GET"])
+def meal_meta_update_form(request):
+    return render(request, "meals/htmx/meta_form.html", {})
+
+
+@require_http_methods(["POST"])
+def meal_meta_session(request):
+    name = request.POST.get("name")
+    description = request.POST.get("description")
+    request.session["recipe_name"] = name
+    request.session["recipe_description"] = description
+    return render(
+        request,
+        "meals/htmx/meta.html",
+        {
+            "name": name,
+            "description": description,
+        }
+    )
