@@ -4,7 +4,7 @@ Pillow==9.4.0
 django-markdownx @ git+https://github.com/neutronX/django-markdownx.git@adcaa9e375a4691bbd16c4e27f8cdfb985366088
 Markdown==3.3.6
 stripe==2.65.0
-django-lifecycle==0.9.3
+django-lifecycle==1.0.0
 django-allauth==0.47.0
 factory_boy==3.2.1
 django-cors-headers==3.11.0
