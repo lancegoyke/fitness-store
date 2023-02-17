@@ -1,7 +1,7 @@
-Django==3.2.18
+Django==4.0.10
 psycopg2-binary==2.9.3
 Pillow==9.0.0
-django-markdownx==3.0.1
+django-markdownx @ git+https://github.com/neutronX/django-markdownx.git@adcaa9e375a4691bbd16c4e27f8cdfb985366088
 Markdown==3.3.6
 stripe==2.65.0
 django-lifecycle==0.9.3
