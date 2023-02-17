@@ -1,5 +1,5 @@
 # pull official base image
-FROM python:3.9-alpine
+FROM python:3.9.16
 
 # set work directory
 WORKDIR /usr/src/app
@@ -8,32 +8,14 @@ WORKDIR /usr/src/app
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# install psycopg2 dependencies
-RUN apk update \
-    && apk add postgresql-dev gcc python3-dev musl-dev build-base libffi-dev
-
-# install Pillow dependencies
-RUN apk --no-cache add sudo jpeg-dev zlib-dev openjpeg-dev
-
-# install rust
-RUN apk --no-cache add curl
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-
 # install dependencies
 RUN pip install --upgrade pip
 COPY ./requirements/base.txt .
 COPY ./requirements/local.txt .
 RUN pip install -r local.txt
 
-# copy entrypoint.sh
-COPY ./entrypoint.sh .
-
 # copy project
 COPY . .
 
 # collect static files
 RUN python3 manage.py collectstatic --noinput
-
-# run entrypoint.sh
-ENTRYPOINT ["/usr/src/app/entrypoint.sh"]
