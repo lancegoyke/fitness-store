@@ -39,7 +39,7 @@ This app runs in a container on Heroku with a heroku-postgresql database addon.
 To deploy:
 
 ```
-git push heroku master
+git push heroku main
 ```
 
 ## Database Migrations

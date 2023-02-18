@@ -1,4 +1,4 @@
-version: "3.7"
+version: "3.9"
 
 services:
   web:
@@ -16,20 +16,11 @@ services:
     depends_on:
       - db
   db:
-    image: postgres:12-alpine
+    image: postgres:14.7
     volumes:
       - postgres_data_prod:/var/lib/postgresql/data/
     env_file:
       - ./.env.prod.db
-  nginx:
-    build: ./nginx
-    volumes:
-      - static_volume:/home/app/web/app/staticfiles
-      - media_volume:/home/app/web/app/mediafiles
-    ports:
-      - 1337:80
-    depends_on:
-      - web
 
 volumes:
   postgres_data_prod:
