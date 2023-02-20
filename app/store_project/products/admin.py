@@ -21,9 +21,7 @@ class ProgramAdmin(admin.ModelAdmin):
         "-created",
     ]
     actions = [
-        # Disabled because bulk updates don't trigger django-lifecycle
-        # AFTER_SAVE marketing emails.
-        # "make_public",
+        "make_public",
         "make_draft",
         "make_private",
     ]
