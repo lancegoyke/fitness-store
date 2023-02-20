@@ -13,6 +13,7 @@ from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_GET
 from django.views.generic.base import TemplateView
 
 import stripe
@@ -29,95 +30,95 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
+@require_GET
 def login_to_purchase(request, product_type: str, product_slug: str):
-    if request.method == "GET":
-        messages.error(request, "You must be logged in to purchase.")
-        next_url = ""
-        if product_type == "program":
-            next_url = reverse('products:program_detail', args=[product_slug])
-        elif product_type == "book":
-            next_url = reverse('products:book_detail', args=[product_slug])
-        else:
-            redirect(f"{settings.LOGIN_URL}")
-        return redirect(
-            f"{settings.LOGIN_URL}?next={next_url}"
-        )
+    messages.error(request, "You must be logged in to purchase.")
+    next_url = ""
+    if product_type == "program":
+        next_url = reverse('products:program_detail', args=[product_slug])
+    elif product_type == "book":
+        next_url = reverse('products:book_detail', args=[product_slug])
+    else:
+        redirect(f"{settings.LOGIN_URL}")
+    return redirect(
+        f"{settings.LOGIN_URL}?next={next_url}"
+    )
 
 
 @csrf_exempt
+@require_GET
 def stripe_config(request):
-    if request.method == "GET":
-        stripe_config = {"publicKey": settings.STRIPE_PUBLISHABLE_KEY}
-        # turn this dict into JSON for JavaScript to use
-        return JsonResponse(stripe_config, safe=False)
+    stripe_config = {"publicKey": settings.STRIPE_PUBLISHABLE_KEY}
+    # turn this dict into JSON for JavaScript to use
+    return JsonResponse(stripe_config, safe=False)
 
 
 @csrf_exempt
 @login_required
+@require_GET
 def create_checkout_session(request):
     """
     A Checkout Session is the programmatic representation of what your
     customer sees when they’re redirected to the payment form.
     Src: https://stripe.com/docs/payments/checkout/accept-a-payment#create-a-checkout-session
     """
-    if request.method == "GET":
-        domain_url = settings.DOMAIN_URL
-        stripe.api_key = settings.STRIPE_SECRET_KEY
-        product_type = request.GET.get("product-type")
-        product_slug = request.GET.get("product-slug")
-        if product_type == "program":
-            product = Program.objects.get(slug=product_slug)
-        elif product_type == "book":
-            product = Book.objects.get(slug=product_slug)
+    domain_url = settings.DOMAIN_URL
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    product_type = request.GET.get("product-type")
+    product_slug = request.GET.get("product-slug")
+    if product_type == "program":
+        product = Program.objects.get(slug=product_slug)
+    elif product_type == "book":
+        product = Book.objects.get(slug=product_slug)
 
-        try:
-            # Create a new Checkout Session for the order
-            # For more, see https://stripe.com/docs/api/checkout/sessions/create
-            line_items = []
-            if product.stripe_price_id:
-                line_items.append(
-                    {
-                        # Use the Price ID we already have
-                        "price": stripe_price_get_or_create(product),
-                        "quantity": 1,
-                    },
-                )
-            else:
-                line_items.append(
-                    {
-                        # Generate a new Price in Stripe
-                        "price_data": {
-                            "currency": "usd",
-                            "unit_amount": f"{int(product.price*100)}",
-                            "product_data": {
-                                "name": f"{product.name}",
-                            },
-                        },
-                        "quantity": 1,
-                    },
-                )
-
-            stripe_customer = stripe_customer_get_or_create(request.user)
-
-            checkout_session = stripe.checkout.Session.create(
-                customer=stripe_customer,
-                client_reference_id=str(request.user.id),
-                success_url=domain_url + "payments/success/?session_id={CHECKOUT_SESSION_ID}",
-                cancel_url=domain_url + product.get_absolute_url()[1:],
-                payment_method_types=["card"],
-                mode="payment",
-                line_items=line_items,
-                allow_promotion_codes=True,
-                metadata={
-                    "product_name": product.name,
-                    "product_type": product_type,
-                    "product_slug": product_slug,
-                    # add other pertinent links to download, etc...
+    try:
+        # Create a new Checkout Session for the order
+        # For more, see https://stripe.com/docs/api/checkout/sessions/create
+        line_items = []
+        if product.stripe_price_id:
+            line_items.append(
+                {
+                    # Use the Price ID we already have
+                    "price": stripe_price_get_or_create(product),
+                    "quantity": 1,
                 },
             )
-            return JsonResponse({"sessionId": checkout_session["id"]})
-        except Exception as e:
-            return JsonResponse({"error": str(e)})
+        else:
+            line_items.append(
+                {
+                    # Generate a new Price in Stripe
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": f"{int(product.price*100)}",
+                        "product_data": {
+                            "name": f"{product.name}",
+                        },
+                    },
+                    "quantity": 1,
+                },
+            )
+
+        stripe_customer = stripe_customer_get_or_create(request.user)
+
+        checkout_session = stripe.checkout.Session.create(
+            customer=stripe_customer,
+            client_reference_id=str(request.user.id),
+            success_url=domain_url + "payments/success/?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=domain_url + product.get_absolute_url()[1:],
+            payment_method_types=["card"],
+            mode="payment",
+            line_items=line_items,
+            allow_promotion_codes=True,
+            metadata={
+                "product_name": product.name,
+                "product_type": product_type,
+                "product_slug": product_slug,
+                # add other pertinent links to download, etc...
+            },
+        )
+        return JsonResponse({"sessionId": checkout_session["id"]})
+    except Exception as e:
+        return JsonResponse({"error": str(e)})
 
 
 @csrf_exempt
