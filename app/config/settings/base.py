@@ -171,7 +171,7 @@ STATIC_ROOT = APP_DIR / "staticfiles"
 MEDIA_URL = "/mediafiles/"
 MEDIA_ROOT = APP_DIR / "mediafiles"
 STATICFILES_DIRS = [
-    APP_DIR / "static",
+    PROJECT_DIR / "static",
 ]
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
