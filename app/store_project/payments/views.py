@@ -64,8 +64,8 @@ def create_checkout_session(request):
     """
     domain_url = settings.DOMAIN_URL
     stripe.api_key = settings.STRIPE_SECRET_KEY
-    product_type = request.GET.get("product-type")
-    product_slug = request.GET.get("product-slug")
+    product_type = request.GET.get("productType")
+    product_slug = request.GET.get("productSlug")
     if product_type == "program":
         product = Program.objects.get(slug=product_slug)
     elif product_type == "book":

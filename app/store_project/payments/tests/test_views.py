@@ -31,7 +31,7 @@ def test_stripe_config_view():
 
 
 def test_create_checkout_session_view(user: User, program: Program, rf: RequestFactory):
-    request = rf.get(f"/payments/create-checkout-session/?product-slug={program.slug}&product-type=program")
+    request = rf.get(f"/payments/create-checkout-session/?productSlug={program.slug}&productType=program")
     request.user = user
     response = views.create_checkout_session(request)
     assert response.status_code == 200
