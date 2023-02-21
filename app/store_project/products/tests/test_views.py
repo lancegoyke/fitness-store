@@ -228,8 +228,8 @@ class TestBookDetailView:
 
         login_to_purchase_link = f'href="/payments/login-to-purchase/{book.slug}/">'
         purchase_button_id = 'id="submitButton"'
-        purchase_button_data_product_slug = f'data-product-slug="{book.slug}"'
-        purchase_button_data_product_type = 'data-product-type="book"'
+        purchase_button_data_product_slug = f'data-productSlug="{book.slug}"'
+        purchase_button_data_product_type = 'data-productType="book"'
         admin_link = reverse("admin:products_book_change", args=(book.id,))
 
         assert response.status_code == 200
