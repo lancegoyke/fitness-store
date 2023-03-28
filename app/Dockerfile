@@ -4,6 +4,14 @@ FROM python:3.11.2
 # set work directory
 WORKDIR /usr/src/app
 
+# install m2crypto dependencies
+RUN apt-get update && apt-get install -y \
+    libssl-dev \
+    libffi-dev \
+    build-essential \
+    gcc \
+    python3-dev
+
 # set environment variables
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
