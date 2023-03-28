@@ -1,0 +1,69 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block head_title %}{% endblock head_title %} | Mastering Fitness</title>
+  <link rel="shortcut icon" href="{% static 'png/favicon-black.png' %}">
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="{% static 'css/base.css' %}" />
+
+  <!-- Google Analytics | Global site tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id={{ GOOGLE_ANALYTICS_GTAG_PROPERTY_ID }}"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', '{{ GOOGLE_ANALYTICS_GTAG_PROPERTY_ID }}', {
+      {% if request.user.id %}'user_id': '{{ request.user.id }}',{% endif %}
+    });
+  </script>
+
+  {% block header %}
+  <meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
+  <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+  <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+  <meta property="og:image:alt" content="Mastering Fitness" />
+  {% endblock header %}
+</head>
+
+<body>
+
+  {% include '_nav.html' %}
+
+  <!-- THE CONTENT -->
+  <main class="content">
+    {% if messages %}
+      <div class="center messages">
+        <ul>
+          {% for message in messages %}
+          <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    {% block content %}
+    <!-- No content available -->
+    {% endblock content %}
+  </main>
+  <!-- .content -->
+
+  <div class="stack-page">
+    {% include '_newsletter.html' %}
+    {% include '_footer.html' %}
+  </div>
+
+  <!-- JavaScript -->
+  {% block javascript %}
+  <!-- No JavaScript available -->
+  {% endblock javascript %}
+
+</body>
+
+</html>
