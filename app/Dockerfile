@@ -6,6 +6,7 @@ WORKDIR /usr/src/app
 
 # install m2crypto dependencies
 RUN apt-get update && apt-get install -y \
+    swig \
     libssl-dev \
     libffi-dev \
     build-essential \
