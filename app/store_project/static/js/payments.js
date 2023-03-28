@@ -1,4 +1,4 @@
-console.log("JavaScript in the house!");
+console.log("payments.js loaded");
 
 // Get Stripe publishable key
 // fetch() response is a ReadableStream
@@ -13,10 +13,16 @@ fetch("/payments/config/")
 
     // Event handler
     const button = document.querySelector("#submitButton");
-    
+
     button.addEventListener("click", () => {
       // Get Checkout Session ID
-      const url = `/payments/create-checkout-session/?product-slug=${button.dataset.productSlug}&product-type=${button.dataset.productType}`;
+      const url =
+        "/payments/create-checkout-session/?" +
+        new URLSearchParams({
+          productSlug: button.dataset.productSlug,
+          productType: button.dataset.productType,
+        });
+      //product-slug=${button.dataset.productSlug}&product-type=${button.dataset.productType};
 
       fetch(url)
         .then((result) => {
