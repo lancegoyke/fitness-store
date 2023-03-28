@@ -20,9 +20,6 @@ INTERNAL_IPS = [
 hostname, _, ips = socket.gethostbyname_ex(socket.gethostname())
 INTERNAL_IPS += [".".join(ip.split(".")[:-1] + ["1"]) for ip in ips]
 
-# https://docs.djangoproject.com/en/dev/ref/settings/#test-runner
-TEST_RUNNER = "django.test.runner.DiscoverRunner"
-
 # Email
 # EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 EMAIL_BACKEND = "django.core.mail.backends.filebased.EmailBackend"

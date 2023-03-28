@@ -21,9 +21,7 @@ class ProgramAdmin(admin.ModelAdmin):
         "-created",
     ]
     actions = [
-        # Disabled because bulk updates don't trigger django-lifecycle
-        # AFTER_SAVE marketing emails.
-        # "make_public",
+        "make_public",
         "make_draft",
         "make_private",
     ]
@@ -33,6 +31,9 @@ class ProgramAdmin(admin.ModelAdmin):
             kwargs["queryset"] = User.objects.filter(is_staff=True)
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
+    @admin.action(
+        description="Mark selected programs as public"
+    )
     def make_public(self, request, queryset):
         updated = queryset.update(status=Program.PUBLIC)
         self.message_user(
@@ -45,6 +46,9 @@ class ProgramAdmin(admin.ModelAdmin):
             messages.SUCCESS,
         )
 
+    @admin.action(
+        description="Mark selected programs as draft"
+    )
     def make_draft(self, request, queryset):
         updated = queryset.update(status=Program.DRAFT)
         self.message_user(
@@ -57,6 +61,9 @@ class ProgramAdmin(admin.ModelAdmin):
             messages.SUCCESS,
         )
 
+    @admin.action(
+        description="Mark selected programs as private"
+    )
     def make_private(self, request, queryset):
         updated = queryset.update(status=Program.PRIVATE)
         self.message_user(
@@ -69,9 +76,6 @@ class ProgramAdmin(admin.ModelAdmin):
             messages.SUCCESS,
         )
 
-    make_public.short_description = "Mark selected programs as public"
-    make_draft.short_description = "Mark selected programs as draft"
-    make_private.short_description = "Mark selected programs as private"
 
 
 @admin.register(Book)
@@ -99,6 +103,9 @@ class BookAdmin(admin.ModelAdmin):
             kwargs["queryset"] = User.objects.filter(is_staff=True)
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
+    @admin.action(
+        description="Mark selected books as public"
+    )
     def make_public(self, request, queryset):
         updated = queryset.update(status=Book.PUBLIC)
         self.message_user(
@@ -111,6 +118,9 @@ class BookAdmin(admin.ModelAdmin):
             messages.SUCCESS,
         )
 
+    @admin.action(
+        description="Mark selected books as draft"
+    )
     def make_draft(self, request, queryset):
         updated = queryset.update(status=Book.DRAFT)
         self.message_user(
@@ -123,6 +133,9 @@ class BookAdmin(admin.ModelAdmin):
             messages.SUCCESS,
         )
 
+    @admin.action(
+        description="Mark selected books as private"
+    )
     def make_private(self, request, queryset):
         updated = queryset.update(status=Book.PRIVATE)
         self.message_user(
@@ -135,9 +148,6 @@ class BookAdmin(admin.ModelAdmin):
             messages.SUCCESS,
         )
 
-    make_public.short_description = "Mark selected books as public"
-    make_draft.short_description = "Mark selected books as draft"
-    make_private.short_description = "Mark selected books as private"
 
 
 @admin.register(Category)

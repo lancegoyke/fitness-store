@@ -56,7 +56,7 @@
 {% endblock content %}
 
 {% block javascript %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.6/clipboard.min.js"></script>
+<script src="{% static 'js/clipboard.min.js' %}"></script>
 <script>
   var clipboard = new ClipboardJS('.copy-btn');
 
