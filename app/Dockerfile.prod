@@ -28,6 +28,3 @@ COPY . .
 
 # collect static files
 RUN python3 manage.py collectstatic --noinput
-
-# migrate database
-RUN python3 manage.py migrate --noinput
