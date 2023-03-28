@@ -20,8 +20,7 @@ RUN apt-get update && apt-get install -y \
 # install dependencies
 RUN pip install --upgrade pip
 COPY ./requirements/base.txt .
-COPY ./requirements/production.txt .
-RUN pip install -r production.txt
+RUN pip install -r base.txt
 
 # copy project
 COPY . .

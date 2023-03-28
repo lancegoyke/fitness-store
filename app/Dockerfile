@@ -20,8 +20,7 @@ ENV PYTHONUNBUFFERED 1
 # install dependencies
 RUN pip install --upgrade pip
 COPY ./requirements/base.txt .
-COPY ./requirements/local.txt .
-RUN pip install -r local.txt
+RUN pip install -r base.txt
 
 # copy project
 COPY . .
