@@ -1289,6 +1289,12 @@ ul.grid {
   color: var(--main-color-dark);
 }
 
+.button.outline {
+  color: var(--main-color-dark);
+  background-color: unset;
+  border: solid var(--border-thin) var(--main-color-dark);
+}
+
 .inherit-colors {
   color: inherit;
   background-color: inherit;
@@ -1504,4 +1510,8 @@ table tr:nth-child(even) {
 .breadcrumbs,
 .breadcrumbs a {
   font-size: var(--s-1);
+}
+
+.hidden {
+  display: none;
 }
