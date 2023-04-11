@@ -126,21 +126,15 @@ function startTimer() {
   // Start preparation countdown
   prepSeconds = parseInt(prepInput.value);
   let prepCounter = prepSeconds;
-  countdownMinutes.innerHTML = `${Math.floor(prepCounter / 60)}`.padStart(
-    2,
-    "0"
-  );
-  countdownSeconds.innerHTML = `${prepCounter % 60}`.padStart(2, "0");
+  countdownMinutes.innerHTML = getMinutes(prepCounter);
+  countdownSeconds.innerHTML = getSeconds(prepCounter);
   content.classList.add("preparing");
 
   // Update the preparation countdown every second
   prepTimer = setInterval(() => {
     prepCounter--;
-    countdownMinutes.innerHTML = `${Math.floor(prepCounter / 60)}`.padStart(
-      2,
-      "0"
-    );
-    countdownSeconds.innerHTML = `${prepCounter % 60}`.padStart(2, "0");
+    countdownMinutes.innerHTML = getMinutes(prepCounter);
+    countdownSeconds.innerHTML = getSeconds(prepCounter);
 
     if (prepCounter === 0) {
       clearInterval(prepTimer);
@@ -165,8 +159,8 @@ function startWorkout() {
   // Set initial values
   isResting = false;
   currentRound = 1;
-  minutes.innerHTML = "0".padStart(2, "0");
-  seconds.innerHTML = "0".padStart(2, "0");
+  minutes.innerHTML = getMinutes(0);
+  seconds.innerHTML = getSeconds(0);
   totalRoundsElement.innerHTML = rounds;
   elapsedSeconds = 1;
   totalRoundSeconds = workSeconds + restSeconds;
@@ -175,8 +169,8 @@ function startWorkout() {
   // Update the display every 1000 milliseconds
   timer = setInterval(() => {
     // Waits 1 second before running
-    minutes.innerHTML = `${Math.floor(elapsedSeconds / 60)}`.padStart(2, "0");
-    seconds.innerHTML = `${elapsedSeconds % 60}`.padStart(2, "0");
+    minutes.innerHTML = getMinutes(elapsedSeconds);
+    seconds.innerHTML = getSeconds(elapsedSeconds);
 
     secondsLeftInRound =
       totalRoundSeconds - (elapsedSeconds % totalRoundSeconds);
