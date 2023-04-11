@@ -3,15 +3,12 @@
  * Author: Lance Goyke
  *
  * TODO
+ * - [ ] Reset button stops the timer
+ * - [x] Count in period
  * - [ ] Add audio cues
  */
 
 // DOM Elements
-let timer;
-let elapsedSeconds;
-let totalRoundSeconds;
-let currentRound;
-let isResting;
 const countdown = document.querySelector("#countdown");
 const countdownMinutes = document.querySelector("#minutes");
 const countdownSeconds = document.querySelector("#seconds");
@@ -22,14 +19,37 @@ const resetButton = document.querySelector(".reset");
 const currentRoundElement = document.querySelector("#current-round");
 const totalRoundsElement = document.querySelector("#total-rounds");
 const content = document.querySelector(".content");
+const roundsInput = form.querySelector("#rounds");
+const workInput = form.querySelector("#work");
+const restInput = form.querySelector("#rest");
+const prepInput = form.querySelector("#prep");
 
-// Computation Values
-let rounds = parseInt(form.querySelector("#rounds").value);
-let workSeconds = parseInt(form.querySelector("#work").value);
-let restSeconds = parseInt(form.querySelector("#rest").value);
+// Global Variables
+let timer;
+let prepTimer;
+let elapsedSeconds;
+let totalRoundSeconds;
+let currentRound;
+let isResting;
+let rounds = parseInt(roundsInput.value);
+let workSeconds = parseInt(workInput.value);
+let restSeconds = parseInt(restInput.value);
+let prepSeconds = parseInt(prepInput.value);
 
-// Event Listener
-form.addEventListener("focusout", () => {
+// Event Listeners
+roundsInput.addEventListener("input", () => {
+  render();
+});
+
+workInput.addEventListener("input", () => {
+  render();
+});
+
+restInput.addEventListener("input", () => {
+  render();
+});
+
+prepInput.addEventListener("input", () => {
   render();
 });
 
@@ -38,7 +58,8 @@ form.addEventListener("submit", (e) => {
   startTimer();
 });
 
-resetButton.addEventListener("click", () => {
+resetButton.addEventListener("click", (e) => {
+  e.preventDefault();
   resetTimer();
 });
 
@@ -46,19 +67,15 @@ resetButton.addEventListener("click", () => {
 render();
 
 // Functions
-function render() {
-  // Get new values
-  rounds = parseInt(form.querySelector("#rounds").value);
-  workSeconds = parseInt(form.querySelector("#work").value);
-  restSeconds = parseInt(form.querySelector("#rest").value);
+function getMinutes(seconds) {
+  return `${Math.floor(seconds / 60)}`.padStart(2, "0");
+}
 
-  // Set new values
-  minutes.innerHTML = `${Math.floor(workSeconds / 60)}`.padStart(2, "0");
-  seconds.innerHTML = `${workSeconds % 60}`.padStart(2, "0");
-  currentRoundElement.innerHTML = 1;
-  totalRoundsElement.innerHTML = rounds;
+function getSeconds(seconds) {
+  return `${seconds % 60}`.padStart(2, "0");
+}
 
-  // Create progress bars
+function createProgressBars() {
   const totalDuration = rounds * (workSeconds + restSeconds) - restSeconds;
   const progressContainer = document.querySelector("#progress-container");
   progressContainer.innerHTML = "";
@@ -85,16 +102,60 @@ function render() {
   progressOverlay.appendChild(elapsedBar);
 }
 
+function render() {
+  // Get new values
+  rounds = parseInt(form.querySelector("#rounds").value);
+  workSeconds = parseInt(form.querySelector("#work").value);
+  restSeconds = parseInt(form.querySelector("#rest").value);
+
+  // Set new values
+  minutes.innerHTML = getMinutes(workSeconds);
+  seconds.innerHTML = getSeconds(workSeconds);
+  currentRoundElement.innerHTML = 1;
+  totalRoundsElement.innerHTML = rounds;
+
+  // Create progress bars
+  createProgressBars();
+}
+
 function startTimer() {
   if (timer) {
     clearInterval(timer);
   }
 
+  // Start preparation countdown
+  prepSeconds = parseInt(prepInput.value);
+  let prepCounter = prepSeconds;
+  countdownMinutes.innerHTML = `${Math.floor(prepCounter / 60)}`.padStart(
+    2,
+    "0"
+  );
+  countdownSeconds.innerHTML = `${prepCounter % 60}`.padStart(2, "0");
+  content.classList.add("preparing");
+
+  // Update the preparation countdown every second
+  prepTimer = setInterval(() => {
+    prepCounter--;
+    countdownMinutes.innerHTML = `${Math.floor(prepCounter / 60)}`.padStart(
+      2,
+      "0"
+    );
+    countdownSeconds.innerHTML = `${prepCounter % 60}`.padStart(2, "0");
+
+    if (prepCounter === 0) {
+      clearInterval(prepTimer);
+      startWorkout();
+    }
+  }, 1000);
+}
+
+function startWorkout() {
   // Update the DOM
   rounds = parseInt(form.querySelector("#rounds").value);
   workSeconds = parseInt(form.querySelector("#work").value);
   restSeconds = parseInt(form.querySelector("#rest").value);
   // audioCue
+  content.classList.remove("preparing");
   content.classList.add("working");
   const elapsedBar = document.querySelector(".progress-bar-elapsed");
 
@@ -143,19 +204,25 @@ function startTimer() {
 
     // Update the progress bar
     elapsedBar.style.width = `${(elapsedSeconds / totalDuration) * 100}%`;
-    console.log(`${(elapsedSeconds / totalDuration) * 100}%`);
-    console.log(elapsedBar);
 
     elapsedSeconds++;
   }, 1000);
 }
 
 function resetTimer() {
-  clearInterval(timer);
-  timer = null;
+  if (prepTimer) {
+    clearInterval(prepTimer);
+    prepTimer = null;
+  }
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+  prepSeconds = parseInt(prepInput.value);
   currentRound = 1;
   elapsedSeconds = 0;
   render();
+  content.classList.remove("preparing");
   content.classList.remove("working");
   content.classList.remove("resting");
   content.classList.remove("finished");
