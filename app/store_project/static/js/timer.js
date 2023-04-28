@@ -3,7 +3,8 @@
  * Author: Lance Goyke
  *
  * TODO
- * - [ ] Reset button stops the timer
+ * - [x] Reset button stops the timer
+ * - [x] Pause and resume
  * - [x] Count in period
  * - [ ] Add audio cues
  */
@@ -31,42 +32,33 @@ let elapsedSeconds;
 let totalRoundSeconds;
 let currentRound;
 let isResting;
+let isPaused = false;
 let rounds = parseInt(roundsInput.value);
 let workSeconds = parseInt(workInput.value);
 let restSeconds = parseInt(restInput.value);
 let prepSeconds = parseInt(prepInput.value);
 
 // Event Listeners
-roundsInput.addEventListener("input", () => {
-  render();
-});
-
-workInput.addEventListener("input", () => {
-  render();
-});
-
-restInput.addEventListener("input", () => {
-  render();
-});
-
-prepInput.addEventListener("input", () => {
-  render();
-});
-
-form.addEventListener("submit", (e) => {
-  e.preventDefault();
-  startTimer();
-});
-
-resetButton.addEventListener("click", (e) => {
-  e.preventDefault();
-  resetTimer();
-});
+roundsInput.addEventListener("input", render);
+workInput.addEventListener("input", render);
+restInput.addEventListener("input", render);
+prepInput.addEventListener("input", render);
+form.addEventListener("submit", startTimer);
+resetButton.addEventListener("click", resetTimer);
 
 // Set initial state
 render();
 
-// Functions
+/*
+/* Utility Functions
+*/
+function clearTimers() {
+  clearInterval(timer);
+  clearInterval(prepTimer);
+  timer = null;
+  prepTimer = null;
+}
+
 function getMinutes(seconds) {
   return `${Math.floor(seconds / 60)}`.padStart(2, "0");
 }
@@ -75,6 +67,9 @@ function getSeconds(seconds) {
   return `${seconds % 60}`.padStart(2, "0");
 }
 
+/*
+/* Display Functions
+*/
 function createProgressBars() {
   const totalDuration = rounds * (workSeconds + restSeconds) - restSeconds;
   const progressContainer = document.querySelector("#progress-container");
@@ -118,29 +113,42 @@ function render() {
   createProgressBars();
 }
 
-function startTimer() {
-  if (timer) {
-    clearInterval(timer);
-  }
+/*
+/* Timer Functions
+*/
+function startTimer(e) {
+  e.preventDefault();
+  console.log("Starting timer");
+
+  clearTimers();
+
+  // Make timer pauseable
+  startButton.innerHTML = "Pause";
+  form.removeEventListener("submit", startTimer);
+  form.addEventListener("submit", pauseTimer);
 
   // Start preparation countdown
-  prepSeconds = parseInt(prepInput.value);
-  let prepCounter = prepSeconds;
-  countdownMinutes.innerHTML = getMinutes(prepCounter);
-  countdownSeconds.innerHTML = getSeconds(prepCounter);
-  content.classList.add("preparing");
-
-  // Update the preparation countdown every second
-  prepTimer = setInterval(() => {
-    prepCounter--;
+  if (!isPaused) {
+    prepSeconds = parseInt(prepInput.value);
+    let prepCounter = prepSeconds;
     countdownMinutes.innerHTML = getMinutes(prepCounter);
     countdownSeconds.innerHTML = getSeconds(prepCounter);
+    content.classList.add("preparing");
 
-    if (prepCounter === 0) {
-      clearInterval(prepTimer);
-      startWorkout();
-    }
-  }, 1000);
+    // Update the preparation countdown every second
+    prepTimer = setInterval(() => {
+      prepCounter--;
+      countdownMinutes.innerHTML = getMinutes(prepCounter);
+      countdownSeconds.innerHTML = getSeconds(prepCounter);
+
+      if (prepCounter === 0) {
+        clearInterval(prepTimer);
+        startWorkout();
+      }
+    }, 1000);
+  } else if (isPaused) {
+    startWorkout();
+  }
 }
 
 function startWorkout() {
@@ -153,18 +161,17 @@ function startWorkout() {
   content.classList.add("working");
   const elapsedBar = document.querySelector(".progress-bar-elapsed");
 
-  // Change the button from start to pause
-  // startButton.innerHTML = "Pause";
-
   // Set initial values
   isResting = false;
-  currentRound = 1;
-  minutes.innerHTML = getMinutes(0);
-  seconds.innerHTML = getSeconds(0);
-  totalRoundsElement.innerHTML = rounds;
-  elapsedSeconds = 1;
-  totalRoundSeconds = workSeconds + restSeconds;
-  totalDuration = rounds * (workSeconds + restSeconds) - restSeconds;
+  if (!isPaused) {
+    currentRound = 1;
+    minutes.innerHTML = getMinutes(0);
+    seconds.innerHTML = getSeconds(0);
+    totalRoundsElement.innerHTML = rounds;
+    elapsedSeconds = 1;
+    totalRoundSeconds = workSeconds + restSeconds;
+    totalDuration = rounds * (workSeconds + restSeconds) - restSeconds;
+  }
 
   // Update the display every 1000 milliseconds
   timer = setInterval(() => {
@@ -203,21 +210,35 @@ function startWorkout() {
   }, 1000);
 }
 
-function resetTimer() {
-  if (prepTimer) {
-    clearInterval(prepTimer);
-    prepTimer = null;
-  }
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
+function pauseTimer(e) {
+  e.preventDefault();
+  console.log("Pausing timer");
+  console.log(`Elapsed seconds: ${elapsedSeconds}`);
+  isPaused = true;
+  clearTimers();
+
+  // Change the button from pause to resume
+  startButton.innerHTML = "Resume";
+  form.removeEventListener("submit", pauseTimer);
+  form.addEventListener("submit", startTimer);
+}
+
+function resetTimer(e) {
+  e.preventDefault();
+
+  // Reset timers
+  clearTimers();
+  isPaused = false;
   prepSeconds = parseInt(prepInput.value);
   currentRound = 1;
   elapsedSeconds = 0;
+
+  // Reset the DOM
   render();
   content.classList.remove("preparing");
   content.classList.remove("working");
   content.classList.remove("resting");
   content.classList.remove("finished");
+
+  console.log("Reset timer");
 }
