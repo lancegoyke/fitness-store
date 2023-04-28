@@ -1,12 +1,8 @@
 /*
  * Fitness Interval Timer
  * Author: Lance Goyke
+ * Site: https://mastering.fitness/timer/
  *
- * TODO
- * - [x] Reset button stops the timer
- * - [x] Pause and resume
- * - [x] Count in period
- * - [ ] Add audio cues
  */
 
 // DOM Elements
