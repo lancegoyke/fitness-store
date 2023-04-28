@@ -39,6 +39,12 @@ let workSeconds = parseInt(workInput.value);
 let restSeconds = parseInt(restInput.value);
 let prepSeconds = parseInt(prepInput.value);
 
+if (audio == undefined) {
+  console.log("Audio not loaded. Timer will be silent.");
+} else {
+  console.log("Audio loaded.");
+}
+
 // Event Listeners
 roundsInput.addEventListener("input", render);
 workInput.addEventListener("input", render);
@@ -143,7 +149,17 @@ function startTimer(e) {
       countdownMinutes.innerHTML = getMinutes(prepCounter);
       countdownSeconds.innerHTML = getSeconds(prepCounter);
 
+      if (prepCounter === 3) {
+        audio["three"].play();
+      }
+      if (prepCounter === 2) {
+        audio["two"].play();
+      }
+      if (prepCounter === 1) {
+        audio["one"].play();
+      }
       if (prepCounter === 0) {
+        audio["go"].play();
         clearInterval(prepTimer);
         startWorkout();
       }
@@ -157,6 +173,7 @@ function startTimer(e) {
         countdownSeconds.innerHTML = getSeconds(prepCounter);
 
         if (prepCounter === 0) {
+          audio["go"].play();
           clearInterval(prepTimer);
           startWorkout();
         }
@@ -208,6 +225,7 @@ function startWorkout() {
       content.classList.add("finished");
     } else if (secondsLeftInRound === totalRoundSeconds) {
       // We just started a new round
+      audio["go"].play();
       currentRound++;
       currentRoundElement.innerHTML = currentRound;
       isResting = !isResting;
@@ -215,9 +233,25 @@ function startWorkout() {
       content.classList.remove("resting");
     } else if (secondsLeftInRound === restSeconds) {
       // We finished working and now we're resting
+      audio["rest"].play();
       isResting = !isResting;
       content.classList.remove("working");
       content.classList.add("resting");
+    } else if (
+      (secondsLeftInRound === 3) |
+      (secondsLeftInRound - restSeconds === 3)
+    ) {
+      audio["three"].play();
+    } else if (
+      (secondsLeftInRound === 2) |
+      (secondsLeftInRound - restSeconds === 2)
+    ) {
+      audio["two"].play();
+    } else if (
+      (secondsLeftInRound === 1) |
+      (secondsLeftInRound - restSeconds === 1)
+    ) {
+      audio["one"].play();
     }
 
     // Update the progress bar

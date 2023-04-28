@@ -70,5 +70,15 @@
 {% endblock content %}
 
 {% block javascript %}
+<script>
+  // Audio files
+  const audio = {
+    one: new Audio("{% static 'audio/lance/one.ogg' %}"),
+    two: new Audio("{% static 'audio/lance/two.ogg' %}"),
+    three: new Audio("{% static 'audio/lance/three.ogg' %}"),
+    rest: new Audio("{% static 'audio/lance/rest.ogg' %}"),
+    go: new Audio("{% static 'audio/lance/go.ogg' %}"),
+  };
+</script>
 <script src="{% static 'js/timer.js' %}" async defer></script>
 {% endblock javascript %}
