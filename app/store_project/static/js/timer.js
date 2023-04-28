@@ -214,6 +214,7 @@ function startWorkout() {
 
     if (currentRound === rounds && secondsLeftInRound === restSeconds) {
       // We finished the last round
+      audio["rest"].play();
       console.log("Confetti!");
       clearInterval(timer);
       content.classList.remove("working");
