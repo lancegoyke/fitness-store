@@ -7,6 +7,10 @@
   padding-right: 0;
 }
 
+.content.preparing {
+  background-color: #3498db;
+}
+
 .content.working {
   background-color: #2ecc71;
 }
@@ -112,11 +116,16 @@
 }
 
 .progress-bar-elapsed {
+  pointer-events: none;
   background-color: #3498db;
 }
 
 .progress-overlay {
-  display: absolute;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
 }
 
 progress.work {

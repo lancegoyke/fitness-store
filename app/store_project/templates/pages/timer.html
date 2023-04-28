@@ -47,6 +47,11 @@
     <label for="rest">Rest duration (seconds):</label>
     <input type="number" id="rest" name="rest" min="1" value="30" tabindex="1" required />
   </div>
+  
+  <div class="field">
+    <label for="prep">Prep time (seconds):</label>
+    <input type="number" id="prep" name="prep" min="1" value="10" tabindex="1" required />
+  </div>
 
   <div class="field">
     <label for="audio-cue">Audio cue:</label>
@@ -58,8 +63,8 @@
   </div>
 
   <div class="buttons w-full">
-    <button class="button start" type="submit" tabindex="1">Start</button>
-    <button class="button outline reset" tabindex="1">Reset</button>
+    <button class="button start" id="start" type="submit" tabindex="1">Start</button>
+    <button class="button outline reset" id="reset" tabindex="1">Reset</button>
   </div>
 </form>
 {% endblock content %}
