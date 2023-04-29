@@ -86,14 +86,15 @@ class Exercise(models.Model):
         return reverse("exercises:detail", kwargs={"slug": self.slug})
 
     def get_yt_demo_id(self):
-        """Returns the 11-character video ID from a link of one of these styles:
+        """Returns the 11-character video ID from a link.
+
+        Link should be of one of these styles:
             - youtu.be/###########
             - youtube.com/watch?v=###########
             - youtube.com/watch?v=###########&list=...
 
         Returns `None` if there is no demonstration URL in the database.
         """
-
         url = self.demonstration
 
         if not url:
@@ -104,14 +105,15 @@ class Exercise(models.Model):
         return m.group(1)
 
     def get_yt_explan_id(self):
-        """Returns the 11-character video ID from a link of one of these styles:
+        """Returns the 11-character video ID from a YouTube link.
+
+        The link should be of one of these styles:
             - youtu.be/###########
             - youtube.com/watch?v=###########
             - youtube.com/watch?v=###########&list=...
 
         Returns `None` if there is no explanation URL in the database.
         """
-
         url = self.explanation
 
         if not url:

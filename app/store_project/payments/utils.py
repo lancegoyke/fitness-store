@@ -16,8 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def int_to_price(price: int) -> str:
-    """Takes an int representing price in cents and returns a string
-    representing a dollar amount with two decimal places."""
+    """Turns int of cents into string of dollars and cents."""
     return f"{float(price / 100):.2f}"
 
 
@@ -56,9 +55,7 @@ def order_confirmation_email(
 
 
 def stripe_customer_get_or_create(user: User) -> stripe.Customer:
-    """
-    A customer might be in our Django database, but not in Stripe.
-    """
+    """A customer might be in our Django database, but not in Stripe."""
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
     if user.stripe_customer_id:
@@ -81,10 +78,7 @@ def stripe_customer_get_or_create(user: User) -> stripe.Customer:
 
 
 def stripe_price_get_or_create(product: Product) -> str:
-    """
-    Because sometimes the Django Postgres database is not synced with the Products
-    and Prices in Stripe.
-    """
+    """Helps sync Django database with the Products and Prices in Stripe."""
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
     try:

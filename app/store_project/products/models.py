@@ -98,9 +98,7 @@ class Product(LifecycleModelMixin, models.Model):
 
     @hook(BEFORE_CREATE)
     def add_product_to_stripe(self):
-        """
-        Send basic product info to Stripe account.
-        """
+        """Send basic product info to Stripe account."""
         stripe.api_key = settings.STRIPE_SECRET_KEY
         product = stripe.Product.create(
             id=self.id,
@@ -120,9 +118,7 @@ class Product(LifecycleModelMixin, models.Model):
     @hook(AFTER_UPDATE, when="name", has_changed=True)
     @hook(AFTER_UPDATE, when="description", has_changed=True)
     def update_product_in_stripe(self):
-        """
-        Update changed product info in Stripe.
-        """
+        """Update changed product info in Stripe."""
         stripe.api_key = settings.STRIPE_SECRET_KEY
         try:
             stripe.Product.modify(
@@ -176,9 +172,9 @@ class Product(LifecycleModelMixin, models.Model):
 
     @hook(BEFORE_DELETE)
     def delete_product_and_price_in_stripe(self):
-        """
-        Mark Product and Price as inactive in Stripe. Keeping the item around
-        in case it is needed in the future.
+        """Mark Product and Price as inactive in Stripe.
+
+        Keeps the item around in case it is needed in the future.
         """
         stripe.api_key = settings.STRIPE_SECRET_KEY
         try:
@@ -194,8 +190,10 @@ class Product(LifecycleModelMixin, models.Model):
 
 
 class Program(Product):
-    """A model for creating new programs. Extend Product model base
-    functionality."""
+    """A model for creating new programs.
+
+    Extend Product model base functionality.
+    """
 
     # equipment = models.ManyToManyField(Equipment, verbose_name=_("Required equipment"))  # noqa: E501
     duration = models.IntegerField(
@@ -230,9 +228,9 @@ class Program(Product):
 
     @hook(AFTER_CREATE)
     def add_program_permission(self):
-        """
-        Create a permission for users who have access to this program and add it
-        to the "comped" group.
+        """Create a permission for users who have access to this program.
+
+        Also adds the permission to the "comped" group.
         """
         permission = Permission.objects.create(
             codename=f"can_view_{self.slug}",
@@ -246,9 +244,7 @@ class Program(Product):
 
     @hook(BEFORE_DELETE)
     def remove_program_permission(self):
-        """
-        Remove the can_view_{program.slug} permission for associated program.
-        """
+        """Remove the can_view_{program.slug} permission for associated program."""
         permission = Permission.objects.get(
             codename=f"can_view_{self.slug}",
             name=f"Can view {self.name}",
@@ -276,9 +272,9 @@ class Book(Product):
 
     @hook(AFTER_CREATE)
     def add_book_permission(self):
-        """
-        Create a permission for users who have access to this book and add it
-        to the "comped" group.
+        """Create a permission for users who have access to this book.
+
+        Also adds the permission to the "comped" group.
         """
         permission = Permission.objects.create(
             codename=f"can_view_{self.slug}",
@@ -292,9 +288,7 @@ class Book(Product):
 
     @hook(BEFORE_DELETE)
     def remove_book_permission(self):
-        """
-        Remove the can_view_{book.slug} permission for associated book.
-        """
+        """Remove the can_view_{book.slug} permission for associated book."""
         permission = Permission.objects.get(
             codename=f"can_view_{self.slug}",
             name=f"Can view {self.name}",
