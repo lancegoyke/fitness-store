@@ -31,10 +31,10 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-klanmxuengq839ng")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = int(os.environ.get("DEBUG", default=0))
 
-CORS_ALLOWED_ORIGINS = [
-    i
-    for i in os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:8000").split(" ")
-]
+CORS_ALLOWED_ORIGINS = list(
+    os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:8000").split(" ")
+)
+
 ATOMIC_REQUESTS = True
 
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost:8000").split(" ")
