@@ -4,7 +4,7 @@ from .models import Alternative, Category, Exercise
 
 
 class AlternativeInline(admin.TabularInline):
-    """Tabular Inline View for Alternative"""
+    """Tabular Inline View for Alternative."""
 
     model = Alternative
     extra = 1

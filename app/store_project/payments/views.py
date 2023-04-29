@@ -54,7 +54,8 @@ def stripe_config(request):
 @login_required
 @require_GET
 def create_checkout_session(request):
-    """
+    """Checkout Session from Stripe API.
+
     A Checkout Session is the programmatic representation of what your
     customer sees when they’re redirected to the payment form.
     Src: https://stripe.com/docs/payments/checkout/accept-a-payment#create-a-checkout-session  # noqa: E501
