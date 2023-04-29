@@ -19,7 +19,7 @@
   {% for program in programs %}
   <li class="card-box card-stack">
     <div class="frame landscape">
-      
+
       {% if program.featured_image %}
         <img src="{{ program.featured_image.url }}" alt="{{ program.name }}" />
       {% else %}
@@ -42,7 +42,7 @@
     </div>
     <div class="box space-between">
       <div class="small">
-        
+
         {% with "products.can_view_"|concat:program.slug as can_view_program %}
           {% if can_view_program in perms %}
             <span class="tag">Owned</span>

@@ -26,7 +26,7 @@
   {% for test in tests %}
   <li class="card-box card-stack">
     <div class="frame landscape">
-      
+
       {% if test.video %}
         {% video test.video as vid %}
         <img src="{{ vid.thumbnail }}" alt="{{ test.name }} video instructions" />

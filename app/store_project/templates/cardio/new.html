@@ -23,7 +23,7 @@
 
       {% if num_of_rounds == 0 %}
       <p>
-        {% trans "Go as far as you can in" %} {{ time_under_duress }} {% trans "minute" %}{{ time_under_duress|pluralize }}        
+        {% trans "Go as far as you can in" %} {{ time_under_duress }} {% trans "minute" %}{{ time_under_duress|pluralize }}
       </p>
       {% else %}
       <p>
@@ -72,7 +72,7 @@
         <p>
           {{ form.non_field_errors }}
         </p>
-      
+
         <p>
           <label class="stack" for="{{ form.mode.id_for_label }}">
             <span>{% trans "Exercise" %}</span>

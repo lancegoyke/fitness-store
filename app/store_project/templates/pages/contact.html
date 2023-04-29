@@ -1,4 +1,4 @@
-{% extends '_base.html' %} 
+{% extends '_base.html' %}
 
 {% load i18n %}
 
@@ -9,16 +9,16 @@
 <div class="stack-auth-form">
   <form class="max-width:measure" method="POST">
     {% csrf_token %}
-    
+
     <div class="messages">
       {{ form.non_field_errors}}
     </div>
-  
+
     <p>
       <label class="stack" for="{{ form.subject.id_for_label }}">
         <span>{% trans "Subject" %}</span>
         {{ form.subject }}
-        
+
         {% if form.subject.errors %}
           <ul class="errorlist">
           {% for error in form.subject.errors %}
@@ -46,7 +46,7 @@
       <label class="stack" for="{{ form.message.id_for_label }}">
         <span>{% trans "Message" %}</span>
         {{ form.message }}
-        
+
         {% if form.message.errors %}
           <ul class="errorlist">
           {% for error in form.message.errors %}
@@ -54,10 +54,10 @@
           {% endfor %}
           </ul>
         {% endif %}
-          
+
       </label>
     </p>
-  
+
     <div class="g-recaptcha" data-sitekey="{{ G_RECAPTCHA_SITE_KEY }}"></div>
 
     <button class="button g-recaptcha" type="submit">{% trans "Send Message" %}</button>

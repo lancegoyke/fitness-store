@@ -22,7 +22,7 @@
   <h2 class="text-center font-size:smallish">Sign up with email</h2>
   <form class="login center" id="email-form" method="POST" action="{% url 'account_signup' %}">
     {% csrf_token %}
-    
+
     <p>
       {{ form.non_field_errors }}
     </p>
