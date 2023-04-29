@@ -67,9 +67,7 @@ class Product(LifecycleModelMixin, models.Model):
         unique=True,
         max_length=settings.PRODUCT_NAME_MAX_LENGTH,
     )
-    description = models.CharField(
-        _("Short description of product"), max_length=255
-    )
+    description = models.CharField(_("Short description of product"), max_length=255)
     price = models.DecimalField(_("Price"), default=0, max_digits=10, decimal_places=2)
     stripe_price_id = models.CharField(_("Stripe Price ID"), max_length=100, blank=True)
     views = models.PositiveIntegerField(_("Number of times viewed"), default=0)
@@ -192,7 +190,9 @@ class Product(LifecycleModelMixin, models.Model):
             logger.info(f"Price {price} has been marked inactive in Stripe.")
         except stripe.error.InvalidRequestError as e:
             logger.error(f"ERROR: {e}")
-            logger.error("ERROR: Product and Price could not be marked inactive in Stripe.")
+            logger.error(
+                "ERROR: Product and Price could not be marked inactive in Stripe."
+            )
 
 
 class Program(Product):
@@ -219,7 +219,7 @@ class Program(Product):
         _("File containing program"),
         upload_to="products/programs/",
         null=True,
-        blank=True
+        blank=True,
     )
 
     def get_absolute_url(self):
@@ -263,12 +263,18 @@ class Book(Product):
     """A model for digital books. Extend Product model base functionality."""
 
     # self.name will contain title and subtitle
-    pdf = models.FileField(_("PDF"), upload_to="products/books/pdf/", max_length=100, blank=True)
-    epub = models.FileField(_("EPUB"), upload_to="products/books/epub/", max_length=100, blank=True)
-    mobi = models.FileField(_("MOBI"), upload_to="products/books/mobi/", max_length=100, blank=True)
+    pdf = models.FileField(
+        _("PDF"), upload_to="products/books/pdf/", max_length=100, blank=True
+    )
+    epub = models.FileField(
+        _("EPUB"), upload_to="products/books/epub/", max_length=100, blank=True
+    )
+    mobi = models.FileField(
+        _("MOBI"), upload_to="products/books/mobi/", max_length=100, blank=True
+    )
 
     def get_absolute_url(self):
-        return reverse('products:book_detail', kwargs={"slug": self.slug})
+        return reverse("products:book_detail", kwargs={"slug": self.slug})
 
     @hook(AFTER_CREATE)
     def add_book_permission(self):

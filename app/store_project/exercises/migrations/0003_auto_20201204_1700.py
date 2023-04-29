@@ -5,28 +5,43 @@ import uuid
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('exercises', '0002_auto_20201204_1648'),
+        ("exercises", "0002_auto_20201204_1648"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='Category',
+            name="Category",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False, verbose_name='Category ID')),
-                ('name', models.CharField(max_length=30, verbose_name='Category name')),
-                ('slug', models.SlugField(default='', unique=True, verbose_name='Slug for category')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="Category ID",
+                    ),
+                ),
+                ("name", models.CharField(max_length=30, verbose_name="Category name")),
+                (
+                    "slug",
+                    models.SlugField(
+                        default="", unique=True, verbose_name="Slug for category"
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'Category',
-                'verbose_name_plural': 'Categories',
-                'ordering': ['name'],
+                "verbose_name": "Category",
+                "verbose_name_plural": "Categories",
+                "ordering": ["name"],
             },
         ),
         migrations.AddField(
-            model_name='exercise',
-            name='category',
-            field=models.ManyToManyField(blank=True, to='exercises.Category', verbose_name='Exercise category'),
+            model_name="exercise",
+            name="category",
+            field=models.ManyToManyField(
+                blank=True, to="exercises.Category", verbose_name="Exercise category"
+            ),
         ),
     ]

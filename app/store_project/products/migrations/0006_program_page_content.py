@@ -5,15 +5,16 @@ import markdownx.models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('products', '0005_program_featured_image'),
+        ("products", "0005_program_featured_image"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='program',
-            name='page_content',
-            field=markdownx.models.MarkdownxField(default='', verbose_name='Page content, in markdown'),
+            model_name="program",
+            name="page_content",
+            field=markdownx.models.MarkdownxField(
+                default="", verbose_name="Page content, in markdown"
+            ),
         ),
     ]

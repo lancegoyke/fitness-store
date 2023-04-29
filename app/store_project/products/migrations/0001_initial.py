@@ -5,27 +5,71 @@ import uuid
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
-    dependencies = [
-    ]
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
-            name='Program',
+            name="Program",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('name', models.CharField(max_length=80, verbose_name='Name of product')),
-                ('slug', models.SlugField(default='', max_length=80, verbose_name='Slug for product')),
-                ('description', models.CharField(blank=True, max_length=255, verbose_name='Short description of product')),
-                ('views', models.PositiveIntegerField(default=0, verbose_name='Number of times viewed')),
-                ('created', models.DateTimeField(auto_now_add=True, verbose_name='Time created')),
-                ('modified', models.DateTimeField(auto_now=True, verbose_name='Time last modified')),
-                ('program_file', models.FileField(blank=True, null=True, upload_to='', verbose_name='File containing program')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                (
+                    "name",
+                    models.CharField(max_length=80, verbose_name="Name of product"),
+                ),
+                (
+                    "slug",
+                    models.SlugField(
+                        default="", max_length=80, verbose_name="Slug for product"
+                    ),
+                ),
+                (
+                    "description",
+                    models.CharField(
+                        blank=True,
+                        max_length=255,
+                        verbose_name="Short description of product",
+                    ),
+                ),
+                (
+                    "views",
+                    models.PositiveIntegerField(
+                        default=0, verbose_name="Number of times viewed"
+                    ),
+                ),
+                (
+                    "created",
+                    models.DateTimeField(
+                        auto_now_add=True, verbose_name="Time created"
+                    ),
+                ),
+                (
+                    "modified",
+                    models.DateTimeField(
+                        auto_now=True, verbose_name="Time last modified"
+                    ),
+                ),
+                (
+                    "program_file",
+                    models.FileField(
+                        blank=True,
+                        null=True,
+                        upload_to="",
+                        verbose_name="File containing program",
+                    ),
+                ),
             ],
             options={
-                'abstract': False,
+                "abstract": False,
             },
         ),
     ]

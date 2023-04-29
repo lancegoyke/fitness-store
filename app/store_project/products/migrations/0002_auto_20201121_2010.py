@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('products', '0001_squashed_0011_program_stripe_price_id'),
+        ("products", "0001_squashed_0011_program_stripe_price_id"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='program',
-            name='categories',
-            field=models.ManyToManyField(blank=True, to='products.Category'),
+            model_name="program",
+            name="categories",
+            field=models.ManyToManyField(blank=True, to="products.Category"),
         ),
     ]

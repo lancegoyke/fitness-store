@@ -26,7 +26,6 @@ user_profile_view = UserProfileView.as_view()
 
 
 class UserUpdateView(LoginRequiredMixin, UpdateView):
-
     model = User
     fields = [
         "name",
