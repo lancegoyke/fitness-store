@@ -34,3 +34,4 @@ repos:
           - flake8-no-pep420==2.4.0
           - flake8-breakpoint==1.1.0
           - flake8-docstrings==1.7.0
+          - flake8-comprehensions==3.12.0
