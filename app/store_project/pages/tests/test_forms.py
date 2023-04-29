@@ -1,7 +1,5 @@
 import pytest
-
 from store_project.pages.forms import ContactForm
-
 
 pytestmark = pytest.mark.django_db
 

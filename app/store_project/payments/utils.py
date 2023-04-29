@@ -1,5 +1,7 @@
 import logging
 
+import botocore
+import stripe
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.sites.models import Site
@@ -7,12 +9,7 @@ from django.core.mail import send_mail
 from django.http.response import HttpResponse
 from django.template.loader import render_to_string
 from django.urls import reverse
-
-import botocore
-import stripe
-
 from store_project.products.models import Product
-
 
 User = get_user_model()
 logger = logging.getLogger(__name__)

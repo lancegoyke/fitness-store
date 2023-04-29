@@ -4,7 +4,6 @@ and send them to heroku through the Heroku CLI.
 """
 import subprocess
 
-
 with open(".env.prod", "r") as env_file:
     for line in env_file:
         key, value = line.split("=")

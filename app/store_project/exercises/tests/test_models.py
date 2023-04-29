@@ -1,10 +1,6 @@
 import pytest
-
+from store_project.exercises.factories import AlternativeFactory, ExerciseFactory
 from store_project.exercises.models import Category, Exercise
-from store_project.exercises.factories import (
-    AlternativeFactory,
-    ExerciseFactory,
-)
 
 pytestmark = pytest.mark.django_db
 

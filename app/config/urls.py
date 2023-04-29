@@ -1,15 +1,13 @@
+from config.sitemaps import StaticViewSitemap
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.contrib.sitemaps.views import sitemap
-from django.urls import path, include
+from django.urls import include, path
 from django.views.decorators.csrf import csrf_exempt
-
-from config.sitemaps import StaticViewSitemap
 from store_project.exercises.sitemaps import ExerciseSitemap
 from store_project.pages.sitemaps import PageSitemap
 from store_project.products.sitemaps import BookSitemap, ProgramSitemap
-
 
 sitemaps = {
     "books": BookSitemap,

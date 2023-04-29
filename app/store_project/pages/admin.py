@@ -1,10 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth import get_user_model
-
 from markdownx.admin import MarkdownxModelAdmin
 
 from .models import Page
-
 
 User = get_user_model()
 

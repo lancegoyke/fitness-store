@@ -1,6 +1,5 @@
-from django.contrib.auth.hashers import make_password
-
 import factory
+from django.contrib.auth.hashers import make_password
 from factory.django import DjangoModelFactory
 
 from .models import User

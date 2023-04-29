@@ -1,7 +1,5 @@
 import pytest
-
 from django.urls import resolve, reverse
-
 from store_project.products.models import Book, Program
 
 pytestmark = pytest.mark.django_db
