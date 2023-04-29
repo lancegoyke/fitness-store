@@ -7,6 +7,7 @@ from store_project.pages.views import (
     SinglePageView,
     robots_txt,
     contact_view,
+    timer_view,
 )
 
 
@@ -22,6 +23,7 @@ urlpatterns = [
         cache_page(settings.DEFAULT_CACHE_TIMEOUT)(contact_view),
         name="contact"
     ),
+    path("timer/", timer_view, name="timer"),
     path("robots.txt", robots_txt, name="robots_txt"),
     path(
         "<str:slug>/",

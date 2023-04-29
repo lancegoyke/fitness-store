@@ -2,7 +2,9 @@ version: "3.9"
 
 services:
   web:
-    build: ./app
+    build:
+      context: ./app
+      dockerfile: Dockerfile
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - ./app/:/usr/src/app/

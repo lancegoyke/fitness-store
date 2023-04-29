@@ -75,6 +75,10 @@ def contact_view(request):
     return render(request, "pages/contact.html", {"form": form, "G_RECAPTCHA_SITE_KEY": G_RECAPTCHA_SITE_KEY})
 
 
+def timer_view(request):
+    return render(request, "pages/timer.html", {})
+
+
 @require_GET
 def robots_txt(request):
     lines = [
