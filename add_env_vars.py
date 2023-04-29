@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""This script is meant to pull all the environment variables in `.env.prod`
-and send them to heroku through the Heroku CLI.
-"""
+"""Send `.env.prod` to Heroku through the Heroku CLI."""
+
 import subprocess
 
 with open(".env.prod", "r") as env_file:

@@ -4,8 +4,9 @@ from django.template.loader import render_to_string
 
 
 def send_contact_emails(message_subject: str, message: str, user_email: str) -> None:
-    """
-    Takes the fields from a user-submitted form and sends two emails:
+    """Takes the fields from a user-submitted form and sends two emails.
+
+    The two emails are:
         1. A confirmation email to the user submitting the form.
         2. A notification email to the DEFAULT_FROM_EMAIL located in settings.
     """
