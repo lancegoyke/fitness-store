@@ -29,3 +29,5 @@ gunicorn
 django-ses[bounce]
 django-admin-honeypot
 sentry-sdk
+ipython
+ipdb
