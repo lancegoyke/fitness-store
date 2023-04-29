@@ -4,7 +4,6 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import DetailView, UpdateView
-
 from store_project.products.models import Book, Program
 
 User = get_user_model()

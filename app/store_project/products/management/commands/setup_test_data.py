@@ -1,13 +1,11 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
-
 from store_project.pages.factories import PageFactory
 from store_project.pages.models import Page
 from store_project.products.factories import ProgramFactory
 from store_project.products.models import Program
+from store_project.users.factories import SuperAdminFactory, UserFactory
 from store_project.users.models import User
-from store_project.users.factories import UserFactory, SuperAdminFactory
-
 
 NUM_PROGRAMS = 35
 NUM_USERS = 10

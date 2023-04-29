@@ -1,15 +1,13 @@
 from django.conf import settings
 from django.urls import path
 from django.views.decorators.cache import cache_page
-
 from store_project.pages.views import (
     HomePageView,
     SinglePageView,
-    robots_txt,
     contact_view,
+    robots_txt,
     timer_view,
 )
-
 
 app_name = "pages"
 urlpatterns = [

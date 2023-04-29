@@ -1,12 +1,10 @@
-from http import HTTPStatus
 import os
+from http import HTTPStatus
+
 import pytest
-
 from django.test import Client, RequestFactory, TestCase
-
 from store_project.pages.factories import PageFactory
 from store_project.pages.views import HomePageView, SinglePageView
-
 
 pytestmark = pytest.mark.django_db
 

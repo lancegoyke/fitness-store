@@ -1,5 +1,4 @@
 from django.contrib.sitemaps import Sitemap
-
 from store_project.exercises.models import Exercise
 
 

@@ -1,9 +1,6 @@
 import pytest
-
-from django.urls import reverse, resolve
-
+from django.urls import resolve, reverse
 from store_project.pages.models import Page
-
 
 pytestmark = pytest.mark.django_db
 

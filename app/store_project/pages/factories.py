@@ -1,9 +1,8 @@
-from django.utils.text import slugify
-
 import factory
+from django.utils.text import slugify
 from factory.django import DjangoModelFactory
-
 from store_project.users.factories import SuperAdminFactory
+
 from .models import Page
 
 

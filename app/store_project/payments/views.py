@@ -2,12 +2,13 @@ import logging
 import os
 import smtplib
 
+import stripe
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.auth.decorators import login_required
 from django.http.response import HttpResponse, JsonResponse
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -15,9 +16,6 @@ from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 from django.views.generic.base import TemplateView
-
-import stripe
-
 from store_project.payments.utils import (
     int_to_price,
     order_confirmation_email,
@@ -26,7 +24,6 @@ from store_project.payments.utils import (
 )
 from store_project.products.models import Book, Category, Program
 from store_project.users.factories import UserFactory
-
 
 User = get_user_model()
 logger = logging.getLogger(__name__)

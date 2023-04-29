@@ -1,5 +1,6 @@
 import os
 
+import requests
 from django.contrib import messages
 from django.core.mail import BadHeaderError
 from django.http import HttpResponse
@@ -7,10 +8,7 @@ from django.shortcuts import render
 from django.views.decorators.http import require_GET
 from django.views.generic.base import TemplateView
 from django.views.generic.detail import DetailView
-
 from markdownx.utils import markdownify
-import requests
-
 from store_project.notifications.emails import send_contact_emails
 from store_project.pages.forms import ContactForm
 from store_project.pages.models import Page

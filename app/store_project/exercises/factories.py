@@ -1,6 +1,5 @@
-from django.utils.text import slugify
-
 import factory
+from django.utils.text import slugify
 from factory.django import DjangoModelFactory
 
 from .models import Alternative, Category, Exercise

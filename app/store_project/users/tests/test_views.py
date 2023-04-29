@@ -1,14 +1,9 @@
 import pytest
-
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
-
-from store_project.users.models import User
 from store_project.users.factories import UserFactory
-from store_project.users.views import (
-    UserUpdateView,
-    user_profile_view,
-)
+from store_project.users.models import User
+from store_project.users.views import UserUpdateView, user_profile_view
 
 pytestmark = pytest.mark.django_db
 

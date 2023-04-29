@@ -1,6 +1,7 @@
 import logging
 import uuid
 
+import stripe
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
@@ -9,19 +10,16 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-
 from django_lifecycle import (
-    BEFORE_CREATE,
     AFTER_CREATE,
+    AFTER_UPDATE,
+    BEFORE_CREATE,
     BEFORE_DELETE,
     BEFORE_UPDATE,
-    AFTER_UPDATE,
-    hook,
     LifecycleModelMixin,
+    hook,
 )
 from markdownx.models import MarkdownxField
-import stripe
-
 
 User = get_user_model()
 logger = logging.getLogger(__name__)

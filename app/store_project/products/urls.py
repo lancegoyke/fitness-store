@@ -3,11 +3,10 @@ from django.urls import path
 from .views import (
     BookDetailView,
     BookListView,
-    StoreView,
     ProgramDetailView,
     ProgramListView,
+    StoreView,
 )
-
 
 app_name = "products"
 urlpatterns = [
