@@ -31,3 +31,5 @@ django-admin-honeypot
 sentry-sdk
 ipython
 ipdb
+pywatchman
+django-browser-reload

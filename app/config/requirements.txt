@@ -66,6 +66,7 @@ django==4.1.7
     #   -r requirements.in
     #   dj-database-url
     #   django-allauth
+    #   django-browser-reload
     #   django-clearcache
     #   django-cors-headers
     #   django-debug-toolbar
@@ -78,6 +79,8 @@ django==4.1.7
 django-admin-honeypot==1.1.0
     # via -r requirements.in
 django-allauth==0.54.0
+    # via -r requirements.in
+django-browser-reload==1.8.0
     # via -r requirements.in
 django-clearcache==1.2.1
     # via -r requirements.in
@@ -223,6 +226,8 @@ python3-openid==3.2.0
     # via django-allauth
 pytz==2023.3
     # via django-ses
+pywatchman==1.4.1
+    # via -r requirements.in
 redis==4.5.4
     # via django-redis
 requests==2.29.0
