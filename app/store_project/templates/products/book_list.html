@@ -19,7 +19,7 @@
   {% for book in books %}
   <li class="card-box card-stack">
     <div class="frame landscape">
-      
+
       {% if book.featured_image %}
         <img src="{{ book.featured_image.url }}" alt="{{ book.name }}" />
       {% else %}
@@ -42,7 +42,7 @@
     </div>
     <div class="box space-between">
       <div class="small">
-        
+
         {% with "products.can_view_"|concat:book.slug as can_view_book %}
           {% if can_view_book in perms %}
             <span class="tag">Owned</span>

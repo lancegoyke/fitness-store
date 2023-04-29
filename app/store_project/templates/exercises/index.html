@@ -41,7 +41,7 @@
     hx-include="#category"
     placeholder="Search"
   >
-  <input 
+  <input
     id="category"
     type="hidden"
     name="category"
@@ -76,7 +76,7 @@
   document.addEventListener("keyup", e => {
     if (e.key !== "/" || e.ctrlKey || e.metaKey) return;
     if (/^(?:input|textarea|select|button)$/i.test(e.target.tagName)) return;
-  
+
     e.preventDefault();
     document.getElementById("search").focus();
   });

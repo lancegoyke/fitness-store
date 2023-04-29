@@ -54,7 +54,7 @@
             <div class="money">${{ book.price|floatformat }}</div>
             <div class="tag duration">{{ book.duration }} weeks</div>
             <div class="tag frequency">{{ book.frequency }} days/wk</div>
-            
+
             {% if book.status == "pr" %}
               <div class="tag private">PRIVATE</div>
             {% endif %}
@@ -62,7 +62,7 @@
             {% if book.status == "dr" %}
               <div class="tag draft">DRAFT</div>
             {% endif %}
-              
+
           </div>
         </div>
       </div>

@@ -318,7 +318,7 @@ a:active {
   line-height: unset;
 }
 
-/* 
+/*
     THE STACK
 
     Description: use with modular scale system for consistent appearance
@@ -586,7 +586,7 @@ a.box.login:active {
 
     Usage: see above
 
-    Adapted from: 
+    Adapted from:
     * https://inclusive-components.design/cards/
     * https://every-layout.dev/layouts/box/
 */
@@ -857,11 +857,11 @@ a.box.login:active {
 
     Description: Sidebar has suggested width, main content adapts width until
     it becomes too thin to tolerate.
-    
-    Usage: div.with-sidebar, intemediary wrapper, then side bar and non-sidebar 
+
+    Usage: div.with-sidebar, intemediary wrapper, then side bar and non-sidebar
     as children
 
-    Ex: 
+    Ex:
     <div class="with-sidebar">
       <div> <!-- intermediary wrapper -->
         <div><!-- sidebar --></div>
@@ -895,7 +895,7 @@ a.box.login:active {
     THE SWITCHER
 
     Description: switch between horizontal and vertical layouts
-    
+
     Usage: use intermediary wrapper between div.product-switcher and child elements
 
     Ex:
@@ -1089,7 +1089,7 @@ ul.grid {
 
     Description: proper sizing and spacing for icons
 
-    Usage: 
+    Usage:
     <span class="with-icon">
       <svg class="icon">
         <use href="/path/to/icons.svg#my-icon"></use>

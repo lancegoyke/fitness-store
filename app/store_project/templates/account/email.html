@@ -45,10 +45,10 @@
 
   <div class="stack-auth-form">
     <h2 class="text-center font-size:smallish">{% trans "Add E-mail Address" %}</h2>
-  
+
     <form class="add_email" method="post" action="{% url 'account_email' %}">
         {% csrf_token %}
-        
+
         <p>
           <label class="stack" for="{{ form.email.id_for_label }}">
             <span>Email</span>
@@ -56,7 +56,7 @@
             {{ form.email.errors }}
           </label>
         </p>
-  
+
         <button class="button" name="action_add" type="submit">{% trans "Add E-mail" %}</button>
     </form>
   </div>

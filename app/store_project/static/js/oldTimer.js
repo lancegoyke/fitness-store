@@ -64,7 +64,7 @@ function createProgressBars(rounds, workDuration, restDuration) {
   const elapsedBar = document.createElement('div');
   elapsedBar.className = 'progress-bar progress-bar-elapsed';
   elapsedBar.style.width = '0%';
-  
+
 }
 
 function startTimer() {

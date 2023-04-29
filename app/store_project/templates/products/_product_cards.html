@@ -4,7 +4,7 @@
   {% for product in products %}
   <li class="card-box card-stack">
     <div class="frame landscape">
-      
+
       {% if product.featured_image %}
         <img src="{{ product.featured_image.url }}" alt="{{ product.name }}" />
       {% else %}
@@ -27,7 +27,7 @@
     </div>
     <div class="box space-between">
       <div class="small">
-        
+
         {% with "products.can_view_"|concat:product.slug as can_view_product %}
           {% if can_view_product in perms %}
             <span class="tag">Owned</span>

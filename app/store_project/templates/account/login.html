@@ -27,7 +27,7 @@
       Sign in with Google
     </h2>
   </a>
-  
+
   <div class="or-separator">
     <div></div>
     <i>or</i>
@@ -38,7 +38,7 @@
     <h2 class="text-center font-size:smallish">Sign in with email</h2>
     <form class="login center" id="email-form" method="POST" action="{% url 'account_login' %}">
       {% csrf_token %}
-      
+
       <div class="messages">
         {{ form.non_field_errors }}
       </div>
