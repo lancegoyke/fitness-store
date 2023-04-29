@@ -1,5 +1,6 @@
 from django.contrib.sitemaps import Sitemap
-from store_project.products.models import Book, Program
+from store_project.products.models import Book
+from store_project.products.models import Program
 
 
 class BookSitemap(Sitemap):

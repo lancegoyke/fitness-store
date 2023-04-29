@@ -4,21 +4,20 @@ import uuid
 import stripe
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group, Permission
+from django.contrib.auth.models import Group
+from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from django_lifecycle import (
-    AFTER_CREATE,
-    AFTER_UPDATE,
-    BEFORE_CREATE,
-    BEFORE_DELETE,
-    BEFORE_UPDATE,
-    LifecycleModelMixin,
-    hook,
-)
+from django_lifecycle import AFTER_CREATE
+from django_lifecycle import AFTER_UPDATE
+from django_lifecycle import BEFORE_CREATE
+from django_lifecycle import BEFORE_DELETE
+from django_lifecycle import BEFORE_UPDATE
+from django_lifecycle import LifecycleModelMixin
+from django_lifecycle import hook
 from markdownx.models import MarkdownxField
 
 User = get_user_model()

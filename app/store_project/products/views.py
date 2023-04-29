@@ -3,7 +3,8 @@ from django.views.generic.detail import DetailView
 from django.views.generic.list import ListView
 from markdownx.utils import markdownify
 
-from .models import Book, Program
+from .models import Book
+from .models import Program
 
 
 class StoreView(TemplateView):

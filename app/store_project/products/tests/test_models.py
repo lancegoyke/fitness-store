@@ -1,7 +1,10 @@
 import pytest
 from django.contrib.auth.models import Permission
-from store_project.products.factories import BookFactory, ProgramFactory
-from store_project.products.models import Book, Product, Program
+from store_project.products.factories import BookFactory
+from store_project.products.factories import ProgramFactory
+from store_project.products.models import Book
+from store_project.products.models import Product
+from store_project.products.models import Program
 
 pytestmark = pytest.mark.django_db
 

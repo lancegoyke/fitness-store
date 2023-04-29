@@ -3,11 +3,13 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.contrib.sitemaps.views import sitemap
-from django.urls import include, path
+from django.urls import include
+from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 from store_project.exercises.sitemaps import ExerciseSitemap
 from store_project.pages.sitemaps import PageSitemap
-from store_project.products.sitemaps import BookSitemap, ProgramSitemap
+from store_project.products.sitemaps import BookSitemap
+from store_project.products.sitemaps import ProgramSitemap
 
 sitemaps = {
     "books": BookSitemap,

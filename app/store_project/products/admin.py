@@ -1,7 +1,10 @@
-from django.contrib import admin, messages
+from django.contrib import admin
+from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.utils.translation import ngettext
-from store_project.products.models import Book, Category, Program
+from store_project.products.models import Book
+from store_project.products.models import Category
+from store_project.products.models import Program
 
 User = get_user_model()
 

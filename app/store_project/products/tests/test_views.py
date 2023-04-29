@@ -2,14 +2,13 @@ import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
 from django.urls import reverse
-from store_project.products.models import Book, Program
-from store_project.products.views import (
-    BookDetailView,
-    BookListView,
-    ProgramDetailView,
-    ProgramListView,
-    StoreView,
-)
+from store_project.products.models import Book
+from store_project.products.models import Program
+from store_project.products.views import BookDetailView
+from store_project.products.views import BookListView
+from store_project.products.views import ProgramDetailView
+from store_project.products.views import ProgramListView
+from store_project.products.views import StoreView
 from store_project.users.models import User
 
 pytestmark = pytest.mark.django_db

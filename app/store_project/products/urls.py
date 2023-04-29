@@ -1,12 +1,10 @@
 from django.urls import path
 
-from .views import (
-    BookDetailView,
-    BookListView,
-    ProgramDetailView,
-    ProgramListView,
-    StoreView,
-)
+from .views import BookDetailView
+from .views import BookListView
+from .views import ProgramDetailView
+from .views import ProgramListView
+from .views import StoreView
 
 app_name = "products"
 urlpatterns = [

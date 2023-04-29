@@ -4,7 +4,8 @@ from store_project.pages.factories import PageFactory
 from store_project.pages.models import Page
 from store_project.products.factories import ProgramFactory
 from store_project.products.models import Program
-from store_project.users.factories import SuperAdminFactory, UserFactory
+from store_project.users.factories import SuperAdminFactory
+from store_project.users.factories import UserFactory
 from store_project.users.models import User
 
 NUM_PROGRAMS = 35

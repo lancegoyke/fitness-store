@@ -1,6 +1,8 @@
 from django.contrib import admin
 
-from .models import Alternative, Category, Exercise
+from .models import Alternative
+from .models import Category
+from .models import Exercise
 
 
 class AlternativeInline(admin.TabularInline):

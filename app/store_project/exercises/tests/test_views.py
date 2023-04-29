@@ -4,7 +4,8 @@ from django.test import RequestFactory
 from django.urls import reverse
 from store_project.exercises.factories import ExerciseFactory
 from store_project.exercises.models import Exercise
-from store_project.exercises.views import ExerciseDetailView, ExerciseListView
+from store_project.exercises.views import ExerciseDetailView
+from store_project.exercises.views import ExerciseListView
 from store_project.users.models import User
 
 pytestmark = pytest.mark.django_db

@@ -1,7 +1,9 @@
 import pytest
 from django.contrib.messages import get_messages
-from django.http import HttpResponseRedirect, JsonResponse
-from django.test import Client, RequestFactory
+from django.http import HttpResponseRedirect
+from django.http import JsonResponse
+from django.test import Client
+from django.test import RequestFactory
 from store_project.payments import views
 from store_project.products.models import Program
 from store_project.users.models import User

@@ -1,10 +1,8 @@
 from django.urls import path
-from store_project.exercises.views import (
-    ExerciseDetailView,
-    ExerciseFilteredListView,
-    ExerciseListView,
-    search,
-)
+from store_project.exercises.views import ExerciseDetailView
+from store_project.exercises.views import ExerciseFilteredListView
+from store_project.exercises.views import ExerciseListView
+from store_project.exercises.views import search
 
 app_name = "exercises"
 urlpatterns = [

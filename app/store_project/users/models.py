@@ -1,7 +1,8 @@
 import uuid
 
 from django.contrib.auth.models import AbstractUser
-from django.db.models import CharField, UUIDField
+from django.db.models import CharField
+from django.db.models import UUIDField
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 

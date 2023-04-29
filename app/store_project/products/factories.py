@@ -5,7 +5,9 @@ from django.utils.text import slugify
 from factory.django import DjangoModelFactory
 from store_project.users.factories import SuperAdminFactory
 
-from .models import Book, Product, Program
+from .models import Book
+from .models import Product
+from .models import Program
 
 
 class BookFactory(DjangoModelFactory):
