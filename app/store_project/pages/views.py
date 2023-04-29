@@ -55,12 +55,12 @@ def contact_view(request):
                     send_contact_emails(subject, message, user_email)
                     messages.success(
                         request,
-                        "Your message was sent! Thanks for the feedback. We emailed you a copy for your records. If needed, someone from our team will reach out to you.",
+                        "Your message was sent! Thanks for the feedback. We emailed you a copy for your records. If needed, someone from our team will reach out to you.",  # noqa: E501
                     )
                 except BadHeaderError:
                     messages.error(
                         request,
-                        "The server couldn't send the email because it found an invalid header.",
+                        "The server couldn't send the email because it found an invalid header.",  # noqa: E501
                     )
             elif g_recaptcha_response["error-codes"]:
                 for error in g_recaptcha_response["error-codes"]:
@@ -70,7 +70,7 @@ def contact_view(request):
             else:
                 messages.error(
                     request,
-                    "Google reCAPTCHA said you were a bot! If you're not, maybe try again? Or email me directly: lance [at] lancegoyke [dot] com",
+                    "Google reCAPTCHA said you were a bot! If you're not, maybe try again? Or email me directly: lance [at] lancegoyke [dot] com",  # noqa: E501
                 )
         else:
             messages.error(

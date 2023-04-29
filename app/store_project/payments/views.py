@@ -57,7 +57,7 @@ def create_checkout_session(request):
     """
     A Checkout Session is the programmatic representation of what your
     customer sees when they’re redirected to the payment form.
-    Src: https://stripe.com/docs/payments/checkout/accept-a-payment#create-a-checkout-session
+    Src: https://stripe.com/docs/payments/checkout/accept-a-payment#create-a-checkout-session  # noqa: E501
     """
     domain_url = settings.DOMAIN_URL
     stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -204,7 +204,7 @@ def stripe_webhook(request):
             )
         user.user_permissions.add(permission)
         print(
-            f'[payments.views.stripe_webhook] Permission "{permission.name}" given to {user.email}'
+            f'[payments.views.stripe_webhook] Permission "{permission.name}" given to {user.email}'  # noqa: E501
         )
 
         try:
@@ -215,7 +215,7 @@ def stripe_webhook(request):
             return HttpResponse(status=500)
 
         print(
-            "[payments.views.stripe_webhook] Successful payment webhook handled properly."
+            "[payments.views.stripe_webhook] Successful payment webhook handled properly."  # noqa: E501
         )
     return HttpResponse(status=200)
 

@@ -29,7 +29,7 @@ def test_stripe_config_view():
 
 def test_create_checkout_session_view(user: User, program: Program, rf: RequestFactory):
     request = rf.get(
-        f"/payments/create-checkout-session/?productSlug={program.slug}&productType=program"
+        f"/payments/create-checkout-session/?productSlug={program.slug}&productType=program"  # noqa: E501
     )
     request.user = user
     response = views.create_checkout_session(request)
