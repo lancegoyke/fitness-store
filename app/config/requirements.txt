@@ -76,7 +76,7 @@ django==4.1.7
     #   django-redis
     #   django-ses
     #   django-storages
-django-admin-honeypot==1.1.0
+django-admin-honeypot @ git+https://github.com/sanyamidha10/django-admin-honeypot.git@90ab42ba11153cae5a833258aea3870f53279ca4
     # via -r requirements.in
 django-allauth==0.54.0
     # via -r requirements.in
@@ -90,6 +90,8 @@ django-debug-toolbar==4.0.0
     # via -r requirements.in
 django-embed-video==1.4.8
     # via -r requirements.in
+django-ipware==5.0.0
+    # via django-admin-honeypot
 django-lifecycle==1.0.0
     # via -r requirements.in
 django-markdownx==4.0.2
