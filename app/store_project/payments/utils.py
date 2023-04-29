@@ -68,10 +68,11 @@ def stripe_customer_get_or_create(user: User) -> stripe.Customer:
         try:
             stripe_customer = stripe.Customer.retrieve(id=user.stripe_customer_id)
         except stripe.error.InvalidRequestError:
-            logger.info(f"Could not find Stripe Customer with ID={user.stripe_customer_id}. Creating now.")
+            logger.info(
+                f"Could not find Stripe Customer with ID={user.stripe_customer_id}. Creating now."
+            )
             stripe_customer = stripe.Customer.create(
-                id=user.stripe_customer_id,
-                email=user.email
+                id=user.stripe_customer_id, email=user.email
             )
     else:
         stripe_customer = stripe.Customer.create(email=user.email)

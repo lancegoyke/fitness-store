@@ -6,26 +6,35 @@ from django.utils.timezone import utc
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('pages', '0001_initial'),
+        ("pages", "0001_initial"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='page',
-            name='created',
-            field=models.DateTimeField(auto_now_add=True, default=datetime.datetime(2020, 11, 20, 19, 33, 29, 768893, tzinfo=utc), verbose_name='Time created'),
+            model_name="page",
+            name="created",
+            field=models.DateTimeField(
+                auto_now_add=True,
+                default=datetime.datetime(2020, 11, 20, 19, 33, 29, 768893, tzinfo=utc),
+                verbose_name="Time created",
+            ),
             preserve_default=False,
         ),
         migrations.AddField(
-            model_name='page',
-            name='modified',
-            field=models.DateTimeField(auto_now=True, verbose_name='Time last modified'),
+            model_name="page",
+            name="modified",
+            field=models.DateTimeField(
+                auto_now=True, verbose_name="Time last modified"
+            ),
         ),
         migrations.AddField(
-            model_name='page',
-            name='status',
-            field=models.CharField(choices=[('pb', 'Public'), ('pr', 'Private'), ('dr', 'Draft')], default='dr', max_length=2),
+            model_name="page",
+            name="status",
+            field=models.CharField(
+                choices=[("pb", "Public"), ("pr", "Private"), ("dr", "Draft")],
+                default="dr",
+                max_length=2,
+            ),
         ),
     ]

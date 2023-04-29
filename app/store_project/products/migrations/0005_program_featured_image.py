@@ -4,15 +4,18 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('products', '0004_program_author'),
+        ("products", "0004_program_author"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='program',
-            name='featured_image',
-            field=models.ImageField(blank=True, upload_to='products/images/', verbose_name='Featured product image'),
+            model_name="program",
+            name="featured_image",
+            field=models.ImageField(
+                blank=True,
+                upload_to="products/images/",
+                verbose_name="Featured product image",
+            ),
         ),
     ]

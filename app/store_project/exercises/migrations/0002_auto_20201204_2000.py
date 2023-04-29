@@ -4,19 +4,20 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('exercises', '0001_squashed_0004_alternative'),
+        ("exercises", "0001_squashed_0004_alternative"),
     ]
 
     operations = [
         migrations.RemoveField(
-            model_name='exercise',
-            name='category',
+            model_name="exercise",
+            name="category",
         ),
         migrations.AddField(
-            model_name='exercise',
-            name='categories',
-            field=models.ManyToManyField(blank=True, to='exercises.Category', verbose_name='Exercise categories'),
+            model_name="exercise",
+            name="categories",
+            field=models.ManyToManyField(
+                blank=True, to="exercises.Category", verbose_name="Exercise categories"
+            ),
         ),
     ]

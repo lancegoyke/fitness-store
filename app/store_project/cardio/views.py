@@ -47,7 +47,7 @@ def cardio_create(request):
             # get slice from PROTOCOL_CHOICES str
             # str length must be divisible by two
             work_seconds = int(protocol[: int(len(protocol) / 2)])
-            rest_seconds = int(protocol[int(len(protocol) / 2):])
+            rest_seconds = int(protocol[int(len(protocol) / 2) :])
             duration_of_round_seconds = work_seconds + rest_seconds
             minutes_under_duress = (
                 duration_minutes - warm_up_minutes - cool_down_minutes
@@ -67,9 +67,7 @@ def cardio_create(request):
             )  # whole number
 
             # Disperse leftover time into warm up and cool down
-            leftover_minutes = minutes_under_duress % (
-                duration_of_round_seconds / 60
-            )
+            leftover_minutes = minutes_under_duress % (duration_of_round_seconds / 60)
             if (leftover_minutes / 2).is_integer():
                 warm_up_minutes += int(leftover_minutes / 2)
                 cool_down_minutes += int(leftover_minutes / 2)
@@ -102,8 +100,4 @@ def cardio_create(request):
 
     # Else display blank form
     form = CardioCreateForm()
-    return render(
-        request,
-        "cardio/new.html",
-        {"form": form, "submitted": submitted}
-    )
+    return render(request, "cardio/new.html", {"form": form, "submitted": submitted})

@@ -4,19 +4,26 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('products', '0009_auto_20200908_0037'),
+        ("products", "0009_auto_20200908_0037"),
     ]
 
     operations = [
         migrations.AlterModelOptions(
-            name='category',
-            options={'ordering': ['name'], 'verbose_name': 'Category', 'verbose_name_plural': 'Categories'},
+            name="category",
+            options={
+                "ordering": ["name"],
+                "verbose_name": "Category",
+                "verbose_name_plural": "Categories",
+            },
         ),
         migrations.AddField(
-            model_name='program',
-            name='status',
-            field=models.CharField(choices=[('pb', 'Public'), ('pr', 'Private'), ('dr', 'Draft')], default='dr', max_length=2),
+            model_name="program",
+            name="status",
+            field=models.CharField(
+                choices=[("pb", "Public"), ("pr", "Private"), ("dr", "Draft")],
+                default="dr",
+                max_length=2,
+            ),
         ),
     ]

@@ -62,11 +62,13 @@ def search(request):
             "exercises/exercises.html",
             {
                 "exercises": exercises.order_by("name"),
-            })
+            },
+        )
 
     return render(
         request,
         "exercises/exercises.html",
         {
             "exercises": exercises.filter(name__search=search),
-        })
+        },
+    )

@@ -7,7 +7,6 @@ import markdownx.models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
@@ -16,13 +15,41 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.CreateModel(
-            name='Page',
+            name="Page",
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('title', models.CharField(max_length=80, verbose_name='Page title')),
-                ('content', markdownx.models.MarkdownxField(default='', verbose_name='Page content, in markdown')),
-                ('slug', models.SlugField(default='', max_length=80, unique=True, verbose_name='Slug for page')),
-                ('author', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.AutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("title", models.CharField(max_length=80, verbose_name="Page title")),
+                (
+                    "content",
+                    markdownx.models.MarkdownxField(
+                        default="", verbose_name="Page content, in markdown"
+                    ),
+                ),
+                (
+                    "slug",
+                    models.SlugField(
+                        default="",
+                        max_length=80,
+                        unique=True,
+                        verbose_name="Slug for page",
+                    ),
+                ),
+                (
+                    "author",
+                    models.ForeignKey(
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
         ),
     ]

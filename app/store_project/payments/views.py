@@ -19,7 +19,9 @@ from django.views.generic.base import TemplateView
 import stripe
 
 from store_project.payments.utils import (
-    int_to_price, order_confirmation_email, stripe_customer_get_or_create,
+    int_to_price,
+    order_confirmation_email,
+    stripe_customer_get_or_create,
     stripe_price_get_or_create,
 )
 from store_project.products.models import Book, Category, Program
@@ -35,14 +37,12 @@ def login_to_purchase(request, product_type: str, product_slug: str):
     messages.error(request, "You must be logged in to purchase.")
     next_url = ""
     if product_type == "program":
-        next_url = reverse('products:program_detail', args=[product_slug])
+        next_url = reverse("products:program_detail", args=[product_slug])
     elif product_type == "book":
-        next_url = reverse('products:book_detail', args=[product_slug])
+        next_url = reverse("products:book_detail", args=[product_slug])
     else:
         redirect(f"{settings.LOGIN_URL}")
-    return redirect(
-        f"{settings.LOGIN_URL}?next={next_url}"
-    )
+    return redirect(f"{settings.LOGIN_URL}?next={next_url}")
 
 
 @csrf_exempt
@@ -103,7 +103,8 @@ def create_checkout_session(request):
         checkout_session = stripe.checkout.Session.create(
             customer=stripe_customer,
             client_reference_id=str(request.user.id),
-            success_url=domain_url + "payments/success/?session_id={CHECKOUT_SESSION_ID}",
+            success_url=domain_url
+            + "payments/success/?session_id={CHECKOUT_SESSION_ID}",
             cancel_url=domain_url + product.get_absolute_url()[1:],
             payment_method_types=["card"],
             mode="payment",
@@ -216,7 +217,9 @@ def stripe_webhook(request):
             logger.error("Could not email order of {product_name} to {user.email}.")
             return HttpResponse(status=500)
 
-        print("[payments.views.stripe_webhook] Successful payment webhook handled properly.")
+        print(
+            "[payments.views.stripe_webhook] Successful payment webhook handled properly."
+        )
     return HttpResponse(status=200)
 
 

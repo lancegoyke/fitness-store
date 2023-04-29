@@ -125,7 +125,9 @@ class TestProgramDetailView:
 
         response = ProgramDetailView.as_view()(request, slug=program.slug)
 
-        login_to_purchase_link = f'href="/payments/login-to-purchase/program/{program.slug}/">'
+        login_to_purchase_link = (
+            f'href="/payments/login-to-purchase/program/{program.slug}/">'
+        )
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{program.slug}"'
         purchase_button_data_product_type = 'data-product-type="program"'
@@ -147,7 +149,9 @@ class TestProgramDetailView:
 
         response = ProgramDetailView.as_view()(request, slug=program.slug)
 
-        login_to_purchase_link = f'href="/payments/login-to-purchase/program/{program.slug}/">'
+        login_to_purchase_link = (
+            f'href="/payments/login-to-purchase/program/{program.slug}/">'
+        )
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{program.slug}"'
         purchase_button_data_product_type = 'data-product-type="program"'
@@ -248,7 +252,9 @@ class TestBookDetailView:
 
         response = BookDetailView.as_view()(request, slug=book.slug)
 
-        login_to_purchase_link = f'href="/payments/login-to-purchase/book/{book.slug}/">'
+        login_to_purchase_link = (
+            f'href="/payments/login-to-purchase/book/{book.slug}/">'
+        )
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{book.slug}"'
         purchase_button_data_product_type = 'data-product-type="book"'
@@ -262,15 +268,15 @@ class TestBookDetailView:
         assert purchase_button_data_product_slug not in response.rendered_content
         assert purchase_button_data_product_type not in response.rendered_content
 
-    def test_super_authenticated(
-        self, superuser: User, book: Book, rf: RequestFactory
-    ):
+    def test_super_authenticated(self, superuser: User, book: Book, rf: RequestFactory):
         request = rf.get(f"/books/{book.slug}/")
         request.user = superuser
 
         response = BookDetailView.as_view()(request, slug=book.slug)
 
-        login_to_purchase_link = f'href="/payments/login-to-purchase/book/{book.slug}/">'
+        login_to_purchase_link = (
+            f'href="/payments/login-to-purchase/book/{book.slug}/">'
+        )
         purchase_button_id = 'id="submitButton"'
         purchase_button_data_product_slug = f'data-product-slug="{book.slug}"'
         purchase_button_data_product_type = 'data-product-type="book"'
@@ -322,9 +328,7 @@ class TestBookListView:
         assert f'href="/books/{book.slug}/"' in response.rendered_content
         assert admin_link not in response.rendered_content
 
-    def test_super_authenticated(
-        self, superuser: User, book: Book, rf: RequestFactory
-    ):
+    def test_super_authenticated(self, superuser: User, book: Book, rf: RequestFactory):
         request = rf.get("/books/")
         request.user = superuser
 

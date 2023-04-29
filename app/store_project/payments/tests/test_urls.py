@@ -10,7 +10,10 @@ pytestmark = pytest.mark.django_db
 
 def test_login_to_purchase(program: Program):
     assert (
-        reverse("payments:login_to_purchase", kwargs={"product_type": "program", "product_slug": program.slug})
+        reverse(
+            "payments:login_to_purchase",
+            kwargs={"product_type": "program", "product_slug": program.slug},
+        )
         == f"/payments/login-to-purchase/program/{program.slug}/"
     )
     assert (

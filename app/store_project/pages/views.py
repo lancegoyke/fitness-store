@@ -57,7 +57,7 @@ def contact_view(request):
                     send_contact_emails(subject, message, user_email)
                     messages.success(
                         request,
-                        "Your message was sent! Thanks for the feedback. We emailed you a copy for your records. If needed, someone from our team will reach out to you."
+                        "Your message was sent! Thanks for the feedback. We emailed you a copy for your records. If needed, someone from our team will reach out to you.",
                     )
                 except BadHeaderError:
                     messages.error(
@@ -66,13 +66,24 @@ def contact_view(request):
                     )
             elif g_recaptcha_response["error-codes"]:
                 for error in g_recaptcha_response["error-codes"]:
-                    messages.error(request, f"Something went wrong with Google reCAPTCHA ({error})")
+                    messages.error(
+                        request, f"Something went wrong with Google reCAPTCHA ({error})"
+                    )
             else:
-                messages.error(request, "Google reCAPTCHA said you were a bot! If you're not, maybe try again? Or email me directly: lance [at] lancegoyke [dot] com")
+                messages.error(
+                    request,
+                    "Google reCAPTCHA said you were a bot! If you're not, maybe try again? Or email me directly: lance [at] lancegoyke [dot] com",
+                )
         else:
-            messages.error(request, "Sorry, the form you filled out was invalid. Maybe try again?")
+            messages.error(
+                request, "Sorry, the form you filled out was invalid. Maybe try again?"
+            )
 
-    return render(request, "pages/contact.html", {"form": form, "G_RECAPTCHA_SITE_KEY": G_RECAPTCHA_SITE_KEY})
+    return render(
+        request,
+        "pages/contact.html",
+        {"form": form, "G_RECAPTCHA_SITE_KEY": G_RECAPTCHA_SITE_KEY},
+    )
 
 
 def timer_view(request):

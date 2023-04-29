@@ -5,20 +5,23 @@ import markdownx.models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('products', '0006_program_page_content'),
+        ("products", "0006_program_page_content"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='program',
-            name='price',
-            field=models.DecimalField(decimal_places=2, default=0, max_digits=10, verbose_name='Price'),
+            model_name="program",
+            name="price",
+            field=models.DecimalField(
+                decimal_places=2, default=0, max_digits=10, verbose_name="Price"
+            ),
         ),
         migrations.AlterField(
-            model_name='program',
-            name='page_content',
-            field=markdownx.models.MarkdownxField(blank=True, default='', verbose_name='Page content, in markdown'),
+            model_name="program",
+            name="page_content",
+            field=markdownx.models.MarkdownxField(
+                blank=True, default="", verbose_name="Page content, in markdown"
+            ),
         ),
     ]
