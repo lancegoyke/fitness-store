@@ -8,19 +8,17 @@ asgiref==3.6.0
     # via
     #   django
     #   scout-apm
-astroid==2.14.2
+astroid==2.15.4
     # via pylint
 async-timeout==4.0.2
     # via redis
-attrs==22.2.0
-    # via pytest
-black==21.12b0
+black==23.3.0
     # via -r requirements.in
-boto3==1.20.40
+boto3==1.26.123
     # via
     #   -r requirements.in
     #   django-ses
-botocore==1.23.54
+botocore==1.29.123
     # via
     #   boto3
     #   s3transfer
@@ -35,16 +33,17 @@ certifi==2022.12.7
     #   urllib3
 cffi==1.15.1
     # via cryptography
-charset-normalizer==3.0.1
+charset-normalizer==3.1.0
     # via requests
 click==8.1.3
     # via
     #   black
     #   pip-tools
-coverage==6.2
+coverage==7.2.4
     # via -r requirements.in
-cryptography==39.0.1
+cryptography==40.0.2
     # via
+    #   django-ses
     #   pyjwt
     #   pyopenssl
     #   urllib3
@@ -52,11 +51,12 @@ defusedxml==0.7.1
     # via python3-openid
 dill==0.3.6
     # via pylint
-dj-database-url==0.5.0
+dj-database-url==2.0.0
     # via -r requirements.in
 django==4.1.7
     # via
     #   -r requirements.in
+    #   dj-database-url
     #   django-allauth
     #   django-clearcache
     #   django-cors-headers
@@ -69,15 +69,15 @@ django==4.1.7
     #   django-storages
 django-admin-honeypot==1.1.0
     # via -r requirements.in
-django-allauth==0.47.0
+django-allauth==0.54.0
     # via -r requirements.in
 django-clearcache==1.2.1
     # via -r requirements.in
-django-cors-headers==3.11.0
+django-cors-headers==3.14.0
     # via -r requirements.in
-django-debug-toolbar==3.2.4
+django-debug-toolbar==4.0.0
     # via -r requirements.in
-django-embed-video==1.4.5
+django-embed-video==1.4.8
     # via -r requirements.in
 django-lifecycle==1.0.0
     # via -r requirements.in
@@ -85,20 +85,18 @@ django-markdownx==4.0.2
     # via -r requirements.in
 django-redis==5.2.0
     # via -r requirements.in
-django-ses[bounce]==2.3.1
+django-ses[bounce]==3.4.1
     # via -r requirements.in
-django-storages==1.12.2
+django-storages==1.13.2
     # via -r requirements.in
 factory-boy==3.2.1
     # via -r requirements.in
-faker==17.0.0
+faker==18.6.0
     # via factory-boy
-flake8==4.0.1
+flake8==6.0.0
     # via flake8-isort
-flake8-isort==4.1.1
+flake8-isort==6.0.0
     # via -r requirements.in
-future==0.18.3
-    # via django-ses
 gunicorn==20.1.0
     # via -r requirements.in
 idna==3.4
@@ -107,23 +105,21 @@ idna==3.4
     #   urllib3
 iniconfig==2.0.0
     # via pytest
-isort==5.10.1
+isort==5.12.0
     # via
     #   flake8-isort
     #   pylint
-jmespath==0.10.0
+jmespath==1.0.1
     # via
     #   boto3
     #   botocore
 lazy-object-proxy==1.9.0
     # via astroid
-m2crypto==0.38.0
-    # via django-ses
-markdown==3.3.6
+markdown==3.4.3
     # via
     #   -r requirements.in
     #   django-markdownx
-mccabe==0.6.1
+mccabe==0.7.0
     # via
     #   flake8
     #   pylint
@@ -131,60 +127,59 @@ mypy-extensions==1.0.0
     # via black
 oauthlib==3.2.2
     # via requests-oauthlib
-packaging==23.0
+packaging==23.1
     # via
+    #   black
     #   build
     #   django-lifecycle
     #   pytest
     #   pytest-sugar
-pathspec==0.11.0
+pathspec==0.11.1
     # via black
-pillow==9.4.0
+pillow==9.5.0
     # via
     #   -r requirements.in
     #   django-markdownx
-pip-tools==6.12.2
+pip-tools==6.13.0
     # via -r requirements.in
-platformdirs==3.0.0
+platformdirs==3.5.0
     # via
     #   black
     #   pylint
 pluggy==1.0.0
     # via pytest
-psutil==5.9.4
+psutil==5.9.5
     # via scout-apm
-psycopg2-binary==2.9.5
+psycopg2-binary==2.9.6
     # via -r requirements.in
-py==1.11.0
-    # via pytest
-pycodestyle==2.8.0
+pycodestyle==2.10.0
     # via flake8
 pycparser==2.21
     # via cffi
-pyflakes==2.4.0
+pyflakes==3.0.1
     # via flake8
 pyjwt[crypto]==2.6.0
     # via django-allauth
-pylint==2.16.2
+pylint==2.17.3
     # via
     #   pylint-django
     #   pylint-plugin-utils
-pylint-django==2.5.0
+pylint-django==2.5.3
     # via -r requirements.in
 pylint-plugin-utils==0.7
     # via pylint-django
-pyopenssl==23.0.0
+pyopenssl==23.1.1
     # via urllib3
 pyproject-hooks==1.0.0
     # via build
-pytest==6.2.5
+pytest==7.3.1
     # via
     #   -r requirements.in
     #   pytest-django
     #   pytest-sugar
 pytest-django==4.5.2
     # via -r requirements.in
-pytest-sugar==0.9.4
+pytest-sugar==0.9.7
     # via -r requirements.in
 python-dateutil==2.8.2
     # via
@@ -192,11 +187,11 @@ python-dateutil==2.8.2
     #   faker
 python3-openid==3.2.0
     # via django-allauth
-pytz==2022.7.1
+pytz==2023.3
     # via django-ses
-redis==4.5.1
+redis==4.5.4
     # via django-redis
-requests==2.28.2
+requests==2.29.0
     # via
     #   django-allauth
     #   django-embed-video
@@ -205,33 +200,27 @@ requests==2.28.2
     #   stripe
 requests-oauthlib==1.3.1
     # via django-allauth
-s3transfer==0.5.2
+s3transfer==0.6.0
     # via boto3
-scout-apm==2.23.5
+scout-apm==2.26.1
     # via -r requirements.in
-sentry-sdk==1.5.3
+sentry-sdk==1.21.1
     # via -r requirements.in
 six==1.16.0
     # via python-dateutil
-sqlparse==0.4.3
+sqlparse==0.4.4
     # via
     #   django
     #   django-debug-toolbar
-stripe==2.65.0
+stripe==5.4.0
     # via -r requirements.in
-termcolor==2.2.0
+termcolor==2.3.0
     # via pytest-sugar
-testfixtures==6.18.5
-    # via flake8-isort
-toml==0.10.2
-    # via pytest
-tomli==1.2.3
-    # via black
-tomlkit==0.11.6
+tomlkit==0.11.8
     # via pylint
 typing-extensions==4.5.0
-    # via black
-urllib3[secure]==1.26.14
+    # via dj-database-url
+urllib3[secure]==1.26.15
     # via
     #   botocore
     #   requests
@@ -241,11 +230,11 @@ urllib3-secure-extra==0.1.0
     # via urllib3
 urlman==2.0.1
     # via django-lifecycle
-wheel==0.38.4
+wheel==0.40.0
     # via pip-tools
-whitenoise[brotli]==5.3.0
+whitenoise[brotli]==6.4.0
     # via -r requirements.in
-wrapt==1.14.1
+wrapt==1.15.0
     # via
     #   astroid
     #   scout-apm
