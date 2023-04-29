@@ -7,7 +7,7 @@ pytestmark = pytest.mark.django_db
 yt_links = [
     "https://youtu.be/rTLSGke1AuA",
     "https://www.youtube.com/watch?v=rTLSGke1AuA",
-    "https://www.youtube.com/watch?v=rTLSGke1AuA&list=PLHaGRfu0X0CJ1LBdXg-atqsLsKd7rYO0V&index=54",
+    "https://www.youtube.com/watch?v=rTLSGke1AuA&list=PLHaGRfu0X0CJ1LBdXg-atqsLsKd7rYO0V&index=54",  # noqa: E501
 ]
 
 

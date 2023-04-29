@@ -65,7 +65,8 @@ class CardioCreateForm(forms.Form):
         if data > 180:
             raise ValidationError(
                 _(
-                    "That's a pretty long workout, don't you think? Try a shorter duration."
+                    "That's a pretty long workout, don't you think?"
+                    "Try a shorter duration."
                 )
             )
 

@@ -197,7 +197,7 @@ class Program(Product):
     """A model for creating new programs. Extend Product model base
     functionality."""
 
-    # equipment = models.ManyToManyField(Equipment, verbose_name=_("Required equipment"))
+    # equipment = models.ManyToManyField(Equipment, verbose_name=_("Required equipment"))  # noqa: E501
     duration = models.IntegerField(
         _("Number of weeks"),
         default=None,
