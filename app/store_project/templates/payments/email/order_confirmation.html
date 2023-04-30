@@ -1,42 +1,42 @@
 {% load account i18n %} {% user_display user as user_display %} {% autoescape off %}
-{% blocktrans with site_name=current_site.name site_domain=current_site.domain %}
+  {% blocktrans with site_name=current_site.name site_domain=current_site.domain %}
 
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Order Confirmation from {{ site_name }}</title>
-</head>
-<body>
-    <p>
-        Thank you for your order at {{ site_domain }}.
-    </p>
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Order Confirmation from {{ site_name }}</title>
+      </head>
+      <body>
+        <p>
+          Thank you for your order at {{ site_domain }}.
+        </p>
 
-    <p>
-        Order details:
-        <ul>
+        <p>
+          Order details:
+          <ul>
             <li>
-                {{ user_display }}
+              {{ user_display }}
             </li>
             <li>
-                {{ product }}
+              {{ product }}
             </li>
             <li>
-                Total: ${{ price }}
+              Total: ${{ price }}
             </li>
             <li>
-                Download from your account: {{ site_domain }}{{ account_url }}
+              Download from your account: {{ site_domain }}{{ account_url }}
             </li>
-        </ul>
-    </p>
+          </ul>
+        </p>
 
-    <p>
-        Thank you from {{ site_name }}!<br />
-        {{ site_domain }}
-    </p>
+        <p>
+          Thank you from {{ site_name }}!<br />
+          {{ site_domain }}
+        </p>
 
-</body>
-</html>
-{% endblocktrans %}
+      </body>
+    </html>
+  {% endblocktrans %}
 {% endautoescape %}

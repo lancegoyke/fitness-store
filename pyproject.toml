@@ -4,3 +4,6 @@ target-version = ['py311']
 [tool.isort]
 profile = "black"
 force_single_line = true
+
+[tool.curlylint.rules]
+image_alt = true

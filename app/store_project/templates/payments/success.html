@@ -5,23 +5,23 @@
 {% block head_title %}{% trans "Payment Successful" %}{% endblock head_title %}
 
 {% block content %}
-<h2>{% trans "Payment Successful" %}</h2>
+  <h2>{% trans "Payment Successful" %}</h2>
 
-{% for product in products %}
-<h3>{{ product }}</h3>
+  {% for product in products %}
+    <h3>{{ product }}</h3>
 
-<p><strong>
-    {% trans "Total" %}: ${{ amount }} USD
-</strong></p>
+    <p><strong>
+      {% trans "Total" %}: ${{ amount }} USD
+    </strong></p>
 
-<a class="box invert download" href="{% url 'users:profile' %}">
-  <span class="with-icon font-size:biggish">
-    <svg class="icon" xmlns="http://www.w3.org/2000/svg" height="0.75rem" viewBox="0 0 24 24" width="0.75rem" stroke="none" fill="currentColor">
-      <path d="M0 0h24v24H0V0z" fill="none"/>
-      <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-    </svg>
-    {% trans "Download in Account" %}
-  </span>
-</a>
-{% endfor %}
+    <a class="box invert download" href="{% url 'users:profile' %}">
+      <span class="with-icon font-size:biggish">
+        <svg class="icon" xmlns="http://www.w3.org/2000/svg" height="0.75rem" viewBox="0 0 24 24" width="0.75rem" stroke="none" fill="currentColor">
+          <path d="M0 0h24v24H0V0z" fill="none"/>
+          <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+        </svg>
+        {% trans "Download in Account" %}
+      </span>
+    </a>
+  {% endfor %}
 {% endblock content %}

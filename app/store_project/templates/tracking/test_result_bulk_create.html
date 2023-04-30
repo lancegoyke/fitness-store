@@ -5,50 +5,50 @@
 {% block head_title %}{% trans test.name %} - {% trans "Add Result" %}{% endblock head_title %}
 
 {% block header %}
-<meta name="description" property="og:description" content="Add a test result">
-<meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
-<meta name="author" content="{{ test.author }}">
-<meta property="og:title" content="{{ test.name }}" />
+  <meta name="description" property="og:description" content="Add a test result">
+  <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+  <meta name="author" content="{{ test.author }}">
+  <meta property="og:title" content="{{ test.name }}" />
 {% endblock header %}
 
 {% block content %}
 
-<p class="breadcrumbs"><a href="{% url 'tracking:test_list' %}">Tests</a> > <a href="{{ test.get_absolute_url }}">{{ test.name }}</a> > Bulk Record Results</p>
+  <p class="breadcrumbs"><a href="{% url 'tracking:test_list' %}">Tests</a> > <a href="{{ test.get_absolute_url }}">{{ test.name }}</a> > Bulk Record Results</p>
 
-{% include 'tracking/partials/test_info.html' %}
+  {% include 'tracking/partials/test_info.html' %}
 
-<div>
-  <button class="button" type="button" hx-get="{% url 'tracking:result_create_form' pk=test.pk %}" hx-target="#resultforms" hx-swap="beforeend">
+  <div>
+    <button class="button" type="button" hx-get="{% url 'tracking:result_create_form' pk=test.pk %}" hx-target="#resultforms" hx-swap="beforeend">
       Add form
-  </button>
-</div>
+    </button>
+  </div>
 
-<div class="stack" id="resultforms"></div>
+  <div class="stack" id="resultforms"></div>
 
-<table id="results">
-  <thead>
-    <tr>
-      <th id="date" scope="col">Date</th>
-      <th id="user" scope="col">User</th>
-      <th id="result" scope="col">Result</th>
-    </tr>
-  </thead>
-  <tbody id="resultsbody">
-    {% for result in test_results %}
-      {% include "tracking/partials/result_row.html" with result=result %}
-    {% endfor %}
-  </tbody>
-</table>
+  <table id="results">
+    <thead>
+      <tr>
+        <th id="date" scope="col">Date</th>
+        <th id="user" scope="col">User</th>
+        <th id="result" scope="col">Result</th>
+      </tr>
+    </thead>
+    <tbody id="resultsbody">
+      {% for result in test_results %}
+        {% include "tracking/partials/result_row.html" with result=result %}
+      {% endfor %}
+    </tbody>
+  </table>
 
 {% endblock content %}
 
 <!-- JavaScript -->
 {% block javascript %}
-<script src="{% static 'js/htmx.min.js' %}"></script>
-<script>
-  document.body.addEventListener('htmx:configRequest', (event) => {
-    event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
-  })
-</script>
+  <script src="{% static 'js/htmx.min.js' %}"></script>
+  <script>
+    document.body.addEventListener('htmx:configRequest', (event) => {
+      event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
+    })
+  </script>
 
 {% endblock javascript %}

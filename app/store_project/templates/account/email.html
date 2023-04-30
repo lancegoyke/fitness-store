@@ -40,24 +40,24 @@
     </form>
 
   {% else %}
-  <p><strong>{% trans 'Warning:'%}</strong> {% trans "You currently do not have any e-mail address set up. You should really add an e-mail address so you can receive notifications, reset your password, etc." %}</p>
+    <p><strong>{% trans 'Warning:'%}</strong> {% trans "You currently do not have any e-mail address set up. You should really add an e-mail address so you can receive notifications, reset your password, etc." %}</p>
   {% endif %}
 
   <div class="stack-auth-form">
     <h2 class="text-center font-size:smallish">{% trans "Add E-mail Address" %}</h2>
 
     <form class="add_email" method="post" action="{% url 'account_email' %}">
-        {% csrf_token %}
+      {% csrf_token %}
 
-        <p>
-          <label class="stack" for="{{ form.email.id_for_label }}">
-            <span>Email</span>
-            {{ form.email }}
-            {{ form.email.errors }}
-          </label>
-        </p>
+      <p>
+        <label class="stack" for="{{ form.email.id_for_label }}">
+          <span>Email</span>
+          {{ form.email }}
+          {{ form.email.errors }}
+        </label>
+      </p>
 
-        <button class="button" name="action_add" type="submit">{% trans "Add E-mail" %}</button>
+      <button class="button" name="action_add" type="submit">{% trans "Add E-mail" %}</button>
     </form>
   </div>
 

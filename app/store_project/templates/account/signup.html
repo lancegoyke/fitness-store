@@ -5,58 +5,58 @@
 {% block head_title %}{% trans "Sign Up" %}{% endblock %}
 
 {% block content %}
-<h1>{% trans "Sign Up" %}</h1>
+  <h1>{% trans "Sign Up" %}</h1>
 
-<p class="text-center">{% blocktrans %}Already have an account? Then please <a href="{{ login_url }}">sign in</a>.{% endblocktrans %}</p>
+  <p class="text-center">{% blocktrans %}Already have an account? Then please <a href="{{ login_url }}">sign in</a>.{% endblocktrans %}</p>
 
-<a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" %}">Continue with Facebook</a>
-<a class="box login google" id="google" href="{% provider_login_url "google" %}">Sign up with Google</a>
+  <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" %}">Continue with Facebook</a>
+  <a class="box login google" id="google" href="{% provider_login_url "google" %}">Sign up with Google</a>
 
-<div class="or-separator">
-  <div></div>
-  <i>or</i>
-  <div></div>
-</div>
+  <div class="or-separator">
+    <div></div>
+    <i>or</i>
+    <div></div>
+  </div>
 
-<div class="stack-auth-form">
-  <h2 class="text-center font-size:smallish">Sign up with email</h2>
-  <form class="login center" id="email-form" method="POST" action="{% url 'account_signup' %}">
-    {% csrf_token %}
+  <div class="stack-auth-form">
+    <h2 class="text-center font-size:smallish">Sign up with email</h2>
+    <form class="login center" id="email-form" method="POST" action="{% url 'account_signup' %}">
+      {% csrf_token %}
 
-    <p>
-      {{ form.non_field_errors }}
-    </p>
+      <p>
+        {{ form.non_field_errors }}
+      </p>
 
-    <p>
-      <label class="stack" for="{{ form.email.id_for_label }}">
-        <span>Email</span>
-        {{ form.email }}
-        {{ form.email.errors }}
-      </label>
-    </p>
+      <p>
+        <label class="stack" for="{{ form.email.id_for_label }}">
+          <span>Email</span>
+          {{ form.email }}
+          {{ form.email.errors }}
+        </label>
+      </p>
 
-    <p>
-      <label class="stack" for="{{ form.password1.id_for_label }}">
-        <span>Password</span>
-        {{ form.password1 }}
-        {{ form.password1.errors }}
-      </label>
-    </p>
+      <p>
+        <label class="stack" for="{{ form.password1.id_for_label }}">
+          <span>Password</span>
+          {{ form.password1 }}
+          {{ form.password1.errors }}
+        </label>
+      </p>
 
-    {% if redirect_field_value %}
-    <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
-    {% endif %}
-    <p>
-      <a class="secondaryAction" href="{% url 'account_reset_password' %}">{% trans "Forgot Password?" %}</a>
-    </p>
-    <p>
-      <button class="primaryAction button" type="submit">{% trans "Sign Up" %}</button>
-    </p>
-  </form>
-</div>
+      {% if redirect_field_value %}
+        <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
+      {% endif %}
+      <p>
+        <a class="secondaryAction" href="{% url 'account_reset_password' %}">{% trans "Forgot Password?" %}</a>
+      </p>
+      <p>
+        <button class="primaryAction button" type="submit">{% trans "Sign Up" %}</button>
+      </p>
+    </form>
+  </div>
 
 {% endblock content %}
 
 {% block javascript %}
-{% providers_media_js %}
+  {% providers_media_js %}
 {% endblock javascript %}

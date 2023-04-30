@@ -6,86 +6,86 @@
 
 {% block content %}
 
-<h1>Programs</h1>
+  <h1>Programs</h1>
 
-{% if user.is_superuser %}
-<p>
-  <a class="button" href="{% url 'admin:products_program_changelist' %}">Admin</a>
-</p>
-{% endif %}
+  {% if user.is_superuser %}
+    <p>
+      <a class="button" href="{% url 'admin:products_program_changelist' %}">Admin</a>
+    </p>
+  {% endif %}
 
-{% if programs %}
-<ul class="grid max-width:measure*2">
-  {% for program in programs %}
-  <li class="card-box card-stack">
-    <div class="frame landscape">
+  {% if programs %}
+    <ul class="grid max-width:measure*2">
+      {% for program in programs %}
+        <li class="card-box card-stack">
+          <div class="frame landscape">
 
-      {% if program.featured_image %}
-        <img src="{{ program.featured_image.url }}" alt="{{ program.name }}" />
-      {% else %}
-        <img style="background-color: var(--main-color-dark);">
-      {% endif %}
-    </div>
-    <div class="box stack">
-      <h3>
-        <a href="{% url 'products:program_detail' program.slug %}">
-          {{ program.name }}
-        </a>
-        {% if program.status == "pr" %}
-          <span class="tag private">PRIVATE</span>
-        {% endif %}
-        {% if program.status == "dr" %}
-          <span class="tag draft">DRAFT</span>
-        {% endif %}
-      </h3>
-      <p>{{ program.description }}</p>
-    </div>
-    <div class="box space-between">
-      <div class="small">
+            {% if program.featured_image %}
+              <img src="{{ program.featured_image.url }}" alt="{{ program.name }}" />
+            {% else %}
+              <img style="background-color: var(--main-color-dark);">
+            {% endif %}
+          </div>
+          <div class="box stack">
+            <h3>
+              <a href="{% url 'products:program_detail' program.slug %}">
+                {{ program.name }}
+              </a>
+              {% if program.status == "pr" %}
+                <span class="tag private">PRIVATE</span>
+              {% endif %}
+              {% if program.status == "dr" %}
+                <span class="tag draft">DRAFT</span>
+              {% endif %}
+            </h3>
+            <p>{{ program.description }}</p>
+          </div>
+          <div class="box space-between">
+            <div class="small">
 
-        {% with "products.can_view_"|concat:program.slug as can_view_program %}
-          {% if can_view_program in perms %}
-            <span class="tag">Owned</span>
-          {% else %}
-            <span class="tag price">${{ program.price|floatformat:"0" }}</span>
-          {% endif %}
-        {% endwith %}
+              {% with "products.can_view_"|concat:program.slug as can_view_program %}
+                {% if can_view_program in perms %}
+                  <span class="tag">Owned</span>
+                {% else %}
+                  <span class="tag price">${{ program.price|floatformat:"0" }}</span>
+                {% endif %}
+              {% endwith %}
 
-      </div>
-      <div class="small font-size:small">
-        <span>By {{ program.author.name }}</span>
-      </div>
-    </div>
-  </li>
-  {% endfor %}
-</ul>
+            </div>
+            <div class="small font-size:small">
+              <span>By {{ program.author.name }}</span>
+            </div>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
 
-<p class="center text-center" style="margin-top: var(--s5);">Want something else? <a target="_blank" href="https://docs.google.com/forms/d/e/1FAIpQLSfqlmSwj1UW3anIIgP0uBEv31W41AhGH-5FYeGVly90dwkMVw/viewform?usp=sf_link">Request it.</a></p>
-{% else %}
-<p>Oh no! The store is empty!</p>
-{% endif %}
+    <p class="center text-center" style="margin-top: var(--s5);">Want something else? <a target="_blank" href="https://docs.google.com/forms/d/e/1FAIpQLSfqlmSwj1UW3anIIgP0uBEv31W41AhGH-5FYeGVly90dwkMVw/viewform?usp=sf_link">Request it.</a></p>
+  {% else %}
+    <p>Oh no! The store is empty!</p>
+  {% endif %}
 {% endblock content %}
 
 {% block javascript %}
-<script>
-  let products = [];
-  {% for program in programs %}
-    products.push({
-      item_id: '{{ program.id }}',
-      item_name: '{{ program.name }}',
-      index: {{ forloop.counter }},
+  <script>
+    let products = [];
+    {% for program in programs %}
+      products.push({
+        item_id: '{{ program.id }}',
+        item_name: '{{ program.name }}',
+        index: {{ forloop.counter }},
+        item_list_name: 'Programs',
+        item_list_id: 'programs',
+        item_brand: '{{ program.author }}',
+        item_category: 'programs',
+        price: {{ program.price }},
+        currency: 'USD',
+      });
+    {% endfor %}
+    gtag('event', 'view_item_list', {
+      items: products,
       item_list_name: 'Programs',
-      item_list_id: 'programs',
-      item_brand: '{{ program.author }}',
-      item_category: 'programs',
-      price: {{ program.price }},
-      currency: 'USD',
+      item_list_id: 'programs'
     });
-  {% endfor %}
-  gtag('event', 'view_item_list', {
-    items: products,
-    item_list_name: 'Programs',
-    item_list_id: 'programs'
-  });
-</script>
+  </script>
 {% endblock javascript %}

@@ -4,93 +4,93 @@
 <!DOCTYPE html>
 <html lang="en">
 
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Mastering Fitness</title>
-  <link rel="shortcut icon" type="image/x-icon" href="{% static 'png/favicon-black.png' %}">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mastering Fitness</title>
+    <link rel="shortcut icon" type="image/x-icon" href="{% static 'png/favicon-black.png' %}">
 
   <!-- CSS -->
-  <link rel="stylesheet" href="{% static 'css/base.css' %}" />
+    <link rel="stylesheet" href="{% static 'css/base.css' %}" />
 
   <!-- Google Analytics | Global site tag (gtag.js) -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-341TNQY35X"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag(){dataLayer.push(arguments);}
-    gtag('js', new Date());
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-341TNQY35X"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
 
-    gtag('config', 'G-341TNQY35X', {
-      {% if request.user.id %}'user_id': '{{ request.user.id }}',{% endif %}
-    });
-  </script>
+      gtag('config', 'G-341TNQY35X', {
+        {% if request.user.id %}'user_id': '{{ request.user.id }}',{% endif %}
+      });
+    </script>
 
-  {% block header %}
-  <meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
-  <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
-  <meta property="og:title" content="Mastering Fitness" />
-  <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
-  <meta property="og:image:alt" content="Mastering Fitness" />
-  {% endblock header %}
+    {% block header %}
+      <meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
+      <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+      <meta property="og:title" content="Mastering Fitness" />
+      <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+      <meta property="og:image:alt" content="Mastering Fitness" />
+    {% endblock header %}
 
-</head>
+  </head>
 
-<body>
+  <body>
   <!-- THE COVER -->
-  <div class="cover">
+    <div class="cover">
 
-    {% include "_nav.html" %}
+      {% include "_nav.html" %}
 
-    <h1 class="center text-center">Start feeling better in every possible way.</h1>
+      <h1 class="center text-center">Start feeling better in every possible way.</h1>
 
-    <div class="center box inherit-colors text-center">
-      <span class="with-icon">
-        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="18px" height="18px">
-          <path d="M0 0h24v24H0V0z" fill="none"/>
-          <path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/>
-        </svg>
-        {% trans "Scroll down" %}
-        <svg class="icon icon-right" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="18px" height="18px">
-          <path d="M0 0h24v24H0V0z" fill="none"/>
-          <path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/>
-        </svg>
-      </span>
+      <div class="center box inherit-colors text-center">
+        <span class="with-icon">
+          <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="18px" height="18px">
+            <path d="M0 0h24v24H0V0z" fill="none"/>
+            <path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/>
+          </svg>
+          {% trans "Scroll down" %}
+          <svg class="icon icon-right" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="18px" height="18px">
+            <path d="M0 0h24v24H0V0z" fill="none"/>
+            <path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/>
+          </svg>
+        </span>
+      </div>
     </div>
-  </div>
   <!-- .cover -->
 
   <!-- THE CONTENT -->
-  <div class="stack-page full-width">
+    <div class="stack-page full-width">
 
-    {% if messages %}
-      <div class="center messages">
-        <ul>
-          {% for message in messages %}
-          <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
-          {% endfor %}
-        </ul>
-      </div>
-    {% endif %}
+      {% if messages %}
+        <div class="center messages">
+          <ul>
+            {% for message in messages %}
+              <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
 
-    {% block content %}
+      {% block content %}
 
-    {% include '_about.html' %}
-    {% include '_testimonials.html' %}
-    {% include '_newsletter.html' %}
-    {% include '_cta.html' %}
-  </div>
+        {% include '_about.html' %}
+        {% include '_testimonials.html' %}
+        {% include '_newsletter.html' %}
+        {% include '_cta.html' %}
+        </div>
   <!-- .content -->
 
-  {% include '_footer.html' %}
+        {% include '_footer.html' %}
 
-  {% endblock content %}
+      {% endblock content %}
 
 
   <!-- JavaScript -->
-  {% block javascript %}
+      {% block javascript %}
   <!-- No JavaScript available -->
-  {% endblock javascript %}
+      {% endblock javascript %}
 
-</body>
+    </body>
 
-</html>
+  </html>

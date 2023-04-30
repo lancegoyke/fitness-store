@@ -5,11 +5,11 @@
 {% block head_title %}{% trans "Macro Calculator" %}{% endblock head_title %}
 
 {% block content %}
-<h1>{% trans "Macro Calculator" %}</h1>
+  <h1>{% trans "Macro Calculator" %}</h1>
 
-<form class="stack" method="POST">
+  <form class="stack" method="POST">
     {% csrf_token %}
     {{ form.as_p }}
     <button class="button" type="submit">Calculate</button>
-</form>
+  </form>
 {% endblock content %}
