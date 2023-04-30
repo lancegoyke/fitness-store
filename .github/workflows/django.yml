@@ -40,7 +40,7 @@ jobs:
           python -m pip install -r app/config/requirements.txt
 
       - name: run system checks
-        run: python manage.py check --deploy
+        run: python app/manage.py check --deploy
 #     - name: Run Tests
 #       run: |
 #       python manage.py test
