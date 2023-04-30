@@ -43,6 +43,9 @@ jobs:
 
       - name: run system checks
         run: python app/manage.py check --deploy
+
+      - name: check for migrations
+        run: python app/manage.py makemigrations --check
 #     - name: Run Tests
 #       run: |
 #       python manage.py test
