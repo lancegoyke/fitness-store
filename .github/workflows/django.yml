@@ -1,0 +1,48 @@
+name: Django CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    env:
+      SECRET_KEY: NotSecureForTesting
+      PYTHONUNBUFFERED: 1
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        id: setup_python
+        with:
+          python-version: "3.11"
+
+      - name: Install apt dependencies
+        run: sudo apt-get update && sudo apt-get install swig
+
+      - name: Cache virtualenv
+        uses: actions/cache@v3
+        with:
+          key: venv-${{ runner.os }}-${{ steps.setup_python.outputs.python-version}}-${{ hashFiles('app/config/requirements.txt') }}
+          path: ./app/.venv
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv app/.venv
+          source app/.venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -r app/config/requirements.txt
+          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
+          echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> $GITHUB_ENV
+
+      - name: run system checks
+        run: python app/manage.py check --deploy
+#     - name: Run Tests
+#       run: |
+#       python manage.py test
