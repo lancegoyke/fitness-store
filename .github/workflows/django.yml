@@ -48,35 +48,35 @@ jobs:
       - name: Start Docker Compose
         run: docker compose -f docker-compose.ci.yml up -d
 
-      - name: Set Up Python
-        uses: actions/setup-python@v4
-        id: setup_python
-        with:
-          python-version: "3.11"
+      # - name: Set Up Python
+      #   uses: actions/setup-python@v4
+      #   id: setup_python
+      #   with:
+      #     python-version: "3.11"
 
-      - name: Install Apt Dependencies
-        run: sudo apt-get update && sudo apt-get install swig
+      # - name: Install Apt Dependencies
+      #   run: sudo apt-get update && sudo apt-get install swig
 
-      - name: Cache Virtual Environment
-        uses: actions/cache@v3
-        with:
-          key: venv-${{ runner.os }}-${{ steps.setup_python.outputs.python-version}}-${{ hashFiles('app/config/requirements.txt') }}
-          path: ./app/.venv
+      # - name: Cache Virtual Environment
+      #   uses: actions/cache@v3
+      #   with:
+      #     key: venv-${{ runner.os }}-${{ steps.setup_python.outputs.python-version}}-${{ hashFiles('app/config/requirements.txt') }}
+      #     path: ./app/.venv
 
-      - name: Install Python Dependencies
-        run: |
-          python -m venv app/.venv
-          source app/.venv/bin/activate
-          python -m pip install --upgrade pip
-          python -m pip install -r app/config/requirements.txt
-          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
-          echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> $GITHUB_ENV
+      # - name: Install Python Dependencies
+      #   run: |
+      #     python -m venv app/.venv
+      #     source app/.venv/bin/activate
+      #     python -m pip install --upgrade pip
+      #     python -m pip install -r app/config/requirements.txt
+      #     echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
+      #     echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> $GITHUB_ENV
 
       - name: Run System Checks
-        run: python app/manage.py check --deploy
+        run: docker compose exec web python app/manage.py check --deploy
 
       - name: Check for Migrations
-        run: python app/manage.py makemigrations --check
+        run: docker compose exec web python app/manage.py makemigrations --check
 
       - name: Run Tests
-        run: cd app && pytest
+        run: docker compose exec web pytest
