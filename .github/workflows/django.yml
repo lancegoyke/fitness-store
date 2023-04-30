@@ -48,4 +48,4 @@ jobs:
         run: python app/manage.py makemigrations --check
 
       - name: Run Tests
-        run: pytest
+        run: cd app && pytest
