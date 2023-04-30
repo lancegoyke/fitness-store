@@ -16,6 +16,7 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       DATABASE: ${{ secrets.DATABASE }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       DEBUG: ${{ secrets.DEBUG }}
       DJANGO_ALLOWED_HOSTS: ${{ secrets.DJANGO_ALLOWED_HOSTS }}
       DOMAIN_URL: ${{ secrets.DOMAIN_URL }}
