@@ -1,24 +1,24 @@
 <div hx-target="#resultsbody" hx-swap="afterbegin">
   <form class="stack-form" method="post">
-      {% csrf_token %}
+    {% csrf_token %}
 
-      <div class="stack">
-        {% for field in form %}
+    <div class="stack">
+      {% for field in form %}
 
-          {% if field.errors %}
-            {{ field.errrors }}
+        {% if field.errors %}
+          {{ field.errrors }}
+        {% endif %}
+
+        <label class="stack" for="{{ field.id_for_label }}">
+          {{ field.label }}
+          {{ field }}
+          {% if field.help_text %}
+            <span class="help-text">{{ field.help_text }}</span>
           {% endif %}
+        </label>
 
-          <label class="stack" for="{{ field.id_for_label }}">
-            {{ field.label }}
-            {{ field }}
-            {% if field.help_text %}
-              <span class="help-text">{{ field.help_text }}</span>
-            {% endif %}
-          </label>
-
-        {% endfor %}
-      </div>
+      {% endfor %}
+    </div>
 
     <button class="button" type="submit" hx-post=".">Save</button>
   </form>

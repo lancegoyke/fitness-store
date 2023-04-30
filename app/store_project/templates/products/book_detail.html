@@ -5,120 +5,120 @@
 {% block head_title %}{% trans book.name %}{% endblock head_title %}
 
 {% block header %}
-<meta name="description" property="og:description" content="{{ book.description }}">
-<meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
-<meta name="author" content="{{ book.author.name }}">
-<meta property="og:title" content="{{ book.name }}" />
+  <meta name="description" property="og:description" content="{{ book.description }}">
+  <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+  <meta name="author" content="{{ book.author.name }}">
+  <meta property="og:title" content="{{ book.name }}" />
 
-{% if book.featured_image %}
-  <meta property="og:image" content="{{ book.featured_image.url }}" />
-{% else %}
-  <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
-{% endif %}
-<meta property="og:image:alt" content="{{ book.name }}" />
+  {% if book.featured_image %}
+    <meta property="og:image" content="{{ book.featured_image.url }}" />
+  {% else %}
+    <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+  {% endif %}
+  <meta property="og:image:alt" content="{{ book.name }}" />
 
 {% endblock header %}
 
 {% block content %}
 
-<div class="cluster">
+  <div class="cluster">
   <!-- intermediary wrapper -->
-  <p>
-    <a class="box padding" href="{% url 'products:store' %}">
-      < Back to Store
-    </a>
-    {% if user.is_superuser %}
-    <a class="box padding:s-1" href="{% url 'admin:products_book_change' book.id %}">
-      Admin
-    </a>
-    {% endif %}
-  </p>
-</div>
-
-<div class="product-switcher">
-  <div> <!-- intermediary wrapper -->
-    <div>
-      <div class="frame square">
-      {% if book.featured_image %}
-        <img src="{{ book.featured_image.url }}" alt="" />
-      {% else %}
-        <img style="background-color: var(--main-color-dark);">
+    <p>
+      <a class="box padding" href="{% url 'products:store' %}">
+        < Back to Store
+      </a>
+      {% if user.is_superuser %}
+        <a class="box padding:s-1" href="{% url 'admin:products_book_change' book.id %}">
+          Admin
+        </a>
       {% endif %}
-      </div>
-    </div>
-    <div class="stack">
+    </p>
+  </div>
+
+  <div class="product-switcher">
+    <div> <!-- intermediary wrapper -->
       <div>
-        <h1>{{ book.name }}</h1>
-        <div class="cluster">
-          <div> <!-- intermediary wrapper -->
-            <div class="money">${{ book.price|floatformat }}</div>
-            <div class="tag duration">{{ book.duration }} weeks</div>
-            <div class="tag frequency">{{ book.frequency }} days/wk</div>
-
-            {% if book.status == "pr" %}
-              <div class="tag private">PRIVATE</div>
-            {% endif %}
-
-            {% if book.status == "dr" %}
-              <div class="tag draft">DRAFT</div>
-            {% endif %}
-
-          </div>
+        <div class="frame square">
+          {% if book.featured_image %}
+            <img src="{{ book.featured_image.url }}" alt="" />
+          {% else %}
+            <img style="background-color: var(--main-color-dark);">
+          {% endif %}
         </div>
       </div>
+      <div class="stack">
+        <div>
+          <h1>{{ book.name }}</h1>
+          <div class="cluster">
+            <div> <!-- intermediary wrapper -->
+              <div class="money">${{ book.price|floatformat }}</div>
+              <div class="tag duration">{{ book.duration }} weeks</div>
+              <div class="tag frequency">{{ book.frequency }} days/wk</div>
 
-      <p>{{ book.description }}</p>
+              {% if book.status == "pr" %}
+                <div class="tag private">PRIVATE</div>
+              {% endif %}
 
-      <p>
-        {% if user.is_authenticated %}
-          {% with "products.can_view_"|concat:book.slug as can_view_book %}
-            {% if can_view_book in perms %}
-              <a class="button purchase box owned" href="{% url 'users:profile' %}">View in Account</a>
-            {% else %}
-              <button
-                class="button box purchase"
-                id="submitButton"
-                data-productType="book"
-                data-productSlug="{{ book.slug }}">
+              {% if book.status == "dr" %}
+                <div class="tag draft">DRAFT</div>
+              {% endif %}
+
+            </div>
+          </div>
+        </div>
+
+        <p>{{ book.description }}</p>
+
+        <p>
+          {% if user.is_authenticated %}
+            {% with "products.can_view_"|concat:book.slug as can_view_book %}
+              {% if can_view_book in perms %}
+                <a class="button purchase box owned" href="{% url 'users:profile' %}">View in Account</a>
+              {% else %}
+                <button
+                  class="button box purchase"
+                  id="submitButton"
+                  data-productType="book"
+                  data-productSlug="{{ book.slug }}">
                   Purchase!
-              </button>
-            {% endif %}
-          {% endwith %}
-        {% else %}
-          <a
-            class="button box purchase"
-            href="{% url 'payments:login_to_purchase' product_type='book' product_slug=book.slug %}">
-            Purchase!
-          </a>
-        {% endif %}
-      </p>
+                </button>
+              {% endif %}
+            {% endwith %}
+          {% else %}
+            <a
+              class="button box purchase"
+              href="{% url 'payments:login_to_purchase' product_type='book' product_slug=book.slug %}">
+              Purchase!
+            </a>
+          {% endif %}
+        </p>
+      </div>
     </div>
   </div>
-</div>
 
-<div class="stack center" style="margin-top: var(--s5);">
-  {% autoescape off %} {{ content }} {% endautoescape %}
-</div>
+  <div class="stack center" style="margin-top: var(--s5);">
+    {% autoescape off %} {{ content }} {% endautoescape %}
+  </div>
 
 {% endblock content %}
 
 <!-- JavaScript -->
 {% block javascript %}
-<script src="{% static 'js/payments.js' %}"></script>
-<script src="https://js.stripe.com/v3/"></script>
+  <script src="{% static 'js/payments.js' %}"></script>
+  <script src="https://js.stripe.com/v3/"></script>
 
-<script>
-  gtag('event', 'view_item', {
-    items: [{
-      item_id: '{{ book.id }}',
-      item_name: '{{ book.name }}',
-      item_brand: '{{ book.author }}',
-      item_category: 'books',
-      price: {{ book.price }},
+  <script>
+    gtag('event', 'view_item', {
+      items: [{
+        item_id: '{{ book.id }}',
+        item_name: '{{ book.name }}',
+        item_brand: '{{ book.author }}',
+        item_category: 'books',
+        price: {{ book.price }},
+        currency: 'USD',
+      }],
       currency: 'USD',
-    }],
-    currency: 'USD',
-    value: {{ book.price }},
-  });
-</script>
+      value: {{ book.price }},
+    });
+  </script>
 {% endblock javascript %}

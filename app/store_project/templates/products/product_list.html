@@ -5,68 +5,68 @@
 {% block head_title %}{% trans "Store" %}{% endblock head_title %}
 
 {% block header %}
-<meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
-<meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
-<meta property="og:title" content="Mastering Fitness" />
-<meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
-<meta property="og:image:alt" content="Mastering Fitness" />
+  <meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
+  <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+  <meta property="og:title" content="Mastering Fitness" />
+  <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+  <meta property="og:image:alt" content="Mastering Fitness" />
 {% endblock header %}
 
 {% block content %}
 
-<h1>Store</h1>
+  <h1>Store</h1>
 
-{% if user.is_superuser %}
-<p>
-  <a class="button" href="{% url 'admin:products_book_changelist' %}">Book Admin</a>
-  <a class="button" href="{% url 'admin:products_program_changelist' %}">Program Admin</a>
-</p>
-{% endif %}
+  {% if user.is_superuser %}
+    <p>
+      <a class="button" href="{% url 'admin:products_book_changelist' %}">Book Admin</a>
+      <a class="button" href="{% url 'admin:products_program_changelist' %}">Program Admin</a>
+    </p>
+  {% endif %}
 
-<h2>{% trans "Programs" %}</h2>
-{% include "products/_product_cards.html" with products=programs %}
+  <h2>{% trans "Programs" %}</h2>
+  {% include "products/_product_cards.html" with products=programs %}
 
-<h2>{% trans "Books" %}</h2>
-{% include "products/_product_cards.html" with products=books %}
+  <h2>{% trans "Books" %}</h2>
+  {% include "products/_product_cards.html" with products=books %}
 
-<p class="center text-center" style="margin-top: var(--s5);">Want something else? <a target="_blank" href="https://docs.google.com/forms/d/e/1FAIpQLSfqlmSwj1UW3anIIgP0uBEv31W41AhGH-5FYeGVly90dwkMVw/viewform?usp=sf_link">Request it.</a></p>
+  <p class="center text-center" style="margin-top: var(--s5);">Want something else? <a target="_blank" href="https://docs.google.com/forms/d/e/1FAIpQLSfqlmSwj1UW3anIIgP0uBEv31W41AhGH-5FYeGVly90dwkMVw/viewform?usp=sf_link">Request it.</a></p>
 
 {% endblock content %}
 
 {% block javascript %}
-<script>
-  let products = [];
-  {% for program in programs %}
-    products.push({
-      item_id: '{{ program.id }}',
-      item_name: '{{ program.name }}',
-      index: {{ forloop.counter }},
-      item_list_name: 'Store',
-      item_list_id: 'store',
-      item_brand: '{{ program.author }}',
-      item_category: 'programs',
-      price: {{ program.price }},
-      currency: 'USD',
-    });
-  {% endfor %}
+  <script>
+    let products = [];
+    {% for program in programs %}
+      products.push({
+        item_id: '{{ program.id }}',
+        item_name: '{{ program.name }}',
+        index: {{ forloop.counter }},
+        item_list_name: 'Store',
+        item_list_id: 'store',
+        item_brand: '{{ program.author }}',
+        item_category: 'programs',
+        price: {{ program.price }},
+        currency: 'USD',
+      });
+    {% endfor %}
 
-  {% for book in books %}
-    products.push({
-      item_id: '{{ book.id }}',
-      item_name: '{{ book.name }}',
-      index: {{ forloop.counter }},
+    {% for book in books %}
+      products.push({
+        item_id: '{{ book.id }}',
+        item_name: '{{ book.name }}',
+        index: {{ forloop.counter }},
+        item_list_name: 'Store',
+        item_list_id: 'store',
+        item_brand: '{{ book.author }}',
+        item_category: 'books',
+        price: {{ book.price }},
+        currency: 'USD',
+      });
+    {% endfor %}
+    gtag('event', 'view_item_list', {
+      items: products,
       item_list_name: 'Store',
-      item_list_id: 'store',
-      item_brand: '{{ book.author }}',
-      item_category: 'books',
-      price: {{ book.price }},
-      currency: 'USD',
+      item_list_id: 'store'
     });
-  {% endfor %}
-  gtag('event', 'view_item_list', {
-    items: products,
-    item_list_name: 'Store',
-    item_list_id: 'store'
-  });
-</script>
+  </script>
 {% endblock javascript %}

@@ -5,27 +5,27 @@
 {% block head_title %}{% trans "Cardio Workout" %}{% endblock %}
 
 {% block header %}
-<script src="{% static 'js/alpine.min.js' %}" defer></script>
+  <script src="{% static 'js/alpine.min.js' %}" defer></script>
 {% endblock header %}
 
 {% block content %}
-    <h1>{% trans "Cardio Workout" %}</h1>
+  <h1>{% trans "Cardio Workout" %}</h1>
 
-    {% if submitted %}
-      <h2>{% trans "Your Workout" %}</h2>
-      <p>{{ mode }}</p>
+  {% if submitted %}
+    <h2>{% trans "Your Workout" %}</h2>
+    <p>{{ mode }}</p>
 
-      {% if warm_up != 0 %}
+    {% if warm_up != 0 %}
       <p style="color:green;">
         {{ warm_up }} {% trans "minute warm up" %}
       </p>
-      {% endif %}
+    {% endif %}
 
-      {% if num_of_rounds == 0 %}
+    {% if num_of_rounds == 0 %}
       <p>
         {% trans "Go as far as you can in" %} {{ time_under_duress }} {% trans "minute" %}{{ time_under_duress|pluralize }}
       </p>
-      {% else %}
+    {% else %}
       <p>
         {% trans "Go hard for" %} {{ work }} {{ time_unit }}{{ work|pluralize }}</p>
       <p>
@@ -34,70 +34,70 @@
       <p>
         {% trans "Repeat for" %} {{ num_of_rounds}} {% trans "round" %}{{ num_of_rounds|pluralize }}
       </p>
-      {% endif %}
+    {% endif %}
 
-      {% if cool_down != 0 %}
+    {% if cool_down != 0 %}
       <p style="color:red;">
         {{ cool_down }} {% trans "minute cool down" %}
       </p>
-      {% endif %}
-
-      <hr>
     {% endif %}
 
-    <p>
+    <hr>
+  {% endif %}
+
+  <p>
+    {% blocktrans %}
+      <h2>Enter your details to get a new workout</h2>
+    {% endblocktrans %}
+  </p>
+  <div class="stack" x-data="{ open: false }">
+    <button
+      class="button info"
+      @click.prevent="open = !open"
+      x-text="open ? 'Close' : 'Get Help'"
+    >Get Help</button>
+    <div class="stack box info" x-show="open" style="display: none;">
       {% blocktrans %}
-        <h2>Enter your details to get a new workout</h2>
+        <p><strong>Selecting your exercise.</strong> We need to find something repetitive that doesn’t require much brain activity. This could be a circuit of 3-6 exercises you’re comfortable with, but it’s even easier to just select a cardio machine of your choice, e.g., elliptical, bike, rower, ski ergometer, treadmill walking, outdoor jogging, etc. You could even split your time between multiple machines.</p>
+        <p><strong>Selecting your duration.</strong> I would generally recommend doing something “kind of easy” for at least 15 minutes. You could go longer if you’re enjoying the process (e.g., nice hike, interesting podcast, etc.). More is usually better, but don’t let it stress you out. If you only have time for a 15-minute workout, then do a 15-minute workout. Most of my cardio sessions are 15-30 minutes. Very few of them are longer than an hour.</p>
+        <p><strong>Selecting your protocol.</strong> For these off-day workouts, you’ll want an “Aerobic” protocol as those require the “kind of easy” difficulty level I mentioned above. </p>
+        <p><strong>Generating your workout.</strong> Once you enter this data and hit “Submit”, the generator will give you the specific step-by-step instructions for your workout.</p>
+        <p><strong>Choosing the correct amount of resistance.</strong> More resistance can make your workout more challenging. If you’re finding you need to take a break before your protocol’s “rest period”, then there’s probably too much resistance (i.e., your treadmill is too fast or too inclined, your bike wheel has too much friction, etc.). You should make it easier so that you don’t need to take unplanned breaks. If you have to, though, that’s okay.</p>
       {% endblocktrans %}
-    </p>
-    <div class="stack" x-data="{ open: false }">
-      <button
-        class="button info"
-        @click.prevent="open = !open"
-        x-text="open ? 'Close' : 'Get Help'"
-        >Get Help</button>
-      <div class="stack box info" x-show="open" style="display: none;">
-        {% blocktrans %}
-          <p><strong>Selecting your exercise.</strong> We need to find something repetitive that doesn’t require much brain activity. This could be a circuit of 3-6 exercises you’re comfortable with, but it’s even easier to just select a cardio machine of your choice, e.g., elliptical, bike, rower, ski ergometer, treadmill walking, outdoor jogging, etc. You could even split your time between multiple machines.</p>
-          <p><strong>Selecting your duration.</strong> I would generally recommend doing something “kind of easy” for at least 15 minutes. You could go longer if you’re enjoying the process (e.g., nice hike, interesting podcast, etc.). More is usually better, but don’t let it stress you out. If you only have time for a 15-minute workout, then do a 15-minute workout. Most of my cardio sessions are 15-30 minutes. Very few of them are longer than an hour.</p>
-          <p><strong>Selecting your protocol.</strong> For these off-day workouts, you’ll want an “Aerobic” protocol as those require the “kind of easy” difficulty level I mentioned above. </p>
-          <p><strong>Generating your workout.</strong> Once you enter this data and hit “Submit”, the generator will give you the specific step-by-step instructions for your workout.</p>
-          <p><strong>Choosing the correct amount of resistance.</strong> More resistance can make your workout more challenging. If you’re finding you need to take a break before your protocol’s “rest period”, then there’s probably too much resistance (i.e., your treadmill is too fast or too inclined, your bike wheel has too much friction, etc.). You should make it easier so that you don’t need to take unplanned breaks. If you have to, though, that’s okay.</p>
-        {% endblocktrans %}
-      </div>
     </div>
+  </div>
 
-    <div class="stack-auth-form">
-      <form>
-        <p>
-          {{ form.non_field_errors }}
-        </p>
+  <div class="stack-auth-form">
+    <form>
+      <p>
+        {{ form.non_field_errors }}
+      </p>
 
-        <p>
-          <label class="stack" for="{{ form.mode.id_for_label }}">
-            <span>{% trans "Exercise" %}</span>
-            {{ form.mode }}
-            {{ form.mode.errors }}
-          </label>
-        </p>
+      <p>
+        <label class="stack" for="{{ form.mode.id_for_label }}">
+          <span>{% trans "Exercise" %}</span>
+          {{ form.mode }}
+          {{ form.mode.errors }}
+        </label>
+      </p>
 
-        <p>
-          <label class="stack" for="{{ form.duration.id_for_label }}">
-            <span>{% trans "Duration" %}</span>
-            {{ form.duration }}
-            {{ form.duration.errors }}
-          </label>
-        </p>
+      <p>
+        <label class="stack" for="{{ form.duration.id_for_label }}">
+          <span>{% trans "Duration" %}</span>
+          {{ form.duration }}
+          {{ form.duration.errors }}
+        </label>
+      </p>
 
-        <p>
-          <label class="stack" for="{{ form.protocol.id_for_label }}">
-            <span>{% trans "Protocol" %}</span>
-            {{ form.protocol }}
-            {{ form.protocol.errors }}
-          </label>
-        </p>
+      <p>
+        <label class="stack" for="{{ form.protocol.id_for_label }}">
+          <span>{% trans "Protocol" %}</span>
+          {{ form.protocol }}
+          {{ form.protocol.errors }}
+        </label>
+      </p>
 
-        <input class="button" type="submit" name="submit" value="Submit" />
-      </form>
-    </div>
+      <input class="button" type="submit" name="submit" value="Submit" />
+    </form>
+  </div>
 {% endblock %}

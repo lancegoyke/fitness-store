@@ -5,58 +5,58 @@
 {% block head_title %}{% trans "Interval Timer" %}{% endblock head_title %}
 
 {% block header %}
-<meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
-<meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
-<meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
-<meta property="og:image:alt" content="Mastering Fitness" />
-<link rel="stylesheet" href="{% static 'css/timer.css' %}" />
+  <meta name="description" property="og:description" content="Get in the best shape of your life with the help of these workouts and fitness educational materials.">
+  <meta name="keywords" content="fitness, health, strength, endurance, running, training, biking">
+  <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+  <meta property="og:image:alt" content="Mastering Fitness" />
+  <link rel="stylesheet" href="{% static 'css/timer.css' %}" />
 {% endblock header %}
 
 {% block content %}
-<h1>{% trans "Interval Timer" %}</h1>
+  <h1>{% trans "Interval Timer" %}</h1>
 
-<div id="timer-display" class="">
-  <div id="status" class="work"></div>
-  <div id="timer"></div>
-  <div id="countdown"></div>
-  <div class="bar-container">
-    <div id="progress-overlay"></div>
-    <div class="progress" id="progress-container"></div>
-  </div>
-  <div class="cycles"></div>
-</div>
-
-
-<form class="stack" id="timer-form">
-  <div class="field">
-    <label for="rounds">Rounds:</label>
-    <input type="number" id="rounds" name="rounds" min="1" value="30" required />
+  <div id="timer-display" class="">
+    <div id="status" class="work"></div>
+    <div id="timer"></div>
+    <div id="countdown"></div>
+    <div class="bar-container">
+      <div id="progress-overlay"></div>
+      <div class="progress" id="progress-container"></div>
+    </div>
+    <div class="cycles"></div>
   </div>
 
-  <div class="field">
-    <label for="work-duration">Work duration (seconds):</label>
-    <input type="number" id="work-duration" name="work-duration" min="1" value="30" required />
-  </div>
 
-  <div class="field">
-    <label for="rest-duration">Rest duration (seconds):</label>
-    <input type="number" id="rest-duration" name="rest-duration" min="1" value="30" required />
-  </div>
+  <form class="stack" id="timer-form">
+    <div class="field">
+      <label for="rounds">Rounds:</label>
+      <input type="number" id="rounds" name="rounds" min="1" value="30" required />
+    </div>
 
-  <div class="field">
-    <label for="audio-cue">Audio cue:</label>
-    <select id="audio-cue" name="audio-cue">
+    <div class="field">
+      <label for="work-duration">Work duration (seconds):</label>
+      <input type="number" id="work-duration" name="work-duration" min="1" value="30" required />
+    </div>
+
+    <div class="field">
+      <label for="rest-duration">Rest duration (seconds):</label>
+      <input type="number" id="rest-duration" name="rest-duration" min="1" value="30" required />
+    </div>
+
+    <div class="field">
+      <label for="audio-cue">Audio cue:</label>
+      <select id="audio-cue" name="audio-cue">
         <option value="beep">Beep</option>
         <option value="chime">Chime</option>
         <option value="bell">Bell</option>
-    </select>
-  </div>
+      </select>
+    </div>
 
-  <div class="buttons w-full">
-    <button class="button start" type="submit">Start</button>
-    <button class="button outline reset">Reset</button>
-  </div>
-</form>
+    <div class="buttons w-full">
+      <button class="button start" type="submit">Start</button>
+      <button class="button outline reset">Reset</button>
+    </div>
+  </form>
 
 
 
@@ -66,5 +66,5 @@
 {% endblock content %}
 
 {% block javascript %}
-<script src="{% static 'js/timer.js' %}" async defer></script>
+  <script src="{% static 'js/timer.js' %}" async defer></script>
 {% endblock javascript %}

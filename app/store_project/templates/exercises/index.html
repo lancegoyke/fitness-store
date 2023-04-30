@@ -5,81 +5,81 @@
 {% block head_title %}{% if category %}{% trans category %} {% endif %}{% trans "Exercises" %}{% endblock head_title %}
 
 {% block content %}
-<h1>{% if category %}{% trans category %} {% endif %}Exercises</h1>
+  <h1>{% if category %}{% trans category %} {% endif %}Exercises</h1>
 
-{% if user.is_superuser %}
-  <p>
-    <a class="button" href="{% url 'admin:exercises_exercise_changelist' %}">
-      Edit in Admin
-    </a>
-  </p>
-{% endif %}
+  {% if user.is_superuser %}
+    <p>
+      <a class="button" href="{% url 'admin:exercises_exercise_changelist' %}">
+        Edit in Admin
+      </a>
+    </p>
+  {% endif %}
 
-{% if category %}
-<p><a href="{% url 'exercises:list' %}"><-- all exercises</a></p>
-{% endif %}
+  {% if category %}
+    <p><a href="{% url 'exercises:list' %}"><-- all exercises</a></p>
+  {% endif %}
 
-{% if categories %}
-<div class="cluster categories">
-  <div> <!-- intermediary wrapper -->
-    {% for category in categories %}
-      <div><a class="tag filter-btn" href="{% url 'exercises:filtered_list' category.slug %}">{{ category.name }}</a></div>
-    {% endfor %}
+  {% if categories %}
+    <div class="cluster categories">
+      <div> <!-- intermediary wrapper -->
+        {% for category in categories %}
+          <div><a class="tag filter-btn" href="{% url 'exercises:filtered_list' category.slug %}">{{ category.name }}</a></div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="stack search">
+    <input
+      id="search"
+      type="text"
+      name="search"
+      hx-post="/exercises/search/"
+      hx-trigger="keyup changed delay:250ms"
+      hx-indicator=".htmx-indicator"
+      hx-target="#exercises"
+      hx-include="#category"
+      placeholder="Search"
+    >
+    <input
+      id="category"
+      type="hidden"
+      name="category"
+      value="{{ category }}"
+    >
+    <span class="htmx-indicator">...</span>
   </div>
-</div>
-{% endif %}
 
-<div class="stack search">
-  <input
-    id="search"
-    type="text"
-    name="search"
-    hx-post="/exercises/search/"
-    hx-trigger="keyup changed delay:250ms"
-    hx-indicator=".htmx-indicator"
-    hx-target="#exercises"
-    hx-include="#category"
-    placeholder="Search"
-  >
-  <input
-    id="category"
-    type="hidden"
-    name="category"
-    value="{{ category }}"
-  >
-  <span class="htmx-indicator">...</span>
-</div>
-
-<ul id="exercises">
-  {% include "exercises/exercises.html" %}
-</ul>
+  <ul id="exercises">
+    {% include "exercises/exercises.html" %}
+  </ul>
 {% endblock content %}
 
 {% block javascript %}
-<script src="{% static 'js/clipboard.min.js' %}"></script>
-<script>
-  var clipboard = new ClipboardJS('.copy-btn');
+  <script src="{% static 'js/clipboard.min.js' %}"></script>
+  <script>
+    var clipboard = new ClipboardJS('.copy-btn');
 
-  clipboard.on('success', function(e) {
-    console.log(e);
-  });
-</script>
+    clipboard.on('success', function(e) {
+      console.log(e);
+    });
+  </script>
 
-<script src="{% static 'js/htmx.min.js' %}"></script>
-<script>
-  document.body.addEventListener('htmx:configRequest', (event) => {
-    event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
-  })
-</script>
+  <script src="{% static 'js/htmx.min.js' %}"></script>
+  <script>
+    document.body.addEventListener('htmx:configRequest', (event) => {
+      event.detail.headers['X-CSRFToken'] = '{{ csrf_token }}';
+    })
+  </script>
 
-<script>
-  document.addEventListener("keyup", e => {
-    if (e.key !== "/" || e.ctrlKey || e.metaKey) return;
-    if (/^(?:input|textarea|select|button)$/i.test(e.target.tagName)) return;
+  <script>
+    document.addEventListener("keyup", e => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey) return;
+      if (/^(?:input|textarea|select|button)$/i.test(e.target.tagName)) return;
 
-    e.preventDefault();
-    document.getElementById("search").focus();
-  });
-</script>
+      e.preventDefault();
+      document.getElementById("search").focus();
+    });
+  </script>
 
 {% endblock javascript %}

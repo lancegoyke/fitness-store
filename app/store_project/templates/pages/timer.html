@@ -5,78 +5,78 @@
 {% block head_title %}{% trans "Interval Timer" %}{% endblock head_title %}
 
 {% block header %}
-<meta name="description" property="og:description" content="An interval timer for your fitness -- tabata, sprints, and more">
-<meta name="keywords" content="timer, interval timer, tabata timer, fitness, health, strength, endurance, running, training, biking">
-<meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
-<meta property="og:image:alt" content="Mastering Fitness" />
-<link rel="stylesheet" href="{% static 'css/timer.css' %}" />
+  <meta name="description" property="og:description" content="An interval timer for your fitness -- tabata, sprints, and more">
+  <meta name="keywords" content="timer, interval timer, tabata timer, fitness, health, strength, endurance, running, training, biking">
+  <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
+  <meta property="og:image:alt" content="Mastering Fitness" />
+  <link rel="stylesheet" href="{% static 'css/timer.css' %}" />
 {% endblock header %}
 
 {% block content %}
-<h1>{% trans "Interval Timer" %}</h1>
+  <h1>{% trans "Interval Timer" %}</h1>
 
-<div id="timer-display" class="inactive">
-  <div id="countdown">
-    <span id="minutes"></span>
-    <span class="divider">:</span>
-    <span id="seconds"></span>
-  </div>
-  <div class="bar-container">
-    <div id="progress-overlay"></div>
-    <div class="progress" id="progress-container"></div>
-  </div>
-  <div id="cycles">
-    <span id="current-round"></span>
-    <span class="divider">/</span>
-    <span id="total-rounds"></span></div>
-</div>
-
-
-<form class="stack" id="timer-form">
-  <div class="field">
-    <label for="rounds">Rounds:</label>
-    <input type="number" id="rounds" name="rounds" min="1" value="30" tabindex="1" required />
+  <div id="timer-display" class="inactive">
+    <div id="countdown">
+      <span id="minutes"></span>
+      <span class="divider">:</span>
+      <span id="seconds"></span>
+    </div>
+    <div class="bar-container">
+      <div id="progress-overlay"></div>
+      <div class="progress" id="progress-container"></div>
+    </div>
+    <div id="cycles">
+      <span id="current-round"></span>
+      <span class="divider">/</span>
+      <span id="total-rounds"></span></div>
   </div>
 
-  <div class="field">
-    <label for="work">Work duration (seconds):</label>
-    <input type="number" id="work" name="work" min="1" value="30" tabindex="1" required />
-  </div>
 
-  <div class="field">
-    <label for="rest">Rest duration (seconds):</label>
-    <input type="number" id="rest" name="rest" min="1" value="30" tabindex="1" required />
-  </div>
+  <form class="stack" id="timer-form">
+    <div class="field">
+      <label for="rounds">Rounds:</label>
+      <input type="number" id="rounds" name="rounds" min="1" value="30" tabindex="1" required />
+    </div>
 
-  <div class="field">
-    <label for="prep">Prep time (seconds):</label>
-    <input type="number" id="prep" name="prep" min="1" value="10" tabindex="1" required />
-  </div>
+    <div class="field">
+      <label for="work">Work duration (seconds):</label>
+      <input type="number" id="work" name="work" min="1" value="30" tabindex="1" required />
+    </div>
 
-  <div class="field">
-    <label for="audio-cue">Audio cue:</label>
-    <select id="audio-cue" name="audio-cue" tabindex="1">
+    <div class="field">
+      <label for="rest">Rest duration (seconds):</label>
+      <input type="number" id="rest" name="rest" min="1" value="30" tabindex="1" required />
+    </div>
+
+    <div class="field">
+      <label for="prep">Prep time (seconds):</label>
+      <input type="number" id="prep" name="prep" min="1" value="10" tabindex="1" required />
+    </div>
+
+    <div class="field">
+      <label for="audio-cue">Audio cue:</label>
+      <select id="audio-cue" name="audio-cue" tabindex="1">
         <option value="lance">Lance</option>
-    </select>
-  </div>
+      </select>
+    </div>
 
-  <div class="buttons w-full">
-    <button class="button start" id="start" type="submit" tabindex="1">Start</button>
-    <button class="button outline reset" id="reset" tabindex="1">Reset</button>
-  </div>
-</form>
+    <div class="buttons w-full">
+      <button class="button start" id="start" type="submit" tabindex="1">Start</button>
+      <button class="button outline reset" id="reset" tabindex="1">Reset</button>
+    </div>
+  </form>
 {% endblock content %}
 
 {% block javascript %}
-<script>
+  <script>
   // Audio files
-  const audio = {
-    one: new Audio("{% static 'audio/lance/one.ogg' %}"),
-    two: new Audio("{% static 'audio/lance/two.ogg' %}"),
-    three: new Audio("{% static 'audio/lance/three.ogg' %}"),
-    rest: new Audio("{% static 'audio/lance/rest.ogg' %}"),
-    go: new Audio("{% static 'audio/lance/go.ogg' %}"),
-  };
-</script>
-<script src="{% static 'js/timer.js' %}" async defer></script>
+    const audio = {
+      one: new Audio("{% static 'audio/lance/one.ogg' %}"),
+      two: new Audio("{% static 'audio/lance/two.ogg' %}"),
+      three: new Audio("{% static 'audio/lance/three.ogg' %}"),
+      rest: new Audio("{% static 'audio/lance/rest.ogg' %}"),
+      go: new Audio("{% static 'audio/lance/go.ogg' %}"),
+    };
+  </script>
+  <script src="{% static 'js/timer.js' %}" async defer></script>
 {% endblock javascript %}

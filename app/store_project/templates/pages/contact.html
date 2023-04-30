@@ -5,67 +5,67 @@
 {% block head_title %}{% trans "Contact" %}{% endblock head_title %}
 
 {% block content %}
-<h1>{% trans "Contact" %}</h1>
-<div class="stack-auth-form">
-  <form class="max-width:measure" method="POST">
-    {% csrf_token %}
+  <h1>{% trans "Contact" %}</h1>
+  <div class="stack-auth-form">
+    <form class="max-width:measure" method="POST">
+      {% csrf_token %}
 
-    <div class="messages">
-      {{ form.non_field_errors}}
-    </div>
+      <div class="messages">
+        {{ form.non_field_errors}}
+      </div>
 
-    <p>
-      <label class="stack" for="{{ form.subject.id_for_label }}">
-        <span>{% trans "Subject" %}</span>
-        {{ form.subject }}
+      <p>
+        <label class="stack" for="{{ form.subject.id_for_label }}">
+          <span>{% trans "Subject" %}</span>
+          {{ form.subject }}
 
-        {% if form.subject.errors %}
-          <ul class="errorlist">
-          {% for error in form.subject.errors %}
-            <li><strong>{% trans "Subject" %}:</strong> {{ error|escape }}</li>
-          {% endfor %}
-          </ul>
-        {% endif %}
-      </label>
-    </p>
-    <p>
-      <label class="stack" for="{{ form.user_email.id_for_label }}">
-        <span>{% trans "Your Email" %}</span>
-        {{ form.user_email }}
+          {% if form.subject.errors %}
+            <ul class="errorlist">
+              {% for error in form.subject.errors %}
+                <li><strong>{% trans "Subject" %}:</strong> {{ error|escape }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        </label>
+      </p>
+      <p>
+        <label class="stack" for="{{ form.user_email.id_for_label }}">
+          <span>{% trans "Your Email" %}</span>
+          {{ form.user_email }}
 
-        {% if form.user_email.errors %}
-          <ul class="errorlist">
-          {% for error in form.user_email.errors %}
-            <li><strong>{% trans "Your Email" %}:</strong> {{ error|escape }}</li>
-          {% endfor %}
-          </ul>
-        {% endif %}
-      </label>
-    </p>
-    <p>
-      <label class="stack" for="{{ form.message.id_for_label }}">
-        <span>{% trans "Message" %}</span>
-        {{ form.message }}
+          {% if form.user_email.errors %}
+            <ul class="errorlist">
+              {% for error in form.user_email.errors %}
+                <li><strong>{% trans "Your Email" %}:</strong> {{ error|escape }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        </label>
+      </p>
+      <p>
+        <label class="stack" for="{{ form.message.id_for_label }}">
+          <span>{% trans "Message" %}</span>
+          {{ form.message }}
 
-        {% if form.message.errors %}
-          <ul class="errorlist">
-          {% for error in form.message.errors %}
-            <li><strong>{% trans "Message" %}:</strong> {{ error|escape }}</li>
-          {% endfor %}
-          </ul>
-        {% endif %}
+          {% if form.message.errors %}
+            <ul class="errorlist">
+              {% for error in form.message.errors %}
+                <li><strong>{% trans "Message" %}:</strong> {{ error|escape }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
 
-      </label>
-    </p>
+        </label>
+      </p>
 
-    <div class="g-recaptcha" data-sitekey="{{ G_RECAPTCHA_SITE_KEY }}"></div>
+      <div class="g-recaptcha" data-sitekey="{{ G_RECAPTCHA_SITE_KEY }}"></div>
 
-    <button class="button g-recaptcha" type="submit">{% trans "Send Message" %}</button>
-  </form>
-</div>
+      <button class="button g-recaptcha" type="submit">{% trans "Send Message" %}</button>
+    </form>
+  </div>
 
 {% endblock content %}
 
 {% block javascript %}
-<script src="https://www.google.com/recaptcha/api.js" async defer></script>
+  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
 {% endblock javascript %}

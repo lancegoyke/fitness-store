@@ -17,6 +17,12 @@ repos:
       - id: check-json
       - id: check-xml
       - id: detect-aws-credentials
+  - repo: https://github.com/rtts/djhtml
+    rev: 3.0.6
+    hooks:
+      - id: djhtml
+        args:
+          - --tabwidth=2
   - repo: https://github.com/psf/black
     rev: 23.3.0
     hooks:
