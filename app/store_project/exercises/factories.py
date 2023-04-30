@@ -19,8 +19,8 @@ class ExerciseFactory(DjangoModelFactory):
     class Meta:
         model = Exercise
 
-    name = factory.Faker("sentence", nb_words=3, variable_nb_words=True)
-    slug = factory.LazyAttribute(lambda o: slugify(o.name))
+    name = factory.Faker("sentence", nb_words=5, variable_nb_words=True)
+    slug = factory.LazyAttribute(lambda o: slugify(o.name)[:50])
     demonstration = "https://youtu.be/5DQgXXkNMOk"
     explanation = "https://www.youtube.com/watch?v=7NCF7hS3CCE"
 
