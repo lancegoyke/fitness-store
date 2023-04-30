@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.postgres",
     # 3rd party
+    "admin_honeypot",
     "allauth",
     "allauth.account",
     "allauth.socialaccount",
