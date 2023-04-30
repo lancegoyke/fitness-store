@@ -73,10 +73,10 @@ jobs:
       #     echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> $GITHUB_ENV
 
       - name: Run System Checks
-        run: docker compose exec web python app/manage.py check --deploy
+        run: docker compose exec web python manage.py check --deploy
 
       - name: Check for Migrations
-        run: docker compose exec web python app/manage.py makemigrations --check
+        run: docker compose exec web python manage.py makemigrations --check
 
       - name: Run Tests
         run: docker compose exec web pytest
