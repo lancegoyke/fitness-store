@@ -38,6 +38,8 @@ jobs:
           source app/.venv/bin/activate
           python -m pip install --upgrade pip
           python -m pip install -r app/config/requirements.txt
+          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
+          echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> $GITHUB_ENV
 
       - name: run system checks
         run: python app/manage.py check --deploy
