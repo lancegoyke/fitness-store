@@ -9,7 +9,6 @@ from .base import *  # noqa
 
 INSTALLED_APPS += [  # noqa
     "django_ses",
-    "admin_honeypot",
 ]
 
 # Application performance monitoring (Scout)
