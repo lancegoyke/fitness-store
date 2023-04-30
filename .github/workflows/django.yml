@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     env:
+      DJANGO_SETTINGS_MODULE: app/config/settings/production.py
       SECRET_KEY: NotSecureForTesting
       PYTHONUNBUFFERED: 1
 
