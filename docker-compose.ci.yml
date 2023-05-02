@@ -17,9 +17,7 @@ services:
     volumes:
       - postgres_data_dev:/var/lib/postgresql/data/
     environment:
-      - POSTGRES_USER=lance_dev
-      - POSTGRES_PASSWORD=892h4uhk4h329f4
-      - POSTGRES_DB=store_dev
+      - POSTGRES_PASSWORD=postgrespassword
     networks:
       - backend
   redis:
@@ -30,7 +28,3 @@ services:
 
 volumes:
   postgres_data_dev:
-
-networks:
-  backend:
-    driver: host
