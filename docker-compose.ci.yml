@@ -33,4 +33,4 @@ volumes:
 
 networks:
   backend:
-    driver: bridge
+    driver: host
