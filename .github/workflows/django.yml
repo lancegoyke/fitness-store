@@ -16,7 +16,6 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       DATABASE: ${{ secrets.DATABASE }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       DEBUG: ${{ secrets.DEBUG }}
       DJANGO_ALLOWED_HOSTS: ${{ secrets.DJANGO_ALLOWED_HOSTS }}
       DOMAIN_URL: ${{ secrets.DOMAIN_URL }}
@@ -33,12 +32,6 @@ jobs:
       G_RECAPTCHA_SITE_KEY: ${{ secrets.G_RECAPTCHA_SITE_KEY }}
       SECRET_KEY: ${{ secrets.SECRET_KEY }}
       SPOONACULAR_API_KEY: ${{ secrets.SPOONACULAR_API_KEY }}
-      SQL_DATABASE: ${{ secrets.SQL_DATABASE }}
-      SQL_ENGINE: ${{ secrets.SQL_ENGINE }}
-      SQL_HOST: ${{ secrets.SQL_HOST }}
-      SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
-      SQL_PORT: ${{ secrets.SQL_PORT }}
-      SQL_USER: ${{ secrets.SQL_USER }}
       STRIPE_ENDPOINT_SECRET: ${{ secrets.STRIPE_ENDPOINT_SECRET }}
       STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
