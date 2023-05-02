@@ -117,7 +117,7 @@ WSGI_APPLICATION = "config.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": os.environ.get("SQL_ENGINE", "django.db.backends.postgresql"),
-        "NAME": os.environ.get("SQL_DATABASE"),
+        "NAME": os.environ.get("SQL_DATABASE", "postgres"),
         "USER": os.environ.get("SQL_USER", "postgres"),
         "PASSWORD": os.environ.get("SQL_PASSWORD", "postgrespassword"),
         "HOST": os.environ.get("SQL_HOST", "localhost"),
@@ -126,13 +126,10 @@ DATABASES = {
 }
 
 # dj_database_url
-DATABASE_URL = os.environ.get("DATABASE_URL")
-if DATABASE_URL:
-    db_from_env = dj_database_url.config(
+if DATABASE_URL := os.environ.get("DATABASE_URL"):
+    DATABASES["default"] = dj_database_url.config(
         default=DATABASE_URL, conn_max_age=500, ssl_require=True
     )
-    DATABASES["default"].update(db_from_env)
-
 
 # Password validation
 # https://docs.djangoproject.com/en/3.1/ref/settings/#auth-password-validators
