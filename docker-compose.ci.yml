@@ -18,8 +18,6 @@ services:
       - postgres_data_dev:/var/lib/postgresql/data/
     environment:
       - POSTGRES_PASSWORD=postgrespassword
-    networks:
-      - backend
   redis:
     restart: always
     image: redis:6.2.3
