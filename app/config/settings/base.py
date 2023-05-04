@@ -37,7 +37,7 @@ CORS_ALLOWED_ORIGINS = list(
 
 ATOMIC_REQUESTS = True
 
-ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost:8000").split(" ")
+ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "127.0.0.1 localhost").split(" ")
 
 
 # Application definition
@@ -55,7 +55,6 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.postgres",
     # 3rd party
-    "admin_honeypot",
     "allauth",
     "allauth.account",
     "allauth.socialaccount",
@@ -66,6 +65,7 @@ INSTALLED_APPS = [
     "embed_video",
     "django_browser_reload",
     # Local
+    "store_project.admin_honeypot",
     "store_project.cardio.apps.CardioConfig",
     "store_project.exercises.apps.ExercisesConfig",
     "store_project.notifications.apps.NotificationsConfig",

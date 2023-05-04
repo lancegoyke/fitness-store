@@ -24,3 +24,5 @@ EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 
 # Your stuff...
 # ------------------------------------------------------------------------------
+
+WHITENOISE_AUTOREFRESH = True
