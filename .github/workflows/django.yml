@@ -36,22 +36,11 @@ jobs:
       STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
 
-    services:
-      db:
-        image: postgres
-        env:
-          POSTGRES_PASSWORD: postgrespassword
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - uses: actions/checkout@v3
 
-      # - name: Start Docker Compose
-      # run: docker compose -f docker-compose.ci.yml up -d db redis
+      - name: Start Docker Compose
+        run: docker compose -f docker-compose.ci.yml up -d db redis
 
       - name: Set Up Python
         uses: actions/setup-python@v4
