@@ -26,6 +26,10 @@ urlpatterns = [
         {"sitemaps": sitemaps},
         name="django.contrib.sitemaps.views.sitemap",
     ),
+    path(
+        "admin/",
+        include("store_project.admin_honeypot.urls", namespace="admin_honeypot"),
+    ),
     path("markdownx/", include("markdownx.urls")),
     path("backside/clearcache/", include("clearcache.urls")),
     path("backside/", admin.site.urls),
@@ -53,5 +57,4 @@ if settings.ENVIRONMENT == "PRODUCTION":
     urlpatterns += [
         path("ses/bounce/", csrf_exempt(handle_bounce)),
         path("backside/django-ses/", include("django_ses.urls")),
-        path("admin/", include("admin_honeypot.urls", namespace="admin_honeypot")),
     ]

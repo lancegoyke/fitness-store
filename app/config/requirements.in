@@ -27,7 +27,6 @@ django-debug-toolbar
 pytest-django
 gunicorn
 django-ses[bounce]
-django-admin-honeypot @ git+https://github.com/sanyamidha10/django-admin-honeypot.git@90ab42ba11153cae5a833258aea3870f53279ca4
 sentry-sdk
 ipython
 ipdb
