@@ -220,6 +220,8 @@ python-dateutil==2.8.2
     # via
     #   botocore
     #   faker
+python-dotenv==1.0.0
+    # via -r requirements.in
 python3-openid==3.2.0
     # via django-allauth
 pytz==2023.3

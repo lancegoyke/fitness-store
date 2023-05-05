@@ -32,3 +32,4 @@ ipython
 ipdb
 pywatchman
 django-browser-reload
+python-dotenv

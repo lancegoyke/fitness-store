@@ -78,7 +78,7 @@ This should ask for username, email, and password.
 You can edit the user's full name in the Django shell...
 
 ```
-docker-compose exec web python manage.py shell
+python manage.py shell
 >>> from django.contrib.auth import get_user_model
 >>> User = get_user_model()
 >>> me = User.objects.get(username="<the username you typed")
@@ -90,21 +90,33 @@ docker-compose exec web python manage.py shell
 
 ## Local Development
 
-### Environment Variables.
+### Environment Variables
 
 Be sure to include [Stripe test mode publishable and secret keys](https://stripe.com/docs/test-mode) in `.env.dev`.
 
-To build containers and detach the console:
+### Docker Compose
+
+To build the database and cache containers:
 
 ```
 cd fitness-store
 docker-compose up -d --build
 ```
 
+### Django
+
+To run the Django development server:
+
+```
+cd app
+python manage.py runserver
+```
+
 To update the database schema:
 
 ```
-docker-compose exec web python manage.py migrate
+cd app
+python manage.py migrate
 ```
 
 To see running container logs:
@@ -127,7 +139,7 @@ Once listening, you must trigger the event by performing the corresponding actio
 To setup test data:
 
 ```
-docker-compose exec web python manage.py setup_test_data
+python manage.py setup_test_data
 ```
 
 Short tests have been made for most of the project.
@@ -135,12 +147,12 @@ Short tests have been made for most of the project.
 To run tests:
 
 ```
-docker-compose exec web pytest
+pytest
 ```
 
 To see coverage report:
 
 ```
-docker-compose exec web coverage run -m pytest
-docker-compose exec web coverage report -m
+coverage run -m pytest
+coverage report -m
 ```

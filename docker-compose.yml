@@ -1,30 +1,19 @@
 version: "3.9"
 
 services:
-  web:
-    build:
-      context: ./app
-      dockerfile: Dockerfile
-    command: python manage.py runserver 0.0.0.0:8000
-    volumes:
-      - ./app/:/usr/src/app/
-    ports:
-      - 8000:8000
-    env_file:
-      - ./.env.dev
-    depends_on:
-      - db
   db:
     image: postgres:14.7
     volumes:
       - postgres_data_dev:/var/lib/postgresql/data/
     environment:
       - POSTGRES_PASSWORD=postgres
+    ports:
+      - 5432:5432
   redis:
     restart: always
     image: redis:6.2.3
-    expose:
-      - "6379"
+    ports:
+      - 6379:6379
 
 volumes:
   postgres_data_dev:
