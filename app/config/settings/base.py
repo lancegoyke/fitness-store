@@ -8,7 +8,7 @@ import dj_database_url
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "PRODUCTION")
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 PRODUCT_NAME_MAX_LENGTH = 80
-DOMAIN_URL = os.environ.get("DOMAIN_URL", "https://mastering-fitness.herokuapp.com/")
+DOMAIN_URL = os.environ.get("DOMAIN_URL", "http://localhost:8000/")
 ADMINS = [
     ("Lance Goyke", "lance@lancegoyke.com"),
 ]
@@ -32,12 +32,16 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-klanmxuengq839ng")
 DEBUG = int(os.environ.get("DEBUG", default=0))
 
 CORS_ALLOWED_ORIGINS = list(
-    os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:8000").split(" ")
+    os.environ.get(
+        "CORS_ALLOWED_ORIGINS", "http://localhost:8000 http://127.0.0.1:8000"
+    ).split(" ")
 )
 
 ATOMIC_REQUESTS = True
 
-ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "127.0.0.1 localhost").split(" ")
+ALLOWED_HOSTS = os.environ.get(
+    "DJANGO_ALLOWED_HOSTS", "localhost 127.0.0.1 [::1]"
+).split(" ")
 
 
 # Application definition
@@ -116,10 +120,10 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": os.environ.get("SQL_ENGINE", "django.db.backends.sqlite3"),
-        "NAME": os.environ.get("SQL_DATABASE", APP_DIR / "db.sqlite3"),
-        "USER": os.environ.get("SQL_USER", "user"),
-        "PASSWORD": os.environ.get("SQL_PASSWORD", "password"),
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ.get("SQL_DATABASE", "postgres"),
+        "USER": os.environ.get("SQL_USER", "postgres"),
+        "PASSWORD": os.environ.get("SQL_PASSWORD", "postgres"),
         "HOST": os.environ.get("SQL_HOST", "localhost"),
         "PORT": os.environ.get("SQL_PORT", "5432"),
     }

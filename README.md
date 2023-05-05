@@ -35,12 +35,12 @@ This is emulated in docker-compose.prod.yml.
 
 ## Deployment
 
-This app runs in a container on Heroku with a heroku-postgresql database addon.
+This app runs in a container on Heroku with a heroku-postgresql database addon. New code pushed to GitHub is chain-pushed to Heroku.
 
 To deploy:
 
 ```
-git push heroku main
+git push origin main
 ```
 
 ## Database Migrations
@@ -90,7 +90,9 @@ docker-compose exec web python manage.py shell
 
 ## Local Development
 
-Be sure to include test publishable and secret keys from Stripe in `.env.dev`.
+### Environment Variables.
+
+Be sure to include [Stripe test mode publishable and secret keys](https://stripe.com/docs/test-mode) in `.env.dev`.
 
 To build containers and detach the console:
 
