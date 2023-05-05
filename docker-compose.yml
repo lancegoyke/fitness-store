@@ -19,9 +19,7 @@ services:
     volumes:
       - postgres_data_dev:/var/lib/postgresql/data/
     environment:
-      - POSTGRES_USER=lance_dev
-      - POSTGRES_PASSWORD=892h4uhk4h329f4
-      - POSTGRES_DB=store_dev
+      - POSTGRES_PASSWORD=postgres
   redis:
     restart: always
     image: redis:6.2.3
