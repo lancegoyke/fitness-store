@@ -1,7 +1,13 @@
 import os
+import sys
 from pathlib import Path
 
 import dj_database_url
+from dotenv import load_dotenv
+
+if "pytest" not in sys.modules:
+    load_dotenv()
+
 
 # Custom Project settings
 # ------------------------------------------------------------------------------
@@ -33,7 +39,8 @@ DEBUG = int(os.environ.get("DEBUG", default=0))
 
 CORS_ALLOWED_ORIGINS = list(
     os.environ.get(
-        "CORS_ALLOWED_ORIGINS", "http://localhost:8000 http://127.0.0.1:8000"
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:8000 http://127.0.0.1:8000",
     ).split(" ")
 )
 
@@ -124,7 +131,7 @@ DATABASES = {
         "NAME": os.environ.get("SQL_DATABASE", "postgres"),
         "USER": os.environ.get("SQL_USER", "postgres"),
         "PASSWORD": os.environ.get("SQL_PASSWORD", "postgres"),
-        "HOST": os.environ.get("SQL_HOST", "db"),
+        "HOST": os.environ.get("SQL_HOST", "localhost"),
         "PORT": os.environ.get("SQL_PORT", "5432"),
     }
 }
@@ -252,7 +259,7 @@ DEFAULT_CACHE_TIMEOUT = 604800  # one week
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": os.environ.get("REDIS_URL", "redis://redis:6379/0"),
+        "LOCATION": os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         },
