@@ -103,7 +103,13 @@ cd fitness-store
 docker-compose up -d --build
 ```
 
-### Django
+### Python & Django
+
+This project depends on m2crypto, which needs `swig`:
+
+```
+sudo apt update && sudo apt install -y swig
+```
 
 To run the Django development server:
 
