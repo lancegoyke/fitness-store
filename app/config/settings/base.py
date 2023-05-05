@@ -9,6 +9,19 @@ if "pytest" not in sys.modules:
     load_dotenv()
 
 
+# Utilities
+# ------------------------------------------------------------------------------
+def get_env_var(var_name, default=None):
+    """Get the environment variable or return exception."""
+    try:
+        return os.environ[var_name]
+    except KeyError:
+        if default is not None:
+            return default
+        error_msg = "Set the {} environment variable".format(var_name)
+        raise Exception(error_msg)
+
+
 # Custom Project settings
 # ------------------------------------------------------------------------------
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "PRODUCTION")
@@ -188,8 +201,8 @@ STATICFILES_DIRS = [
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
 AWS_STORAGE_BUCKET_NAME = "masterfit"
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "fake598234752934")
-AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "fake423456j234h6k2j5h")
+AWS_ACCESS_KEY_ID = get_env_var("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = get_env_var("AWS_SECRET_ACCESS_KEY")
 
 
 # User Management
@@ -219,8 +232,8 @@ AUTHENTICATION_BACKENDS = [
 SOCIALACCOUNT_PROVIDERS = {
     "facebook": {
         "APP": {
-            "client_id": os.environ.get("FB_APP_ID", "facebooknotgoingtowork"),
-            "secret": os.environ.get("FB_SECRET_KEY", "facebooknotsosecretsecret"),
+            "client_id": get_env_var("FB_APP_ID"),
+            "secret": get_env_var("FB_SECRET_KEY"),
         },
         "METHOD": "js_sdk",
         "SCOPE": [
@@ -232,8 +245,8 @@ SOCIALACCOUNT_PROVIDERS = {
     },
     "google": {
         "APP": {
-            "client_id": os.environ.get("GOOGLE_CLIENT_ID", "googlenotgoingtowork"),
-            "secret": os.environ.get("GOOGLE_CLIENT_SECRET", "googlenotsosecretsecret"),
+            "client_id": get_env_var("GOOGLE_CLIENT_ID"),
+            "secret": get_env_var("GOOGLE_CLIENT_SECRET"),
         },
         "SCOPE": [
             "profile",
@@ -247,10 +260,8 @@ SOCIALACCOUNT_PROVIDERS = {
 
 # Payments
 
-STRIPE_PUBLISHABLE_KEY = os.environ.get(
-    "STRIPE_PUBLISHABLE_KEY", "stripenotgoingtowork"
-)
-STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "stripenotsosecretsecret")
+STRIPE_PUBLISHABLE_KEY = get_env_var("STRIPE_PUBLISHABLE_KEY")
+STRIPE_SECRET_KEY = get_env_var("STRIPE_SECRET_KEY")
 
 # Cache
 
