@@ -24,9 +24,8 @@ Current features:
 
 Current features:
 
-- Docker
-- Docker Compose
-- Nginx
+- Docker and Docker Compose
+- Redis for caching static pages
 - PostgreSQL
 - pytest
 - custom User model
