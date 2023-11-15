@@ -11,7 +11,7 @@ Current features:
 - Layout powered by [Every Layout](https://every-layout.dev/) and basic CSS
 - `payments` – powered by Stripe Checkout with information synced from Django Admin dashboard
 - `pages` – markdown-powered pages (ex: [About page](https://mastering.fitness/about/))
-- `product` – foundation of the shop with extendable Product abstract base class (ex: [30 Days of Fitness](https://mastering.fitness/programs/30-days-fitness-challenge/))
+- `products` – foundation of the shop with extendable Product abstract base class (ex: [30 Days of Fitness](https://mastering.fitness/programs/30-days-fitness-challenge/))
 - `exercises` – exercise database with instruction videos and alternative suggestions ([Exercises](https://mastering.fitness/exercises/))
 - `cardio` – self-generated cardio workouts ([Cardio](https://mastering.fitness/cardio/))
 - `timer` - interval timer in JavaScript ([Timer](https://mastering.fitness/timer/))
