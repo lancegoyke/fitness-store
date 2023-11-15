@@ -30,6 +30,5 @@ django-ses[bounce]
 sentry-sdk
 ipython
 ipdb
-pywatchman
 django-browser-reload
 python-dotenv
