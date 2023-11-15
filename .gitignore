@@ -12,3 +12,4 @@ tmp/
 *.pyc
 *.dump
 testdata_*
+__pycache__/
