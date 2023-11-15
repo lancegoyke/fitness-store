@@ -104,12 +104,6 @@ docker-compose up -d --build
 
 ### Python & Django
 
-This project depends on m2crypto, which needs `swig`:
-
-```
-sudo apt update && sudo apt install -y swig
-```
-
 To run the Django development server:
 
 ```
