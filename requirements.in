@@ -32,3 +32,4 @@ ipython
 ipdb
 django-browser-reload
 python-dotenv
+uv
