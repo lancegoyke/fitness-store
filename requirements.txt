@@ -49,7 +49,7 @@ dill==0.3.8
     # via pylint
 dj-database-url==2.2.0
     # via -r requirements.in
-django==4.2.7
+django==4.2.13
     # via
     #   -r requirements.in
     #   dj-database-url
@@ -72,7 +72,7 @@ django-clearcache==1.2.1
     # via -r requirements.in
 django-cors-headers==4.3.1
     # via -r requirements.in
-django-debug-toolbar==4.3.0
+django-debug-toolbar==4.4.2
     # via -r requirements.in
 django-embed-video==1.4.10
     # via -r requirements.in
