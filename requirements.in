@@ -5,7 +5,7 @@ django-markdownx
 Markdown
 stripe
 django-lifecycle
-django-allauth
+django-allauth[socialaccount]
 factory_boy
 django-cors-headers
 whitenoise[brotli]
