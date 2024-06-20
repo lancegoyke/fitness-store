@@ -1,4 +1,4 @@
-{% extends "socialaccount/base.html" %}
+{% extends "_base.html" %}
 {% load i18n %}
 {% load allauth %}
 {% block head_title %}
@@ -23,9 +23,7 @@
   {% element form method="post" no_visible_fields=True %}
     {% slot actions %}
       {% csrf_token %}
-      {% element button type="submit" %}
-        {% trans "Continue" %}
-      {% endelement %}
+      <button class="primaryAction button" type="submit">{% trans "Continue" %}</button>
     {% endslot %}
   {% endelement %}
 {% endblock content %}
