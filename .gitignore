@@ -13,3 +13,4 @@ tmp/
 *.dump
 testdata_*
 __pycache__/
+credentials.json
