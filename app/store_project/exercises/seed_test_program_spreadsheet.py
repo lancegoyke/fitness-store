@@ -78,9 +78,10 @@ def seed_spreadsheet_with_program(spreadsheet_id):
         ["A2) Barbell Romanian Deadlift (RDL)",                        "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "",                                                             "Went back to Kettlebell Romanian Deadlift", "Exercise with letter+number order prepended"],  # noqa: E501
         ["A2) Front Squat",                                            "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "Do Crossed Arm Front Squat instead if unable to hold the bar", "Yeah that was tough",                       "Exercise in the notes section"],  # noqa: E501
         ["Single Leg Romanaian Deadlift (SLRDL) aka the Sipping Bird", "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "Stay long throughout",                                         "Feels good man",                            "Exercise with extra text appended"],  # noqa: E501
+        ["B) Safety Squat Bar Squat",                                  "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "Stay tall throughout",                                         "That bar is heavy!!",                       "Exercise not in the database"],  # noqa: E501
     ]
     # fmt: on
-    return update_values(spreadsheet_id, "A1:H6", "USER_ENTERED", values)
+    return update_values(spreadsheet_id, "A1:H7", "USER_ENTERED", values)
 
 
 def update_values(spreadsheet_id, range_name, value_input_option, _values):
