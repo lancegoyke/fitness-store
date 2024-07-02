@@ -15,3 +15,4 @@ testdata_*
 __pycache__/
 credentials.json
 token.json
+test_spreadsheet.json
