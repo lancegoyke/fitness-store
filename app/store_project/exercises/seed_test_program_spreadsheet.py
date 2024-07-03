@@ -46,7 +46,7 @@ def create(title):
         spreadsheet = {"properties": {"title": title}}
         spreadsheet = (
             service.spreadsheets()
-            .create(body=spreadsheet, fields="spreadsheetId,spreadsheetUrl")
+            .create(body=spreadsheet, fields="spreadsheetId,spreadsheetUrl,sheets")
             .execute()
         )
         print(f"Spreadsheet URL: {spreadsheet.get('spreadsheetUrl')}")
@@ -75,9 +75,11 @@ def seed_spreadsheet_with_program(spreadsheet_id):
         ["A2) Front Squat",                                            "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "Do Crossed Arm Front Squat instead if unable to hold the bar", "Yeah that was tough",                       "Exercise in the notes section"],  # noqa: E501
         ["Single Leg Romanaian Deadlift (SLRDL) aka the Sipping Bird", "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "Stay long throughout",                                         "Feels good man",                            "Exercise with extra text appended"],  # noqa: E501
         ["B) Safety Squat Bar Squat",                                  "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "Stay tall throughout",                                         "That bar is heavy!!",                       "Exercise not in the database"],  # noqa: E501
+        [],
+        ["Test Hello World!"],
     ]
     # fmt: on
-    return update_values(spreadsheet_id, "A1:H7", "USER_ENTERED", values)
+    return update_values(spreadsheet_id, "A1:H9", "USER_ENTERED", values)
 
 
 def update_values(spreadsheet_id, range_name, value_input_option, _values):
@@ -104,11 +106,57 @@ def update_values(spreadsheet_id, range_name, value_input_option, _values):
         return error
 
 
+def find_and_replace(spreadsheet_id: str, sheet_id: str, find: str, replacement: str):
+    """Searches for `find` and replaces with `replacement`."""
+    creds = get_creds()
+    try:
+        service = build("sheets", "v4", credentials=creds)
+        requests = []
+        # Find and replace text
+        requests.append(
+            {
+                "findReplace": {
+                    "find": find,
+                    "replacement": replacement,
+                    "sheetId": sheet_id,
+                }
+            }
+        )
+        body = {"requests": requests}
+        response = (
+            service.spreadsheets()
+            .batchUpdate(spreadsheetId=spreadsheet_id, body=body)
+            .execute()
+        )
+        print(f"{response=}")
+        find_replace_response = response.get("replies")[1].get("findReplace")
+        print(f"{find_replace_response.get('occurrencesChanged')} replacements made.")
+        return response
+
+    except HttpError as error:
+        print(f"An error occurred: {error}")
+        return error
+
+
 if __name__ == "__main__":
-    if not Path(SPREADSHEET_FILENAME):
+    if not Path(SPREADSHEET_FILENAME).exists():
         create("Link Tester Sheet")
 
-    spreadsheet_id: str
+    spreadsheet: dict
     with open(SPREADSHEET_FILENAME) as f:
-        spreadsheet_id = json.load(f).get("spreadsheetId")
-    seed_spreadsheet_with_program(spreadsheet_id)
+        spreadsheet = json.load(f)
+
+    if spreadsheet is not None:
+        spreadsheet_id = spreadsheet.get("spreadsheetId")
+        sheets = spreadsheet.get("sheets")
+        if sheets is not None and len(sheets) > 0:
+            sheet_id = sheets[0].get("properties").get("sheetId")
+        else:
+            print("No sheets found in the spreadsheet.")
+    else:
+        print("Spreadsheet is None.")
+
+    if spreadsheet_id is not None and sheet_id is not None:
+        seed_spreadsheet_with_program(spreadsheet_id)
+        # find_and_replace(spreadsheet_id, sheet_id, "World", "Developer")
+        find_and_replace(spreadsheet_id, sheet_id, "Developer", "World")
