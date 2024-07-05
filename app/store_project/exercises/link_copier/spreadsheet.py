@@ -2,6 +2,7 @@ import json
 import os.path
 from dataclasses import dataclass
 from typing import Union
+from functools import wraps
 
 from google.auth.external_account_authorized_user import Credentials as ExternalCreds
 from google.auth.transport.requests import Request
@@ -22,6 +23,20 @@ class Coordinate:
     sheet_id: int
     row_index: int
     column_index: int
+
+
+def sheets_api_call(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        creds = get_creds()
+        try:
+            service = build("sheets", "v4", credentials=creds)
+            return func(service, *args, **kwargs)
+        except HttpError as error:
+            print(f"An error occurred: {error}")
+            return error
+
+    return wrapper
 
 
 def get_creds() -> Union[Credentials, ExternalCreds]:
@@ -45,23 +60,18 @@ def get_creds() -> Union[Credentials, ExternalCreds]:
     return creds
 
 
-def create(title):
+@sheets_api_call
+def create(service, title):
     """Creates the Sheet the user has access to."""
-    creds = get_creds()
-    try:
-        service = build("sheets", "v4", credentials=creds)
-        spreadsheet = {"properties": {"title": title}}
-        spreadsheet = (
-            service.spreadsheets()
-            .create(body=spreadsheet, fields="spreadsheetId,spreadsheetUrl,sheets")
-            .execute()
-        )
-        print(f"Spreadsheet URL: {spreadsheet.get('spreadsheetUrl')}")
-        write_to_file(spreadsheet)
-        return spreadsheet.get("spreadsheetId")
-    except HttpError as error:
-        print(f"An error occurred: {error}")
-        return error
+    spreadsheet = {"properties": {"title": title}}
+    spreadsheet = (
+        service.spreadsheets()
+        .create(body=spreadsheet, fields="spreadsheetId,spreadsheetUrl,sheets")
+        .execute()
+    )
+    print(f"Spreadsheet URL: {spreadsheet.get('spreadsheetUrl')}")
+    write_to_file(spreadsheet)
+    return spreadsheet.get("spreadsheetId")
 
 
 def write_to_file(spreadsheet):
@@ -71,28 +81,23 @@ def write_to_file(spreadsheet):
         print(f"Wrote spreadsheet data to {SPREADSHEET_FILENAME}")
 
 
-def update_values(spreadsheet_id, range_name, value_input_option, _values):
+@sheets_api_call
+def update_values(service, spreadsheet_id, range_name, value_input_option, _values):
     """Creates the batch_update the user has access to."""
-    creds = get_creds()
-    try:
-        service = build("sheets", "v4", credentials=creds)
-        body = {"values": _values}
-        result = (
-            service.spreadsheets()
-            .values()
-            .update(
-                spreadsheetId=spreadsheet_id,
-                range=range_name,
-                valueInputOption=value_input_option,
-                body=body,
-            )
-            .execute()
+    body = {"values": _values}
+    result = (
+        service.spreadsheets()
+        .values()
+        .update(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            valueInputOption=value_input_option,
+            body=body,
         )
-        print(f"{result.get('updatedCells')} cells updated.")
-        return result
-    except HttpError as error:
-        print(f"An error occurred: {error}")
-        return error
+        .execute()
+    )
+    print(f"{result.get('updatedCells')} cells updated.")
+    return result
 
 
 def find_replace_request(find: str, replacement: str, sheet_id: int):
@@ -118,51 +123,39 @@ def paste_data_request(coordinate: Coordinate, html_data: str):
     }
 
 
-def batch_update(spreadsheet_id: str, requests: list[dict[str, str]]):
+@sheets_api_call
+def batch_update(service, spreadsheet_id: str, requests: list[dict[str, str]]):
     """Searches for `find` and replaces with `replacement`."""
-    creds = get_creds()
-    try:
-        service = build("sheets", "v4", credentials=creds)
-        body = {"requests": requests}
-        response = (
-            service.spreadsheets()
-            .batchUpdate(spreadsheetId=spreadsheet_id, body=body)
-            .execute()
+    body = {"requests": requests}
+    response = (
+        service.spreadsheets()
+        .batchUpdate(spreadsheetId=spreadsheet_id, body=body)
+        .execute()
+    )
+    # TODO: log results to the console
+    # find_replace_response = response.get("replies")[0].get("findReplace")
+    # print(
+    #     f"{find_replace_response.get('occurrencesChanged', 0)} replacements made."
+    # )
+    print(f"Batch update: {response}")
+    return response
+
+
+@sheets_api_call
+def read_cell(service, spreadsheet_id: str, range: str):
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            range=range,
+            fields="*",
         )
-        # TODO: log results to the console
-        # find_replace_response = response.get("replies")[0].get("findReplace")
-        # print(
-        #     f"{find_replace_response.get('occurrencesChanged', 0)} replacements made."
-        # )
-        print(f"Batch update: {response}")
-        return response
-
-    except HttpError as error:
-        print(f"An error occurred: {error}")
-        return error
-
-
-def read_cell(spreadsheet_id: str, range: str):
-    creds = get_creds()
-    try:
-        service = build("sheets", "v4", credentials=creds)
-
-        result = (
-            service.spreadsheets()
-            .values()
-            .get(
-                spreadsheetId=spreadsheet_id,
-                range=range,
-                fields="*",
-            )
-            .execute()
-        )
-        rows = result.get("values", [])
-        print(f"{len(rows)} rows retrieved")
-        return result
-    except HttpError as error:
-        print(f"An error occurred: {error}")
-        return error
+        .execute()
+    )
+    rows = result.get("values", [])
+    print(f"{len(rows)} rows retrieved")
+    return result
 
 
 if __name__ == "__main__":
