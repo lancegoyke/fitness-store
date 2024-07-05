@@ -1,6 +1,6 @@
 import json
 import os.path
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Union
 
 from google.auth.external_account_authorized_user import Credentials as ExternalCreds
@@ -15,6 +15,13 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 # A local copy of the spreadsheet
 SPREADSHEET_FILENAME = "test_spreadsheet.json"
+
+
+@dataclass
+class Coordinate:
+    sheet_id: int
+    row_index: int
+    column_index: int
 
 
 def get_creds() -> Union[Credentials, ExternalCreds]:
@@ -64,24 +71,6 @@ def write_to_file(spreadsheet):
         print(f"Wrote spreadsheet data to {SPREADSHEET_FILENAME}")
 
 
-def seed_spreadsheet_with_program(spreadsheet_id):
-    """Seeds the spreadsheet with some test cases."""
-    # fmt: off
-    values = [
-        ["",                                                           "Test User Program"],  # noqa: E501
-        ["",                                                           "Week 1",             "Week 2", "Week 3", "Week 4", "Coach Notes",                                                  "Athlete Notes",                             "Test Case"],  # noqa: E501
-        ["Push Up",                                                    "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "Arms long at the top",                                         "",                                          "Exercise in main column"],  # noqa: E501
-        ["A2) Barbell Romanian Deadlift (RDL)",                        "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "",                                                             "Went back to Kettlebell Romanian Deadlift", "Exercise with letter+number order prepended"],  # noqa: E501
-        ["A2) Front Squat",                                            "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "Do Crossed Arm Front Squat instead if unable to hold the bar", "Yeah that was tough",                       "Exercise in the notes section"],  # noqa: E501
-        ["Single Leg Romanaian Deadlift (SLRDL) aka the Sipping Bird", "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "Stay long throughout",                                         "Feels good man",                            "Exercise with extra text appended"],  # noqa: E501
-        ["B) Safety Squat Bar Squat",                                  "3 x 10",             "3 x 10", "3 x 12", "3 x 12", "Stay tall throughout",                                         "That bar is heavy!!",                       "Exercise not in the database"],  # noqa: E501
-        [],
-        ["Test Hello World!"],
-    ]
-    # fmt: on
-    return update_values(spreadsheet_id, "A1:H9", "USER_ENTERED", values)
-
-
 def update_values(spreadsheet_id, range_name, value_input_option, _values):
     """Creates the batch_update the user has access to."""
     creds = get_creds()
@@ -106,31 +95,46 @@ def update_values(spreadsheet_id, range_name, value_input_option, _values):
         return error
 
 
-def find_and_replace(spreadsheet_id: str, sheet_id: str, find: str, replacement: str):
+def find_replace_request(find: str, replacement: str, sheet_id: int):
+    """Adds a `findReplace` object for the batchUpdate request."""
+    return {
+        "findReplace": {
+            "find": find,
+            "replacement": replacement,
+            "sheetId": sheet_id,
+        }
+    }
+
+
+def paste_data_request(coordinate: Coordinate, html_data: str):
+    """Adds a `pasteData` object for the batchUpdate request."""
+    return {
+        "pasteData": {
+            "coordinate": coordinate,
+            "data": html_data,
+            "type": "PASTE_NORMAL",
+            "html": True,
+        }
+    }
+
+
+def batch_update(spreadsheet_id: str, requests: list[dict[str, str]]):
     """Searches for `find` and replaces with `replacement`."""
     creds = get_creds()
     try:
         service = build("sheets", "v4", credentials=creds)
-        requests = []
-        # Find and replace text
-        requests.append(
-            {
-                "findReplace": {
-                    "find": find,
-                    "replacement": replacement,
-                    "sheetId": sheet_id,
-                }
-            }
-        )
         body = {"requests": requests}
         response = (
             service.spreadsheets()
             .batchUpdate(spreadsheetId=spreadsheet_id, body=body)
             .execute()
         )
-        print(f"{response=}")
-        find_replace_response = response.get("replies")[1].get("findReplace")
-        print(f"{find_replace_response.get('occurrencesChanged')} replacements made.")
+        # TODO: log results to the console
+        # find_replace_response = response.get("replies")[0].get("findReplace")
+        # print(
+        #     f"{find_replace_response.get('occurrencesChanged', 0)} replacements made."
+        # )
+        print(f"Batch update: {response}")
         return response
 
     except HttpError as error:
@@ -138,25 +142,28 @@ def find_and_replace(spreadsheet_id: str, sheet_id: str, find: str, replacement:
         return error
 
 
+def read_cell(spreadsheet_id: str, range: str):
+    creds = get_creds()
+    try:
+        service = build("sheets", "v4", credentials=creds)
+
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=spreadsheet_id,
+                range=range,
+                fields="*",
+            )
+            .execute()
+        )
+        rows = result.get("values", [])
+        print(f"{len(rows)} rows retrieved")
+        return result
+    except HttpError as error:
+        print(f"An error occurred: {error}")
+        return error
+
+
 if __name__ == "__main__":
-    if not Path(SPREADSHEET_FILENAME).exists():
-        create("Link Tester Sheet")
-
-    spreadsheet: dict
-    with open(SPREADSHEET_FILENAME) as f:
-        spreadsheet = json.load(f)
-
-    if spreadsheet is not None:
-        spreadsheet_id = spreadsheet.get("spreadsheetId")
-        sheets = spreadsheet.get("sheets")
-        if sheets is not None and len(sheets) > 0:
-            sheet_id = sheets[0].get("properties").get("sheetId")
-        else:
-            print("No sheets found in the spreadsheet.")
-    else:
-        print("Spreadsheet is None.")
-
-    if spreadsheet_id is not None and sheet_id is not None:
-        seed_spreadsheet_with_program(spreadsheet_id)
-        # find_and_replace(spreadsheet_id, sheet_id, "World", "Developer")
-        find_and_replace(spreadsheet_id, sheet_id, "Developer", "World")
+    print("To get a test Sheets file, run `python ./seed_spreadsheet.py`")
