@@ -155,13 +155,61 @@ def read_cell(service, spreadsheet_id: str, range: str):
         .get(
             spreadsheetId=spreadsheet_id,
             range=range,
-            fields="*",
         )
         .execute()
     )
     rows = result.get("values", [])
+    print(result)
     print(f"{len(rows)} rows retrieved")
     return result
+
+
+@sheets_api_call
+def get_spreadsheet_data(service, spreadsheet_id: str):
+    return (
+        service.spreadsheets()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            fields="sheets/data/rowData/values",
+        )
+        .execute()
+    )
+
+
+def get_sheets_from_spreadsheet(spreadsheet):
+    """Return a list of sheets from a spreadsheet response.
+
+    See the structure of the data here:
+    https://googleapis.github.io/google-api-python-client/docs/dyn/sheets_v4.spreadsheets.html#get
+    """
+    return spreadsheet.get("sheets", [])
+
+
+def get_ranges_from_sheet(sheet):
+    return sheet.get("data", [])
+
+
+def get_rows_from_range(cell_range):
+    return cell_range.get("rowData", [])
+
+
+def get_exercises() -> list[Exercise]:
+    """Give us a list of exercise objects."""
+    with open("exercises.json") as f:
+        exercises = json.load(f)
+    return exercises
+
+
+def find_and_replace_exercise(exercise: Exercise):
+    """Look for an exercise in the spreadsheet and hyperlink it."""
+    # find the location
+    # copy the contents
+    # wrap the exercise in <a>
+    # paste the new contents
+
+    # perform a single read for the sheet with one call
+    # and single write for each cell in a single `batchUpdate`
+    pass
 
 
 if __name__ == "__main__":
