@@ -193,6 +193,10 @@ def get_rows_from_range(cell_range):
     return cell_range.get("rowData", [])
 
 
+def get_cells_in_row(row):
+    return row.get("values", [])
+
+
 def get_exercises() -> list[Exercise]:
     """Give us a list of exercise objects."""
     with open("exercises.json") as f:
