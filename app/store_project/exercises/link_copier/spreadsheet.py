@@ -25,6 +25,12 @@ class Coordinate:
     column_index: int
 
 
+@dataclass
+class Exercise:
+    name: str
+    url: str
+
+
 def sheets_api_call(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
