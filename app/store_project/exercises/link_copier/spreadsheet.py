@@ -170,30 +170,31 @@ def get_spreadsheet_data(service, spreadsheet_id: str):
         service.spreadsheets()
         .get(
             spreadsheetId=spreadsheet_id,
-            fields="sheets/data/rowData/values",
+            fields="sheets/properties/sheetId,sheets/data/rowData/values",
         )
         .execute()
     )
 
 
-def get_sheets_from_spreadsheet(spreadsheet):
+def get_sheets_from_spreadsheet(spreadsheet) -> list:
     """Return a list of sheets from a spreadsheet response.
 
     See the structure of the data here:
     https://googleapis.github.io/google-api-python-client/docs/dyn/sheets_v4.spreadsheets.html#get
     """
+    # return
     return spreadsheet.get("sheets", [])
 
 
-def get_ranges_from_sheet(sheet):
+def get_ranges_from_sheet(sheet) -> list:
     return sheet.get("data", [])
 
 
-def get_rows_from_range(cell_range):
+def get_rows_from_range(cell_range) -> list:
     return cell_range.get("rowData", [])
 
 
-def get_cells_in_row(row):
+def get_cells_in_row(row) -> list:
     return row.get("values", [])
 
 
@@ -204,17 +205,125 @@ def get_exercises() -> list[Exercise]:
     return exercises
 
 
-def find_and_replace_exercise(exercise: Exercise):
+def extract_values(response):
+    all_values = []
+    for sheet in response:
+        for data in sheet.get("data", []):
+            for row in data.get("rowData", []):
+                row_values = []
+                for cell in row.get("values", []):
+                    formatted_value = cell.get("formattedValue", "")
+                    row_values.append(formatted_value)
+                all_values.append(row_values)
+    return all_values
+
+
+@dataclass
+class Link:
+    href: str
+    start: int
+    end: int
+
+
+def handle_textFormatRun(cell: dict, run: dict, idx: int) -> Link:
+    if "format" in run and "link" in run["format"]:
+        if idx >= len(cell["textFormatRuns"]) - 1:
+            # this is the last run
+            return Link(
+                href=run["format"]["link"].get("uri", ""),
+                start=run.get("startIndex", 0),
+                end=len(cell.get("formattedValue", "")),
+            )
+
+        # there is a next run
+        next_run = cell["textFormatRuns"][idx + 1]
+        return Link(
+            href=run["format"]["link"].get("uri", ""),
+            start=run.get("startIndex", 0),
+            end=next_run.get("startIndex"),
+        )
+
+
+def process_row_values(row: list[dict]) -> list[list[dict]]:
+    row_values = []
+    row_links = []
+    for cell in row:
+        formatted_value = cell.get("formattedValue", "")
+        row_values.append(formatted_value)
+
+        links = []
+        if (
+            "userEnteredFormat" in cell
+            and "textFormat" in cell["userEnteredFormat"]
+            and "link" in cell["userEnteredFormat"]["textFormat"]
+        ):
+            uri = cell["userEnteredFormat"]["textFormat"]["link"].get("uri", "")
+            links.append(
+                Link(
+                    href=uri,
+                    start=0,
+                    end=len(formatted_value),
+                )
+            )
+        elif (
+            "effectiveFormat" in cell
+            and "textFormat" in cell["effectiveFormat"]
+            and "link" in cell["effectiveFormat"]["textFormat"]
+        ):
+            uri = cell["effectiveFormat"]["textFormat"]["link"].get("uri", "")
+            links.append(
+                Link(
+                    href=uri,
+                    start=0,
+                    end=len(formatted_value),
+                )
+            )
+        elif "textFormatRuns" in cell:
+            for idx in range(len(cell["textFormatRuns"])):
+                run = cell["textFormatRuns"][idx]
+                links.append(handle_textFormatRun(cell, run, idx))
+        row_links.append(links)
+    return row_values, row_links
+
+
+def extract_values_with_links(sheet):
+    """Takes in a sheet from an entire spreadsheet API."""
+    print("hi from extract_values_with_links()")
+    all_values = []
+    all_links = []
+    for data in sheet.get("data", []):
+        for row in data.get("rowData", []):
+            row_values, row_links = process_row_values(row.get("values"))
+            all_values.append(row_values)
+            all_links.append(row_links)
+    return all_values, all_links
+
+
+def find_and_replace_exercise(spreadsheet, exercise: Exercise):
     """Look for an exercise in the spreadsheet and hyperlink it."""
-    # find the location
+    # setup two dimensional arrays for values and links
+    sheets = get_sheets_from_spreadsheet(spreadsheet)
+    values, links = extract_values_with_links(sheets[1])
+
     # copy the contents
     # wrap the exercise in <a>
     # paste the new contents
 
     # perform a single read for the sheet with one call
     # and single write for each cell in a single `batchUpdate`
-    pass
+    return values, links
 
 
 if __name__ == "__main__":
     print("To get a test Sheets file, run `python ./seed_spreadsheet.py`")
+
+    spreadsheet_id = "1B0awnXZ0Cqg7iIPgP_WcWEqFuE8-gu4hvqH9jjg1_qc"
+    sheet_id = 0
+    spreadsheet = get_spreadsheet_data(spreadsheet_id=spreadsheet_id)
+    sheets = spreadsheet.get("sheets", [])
+
+    exercises = get_exercises()
+    values, links = find_and_replace_exercise(spreadsheet, exercises)
+
+    ## test out this find_and_replace_exercise() function
+    # while we build it out
