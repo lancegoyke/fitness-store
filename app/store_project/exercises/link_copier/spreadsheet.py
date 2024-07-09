@@ -308,20 +308,10 @@ def equal_dimension(list_one: list[list], list_two: list[list]) -> bool:
     return all(len(list_one[i]) == len(list_two[i]) for i in range(len(list_one)))
 
 
-def find_and_replace_exercise(spreadsheet, exercises: list[Exercise]):
-    """Look for an exercise in the spreadsheet and hyperlink it."""
-    # TODO: refactor for faster search: create block of text and find applicable exercises,
-    #       then iterate through all the cells
-
-    # setup two dimensional arrays for values and links
-    sheets = get_sheets_from_spreadsheet(spreadsheet)
-    values, links = extract_values_with_links(sheets[1])
-
-    if not equal_dimension(values, links):
-        raise ValueError("Your two two-dimensional lists are not equal in size")
-
-    # add new links for exercises
-    # for cell in spreadsheet
+def add_exercise_links(
+    values: list[list], links: list[list], exercises: list[Exercise]
+) -> None:
+    """Modifies `links` to include exercise links."""
     for i_row in range(len(values)):
         for i_col in range(len(values[i_row])):
             # check for exercise name
@@ -338,6 +328,22 @@ def find_and_replace_exercise(spreadsheet, exercises: list[Exercise]):
                     links[i_row][i_col].append(
                         Link(href=exercise["url"], start=start, end=end)
                     )
+
+
+def find_and_replace_exercise(spreadsheet, exercises: list[Exercise]):
+    """Look for an exercise in the spreadsheet and hyperlink it."""
+    # TODO: refactor for faster search: create block of text and find applicable exercises,
+    #       then iterate through all the cells
+
+    # setup two dimensional arrays for values and links
+    sheets = get_sheets_from_spreadsheet(spreadsheet)
+    values, links = extract_values_with_links(sheets[1])
+
+    if not equal_dimension(values, links):
+        raise ValueError("Your two two-dimensional lists are not equal in size")
+
+    # add new links for exercises
+    add_exercise_links(values, links, exercises)
 
     # format cells with <a> tags
     # paste the new contents
