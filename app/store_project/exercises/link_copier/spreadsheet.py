@@ -225,7 +225,7 @@ class Link:
     end: int
 
 
-def handle_textFormatRun(cell: dict, run: dict, idx: int) -> Link:
+def handle_textFormatRun(cell: dict, run: dict, idx: int) -> Link | None:
     if "format" in run and "link" in run["format"]:
         if idx >= len(cell["textFormatRuns"]) - 1:
             # this is the last run
@@ -281,7 +281,9 @@ def process_row_values(row: list[dict]) -> list[list[dict]]:
         elif "textFormatRuns" in cell:
             for idx in range(len(cell["textFormatRuns"])):
                 run = cell["textFormatRuns"][idx]
-                links.append(handle_textFormatRun(cell, run, idx))
+                link = handle_textFormatRun(cell, run, idx)
+                if link is not None:
+                    links.append(link)
         row_links.append(links)
     return row_values, row_links
 
