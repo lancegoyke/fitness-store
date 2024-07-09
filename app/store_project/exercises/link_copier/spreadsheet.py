@@ -299,14 +299,23 @@ def extract_values_with_links(sheet) -> list[list[dict]]:
     return all_values, all_links
 
 
+def equal_dimension(list_one: list[list], list_two: list[list]) -> bool:
+    """Checks that two two-dimensional arrays are of the same size."""
+    if len(list_one) != len(list_two):
+        return False
+    return all(len(list_one[i]) == len(list_two[i]) for i in range(len(list_one)))
+
+
 def find_and_replace_exercise(spreadsheet, exercise: Exercise):
     """Look for an exercise in the spreadsheet and hyperlink it."""
     # setup two dimensional arrays for values and links
     sheets = get_sheets_from_spreadsheet(spreadsheet)
     values, links = extract_values_with_links(sheets[1])
 
-    # copy the contents
-    # wrap the exercise in <a>
+    # add new links for exercises
+    # for idx in range(len())
+
+    # format cells with <a> tags
     # paste the new contents
 
     # perform a single read for the sheet with one call
