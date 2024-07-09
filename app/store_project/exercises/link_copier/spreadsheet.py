@@ -286,7 +286,7 @@ def process_row_values(row: list[dict]) -> list[list[dict]]:
     return row_values, row_links
 
 
-def extract_values_with_links(sheet):
+def extract_values_with_links(sheet) -> list[list[dict]]:
     """Takes in a sheet from an entire spreadsheet API."""
     print("hi from extract_values_with_links()")
     all_values = []
