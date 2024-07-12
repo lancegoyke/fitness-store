@@ -1,3 +1,4 @@
+from enum import Enum
 import json
 import os.path
 from dataclasses import asdict
@@ -289,7 +290,7 @@ class Link:
         return {
             "startIndex": self.start,
             "format": {
-                "foregroundColorStyle": "LINK",
+                "foregroundColorStyle": {"themeColor": "LINK"},
                 "underline": True,
                 "link": {"uri": self.href},
             },
@@ -404,6 +405,48 @@ def add_exercise_links(
                     )
 
 
+@dataclass
+class GoogleAPILink:
+    uri: str
+
+
+class ThemeColorType(Enum):
+    THEME_COLOR_TYPE_UNSPECIFIED = "THEME_COLOR_TYPE_UNSPECIFIED"
+    TEXT = "TEXT"
+    BACKGROUND = "BACKGROUND"
+    ACCENT1 = "ACCENT1"
+    ACCENT2 = "ACCENT2"
+    ACCENT3 = "ACCENT3"
+    ACCENT4 = "ACCENT4"
+    ACCENT5 = "ACCENT5"
+    ACCENT6 = "ACCENT6"
+    LINK = "LINK"
+
+
+@dataclass
+class ColorStyle:
+    theme_color: ThemeColorType
+
+
+@dataclass
+class TextFormat:
+    foreground_color_style: ColorStyle
+    underline: bool
+    link: GoogleAPILink
+
+
+@dataclass
+class TextFormatRun:
+    start_index: int = 0
+    format: TextFormat
+
+
+@dataclass
+class CellData:
+    value: str = ""
+    text_format_runs: list[TextFormatRun] = []
+
+
 def create_update_requests(sheet_id, values, links) -> list[dict]:
     """Create a list of requests to pass into `batch_update()`."""
     requests = []
@@ -412,27 +455,22 @@ def create_update_requests(sheet_id, values, links) -> list[dict]:
             if len(links[i_row][i_col]) == 0:
                 continue
 
-            # create <a> tag for new links and preserve old links
+            cell = {"formattedValue": values[i_row][i_col]}
+            cell = CellData(values[i_row][i_col])
             cell_links: list[Link] = links[i_row][i_col]
             if any(cell_link.is_new for cell_link in cell_links):
-                # we need to recreate the cell HTML
-                # cell_html: str = values[i_row][i_col]  # plain text for now
-                for link in reversed(cell_links):  # work backwards to not break indices
-                    # cell_html = cell_html.replace(
-                    #     cell_html[link.start : link.end],
-                    #     f'<a href="{link.href}">{cell_html[link.start:link.end]}</a>',
-                    # )
-                    cell = {
-                        "formattedValue": values[i_row][i_col],
-                        "textFormatRuns": [link.to_text_format_run()],
-                    }
-
-                # requests.append(
-                #     paste_data_request(
-                #         Coordinate(sheet_id, i_row, i_col),
-                #         cell_html,
-                #     )
-                # )
+                for i_link in range(len(cell_links)):
+                    link = cell_links[i_link]
+                    cell["textFormatRuns"] = [link.to_text_format_run()]
+                    # makes our links, but doesn't retain standard formatted text
+                    # formattedValue = "A) Back Squat or Front Squat"
+                    # links = [Link("Back Squat", 3, 13), Link("Front Squat", 17, 28)]
+                    # formatRuns = [
+                    #     {'startIndex': 0, 'format': {'foregroundColorStyle': {'themeColor': 'TEXT'}}},
+                    #     {'startIndex': 3, 'format': {'foregroundColorStyle': {'themeColor': 'LINK'}, 'underline': True, 'link': {'uri': 'https://ex.com/back-squat'}}},
+                    #     {'startIndex': 13, 'format': {'foregroundColorStyle': {'themeColor': 'TEXT'}}},
+                    #     {'startIndex': 17, 'format': {'foregroundColorStyle': {'themeColor': 'LINK'}, 'underline': True, 'link': {'uri': 'https://ex.com/front-squat'}}},
+                    # ]
 
             row.append(cell)
         rows.append(row)
