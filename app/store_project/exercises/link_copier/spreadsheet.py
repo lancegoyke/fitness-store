@@ -1,6 +1,8 @@
 import json
 import os.path
+from dataclasses import asdict
 from dataclasses import dataclass
+from pprint import pprint
 from typing import Union
 from functools import wraps
 
@@ -23,6 +25,18 @@ class Coordinate:
     sheet_id: int
     row_index: int
     column_index: int
+
+
+def snake_case_to_camel_case(data: str) -> str:
+    data_list: list[str] = data.split("_")
+    for i in range(1, len(data_list)):
+        data_list[i] = data_list[i][0].upper() + data_list[i][1:]
+    return "".join(data_list)
+
+
+def camel_case_dict_factory(data) -> dict:
+    """Remap the keys from snake_case to camelCase."""
+    return {snake_case_to_camel_case(field[0]): field[1] for field in data}
 
 
 @dataclass
@@ -106,8 +120,13 @@ def update_values(service, spreadsheet_id, range_name, value_input_option, _valu
     return result
 
 
-def find_replace_request(find: str, replacement: str, sheet_id: int):
-    """Adds a `findReplace` object for the batchUpdate request."""
+def find_replace_request(find: str, replacement: str, sheet_id: int) -> dict:
+    """
+    Adds a `findReplace` object for the batchUpdate request.
+
+    Ref:
+      - https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/request#findreplacerequest
+    """
     return {
         "findReplace": {
             "find": find,
@@ -117,14 +136,54 @@ def find_replace_request(find: str, replacement: str, sheet_id: int):
     }
 
 
-def paste_data_request(coordinate: Coordinate, html_data: str):
-    """Adds a `pasteData` object for the batchUpdate request."""
+def paste_data_request(coordinate: Coordinate, html_data: str) -> dict:
+    """
+    Adds a `pasteData` object for the batchUpdate request.
+
+    Ref:
+      - https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/request#pastedatarequest
+    """
     return {
         "pasteData": {
-            "coordinate": coordinate,
+            "coordinate": asdict(coordinate, dict_factory=camel_case_dict_factory),
             "data": html_data,
             "type": "PASTE_NORMAL",
             "html": True,
+        }
+    }
+
+
+def update_cells_request(
+    start_coordinate: Coordinate, rows: list[list[dict]], fields: str = "*"
+) -> dict:
+    """
+    Adds an `updateCells` object for the batchUpdate request.
+
+    The `rows` field is comprised a list of rows each holding a list of `CellData`
+    objects. See link below for the structure of the `CellData` object.
+
+    Ex:
+      cell_data = {
+        "textFormatRuns": [
+          {
+            "startIndex": 0,
+            "format": {"foregroundColorStyle": "LINK"},
+          },
+        ],
+      }
+      rows = [
+        [cell_data]  # a single cell in a single row
+      ]
+
+    Ref:
+      - https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/request#UpdateCellsRequest
+      - https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/cells#CellData
+    """
+    return {
+        "updateCells": {
+            "start": asdict(start_coordinate, dict_factory=camel_case_dict_factory),
+            "fields": fields,
+            "rows": rows,
         }
     }
 
@@ -133,18 +192,11 @@ def paste_data_request(coordinate: Coordinate, html_data: str):
 def batch_update(service, spreadsheet_id: str, requests: list[dict[str, str]]):
     """Searches for `find` and replaces with `replacement`."""
     body = {"requests": requests}
-    response = (
+    return (
         service.spreadsheets()
         .batchUpdate(spreadsheetId=spreadsheet_id, body=body)
         .execute()
     )
-    # TODO: log results to the console
-    # find_replace_response = response.get("replies")[0].get("findReplace")
-    # print(
-    #     f"{find_replace_response.get('occurrencesChanged', 0)} replacements made."
-    # )
-    print(f"Batch update: {response}")
-    return response
 
 
 @sheets_api_call
@@ -223,6 +275,25 @@ class Link:
     href: str
     start: int
     end: int
+    is_new: bool
+
+    def to_text_format_run(self) -> dict:
+        """Turn the `Link` into a `TextFormatRun` for the Google Sheets API.
+
+        This method does NOT take into account the length of the hyperlinked string.
+        This requires adjusting the `startIndex` of the subsequent `TextFormatRun`.
+
+        Ref:
+          - https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/cells#TextFormatRun
+        """
+        return {
+            "startIndex": self.start,
+            "format": {
+                "foregroundColorStyle": "LINK",
+                "underline": True,
+                "link": {"uri": self.href},
+            },
+        }
 
 
 def handle_textFormatRun(cell: dict, run: dict, idx: int) -> Link | None:
@@ -233,6 +304,7 @@ def handle_textFormatRun(cell: dict, run: dict, idx: int) -> Link | None:
                 href=run["format"]["link"].get("uri", ""),
                 start=run.get("startIndex", 0),
                 end=len(cell.get("formattedValue", "")),
+                is_new=False,
             )
 
         # there is a next run
@@ -241,6 +313,7 @@ def handle_textFormatRun(cell: dict, run: dict, idx: int) -> Link | None:
             href=run["format"]["link"].get("uri", ""),
             start=run.get("startIndex", 0),
             end=next_run.get("startIndex"),
+            is_new=False,
         )
 
 
@@ -263,6 +336,7 @@ def process_row_values(row: list[dict]) -> list[list[dict]]:
                     href=uri,
                     start=0,
                     end=len(formatted_value),
+                    is_new=False,
                 )
             )
         elif (
@@ -276,6 +350,7 @@ def process_row_values(row: list[dict]) -> list[list[dict]]:
                     href=uri,
                     start=0,
                     end=len(formatted_value),
+                    is_new=False,
                 )
             )
         elif "textFormatRuns" in cell:
@@ -290,7 +365,6 @@ def process_row_values(row: list[dict]) -> list[list[dict]]:
 
 def extract_values_with_links(sheet) -> list[list[dict]]:
     """Takes in a sheet from an entire spreadsheet API."""
-    print("hi from extract_values_with_links()")
     all_values = []
     all_links = []
     for data in sheet.get("data", []):
@@ -326,11 +400,58 @@ def add_exercise_links(
                     start = v.lower().index(exercise["name"].lower())
                     end = start + len(exercise["name"])
                     links[i_row][i_col].append(
-                        Link(href=exercise["url"], start=start, end=end)
+                        Link(href=exercise["url"], start=start, end=end, is_new=True)
                     )
 
 
-def find_and_replace_exercise(spreadsheet, exercises: list[Exercise]):
+def create_update_requests(sheet_id, values, links) -> list[dict]:
+    """Create a list of requests to pass into `batch_update()`."""
+    requests = []
+    for i_row in range(len(links)):
+        for i_col in range(len(links[i_row])):
+            if len(links[i_row][i_col]) == 0:
+                continue
+
+            # create <a> tag for new links and preserve old links
+            cell_links: list[Link] = links[i_row][i_col]
+            if any(cell_link.is_new for cell_link in cell_links):
+                # we need to recreate the cell HTML
+                # cell_html: str = values[i_row][i_col]  # plain text for now
+                for link in reversed(cell_links):  # work backwards to not break indices
+                    # cell_html = cell_html.replace(
+                    #     cell_html[link.start : link.end],
+                    #     f'<a href="{link.href}">{cell_html[link.start:link.end]}</a>',
+                    # )
+                    cell = {
+                        "formattedValue": values[i_row][i_col],
+                        "textFormatRuns": [link.to_text_format_run()],
+                    }
+
+                # requests.append(
+                #     paste_data_request(
+                #         Coordinate(sheet_id, i_row, i_col),
+                #         cell_html,
+                #     )
+                # )
+
+            row.append(cell)
+        rows.append(row)
+    requests.append(
+        # TODO
+        # Instead, create a 2D array of CellData objects
+        # we can sent straight to Google.
+        # Do not pass Go.
+        # Do not collect $200.
+        update_cells_request(
+            Coordinate(sheet_id, i_row, i_col),
+            rows=rows,
+        )
+    )
+
+    return requests
+
+
+def find_and_replace_exercises(spreadsheet, exercises: list[Exercise]):
     """Look for an exercise in the spreadsheet and hyperlink it."""
     # TODO: refactor for faster search: create block of text and find applicable exercises,
     #       then iterate through all the cells
@@ -338,6 +459,9 @@ def find_and_replace_exercise(spreadsheet, exercises: list[Exercise]):
     # setup two dimensional arrays for values and links
     sheets = get_sheets_from_spreadsheet(spreadsheet)
     values, links = extract_values_with_links(sheets[1])
+    sheet_id: int = 0  # 0 is the default given by google sheets
+    if "properties" in sheets[1] and "sheetId" in sheets[1].get("properties"):
+        sheet_id = sheets[1].get("properties").get("sheetId")
 
     if not equal_dimension(values, links):
         raise ValueError("Your two two-dimensional lists are not equal in size")
@@ -346,7 +470,11 @@ def find_and_replace_exercise(spreadsheet, exercises: list[Exercise]):
     add_exercise_links(values, links, exercises)
 
     # format cells with <a> tags
+    requests = create_update_requests(sheet_id, values, links)
+
     # paste the new contents
+    response = batch_update(spreadsheet_id=spreadsheet_id, requests=requests)
+    pprint(response, depth=4)
 
     # perform a single read for the sheet with one call
     # and single write for each cell in a single `batchUpdate`
@@ -362,7 +490,7 @@ if __name__ == "__main__":
     sheets = spreadsheet.get("sheets", [])
 
     exercises = get_exercises()
-    values, links = find_and_replace_exercise(spreadsheet, exercises)
+    values, links = find_and_replace_exercises(spreadsheet, exercises)
 
     ## test out this find_and_replace_exercise() function
     # while we build it out
