@@ -478,28 +478,6 @@ def equal_dimension(list_one: list[list], list_two: list[list]) -> bool:
     return all(len(list_one[i]) == len(list_two[i]) for i in range(len(list_one)))
 
 
-def add_exercise_links(
-    values: list[list], links: list[list], exercises: list[Exercise]
-) -> None:
-    """Modifies `links` to include exercise links."""
-    for i_row in range(len(values)):
-        for i_col in range(len(values[i_row])):
-            # check for exercise name
-            v = values[i_row][i_col]
-            for exercise in exercises:
-                if (
-                    exercise.get("url")
-                    and exercise.get("name")
-                    and exercise["name"].lower() in v.lower()
-                ):
-                    # add link
-                    start = v.lower().index(exercise["name"].lower())
-                    end = start + len(exercise["name"])
-                    links[i_row][i_col].append(
-                        Link(href=exercise["url"], start=start, end=end, is_new=True)
-                    )
-
-
 @dataclass
 class GoogleAPILink:
     uri: str
@@ -559,8 +537,8 @@ class ColorStyle:
 @dataclass
 class TextFormat:
     foreground_color_style: ColorStyle
-    underline: bool
-    link: GoogleAPILink
+    underline: Optional[bool] = False
+    link: Optional[GoogleAPILink] = ""
 
 
 @dataclass
@@ -573,6 +551,12 @@ class TextFormatRun:
 class CellData:
     value: str = ""
     text_format_runs: list[TextFormatRun] = field(default_factory=list)
+
+
+@dataclass
+class Cell:
+    data: CellData
+    is_new: bool = False
 
 
 def create_cell_data_matrix(values, links):
@@ -596,6 +580,48 @@ def create_cell_data_matrix(values, links):
             cell_data_row.append(cell_data)
         cell_data_matrix.append(cell_data_row)
     return cell_data_matrix
+
+
+def add_exercise_links(cells: list[list[Cell]], exercises: list[Exercise]) -> None:
+    """Modifies `cells` to include exercise links and marks them as changed."""
+    # for i_row in range(len(cells)):
+    for row in cells:
+        for cell in row:
+            # check for exercise name
+            for exercise in exercises:
+                if (
+                    exercise.get("url")
+                    and exercise.get("name")
+                    and exercise["name"].lower() in cell.data.value.lower()
+                ):
+                    # add link
+                    start = cell.data.value.lower().index(exercise["name"].lower())
+                    end = start + len(exercise["name"])
+                    cell.data.text_format_runs.extend(
+                        [
+                            # link
+                            TextFormatRun(
+                                TextFormat(
+                                    foreground_color_style=ColorStyle(
+                                        ThemeColorType.LINK
+                                    ),
+                                    underline=True,
+                                    link=GoogleAPILink(exercise["url"]),
+                                ),
+                                start_index=start,
+                            ),
+                            # plain text
+                            TextFormatRun(
+                                TextFormat(
+                                    foreground_color_style=ColorStyle(
+                                        ThemeColorType.TEXT
+                                    ),
+                                ),
+                                start_index=end,
+                            ),
+                        ]
+                    )
+            cell.is_new = True
 
 
 def create_update_requests(sheet_id, values, links) -> list[dict]:
@@ -664,12 +690,10 @@ def find_and_replace_exercises(spreadsheet, exercises: list[Exercise]):
         raise ValueError("Your two two-dimensional lists are not equal in size")
 
     # mark cells as old with `False`
-    cells_to_update: list[list[tuple[CellData, bool]]] = [
-        [(cell, False) for cell in row] for row in cells
-    ]
+    cells_to_update: list[list[Cell]] = [[Cell(cell) for cell in row] for row in cells]
 
     # add new links for exercises
-    add_exercise_links(values, links, exercises)
+    add_exercise_links(cells_to_update, exercises)
 
     # format cells with <a> tags
     requests = create_update_requests(sheet_id, values, links)
