@@ -616,29 +616,6 @@ class Cell:
     is_new: bool = False
 
 
-def create_cell_data_matrix(values, links):
-    """Zips two matrices together."""
-    cell_data_matrix = []
-    for row_values, row_links in zip(values, links):
-        cell_data_row = []
-        for cell_value, cell_links in zip(row_values, row_links):
-            cell_data = CellData(value=cell_value)
-            for link in cell_links:
-                text_format = TextFormat(
-                    foreground_color_style=ColorStyle(theme_color=ThemeColorType.LINK),
-                    underline=True,
-                    link=GoogleAPILink(uri=link.href),
-                )
-                text_format_run = TextFormatRun(
-                    format=text_format,
-                    start_index=link.start,
-                )
-                cell_data.text_format_runs.append(text_format_run)
-            cell_data_row.append(cell_data)
-        cell_data_matrix.append(cell_data_row)
-    return cell_data_matrix
-
-
 def add_exercise_links(cells: list[list[Cell]], exercises: list[Exercise]) -> None:
     """Modifies `cells` to include exercise links and marks them as changed."""
     # for i_row in range(len(cells)):
