@@ -388,8 +388,8 @@ def process_row_into_cells(row: list[dict]) -> list["CellData"]:
                         foreground_color_style=ColorStyle(
                             theme_color=ThemeColorType.LINK
                         ),
-                        link=uri,
                         underline=True,
+                        link=GoogleAPILink(uri=uri),
                     ),
                 )
             )
@@ -408,8 +408,8 @@ def process_row_into_cells(row: list[dict]) -> list["CellData"]:
                         foreground_color_style=ColorStyle(
                             theme_color=ThemeColorType.LINK
                         ),
-                        link=uri,
                         underline=True,
+                        link=GoogleAPILink(uri=uri),
                     ),
                 )
             )
@@ -558,10 +558,12 @@ class ColorStyle:
 class TextFormat:
     foreground_color_style: ColorStyle
     underline: Optional[bool] = False
-    link: Optional[GoogleAPILink] = ""
+    link: Optional[GoogleAPILink] = None
 
     def to_google_dict(self) -> dict:
         """Returns Google's expected dictionary structure for writes."""
+        print("LINK IS BREAKING")
+        pprint(self)
         output = {
             "foregroundColorStyle": self.foreground_color_style.to_google_dict(),
         }
