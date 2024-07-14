@@ -482,6 +482,10 @@ def equal_dimension(list_one: list[list], list_two: list[list]) -> bool:
 class GoogleAPILink:
     uri: str
 
+    def to_google_dict(self) -> dict:
+        """Returns Google's expected dictionary structure for writes."""
+        return {"uri": self.uri}
+
 
 class ThemeColorType(Enum):
     THEME_COLOR_TYPE_UNSPECIFIED = "THEME_COLOR_TYPE_UNSPECIFIED"
@@ -501,7 +505,7 @@ class Color:
     red: float = 0
     green: float = 0
     blue: float = 0
-    alpha: float = 1
+    alpha: float = None
 
     def __post_init__(self):
         if not (0 <= self.red <= 1):
@@ -516,10 +520,21 @@ class Color:
             raise ValueError(
                 f"Invalid value for blue: {self.blue}. Must be between 0 and 1."
             )
-        if not (0 <= self.alpha <= 1):
+        if self.alpha is not None and not (0 <= self.alpha <= 1):
             raise ValueError(
                 f"Invalid value for alpha: {self.alpha}. Must be between 0 and 1."
             )
+
+    def to_google_dict(self) -> dict:
+        """Returns Google's expected dictionary structure for writes."""
+        output = {
+            "red": self.red,
+            "green": self.green,
+            "blue": self.blue,
+        }
+        if self.alpha is not None:
+            output["alpha"] = self.alpha
+        return output
 
 
 @dataclass
@@ -533,6 +548,12 @@ class ColorStyle:
         ):
             raise ValueError("Must supply only one of rgb_color or theme_color.")
 
+    def to_google_dict(self) -> dict:
+        """Returns Google's expected dictionary structure for writes."""
+        if self.rgb_color:
+            return {"rgbColor": self.rgb_color.to_google_dict()}
+        return {"themeColor": self.theme_color.value} if self.theme_color else {}
+
 
 @dataclass
 class TextFormat:
@@ -540,17 +561,42 @@ class TextFormat:
     underline: Optional[bool] = False
     link: Optional[GoogleAPILink] = ""
 
+    def to_google_dict(self) -> dict:
+        """Returns Google's expected dictionary structure for writes."""
+        output = {
+            "foregroundColorStyle": self.foreground_color_style.to_google_dict(),
+        }
+        if self.underline:
+            output["underline"] = True
+        if self.link:
+            output["link"] = self.link.to_google_dict()
+        return output
+
 
 @dataclass
 class TextFormatRun:
     format: TextFormat
     start_index: int = 0
 
+    def to_google_dict(self) -> dict:
+        """Returns Google's expected dictionary structure for writes."""
+        return {
+            "startIndex": self.start_index,
+            "format": self.format.to_google_dict(),
+        }
+
 
 @dataclass
 class CellData:
     value: str = ""
     text_format_runs: list[TextFormatRun] = field(default_factory=list)
+
+    def to_google_dict(self) -> dict:
+        """Returns Google's expected dictionary structure for writes."""
+        return {
+            "userEnteredValue": {"stringValue": self.value},
+            "textFormatRuns": [run.to_google_dict() for run in self.text_format_runs],
+        }
 
 
 @dataclass
@@ -597,74 +643,51 @@ def add_exercise_links(cells: list[list[Cell]], exercises: list[Exercise]) -> No
                     # add link
                     start = cell.data.value.lower().index(exercise["name"].lower())
                     end = start + len(exercise["name"])
-                    cell.data.text_format_runs.extend(
-                        [
-                            # link
-                            TextFormatRun(
-                                TextFormat(
-                                    foreground_color_style=ColorStyle(
-                                        ThemeColorType.LINK
-                                    ),
-                                    underline=True,
-                                    link=GoogleAPILink(exercise["url"]),
+                    text_format_runs = [
+                        # link
+                        TextFormatRun(
+                            TextFormat(
+                                foreground_color_style=ColorStyle(
+                                    theme_color=ThemeColorType.LINK
                                 ),
-                                start_index=start,
+                                underline=True,
+                                link=GoogleAPILink(exercise["url"]),
                             ),
+                            start_index=start,
+                        )
+                    ]
+                    if end < len(cell.data.value):
+                        text_format_runs.append(
                             # plain text
                             TextFormatRun(
                                 TextFormat(
                                     foreground_color_style=ColorStyle(
-                                        ThemeColorType.TEXT
+                                        theme_color=ThemeColorType.TEXT
                                     ),
                                 ),
                                 start_index=end,
                             ),
-                        ]
-                    )
-            cell.is_new = True
+                        )
+                    cell.data.text_format_runs.extend(text_format_runs)
+                    cell.is_new = True
 
 
-def create_update_requests(sheet_id, values, links) -> list[dict]:
+def create_update_requests(sheet_id: int, cells: list[list[Cell]]) -> list[dict]:
     """Create a list of requests to pass into `batch_update()`."""
 
-    cells: list[list[CellData]] = zip(values, links)
-
     requests = []
-    for i_row in range(len(links)):
-        for i_col in range(len(links[i_row])):
-            if len(links[i_row][i_col]) == 0:
+    for i_row in range(len(cells)):
+        for i_col in range(len(cells[i_row])):
+            cell: Cell = cells[i_row][i_col]
+            if not cell.is_new:
                 continue
 
-            cell = {"formattedValue": values[i_row][i_col]}
-            cell = CellData(values[i_row][i_col])
-            cell_links: list[Link] = links[i_row][i_col]
-            if any(cell_link.is_new for cell_link in cell_links):
-                for i_link in range(len(cell_links)):
-                    link = cell_links[i_link]
-                    cell.text_format_runs.append(link.to_text_format_run())
-                    # makes our links, but doesn't retain standard formatted text
-                    # formattedValue = "A) Back Squat or Front Squat"
-                    # links = [Link("Back Squat", 3, 13), Link("Front Squat", 17, 28)]
-                    # formatRuns = [
-                    #     {'startIndex': 0, 'format': {'foregroundColorStyle': {'themeColor': 'TEXT'}}},
-                    #     {'startIndex': 3, 'format': {'foregroundColorStyle': {'themeColor': 'LINK'}, 'underline': True, 'link': {'uri': 'https://ex.com/back-squat'}}},
-                    #     {'startIndex': 13, 'format': {'foregroundColorStyle': {'themeColor': 'TEXT'}}},
-                    #     {'startIndex': 17, 'format': {'foregroundColorStyle': {'themeColor': 'LINK'}, 'underline': True, 'link': {'uri': 'https://ex.com/front-squat'}}},
-                    # ]
-            # row.append(cell)
-        # rows.append(row)
-    rows = []
-    requests.append(
-        # TODO
-        # Instead, create a 2D array of CellData objects
-        # we can sent straight to Google.
-        # Do not pass Go.
-        # Do not collect $200.
-        update_cells_request(
-            Coordinate(sheet_id, i_row, i_col),
-            rows=rows,
-        )
-    )
+            requests.append(
+                update_cells_request(
+                    Coordinate(sheet_id, i_row, i_col),
+                    rows=[[cell.data.to_google_dict()]],
+                )
+            )
 
     return requests
 
@@ -696,15 +719,15 @@ def find_and_replace_exercises(spreadsheet, exercises: list[Exercise]):
     add_exercise_links(cells_to_update, exercises)
 
     # format cells with <a> tags
-    requests = create_update_requests(sheet_id, values, links)
+    requests = create_update_requests(sheet_id, cells_to_update)
 
     # paste the new contents
-    response = batch_update(spreadsheet_id=spreadsheet_id, requests=requests)
-    pprint(response, depth=4)
+    # response = batch_update(spreadsheet_id=spreadsheet_id, requests=requests)
+    # pprint(response, depth=4)
 
     # perform a single read for the sheet with one call
     # and single write for each cell in a single `batchUpdate`
-    return values, links, cells_to_update
+    return cells_to_update, requests
 
 
 if __name__ == "__main__":
@@ -716,7 +739,7 @@ if __name__ == "__main__":
     sheets = spreadsheet.get("sheets", [])
 
     exercises = get_exercises()
-    values, links, cells = find_and_replace_exercises(spreadsheet, exercises)
+    cells, requests = find_and_replace_exercises(spreadsheet, exercises)
 
     ## test out this find_and_replace_exercise() function
     # while we build it out
