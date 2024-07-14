@@ -1,10 +1,10 @@
 from enum import Enum
 import json
 import os.path
-from dataclasses import asdict
+from dataclasses import asdict, field
 from dataclasses import dataclass
 from pprint import pprint
-from typing import Union
+from typing import Optional, Union
 from functools import wraps
 
 from google.auth.external_account_authorized_user import Credentials as ExternalCreds
@@ -331,6 +331,8 @@ def process_row_values(row: list[dict]) -> list[list[dict]]:
             and "textFormat" in cell["userEnteredFormat"]
             and "link" in cell["userEnteredFormat"]["textFormat"]
         ):
+            # The entire cell is a link
+            # e.g., Google link
             uri = cell["userEnteredFormat"]["textFormat"]["link"].get("uri", "")
             links.append(
                 Link(
@@ -345,6 +347,7 @@ def process_row_values(row: list[dict]) -> list[list[dict]]:
             and "textFormat" in cell["effectiveFormat"]
             and "link" in cell["effectiveFormat"]["textFormat"]
         ):
+            # Not sure?
             uri = cell["effectiveFormat"]["textFormat"]["link"].get("uri", "")
             links.append(
                 Link(
@@ -355,6 +358,7 @@ def process_row_values(row: list[dict]) -> list[list[dict]]:
                 )
             )
         elif "textFormatRuns" in cell:
+            # There may be multiple links
             for idx in range(len(cell["textFormatRuns"])):
                 run = cell["textFormatRuns"][idx]
                 link = handle_textFormatRun(cell, run, idx)
@@ -364,16 +368,107 @@ def process_row_values(row: list[dict]) -> list[list[dict]]:
     return row_values, row_links
 
 
+def process_row_into_cells(row: list[dict]) -> list["CellData"]:
+    cell_data_row = []
+    for cell_dict in row:
+        text_format_runs: list[TextFormatRun] = []
+
+        cell_links = []
+        if (
+            "userEnteredFormat" in cell_dict
+            and "textFormat" in cell_dict["userEnteredFormat"]
+            and "link" in cell_dict["userEnteredFormat"]["textFormat"]
+        ):
+            # The entire cell is a link
+            # e.g., Google link
+            uri = cell_dict["userEnteredFormat"]["textFormat"]["link"].get("uri", "")
+
+            text_format_runs.append(
+                TextFormatRun(
+                    format=TextFormat(
+                        foreground_color_style=ColorStyle(
+                            theme_color=ThemeColorType.LINK
+                        ),
+                        link=uri,
+                        underline=True,
+                    ),
+                )
+            )
+
+        elif (
+            "effectiveFormat" in cell_dict
+            and "textFormat" in cell_dict["effectiveFormat"]
+            and "link" in cell_dict["effectiveFormat"]["textFormat"]
+        ):
+            # Not sure?
+            uri = cell_dict["effectiveFormat"]["textFormat"]["link"].get("uri", "")
+
+            text_format_runs.append(
+                TextFormatRun(
+                    format=TextFormat(
+                        foreground_color_style=ColorStyle(
+                            theme_color=ThemeColorType.LINK
+                        ),
+                        link=uri,
+                        underline=True,
+                    ),
+                )
+            )
+
+        elif "textFormatRuns" in cell_dict:
+            # There may be multiple links
+            for run in cell_dict["textFormatRuns"]:
+                if "format" in run:
+                    if "foregroundColorStyle" in run["format"]:
+                        if "rgbColor" in run["format"]["foregroundColorStyle"]:
+                            rgba = run["format"]["foregroundColorStyle"]["rgbColor"]
+                            foreground_color_style = ColorStyle(rgb_color=Color(**rgba))
+                        elif "themeColor" in run["format"]["foregroundColorStyle"]:
+                            foreground_color_style = ColorStyle(
+                                theme_color=run["format"]["foregroundColorStyle"][
+                                    "themeColor"
+                                ]
+                            )
+                    if "link" in run["format"]:
+                        uri = run["format"]["link"]["uri"]
+
+                text_format_dict = {
+                    "foreground_color_style": foreground_color_style,
+                    "underline": run["format"].get("underline", False),
+                    "link": GoogleAPILink(uri=uri),
+                }
+                text_format_runs.append(
+                    TextFormatRun(
+                        format=TextFormat(**text_format_dict),
+                        start_index=run.get("startIndex", 0),
+                    )
+                )
+
+        # Done parsing, make a cell
+        cell_data_row.append(
+            CellData(
+                value=cell_dict.get("formattedValue", ""),
+                text_format_runs=text_format_runs,
+            )
+        )
+
+        # row_links.append(links)
+    return cell_data_row
+
+
 def extract_values_with_links(sheet) -> list[list[dict]]:
     """Takes in a sheet from an entire spreadsheet API."""
     all_values = []
     all_links = []
+    all_cells = []
     for data in sheet.get("data", []):
         for row in data.get("rowData", []):
+            cell_data_row = process_row_into_cells(row.get("values"))
             row_values, row_links = process_row_values(row.get("values"))
             all_values.append(row_values)
             all_links.append(row_links)
-    return all_values, all_links
+            all_cells.append(cell_data_row)
+    return all_values, all_links, all_cells
 
 
 def equal_dimension(list_one: list[list], list_two: list[list]) -> bool:
@@ -424,8 +519,41 @@ class ThemeColorType(Enum):
 
 
 @dataclass
+class Color:
+    red: float = 0
+    green: float = 0
+    blue: float = 0
+    alpha: float = 1
+
+    def __post_init__(self):
+        if not (0 <= self.red <= 1):
+            raise ValueError(
+                f"Invalid value for red: {self.red}. Must be between 0 and 1."
+            )
+        if not (0 <= self.green <= 1):
+            raise ValueError(
+                f"Invalid value for green: {self.green}. Must be between 0 and 1."
+            )
+        if not (0 <= self.blue <= 1):
+            raise ValueError(
+                f"Invalid value for blue: {self.blue}. Must be between 0 and 1."
+            )
+        if not (0 <= self.alpha <= 1):
+            raise ValueError(
+                f"Invalid value for alpha: {self.alpha}. Must be between 0 and 1."
+            )
+
+
+@dataclass
 class ColorStyle:
-    theme_color: ThemeColorType
+    rgb_color: Optional[Color] = None
+    theme_color: Optional[ThemeColorType] = None
+
+    def __post_init__(self):
+        if (self.rgb_color is None and self.theme_color is None) or (
+            self.rgb_color is not None and self.theme_color is not None
+        ):
+            raise ValueError("Must supply only one of rgb_color or theme_color.")
 
 
 @dataclass
@@ -437,18 +565,44 @@ class TextFormat:
 
 @dataclass
 class TextFormatRun:
-    start_index: int = 0
     format: TextFormat
+    start_index: int = 0
 
 
 @dataclass
 class CellData:
     value: str = ""
-    text_format_runs: list[TextFormatRun] = []
+    text_format_runs: list[TextFormatRun] = field(default_factory=list)
+
+
+def create_cell_data_matrix(values, links):
+    """Zips two matrices together."""
+    cell_data_matrix = []
+    for row_values, row_links in zip(values, links):
+        cell_data_row = []
+        for cell_value, cell_links in zip(row_values, row_links):
+            cell_data = CellData(value=cell_value)
+            for link in cell_links:
+                text_format = TextFormat(
+                    foreground_color_style=ColorStyle(theme_color=ThemeColorType.LINK),
+                    underline=True,
+                    link=GoogleAPILink(uri=link.href),
+                )
+                text_format_run = TextFormatRun(
+                    format=text_format,
+                    start_index=link.start,
+                )
+                cell_data.text_format_runs.append(text_format_run)
+            cell_data_row.append(cell_data)
+        cell_data_matrix.append(cell_data_row)
+    return cell_data_matrix
 
 
 def create_update_requests(sheet_id, values, links) -> list[dict]:
     """Create a list of requests to pass into `batch_update()`."""
+
+    cells: list[list[CellData]] = zip(values, links)
+
     requests = []
     for i_row in range(len(links)):
         for i_col in range(len(links[i_row])):
@@ -461,7 +615,7 @@ def create_update_requests(sheet_id, values, links) -> list[dict]:
             if any(cell_link.is_new for cell_link in cell_links):
                 for i_link in range(len(cell_links)):
                     link = cell_links[i_link]
-                    cell["textFormatRuns"] = [link.to_text_format_run()]
+                    cell.text_format_runs.append(link.to_text_format_run())
                     # makes our links, but doesn't retain standard formatted text
                     # formattedValue = "A) Back Squat or Front Squat"
                     # links = [Link("Back Squat", 3, 13), Link("Front Squat", 17, 28)]
@@ -471,9 +625,9 @@ def create_update_requests(sheet_id, values, links) -> list[dict]:
                     #     {'startIndex': 13, 'format': {'foregroundColorStyle': {'themeColor': 'TEXT'}}},
                     #     {'startIndex': 17, 'format': {'foregroundColorStyle': {'themeColor': 'LINK'}, 'underline': True, 'link': {'uri': 'https://ex.com/front-squat'}}},
                     # ]
-
-            row.append(cell)
-        rows.append(row)
+            # row.append(cell)
+        # rows.append(row)
+    rows = []
     requests.append(
         # TODO
         # Instead, create a 2D array of CellData objects
@@ -496,13 +650,23 @@ def find_and_replace_exercises(spreadsheet, exercises: list[Exercise]):
 
     # setup two dimensional arrays for values and links
     sheets = get_sheets_from_spreadsheet(spreadsheet)
-    values, links = extract_values_with_links(sheets[1])
+
+    # TODO: don't hardcode sheet
+    # TODO: trim out `values` and `links`
+    values, links, cells = extract_values_with_links(sheets[1])
+
     sheet_id: int = 0  # 0 is the default given by google sheets
     if "properties" in sheets[1] and "sheetId" in sheets[1].get("properties"):
         sheet_id = sheets[1].get("properties").get("sheetId")
 
+    # TODO: can remove when `values` and `links` have been pruned
     if not equal_dimension(values, links):
         raise ValueError("Your two two-dimensional lists are not equal in size")
+
+    # mark cells as old with `False`
+    cells_to_update: list[list[tuple[CellData, bool]]] = [
+        [(cell, False) for cell in row] for row in cells
+    ]
 
     # add new links for exercises
     add_exercise_links(values, links, exercises)
@@ -516,7 +680,7 @@ def find_and_replace_exercises(spreadsheet, exercises: list[Exercise]):
 
     # perform a single read for the sheet with one call
     # and single write for each cell in a single `batchUpdate`
-    return values, links
+    return values, links, cells_to_update
 
 
 if __name__ == "__main__":
@@ -528,7 +692,7 @@ if __name__ == "__main__":
     sheets = spreadsheet.get("sheets", [])
 
     exercises = get_exercises()
-    values, links = find_and_replace_exercises(spreadsheet, exercises)
+    values, links, cells = find_and_replace_exercises(spreadsheet, exercises)
 
     ## test out this find_and_replace_exercise() function
     # while we build it out
