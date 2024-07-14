@@ -424,9 +424,9 @@ def process_row_into_cells(row: list[dict]) -> list["CellData"]:
                             foreground_color_style = ColorStyle(rgb_color=Color(**rgba))
                         elif "themeColor" in run["format"]["foregroundColorStyle"]:
                             foreground_color_style = ColorStyle(
-                                theme_color=run["format"]["foregroundColorStyle"][
-                                    "themeColor"
-                                ]
+                                theme_color=theme_color_type_lookup.get(
+                                    run["format"]["foregroundColorStyle"]["themeColor"]
+                                )
                             )
                     if "link" in run["format"]:
                         uri = run["format"]["link"]["uri"]
@@ -499,6 +499,9 @@ class ThemeColorType(Enum):
     LINK = "LINK"
 
 
+theme_color_type_lookup = {member.value: member for member in ThemeColorType}
+
+
 @dataclass
 class Color:
     red: float = 0
@@ -562,8 +565,6 @@ class TextFormat:
 
     def to_google_dict(self) -> dict:
         """Returns Google's expected dictionary structure for writes."""
-        print("LINK IS BREAKING")
-        pprint(self)
         output = {
             "foregroundColorStyle": self.foreground_color_style.to_google_dict(),
         }
