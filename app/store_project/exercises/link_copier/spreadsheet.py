@@ -191,7 +191,6 @@ def update_cells_request(
 
 @sheets_api_call
 def batch_update(service, spreadsheet_id: str, requests: list[dict[str, str]]):
-    """Searches for `find` and replaces with `replacement`."""
     body = {"requests": requests}
     return (
         service.spreadsheets()
@@ -600,6 +599,15 @@ class CellData:
 
 
 @dataclass
+class RowData:
+    values: list[CellData] = field(default_factory=list)
+
+    def to_google_dict(self) -> dict:
+        """Returns Google's expected dictionary structure for writes."""
+        return {"values": [cell.to_google_dict() for cell in self.values]}
+
+
+@dataclass
 class Cell:
     data: CellData
     is_new: bool = False
@@ -685,7 +693,7 @@ def create_update_requests(sheet_id: int, cells: list[list[Cell]]) -> list[dict]
             requests.append(
                 update_cells_request(
                     Coordinate(sheet_id, i_row, i_col),
-                    rows=[[cell.data.to_google_dict()]],
+                    rows=[RowData(values=[cell.data]).to_google_dict()],
                 )
             )
 
@@ -722,12 +730,12 @@ def find_and_replace_exercises(spreadsheet, exercises: list[Exercise]):
     requests = create_update_requests(sheet_id, cells_to_update)
 
     # paste the new contents
-    # response = batch_update(spreadsheet_id=spreadsheet_id, requests=requests)
-    # pprint(response, depth=4)
+    response = batch_update(spreadsheet_id=spreadsheet_id, requests=requests)
+    pprint(response, depth=4)
 
     # perform a single read for the sheet with one call
     # and single write for each cell in a single `batchUpdate`
-    return cells_to_update, requests
+    return cells_to_update, requests, response
 
 
 if __name__ == "__main__":
@@ -739,7 +747,7 @@ if __name__ == "__main__":
     sheets = spreadsheet.get("sheets", [])
 
     exercises = get_exercises()
-    cells, requests = find_and_replace_exercises(spreadsheet, exercises)
+    cells, requests, response = find_and_replace_exercises(spreadsheet, exercises)
 
     ## test out this find_and_replace_exercise() function
     # while we build it out
