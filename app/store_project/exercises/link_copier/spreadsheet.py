@@ -631,19 +631,24 @@ def add_exercise_links(cells: list[list[Cell]], exercises: list[Exercise]) -> No
                     # add link
                     start = cell.data.value.lower().index(exercise["name"].lower())
                     end = start + len(exercise["name"])
-                    text_format_runs = [
-                        # link
-                        TextFormatRun(
-                            TextFormat(
-                                foreground_color_style=ColorStyle(
-                                    theme_color=ThemeColorType.LINK
-                                ),
-                                underline=True,
-                                link=GoogleAPILink(exercise["url"]),
+                    new_run = TextFormatRun(
+                        TextFormat(
+                            foreground_color_style=ColorStyle(
+                                theme_color=ThemeColorType.LINK
                             ),
-                            start_index=start,
-                        )
-                    ]
+                            underline=True,
+                            link=GoogleAPILink(exercise["url"]),
+                        ),
+                        start_index=start,
+                    )
+
+                    if any(
+                        old_run == new_run for old_run in cell.data.text_format_runs
+                    ):
+                        # no need to add link formatting for something that's already linked
+                        continue
+
+                    text_format_runs = []
                     if end < len(cell.data.value):
                         text_format_runs.append(
                             # plain text
@@ -710,8 +715,10 @@ def find_and_replace_exercises(spreadsheet, exercises: list[Exercise]):
     requests = create_update_requests(sheet_id, cells_to_update)
 
     # paste the new contents
-    response = batch_update(spreadsheet_id=spreadsheet_id, requests=requests)
-    pprint(response, depth=4)
+    response = None
+    if len(requests) >= 1:
+        response = batch_update(spreadsheet_id=spreadsheet_id, requests=requests)
+        pprint(response, depth=4)
 
     # perform a single read for the sheet with one call
     # and single write for each cell in a single `batchUpdate`
