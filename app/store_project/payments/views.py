@@ -127,7 +127,7 @@ def stripe_webhook(request):
     stripe.api_key = settings.STRIPE_SECRET_KEY
     endpoint_secret = os.environ.get("STRIPE_ENDPOINT_SECRET")
     payload = request.body
-    signature_header = request.META["HTTP_STRIPE_SIGNATURE"]
+    signature_header = request.headers["stripe-signature"]
     event = None
 
     try:

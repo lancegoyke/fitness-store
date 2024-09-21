@@ -48,7 +48,7 @@ class AdminHoneypot(generic.FormView):
             username=self.request.POST.get("username"),
             session_key=self.request.session.session_key,
             ip_address=self.request.META.get("REMOTE_ADDR"),
-            user_agent=self.request.META.get("HTTP_USER_AGENT"),
+            user_agent=self.request.headers.get("user-agent"),
             path=self.request.get_full_path(),
         )
         honeypot.send(sender=LoginAttempt, instance=instance, request=self.request)

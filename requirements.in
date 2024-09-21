@@ -12,11 +12,12 @@ django-lifecycle
 django-redis
 django-clearcache
 django-embed-video
-flake8-isort
 django-markdownx
+django-upgrade
 django-ses[bounce]
 django-storages
 factory_boy
+flake8-isort
 gunicorn
 ipython
 ipdb

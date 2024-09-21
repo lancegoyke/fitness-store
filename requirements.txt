@@ -88,6 +88,8 @@ django-ses==4.1.0
     # via -r requirements.in
 django-storages==1.14.3
     # via -r requirements.in
+django-upgrade==1.21.0
+    # via -r requirements.in
 executing==2.0.1
     # via stack-data
 factory-boy==3.3.0
@@ -243,6 +245,8 @@ stripe==9.12.0
     # via -r requirements.in
 termcolor==2.4.0
     # via pytest-sugar
+tokenize-rt==6.0.0
+    # via django-upgrade
 tomlkit==0.12.5
     # via pylint
 traitlets==5.14.3
