@@ -184,7 +184,6 @@ TIME_ZONE = "UTC"
 
 USE_I18N = True
 
-USE_L10N = True
 
 USE_TZ = True
 
@@ -199,8 +198,14 @@ MEDIA_ROOT = APP_DIR / "mediafiles"
 STATICFILES_DIRS = [
     PROJECT_DIR / "static",
 ]
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
-DEFAULT_FILE_STORAGE = "storages.backends.s3boto3.S3Boto3Storage"
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 AWS_STORAGE_BUCKET_NAME = "masterfit"
 AWS_ACCESS_KEY_ID = get_env_var("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = get_env_var("AWS_SECRET_ACCESS_KEY")

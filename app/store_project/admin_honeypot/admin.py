@@ -3,6 +3,7 @@ from django.utils.translation import gettext_lazy as _
 from store_project.admin_honeypot.models import LoginAttempt
 
 
+@admin.register(LoginAttempt)
 class LoginAttemptAdmin(admin.ModelAdmin):
     list_display = (
         "username",
@@ -21,31 +22,22 @@ class LoginAttemptAdmin(admin.ModelAdmin):
             del actions["delete_selected"]
         return actions
 
+    @admin.display(description=_("Session"))
     def get_session_key(self, instance):
         return '<a href="?session_key=%(key)s">%(key)s</a>' % {
             "key": instance.session_key
         }
 
-    get_session_key.short_description = _("Session")
-    get_session_key.allow_tags = True
-
+    @admin.display(description=_("IP Address"))
     def get_ip_address(self, instance):
         return '<a href="?ip_address=%(ip)s">%(ip)s</a>' % {"ip": instance.ip_address}
 
-    get_ip_address.short_description = _("IP Address")
-    get_ip_address.allow_tags = True
-
+    @admin.display(description=_("URL"))
     def get_path(self, instance):
         return '<a href="?path=%(path)s">%(path)s</a>' % {"path": instance.path}
-
-    get_path.short_description = _("URL")
-    get_path.allow_tags = True
 
     def has_add_permission(self, request, obj=None):
         return False
 
     def has_delete_permission(self, request, obj=None):
         return False
-
-
-admin.site.register(LoginAttempt, LoginAttemptAdmin)
