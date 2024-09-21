@@ -1414,10 +1414,6 @@ ul.grid {
   background-color: var(--error);
 }
 
-.testimonials {
-  background: var(--main-color-gray);
-}
-
 .testimonials > * {
   /* max-width: 1000px; */
   margin: auto;
