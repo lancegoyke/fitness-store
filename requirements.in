@@ -1,5 +1,5 @@
 Django>=5.1
-Pillow==10.3.0
+Pillow
 black
 boto3
 coverage
@@ -15,7 +15,7 @@ django-embed-video
 django-markdownx
 django-upgrade
 django-ses[bounce]
-django-storages
+django-storages[s3]
 factory_boy
 flake8-isort
 gunicorn
