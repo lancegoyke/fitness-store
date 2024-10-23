@@ -14,6 +14,7 @@ INSTALLED_APPS += [  # noqa
 # Application performance monitoring (Scout)
 
 INSTALLED_APPS.insert(0, "scout_apm.django")  # should be listed first
+INSTALLED_APPS.append("django_ses")
 SCOUT_NAME = "Mastering Fitness"
 # SCOUT_KEY & SCOUT_MONITOR configured by Heroku Addon
 
