@@ -14,7 +14,7 @@ django-clearcache
 django-embed-video
 django-markdownx
 django-upgrade
-django-ses[bounce]
+django-ses[events]
 django-storages[s3]
 factory_boy
 flake8-isort
