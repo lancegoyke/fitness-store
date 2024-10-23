@@ -51,6 +51,8 @@ jobs:
           echo "VIRTUAL_ENV=$VIRTUAL_ENV" >> $GITHUB_ENV
 
       - name: run system checks
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.production
         run: python app/manage.py check --deploy
 
       - name: check for migrations
