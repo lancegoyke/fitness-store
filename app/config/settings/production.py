@@ -14,7 +14,6 @@ INSTALLED_APPS += [  # noqa
 # Application performance monitoring (Scout)
 
 INSTALLED_APPS.insert(0, "scout_apm.django")  # should be listed first
-INSTALLED_APPS.append("django_ses")
 SCOUT_NAME = "Mastering Fitness"
 # SCOUT_KEY & SCOUT_MONITOR configured by Heroku Addon
 
@@ -63,7 +62,7 @@ LOGGING = {
 # Error monitoring [Sentry]
 
 sentry_sdk.init(
-    dsn=os.environ["SENTRY_DSN"],
+    dsn=os.environ.get("SENTRY_DSN", ""),
     integrations=[DjangoIntegration()],
     send_default_pii=True,
 )
