@@ -1,4 +1,5 @@
 import os
+import ssl
 import sys
 from pathlib import Path
 
@@ -274,10 +275,10 @@ DEFAULT_CACHE_TIMEOUT = 604800  # one week
 
 CACHES = {
     "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.environ.get("REDIS_TLS_URL", "redis://localhost:6379/0"),
         "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "ssl_cert_reqs": ssl.CERT_NONE,
         },
     }
 }

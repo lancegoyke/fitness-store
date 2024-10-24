@@ -9,7 +9,6 @@ django-browser-reload
 django-cors-headers
 django-debug-toolbar
 django-lifecycle
-django-redis
 django-clearcache
 django-embed-video
 django-markdownx
@@ -19,6 +18,7 @@ django-storages[s3]
 factory_boy
 flake8-isort
 gunicorn
+hiredis
 ipython
 ipdb
 Markdown
@@ -29,6 +29,7 @@ pytest
 pytest-sugar
 pytest-django
 python-dotenv
+redis
 sentry-sdk
 scout-apm
 stripe
