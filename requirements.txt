@@ -86,7 +86,7 @@ django-markdownx==4.0.7
     # via -r requirements.in
 django-redis==5.4.0
     # via -r requirements.in
-django-ses==4.2.0
+django-ses==4.1.1
     # via -r requirements.in
 django-storages==1.14.4
     # via -r requirements.in
