@@ -65,6 +65,7 @@ django==5.1.2
     #   django-embed-video
     #   django-lifecycle
     #   django-markdownx
+    #   django-redis
     #   django-ses
     #   django-storages
 django-allauth==65.1.0
@@ -83,6 +84,8 @@ django-lifecycle==1.2.4
     # via -r requirements.in
 django-markdownx==4.0.7
     # via -r requirements.in
+django-redis==5.4.0
+    # via -r requirements.in
 django-ses==4.1.1
     # via -r requirements.in
 django-storages==1.14.4
@@ -100,8 +103,6 @@ flake8==7.1.1
 flake8-isort==6.1.1
     # via -r requirements.in
 gunicorn==23.0.0
-    # via -r requirements.in
-hiredis==3.0.0
     # via -r requirements.in
 idna==3.10
     # via requests
@@ -212,7 +213,7 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
     # via -r requirements.in
 redis==5.1.1
-    # via -r requirements.in
+    # via django-redis
 requests==2.32.3
     # via
     #   django-allauth
