@@ -281,5 +281,9 @@ CACHES = {
     }
 }
 
+if ENVIRONMENT == "PRODUCTION":
+    # https://devcenter.heroku.com/articles/connecting-heroku-redis#using-the-built-in-redis-backend-support
+    CACHES["default"]["OPTIONS"] = {"ssl_cert_reqs": None}
+
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
