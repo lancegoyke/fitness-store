@@ -6,8 +6,8 @@ from store_project.exercises.factories import ExerciseFactory
 from store_project.exercises.models import Exercise
 from store_project.pages.factories import PageFactory
 from store_project.pages.models import Page
-from store_project.products.factories import ProgramFactory
-from store_project.products.models import Program
+from store_project.products.factories import ProgramFactory, BookFactory
+from store_project.products.models import Program, Book
 from store_project.users.factories import SuperAdminFactory
 from store_project.users.factories import UserFactory
 from store_project.users.models import User
@@ -15,6 +15,7 @@ from store_project.users.models import User
 NUM_PROGRAMS = 35
 NUM_USERS = 10
 NUM_EXERCISES = 300
+NUM_BOOKS = 15
 
 
 class Command(BaseCommand):
@@ -34,7 +35,7 @@ class Command(BaseCommand):
 
         if options["refresh"]:
             self.stdout.write("Deleting old data...")
-            models = [User, Program, Page, Exercise]
+            models = [User, Program, Page, Exercise, Book]
             for m in models:
                 m.objects.all().delete()
 
@@ -49,6 +50,9 @@ class Command(BaseCommand):
 
         programs = create_programs()
         self.stdout.write(f"  - {len(programs)} new programs")
+
+        books = create_books()
+        self.stdout.write(f"  - {len(books)} new books")
 
         exercises = create_exercises()
         self.stdout.write(f"  - {len(exercises)} new exercises")
@@ -67,6 +71,11 @@ def create_users() -> tuple[SuperAdminFactory, list[UserFactory]]:
 def create_programs() -> list[ProgramFactory]:
     """Creates NUM_PROGRAMS programs."""
     return ProgramFactory.create_batch(NUM_PROGRAMS)
+
+
+def create_books() -> list[BookFactory]:
+    """Creates NUM_BOOKS books."""
+    return BookFactory.create_batch(NUM_BOOKS)
 
 
 def create_exercises() -> list[ExerciseFactory]:
