@@ -275,10 +275,7 @@ DEFAULT_CACHE_TIMEOUT = 604800  # one week
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": os.environ.get("REDIS_TLS_URL", "redis://localhost:6379/0"),
-        "OPTIONS": {
-            "ssl_cert_reqs": ssl.CERT_NONE,
-        },
+        "LOCATION": os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
     }
 }
 
