@@ -1,14 +1,8 @@
 """With these settings, tests run faster."""
 
 import os
-import unittest.mock
 
-import requests
-import stripe
-
-from .base import *  # noqa
-
-# Set environment variables for testing before importing base settings
+# Set environment variables for testing BEFORE importing base settings
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "test-access-key")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test-secret-key")
 os.environ.setdefault("FB_APP_ID", "test-fb-app-id")
@@ -21,6 +15,13 @@ os.environ.setdefault("STRIPE_SECRET_KEY", "test-stripe-secret-key")
 os.environ.setdefault("G_RECAPTCHA_SITE_KEY", "test-recaptcha-site-key")
 os.environ.setdefault("G_RECAPTCHA_SECRET_KEY", "test-recaptcha-secret-key")
 os.environ.setdefault("G_RECAPTCHA_ENDPOINT", "https://test-recaptcha-endpoint.com")
+
+from .base import *  # noqa
+
+# Import these after base settings to prevent import order issues
+import unittest.mock  # noqa
+import requests  # noqa
+import stripe  # noqa
 
 # TESTING
 # ------------------------------------------------------------------------------

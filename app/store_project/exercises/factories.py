@@ -18,6 +18,7 @@ class CategoryFactory(DjangoModelFactory):
 class ExerciseFactory(DjangoModelFactory):
     class Meta:
         model = Exercise
+        skip_postgeneration_save = True
 
     name = factory.Faker("sentence", nb_words=5, variable_nb_words=True)
     slug = factory.LazyAttribute(lambda o: slugify(o.name)[:50])
