@@ -71,6 +71,21 @@ requests.post = unittest.mock.Mock(
     return_value=unittest.mock.Mock(json=lambda: {"success": True})
 )
 
+# DATABASE
+# ------------------------------------------------------------------------------
+# Use fast in-memory SQLite database for testing
+# Benefits:
+# - Much faster than file-based databases (no disk I/O)
+# - Isolated - each test run gets a fresh database
+# - No cleanup required - database disappears when process ends
+# https://docs.djangoproject.com/en/dev/ref/settings/#databases
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ":memory:",
+    }
+}
+
 # CACHES
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#caches
