@@ -1,5 +1,56 @@
+[project]
+name = "fitness-store"
+version = "0"
+description = "A fitness store application"
+authors = [{name = "Lance Goyke", email = "lance@lancegoyke.com"}]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "Django>=5.2",
+    "Pillow",
+    "boto3",
+    "dj-database-url",
+    "django-allauth[socialaccount]",
+    "django-cors-headers",
+    "django-lifecycle",
+    "django-clearcache",
+    "django-embed-video",
+    "django-markdownx",
+    "django-ses[events]==4.1.1",
+    "django-storages[s3]",
+    "gunicorn",
+    "hiredis",
+    "Markdown",
+    "psycopg2-binary",
+    "python-dotenv",
+    "redis",
+    "sentry-sdk",
+    "scout-apm",
+    "stripe",
+    "whitenoise[brotli]",
+]
+
+[dependency-groups]
+dev = [
+    "black",
+    "coverage",
+    "django-browser-reload",
+    "django-debug-toolbar",
+    "django-upgrade",
+    "factory_boy",
+    "flake8-isort",
+    "ipython",
+    "ipdb",
+    "pip-tools",
+    "pylint-django",
+    "pytest",
+    "pytest-sugar",
+    "pytest-django",
+    "uv",
+]
+
 [tool.black]
-target-version = ['py311']
+target-version = ['py313']
 
 [tool.isort]
 profile = "black"
