@@ -61,5 +61,9 @@ ignore = []
 [tool.ruff.lint.isort]
 force-single-line = true
 
+[tool.pytest.ini_options]
+addopts = "--ds=config.settings.test --ignore=store_project/admin_honeypot/tests"
+python_files = ["tests.py", "test_*.py"]
+
 [tool.curlylint.rules]
 image_alt = true
