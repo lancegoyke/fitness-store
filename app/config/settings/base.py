@@ -87,7 +87,6 @@ INSTALLED_APPS = [
     "corsheaders",
     "markdownx",
     "embed_video",
-    "django_browser_reload",
     # Local
     "store_project.admin_honeypot",
     "store_project.cardio.apps.CardioConfig",
@@ -105,7 +104,6 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "allauth.account.middleware.AccountMiddleware",
-    "django_browser_reload.middleware.BrowserReloadMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
