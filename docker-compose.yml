@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:14.13
+    image: postgres:17
     volumes:
       - postgres_data_dev:/var/lib/postgresql/data/
     environment:
@@ -8,7 +8,7 @@ services:
     ports:
       - 5432:5432
   redis:
-    image: redis:7.2.4
+    image: redis:8
     ports:
       - 6379:6379
 
