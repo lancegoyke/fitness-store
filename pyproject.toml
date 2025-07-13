@@ -21,7 +21,7 @@ dependencies = [
     "gunicorn",
     "hiredis",
     "Markdown",
-    "psycopg2-binary",
+    "psycopg[binary]>=3.2.9",
     "python-dotenv",
     "redis",
     "sentry-sdk",
