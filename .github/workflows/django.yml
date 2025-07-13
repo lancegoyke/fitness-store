@@ -22,6 +22,9 @@ jobs:
       STRIPE_ENDPOINT_SECRET: ${{ secrets.STRIPE_ENDPOINT_SECRET }}
       STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      G_RECAPTCHA_SITE_KEY: test-recaptcha-site-key
+      G_RECAPTCHA_SECRET_KEY: test-recaptcha-secret-key
+      G_RECAPTCHA_ENDPOINT: https://test-recaptcha-endpoint.com
 
     steps:
       - uses: actions/checkout@v4
@@ -50,11 +53,11 @@ jobs:
         run: uv sync --all-extras
 
       - name: run system checks
-        run: uv run python app/manage.py check --deploy
+        run: cd app && uv run python manage.py check --deploy
 
       - name: check for migrations
-        run: uv run python app/manage.py makemigrations --check
-#       TODO
-#     - name: Run Tests
-#       run: |
-#       uv run python app/manage.py test
+        run: cd app && uv run python manage.py makemigrations --check
+
+      - name: Run Tests
+        run: |
+          cd app && uv run pytest
