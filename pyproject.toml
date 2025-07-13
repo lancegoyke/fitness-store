@@ -32,29 +32,35 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "black",
     "coverage",
     "django-browser-reload",
     "django-debug-toolbar",
     "django-upgrade",
     "factory_boy",
-    "flake8-isort",
     "ipython",
     "ipdb",
-    "pip-tools",
     "pylint-django",
     "pytest",
     "pytest-sugar",
     "pytest-django",
-    "uv",
+    "ruff",
 ]
 
-[tool.black]
-target-version = ['py313']
+[tool.ruff]
+target-version = "py313"
+line-length = 88
 
-[tool.isort]
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.ruff.lint.isort]
+force-single-line = true
 profile = "black"
-force_single_line = true
 
 [tool.curlylint.rules]
 image_alt = true
