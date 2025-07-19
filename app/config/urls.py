@@ -1,4 +1,3 @@
-from config.sitemaps import StaticViewSitemap
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
@@ -10,6 +9,8 @@ from store_project.exercises.sitemaps import ExerciseSitemap
 from store_project.pages.sitemaps import PageSitemap
 from store_project.products.sitemaps import BookSitemap
 from store_project.products.sitemaps import ProgramSitemap
+
+from config.sitemaps import StaticViewSitemap
 
 sitemaps = {
     "books": BookSitemap,
@@ -34,6 +35,7 @@ urlpatterns = [
     path("backside/clearcache/", include("clearcache.urls")),
     path("backside/", admin.site.urls),
     path("cardio/", include("store_project.cardio.urls")),
+    path("challenges/", include("store_project.challenges.urls")),
     path("exercises/", include("store_project.exercises.urls")),
     path("payments/", include("store_project.payments.urls")),
     path("users/", include("store_project.users.urls")),

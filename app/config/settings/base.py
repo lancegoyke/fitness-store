@@ -90,6 +90,7 @@ INSTALLED_APPS = [
     # Local
     "store_project.admin_honeypot",
     "store_project.cardio.apps.CardioConfig",
+    "store_project.challenges.apps.ChallengesConfig",
     "store_project.exercises.apps.ExercisesConfig",
     "store_project.notifications.apps.NotificationsConfig",
     "store_project.pages.apps.PagesConfig",
