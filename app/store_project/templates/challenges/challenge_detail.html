@@ -1,0 +1,117 @@
+{% extends '_base.html' %}
+{% load static %}
+
+{% block title %}
+  {{ challenge.name}} | {% include "_site_title.html" %}
+{% endblock title %}
+
+{% block content %}
+
+  <div class="columns">
+    {% include "challenges/sidebar.html" %}
+
+    <div class="column" id="main-content">
+      <div class="container">
+        <div style="margin-top: -20px;">
+          <a class="is-size-7" href="{% url 'challenge_filtered_list' %}">
+            ← view all
+          </a>
+        </div>
+        <h3 class="title is-3">{{ challenge.name }}</h3>
+        <div class="content">
+          <div class="columns is-desktop is-multiline">
+            <div class="column is-one-third">
+              {% for line in challenge.description.splitlines %}
+                <p>{{ line|safe }}</p>
+              {% endfor %}
+
+              <p class="tags">
+                {% for tag in challenge.tags.all %}
+                  <a class="tag is-info is-light" href="{% url 'challenge_tag_filtered_list' tag.slug %}">
+                    {{ tag }}
+                  </a>
+                {% endfor %}
+              </p><!-- .tags -->
+
+              {% if user.is_superuser %}
+                <p>
+                  <a class="button is-dark"
+                     href="{% url 'admin:challenges_challenge_change' challenge.id %}">Admin</a>
+                </p>
+              {% endif %}
+            </div><!-- .column -->
+
+
+            {% if top_score %}
+
+              <div class="column is-two-thirds-desktop">
+                <div class="columns">
+                  <div class="column">
+                    <div class="notification {% if user_pr %}is-success{% else %}is-danger{% endif %}">
+                      <h4 class="title is-5">Your PR</h4>
+                      <p class="is-size-2 is-size-3-mobile is-size-1-widescreen is-family-monospace">
+                        {% if user_pr %}
+                          {{ user_pr }}
+                        {% else %}
+                          -
+                        {% endif %}
+                      </p>
+                    </div><!-- .notification -->
+                  </div><!-- .column -->
+
+                  {% if top_score %}
+                    <div class="column">
+                      <div class="notification is-info">
+                        <h4 class="title is-5">Top Score</h4>
+                        <p class="is-size-2 is-size-3-mobile is-size-1-widescreen is-family-monospace">
+                          {{ top_score }}
+                        </p>
+                      </div><!-- .notification -->
+                    </div><!-- .column -->
+                  {% endif %}
+                </div><!-- .columns -->
+              </div><!-- .column -->
+
+            {% endif %}
+
+            <div class="column is-12">
+              <h3 class="title is-5">Submitted Scores</h3>
+              {% if top_score %}
+                <div class="content is-family-monospace is-size-7-mobile">
+                  <table class="table is-striped">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>User</th>
+                        <th>Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for record in filter.qs %}
+                        <tr class="{% if user == record.user %}is-selected{% endif %}">
+                          <td>{{ record.time_score }}</td>
+                          <td>{{ record.user }}</td>
+                          <td>{{ record.date_recorded|date:"SHORT_DATE_FORMAT" }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div><!-- .content .is-family-monospace -->
+              {% else %}
+                <div class="content is-family-primary">
+                  <p><em>No scores available.</em></p>
+                  <p>If you hurry, you might be the first to set a record for this one!</p>
+                </div><!-- .content .is-family-primary-->
+              {% endif %}
+            </div><!-- .column -->
+
+          </div><!-- .columns -->
+        </div><!-- .content -->
+      </div><!-- .container -->
+    </div><!-- .column -->
+  </div><!-- .columns -->
+{% endblock content %}
+
+{% block javascript %}
+  <script type="module" src="{% static 'challenges/challengeDetail/index.js' %}"></script>
+{% endblock javascript %}
