@@ -12,6 +12,7 @@ tmp/
 *.pyc
 *.dump
 testdata_*
+data*/
 __pycache__/
 credentials.json
 token.json
