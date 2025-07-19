@@ -171,6 +171,19 @@ wheels = [
 ]
 
 [[package]]
+name = "crispy-bulma"
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+    { name = "django-crispy-forms" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/99/21/072e37f692f2cacb9807153b64ab214f67847644a3097a4dbd6bec699b59/crispy_bulma-0.12.0.tar.gz", hash = "sha256:15edbab15a313635b990fe64752297a37d752b2f3b6aa2c6b9060da54a33dda2", size = 34946, upload-time = "2025-05-11T14:09:47.964Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/6e/54efc125f9eaf58f4a1cd2e3dd5f04e65e4c6984bf2ee7e11db91a31021a/crispy_bulma-0.12.0-py3-none-any.whl", hash = "sha256:6fb2b01d3fac6ad7a9d062164fc769711f47149138f00dfbd2f9a4ce14907982", size = 22081, upload-time = "2025-05-11T14:09:46.371Z" },
+]
+
+[[package]]
 name = "cryptography"
 version = "45.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -305,6 +318,18 @@ wheels = [
 ]
 
 [[package]]
+name = "django-crispy-forms"
+version = "2.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/88/a1/ffd7b0e160296121d88e3e173165370000ee4de7328f5c4f4b266638dcd9/django_crispy_forms-2.4.tar.gz", hash = "sha256:915e1ffdeb2987d78b33fabfeff8e5203c8776aa910a3a659a2c514ca125f3bd", size = 278932, upload-time = "2025-04-13T07:25:00.176Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/ec/a25f81e56a674e63cf6c3dd8e36b1b3fecc238fecd6098504adc0cc61402/django_crispy_forms-2.4-py3-none-any.whl", hash = "sha256:5a4b99876cfb1bdd3e47727731b6d4197c51c0da502befbfbec6a93010b02030", size = 31446, upload-time = "2025-04-13T07:24:58.516Z" },
+]
+
+[[package]]
 name = "django-debug-toolbar"
 version = "5.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -328,6 +353,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b4/bd/b11484483a4d5820f379cc811f0dd83a1ea4c7f384e14c9ea72524951494/django_embed_video-1.4.10.tar.gz", hash = "sha256:45f9fb4a8c64a937ef1801237738572103f1e46d9056df637b4063db13f4ca36", size = 42623, upload-time = "2024-05-07T16:26:01.916Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3c/70/846a9761410c96477441bbedef1702ad81a8d00a1de7c8f9db36a5932af8/django_embed_video-1.4.10-py3-none-any.whl", hash = "sha256:ca74bb52215959c63ca578f1c1158e2c7f99b2f2c8f6fbe87ad89afcd226ad06", size = 25192, upload-time = "2024-05-07T16:25:56.427Z" },
+]
+
+[[package]]
+name = "django-filter"
+version = "25.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b5/40/c702a6fe8cccac9bf426b55724ebdf57d10a132bae80a17691d0cf0b9bac/django_filter-25.1.tar.gz", hash = "sha256:1ec9eef48fa8da1c0ac9b411744b16c3f4c31176c867886e4c48da369c407153", size = 143021, upload-time = "2025-02-14T16:30:53.238Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/a6/70dcd68537c434ba7cb9277d403c5c829caf04f35baf5eb9458be251e382/django_filter-25.1-py3-none-any.whl", hash = "sha256:4fa48677cf5857b9b1347fed23e355ea792464e0fe07244d1fdfb8a806215b80", size = 94114, upload-time = "2025-02-14T16:30:50.435Z" },
 ]
 
 [[package]]
@@ -393,6 +430,18 @@ s3 = [
 ]
 
 [[package]]
+name = "django-taggit"
+version = "6.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/34/a6/f1beaf8f552fe90c153cc039316ebab942c23dfbc88588dde081fefca816/django_taggit-6.1.0.tar.gz", hash = "sha256:c4d1199e6df34125dd36db5eb0efe545b254dec3980ce5dd80e6bab3e78757c3", size = 38151, upload-time = "2024-09-29T08:07:39.477Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6b/34/4185c345530b91d05cb82e05d07148f481a5eb5dc2ac44e092b3daa6f206/django_taggit-6.1.0-py3-none-any.whl", hash = "sha256:ab776264bbc76cb3d7e49e1bf9054962457831bd21c3a42db9138b41956e4cf0", size = 75749, upload-time = "2024-09-29T08:07:14.612Z" },
+]
+
+[[package]]
 name = "django-upgrade"
 version = "1.25.0"
 source = { registry = "https://pypi.org/simple" }
@@ -443,16 +492,20 @@ version = "0"
 source = { virtual = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "crispy-bulma" },
     { name = "dj-database-url" },
     { name = "django" },
     { name = "django-allauth", extra = ["socialaccount"] },
     { name = "django-clearcache" },
     { name = "django-cors-headers" },
+    { name = "django-crispy-forms" },
     { name = "django-embed-video" },
+    { name = "django-filter" },
     { name = "django-lifecycle" },
     { name = "django-markdownx" },
     { name = "django-ses", extra = ["events"] },
     { name = "django-storages", extra = ["s3"] },
+    { name = "django-taggit" },
     { name = "gunicorn" },
     { name = "hiredis" },
     { name = "markdown" },
@@ -485,16 +538,20 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3" },
+    { name = "crispy-bulma", specifier = ">=0.12.0" },
     { name = "dj-database-url" },
     { name = "django", specifier = ">=5.2" },
     { name = "django-allauth", extras = ["socialaccount"] },
     { name = "django-clearcache" },
     { name = "django-cors-headers" },
+    { name = "django-crispy-forms", specifier = ">=2.4" },
     { name = "django-embed-video" },
+    { name = "django-filter", specifier = ">=25.1" },
     { name = "django-lifecycle" },
     { name = "django-markdownx" },
     { name = "django-ses", extras = ["events"], specifier = "==4.1.1" },
     { name = "django-storages", extras = ["s3"] },
+    { name = "django-taggit", specifier = ">=6.1.0" },
     { name = "gunicorn" },
     { name = "hiredis" },
     { name = "markdown" },

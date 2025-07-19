@@ -1,0 +1,28 @@
+{% extends '_base.html' %}
+
+{% load crispy_forms_tags %}
+
+
+{% block title %}
+  Add Score | {% include "_site_title.html" %}
+{% endblock title %}
+
+
+{% block content %}
+
+
+  <h2 class="title">Add Score</h2>
+  <p class="subtitle">
+    {{ challenge.name }}
+  </p>
+  <div class="content">
+
+    <form method="post">
+      {% csrf_token %}
+      {{ form|crispy }}
+      <button class="button is-primary" type="submit">Submit</button>
+    </form>
+
+  </div>
+
+{% endblock content %}

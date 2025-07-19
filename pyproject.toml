@@ -28,6 +28,10 @@ dependencies = [
     "scout-apm",
     "stripe",
     "whitenoise[brotli]",
+    "django-taggit>=6.1.0",
+    "django-filter>=25.1",
+    "django-crispy-forms>=2.4",
+    "crispy-bulma>=0.12.0",
 ]
 
 [dependency-groups]
@@ -49,7 +53,10 @@ dev = [
 [tool.ruff]
 target-version = "py313"
 line-length = 88
-exclude = ["app/store_project/admin_honeypot/tests/test_suite.py"]
+exclude = [
+    "app/store_project/admin_honeypot/tests/test_suite.py",
+    "app/store_project/**/migrations/*.py",
+]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -57,7 +64,9 @@ indent-style = "space"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "D"]
-ignore = ["E203", "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107"]
+ignore = ["E203", "E501", "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107"]
+fixable = ["ALL"]
+unfixable = []
 
 [tool.ruff.lint.per-file-ignores]
 "add_env_vars.py" = ["INP001"]

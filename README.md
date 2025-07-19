@@ -135,11 +135,40 @@ Once listening, you must trigger the event by performing the corresponding actio
 
 ## Tests
 
-To setup test data:
+### Database Seeding
+
+To seed the database with sample data from all apps:
+
+```
+python manage.py seed_database
+```
+
+Additional seeding options:
+
+```
+# Delete all existing data and reseed everything
+python manage.py seed_database --delete
+
+# Seed only challenges data
+python manage.py seed_database --challenges-only
+
+# Seed only products data
+python manage.py seed_database --products-only
+
+# Individual app commands
+python manage.py seed_challenges
+python manage.py seed_products
+```
+
+### Legacy Test Data
+
+To setup test data (legacy command):
 
 ```
 python manage.py setup_test_data
 ```
+
+### Running Tests
 
 Short tests have been made for most of the project.
 

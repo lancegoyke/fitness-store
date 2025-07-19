@@ -85,11 +85,15 @@ INSTALLED_APPS = [
     "allauth.socialaccount.providers.facebook",
     "allauth.socialaccount.providers.google",
     "corsheaders",
-    "markdownx",
+    "crispy_bulma",
+    "crispy_forms",
     "embed_video",
+    "markdownx",
+    "taggit",
     # Local
     "store_project.admin_honeypot",
     "store_project.cardio.apps.CardioConfig",
+    "store_project.challenges.apps.ChallengesConfig",
     "store_project.exercises.apps.ExercisesConfig",
     "store_project.notifications.apps.NotificationsConfig",
     "store_project.pages.apps.PagesConfig",
@@ -150,7 +154,7 @@ DATABASES = {
 
 # dj_database_url
 if DATABASE_URL := os.environ.get("DATABASE_URL"):
-    DATABASES["default"] = dj_database_url.config(conn_max_age=600, ssl_require=True)
+    DATABASES["default"] = dj_database_url.config(conn_max_age=600, ssl_require=True)  # type: ignore
 
 
 # Password validation
@@ -264,6 +268,13 @@ SOCIALACCOUNT_PROVIDERS = {
 STRIPE_PUBLISHABLE_KEY = get_env_var("STRIPE_PUBLISHABLE_KEY")
 STRIPE_SECRET_KEY = get_env_var("STRIPE_SECRET_KEY")
 
+# django-taggit
+TAGGIT_CASE_INSENSITIVE = True
+
+# Crispy Forms
+CRISPY_ALLOWED_TEMPLATE_PACKS = ("bulma",)
+CRISPY_TEMPLATE_PACK = "bulma"
+
 # Cache
 
 DEFAULT_CACHE_TIMEOUT = 604800  # one week
@@ -277,7 +288,7 @@ CACHES = {
 
 if ENVIRONMENT == "PRODUCTION":
     # https://devcenter.heroku.com/articles/connecting-heroku-redis#using-the-built-in-redis-backend-support
-    CACHES["default"]["OPTIONS"] = {"ssl_cert_reqs": None}
+    CACHES["default"]["OPTIONS"] = {"ssl_cert_reqs": None}  # type: ignore
 
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
