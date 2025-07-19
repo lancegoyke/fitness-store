@@ -1,11 +1,9 @@
 from autoslug import AutoSlugField
-from django.contrib.auth import get_user_model
 from django.db import models
 from django.urls import reverse
 from taggit.managers import TaggableManager
 
 
-# Create your models here.
 class Challenge(models.Model):
     """The exercise challenges presented to clients."""
 
@@ -43,7 +41,7 @@ class Record(models.Model):
     )
     notes = models.CharField(max_length=200, blank=True)
     date_recorded = models.DateTimeField(auto_now_add=True)
-    user = models.ForeignKey(get_user_model(), on_delete=models.SET_NULL, null=True)
+    user = models.ForeignKey("users.User", on_delete=models.SET_NULL, null=True)
 
     class Meta:
         """Meta definition for Record."""

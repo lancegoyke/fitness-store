@@ -1,37 +1,39 @@
-from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import Challenge
-from .models import Record
+from store_project.challenges.models import Challenge
+from store_project.challenges.models import Record
+from store_project.users.models import User
 
 
-# Create your tests here.
 class ChallengeTests(TestCase):
-    def setUp(self):
-        self.user = get_user_model().objects.create_user(
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user(
             username="recorduser", email="recorduser@email.com", password="testpass123"
         )
 
-        self.adminuser = get_user_model().objects.create_superuser(
+        cls.adminuser = User.objects.create_superuser(
             username="adminuser", email="adminuser@email.com", password="testpass123"
         )
 
-        self.challenge = Challenge.objects.create(
+        cls.challenge = Challenge.objects.create(
             name="Test challenge",
             description="This is a hard workout",
             tags=[],
         )
 
-        self.record = Record.objects.create(
-            challenge=self.challenge,
-            user=self.user,
+        cls.record = Record.objects.create(
+            challenge=cls.challenge,
+            user=cls.user,
             time_score="4:26:44",
         )
 
     def test_challenge_listing(self):
         self.assertEqual(f"{self.challenge.name}", "Test challenge")
         self.assertEqual(f"{self.challenge.description}", "This is a hard workout")
+        self.assertEqual(f"{self.record.time_score}", "4:26:44")
+        self.assertEqual(f"{self.record.user.username}", "recorduser")
 
     def test_challenge_list_view_for_logged_in_user(self):
         self.client.login(email="recorduser@email.com", password="testpass123")
