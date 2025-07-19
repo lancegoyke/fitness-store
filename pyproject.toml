@@ -51,7 +51,10 @@ dev = [
 [tool.ruff]
 target-version = "py313"
 line-length = 88
-exclude = ["app/store_project/admin_honeypot/tests/test_suite.py"]
+exclude = [
+    "app/store_project/admin_honeypot/tests/test_suite.py",
+    "app/store_project/**/migrations/*.py",
+]
 
 [tool.ruff.format]
 quote-style = "double"
