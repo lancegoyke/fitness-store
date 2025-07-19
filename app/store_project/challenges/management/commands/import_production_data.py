@@ -23,6 +23,11 @@ class Command(BaseCommand):
             help="Directory containing JSON data files (default: data-import)",
         )
         parser.add_argument(
+            "--s3-bucket",
+            type=str,
+            help="S3 bucket containing data files (e.g. 'my-bucket/data-import/')",
+        )
+        parser.add_argument(
             "--dry-run",
             action="store_true",
             help="Show what would be imported without actually importing",
@@ -35,8 +40,13 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         data_dir = options["data_dir"]
+        s3_bucket = options["s3_bucket"]
         dry_run = options["dry_run"]
         merge_users = options["merge_users"]
+
+        # Handle S3 download if specified
+        if s3_bucket:
+            data_dir = self._download_from_s3(s3_bucket, dry_run)
 
         if dry_run:
             self.stdout.write(
@@ -517,3 +527,66 @@ class Command(BaseCommand):
             count += 1
 
         return count, messages
+
+    def _download_from_s3(self, s3_path, dry_run):
+        """Download data files from S3 to temporary directory."""
+        import tempfile
+
+        import boto3
+        from botocore.exceptions import ClientError
+        from botocore.exceptions import NoCredentialsError
+
+        if dry_run:
+            self.stdout.write(f"DRY RUN: Would download from S3: {s3_path}")
+            return "data-import"  # Return default for dry run
+
+        try:
+            # Parse S3 path
+            if s3_path.startswith("s3://"):
+                s3_path = s3_path[5:]
+
+            parts = s3_path.split("/", 1)
+            bucket_name = parts[0]
+            prefix = parts[1] if len(parts) > 1 else ""
+
+            self.stdout.write(f"Downloading data from S3: s3://{bucket_name}/{prefix}")
+
+            # Create temporary directory
+            temp_dir = tempfile.mkdtemp(prefix="import_data_")
+
+            # Initialize S3 client
+            s3_client = boto3.client("s3")
+
+            # List and download files
+            filenames = [
+                "production-users.json",
+                "production-tags.json",
+                "production-challenges.json",
+                "production-records.json",
+                "production-tagged_items.json",
+            ]
+
+            downloaded_count = 0
+            for filename in filenames:
+                s3_key = f"{prefix}/{filename}" if prefix else filename
+                local_path = os.path.join(temp_dir, filename)
+
+                try:
+                    s3_client.download_file(bucket_name, s3_key, local_path)
+                    self.stdout.write(f"✓ Downloaded {filename}")
+                    downloaded_count += 1
+                except ClientError as e:
+                    if e.response["Error"]["Code"] == "404":
+                        self.stdout.write(f"⚠ File not found: {s3_key}")
+                    else:
+                        raise
+
+            self.stdout.write(f"Downloaded {downloaded_count} files to {temp_dir}")
+            return temp_dir
+
+        except NoCredentialsError:
+            raise CommandError(
+                "AWS credentials not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables."
+            )
+        except Exception as e:
+            raise CommandError(f"Error downloading from S3: {str(e)}")
