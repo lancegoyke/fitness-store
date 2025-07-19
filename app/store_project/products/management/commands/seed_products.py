@@ -66,6 +66,7 @@ class Command(BaseCommand):
         self.stdout.write("Done 💪")
 
 
+@transaction.atomic
 def create_users() -> tuple[SuperAdminFactory, list[UserFactory]]:
     """Creates a superuser and NUM_USERS users."""
     superuser = SuperAdminFactory()
@@ -74,16 +75,19 @@ def create_users() -> tuple[SuperAdminFactory, list[UserFactory]]:
     return superuser, people
 
 
+@transaction.atomic
 def create_programs() -> list[ProgramFactory]:
     """Creates NUM_PROGRAMS programs."""
     return ProgramFactory.create_batch(NUM_PROGRAMS)
 
 
+@transaction.atomic
 def create_books() -> list[BookFactory]:
     """Creates NUM_BOOKS books."""
     return BookFactory.create_batch(NUM_BOOKS)
 
 
+@transaction.atomic
 def create_exercises() -> list[ExerciseFactory]:
     """Creates NUM_EXERCISES exercises."""
     return ExerciseFactory.create_batch(NUM_EXERCISES)

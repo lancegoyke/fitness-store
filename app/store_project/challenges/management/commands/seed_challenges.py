@@ -7,6 +7,7 @@ from allauth.socialaccount.models import SocialApp
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandParser
+from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
 from store_project.challenges.models import Challenge
@@ -84,10 +85,15 @@ class Command(BaseCommand):
             slug = slugify(name)
             challenge = Challenge(name=name, description=description, slug=slug)
             challenges.append(challenge)
-        return Challenge.objects.bulk_create(challenges)
+        return Challenge.objects.bulk_create(challenges, batch_size=100)
 
     def _create_records(self, challenges: list[Challenge]) -> list[Record]:
         """Creates Record objects for each Challenge object."""
+        # Pre-fetch all users once to avoid slow random queries
+        all_users = list(User.objects.all())
+        if not all_users:
+            return []
+
         records = []
         for challenge in challenges:
             num_records = random.randint(5, 250)
@@ -97,24 +103,24 @@ class Command(BaseCommand):
                 seconds = random.randint(0, 59)
                 time_score = timedelta(minutes=minutes, seconds=seconds)
 
+                # Generate random date upfront instead of after creation
+                naive_datetime = datetime.now() - timedelta(days=random.randint(0, 365))
+                aware_datetime = timezone.make_aware(
+                    naive_datetime, timezone=timezone.get_current_timezone()
+                )
+
                 records.append(
                     Record(
                         challenge=challenge,
                         time_score=time_score,
-                        user=User.objects.order_by("?").first(),
+                        user=random.choice(
+                            all_users
+                        ),  # Much faster than DB random query
+                        date_recorded=aware_datetime,
                     )
                 )
 
-        record_objs = Record.objects.bulk_create(records)
-
-        for record in record_objs:
-            naive_datetime = datetime.now() - timedelta(days=random.randint(0, 365))
-            aware_datetime = timezone.make_aware(
-                naive_datetime, timezone=timezone.get_current_timezone()
-            )
-            record.date_recorded = aware_datetime
-        Record.objects.bulk_update(record_objs, ["date_recorded"])
-
+        record_objs = Record.objects.bulk_create(records, batch_size=1000)
         return record_objs
 
     def _create_social_app(self) -> None:
@@ -141,12 +147,15 @@ class Command(BaseCommand):
             user = User(username=username.lower(), email=email)
             user.set_password("testpass123")  # Properly hash the password
             users.append(user)
-        return User.objects.bulk_create(users)
+        return User.objects.bulk_create(users, batch_size=100)
 
+    @transaction.atomic
     def _tag_challenges(self, challenges: list[Challenge]) -> None:
+        # Batch tag additions in a single transaction for better performance
         for challenge in challenges:
             challenge.tags.add(*random.sample(TAG_OPTIONS, random.randint(1, 3)))
 
+    @transaction.atomic
     def handle(self, *args, **kwargs):
         if kwargs["delete"]:
             User.objects.all().delete()
@@ -173,4 +182,4 @@ class Command(BaseCommand):
         self._create_records(challenges)
         self._create_social_app()
 
-        self.stdout.write(self.style.SUCCESS("Data created successfully"))
+        self.stdout.write(self.style.SUCCESS("Done 💪"))
