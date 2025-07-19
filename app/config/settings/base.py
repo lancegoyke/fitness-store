@@ -85,8 +85,9 @@ INSTALLED_APPS = [
     "allauth.socialaccount.providers.facebook",
     "allauth.socialaccount.providers.google",
     "corsheaders",
-    "markdownx",
     "embed_video",
+    "markdownx",
+    "taggit",
     # Local
     "store_project.admin_honeypot",
     "store_project.cardio.apps.CardioConfig",
@@ -264,6 +265,9 @@ SOCIALACCOUNT_PROVIDERS = {
 
 STRIPE_PUBLISHABLE_KEY = get_env_var("STRIPE_PUBLISHABLE_KEY")
 STRIPE_SECRET_KEY = get_env_var("STRIPE_SECRET_KEY")
+
+# django-taggit
+TAGGIT_CASE_INSENSITIVE = True
 
 # Cache
 
