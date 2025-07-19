@@ -1,4 +1,3 @@
-from autoslug import AutoSlugField
 from django.db import models
 from django.urls import reverse
 from taggit.managers import TaggableManager
@@ -9,7 +8,7 @@ class Challenge(models.Model):
 
     name = models.CharField(max_length=200)
     description = models.TextField()
-    slug = AutoSlugField(populate_from="name")
+    slug = models.SlugField(max_length=200, unique=True, blank=True)
     date_created = models.DateTimeField(
         auto_now_add=True,
         editable=False,
