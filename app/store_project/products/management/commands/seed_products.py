@@ -1,3 +1,4 @@
+from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandParser
 from django.db import transaction
@@ -9,12 +10,9 @@ from store_project.products.factories import BookFactory
 from store_project.products.factories import ProgramFactory
 from store_project.products.models import Book
 from store_project.products.models import Program
-from store_project.users.factories import SuperAdminFactory
-from store_project.users.factories import UserFactory
 from store_project.users.models import User
 
 NUM_PROGRAMS = 35
-NUM_USERS = 10
 NUM_EXERCISES = 300
 NUM_BOOKS = 15
 
@@ -41,15 +39,19 @@ class Command(BaseCommand):
 
         if options["refresh"]:
             self.stdout.write("Deleting old data...")
-            models = [User, Program, Page, Exercise, Book]
+            models = [Program, Page, Exercise, Book]
             for m in models:
                 m.objects.all().delete()
 
         self.stdout.write("Creating new data...")
 
-        superuser, users = create_users()
-        self.stdout.write(f"  - new superuser {superuser.username}")
-        self.stdout.write(f"  - {len(users)} new users")
+        # Ensure users exist by calling seed_users
+        if not User.objects.exists() or options["refresh"]:
+            self.stdout.write("Creating users...")
+            if options["refresh"]:
+                call_command("seed_users", "--delete")
+            else:
+                call_command("seed_users")
 
         PageFactory()
         self.stdout.write("  - new About page")
@@ -64,15 +66,6 @@ class Command(BaseCommand):
         self.stdout.write(f"  - {len(exercises)} new exercises")
 
         self.stdout.write("Done 💪")
-
-
-@transaction.atomic
-def create_users() -> tuple[SuperAdminFactory, list[UserFactory]]:
-    """Creates a superuser and NUM_USERS users."""
-    superuser = SuperAdminFactory()
-    people = UserFactory.create_batch(NUM_USERS)
-
-    return superuser, people
 
 
 @transaction.atomic

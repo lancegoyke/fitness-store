@@ -3,8 +3,7 @@ from datetime import datetime
 from datetime import timedelta
 from textwrap import dedent
 
-from allauth.socialaccount.models import SocialApp
-from django.contrib.sites.models import Site
+from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandParser
 from django.db import transaction
@@ -25,34 +24,6 @@ TAG_OPTIONS = [
     "Power",
     "Coordination",
     "Accuracy",
-]
-
-RANDOM_USERS = [
-    "John",
-    "Emma",
-    "Michael",
-    "Olivia",
-    "William",
-    "Ava",
-    "James",
-    "Isabella",
-    "Benjamin",
-    "Sophia",
-    "Mason",
-    "Mia",
-    "Elijah",
-    "Charlotte",
-    "Oliver",
-    "Amelia",
-    "Jacob",
-    "Harper",
-    "Lucas",
-    "Evelyn",
-    "Alexander",
-    "Abigail",
-    "Daniel",
-    "Emily",
-    "Matthew",
 ]
 
 
@@ -123,32 +94,6 @@ class Command(BaseCommand):
         record_objs = Record.objects.bulk_create(records, batch_size=1000)
         return record_objs
 
-    def _create_social_app(self) -> None:
-        """Creates a SocialApp object for the Django admin."""
-        site = Site.objects.get_current()
-        google = SocialApp.objects.create(
-            provider="google",
-            name="Google",
-            client_id="1234567890",
-            secret="0987654321",
-        )
-        google.sites.add(site)
-        google.save()
-
-    def _create_superuser(self) -> User:
-        return User.objects.create_superuser(
-            "admin", "admin@example.com", "adminpassword"
-        )
-
-    def _create_users(self) -> list[User]:
-        users = []
-        for username in RANDOM_USERS:
-            email = f"{username.lower()}@example.com"
-            user = User(username=username.lower(), email=email)
-            user.set_password("testpass123")  # Properly hash the password
-            users.append(user)
-        return User.objects.bulk_create(users, batch_size=100)
-
     @transaction.atomic
     def _tag_challenges(self, challenges: list[Challenge]) -> None:
         # Batch tag additions in a single transaction for better performance
@@ -158,28 +103,24 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **kwargs):
         if kwargs["delete"]:
-            User.objects.all().delete()
             Challenge.objects.all().delete()
-            SocialApp.objects.all().delete()
-            self.stdout.write(self.style.SUCCESS("All data deleted"))
+            self.stdout.write(self.style.SUCCESS("Challenge data deleted"))
 
-        if (
-            User.objects.exists()
-            or Challenge.objects.exists()
-            or SocialApp.objects.exists()
-        ):
+        if Challenge.objects.exists():
             self.stdout.write(
                 self.style.WARNING(
-                    "Data already exists. Use --delete to delete all data first"
+                    "Challenge data already exists. Use --delete to delete all data first"
                 )
             )
             return
 
-        self._create_superuser()
-        self._create_users()
+        # Ensure users exist by calling seed_users
+        if not User.objects.exists():
+            self.stdout.write("No users found, creating users first...")
+            call_command("seed_users")
+
         challenges = self._create_challenges()
         self._tag_challenges(challenges)
         self._create_records(challenges)
-        self._create_social_app()
 
         self.stdout.write(self.style.SUCCESS("Done 💪"))
