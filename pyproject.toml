@@ -30,6 +30,8 @@ dependencies = [
     "whitenoise[brotli]",
     "django-taggit>=6.1.0",
     "django-filter>=25.1",
+    "django-crispy-forms>=2.4",
+    "crispy-bulma>=0.12.0",
 ]
 
 [dependency-groups]

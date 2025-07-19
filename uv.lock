@@ -171,6 +171,19 @@ wheels = [
 ]
 
 [[package]]
+name = "crispy-bulma"
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+    { name = "django-crispy-forms" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/99/21/072e37f692f2cacb9807153b64ab214f67847644a3097a4dbd6bec699b59/crispy_bulma-0.12.0.tar.gz", hash = "sha256:15edbab15a313635b990fe64752297a37d752b2f3b6aa2c6b9060da54a33dda2", size = 34946, upload-time = "2025-05-11T14:09:47.964Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/6e/54efc125f9eaf58f4a1cd2e3dd5f04e65e4c6984bf2ee7e11db91a31021a/crispy_bulma-0.12.0-py3-none-any.whl", hash = "sha256:6fb2b01d3fac6ad7a9d062164fc769711f47149138f00dfbd2f9a4ce14907982", size = 22081, upload-time = "2025-05-11T14:09:46.371Z" },
+]
+
+[[package]]
 name = "cryptography"
 version = "45.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -302,6 +315,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/93/6c/16f6cb6064c63074fd5b2bd494eb319afd846236d9c1a6c765946df2c289/django_cors_headers-4.7.0.tar.gz", hash = "sha256:6fdf31bf9c6d6448ba09ef57157db2268d515d94fc5c89a0a1028e1fc03ee52b", size = 21037, upload-time = "2025-02-06T22:15:28.924Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7e/a2/7bcfff86314bd9dd698180e31ba00604001606efb518a06cca6833a54285/django_cors_headers-4.7.0-py3-none-any.whl", hash = "sha256:f1c125dcd58479fe7a67fe2499c16ee38b81b397463cf025f0e2c42937421070", size = 12794, upload-time = "2025-02-06T22:15:24.341Z" },
+]
+
+[[package]]
+name = "django-crispy-forms"
+version = "2.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/88/a1/ffd7b0e160296121d88e3e173165370000ee4de7328f5c4f4b266638dcd9/django_crispy_forms-2.4.tar.gz", hash = "sha256:915e1ffdeb2987d78b33fabfeff8e5203c8776aa910a3a659a2c514ca125f3bd", size = 278932, upload-time = "2025-04-13T07:25:00.176Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/ec/a25f81e56a674e63cf6c3dd8e36b1b3fecc238fecd6098504adc0cc61402/django_crispy_forms-2.4-py3-none-any.whl", hash = "sha256:5a4b99876cfb1bdd3e47727731b6d4197c51c0da502befbfbec6a93010b02030", size = 31446, upload-time = "2025-04-13T07:24:58.516Z" },
 ]
 
 [[package]]
@@ -467,11 +492,13 @@ version = "0"
 source = { virtual = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "crispy-bulma" },
     { name = "dj-database-url" },
     { name = "django" },
     { name = "django-allauth", extra = ["socialaccount"] },
     { name = "django-clearcache" },
     { name = "django-cors-headers" },
+    { name = "django-crispy-forms" },
     { name = "django-embed-video" },
     { name = "django-filter" },
     { name = "django-lifecycle" },
@@ -511,11 +538,13 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3" },
+    { name = "crispy-bulma", specifier = ">=0.12.0" },
     { name = "dj-database-url" },
     { name = "django", specifier = ">=5.2" },
     { name = "django-allauth", extras = ["socialaccount"] },
     { name = "django-clearcache" },
     { name = "django-cors-headers" },
+    { name = "django-crispy-forms", specifier = ">=2.4" },
     { name = "django-embed-video" },
     { name = "django-filter", specifier = ">=25.1" },
     { name = "django-lifecycle" },
