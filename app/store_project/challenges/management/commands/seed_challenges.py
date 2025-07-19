@@ -4,13 +4,14 @@ from datetime import timedelta
 from textwrap import dedent
 
 from allauth.socialaccount.models import SocialApp
-from challenges.models import Challenge
-from challenges.models import Record
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandParser
 from django.utils import timezone
-from users.models import CustomUser as User
+from django.utils.text import slugify
+from store_project.challenges.models import Challenge
+from store_project.challenges.models import Record
+from store_project.users.models import User
 
 TAG_OPTIONS = [
     "Strength",
@@ -55,7 +56,7 @@ RANDOM_USERS = [
 
 
 class Command(BaseCommand):
-    help = "Seeds the database with an initial superuser and Challenge object"
+    help = "Seeds the database with challenges and related data"
 
     def add_arguments(self, parser: CommandParser) -> None:
         super().add_arguments(parser)
@@ -80,7 +81,8 @@ class Command(BaseCommand):
                 Front plank x 30 sec
                 """
             )
-            challenge = Challenge(name=name, description=description)
+            slug = slugify(name)
+            challenge = Challenge(name=name, description=description, slug=slug)
             challenges.append(challenge)
         return Challenge.objects.bulk_create(challenges)
 
@@ -89,14 +91,20 @@ class Command(BaseCommand):
         records = []
         for challenge in challenges:
             num_records = random.randint(5, 250)
-            records.extend(
-                Record(
-                    challenge=challenge,
-                    time_score=f"00:{random.randint(10, 35)}:{random.randint(0, 59)}",
-                    user=User.objects.order_by("?").first(),
+            for _ in range(num_records):
+                # Create a timedelta object for the DurationField
+                minutes = random.randint(10, 35)
+                seconds = random.randint(0, 59)
+                time_score = timedelta(minutes=minutes, seconds=seconds)
+
+                records.append(
+                    Record(
+                        challenge=challenge,
+                        time_score=time_score,
+                        user=User.objects.order_by("?").first(),
+                    )
                 )
-                for _ in range(num_records)
-            )
+
         record_objs = Record.objects.bulk_create(records)
 
         for record in record_objs:
@@ -127,12 +135,13 @@ class Command(BaseCommand):
         )
 
     def _create_users(self) -> list[User]:
-        return User.objects.bulk_create(
-            [
-                User(username=username.lower(), password="testpass123")
-                for username in RANDOM_USERS
-            ]
-        )
+        users = []
+        for username in RANDOM_USERS:
+            email = f"{username.lower()}@example.com"
+            user = User(username=username.lower(), email=email)
+            user.set_password("testpass123")  # Properly hash the password
+            users.append(user)
+        return User.objects.bulk_create(users)
 
     def _tag_challenges(self, challenges: list[Challenge]) -> None:
         for challenge in challenges:

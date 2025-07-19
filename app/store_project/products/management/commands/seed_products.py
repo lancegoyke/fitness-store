@@ -1,13 +1,14 @@
 from django.core.management.base import BaseCommand
-from django.core.management.base import CommandError
 from django.core.management.base import CommandParser
 from django.db import transaction
 from store_project.exercises.factories import ExerciseFactory
 from store_project.exercises.models import Exercise
 from store_project.pages.factories import PageFactory
 from store_project.pages.models import Page
-from store_project.products.factories import ProgramFactory, BookFactory
-from store_project.products.models import Program, Book
+from store_project.products.factories import BookFactory
+from store_project.products.factories import ProgramFactory
+from store_project.products.models import Book
+from store_project.products.models import Program
 from store_project.users.factories import SuperAdminFactory
 from store_project.users.factories import UserFactory
 from store_project.users.models import User
@@ -19,7 +20,7 @@ NUM_BOOKS = 15
 
 
 class Command(BaseCommand):
-    help = "Seeds database with sample data"
+    help = "Seeds database with products and related data"
 
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
@@ -31,7 +32,12 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args, **options):
         if Program.objects.exists() and not options["refresh"]:
-            raise CommandError("There are already programs in the database. Aborting.")
+            self.stdout.write(
+                self.style.WARNING(
+                    "Data already exists. Use --refresh to delete all data first"
+                )
+            )
+            return
 
         if options["refresh"]:
             self.stdout.write("Deleting old data...")
