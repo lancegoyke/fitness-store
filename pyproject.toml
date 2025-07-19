@@ -62,7 +62,9 @@ indent-style = "space"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "D"]
-ignore = ["E203", "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107"]
+ignore = ["E203", "E501", "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107"]
+fixable = ["ALL"]
+unfixable = []
 
 [tool.ruff.lint.per-file-ignores]
 "add_env_vars.py" = ["INP001"]
