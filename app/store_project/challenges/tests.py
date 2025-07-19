@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.test import TestCase
 from django.urls import reverse
 
@@ -20,20 +22,23 @@ class ChallengeTests(TestCase):
         cls.challenge = Challenge.objects.create(
             name="Test challenge",
             description="This is a hard workout",
+            slug="test-challenge",
             tags=[],
         )
 
         cls.record = Record.objects.create(
             challenge=cls.challenge,
             user=cls.user,
-            time_score="4:26:44",
+            time_score=timedelta(hours=4, minutes=26, seconds=44),
         )
 
     def test_challenge_listing(self):
         self.assertEqual(f"{self.challenge.name}", "Test challenge")
         self.assertEqual(f"{self.challenge.description}", "This is a hard workout")
         self.assertEqual(f"{self.record.time_score}", "4:26:44")
-        self.assertEqual(f"{self.record.user.username}", "recorduser")
+        self.assertIsNotNone(self.record.user)
+        if self.record.user:
+            self.assertEqual(f"{self.record.user.username}", "recorduser")
 
     def test_challenge_list_view_for_logged_in_user(self):
         self.client.login(email="recorduser@email.com", password="testpass123")
@@ -78,11 +83,9 @@ class ChallengeTests(TestCase):
         self.client.login(email="recorduser@email.com", password="testpass123")
         response = self.client.post(
             self.challenge.get_absolute_url(),
-            kwargs={
-                "form": {
-                    "time_score": "01",
-                    "notes": "I did it at the speed of light",
-                }
+            data={
+                "time_score": "01",
+                "notes": "I did it at the speed of light",
             },
         )
         response = self.client.get(self.challenge.get_absolute_url())
