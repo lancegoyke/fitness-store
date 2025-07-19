@@ -39,6 +39,9 @@ lint:
 format:
     uv run ruff format
 
+format-unsafe:
+    uv run ruff check --fix --unsafe-fixes
+
 check: lint test
 
 # Heroku deployment
