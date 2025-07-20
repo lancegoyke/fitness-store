@@ -109,3 +109,35 @@ class ChallengeTests(TestCase):
         # with self.assertRaises(PermissionDenied):
         response = self.client.get(reverse("challenge_create"))
         self.assertEqual(response.status_code, 403)
+
+    def test_challenge_detail_paginates_records(self):
+        # First check that we have the initial record from setUpTestData
+        initial_count = Record.objects.filter(challenge=self.challenge).count()
+        self.assertEqual(initial_count, 1)  # Should have 1 from setUpTestData
+
+        # Create 75 MORE records to test pagination with 50 per page
+        # This gives us 76 total (1 from setup + 75 new)
+        for i in range(75):
+            Record.objects.create(
+                challenge=self.challenge,
+                user=self.user,
+                time_score=timedelta(seconds=i),
+            )
+
+        # Verify all records were created
+        total_count = Record.objects.filter(challenge=self.challenge).count()
+        self.assertEqual(total_count, 76)
+
+        self.client.login(email="recorduser@email.com", password="testpass123")
+
+        response = self.client.get(self.challenge.get_absolute_url())
+
+        # Should have 50 items on page 1 and show we're on page 1 of 2
+        self.assertEqual(len(response.context["page_obj"]), 50)
+        self.assertContains(response, "Page 1 of 2")
+
+        response = self.client.get(self.challenge.get_absolute_url() + "?page=2")
+        self.assertEqual(
+            len(response.context["page_obj"]), 26
+        )  # 76 total - 50 on page 1 = 26
+        self.assertContains(response, "Page 2 of 2")

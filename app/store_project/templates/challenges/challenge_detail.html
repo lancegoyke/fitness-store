@@ -94,7 +94,7 @@
         <div class="box">
           <div class="stack">
             <h3>All Submitted Scores</h3>
-            {% if top_score %}
+            {% if page_obj %}
               <div>
                 <table>
                   <thead>
@@ -105,7 +105,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {% for record in filter.qs %}
+                    {% for record in page_obj %}
                       <tr {% if user == record.user %}style="background-color: var(--success);"{% endif %}>
                         <td>{{ record.time_score }}</td>
                         <td>{{ record.user }}</td>
@@ -115,6 +115,21 @@
                   </tbody>
                 </table>
               </div>
+              {% if is_paginated %}
+                <div class="pagination-container">
+                  {% if page_obj.has_previous %}
+                    <a class="pagination-button" href="?{{ querystring }}{% if querystring %}&amp;{% endif %}page={{ page_obj.previous_page_number }}">← Previous</a>
+                  {% else %}
+                    <div></div>
+                  {% endif %}
+                  <div class="pagination-info">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</div>
+                  {% if page_obj.has_next %}
+                    <a class="pagination-button" href="?{{ querystring }}{% if querystring %}&amp;{% endif %}page={{ page_obj.next_page_number }}">Next →</a>
+                  {% else %}
+                    <div></div>
+                  {% endif %}
+                </div>
+              {% endif %}
             {% else %}
               <div>
                 <p><em>No scores available.</em></p>
