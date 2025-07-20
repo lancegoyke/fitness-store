@@ -21,7 +21,7 @@ class Challenge(models.Model):
     )
     difficulty_level = models.CharField(
         max_length=20,
-        choices=DifficultyLevel.choices,
+        choices=DifficultyLevel,
         default=DifficultyLevel.BEGINNER,
     )
     tags = TaggableManager()
