@@ -105,7 +105,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {% for record in filter.qs %}
+                    {% for record in page_obj %}
                       <tr {% if user == record.user %}style="background-color: var(--success);"{% endif %}>
                         <td>{{ record.time_score }}</td>
                         <td>{{ record.user }}</td>
@@ -115,6 +115,17 @@
                   </tbody>
                 </table>
               </div>
+              {% if is_paginated %}
+                <div class="cluster" style="justify-content: space-between;">
+                  {% if page_obj.has_previous %}
+                    <a class="button outline" href="?{{ querystring }}{% if querystring %}&amp;{% endif %}page={{ page_obj.previous_page_number }}">Previous</a>
+                  {% endif %}
+                  <div>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</div>
+                  {% if page_obj.has_next %}
+                    <a class="button outline" href="?{{ querystring }}{% if querystring %}&amp;{% endif %}page={{ page_obj.next_page_number }}">Next</a>
+                  {% endif %}
+                </div>
+              {% endif %}
             {% else %}
               <div>
                 <p><em>No scores available.</em></p>

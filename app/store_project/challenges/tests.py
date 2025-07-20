@@ -109,3 +109,21 @@ class ChallengeTests(TestCase):
         # with self.assertRaises(PermissionDenied):
         response = self.client.get(reverse("challenge_create"))
         self.assertEqual(response.status_code, 403)
+
+    def test_challenge_detail_paginates_records(self):
+        for i in range(15):
+            Record.objects.create(
+                challenge=self.challenge,
+                user=self.user,
+                time_score=timedelta(seconds=i),
+            )
+
+        self.client.login(email="recorduser@email.com", password="testpass123")
+
+        response = self.client.get(self.challenge.get_absolute_url())
+        self.assertEqual(len(response.context["page_obj"]), 10)
+        self.assertContains(response, "Page 1 of 2")
+
+        response = self.client.get(self.challenge.get_absolute_url() + "?page=2")
+        self.assertEqual(len(response.context["page_obj"]), 6)
+        self.assertContains(response, "Page 2 of 2")
