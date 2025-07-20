@@ -1,4 +1,5 @@
 import pytest
+
 from store_project.exercises.factories import CategoryFactory
 from store_project.exercises.factories import ExerciseFactory
 from store_project.exercises.models import Category

@@ -4,6 +4,7 @@ from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils.translation import gettext as _
 from django.views import generic
+
 from store_project.admin_honeypot.forms import HoneypotLoginForm
 from store_project.admin_honeypot.models import LoginAttempt
 from store_project.admin_honeypot.signals import honeypot

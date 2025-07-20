@@ -1,4 +1,5 @@
 import pytest
+
 from store_project.pages.models import Page
 
 pytestmark = pytest.mark.django_db

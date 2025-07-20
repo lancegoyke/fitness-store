@@ -1,4 +1,5 @@
 import pytest
+
 from store_project.users.factories import UserFactory
 from store_project.users.forms import UserCreationForm
 

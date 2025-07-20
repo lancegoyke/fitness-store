@@ -5,6 +5,7 @@ import pytest
 from django.test import Client
 from django.test import RequestFactory
 from django.test import TestCase
+
 from store_project.pages.factories import PageFactory
 from store_project.pages.views import HomePageView
 from store_project.pages.views import SinglePageView

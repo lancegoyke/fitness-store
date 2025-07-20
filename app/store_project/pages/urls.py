@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.urls import path
 from django.views.decorators.cache import cache_page
+
 from store_project.pages.views import HomePageView
 from store_project.pages.views import SinglePageView
 from store_project.pages.views import contact_view

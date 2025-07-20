@@ -1,4 +1,5 @@
 from django.urls import path
+
 from store_project.feed.views import LatestProductsFeed
 
 app_name = "feed"
