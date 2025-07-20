@@ -80,11 +80,11 @@
                   </div>
 
                   <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--s-1);">
-                    {% if challenge.tag_list %}
+                    {% if challenge.tags.all %}
                       <div class="cluster categories">
                         <div>
-                          {% for tag in challenge.tag_list %}
-                            <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">{{ tag.name }}</a>
+                          {% for tag in challenge.tags.all %}
+                            <span class="tag">{{ tag.name }}</span>
                           {% endfor %}
                         </div>
                       </div>
