@@ -3,6 +3,12 @@ from django.urls import reverse
 from taggit.managers import TaggableManager
 
 
+class DifficultyLevel(models.TextChoices):
+    BEGINNER = "beginner", "Beginner"
+    INTERMEDIATE = "intermediate", "Intermediate"
+    ADVANCED = "advanced", "Advanced"
+
+
 class Challenge(models.Model):
     """The exercise challenges presented to clients."""
 
@@ -12,6 +18,11 @@ class Challenge(models.Model):
     date_created = models.DateTimeField(
         auto_now_add=True,
         editable=False,
+    )
+    difficulty_level = models.CharField(
+        max_length=20,
+        choices=DifficultyLevel.choices,
+        default=DifficultyLevel.BEGINNER,
     )
     tags = TaggableManager()
 
@@ -27,6 +38,16 @@ class Challenge(models.Model):
 
     def get_absolute_url(self):
         return reverse("challenge_detail", kwargs={"slug": self.slug})
+
+    @property
+    def difficulty_color(self) -> str:
+        """Return Bulma color name for the difficulty indicator."""
+        mapping = {
+            DifficultyLevel.BEGINNER: "success",
+            DifficultyLevel.INTERMEDIATE: "warning",
+            DifficultyLevel.ADVANCED: "danger",
+        }
+        return mapping.get(self.difficulty_level, "info")
 
 
 class Record(models.Model):
