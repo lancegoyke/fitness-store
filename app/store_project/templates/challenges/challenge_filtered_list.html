@@ -5,13 +5,25 @@
   Challenges | {% include "_site_title.html" %}
 {% endblock title %}
 
-{% block content %}
-  <div class="with-sidebar">
-    <div>
+{% block layout %}
+  {# Override default layout for functional page #}
+  <div class="stack functional-width">
+    {% if messages %}
+      <div class="center messages">
+        <ul>
+          {% for message in messages %}
+            <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    <div style="display: grid; grid-template-columns: 300px 1fr; gap: 2rem;">
+      <!-- Sidebar with filtering -->
       <div class="box">
         <div class="stack">
           <div>
-            <h3>Search and sort</h3>
+            <h4>Search and sort</h4>
             <div class="stack-form">
               <form action="" method="get">
                 {{ filter.form|crispy }}
@@ -25,35 +37,55 @@
             </div>
           </div>
 
-          <div>
-            <h4>Filter by tag</h4>
-            <div class="cluster categories">
-              <div>
-                {% for tag in tag_list %}
-                  <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">
-                    {{ tag.name }}
-                  </a>
-                {% endfor %}
+          {% if tag_list %}
+            <div>
+              <h4>Tags</h4>
+              <div class="cluster categories">
+                <div>
+                  {% for tag in tag_list %}
+                    <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">{{ tag.name }}</a>
+                  {% endfor %}
+                </div>
               </div>
             </div>
-          </div>
+          {% endif %}
         </div>
       </div>
 
-      <div>
-        <h2>Pick a Challenge</h2>
+      <!-- Main content area -->
+      <div class="stack">
+        <div>
+          <h1>Pick a Challenge</h1>
+        </div>
+
         <div class="stack">
           {% for challenge in filter.qs %}
             <div class="card-box">
-              <div class="box">
-                <h3>
-                  <a href="{{ challenge.get_absolute_url }}">{{ challenge.name }}</a>
-                </h3>
+              <div class="cluster">
+                <div>
+                  <h3><a href="{% url 'challenge_detail' challenge.slug %}">{{ challenge.name }}</a></h3>
+                  <p>{{ challenge.description }}</p>
+                </div>
+                <div>
+                  {% if challenge.tag_list %}
+                    <div class="cluster categories">
+                      <div>
+                        {% for tag in challenge.tag_list %}
+                          <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">{{ tag.name }}</a>
+                        {% endfor %}
+                      </div>
+                    </div>
+                  {% endif %}
+                </div>
               </div>
+            </div>
+          {% empty %}
+            <div class="box">
+              <p>No challenges found.</p>
             </div>
           {% endfor %}
         </div>
       </div>
     </div>
   </div>
-{% endblock content %}
+{% endblock layout %}
