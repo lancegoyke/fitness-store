@@ -69,7 +69,7 @@
                 <div class="box {% if user_pr %}success{% else %}error{% endif %}">
                   <div class="stack">
                     <h4>Your PR</h4>
-                    <p class="font-size:big" style="font-family: monospace;">
+                    <p class="font-size:big font-monospace">
                       {% if user_pr %}
                         {{ user_pr }}
                       {% else %}
@@ -82,7 +82,7 @@
                 <div class="box info">
                   <div class="stack">
                     <h4>Top Score</h4>
-                    <p class="font-size:big" style="font-family: monospace;">
+                    <p class="font-size:big font-monospace">
                       {{ top_score }}
                     </p>
                   </div>
@@ -96,7 +96,7 @@
           <div class="stack">
             <h3>All Submitted Scores</h3>
             {% if top_score %}
-              <div style="font-family: monospace; font-size: var(--s-1);">
+              <div>
                 <table>
                   <thead>
                     <tr>

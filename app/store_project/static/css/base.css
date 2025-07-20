@@ -1271,6 +1271,10 @@ ul.grid {
   align-items: baseline;
 }
 
+.font-monospace {
+  font-family: monospace;
+}
+
 .font-size\:big {
   font-size: var(--s3);
 }
