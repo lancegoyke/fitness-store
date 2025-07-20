@@ -11,6 +11,7 @@ class ChallengeCreateForm(ModelForm):
         fields = [
             "name",
             "description",
+            "summary",
             "difficulty_level",
             "tags",
         ]

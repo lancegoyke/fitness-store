@@ -60,6 +60,7 @@ class Command(BaseCommand):
             challenge = Challenge(
                 name=name,
                 description=description,
+                summary="Lorem ipsum dolor sit amet.",
                 slug=slug,
                 difficulty_level=random.choice(list(DifficultyLevel.values)),
             )
