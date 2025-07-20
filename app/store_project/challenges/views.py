@@ -58,10 +58,12 @@ class ChallengeDisplay(DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["record_create_form"] = RecordCreateForm()
-        records = self.get_object().records.order_by("-date_recorded")
+        records = (
+            self.get_object().records.select_related("user").order_by("-date_recorded")
+        )
         context["filter"] = RecordFilter(self.request.GET, queryset=records)
 
-        paginator = Paginator(context["filter"].qs, 10)
+        paginator = Paginator(context["filter"].qs, 50)
         page_number = self.request.GET.get("page")
         page_obj = paginator.get_page(page_number)
         context["page_obj"] = page_obj
@@ -71,7 +73,9 @@ class ChallengeDisplay(DetailView):
         if "page" in query_params:
             query_params.pop("page")
         context["querystring"] = query_params.urlencode()
-        challenge_records = self.get_object().records.all()
+
+        # Use the same base queryset for stats calculation
+        challenge_records = records  # Use the same queryset with select_related
         if challenge_records.exists():
             context["top_score"] = (
                 challenge_records.order_by("time_score").first().time_score
