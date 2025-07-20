@@ -1,3 +1,5 @@
+import statistics
+
 from django.db import models
 from django.urls import reverse
 from taggit.managers import TaggableManager
@@ -53,6 +55,22 @@ class Challenge(models.Model):
             DifficultyLevel.ADVANCED: "danger",
         }
         return mapping.get(self.difficulty_level, "info")
+
+    @property
+    def estimated_completion_time(self):
+        """Return the median completion time for all records of this challenge."""
+        time_scores = self.records.values_list("time_score", flat=True)
+        if not time_scores:
+            return None
+
+        # Convert to total seconds for calculation
+        time_seconds = [score.total_seconds() for score in time_scores]
+        median_seconds = statistics.median(time_seconds)
+
+        # Round to nearest second and convert back to a timedelta
+        from datetime import timedelta
+
+        return timedelta(seconds=round(median_seconds))
 
 
 class Record(models.Model):

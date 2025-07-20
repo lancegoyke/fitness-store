@@ -1,5 +1,6 @@
 {% extends '_base.html' %}
 {% load crispy_forms_tags %}
+{% load duration_filters %}
 
 {% block head_title %}Challenges{% endblock head_title %}
 
@@ -97,9 +98,12 @@
                     {% endif %}
 
                     <div style="font-size: var(--s-1); color: var(--color-gray);">
-                      {% with record_count=challenge.records.count %}
+                      {% with record_count=challenge.records.count estimated_time=challenge.estimated_completion_time %}
                         {% if record_count %}
                           {{ record_count }} record{{ record_count|pluralize }}
+                          {% if estimated_time %}
+                            • Est. {{ estimated_time|duration_humanize }}
+                          {% endif %}
                         {% else %}
                           No records yet
                         {% endif %}
