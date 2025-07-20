@@ -63,9 +63,9 @@
             <div class="card-box">
               <div class="padding:s0">
                 <div class="stack">
-                  <div>
-                    <h3 style="margin: 0;"><a href="{% url 'challenge_detail' challenge.slug %}">{{ challenge.name }}</a></h3>
-                    <span class="has-text-{{ challenge.difficulty_color }}" title="{{ challenge.get_difficulty_level_display }}">&#x25cf;</span>
+                  <div class="flex-row gap-s-2">
+                    <h3 class="margin-0"><a href="{% url 'challenge_detail' challenge.slug %}">{{ challenge.name }}</a></h3>
+                    <span class="difficulty-indicator difficulty-{{ challenge.difficulty_level }}" title="{{ challenge.get_difficulty_level_display }}">&#x25cf;</span>
                   </div>
 
                   <div>
