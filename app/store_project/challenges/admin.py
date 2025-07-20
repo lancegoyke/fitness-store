@@ -18,5 +18,6 @@ class ChallengeAdmin(admin.ModelAdmin):
     list_display = (
         "name",
         "description",
+        "difficulty_level",
         "date_created",
     )

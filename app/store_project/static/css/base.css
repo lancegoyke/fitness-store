@@ -1206,6 +1206,29 @@ ul.grid {
 /*
     UTILITY CLASSES
 */
+.flex-row {
+  display: flex;
+  align-items: center;
+}
+
+.flex-row-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gap-s-2 {
+  gap: var(--s-2);
+}
+
+.gap-s-1 {
+  gap: var(--s-1);
+}
+
+.margin-0 {
+  margin: 0;
+}
+
 .max-width\:measure {
   max-width: var(--measure);
 }
@@ -1539,4 +1562,24 @@ table tr:nth-child(even) {
 
 .hidden {
   display: none;
+}
+
+/*
+    DIFFICULTY INDICATORS
+*/
+.difficulty-indicator {
+  font-size: var(--s0);
+  font-weight: bold;
+}
+
+.difficulty-beginner {
+  color: #22c55e; /* Green for beginner */
+}
+
+.difficulty-intermediate {
+  color: #f59e0b; /* Amber/orange for intermediate */
+}
+
+.difficulty-advanced {
+  color: #ef4444; /* Red for advanced */
 }

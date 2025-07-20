@@ -29,8 +29,9 @@
           <a href="{% url 'challenge_filtered_list' %}">← view all</a>
         </div>
 
-        <div>
-          <h1>{{ challenge.name }}</h1>
+        <div class="flex-row-center gap-s-1">
+          <h1 class="margin-0">{{ challenge.name }}</h1>
+          <span class="difficulty-indicator difficulty-{{ challenge.difficulty_level }}" title="{{ challenge.get_difficulty_level_display }}">&#x25cf;</span>
         </div>
 
         <div class="box">

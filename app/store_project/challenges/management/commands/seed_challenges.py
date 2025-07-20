@@ -10,6 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
 from store_project.challenges.models import Challenge
+from store_project.challenges.models import DifficultyLevel
 from store_project.challenges.models import Record
 from store_project.users.models import User
 from taggit.models import Tag
@@ -56,7 +57,12 @@ class Command(BaseCommand):
                 """
             )
             slug = slugify(name)
-            challenge = Challenge(name=name, description=description, slug=slug)
+            challenge = Challenge(
+                name=name,
+                description=description,
+                slug=slug,
+                difficulty_level=random.choice(list(DifficultyLevel.values)),
+            )
             challenges.append(challenge)
         return Challenge.objects.bulk_create(challenges, batch_size=100)
 

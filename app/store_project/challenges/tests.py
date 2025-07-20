@@ -23,6 +23,7 @@ class ChallengeTests(TestCase):
             name="Test challenge",
             description="This is a hard workout",
             slug="test-challenge",
+            difficulty_level="beginner",
             tags=[],
         )
 
