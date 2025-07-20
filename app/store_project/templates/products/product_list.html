@@ -1,4 +1,4 @@
-{% extends '_base_wide.html' %}
+{% extends '_base.html' %}
 
 {% load static i18n %}
 
@@ -12,26 +12,62 @@
   <meta property="og:image:alt" content="Mastering Fitness" />
 {% endblock header %}
 
-{% block content %}
+{% block layout %}
+  {# Override default layout for functional page #}
+  <div class="stack functional-width">
+    {% if messages %}
+      <div class="center messages">
+        <ul>
+          {% for message in messages %}
+            <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
 
-  <h1>Store</h1>
+    <div class="stack">
+      <div>
+        <h1>Store</h1>
+      </div>
 
-  {% if user.is_superuser %}
-    <p>
-      <a class="button" href="{% url 'admin:products_book_changelist' %}">Book Admin</a>
-      <a class="button" href="{% url 'admin:products_program_changelist' %}">Program Admin</a>
-    </p>
-  {% endif %}
+      {% if user.is_superuser %}
+        <div>
+          <div class="cluster">
+            <div>
+              <a class="button" href="{% url 'admin:products_book_changelist' %}">Book Admin</a>
+              <a class="button" href="{% url 'admin:products_program_changelist' %}">Program Admin</a>
+            </div>
+          </div>
+        </div>
+      {% endif %}
 
-  <h2>{% trans "Programs" %}</h2>
-  {% include "products/_product_cards.html" with products=programs %}
+      <div class="stack">
+        <div>
+          <h2>{% trans "Programs" %}</h2>
+        </div>
+        <div>
+          {% include "products/_product_cards.html" with products=programs %}
+        </div>
+      </div>
 
-  <h2>{% trans "Books" %}</h2>
-  {% include "products/_product_cards.html" with products=books %}
+      <div class="stack">
+        <div>
+          <h2>{% trans "Books" %}</h2>
+        </div>
+        <div>
+          {% include "products/_product_cards.html" with products=books %}
+        </div>
+      </div>
 
-  <p class="center text-center" style="margin-top: var(--s5);">Want something else? <a target="_blank" href="https://docs.google.com/forms/d/e/1FAIpQLSfqlmSwj1UW3anIIgP0uBEv31W41AhGH-5FYeGVly90dwkMVw/viewform?usp=sf_link">Request it.</a></p>
-
-{% endblock content %}
+      <div>
+        <p>
+          Want something else?
+          <a href="https://docs.google.com/forms/d/e/1FAIpQLSfqlmSwj1UW3anIIgP0uBEv31W41AhGH-5FYeGVly90dwkMVw/viewform?usp=sf_link">Request it.</a>
+        </p>
+      </div>
+    </div>
+  </div>
+{% endblock layout %}
 
 {% block javascript %}
   <script>
