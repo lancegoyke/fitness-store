@@ -116,13 +116,17 @@
                 </table>
               </div>
               {% if is_paginated %}
-                <div class="cluster" style="justify-content: space-between;">
+                <div class="pagination-container">
                   {% if page_obj.has_previous %}
-                    <a class="button outline" href="?{{ querystring }}{% if querystring %}&amp;{% endif %}page={{ page_obj.previous_page_number }}">Previous</a>
+                    <a class="pagination-button" href="?{{ querystring }}{% if querystring %}&amp;{% endif %}page={{ page_obj.previous_page_number }}">← Previous</a>
+                  {% else %}
+                    <div></div>
                   {% endif %}
-                  <div>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</div>
+                  <div class="pagination-info">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</div>
                   {% if page_obj.has_next %}
-                    <a class="button outline" href="?{{ querystring }}{% if querystring %}&amp;{% endif %}page={{ page_obj.next_page_number }}">Next</a>
+                    <a class="pagination-button" href="?{{ querystring }}{% if querystring %}&amp;{% endif %}page={{ page_obj.next_page_number }}">Next →</a>
+                  {% else %}
+                    <div></div>
                   {% endif %}
                 </div>
               {% endif %}
