@@ -1,8 +1,8 @@
 {% load crispy_forms_tags %}
 
-<div class="box invert">
-  <div class="stack">
-    <div>
+<div class="stack">
+  <div class="box success">
+    <div class="stack">
       <h3>Submit a Score</h3>
       <div class="stack-form">
         <form action="" method="POST">
@@ -12,9 +12,11 @@
         </form>
       </div>
     </div>
+  </div>
 
-    {% if top_score %}
-      <div>
+  {% if top_score %}
+    <div class="box">
+      <div class="stack">
         <h3>Sort and Filter Scores</h3>
         <div class="stack-form">
           <form action="" method="get">
@@ -28,6 +30,6 @@
           </form>
         </div>
       </div>
-    {% endif %}
-  </div>
+    </div>
+  {% endif %}
 </div>
