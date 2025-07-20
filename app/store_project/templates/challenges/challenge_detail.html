@@ -5,48 +5,65 @@
   {{ challenge.name}} | {% include "_site_title.html" %}
 {% endblock title %}
 
-{% block content %}
-  <div class="with-sidebar">
-    <div>
-      {% include "challenges/sidebar.html" %}
+{% block layout %}
+  {% if messages %}
+    <div class="center messages">
+      <ul>
+        {% for message in messages %}
+          <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
 
+  <div class="functional-width">
+    <div style="display: grid; grid-template-columns: 300px 1fr; gap: 2rem;">
+      <!-- Left sidebar with submit score and filter forms -->
       <div>
-        <div class="stack">
-          <div>
-            <a href="{% url 'challenge_filtered_list' %}">← view all</a>
-          </div>
+        {% include "challenges/sidebar.html" %}
+      </div>
 
-          <div>
-            <h1>{{ challenge.name }}</h1>
-          </div>
+      <!-- Main content area -->
+      <div class="stack">
+        <div>
+          <a href="{% url 'challenge_filtered_list' %}">← view all</a>
+        </div>
 
-          <div class="box">
-            <div class="stack">
+        <div>
+          <h1>{{ challenge.name }}</h1>
+        </div>
+
+        <div class="box">
+          <div class="stack">
+            <div>
+              {% for line in challenge.description.splitlines %}
+                <p>{{ line|safe }}</p>
+              {% endfor %}
+            </div>
+
+            <div class="cluster categories">
               <div>
-                {% for line in challenge.description.splitlines %}
-                  <p>{{ line|safe }}</p>
+                {% for tag in challenge.tags.all %}
+                  <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">
+                    {{ tag }}
+                  </a>
                 {% endfor %}
               </div>
-
-              <div class="cluster categories">
-                <div>
-                  {% for tag in challenge.tags.all %}
-                    <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">
-                      {{ tag }}
-                    </a>
-                  {% endfor %}
-                </div>
-              </div>
-
-              {% if user.is_superuser %}
-                <div>
-                  <a class="button invert" href="{% url 'admin:challenges_challenge_change' challenge.id %}">Admin</a>
-                </div>
-              {% endif %}
             </div>
-          </div>
 
-          {% if top_score %}
+            {% if user.is_superuser %}
+              <div>
+                <a class="button invert" href="{% url 'admin:challenges_challenge_change' challenge.id %}">Admin</a>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if top_score %}
+          <div class="stack">
+            <div>
+              <h2>Your Performance</h2>
+            </div>
             <div class="two-switcher">
               <div>
                 <div class="box {% if user_pr %}success{% else %}error{% endif %}">
@@ -62,54 +79,52 @@
                   </div>
                 </div>
 
-                {% if top_score %}
-                  <div class="box info">
-                    <div class="stack">
-                      <h4>Top Score</h4>
-                      <p class="font-size:big" style="font-family: monospace;">
-                        {{ top_score }}
-                      </p>
-                    </div>
+                <div class="box info">
+                  <div class="stack">
+                    <h4>Top Score</h4>
+                    <p class="font-size:big" style="font-family: monospace;">
+                      {{ top_score }}
+                    </p>
                   </div>
-                {% endif %}
+                </div>
               </div>
             </div>
-          {% endif %}
+          </div>
+        {% endif %}
 
-          <div class="box">
-            <div class="stack">
-              <h3>Submitted Scores</h3>
-              {% if top_score %}
-                <div style="font-family: monospace; font-size: var(--s-1);">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Time</th>
-                        <th>User</th>
-                        <th>Date</th>
+        <div class="box">
+          <div class="stack">
+            <h3>All Submitted Scores</h3>
+            {% if top_score %}
+              <div style="font-family: monospace; font-size: var(--s-1);">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>User</th>
+                      <th>Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for record in filter.qs %}
+                      <tr {% if user == record.user %}style="background-color: var(--success);"{% endif %}>
+                        <td>{{ record.time_score }}</td>
+                        <td>{{ record.user }}</td>
+                        <td>{{ record.date_recorded|date:"SHORT_DATE_FORMAT" }}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {% for record in filter.qs %}
-                        <tr {% if user == record.user %}style="background-color: var(--success);"{% endif %}>
-                          <td>{{ record.time_score }}</td>
-                          <td>{{ record.user }}</td>
-                          <td>{{ record.date_recorded|date:"SHORT_DATE_FORMAT" }}</td>
-                        </tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                </div>
-              {% else %}
-                <div>
-                  <p><em>No scores available.</em></p>
-                  <p>If you hurry, you might be the first to set a record for this one!</p>
-                </div>
-              {% endif %}
-            </div>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <div>
+                <p><em>No scores available.</em></p>
+                <p>If you hurry, you might be the first to set a record for this one!</p>
+              </div>
+            {% endif %}
           </div>
         </div>
       </div>
     </div>
   </div>
-{% endblock content %}
+{% endblock layout %}
