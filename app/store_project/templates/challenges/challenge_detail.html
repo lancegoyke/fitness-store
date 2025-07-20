@@ -1,9 +1,7 @@
 {% extends '_base.html' %}
 {% load static %}
 
-{% block title %}
-  {{ challenge.name}} | {% include "_site_title.html" %}
-{% endblock title %}
+{% block head_title %}{{ challenge.name }}{% endblock head_title %}
 
 {% block layout %}
   {% if messages %}

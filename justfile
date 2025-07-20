@@ -52,6 +52,10 @@ deploy:
 shell:
     uv run python app/manage.py shell
 
+# Run shell command with -c option
+shell-c command:
+    uv run python app/manage.py shell -c "{{ command }}"
+
 collectstatic:
     uv run python app/manage.py collectstatic
 
