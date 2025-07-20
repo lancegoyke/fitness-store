@@ -1,5 +1,6 @@
 {% extends '_base.html' %}
 {% load static %}
+{% load duration_filters %}
 
 {% block head_title %}{{ challenge.name }}{% endblock head_title %}
 
@@ -31,6 +32,19 @@
           <h1 class="margin-0">{{ challenge.name }}</h1>
           <span class="difficulty-indicator difficulty-{{ challenge.difficulty_level }}" title="{{ challenge.get_difficulty_level_display }}">&#x25cf;</span>
         </div>
+
+        {% with estimated_time=challenge.estimated_completion_time %}
+          {% if estimated_time %}
+            <div style="background: var(--color-light); padding: var(--s-1); border-radius: var(--border-radius); margin-bottom: var(--s0);">
+              <div style="font-weight: bold; color: var(--color-dark);">
+                Estimated completion time: {{ estimated_time|duration_humanize }}
+              </div>
+              <div style="font-size: var(--s-1); color: var(--color-gray);">
+                Based on median of {{ challenge.records.count }} record{{ challenge.records.count|pluralize }}
+              </div>
+            </div>
+          {% endif %}
+        {% endwith %}
 
         <div class="box">
           <div class="stack">
