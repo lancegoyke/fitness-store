@@ -36,13 +36,9 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v2.7.1
+  - repo: https://github.com/biomejs/pre-commit
+    rev: v1.5.2
     hooks:
-      - id: prettier
-        types_or:
-          - css
-          - xml
-        additional_dependencies:
-          - prettier@2.8.8
-          - "@prettier/plugin-xml@2.2.0"
+      - id: biome
+        args: ["check", "--apply"]
+        types: [css]

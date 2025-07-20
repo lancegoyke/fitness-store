@@ -3,7 +3,8 @@ env/
 !.env.example
 mediafiles/
 .devcontainer/
-.vscode/
+.vscode/*
+!.vscode/settings.json
 app/db.sqlite3
 staticfiles/
 .pytest_cache/
