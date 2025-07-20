@@ -5,52 +5,114 @@
   Challenges | {% include "_site_title.html" %}
 {% endblock title %}
 
+{% block layout %}
+  {# Override default layout for functional page #}
+  <div class="stack functional-width">
+    {% if messages %}
+      <div class="center messages">
+        <ul>
+          {% for message in messages %}
+            <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
 
-{% block content %}
+    <div class="sidebar-main-layout">
+      <!-- Sidebar with filtering -->
+      <div class="box">
+        <div class="stack">
+          <div>
+            <h4>Search and sort</h4>
+            <div class="stack-form">
+              <form action="" method="get">
+                {{ filter.form|crispy }}
+                <div class="cluster">
+                  <div>
+                    <input class="button" type="submit" value="Submit" />
+                    <a class="button outline" href="{% url 'challenge_filtered_list' %}">Clear</a>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
 
-  <div class="columns">
-    <div class="column is-one-quarter">
-      <div class="columns is-multiline">
-        <div class="column is-12">
-          <h3 class="title is-4">Search and sort</h3>
-          <form action="" method="get">
-            {{ filter.form|crispy }}
-            <input class="button is-info" type="submit" value="Submit" />
-            <a class="button is-text" href="{% url 'challenge_filtered_list' %}">Clear</a>
-          </form>
-        </div><!-- .column .is-12 -->
+          {% if tag_list %}
+            <div>
+              <h4>Tags</h4>
+              <div class="cluster categories">
+                <div>
+                  {% for tag in tag_list %}
+                    <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">{{ tag.name }}</a>
+                  {% endfor %}
+                </div>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
 
-        <div class="column is-12">
-          <div class="container">
-            <h4 class="title is-5">Filter by tag</h4>
-            <div class="tags">
-              {% for tag in tag_list %}
-                <a class="tag is-info is-light" href="{% url 'challenge_tag_filtered_list' tag.slug %}">
-                  {{ tag.name }}
-                </a>
-              {% endfor %}
-            </div><!-- .tags -->
-          </div><!-- .container -->
-        </div><!-- .column .is-12 -->
-      </div><!-- .columns .is-multiline -->
-    </div><!-- .column -->
+      <!-- Main content area -->
+      <div class="stack">
+        <div>
+          <h1>Pick a Challenge</h1>
+        </div>
 
-    <div class="column">
-      <div class="container">
-        <h2 class="title">Pick a Challenge</h2>
+        <div class="stack">
+          {% for challenge in filter.qs %}
+            <div class="card-box">
+              <div class="padding:s0">
+                <div class="stack">
+                  <div>
+                    <h3 style="margin: 0;"><a href="{% url 'challenge_detail' challenge.slug %}">{{ challenge.name }}</a></h3>
+                  </div>
 
-        {% for challenge in filter.qs %}
-          <div class="content">
-            <h3 class="title is-4">
-              <a href="{{ challenge.get_absolute_url }}">{{ challenge.name }}</a>
-            </h3>
-          </div><!-- .content -->
-        {% endfor %}
+                  <div>
+                    {% with description_lines=challenge.description.splitlines %}
+                      {% if description_lines %}
+                        <p style="margin: 0; color: var(--color-gray);">
+                          {{ description_lines.0|truncatewords:25 }}
+                          {% if description_lines|length > 1 or description_lines.0|length > 150 %}
+                            ...
+                          {% endif %}
+                        </p>
+                      {% endif %}
+                    {% endwith %}
+                  </div>
 
-      </div><!-- .container -->
-    </div><!-- .column -->
+                  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--s-1);">
+                    {% if challenge.tag_list %}
+                      <div class="cluster categories">
+                        <div>
+                          {% for tag in challenge.tag_list %}
+                            <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">{{ tag.name }}</a>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    {% else %}
+                      <div></div>
+                    {% endif %}
 
-  </div><!-- .columns -->
-
-
-{% endblock content %}
+                    <div style="font-size: var(--s-1); color: var(--color-gray);">
+                      {% with record_count=challenge.records.count %}
+                        {% if record_count %}
+                          {{ record_count }} record{{ record_count|pluralize }}
+                        {% else %}
+                          No records yet
+                        {% endif %}
+                      {% endwith %}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          {% empty %}
+            <div class="box">
+              <p>No challenges found.</p>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock layout %}

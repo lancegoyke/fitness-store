@@ -4,56 +4,81 @@
 
 {% block head_title %}{% if category %}{% trans category %} {% endif %}{% trans "Exercises" %}{% endblock head_title %}
 
-{% block content %}
-  <h1>{% if category %}{% trans category %} {% endif %}Exercises</h1>
+{% block layout %}
+  {# Override default layout for functional page #}
+  <div class="stack functional-width">
+    {% if messages %}
+      <div class="center messages">
+        <ul>
+          {% for message in messages %}
+            <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
 
-  {% if user.is_superuser %}
-    <p>
-      <a class="button" href="{% url 'admin:exercises_exercise_changelist' %}">
-        Edit in Admin
-      </a>
-    </p>
-  {% endif %}
+    <div class="stack">
+      <div>
+        <h1>{% if category %}{% trans category %} {% endif %}Exercises</h1>
+      </div>
 
-  {% if category %}
-    <p><a href="{% url 'exercises:list' %}"><-- all exercises</a></p>
-  {% endif %}
+      {% if user.is_superuser %}
+        <div>
+          <a class="button" href="{% url 'admin:exercises_exercise_changelist' %}">
+            Edit in Admin
+          </a>
+        </div>
+      {% endif %}
 
-  {% if categories %}
-    <div class="cluster categories">
-      <div> <!-- intermediary wrapper -->
-        {% for category in categories %}
-          <div><a class="tag filter-btn" href="{% url 'exercises:filtered_list' category.slug %}">{{ category.name }}</a></div>
-        {% endfor %}
+      {% if category %}
+        <div>
+          <a href="{% url 'exercises:list' %}">← all exercises</a>
+        </div>
+      {% endif %}
+
+      {% if categories %}
+        <div>
+          <div class="cluster categories">
+            <div> <!-- intermediary wrapper -->
+              {% for category in categories %}
+                <div><a class="tag filter-btn" href="{% url 'exercises:filtered_list' category.slug %}">{{ category.name }}</a></div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      <div>
+        <div class="stack search">
+          <input
+            id="search"
+            type="text"
+            name="search"
+            hx-post="/exercises/search/"
+            hx-trigger="keyup changed delay:250ms"
+            hx-indicator=".htmx-indicator"
+            hx-target="#exercises"
+            hx-include="#category"
+            placeholder="Search"
+          >
+          <input
+            id="category"
+            type="hidden"
+            name="category"
+            value="{{ category }}"
+          >
+          <span class="htmx-indicator">...</span>
+        </div>
+      </div>
+
+      <div>
+        <ul id="exercises">
+          {% include "exercises/exercises.html" %}
+        </ul>
       </div>
     </div>
-  {% endif %}
-
-  <div class="stack search">
-    <input
-      id="search"
-      type="text"
-      name="search"
-      hx-post="/exercises/search/"
-      hx-trigger="keyup changed delay:250ms"
-      hx-indicator=".htmx-indicator"
-      hx-target="#exercises"
-      hx-include="#category"
-      placeholder="Search"
-    >
-    <input
-      id="category"
-      type="hidden"
-      name="category"
-      value="{{ category }}"
-    >
-    <span class="htmx-indicator">...</span>
   </div>
-
-  <ul id="exercises">
-    {% include "exercises/exercises.html" %}
-  </ul>
-{% endblock content %}
+{% endblock layout %}
 
 {% block javascript %}
   <script src="{% static 'js/clipboard.min.js' %}"></script>
