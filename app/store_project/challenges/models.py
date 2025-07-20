@@ -14,6 +14,11 @@ class Challenge(models.Model):
 
     name = models.CharField(max_length=200)
     description = models.TextField()
+    summary = models.CharField(
+        max_length=300,
+        blank=True,
+        help_text="Brief description for list view",
+    )
     slug = models.SlugField(max_length=200, unique=True, blank=True)
     date_created = models.DateTimeField(
         auto_now_add=True,

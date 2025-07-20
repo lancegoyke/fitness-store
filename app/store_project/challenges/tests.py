@@ -22,6 +22,7 @@ class ChallengeTests(TestCase):
         cls.challenge = Challenge.objects.create(
             name="Test challenge",
             description="This is a hard workout",
+            summary="Hard workout summary",
             slug="test-challenge",
             difficulty_level="beginner",
             tags=[],
