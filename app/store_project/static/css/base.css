@@ -586,16 +586,6 @@ a.box.login:active {
   background-color: #cac7c7;
 }
 
-.box.login.facebook {
-  /* color: var(--facebook-blue); */
-  /* background-color: var(--facebook-blue); */
-}
-
-.box.login.google {
-  /* color: var(--google-blue); */
-  /* background-color: var(--main-color-light); */
-}
-
 /*
     THE CARD BOX
 
