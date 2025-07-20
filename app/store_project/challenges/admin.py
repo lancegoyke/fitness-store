@@ -42,7 +42,6 @@ class ChallengeAdmin(admin.ModelAdmin):
         return custom + urls
 
     def generate_summary(self, request, object_id):
-
         challenge = self.get_object(request, object_id)
         if not challenge:
             messages.error(request, "Challenge not found")

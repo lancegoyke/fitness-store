@@ -2,12 +2,12 @@
 {% load i18n admin_urls %}
 
 {% block object-tools-items %}
-    {{ block.super }}
-    {% if not original.summary %}
+  {{ block.super }}
+  {% if not original.summary %}
     <li>
-        <a href="{% url 'admin:challenge-generate-summary' object_id=original.pk %}">
-            Generate Summary
-        </a>
+      <a href="{% url 'admin:challenge-generate-summary' object_id=original.pk %}">
+        Generate Summary
+      </a>
     </li>
-    {% endif %}
+  {% endif %}
 {% endblock %}
