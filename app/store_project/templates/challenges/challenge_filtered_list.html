@@ -61,21 +61,48 @@
         <div class="stack">
           {% for challenge in filter.qs %}
             <div class="card-box">
-              <div class="cluster">
-                <div>
-                  <h3><a href="{% url 'challenge_detail' challenge.slug %}">{{ challenge.name }}</a></h3>
-                  <p>{{ challenge.description }}</p>
-                </div>
-                <div>
-                  {% if challenge.tag_list %}
-                    <div class="cluster categories">
-                      <div>
-                        {% for tag in challenge.tag_list %}
-                          <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">{{ tag.name }}</a>
-                        {% endfor %}
+              <div class="padding:s0">
+                <div class="stack">
+                  <div>
+                    <h3 style="margin: 0;"><a href="{% url 'challenge_detail' challenge.slug %}">{{ challenge.name }}</a></h3>
+                  </div>
+
+                  <div>
+                    {% with description_lines=challenge.description.splitlines %}
+                      {% if description_lines %}
+                        <p style="margin: 0; color: var(--color-gray);">
+                          {{ description_lines.0|truncatewords:25 }}
+                          {% if description_lines|length > 1 or description_lines.0|length > 150 %}
+                            ...
+                          {% endif %}
+                        </p>
+                      {% endif %}
+                    {% endwith %}
+                  </div>
+
+                  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--s-1);">
+                    {% if challenge.tag_list %}
+                      <div class="cluster categories">
+                        <div>
+                          {% for tag in challenge.tag_list %}
+                            <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">{{ tag.name }}</a>
+                          {% endfor %}
+                        </div>
                       </div>
+                    {% else %}
+                      <div></div>
+                    {% endif %}
+
+                    <div style="font-size: var(--s-1); color: var(--color-gray);">
+                      {% with record_count=challenge.records.count %}
+                        {% if record_count %}
+                          {{ record_count }} record{{ record_count|pluralize }}
+                        {% else %}
+                          No records yet
+                        {% endif %}
+                      {% endwith %}
                     </div>
-                  {% endif %}
+                  </div>
                 </div>
               </div>
             </div>
