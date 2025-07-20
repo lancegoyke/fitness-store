@@ -8,47 +8,78 @@ This is a Django-based e-commerce platform for fitness products and services cal
 
 ## Development Commands
 
+This project uses [just](https://github.com/casey/just) as a command runner. All commands should be run from the project root directory using `just <command>`.
+
 ### Environment Setup
 ```bash
-# Development with Docker
-cd fitness-store
-docker-compose up -d --build
+# Development server (recommended)
+just dev
+# OR: just django (alias for dev)
 
-# Development server (after Docker setup)
-cd app
-python manage.py runserver
+# Development with Docker
+just docker-dev
 ```
 
 ### Database Operations
 ```bash
-cd app
-python manage.py migrate
-python manage.py setup_test_data  # Setup test data
-python manage.py createsuperuser
+just migrate
+just makemigrations
+just setup-test-data
+just createsuperuser
 ```
 
 ### Testing and Code Quality
 ```bash
 # Run tests
-pytest
+just test
 
 # Test coverage
-coverage run -m pytest
-coverage report -m
+just test-coverage
 
 # Code formatting and linting
-ruff check
-ruff format
+just lint
+just format
+just format-unsafe  # Apply unsafe fixes
+just check          # Run both lint and test
+```
+
+### Django Management
+```bash
+# Django shell
+just shell
+
+# Any Django management command
+just manage <command> [args]
+# Example: just manage collectstatic
+```
+
+### Services
+```bash
+# Start background services (DB, Redis, etc.)
+just services
+
+# Stop services
+just stop-services
 ```
 
 ### Production Deployment
 ```bash
 # Deploy to Heroku
-git push origin main
+just deploy
+```
 
-# Manual migrations on Heroku
-heroku run python manage.py migrate
-heroku run python manage.py collectstatic
+### Legacy Commands (if not using just)
+```bash
+# Development server
+uv run python app/manage.py runserver
+
+# Database operations
+uv run python app/manage.py migrate
+uv run python app/manage.py setup_test_data
+
+# Testing
+uv run pytest
+uv run ruff check
 ```
 
 ## Project Architecture
