@@ -7,6 +7,8 @@ from django.shortcuts import redirect
 from .models import Challenge
 from .models import Record
 
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+
 
 # Register your models here.
 class RecordInline(admin.TabularInline):
@@ -57,16 +59,23 @@ class ChallengeAdmin(admin.ModelAdmin):
             return redirect("..")
 
         try:
-            import google.generativeai as genai
 
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-1.5-flash-latest")
-            prompt = (
-                "Summarize the following challenge description in no more than 300 characters: "
-                + challenge.description
-            )
-            response = model.generate_content(prompt)
-            challenge.summary = response.text[:300]
+            def generate_challenge_summary(description, api_key):
+                """Generate a summary of a challenge description using the Google Gemini API."""
+                from google import genai
+
+                client = genai.Client(api_key=api_key)
+                prompt = (
+                    "Summarize the following challenge description in no more than 300 characters: "
+                    + description
+                )
+                response = client.models.generate_content(
+                    model=DEFAULT_GEMINI_MODEL, contents=prompt
+                )
+                return response.text[:300]
+
+            summary = generate_challenge_summary(challenge.description, api_key)
+            challenge.summary = summary
             challenge.save()
             messages.success(request, "Summary generated")
         except Exception as exc:  # pragma: no cover - external API errors
