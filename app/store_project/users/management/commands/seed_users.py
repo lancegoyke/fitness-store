@@ -1,4 +1,3 @@
-from allauth.socialaccount.models import SocialApp
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandParser
@@ -52,20 +51,21 @@ class Command(BaseCommand):
             help="Only create superuser, skip regular users",
         )
 
-    def _create_social_app(self) -> None:
-        """Creates a SocialApp object for Google OAuth in Django admin."""
-        if SocialApp.objects.filter(provider="google").exists():
-            return
-
-        site = Site.objects.get_current()
-        google = SocialApp.objects.create(
-            provider="google",
-            name="Google",
-            client_id="1234567890",
-            secret="0987654321",
-        )
-        google.sites.add(site)
-        google.save()
+    def _update_site_for_development(self) -> None:
+        """Updates the Site to use localhost for development."""
+        try:
+            site = Site.objects.get(pk=1)
+            if site.domain == "example.com":
+                site.domain = "localhost:8000"
+                site.name = "localhost:8000"
+                site.save()
+                self.stdout.write("  - updated site domain to localhost:8000")
+            else:
+                self.stdout.write(f"  - site already configured: {site.domain}")
+        except Site.DoesNotExist:
+            # Create site if it doesn't exist
+            Site.objects.create(pk=1, domain="localhost:8000", name="localhost:8000")
+            self.stdout.write("  - created site: localhost:8000")
 
     def _create_superuser(self) -> User:
         """Creates superuser using factory if none exists."""
@@ -81,42 +81,20 @@ class Command(BaseCommand):
         return superuser
 
     def _create_regular_users(self) -> list[User]:
-        """Creates regular users from predefined list and factories."""
-        existing_count = User.objects.filter(is_superuser=False).count()
-
+        """Creates regular users using factory."""
         users = []
+        for name in RANDOM_USERS:
+            user = UserFactory(username=name, email=f"{name.lower()}@example.com")
+            users.append(user)
 
-        # Create users from RANDOM_USERS list (for challenges compatibility)
-        for username in RANDOM_USERS:
-            email = f"{username.lower()}@example.com"
-            if not User.objects.filter(email=email).exists():
-                user = User(username=username.lower(), email=email)
-                user.set_password("testpass123")
-                users.append(user)
-
-        if users:
-            created_users = User.objects.bulk_create(users, batch_size=100)
-            self.stdout.write(
-                f"  - created {len(created_users)} users from RANDOM_USERS list"
-            )
-
-        # Create additional users via factory if needed (for products compatibility)
-        factory_users_needed = max(0, 10 - existing_count - len(users))
-        if factory_users_needed > 0:
-            factory_users = UserFactory.create_batch(factory_users_needed)
-            self.stdout.write(
-                f"  - created {len(factory_users)} additional users via factory"
-            )
-            users.extend(factory_users)
-
+        self.stdout.write(f"  - created {len(users)} regular users")
         return users
 
     @transaction.atomic
     def handle(self, *args, **options):
         if options["delete"]:
             User.objects.all().delete()
-            SocialApp.objects.all().delete()
-            self.stdout.write(self.style.SUCCESS("All users and social apps deleted"))
+            self.stdout.write(self.style.SUCCESS("All users deleted"))
 
         if User.objects.exists() and not options["delete"]:
             self.stdout.write(
@@ -128,6 +106,9 @@ class Command(BaseCommand):
 
         self.stdout.write("Creating users...")
 
+        # Always update site for development
+        self._update_site_for_development()
+
         # Always create superuser
         self._create_superuser()
 
@@ -136,9 +117,8 @@ class Command(BaseCommand):
         if not options["superuser_only"]:
             users = self._create_regular_users()
 
-        # Create social app for authentication
-        self._create_social_app()
-        self.stdout.write("  - created/verified Google social app")
+        # Note: SocialApp creation removed - using SOCIALACCOUNT_PROVIDERS from settings instead
+        self.stdout.write("  - social auth configured via settings (not database)")
 
         total_users = 1 + len(users)  # superuser + regular users
         self.stdout.write(

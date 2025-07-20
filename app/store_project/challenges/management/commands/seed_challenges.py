@@ -12,6 +12,8 @@ from django.utils.text import slugify
 from store_project.challenges.models import Challenge
 from store_project.challenges.models import Record
 from store_project.users.models import User
+from taggit.models import Tag
+from taggit.models import TaggedItem
 
 TAG_OPTIONS = [
     "Strength",
@@ -100,10 +102,21 @@ class Command(BaseCommand):
         for challenge in challenges:
             challenge.tags.add(*random.sample(TAG_OPTIONS, random.randint(1, 3)))
 
+    def _cleanup_taggit_data(self):
+        """Clean up taggit tables to prevent constraint violations."""
+        # Delete ALL taggit records to ensure clean state
+        TaggedItem.objects.all().delete()
+        Tag.objects.all().delete()
+
     @transaction.atomic
     def handle(self, *args, **kwargs):
         if kwargs["delete"]:
+            # Delete challenges and related records
             Challenge.objects.all().delete()
+
+            # Clean up taggit tables and reset sequences
+            self._cleanup_taggit_data()
+
             self.stdout.write(self.style.SUCCESS("Challenge data deleted"))
 
         if Challenge.objects.exists():
