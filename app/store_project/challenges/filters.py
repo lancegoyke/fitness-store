@@ -6,6 +6,10 @@ from .models import Record
 
 
 class ChallengeFilter(django_filters.FilterSet):
+    tags = django_filters.CharFilter(
+        field_name="tags__name", lookup_expr="icontains", label="Tags"
+    )
+
     ordering = django_filters.OrderingFilter(
         choices=(
             ("-date_created", "Newest First"),
@@ -20,6 +24,7 @@ class ChallengeFilter(django_filters.FilterSet):
         model = Challenge
         fields = {
             "name": ["icontains"],
+            "tags": ["exact"],
         }
 
 
