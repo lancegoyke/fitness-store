@@ -39,3 +39,9 @@ class User(AbstractUser):
     def get_absolute_url(self):
         """Get url for user's profile view."""
         return reverse("users:profile")
+    
+    def display_name(self):
+        """Return user's name if available, otherwise email prefix."""
+        if self.name:
+            return self.name
+        return self.email.split("@")[0] if self.email else "Anonymous"

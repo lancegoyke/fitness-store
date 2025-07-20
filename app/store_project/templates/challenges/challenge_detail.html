@@ -122,7 +122,7 @@
                     {% for record in page_obj %}
                       <tr {% if user == record.user %}style="background-color: var(--success);"{% endif %}>
                         <td>{{ record.time_score }}</td>
-                        <td>{{ record.user }}</td>
+                        <td>{{ record.user.display_name }}</td>
                         <td>{{ record.date_recorded|date:"SHORT_DATE_FORMAT" }}</td>
                       </tr>
                     {% endfor %}
