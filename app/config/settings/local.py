@@ -1,6 +1,21 @@
+import os
 import socket
 
+# Set default AWS credentials for local development
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "local-access-key")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "local-secret-key")
+
 from .base import *  # noqa
+
+# Use the local filesystem instead of S3 for storage
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
 
 # ALLOWED_HOSTS in .env.dev
 
