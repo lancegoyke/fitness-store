@@ -187,3 +187,9 @@ To see coverage report:
 coverage run -m pytest
 coverage report -m
 ```
+
+### Pre-commit Hooks
+
+This project uses [pre-commit](https://pre-commit.com/) to run
+formatting and linting checks. The GitHub Actions workflow automatically
+executes these hooks on every pull request.

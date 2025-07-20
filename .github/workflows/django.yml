@@ -52,6 +52,11 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --all-extras
 
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files --color=always
+
       - name: run system checks
         run: cd app && uv run python manage.py check --deploy
 
