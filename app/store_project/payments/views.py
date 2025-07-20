@@ -17,6 +17,7 @@ from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 from django.views.generic.base import TemplateView
+
 from store_project.payments.utils import int_to_price
 from store_project.payments.utils import order_confirmation_email
 from store_project.payments.utils import stripe_customer_get_or_create
@@ -88,7 +89,7 @@ def create_checkout_session(request):
                     # Generate a new Price in Stripe
                     "price_data": {
                         "currency": "usd",
-                        "unit_amount": f"{int(product.price*100)}",
+                        "unit_amount": f"{int(product.price * 100)}",
                         "product_data": {
                             "name": f"{product.name}",
                         },

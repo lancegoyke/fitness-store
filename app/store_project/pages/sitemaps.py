@@ -1,4 +1,5 @@
 from django.contrib.sitemaps import Sitemap
+
 from store_project.pages.models import Page
 
 

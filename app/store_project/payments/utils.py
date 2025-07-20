@@ -9,6 +9,7 @@ from django.core.mail import send_mail
 from django.http.response import HttpResponse
 from django.template.loader import render_to_string
 from django.urls import reverse
+
 from store_project.products.models import Product
 
 User = get_user_model()
@@ -106,7 +107,7 @@ def stripe_price_get_or_create(product: Product) -> str:
             )
         price_object = stripe.Price.create(
             currency="USD",
-            unit_amount=f"{int(product.price*100)}",
+            unit_amount=f"{int(product.price * 100)}",
             product=str(product.id),
         )
 

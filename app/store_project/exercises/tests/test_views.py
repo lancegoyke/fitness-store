@@ -2,6 +2,7 @@ import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
 from django.urls import reverse
+
 from store_project.exercises.factories import ExerciseFactory
 from store_project.exercises.models import Exercise
 from store_project.exercises.views import ExerciseDetailView

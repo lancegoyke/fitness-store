@@ -3,6 +3,7 @@ from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from django.views.generic import DetailView
 from django.views.generic import ListView
+
 from store_project.exercises.models import Alternative
 from store_project.exercises.models import Category
 from store_project.exercises.models import Exercise

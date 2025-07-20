@@ -2,6 +2,7 @@ import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
 from django.urls import reverse
+
 from store_project.products.models import Book
 from store_project.products.models import Program
 from store_project.products.views import BookDetailView

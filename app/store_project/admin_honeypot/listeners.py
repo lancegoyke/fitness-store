@@ -2,6 +2,7 @@ from django.conf import settings
 from django.core.mail import mail_admins
 from django.template.loader import render_to_string
 from django.urls import reverse
+
 from store_project.admin_honeypot.signals import honeypot
 
 
