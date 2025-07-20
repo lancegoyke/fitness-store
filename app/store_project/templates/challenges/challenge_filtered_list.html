@@ -5,52 +5,55 @@
   Challenges | {% include "_site_title.html" %}
 {% endblock title %}
 
-
 {% block content %}
+  <div class="with-sidebar">
+    <div>
+      <div class="box">
+        <div class="stack">
+          <div>
+            <h3>Search and sort</h3>
+            <div class="stack-form">
+              <form action="" method="get">
+                {{ filter.form|crispy }}
+                <div class="cluster">
+                  <div>
+                    <input class="button" type="submit" value="Submit" />
+                    <a class="button outline" href="{% url 'challenge_filtered_list' %}">Clear</a>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
 
-  <div class="columns">
-    <div class="column is-one-quarter">
-      <div class="columns is-multiline">
-        <div class="column is-12">
-          <h3 class="title is-4">Search and sort</h3>
-          <form action="" method="get">
-            {{ filter.form|crispy }}
-            <input class="button is-info" type="submit" value="Submit" />
-            <a class="button is-text" href="{% url 'challenge_filtered_list' %}">Clear</a>
-          </form>
-        </div><!-- .column .is-12 -->
+          <div>
+            <h4>Filter by tag</h4>
+            <div class="cluster categories">
+              <div>
+                {% for tag in tag_list %}
+                  <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">
+                    {{ tag.name }}
+                  </a>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-        <div class="column is-12">
-          <div class="container">
-            <h4 class="title is-5">Filter by tag</h4>
-            <div class="tags">
-              {% for tag in tag_list %}
-                <a class="tag is-info is-light" href="{% url 'challenge_tag_filtered_list' tag.slug %}">
-                  {{ tag.name }}
-                </a>
-              {% endfor %}
-            </div><!-- .tags -->
-          </div><!-- .container -->
-        </div><!-- .column .is-12 -->
-      </div><!-- .columns .is-multiline -->
-    </div><!-- .column -->
-
-    <div class="column">
-      <div class="container">
-        <h2 class="title">Pick a Challenge</h2>
-
-        {% for challenge in filter.qs %}
-          <div class="content">
-            <h3 class="title is-4">
-              <a href="{{ challenge.get_absolute_url }}">{{ challenge.name }}</a>
-            </h3>
-          </div><!-- .content -->
-        {% endfor %}
-
-      </div><!-- .container -->
-    </div><!-- .column -->
-
-  </div><!-- .columns -->
-
-
+      <div>
+        <h2>Pick a Challenge</h2>
+        <div class="stack">
+          {% for challenge in filter.qs %}
+            <div class="card-box">
+              <div class="box">
+                <h3>
+                  <a href="{{ challenge.get_absolute_url }}">{{ challenge.name }}</a>
+                </h3>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
 {% endblock content %}
