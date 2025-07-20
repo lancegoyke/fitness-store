@@ -92,6 +92,9 @@ python manage.py shell
 ### Environment Variables
 
 Be sure to include [Stripe test mode publishable and secret keys](https://stripe.com/docs/test-mode) in `.env.dev`.
+AWS credentials are optional when running locally because `settings/local.py` now sets
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` to dummy values if they are not
+provided.
 
 ### Docker Compose
 
