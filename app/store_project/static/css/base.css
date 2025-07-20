@@ -1248,9 +1248,15 @@ ul.grid {
   }
 
   /* Stack grid columns on mobile */
-  div[style*="grid-template-columns"] {
+  .sidebar-main-layout {
     grid-template-columns: 1fr !important;
   }
+}
+
+.sidebar-main-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 2rem;
 }
 
 .padding\:s0 {
