@@ -4,6 +4,53 @@
 
 {% block head_title %}Challenges{% endblock head_title %}
 
+{% block header %}
+  {{ block.super }}
+  <style>
+    /* Challenge group expand/collapse animation */
+    .challenge-group-expanded {
+      max-height: 0;
+      overflow: hidden;
+      margin-top: 0;
+      opacity: 0;
+      transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), 
+                  margin-top 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+                  opacity 0.3s ease;
+    }
+    
+    .challenge-group.expanded .challenge-group-expanded {
+      margin-top: var(--s-2);
+      opacity: 1;
+      overflow: visible;
+    }
+    
+    .challenge-group .expand-arrow {
+      transform: rotate(0deg);
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    .challenge-group.expanded .expand-arrow {
+      transform: rotate(180deg);
+    }
+    
+    /* Fix focus outline for cards within expanded challenge groups */
+    .challenge-group-expanded .card-box {
+      position: relative;
+    }
+    
+    .challenge-group-expanded .card-box:focus-within {
+      box-shadow: 0 0 0 2px currentColor !important;
+      outline: none !important;
+      z-index: 1 !important;
+    }
+    
+    .challenge-group-expanded .card-box:hover {
+      box-shadow: 0 0 0 2px currentColor !important;
+      z-index: 1 !important;
+    }
+  </style>
+{% endblock header %}
+
 {% block layout %}
   {# Override default layout for functional page #}
   <div class="stack functional-width">
@@ -131,7 +178,7 @@
                           {{ challenges|length }} variation{{ challenges|length|pluralize }} available
                         </p>
                       </div>
-                      <div class="expand-arrow" style="transform: rotate(0deg); transition: transform 0.2s ease; font-size: var(--s1); color: var(--color-gray);">▼</div>
+                      <div class="expand-arrow" style="font-size: var(--s1); color: var(--color-gray);">▼</div>
                     </div>
 
                     <!-- Show tags from first challenge in group -->
@@ -151,7 +198,7 @@
                 </div>
 
                 <!-- Expanded view - individual challenge cards -->
-                <div class="challenge-group-expanded" style="max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out, margin-top 0.3s ease-out; margin-top: 0;">
+                <div class="challenge-group-expanded">
                   <div class="stack" style="gap: var(--s-2);">
                     {% for challenge in challenges %}
                       <div class="card-box">
@@ -232,23 +279,56 @@
   </div>
 {% endblock layout %}
 
+
 {% block javascript %}
 <script>
 function toggleChallengeGroup(groupId) {
   const group = document.querySelector(`[data-group="${groupId}"]`);
-  const expanded = group.querySelector('.challenge-group-expanded');
-  const arrow = group.querySelector('.expand-arrow');
-  
-  if (expanded.style.maxHeight === '0px' || expanded.style.maxHeight === '') {
-    // Expand: set max-height to scroll height for smooth animation
-    expanded.style.maxHeight = expanded.scrollHeight + 'px';
-    expanded.style.marginTop = 'var(--s-2)';
-    arrow.style.transform = 'rotate(180deg)';
+  if (group.classList.contains('expanded')) {
+    collapseChallengeGroup(groupId);
   } else {
-    // Collapse: set max-height to 0
-    expanded.style.maxHeight = '0px';
-    expanded.style.marginTop = '0';
-    arrow.style.transform = 'rotate(0deg)';
+    expandChallengeGroup(groupId);
+  }
+}
+
+function expandChallengeGroup(groupId) {
+  const group = document.querySelector(`[data-group="${groupId}"]`);
+  const expanded = group.querySelector('.challenge-group-expanded');
+  
+  if (!group.classList.contains('expanded')) {
+    // Measure the natural height
+    expanded.style.maxHeight = 'none';
+    const height = expanded.scrollHeight;
+    expanded.style.maxHeight = '0';
+    
+    // Force reflow then animate to actual height
+    expanded.offsetHeight;
+    expanded.style.maxHeight = height + 'px';
+    
+    group.classList.add('expanded');
+    
+    // Clean up after animation
+    setTimeout(() => {
+      if (group.classList.contains('expanded')) {
+        expanded.style.maxHeight = 'none';
+      }
+    }, 400);
+  }
+}
+
+function collapseChallengeGroup(groupId) {
+  const group = document.querySelector(`[data-group="${groupId}"]`);
+  const expanded = group.querySelector('.challenge-group-expanded');
+  
+  if (group.classList.contains('expanded')) {
+    // Set to current height first
+    expanded.style.maxHeight = expanded.scrollHeight + 'px';
+    
+    // Force reflow then animate to 0
+    expanded.offsetHeight;
+    expanded.style.maxHeight = '0';
+    
+    group.classList.remove('expanded');
   }
 }
 
@@ -259,5 +339,42 @@ function handleKeyDown(event, groupId) {
     toggleChallengeGroup(groupId);
   }
 }
+
+// Set up focus event listeners when the page loads
+document.addEventListener('DOMContentLoaded', function() {
+  // Find all challenge groups and set up focus listeners for their expanded content
+  document.querySelectorAll('.challenge-group').forEach(function(group) {
+    const groupId = group.dataset.group;
+    const expanded = group.querySelector('.challenge-group-expanded');
+    
+    // Add focus event listeners to all focusable elements within the expanded content
+    const focusableElements = expanded.querySelectorAll('a, button, input, textarea, select, [tabindex]:not([tabindex="-1"])');
+    
+    focusableElements.forEach(function(element) {
+      element.addEventListener('focus', function() {
+        // Expand the group when any child element receives focus
+        expandChallengeGroup(groupId);
+      });
+      
+      element.addEventListener('blur', function() {
+        // Check if focus is moving outside the group entirely
+        setTimeout(function() {
+          const activeElement = document.activeElement;
+          const isInsideGroup = group.contains(activeElement);
+          const isNextSibling = activeElement && activeElement.closest('.challenge-group');
+          
+          // If focus moved completely outside challenge groups, collapse this one
+          if (!isInsideGroup && (!isNextSibling || isNextSibling !== group)) {
+            // Only collapse if no other element in this group has focus
+            const groupHasFocus = group.querySelector(':focus') !== null;
+            if (!groupHasFocus) {
+              collapseChallengeGroup(groupId);
+            }
+          }
+        }, 10); // Small delay to allow focus to settle
+      });
+    });
+  });
+});
 </script>
 {% endblock javascript %}
