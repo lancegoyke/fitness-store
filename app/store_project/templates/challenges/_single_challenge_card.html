@@ -1,0 +1,56 @@
+{% load duration_filters %}
+<!-- Single challenge card component -->
+<div class="card-box">
+  <div class="padding:s0">
+    <div class="stack">
+      <div class="flex-row gap-s-2">
+        <h3 class="margin-0"><a href="{% url 'challenge_detail' challenge.slug %}">{{ challenge.name }}</a></h3>
+        <span class="difficulty-indicator difficulty-{{ challenge.difficulty_level }}" title="{{ challenge.get_difficulty_level_display }}">&#x25cf;</span>
+      </div>
+
+      <div>
+        {% if challenge.summary %}
+          <p style="margin: 0; color: var(--color-gray);">{{ challenge.summary }}</p>
+        {% else %}
+          {% with description_lines=challenge.description.splitlines %}
+            {% if description_lines %}
+              <p style="margin: 0; color: var(--color-gray);">
+                {{ description_lines.0|truncatewords:25 }}
+                {% if description_lines|length > 1 or description_lines.0|length > 150 %}
+                  ...
+                {% endif %}
+              </p>
+            {% endif %}
+          {% endwith %}
+        {% endif %}
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--s-1);">
+        {% if challenge.tags.all %}
+          <div class="cluster categories">
+            <div>
+              {% for tag in challenge.tags.all %}
+                <span class="tag">{{ tag.name }}</span>
+              {% endfor %}
+            </div>
+          </div>
+        {% else %}
+          <div></div>
+        {% endif %}
+
+        <div style="font-size: var(--s-1); color: var(--color-gray);">
+          {% with record_count=challenge.records.count estimated_time=challenge.estimated_completion_time %}
+            {% if record_count %}
+              {{ record_count }} record{{ record_count|pluralize }}
+              {% if estimated_time %}
+                • Est. {{ estimated_time|duration_humanize }}
+              {% endif %}
+            {% else %}
+              No records yet
+            {% endif %}
+          {% endwith %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

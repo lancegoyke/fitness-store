@@ -1,0 +1,109 @@
+{% load duration_filters %}
+<!-- Grouped challenge with multiple variations - expandable -->
+<div class="challenge-group" data-group="{{ base_name|slugify }}" style="position: relative;">
+  <!-- Collapsed view - looks like a card but is not clickable as a card -->
+  <div class="challenge-group-header card-box" style="cursor: pointer; position: relative; outline: none; z-index: 1;" onclick="toggleChallengeGroup('{{ base_name|slugify }}')" onkeydown="handleKeyDown(event, '{{ base_name|slugify }}')" tabindex="0">
+    <div class="padding:s0">
+    <div class="stack">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <h3 class="margin-0">{{ base_name }}</h3>
+          <p style="margin: 0.5rem 0; color: var(--color-gray); font-size: var(--s-1);">
+            {{ challenges|length }} variation{{ challenges|length|pluralize }} available
+          </p>
+        </div>
+        <div class="expand-arrow" style="font-size: var(--s1); color: var(--color-gray);">▼</div>
+      </div>
+
+      <!-- Show tags from first challenge in group -->
+      {% with first_challenge=challenges.0 %}
+        {% if first_challenge.tags.all %}
+          <div class="cluster categories">
+            <div>
+              {% for tag in first_challenge.tags.all %}
+                <span class="tag">{{ tag.name }}</span>
+              {% endfor %}
+            </div>
+          </div>
+        {% endif %}
+      {% endwith %}
+    </div>
+    </div>
+  </div>
+
+  <!-- Shadow cards to indicate more content -->
+  <div class="challenge-shadow-cards">
+    <div class="challenge-shadow-card"></div>
+    <div class="challenge-shadow-card"></div>
+  </div>
+
+  <!-- Expanded view - individual challenge cards -->
+  <div class="challenge-group-expanded">
+    <div class="stack">
+      {% for challenge in challenges %}
+        <div class="card-box">
+          <div class="padding:s0">
+            <div class="stack">
+              <div class="flex-row gap-s-2">
+                <h4 class="margin-0">
+                  <a href="{% url 'challenge_detail' challenge.slug %}">
+                    {% if challenge.is_variation %}
+                      {{ challenge.name }} - Level {{ challenge.variation_number }}
+                    {% else %}
+                      {{ challenge.name }}
+                    {% endif %}
+                  </a>
+                </h4>
+                <span class="difficulty-indicator difficulty-{{ challenge.difficulty_level }}" title="{{ challenge.get_difficulty_level_display }}">&#x25cf;</span>
+              </div>
+
+              <div>
+                {% if challenge.summary %}
+                  <p style="margin: 0; color: var(--color-gray); font-size: var(--s-1);">{{ challenge.summary }}</p>
+                {% else %}
+                  {% with description_lines=challenge.description.splitlines %}
+                    {% if description_lines %}
+                      <p style="margin: 0; color: var(--color-gray); font-size: var(--s-1);">
+                        {{ description_lines.0|truncatewords:20 }}
+                        {% if description_lines|length > 1 or description_lines.0|length > 120 %}
+                          ...
+                        {% endif %}
+                      </p>
+                    {% endif %}
+                  {% endwith %}
+                {% endif %}
+              </div>
+
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--s-1);">
+                {% if challenge.tags.all %}
+                  <div class="cluster categories">
+                    <div>
+                      {% for tag in challenge.tags.all %}
+                        <span class="tag" style="font-size: var(--s-2);">{{ tag.name }}</span>
+                      {% endfor %}
+                    </div>
+                  </div>
+                {% else %}
+                  <div></div>
+                {% endif %}
+
+                <div style="font-size: var(--s-1); color: var(--color-gray);">
+                  {% with record_count=challenge.records.count estimated_time=challenge.estimated_completion_time %}
+                    {% if record_count %}
+                      {{ record_count }} record{{ record_count|pluralize }}
+                      {% if estimated_time %}
+                        • Est. {{ estimated_time|duration_humanize }}
+                      {% endif %}
+                    {% else %}
+                      No records yet
+                    {% endif %}
+                  {% endwith %}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
