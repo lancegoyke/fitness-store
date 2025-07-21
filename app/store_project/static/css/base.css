@@ -1417,6 +1417,87 @@ ul.grid {
 }
 
 /*
+  CHALLENGE GROUP
+*/
+.challenge-group-expanded {
+  max-height: 0;
+  overflow: hidden;
+  margin-top: 0;
+  opacity: 0;
+  transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+              margin-top 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.3s ease;
+}
+
+.challenge-group.expanded .challenge-group-expanded {
+  margin-top: var(--s-2);
+  opacity: 1;
+  overflow: visible;
+}
+
+.challenge-group .expand-arrow {
+  transform: rotate(0deg);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.challenge-group.expanded .expand-arrow {
+  transform: rotate(180deg);
+}
+
+/* Fix focus outline for cards within expanded challenge groups */
+.challenge-group-expanded .card-box {
+  position: relative;
+}
+
+.challenge-group-expanded .card-box:focus-within {
+  box-shadow: 0 0 0 2px currentColor !important;
+  outline: none !important;
+  z-index: 1 !important;
+}
+
+.challenge-group-expanded .card-box:hover {
+  box-shadow: 0 0 0 2px currentColor !important;
+  z-index: 1 !important;
+}
+
+/* Override stack spacing for tighter card spacing */
+.challenge-group-expanded .stack {
+  --stack-space: var(--s-3);
+}
+
+/* Shadow cards underneath group header */
+.challenge-shadow-cards {
+  position: relative;
+  margin-top: -8px;
+  z-index: 0;
+}
+
+.challenge-shadow-card {
+  height: 12px;
+  background: #e8e8e8;
+  border: 1px solid #c0c0c0;
+  border-radius: 0 0 4px 4px;
+  margin: 2px 4px 0;
+  opacity: 0.8;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  border-top: none;
+}
+
+.challenge-shadow-card:last-child {
+  margin: 2px 8px 0;
+  opacity: 0.6;
+  height: 10px;
+  background: #eeeeee;
+  border-color: #d0d0d0;
+}
+
+/* Hide shadows when expanded */
+.challenge-group.expanded .challenge-shadow-cards {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+/*
     CUSTOMIZING ELEMENTS
 */
 .navbar {
