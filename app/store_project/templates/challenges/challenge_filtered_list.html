@@ -121,7 +121,7 @@
               <!-- Grouped challenge with multiple variations - expandable -->
               <div class="challenge-group" data-group="{{ base_name|slugify }}">
                 <!-- Collapsed view - looks like a card but is not clickable as a card -->
-                <div class="challenge-group-header card-box" style="cursor: pointer; position: relative;" onclick="toggleChallengeGroup('{{ base_name|slugify }}')">
+                <div class="challenge-group-header card-box" style="cursor: pointer; position: relative; outline: none;" onclick="toggleChallengeGroup('{{ base_name|slugify }}')" onkeydown="handleKeyDown(event, '{{ base_name|slugify }}')" tabindex="0">
                   <div class="padding:s0">
                   <div class="stack">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -249,6 +249,14 @@ function toggleChallengeGroup(groupId) {
     expanded.style.maxHeight = '0px';
     expanded.style.marginTop = '0';
     arrow.style.transform = 'rotate(0deg)';
+  }
+}
+
+function handleKeyDown(event, groupId) {
+  // Handle Enter and Space key presses
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    toggleChallengeGroup(groupId);
   }
 }
 </script>
