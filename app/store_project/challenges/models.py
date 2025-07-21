@@ -3,6 +3,7 @@ import statistics
 
 from django.db import models
 from django.urls import reverse
+from django.utils.functional import cached_property
 from taggit.managers import TaggableManager
 
 
@@ -25,7 +26,7 @@ class ChallengeQuerySet(models.QuerySet):
         grouped: dict[str, list["Challenge"]] = {}
 
         for challenge in self.order_by("-date_created"):
-            base_name = challenge.get_base_name()
+            base_name = challenge.base_name
             grouped.setdefault(base_name, []).append(challenge)
 
         # Sort each group by difficulty level (beginner first, then intermediate, then advanced)
@@ -81,20 +82,21 @@ class Challenge(models.Model):
     def get_absolute_url(self):
         return reverse("challenge_detail", kwargs={"slug": self.slug})
 
-    def get_base_name(self):
+    @cached_property
+    def base_name(self):
         """Extract base name by removing (L1), (L2), etc. suffixes."""
-        # Remove pattern like " (L1)", " (L2)", etc.
         base_name = re.sub(r"\s*\(L\d+\)$", "", self.name)
         return base_name.strip()
 
-    def get_variation_number(self):
+    @cached_property
+    def variation_number(self):
         """Extract the variation number from names like 'Fit Fall (L1)', returns None if no variation."""
         match = re.search(r"\(L(\d+)\)$", self.name)
         return int(match[1]) if match else None
 
     def is_variation(self):
         """Check if this challenge is a variation (has L1, L2, etc. suffix)."""
-        return self.get_variation_number() is not None
+        return self.variation_number is not None
 
     @property
     def difficulty_color(self) -> str:

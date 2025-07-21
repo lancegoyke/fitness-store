@@ -18,7 +18,6 @@ from .filters import RecordFilter
 from .forms import ChallengeCreateForm
 from .forms import RecordCreateForm
 from .models import Challenge
-from .models import DifficultyLevel
 
 
 @login_required()
@@ -28,36 +27,17 @@ def challenge_filtered_list(request, slug=None):
     # Get base queryset
     if slug is not None:
         # use the tag in the URL to filter challenges
-        queryset = Challenge.objects.filter(tags__slug__in=[slug]).order_by(
-            "-date_created"
-        )
+        queryset = Challenge.objects.filter(tags__slug__in=[slug])
     else:
         # use all challenges
-        queryset = Challenge.objects.all().order_by("-date_created")
+        queryset = Challenge.objects.all()
 
     # Apply filters first
     filter_obj = ChallengeFilter(request.GET, queryset=queryset)
 
-    # Group the filtered challenges
-    grouped_challenges = {}
-    for challenge in filter_obj.qs:
-        base_name = challenge.get_base_name()
-        if base_name not in grouped_challenges:
-            grouped_challenges[base_name] = []
-        grouped_challenges[base_name].append(challenge)
-
-    # Sort each group by difficulty level (beginner first, then intermediate, then advanced)
-    difficulty_order = {
-        DifficultyLevel.BEGINNER: 0,
-        DifficultyLevel.INTERMEDIATE: 1,
-        DifficultyLevel.ADVANCED: 2,
-    }
-
-    for value in grouped_challenges.values():
-        value.sort(key=lambda c: difficulty_order.get(c.difficulty_level, 99))
-
+    # Group the filtered challenges using our queryset method
     context["filter"] = filter_obj
-    context["grouped_challenges"] = grouped_challenges
+    context["grouped_challenges"] = filter_obj.qs.grouped()
     return render(request, "challenges/challenge_filtered_list.html", context)
 
 
