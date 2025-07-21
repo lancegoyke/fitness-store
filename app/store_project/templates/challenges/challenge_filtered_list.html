@@ -48,6 +48,11 @@
       box-shadow: 0 0 0 2px currentColor !important;
       z-index: 1 !important;
     }
+    
+    /* Override stack spacing for tighter card spacing */
+    .challenge-group-expanded .stack {
+      --stack-space: var(--s-3);
+    }
   </style>
 {% endblock header %}
 
@@ -199,7 +204,7 @@
 
                 <!-- Expanded view - individual challenge cards -->
                 <div class="challenge-group-expanded">
-                  <div class="stack" style="gap: var(--s-2);">
+                  <div class="stack">
                     {% for challenge in challenges %}
                       <div class="card-box">
                         <div class="padding:s0">
