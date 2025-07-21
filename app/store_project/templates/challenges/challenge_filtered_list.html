@@ -59,10 +59,11 @@
 
         <div class="stack">
           {% for base_name, challenges in grouped_challenges.items %}
-            <div class="card-box">
-              <div class="padding:s0">
-                <div class="stack">
-                  {% if challenges|length == 1 %}
+            {% if challenges|length == 1 %}
+              <!-- Single challenge - use regular clickable card -->
+              <div class="card-box">
+                <div class="padding:s0">
+                  <div class="stack">
                     {% with challenge=challenges.0 %}
                       <div class="flex-row gap-s-2">
                         <h3 class="margin-0"><a href="{% url 'challenge_detail' challenge.slug %}">{{ challenge.name }}</a></h3>
@@ -113,41 +114,24 @@
                         </div>
                       </div>
                     {% endwith %}
-                  {% else %}
-                    <!-- Grouped challenge with multiple variations -->
-                    <div>
-                      <h3 class="margin-0">{{ base_name }}</h3>
-                      <p style="margin: 0.5rem 0; color: var(--color-gray); font-size: var(--s-1);">
-                        {{ challenges|length }} variation{{ challenges|length|pluralize }} available
-                      </p>
-                    </div>
-
-                    <!-- Show variations in a compact format -->
-                    <div class="stack" style="gap: var(--s-2);">
-                      {% for challenge in challenges %}
-                        <div style="display: flex; justify-content: space-between; align-items: center; padding: var(--s-2); border: 1px solid var(--color-light-gray); border-radius: var(--border-radius);">
-                          <div class="flex-row gap-s-2">
-                            <a href="{% url 'challenge_detail' challenge.slug %}" style="font-weight: 500;">
-                              {% if challenge.is_variation %}
-                                Level {{ challenge.get_variation_number }}
-                              {% else %}
-                                {{ challenge.name }}
-                              {% endif %}
-                            </a>
-                            <span class="difficulty-indicator difficulty-{{ challenge.difficulty_level }}" title="{{ challenge.get_difficulty_level_display }}">&#x25cf;</span>
-                          </div>
-
-                          <div style="font-size: var(--s-1); color: var(--color-gray);">
-                            {% with record_count=challenge.records.count %}
-                              {% if record_count %}
-                                {{ record_count }} record{{ record_count|pluralize }}
-                              {% else %}
-                                No records
-                              {% endif %}
-                            {% endwith %}
-                          </div>
-                        </div>
-                      {% endfor %}
+                  </div>
+                </div>
+              </div>
+            {% else %}
+              <!-- Grouped challenge with multiple variations - expandable -->
+              <div class="challenge-group" data-group="{{ base_name|slugify }}">
+                <!-- Collapsed view - looks like a card but is not clickable as a card -->
+                <div class="challenge-group-header card-box" style="cursor: pointer; position: relative;" onclick="toggleChallengeGroup('{{ base_name|slugify }}')">
+                  <div class="padding:s0">
+                  <div class="stack">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <div>
+                        <h3 class="margin-0">{{ base_name }}</h3>
+                        <p style="margin: 0.5rem 0; color: var(--color-gray); font-size: var(--s-1);">
+                          {{ challenges|length }} variation{{ challenges|length|pluralize }} available
+                        </p>
+                      </div>
+                      <div class="expand-arrow" style="transform: rotate(0deg); transition: transform 0.2s ease; font-size: var(--s1); color: var(--color-gray);">▼</div>
                     </div>
 
                     <!-- Show tags from first challenge in group -->
@@ -162,10 +146,81 @@
                         </div>
                       {% endif %}
                     {% endwith %}
-                  {% endif %}
+                  </div>
+                  </div>
+                </div>
+
+                <!-- Expanded view - individual challenge cards -->
+                <div class="challenge-group-expanded" style="max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out, margin-top 0.3s ease-out; margin-top: 0;">
+                  <div class="stack" style="gap: var(--s-2);">
+                    {% for challenge in challenges %}
+                      <div class="card-box">
+                        <div class="padding:s0">
+                          <div class="stack">
+                            <div class="flex-row gap-s-2">
+                              <h4 class="margin-0">
+                                <a href="{% url 'challenge_detail' challenge.slug %}">
+                                  {% if challenge.is_variation %}
+                                    {{ challenge.name }} - Level {{ challenge.get_variation_number }}
+                                  {% else %}
+                                    {{ challenge.name }}
+                                  {% endif %}
+                                </a>
+                              </h4>
+                              <span class="difficulty-indicator difficulty-{{ challenge.difficulty_level }}" title="{{ challenge.get_difficulty_level_display }}">&#x25cf;</span>
+                            </div>
+
+                            <div>
+                              {% if challenge.summary %}
+                                <p style="margin: 0; color: var(--color-gray); font-size: var(--s-1);">{{ challenge.summary }}</p>
+                              {% else %}
+                                {% with description_lines=challenge.description.splitlines %}
+                                  {% if description_lines %}
+                                    <p style="margin: 0; color: var(--color-gray); font-size: var(--s-1);">
+                                      {{ description_lines.0|truncatewords:20 }}
+                                      {% if description_lines|length > 1 or description_lines.0|length > 120 %}
+                                        ...
+                                      {% endif %}
+                                    </p>
+                                  {% endif %}
+                                {% endwith %}
+                              {% endif %}
+                            </div>
+
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--s-1);">
+                              {% if challenge.tags.all %}
+                                <div class="cluster categories">
+                                  <div>
+                                    {% for tag in challenge.tags.all %}
+                                      <span class="tag" style="font-size: var(--s-2);">{{ tag.name }}</span>
+                                    {% endfor %}
+                                  </div>
+                                </div>
+                              {% else %}
+                                <div></div>
+                              {% endif %}
+
+                              <div style="font-size: var(--s-1); color: var(--color-gray);">
+                                {% with record_count=challenge.records.count estimated_time=challenge.estimated_completion_time %}
+                                  {% if record_count %}
+                                    {{ record_count }} record{{ record_count|pluralize }}
+                                    {% if estimated_time %}
+                                      • Est. {{ estimated_time|duration_humanize }}
+                                    {% endif %}
+                                  {% else %}
+                                    No records yet
+                                  {% endif %}
+                                {% endwith %}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    {% endfor %}
+                  </div>
                 </div>
               </div>
-            </div>
+            {% endif %}
           {% empty %}
             <div class="box">
               <p>No challenges found.</p>
@@ -176,3 +231,25 @@
     </div>
   </div>
 {% endblock layout %}
+
+{% block javascript %}
+<script>
+function toggleChallengeGroup(groupId) {
+  const group = document.querySelector(`[data-group="${groupId}"]`);
+  const expanded = group.querySelector('.challenge-group-expanded');
+  const arrow = group.querySelector('.expand-arrow');
+  
+  if (expanded.style.maxHeight === '0px' || expanded.style.maxHeight === '') {
+    // Expand: set max-height to scroll height for smooth animation
+    expanded.style.maxHeight = expanded.scrollHeight + 'px';
+    expanded.style.marginTop = 'var(--s-2)';
+    arrow.style.transform = 'rotate(180deg)';
+  } else {
+    // Collapse: set max-height to 0
+    expanded.style.maxHeight = '0px';
+    expanded.style.marginTop = '0';
+    arrow.style.transform = 'rotate(0deg)';
+  }
+}
+</script>
+{% endblock javascript %}
