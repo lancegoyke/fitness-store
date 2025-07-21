@@ -13,11 +13,22 @@ class DifficultyLevel(models.TextChoices):
     ADVANCED = "advanced", "Advanced"
 
 
+# Module-level constants to eliminate duplication
 DIFFICULTY_ORDER = {
     DifficultyLevel.BEGINNER: 0,
     DifficultyLevel.INTERMEDIATE: 1,
     DifficultyLevel.ADVANCED: 2,
 }
+
+DIFFICULTY_COLOR_MAPPING = {
+    DifficultyLevel.BEGINNER: "success",
+    DifficultyLevel.INTERMEDIATE: "warning",
+    DifficultyLevel.ADVANCED: "danger",
+}
+
+# Regex patterns for challenge variations (L1, L2, etc.)
+VARIATION_SUFFIX_PATTERN = r"\s*\(L\d+\)$"
+VARIATION_NUMBER_PATTERN = r"\(L(\d+)\)$"
 
 
 class ChallengeQuerySet(models.QuerySet):
@@ -85,13 +96,14 @@ class Challenge(models.Model):
     @cached_property
     def base_name(self):
         """Extract base name by removing (L1), (L2), etc. suffixes."""
-        base_name = re.sub(r"\s*\(L\d+\)$", "", self.name)
+        # Remove pattern like " (L1)", " (L2)", etc.
+        base_name = re.sub(VARIATION_SUFFIX_PATTERN, "", self.name)
         return base_name.strip()
 
     @cached_property
     def variation_number(self):
         """Extract the variation number from names like 'Fit Fall (L1)', returns None if no variation."""
-        match = re.search(r"\(L(\d+)\)$", self.name)
+        match = re.search(VARIATION_NUMBER_PATTERN, self.name)
         return int(match[1]) if match else None
 
     def is_variation(self):
@@ -101,12 +113,7 @@ class Challenge(models.Model):
     @property
     def difficulty_color(self) -> str:
         """Return Bulma color name for the difficulty indicator."""
-        mapping = {
-            DifficultyLevel.BEGINNER: "success",
-            DifficultyLevel.INTERMEDIATE: "warning",
-            DifficultyLevel.ADVANCED: "danger",
-        }
-        return mapping.get(self.difficulty_level, "info")
+        return DIFFICULTY_COLOR_MAPPING.get(self.difficulty_level, "info")
 
     @property
     def estimated_completion_time(self):
