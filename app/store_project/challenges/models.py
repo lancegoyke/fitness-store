@@ -1,3 +1,4 @@
+import re
 import statistics
 
 from django.db import models
@@ -9,6 +10,31 @@ class DifficultyLevel(models.TextChoices):
     BEGINNER = "beginner", "Beginner"
     INTERMEDIATE = "intermediate", "Intermediate"
     ADVANCED = "advanced", "Advanced"
+
+
+class ChallengeManager(models.Manager):
+    def grouped_by_base_name(self):
+        """Group challenges by their base name (removing L1, L2, etc. suffixes)."""
+        challenges = self.all().order_by("-date_created")
+        grouped = {}
+
+        for challenge in challenges:
+            base_name = challenge.get_base_name()
+            if base_name not in grouped:
+                grouped[base_name] = []
+            grouped[base_name].append(challenge)
+
+        # Sort each group by difficulty level (beginner first, then intermediate, then advanced)
+        difficulty_order = {
+            DifficultyLevel.BEGINNER: 0,
+            DifficultyLevel.INTERMEDIATE: 1,
+            DifficultyLevel.ADVANCED: 2,
+        }
+
+        for value in grouped.values():
+            value.sort(key=lambda c: difficulty_order.get(c.difficulty_level, 99))
+
+        return grouped
 
 
 class Challenge(models.Model):
@@ -33,6 +59,8 @@ class Challenge(models.Model):
     )
     tags = TaggableManager()
 
+    objects = ChallengeManager()
+
     class Meta:
         """Meta definition for Challenge."""
 
@@ -45,6 +73,21 @@ class Challenge(models.Model):
 
     def get_absolute_url(self):
         return reverse("challenge_detail", kwargs={"slug": self.slug})
+
+    def get_base_name(self):
+        """Extract base name by removing (L1), (L2), etc. suffixes."""
+        # Remove pattern like " (L1)", " (L2)", etc.
+        base_name = re.sub(r"\s*\(L\d+\)$", "", self.name)
+        return base_name.strip()
+
+    def get_variation_number(self):
+        """Extract the variation number from names like 'Fit Fall (L1)', returns None if no variation."""
+        match = re.search(r"\(L(\d+)\)$", self.name)
+        return int(match[1]) if match else None
+
+    def is_variation(self):
+        """Check if this challenge is a variation (has L1, L2, etc. suffix)."""
+        return self.get_variation_number() is not None
 
     @property
     def difficulty_color(self) -> str:
