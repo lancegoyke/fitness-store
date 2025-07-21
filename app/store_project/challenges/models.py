@@ -12,29 +12,36 @@ class DifficultyLevel(models.TextChoices):
     ADVANCED = "advanced", "Advanced"
 
 
-class ChallengeManager(models.Manager):
-    def grouped_by_base_name(self):
-        """Group challenges by their base name (removing L1, L2, etc. suffixes)."""
-        challenges = self.all().order_by("-date_created")
-        grouped = {}
+DIFFICULTY_ORDER = {
+    DifficultyLevel.BEGINNER: 0,
+    DifficultyLevel.INTERMEDIATE: 1,
+    DifficultyLevel.ADVANCED: 2,
+}
 
-        for challenge in challenges:
+
+class ChallengeQuerySet(models.QuerySet):
+    def grouped(self):
+        """Group challenges by their base name (removing L1, L2, etc. suffixes)."""
+        grouped: dict[str, list["Challenge"]] = {}
+
+        for challenge in self.order_by("-date_created"):
             base_name = challenge.get_base_name()
-            if base_name not in grouped:
-                grouped[base_name] = []
-            grouped[base_name].append(challenge)
+            grouped.setdefault(base_name, []).append(challenge)
 
         # Sort each group by difficulty level (beginner first, then intermediate, then advanced)
-        difficulty_order = {
-            DifficultyLevel.BEGINNER: 0,
-            DifficultyLevel.INTERMEDIATE: 1,
-            DifficultyLevel.ADVANCED: 2,
-        }
-
-        for value in grouped.values():
-            value.sort(key=lambda c: difficulty_order.get(c.difficulty_level, 99))
+        for challenges in grouped.values():
+            challenges.sort(key=lambda c: DIFFICULTY_ORDER.get(c.difficulty_level, 99))
 
         return grouped
+
+
+class ChallengeManager(models.Manager):
+    def get_queryset(self):
+        return ChallengeQuerySet(self.model, using=self._db)
+
+    def grouped(self):
+        """Convenience proxy for `queryset.grouped()`."""
+        return self.get_queryset().grouped()
 
 
 class Challenge(models.Model):
