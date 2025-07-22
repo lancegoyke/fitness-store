@@ -91,7 +91,7 @@ convention = "google"
 force-single-line = true
 
 [tool.pytest.ini_options]
-addopts = "--ds=config.settings.test --ignore=store_project/admin_honeypot/tests"
+addopts = "--ds=config.settings.test --ignore=app/store_project/admin_honeypot/tests"
 python_files = ["tests.py", "test_*.py"]
 pythonpath = ["app"]
 

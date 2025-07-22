@@ -60,4 +60,4 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd app && uv run pytest
+          uv run pytest
