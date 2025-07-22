@@ -1,8 +1,11 @@
 from datetime import timedelta
 
+from django.http import QueryDict
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
+from store_project.challenges.filters import ChallengeFilter
 from store_project.challenges.models import DIFFICULTY_COLOR_MAPPING
 from store_project.challenges.models import DIFFICULTY_ORDER
 from store_project.challenges.models import VARIATION_NUMBER_PATTERN
@@ -299,3 +302,344 @@ class ChallengeTests(TestCase):
             len(response.context["page_obj"]), 26
         )  # 76 total - 50 on page 1 = 26
         self.assertContains(response, "Page 2 of 2")
+
+
+class ChallengeFilterOrderingTests(TestCase):
+    """Test cases for ChallengeFilter ordering functionality."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Set up test data with challenges and records for ordering tests."""
+        cls.user = User.objects.create_user(
+            username="testuser", email="testuser@test.com", password="testpass123"
+        )
+
+        # Create challenges with predictable names for alphabetical ordering
+        cls.challenge_alpha = Challenge.objects.create(
+            name="Alpha Challenge",
+            description="First challenge alphabetically",
+            slug="alpha-challenge",
+            difficulty_level=DifficultyLevel.BEGINNER,
+        )
+
+        cls.challenge_beta = Challenge.objects.create(
+            name="Beta Challenge",
+            description="Second challenge alphabetically",
+            slug="beta-challenge",
+            difficulty_level=DifficultyLevel.INTERMEDIATE,
+        )
+
+        cls.challenge_gamma = Challenge.objects.create(
+            name="Gamma Challenge",
+            description="Third challenge alphabetically",
+            slug="gamma-challenge",
+            difficulty_level=DifficultyLevel.ADVANCED,
+        )
+
+        # Create records to test popularity ordering
+        # Use a fixed reference time to avoid race conditions
+        cls.reference_time = timezone.now().replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+
+        # Mock timezone.now to control auto_now_add dates
+        from unittest.mock import patch
+
+        # Beta Challenge: 5 records in last month (most popular)
+        for i in range(5):
+            target_date = cls.reference_time - timedelta(days=i + 1)
+            with patch("django.utils.timezone.now", return_value=target_date):
+                Record.objects.create(
+                    challenge=cls.challenge_beta,
+                    user=cls.user,
+                    time_score=timedelta(minutes=10 + i),
+                )
+
+        # Gamma Challenge: 3 records in last month (second most popular)
+        for i in range(3):
+            target_date = cls.reference_time - timedelta(days=i + 2)
+            with patch("django.utils.timezone.now", return_value=target_date):
+                Record.objects.create(
+                    challenge=cls.challenge_gamma,
+                    user=cls.user,
+                    time_score=timedelta(minutes=15 + i),
+                )
+
+        # Alpha Challenge: 1 record in last month (least popular)
+        target_date = cls.reference_time - timedelta(days=5)
+        with patch("django.utils.timezone.now", return_value=target_date):
+            Record.objects.create(
+                challenge=cls.challenge_alpha,
+                user=cls.user,
+                time_score=timedelta(minutes=20),
+            )
+
+        # Add old records (> 30 days) that should not count for popularity
+        target_date = cls.reference_time - timedelta(days=35)
+        with patch("django.utils.timezone.now", return_value=target_date):
+            Record.objects.create(
+                challenge=cls.challenge_alpha,
+                user=cls.user,
+                time_score=timedelta(minutes=25),
+            )
+
+    def test_default_ordering_is_popularity(self):
+        """Test that default ordering (no parameters) sorts by popularity."""
+        from unittest.mock import patch
+
+        # Mock timezone.now to use our reference time
+        with patch(
+            "store_project.challenges.filters.timezone.now",
+            return_value=self.reference_time,
+        ):
+            data = QueryDict("")  # Empty - simulates default page load
+            # Use only our test challenges, not all challenges in the database
+            test_queryset = Challenge.objects.filter(
+                pk__in=[
+                    self.challenge_alpha.pk,
+                    self.challenge_beta.pk,
+                    self.challenge_gamma.pk,
+                ]
+            )
+            filter_obj = ChallengeFilter(data, queryset=test_queryset)
+
+            challenges_list = list(filter_obj.qs)
+
+            # Should be ordered by popularity (Beta=5, Gamma=3, Alpha=1)
+            self.assertEqual(challenges_list[0], self.challenge_beta)
+            self.assertEqual(challenges_list[1], self.challenge_gamma)
+            self.assertEqual(challenges_list[2], self.challenge_alpha)
+
+            # Verify record_count annotation is present
+            self.assertTrue(hasattr(challenges_list[0], "record_count"))
+            self.assertEqual(challenges_list[0].record_count, 5)
+            self.assertEqual(challenges_list[1].record_count, 3)
+            self.assertEqual(challenges_list[2].record_count, 1)
+
+    def test_explicit_popularity_ordering(self):
+        """Test explicit popularity ordering parameter."""
+        data = QueryDict("ordering=popularity")
+        test_queryset = Challenge.objects.filter(
+            pk__in=[
+                self.challenge_alpha.pk,
+                self.challenge_beta.pk,
+                self.challenge_gamma.pk,
+            ]
+        )
+        filter_obj = ChallengeFilter(data, queryset=test_queryset)
+
+        challenges_list = list(filter_obj.qs)
+
+        # Should be ordered by popularity (Beta=5, Gamma=3, Alpha=1)
+        self.assertEqual(challenges_list[0], self.challenge_beta)
+        self.assertEqual(challenges_list[1], self.challenge_gamma)
+        self.assertEqual(challenges_list[2], self.challenge_alpha)
+
+    def test_alphabetical_ordering(self):
+        """Test explicit alphabetical ordering."""
+        data = QueryDict("ordering=name")
+        test_queryset = Challenge.objects.filter(
+            pk__in=[
+                self.challenge_alpha.pk,
+                self.challenge_beta.pk,
+                self.challenge_gamma.pk,
+            ]
+        )
+        filter_obj = ChallengeFilter(data, queryset=test_queryset)
+
+        challenges_list = list(filter_obj.qs)
+
+        # Should be ordered alphabetically (Alpha, Beta, Gamma)
+        self.assertEqual(challenges_list[0], self.challenge_alpha)
+        self.assertEqual(challenges_list[1], self.challenge_beta)
+        self.assertEqual(challenges_list[2], self.challenge_gamma)
+
+    def test_date_ordering_newest_first(self):
+        """Test ordering by newest creation date first."""
+        data = QueryDict("ordering=-date_created")
+        test_queryset = Challenge.objects.filter(
+            pk__in=[
+                self.challenge_alpha.pk,
+                self.challenge_beta.pk,
+                self.challenge_gamma.pk,
+            ]
+        )
+        filter_obj = ChallengeFilter(data, queryset=test_queryset)
+
+        challenges_list = list(filter_obj.qs)
+
+        # Should be ordered by creation date (newest first)
+        # Gamma was created last, then Beta, then Alpha
+        self.assertEqual(challenges_list[0], self.challenge_gamma)
+        self.assertEqual(challenges_list[1], self.challenge_beta)
+        self.assertEqual(challenges_list[2], self.challenge_alpha)
+
+    def test_date_ordering_oldest_first(self):
+        """Test ordering by oldest creation date first."""
+        data = QueryDict("ordering=date_created")
+        test_queryset = Challenge.objects.filter(
+            pk__in=[
+                self.challenge_alpha.pk,
+                self.challenge_beta.pk,
+                self.challenge_gamma.pk,
+            ]
+        )
+        filter_obj = ChallengeFilter(data, queryset=test_queryset)
+
+        challenges_list = list(filter_obj.qs)
+
+        # Should be ordered by creation date (oldest first)
+        # Alpha was created first, then Beta, then Gamma
+        self.assertEqual(challenges_list[0], self.challenge_alpha)
+        self.assertEqual(challenges_list[1], self.challenge_beta)
+        self.assertEqual(challenges_list[2], self.challenge_gamma)
+
+    def test_popularity_uses_last_month_only(self):
+        """Test that popularity ordering only counts records from last 30 days."""
+        from unittest.mock import patch
+
+        # Mock timezone.now to use our reference time
+        with patch(
+            "store_project.challenges.filters.timezone.now",
+            return_value=self.reference_time,
+        ):
+            # The old record (35 days old) should not affect Alpha's popularity
+            data = QueryDict("ordering=popularity")
+            test_queryset = Challenge.objects.filter(
+                pk__in=[
+                    self.challenge_alpha.pk,
+                    self.challenge_beta.pk,
+                    self.challenge_gamma.pk,
+                ]
+            )
+            filter_obj = ChallengeFilter(data, queryset=test_queryset)
+
+            challenges_list = list(filter_obj.qs)
+
+            # Alpha should have record_count=1 (not 2, because old record is excluded)
+            alpha_challenge = next(
+                c for c in challenges_list if c == self.challenge_alpha
+            )
+            self.assertEqual(alpha_challenge.record_count, 1)
+
+    def test_popularity_secondary_alphabetical_ordering(self):
+        """Test that challenges with same popularity are ordered alphabetically."""
+        # Create two challenges with same number of records
+        challenge_delta = Challenge.objects.create(
+            name="Delta Challenge",
+            description="Test secondary ordering",
+            slug="delta-challenge",
+            difficulty_level=DifficultyLevel.BEGINNER,
+        )
+
+        challenge_charlie = Challenge.objects.create(
+            name="Charlie Challenge",
+            description="Test secondary ordering",
+            slug="charlie-challenge",
+            difficulty_level=DifficultyLevel.BEGINNER,
+        )
+
+        # Give both 2 records (same popularity)
+        now = timezone.now()
+        for challenge in [challenge_delta, challenge_charlie]:
+            for i in range(2):
+                Record.objects.create(
+                    challenge=challenge,
+                    user=self.user,
+                    time_score=timedelta(minutes=10 + i),
+                    date_recorded=now - timedelta(days=i + 1),
+                )
+
+        data = QueryDict("ordering=popularity")
+        # Include the new challenges in our test queryset
+        test_queryset = Challenge.objects.filter(
+            pk__in=[
+                self.challenge_alpha.pk,
+                self.challenge_beta.pk,
+                self.challenge_gamma.pk,
+                challenge_delta.pk,
+                challenge_charlie.pk,
+            ]
+        )
+        filter_obj = ChallengeFilter(data, queryset=test_queryset)
+
+        challenges_list = list(filter_obj.qs)
+
+        # Find Charlie and Delta in the results
+        charlie_idx = next(
+            i for i, c in enumerate(challenges_list) if c == challenge_charlie
+        )
+        delta_idx = next(
+            i for i, c in enumerate(challenges_list) if c == challenge_delta
+        )
+
+        # Charlie should come before Delta alphabetically (both have 2 records)
+        self.assertLess(charlie_idx, delta_idx)
+
+        # Both should have same record count
+        self.assertEqual(challenges_list[charlie_idx].record_count, 2)
+        self.assertEqual(challenges_list[delta_idx].record_count, 2)
+
+    def test_filter_form_initial_value(self):
+        """Test that the filter form has correct initial value."""
+        data = QueryDict("")
+        filter_obj = ChallengeFilter(data, queryset=Challenge.objects.all())
+
+        # The initial value should be set to 'popularity'
+        ordering_field = filter_obj.filters["ordering"]
+        self.assertEqual(ordering_field.extra.get("initial"), "popularity")
+
+    def test_filter_form_choices(self):
+        """Test that filter form has correct choices in correct order."""
+        data = QueryDict("")
+        filter_obj = ChallengeFilter(data, queryset=Challenge.objects.all())
+
+        ordering_field = filter_obj.filters["ordering"]
+        choices = ordering_field.extra.get("choices")
+
+        expected_choices = [
+            ("popularity", "By Popularity"),
+            ("name", "Alphabetical"),
+            ("-date_created", "Newest First"),
+            ("date_created", "Oldest First"),
+        ]
+
+        self.assertEqual(list(choices), expected_choices)
+
+    def test_grouped_method_preserves_ordering(self):
+        """Test that the grouped() method preserves queryset ordering."""
+        # Test with alphabetical ordering
+        data = QueryDict("ordering=name")
+        test_queryset = Challenge.objects.filter(
+            pk__in=[
+                self.challenge_alpha.pk,
+                self.challenge_beta.pk,
+                self.challenge_gamma.pk,
+            ]
+        )
+        filter_obj = ChallengeFilter(data, queryset=test_queryset)
+        grouped = filter_obj.qs.grouped()
+
+        # Get the order of base names
+        base_names = list(grouped.keys())
+        self.assertEqual(
+            base_names, ["Alpha Challenge", "Beta Challenge", "Gamma Challenge"]
+        )
+
+        # Test with popularity ordering
+        data = QueryDict("ordering=popularity")
+        test_queryset = Challenge.objects.filter(
+            pk__in=[
+                self.challenge_alpha.pk,
+                self.challenge_beta.pk,
+                self.challenge_gamma.pk,
+            ]
+        )
+        filter_obj = ChallengeFilter(data, queryset=test_queryset)
+        grouped = filter_obj.qs.grouped()
+
+        # Get the order of base names
+        base_names = list(grouped.keys())
+        self.assertEqual(
+            base_names, ["Beta Challenge", "Gamma Challenge", "Alpha Challenge"]
+        )
