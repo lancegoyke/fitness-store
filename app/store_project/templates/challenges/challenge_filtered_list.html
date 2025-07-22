@@ -79,106 +79,106 @@
 
 
 {% block javascript %}
-<script>
-function toggleChallengeGroup(groupId) {
-  const group = document.querySelector(`[data-group="${groupId}"]`);
-  if (group.classList.contains('expanded')) {
-    collapseChallengeGroup(groupId);
-  } else {
-    expandChallengeGroup(groupId);
-  }
-}
+  <script>
+    function toggleChallengeGroup(groupId) {
+      const group = document.querySelector(`[data-group="${groupId}"]`);
+      if (group.classList.contains('expanded')) {
+        collapseChallengeGroup(groupId);
+      } else {
+        expandChallengeGroup(groupId);
+      }
+    }
 
-function expandChallengeGroup(groupId) {
-  const group = document.querySelector(`[data-group="${groupId}"]`);
-  const expanded = group.querySelector('.challenge-group-expanded');
-  const header = group.querySelector('.challenge-group-header');
+    function expandChallengeGroup(groupId) {
+      const group = document.querySelector(`[data-group="${groupId}"]`);
+      const expanded = group.querySelector('.challenge-group-expanded');
+      const header = group.querySelector('.challenge-group-header');
 
-  if (!group.classList.contains('expanded')) {
+      if (!group.classList.contains('expanded')) {
     // Measure the natural height
-    expanded.style.maxHeight = 'none';
-    const height = expanded.scrollHeight;
-    expanded.style.maxHeight = '0';
+        expanded.style.maxHeight = 'none';
+        const height = expanded.scrollHeight;
+        expanded.style.maxHeight = '0';
 
     // Force reflow then animate to actual height
-    expanded.offsetHeight;
-    expanded.style.maxHeight = height + 'px';
+        expanded.offsetHeight;
+        expanded.style.maxHeight = height + 'px';
 
-    group.classList.add('expanded');
+        group.classList.add('expanded');
     // Update aria-expanded for accessibility
-    header.setAttribute('aria-expanded', 'true');
+        header.setAttribute('aria-expanded', 'true');
 
     // Clean up after animation
-    setTimeout(() => {
-      if (group.classList.contains('expanded')) {
-        expanded.style.maxHeight = 'none';
+        setTimeout(() => {
+          if (group.classList.contains('expanded')) {
+            expanded.style.maxHeight = 'none';
+          }
+        }, 400);
       }
-    }, 400);
-  }
-}
+    }
 
-function collapseChallengeGroup(groupId) {
-  const group = document.querySelector(`[data-group="${groupId}"]`);
-  const expanded = group.querySelector('.challenge-group-expanded');
-  const header = group.querySelector('.challenge-group-header');
+    function collapseChallengeGroup(groupId) {
+      const group = document.querySelector(`[data-group="${groupId}"]`);
+      const expanded = group.querySelector('.challenge-group-expanded');
+      const header = group.querySelector('.challenge-group-header');
 
-  if (group.classList.contains('expanded')) {
+      if (group.classList.contains('expanded')) {
     // Set to current height first
-    expanded.style.maxHeight = expanded.scrollHeight + 'px';
+        expanded.style.maxHeight = expanded.scrollHeight + 'px';
 
     // Force reflow then animate to 0
-    expanded.offsetHeight;
-    expanded.style.maxHeight = '0';
+        expanded.offsetHeight;
+        expanded.style.maxHeight = '0';
 
-    group.classList.remove('expanded');
+        group.classList.remove('expanded');
     // Update aria-expanded for accessibility
-    header.setAttribute('aria-expanded', 'false');
-  }
-}
+        header.setAttribute('aria-expanded', 'false');
+      }
+    }
 
-function handleKeyDown(event, groupId) {
+    function handleKeyDown(event, groupId) {
   // Handle Enter and Space key presses
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault();
-    toggleChallengeGroup(groupId);
-  }
-}
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        toggleChallengeGroup(groupId);
+      }
+    }
 
 // Set up focus event listeners when the page loads
-document.addEventListener('DOMContentLoaded', function() {
+    document.addEventListener('DOMContentLoaded', function() {
   // Find all challenge groups and set up focus listeners for their expanded content
-  document.querySelectorAll('.challenge-group').forEach(function(group) {
-    const groupId = group.dataset.group;
-    const expanded = group.querySelector('.challenge-group-expanded');
+      document.querySelectorAll('.challenge-group').forEach(function(group) {
+        const groupId = group.dataset.group;
+        const expanded = group.querySelector('.challenge-group-expanded');
 
     // Add focus event listeners to all focusable elements within the expanded content
-    const focusableElements = expanded.querySelectorAll('a, button, input, textarea, select, [tabindex]:not([tabindex="-1"])');
+        const focusableElements = expanded.querySelectorAll('a, button, input, textarea, select, [tabindex]:not([tabindex="-1"])');
 
-    focusableElements.forEach(function(element) {
-      element.addEventListener('focus', function() {
+        focusableElements.forEach(function(element) {
+          element.addEventListener('focus', function() {
         // Expand the group when any child element receives focus
-        expandChallengeGroup(groupId);
-      });
+            expandChallengeGroup(groupId);
+          });
 
-      element.addEventListener('blur', function() {
+          element.addEventListener('blur', function() {
         // Check if focus is moving outside the group entirely
-        setTimeout(function() {
-          const activeElement = document.activeElement;
-          const isInsideGroup = group.contains(activeElement);
-          const isNextSibling = activeElement && activeElement.closest('.challenge-group');
+            setTimeout(function() {
+              const activeElement = document.activeElement;
+              const isInsideGroup = group.contains(activeElement);
+              const isNextSibling = activeElement && activeElement.closest('.challenge-group');
 
           // If focus moved completely outside challenge groups, collapse this one
-          if (!isInsideGroup && (!isNextSibling || isNextSibling !== group)) {
+              if (!isInsideGroup && (!isNextSibling || isNextSibling !== group)) {
             // Only collapse if no other element in this group has focus
-            const groupHasFocus = group.querySelector(':focus') !== null;
-            if (!groupHasFocus) {
-              collapseChallengeGroup(groupId);
-            }
-          }
-        }, 10); // Small delay to allow focus to settle
+                const groupHasFocus = group.querySelector(':focus') !== null;
+                if (!groupHasFocus) {
+                  collapseChallengeGroup(groupId);
+                }
+              }
+            }, 10); // Small delay to allow focus to settle
+          });
+        });
       });
     });
-  });
-});
-</script>
+  </script>
 {% endblock javascript %}

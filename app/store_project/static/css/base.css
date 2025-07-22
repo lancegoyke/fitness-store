@@ -1424,9 +1424,10 @@ ul.grid {
   overflow: hidden;
   margin-top: 0;
   opacity: 0;
-  transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1),
-              margin-top 0.4s cubic-bezier(0.4, 0, 0.2, 1),
-              opacity 0.3s ease;
+  transition:
+    max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+    margin-top 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.3s ease;
 }
 
 .challenge-group.expanded .challenge-group-expanded {
@@ -1479,7 +1480,9 @@ ul.grid {
   border-radius: 0 0 4px 4px;
   margin: 2px 4px 0;
   opacity: 0.8;
-  transition: opacity 0.3s ease, transform 0.3s ease;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
   border-top: none;
 }
 
