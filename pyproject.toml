@@ -2,7 +2,7 @@
 name = "fitness-store"
 version = "0"
 description = "A fitness store application"
-authors = [{name = "Lance Goyke", email = "lance@lancegoyke.com"}]
+authors = [{ name = "Lance Goyke", email = "lance@lancegoyke.com" }]
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -65,7 +65,18 @@ indent-style = "space"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "D"]
-ignore = ["E203", "E501", "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107"]
+ignore = [
+    "E203",
+    "E501",
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D106",
+    "D107",
+]
 fixable = ["ALL"]
 unfixable = []
 
@@ -80,8 +91,9 @@ convention = "google"
 force-single-line = true
 
 [tool.pytest.ini_options]
-addopts = "--ds=config.settings.test --ignore=store_project/admin_honeypot/tests"
+addopts = "--ds=config.settings.test --ignore=app/store_project/admin_honeypot/tests"
 python_files = ["tests.py", "test_*.py"]
+pythonpath = ["app"]
 
 [tool.curlylint.rules]
 image_alt = true
