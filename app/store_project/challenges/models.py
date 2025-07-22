@@ -36,7 +36,8 @@ class ChallengeQuerySet(models.QuerySet):
         """Group challenges by their base name (removing L1, L2, etc. suffixes)."""
         grouped: dict[str, list["Challenge"]] = {}
 
-        for challenge in self.order_by("-date_created"):
+        # Preserve the existing ordering instead of forcing date_created ordering
+        for challenge in self:
             base_name = challenge.base_name
             grouped.setdefault(base_name, []).append(challenge)
 

@@ -24,7 +24,7 @@ from .models import Challenge
 def challenge_filtered_list(request, slug=None):
     context = {"tag_list": Tag.objects.all()}
 
-    # Get base queryset
+    # Get base queryset - ordering will be handled by the filter
     if slug is not None:
         # use the tag in the URL to filter challenges
         queryset = Challenge.objects.filter(tags__slug__in=[slug])
