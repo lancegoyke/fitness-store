@@ -2,7 +2,7 @@
 <!-- Grouped challenge with multiple variations - expandable -->
 <div class="challenge-group" data-group="{{ base_name|slugify }}" style="position: relative;">
   <!-- Collapsed view - looks like a card but is not clickable as a card -->
-  <div class="challenge-group-header card-box" style="cursor: pointer; position: relative; outline: none; z-index: 1;" onclick="toggleChallengeGroup('{{ base_name|slugify }}')" onkeydown="handleKeyDown(event, '{{ base_name|slugify }}')" tabindex="0">
+  <div class="challenge-group-header card-box" style="cursor: pointer; position: relative; outline: none; z-index: 1;" onclick="toggleChallengeGroup('{{ base_name|slugify }}')" onkeydown="handleKeyDown(event, '{{ base_name|slugify }}')" tabindex="0" role="button" aria-expanded="false" aria-label="Expand {{ base_name }} variations">
     <div class="padding:s0">
     <div class="stack">
       <div style="display: flex; justify-content: space-between; align-items: center;">

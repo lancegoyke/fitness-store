@@ -92,6 +92,7 @@ function toggleChallengeGroup(groupId) {
 function expandChallengeGroup(groupId) {
   const group = document.querySelector(`[data-group="${groupId}"]`);
   const expanded = group.querySelector('.challenge-group-expanded');
+  const header = group.querySelector('.challenge-group-header');
 
   if (!group.classList.contains('expanded')) {
     // Measure the natural height
@@ -104,6 +105,8 @@ function expandChallengeGroup(groupId) {
     expanded.style.maxHeight = height + 'px';
 
     group.classList.add('expanded');
+    // Update aria-expanded for accessibility
+    header.setAttribute('aria-expanded', 'true');
 
     // Clean up after animation
     setTimeout(() => {
@@ -117,6 +120,7 @@ function expandChallengeGroup(groupId) {
 function collapseChallengeGroup(groupId) {
   const group = document.querySelector(`[data-group="${groupId}"]`);
   const expanded = group.querySelector('.challenge-group-expanded');
+  const header = group.querySelector('.challenge-group-header');
 
   if (group.classList.contains('expanded')) {
     // Set to current height first
@@ -127,6 +131,8 @@ function collapseChallengeGroup(groupId) {
     expanded.style.maxHeight = '0';
 
     group.classList.remove('expanded');
+    // Update aria-expanded for accessibility
+    header.setAttribute('aria-expanded', 'false');
   }
 }
 
