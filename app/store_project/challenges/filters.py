@@ -24,17 +24,25 @@ class ChallengeFilter(django_filters.FilterSet):
         initial="popularity",  # Default to popularity
     )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # If no ordering parameter is provided, apply default popularity ordering
+        if not self.data.get("ordering"):
+            self.data = self.data.copy()
+            self.data["ordering"] = "popularity"
+
     def filter_by_ordering(self, queryset, name, value):
         # If no value provided, default to popularity
-        if not value or value == '':
-            value = 'popularity'
-            
+        if not value or value == "":
+            value = "popularity"
+
         if value == "popularity":
             # Get records from the last month
             one_month_ago = timezone.now() - timedelta(days=30)
             return queryset.annotate(
                 record_count=Count(
-                    "records", filter=models.Q(records__date_recorded__gte=one_month_ago)
+                    "records",
+                    filter=models.Q(records__date_recorded__gte=one_month_ago),
                 )
             ).order_by("-record_count", "name")
         elif value == "name":
