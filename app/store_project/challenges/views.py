@@ -23,19 +23,21 @@ from .models import Challenge
 @login_required()
 def challenge_filtered_list(request, slug=None):
     context = {"tag_list": Tag.objects.all()}
+
+    # Get base queryset
     if slug is not None:
         # use the tag in the URL to filter challenges
-        context["filter"] = ChallengeFilter(
-            request.GET,
-            queryset=Challenge.objects.filter(tags__slug__in=[slug]).order_by(
-                "-date_created"
-            ),
-        )
+        queryset = Challenge.objects.filter(tags__slug__in=[slug])
     else:
         # use all challenges
-        context["filter"] = ChallengeFilter(
-            request.GET, queryset=Challenge.objects.all().order_by("-date_created")
-        )
+        queryset = Challenge.objects.all()
+
+    # Apply filters first
+    filter_obj = ChallengeFilter(request.GET, queryset=queryset)
+
+    # Group the filtered challenges using our queryset method
+    context["filter"] = filter_obj
+    context["grouped_challenges"] = filter_obj.qs.grouped()
     return render(request, "challenges/challenge_filtered_list.html", context)
 
 

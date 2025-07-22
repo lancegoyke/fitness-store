@@ -58,61 +58,14 @@
         </div>
 
         <div class="stack">
-          {% for challenge in filter.qs %}
-            <div class="card-box">
-              <div class="padding:s0">
-                <div class="stack">
-                  <div class="flex-row gap-s-2">
-                    <h3 class="margin-0"><a href="{% url 'challenge_detail' challenge.slug %}">{{ challenge.name }}</a></h3>
-                    <span class="difficulty-indicator difficulty-{{ challenge.difficulty_level }}" title="{{ challenge.get_difficulty_level_display }}">&#x25cf;</span>
-                  </div>
-
-                  <div>
-                    {% if challenge.summary %}
-                      <p style="margin: 0; color: var(--color-gray);">{{ challenge.summary }}</p>
-                    {% else %}
-                      {% with description_lines=challenge.description.splitlines %}
-                        {% if description_lines %}
-                          <p style="margin: 0; color: var(--color-gray);">
-                            {{ description_lines.0|truncatewords:25 }}
-                            {% if description_lines|length > 1 or description_lines.0|length > 150 %}
-                              ...
-                            {% endif %}
-                          </p>
-                        {% endif %}
-                      {% endwith %}
-                    {% endif %}
-                  </div>
-
-                  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--s-1);">
-                    {% if challenge.tags.all %}
-                      <div class="cluster categories">
-                        <div>
-                          {% for tag in challenge.tags.all %}
-                            <span class="tag">{{ tag.name }}</span>
-                          {% endfor %}
-                        </div>
-                      </div>
-                    {% else %}
-                      <div></div>
-                    {% endif %}
-
-                    <div style="font-size: var(--s-1); color: var(--color-gray);">
-                      {% with record_count=challenge.records.count estimated_time=challenge.estimated_completion_time %}
-                        {% if record_count %}
-                          {{ record_count }} record{{ record_count|pluralize }}
-                          {% if estimated_time %}
-                            • Est. {{ estimated_time|duration_humanize }}
-                          {% endif %}
-                        {% else %}
-                          No records yet
-                        {% endif %}
-                      {% endwith %}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+          {% for base_name, challenges in grouped_challenges.items %}
+            {% if challenges|length == 1 %}
+              {% with challenge=challenges.0 %}
+                {% include "challenges/_single_challenge_card.html" %}
+              {% endwith %}
+            {% else %}
+              {% include "challenges/_challenge_group.html" %}
+            {% endif %}
           {% empty %}
             <div class="box">
               <p>No challenges found.</p>
@@ -123,3 +76,109 @@
     </div>
   </div>
 {% endblock layout %}
+
+
+{% block javascript %}
+  <script>
+    function toggleChallengeGroup(groupId) {
+      const group = document.querySelector(`[data-group="${groupId}"]`);
+      if (group.classList.contains('expanded')) {
+        collapseChallengeGroup(groupId);
+      } else {
+        expandChallengeGroup(groupId);
+      }
+    }
+
+    function expandChallengeGroup(groupId) {
+      const group = document.querySelector(`[data-group="${groupId}"]`);
+      const expanded = group.querySelector('.challenge-group-expanded');
+      const header = group.querySelector('.challenge-group-header');
+
+      if (!group.classList.contains('expanded')) {
+    // Measure the natural height
+        expanded.style.maxHeight = 'none';
+        const height = expanded.scrollHeight;
+        expanded.style.maxHeight = '0';
+
+    // Force reflow then animate to actual height
+        expanded.offsetHeight;
+        expanded.style.maxHeight = height + 'px';
+
+        group.classList.add('expanded');
+    // Update aria-expanded for accessibility
+        header.setAttribute('aria-expanded', 'true');
+
+    // Clean up after animation
+        setTimeout(() => {
+          if (group.classList.contains('expanded')) {
+            expanded.style.maxHeight = 'none';
+          }
+        }, 400);
+      }
+    }
+
+    function collapseChallengeGroup(groupId) {
+      const group = document.querySelector(`[data-group="${groupId}"]`);
+      const expanded = group.querySelector('.challenge-group-expanded');
+      const header = group.querySelector('.challenge-group-header');
+
+      if (group.classList.contains('expanded')) {
+    // Set to current height first
+        expanded.style.maxHeight = expanded.scrollHeight + 'px';
+
+    // Force reflow then animate to 0
+        expanded.offsetHeight;
+        expanded.style.maxHeight = '0';
+
+        group.classList.remove('expanded');
+    // Update aria-expanded for accessibility
+        header.setAttribute('aria-expanded', 'false');
+      }
+    }
+
+    function handleKeyDown(event, groupId) {
+  // Handle Enter and Space key presses
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        toggleChallengeGroup(groupId);
+      }
+    }
+
+// Set up focus event listeners when the page loads
+    document.addEventListener('DOMContentLoaded', function() {
+  // Find all challenge groups and set up focus listeners for their expanded content
+      document.querySelectorAll('.challenge-group').forEach(function(group) {
+        const groupId = group.dataset.group;
+        const expanded = group.querySelector('.challenge-group-expanded');
+
+    // Add focus event listeners to all focusable elements within the expanded content
+        const focusableElements = expanded.querySelectorAll('a, button, input, textarea, select, [tabindex]:not([tabindex="-1"])');
+
+        focusableElements.forEach(function(element) {
+          element.addEventListener('focus', function() {
+        // Expand the group when any child element receives focus
+            expandChallengeGroup(groupId);
+          });
+
+          element.addEventListener('blur', function() {
+        // Check if focus is moving outside the group entirely
+            setTimeout(function() {
+              const activeElement = document.activeElement;
+              const isInsideGroup = group.contains(activeElement);
+              const isNextSibling = activeElement && activeElement.closest('.challenge-group');
+
+          // If focus moved completely outside challenge groups, collapse this one
+              if (!isInsideGroup && (!isNextSibling || isNextSibling !== group)) {
+            // Only collapse if no other element in this group has focus
+                const groupHasFocus = group.querySelector(':focus') !== null;
+                if (!groupHasFocus) {
+                  collapseChallengeGroup(groupId);
+                }
+              }
+            }, 10); // Small delay to allow focus to settle
+          });
+        });
+      });
+    });
+  </script>
+{% endblock javascript %}
