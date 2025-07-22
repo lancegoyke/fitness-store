@@ -6,57 +6,57 @@ authors = [{ name = "Lance Goyke", email = "lance@lancegoyke.com" }]
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "Django>=5.2",
-    "Pillow",
-    "boto3",
-    "dj-database-url",
-    "django-allauth[socialaccount]",
-    "django-cors-headers",
-    "django-lifecycle",
-    "django-clearcache",
-    "django-embed-video",
-    "django-markdownx",
-    "django-ses[events]==4.1.1",
-    "django-storages[s3]",
-    "gunicorn",
-    "hiredis",
-    "Markdown",
-    "psycopg[binary]>=3.2.9",
-    "python-dotenv",
-    "redis",
-    "sentry-sdk",
-    "scout-apm",
-    "stripe",
-    "whitenoise[brotli]",
-    "django-taggit>=6.1.0",
-    "django-filter>=25.1",
-    "django-crispy-forms>=2.4",
-    "crispy-bulma>=0.12.0",
-    "google-genai>=1.26.0",
+  "Django>=5.2",
+  "Pillow",
+  "boto3",
+  "dj-database-url",
+  "django-allauth[socialaccount]",
+  "django-cors-headers",
+  "django-lifecycle",
+  "django-clearcache",
+  "django-embed-video",
+  "django-markdownx",
+  "django-ses[events]==4.1.1",
+  "django-storages[s3]",
+  "gunicorn",
+  "hiredis",
+  "Markdown",
+  "psycopg[binary]>=3.2.9",
+  "python-dotenv",
+  "redis",
+  "sentry-sdk",
+  "scout-apm",
+  "stripe",
+  "whitenoise[brotli]",
+  "django-taggit>=6.1.0",
+  "django-filter>=25.1",
+  "django-crispy-forms>=2.4",
+  "crispy-bulma>=0.12.0",
+  "google-genai>=1.26.0",
 ]
 
 [dependency-groups]
 dev = [
-    "coverage",
-    "django-browser-reload",
-    "django-debug-toolbar",
-    "django-upgrade",
-    "factory_boy",
-    "ipython",
-    "ipdb",
-    "pylint-django",
-    "pytest",
-    "pytest-sugar",
-    "pytest-django",
-    "ruff",
+  "coverage",
+  "django-browser-reload",
+  "django-debug-toolbar",
+  "django-upgrade",
+  "factory_boy",
+  "ipython",
+  "ipdb",
+  "pylint-django",
+  "pytest",
+  "pytest-sugar",
+  "pytest-django",
+  "ruff",
 ]
 
 [tool.ruff]
 target-version = "py313"
 line-length = 88
 exclude = [
-    "app/store_project/admin_honeypot/tests/test_suite.py",
-    "app/store_project/**/migrations/*.py",
+  "app/store_project/admin_honeypot/tests/test_suite.py",
+  "app/store_project/**/migrations/*.py",
 ]
 
 [tool.ruff.format]
@@ -66,16 +66,16 @@ indent-style = "space"
 [tool.ruff.lint]
 select = ["E", "F", "I", "D"]
 ignore = [
-    "E203",
-    "E501",
-    "D100",
-    "D101",
-    "D102",
-    "D103",
-    "D104",
-    "D105",
-    "D106",
-    "D107",
+  "E203",
+  "E501",
+  "D100",
+  "D101",
+  "D102",
+  "D103",
+  "D104",
+  "D105",
+  "D106",
+  "D107",
 ]
 fixable = ["ALL"]
 unfixable = []
@@ -91,7 +91,7 @@ convention = "google"
 force-single-line = true
 
 [tool.pytest.ini_options]
-addopts = "--ds=config.settings.test --ignore=app/store_project/admin_honeypot/tests"
+addopts = "--ds=config.settings.test --ignore=store_project/admin_honeypot/tests"
 python_files = ["tests.py", "test_*.py"]
 pythonpath = ["app"]
 
