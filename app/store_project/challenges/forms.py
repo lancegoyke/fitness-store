@@ -13,9 +13,9 @@ class ChallengeCreateForm(ModelForm):
             "description",
             "summary",
             "difficulty_level",
-            "tags",
+            "challenge_tags",
         ]
-        widgets = {"tags": TextInput(attrs={"class": "input"})}
+        widgets = {"challenge_tags": TextInput(attrs={"class": "input"})}
 
 
 class RecordCreateForm(ModelForm):

@@ -17,10 +17,10 @@
 
       <!-- Show tags from first challenge in group -->
         {% with first_challenge=challenges.0 %}
-          {% if first_challenge.tags.all %}
+          {% if first_challenge.challenge_tags.all %}
             <div class="cluster categories">
               <div>
-                {% for tag in first_challenge.tags.all %}
+                {% for tag in first_challenge.challenge_tags.all %}
                   <span class="tag">{{ tag.name }}</span>
                 {% endfor %}
               </div>
@@ -75,10 +75,10 @@
               </div>
 
               <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--s-1);">
-                {% if challenge.tags.all %}
+                {% if challenge.challenge_tags.all %}
                   <div class="cluster categories">
                     <div>
-                      {% for tag in challenge.tags.all %}
+                      {% for tag in challenge.challenge_tags.all %}
                         <span class="tag" style="font-size: var(--s-2);">{{ tag.name }}</span>
                       {% endfor %}
                     </div>

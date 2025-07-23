@@ -10,11 +10,10 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
 from store_project.challenges.models import Challenge
+from store_project.challenges.models import ChallengeTag
 from store_project.challenges.models import DifficultyLevel
 from store_project.challenges.models import Record
 from store_project.users.models import User
-from taggit.models import Tag
-from taggit.models import TaggedItem
 
 TAG_OPTIONS = [
     "Strength",
@@ -105,15 +104,23 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def _tag_challenges(self, challenges: list[Challenge]) -> None:
+        # Create ChallengeTag instances for all tag options
+        challenge_tags = []
+        for tag_name in TAG_OPTIONS:
+            tag, created = ChallengeTag.objects.get_or_create(
+                name=tag_name, defaults={"slug": slugify(tag_name)}
+            )
+            challenge_tags.append(tag)
+
         # Batch tag additions in a single transaction for better performance
         for challenge in challenges:
-            challenge.tags.add(*random.sample(TAG_OPTIONS, random.randint(1, 3)))
+            random_tags = random.sample(challenge_tags, random.randint(1, 3))
+            challenge.challenge_tags.add(*random_tags)
 
-    def _cleanup_taggit_data(self):
-        """Clean up taggit tables to prevent constraint violations."""
-        # Delete ALL taggit records to ensure clean state
-        TaggedItem.objects.all().delete()
-        Tag.objects.all().delete()
+    def _cleanup_challenge_data(self):
+        """Clean up challenge-related data."""
+        # Delete challenge tags
+        ChallengeTag.objects.all().delete()
 
     @transaction.atomic
     def handle(self, *args, **kwargs):
@@ -121,8 +128,8 @@ class Command(BaseCommand):
             # Delete challenges and related records
             Challenge.objects.all().delete()
 
-            # Clean up taggit tables and reset sequences
-            self._cleanup_taggit_data()
+            # Clean up challenge data
+            self._cleanup_challenge_data()
 
             self.stdout.write(self.style.SUCCESS("Challenge data deleted"))
 

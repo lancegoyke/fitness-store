@@ -1,10 +1,34 @@
 import re
 import statistics
+import uuid
 
 from django.db import models
 from django.urls import reverse
 from django.utils.functional import cached_property
-from taggit.managers import TaggableManager
+from django.utils.translation import gettext_lazy as _
+
+
+class ChallengeTag(models.Model):
+    """Tags for categorizing challenges."""
+
+    id = models.UUIDField(
+        _("Challenge Tag ID"), primary_key=True, default=uuid.uuid4, editable=False
+    )
+    name = models.CharField(_("Tag name"), max_length=50)
+    slug = models.SlugField(
+        _("Slug for tag"),
+        default="",
+        null=False,
+        unique=True,
+    )
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Challenge Tag"
+        verbose_name_plural = "Challenge Tags"
+
+    def __str__(self):
+        return self.name
 
 
 class DifficultyLevel(models.TextChoices):
@@ -91,7 +115,11 @@ class Challenge(models.Model):
         choices=DifficultyLevel,
         default=DifficultyLevel.BEGINNER,
     )
-    tags = TaggableManager()
+    challenge_tags = models.ManyToManyField(
+        "ChallengeTag",
+        verbose_name=_("Challenge tags"),
+        blank=True,
+    )
 
     objects = ChallengeManager()
 
