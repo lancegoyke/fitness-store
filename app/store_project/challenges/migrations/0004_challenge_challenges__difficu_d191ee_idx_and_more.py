@@ -8,7 +8,6 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('challenges', '0003_challenge_summary'),
-        ('taggit', '0006_rename_taggeditem_content_type_object_id_taggit_tagg_content_8fc721_idx'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

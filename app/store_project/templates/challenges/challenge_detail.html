@@ -56,7 +56,7 @@
 
             <div class="cluster categories">
               <div>
-                {% for tag in challenge.tags.all %}
+                {% for tag in challenge.challenge_tags.all %}
                   <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">
                     {{ tag }}
                   </a>

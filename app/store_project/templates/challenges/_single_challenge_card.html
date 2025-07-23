@@ -26,10 +26,10 @@
       </div>
 
       <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--s-1);">
-        {% if challenge.tags.all %}
+        {% if challenge.challenge_tags.all %}
           <div class="cluster categories">
             <div>
-              {% for tag in challenge.tags.all %}
+              {% for tag in challenge.challenge_tags.all %}
                 <span class="tag">{{ tag.name }}</span>
               {% endfor %}
             </div>

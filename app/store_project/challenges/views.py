@@ -11,23 +11,23 @@ from django.views.generic import CreateView
 from django.views.generic import DetailView
 from django.views.generic import FormView
 from django.views.generic.detail import SingleObjectMixin
-from taggit.models import Tag
 
 from .filters import ChallengeFilter
 from .filters import RecordFilter
 from .forms import ChallengeCreateForm
 from .forms import RecordCreateForm
 from .models import Challenge
+from .models import ChallengeTag
 
 
 @login_required()
 def challenge_filtered_list(request, slug=None):
-    context = {"tag_list": Tag.objects.all()}
+    context = {"tag_list": ChallengeTag.objects.all()}
 
     # Get base queryset - ordering will be handled by the filter
     if slug is not None:
         # use the tag in the URL to filter challenges
-        queryset = Challenge.objects.filter(tags__slug__in=[slug])
+        queryset = Challenge.objects.filter(challenge_tags__slug__in=[slug])
     else:
         # use all challenges
         queryset = Challenge.objects.all()
