@@ -8,9 +8,15 @@ def convert_tagged_items_to_challenge_tags(apps, schema_editor):
     # Get models
     Challenge = apps.get_model('challenges', 'Challenge')
     ChallengeTag = apps.get_model('challenges', 'ChallengeTag')
-    Tag = apps.get_model('taggit', 'Tag')
-    TaggedItem = apps.get_model('taggit', 'TaggedItem')
-    ContentType = apps.get_model('contenttypes', 'ContentType')
+
+    # Check if taggit is available - if not, skip migration
+    try:
+        Tag = apps.get_model('taggit', 'Tag')
+        TaggedItem = apps.get_model('taggit', 'TaggedItem')
+        ContentType = apps.get_model('contenttypes', 'ContentType')
+    except LookupError:
+        # taggit is not installed, skip this migration
+        return
 
     # Get the ContentType for Challenge model
     try:

@@ -1,15 +1,12 @@
 import json
 import os
 
-from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandError
 from django.db import transaction
 from store_project.challenges.models import Challenge
 from store_project.challenges.models import Record
 from store_project.users.models import User
-from taggit.models import Tag
-from taggit.models import TaggedItem
 
 
 class Command(BaseCommand):
@@ -61,12 +58,11 @@ class Command(BaseCommand):
             )
 
         # Import order (dependencies first)
+        # Note: For challenge tags, use the dedicated import_challenge_tags command
         import_files = [
             ("production-users.json", self.import_users_safe),
-            ("production-tags.json", self.import_tags),
             ("production-challenges.json", self.import_challenges),
             ("production-records.json", self.import_records_safe),
-            ("production-tagged_items.json", self.import_tagged_items),
         ]
 
         with transaction.atomic():
@@ -343,40 +339,6 @@ class Command(BaseCommand):
         """Get list of users needing password reset."""
         return getattr(self, "_users_needing_password_reset", [])
 
-    def import_tags(self, filepath, dry_run, merge_users):
-        with open(filepath, "r") as f:
-            data = json.load(f)
-
-        count = 0
-        messages = []
-
-        for item in data:
-            if item["model"] != "taggit.tag":
-                continue
-
-            fields = item["fields"]
-            tag_id = item["pk"]
-
-            if dry_run:
-                messages.append(f"Would import tag: {fields['name']}")
-                count += 1
-                continue
-
-            if Tag.objects.filter(id=tag_id).exists():
-                messages.append(f"Tag {tag_id} already exists, skipping")
-                continue
-
-            # Check for name conflicts
-            if Tag.objects.filter(name=fields["name"]).exists():
-                messages.append(f'Tag name "{fields["name"]}" already exists, skipping')
-                continue
-
-            tag = Tag(id=tag_id, name=fields["name"], slug=fields["slug"])
-            tag.save()
-            count += 1
-
-        return count, messages
-
     def import_challenges(self, filepath, dry_run, merge_users):
         with open(filepath, "r") as f:
             data = json.load(f)
@@ -481,49 +443,6 @@ class Command(BaseCommand):
                 user=user,
             )
             record.save()
-            count += 1
-
-        return count, messages
-
-    def import_tagged_items(self, filepath, dry_run, merge_users):
-        with open(filepath, "r") as f:
-            data = json.load(f)
-
-        count = 0
-        messages = []
-
-        for item in data:
-            if item["model"] != "taggit.taggeditem":
-                continue
-
-            fields = item["fields"]
-            tagged_item_id = item["pk"]
-
-            if dry_run:
-                messages.append(f"Would import tagged item: {tagged_item_id}")
-                count += 1
-                continue
-
-            if TaggedItem.objects.filter(id=tagged_item_id).exists():
-                messages.append(
-                    f"Tagged item {tagged_item_id} already exists, skipping"
-                )
-                continue
-
-            try:
-                tag = Tag.objects.get(id=fields["tag"])
-                content_type = ContentType.objects.get(id=fields["content_type"])
-            except (Tag.DoesNotExist, ContentType.DoesNotExist) as e:
-                messages.append(f"Skipping tagged item {tagged_item_id}: {str(e)}")
-                continue
-
-            tagged_item = TaggedItem(
-                id=tagged_item_id,
-                tag=tag,
-                content_type=content_type,
-                object_id=fields["object_id"],
-            )
-            tagged_item.save()
             count += 1
 
         return count, messages

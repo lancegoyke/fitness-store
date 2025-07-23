@@ -33,7 +33,6 @@ class ChallengeTests(TestCase):
             summary="Hard workout summary",
             slug="test-challenge",
             difficulty_level="beginner",
-            tags=[],
         )
 
         cls.record = Record.objects.create(
