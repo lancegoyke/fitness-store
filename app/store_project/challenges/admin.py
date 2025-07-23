@@ -15,11 +15,11 @@ class RecordInline(admin.TabularInline):
     model = Record
     extra = 0
     max_num = 20
-    raw_id_fields = ('user',)
-    
+    raw_id_fields = ("user",)
+
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
-        return queryset.select_related('user', 'challenge').order_by('-date_recorded')
+        return queryset.select_related("user", "challenge").order_by("-date_recorded")
 
 
 @admin.register(Challenge)
@@ -39,14 +39,16 @@ class ChallengeAdmin(admin.ModelAdmin):
     list_filter = ("difficulty_level", "date_created")
     search_fields = ("name", "description", "summary")
     list_per_page = 25
-    
+
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
-        return queryset.prefetch_related('tags', 'records__user').with_completion_stats()
-    
+        return queryset.prefetch_related(
+            "tags", "records__user"
+        ).with_completion_stats()
+
     def get_object(self, request, object_id, from_field=None):
         obj = super().get_object(request, object_id, from_field)
-        if obj and hasattr(obj, '_prefetched_objects_cache'):
+        if obj and hasattr(obj, "_prefetched_objects_cache"):
             return obj
         queryset = self.get_queryset(request)
         return queryset.get(pk=object_id)
@@ -106,9 +108,9 @@ class ChallengeAdmin(admin.ModelAdmin):
 
 @admin.register(Record)
 class RecordAdmin(admin.ModelAdmin):
-    list_display = ('challenge', 'user', 'time_score', 'date_recorded')
-    list_filter = ('date_recorded', 'challenge__difficulty_level')
-    search_fields = ('challenge__name', 'user__name', 'user__email')
-    raw_id_fields = ('user', 'challenge')
-    list_select_related = ('user', 'challenge')
+    list_display = ("challenge", "user", "time_score", "date_recorded")
+    list_filter = ("date_recorded", "challenge__difficulty_level")
+    search_fields = ("challenge__name", "user__name", "user__email")
+    raw_id_fields = ("user", "challenge")
+    list_select_related = ("user", "challenge")
     list_per_page = 50
