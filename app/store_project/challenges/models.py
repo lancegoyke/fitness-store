@@ -46,6 +46,14 @@ class ChallengeQuerySet(models.QuerySet):
             challenges.sort(key=lambda c: DIFFICULTY_ORDER.get(c.difficulty_level, 99))
 
         return grouped
+    
+    def with_completion_stats(self):
+        """Annotate challenges with completion time statistics."""
+        from django.db.models import Avg, Count
+        return self.annotate(
+            record_count=Count('records'),
+            avg_completion_time=Avg('records__time_score')
+        )
 
 
 class ChallengeManager(models.Manager):
@@ -55,6 +63,10 @@ class ChallengeManager(models.Manager):
     def grouped(self):
         """Convenience proxy for `queryset.grouped()`."""
         return self.get_queryset().grouped()
+    
+    def with_completion_stats(self):
+        """Convenience proxy for `queryset.with_completion_stats()`."""
+        return self.get_queryset().with_completion_stats()
 
 
 class Challenge(models.Model):
@@ -86,6 +98,10 @@ class Challenge(models.Model):
 
         verbose_name = "Challenge"
         verbose_name_plural = "Challenges"
+        indexes = [
+            models.Index(fields=['difficulty_level']),
+            models.Index(fields=['date_created']),
+        ]
 
     def __str__(self):
         """Unicode representation of Challenge."""
@@ -151,6 +167,11 @@ class Record(models.Model):
 
         verbose_name = "Record"
         verbose_name_plural = "Records"
+        indexes = [
+            models.Index(fields=['date_recorded']),
+            models.Index(fields=['time_score']),
+            models.Index(fields=['challenge', 'date_recorded']),
+        ]
 
     def __str__(self):
         """Unicode representation of Record."""
