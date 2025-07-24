@@ -43,7 +43,7 @@ class ChallengeAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
         return queryset.prefetch_related(
-            "tags", "records__user"
+            "challenge_tags", "records__user"
         ).with_completion_stats()
 
     def get_object(self, request, object_id, from_field=None):
