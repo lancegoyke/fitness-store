@@ -25,7 +25,7 @@
       <!-- Main content area -->
       <div class="stack">
         <div>
-          <a href="{% url 'challenge_filtered_list' %}">← view all</a>
+          <a href="{% url 'challenges:challenge_filtered_list' %}">← view all</a>
         </div>
 
         <div class="flex-row-center gap-s-1">
@@ -57,7 +57,7 @@
             <div class="cluster categories">
               <div>
                 {% for tag in challenge.challenge_tags.all %}
-                  <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">
+                  <a class="tag" href="{% url 'challenges:challenge_tag_filtered_list' tag.slug %}">
                     {{ tag }}
                   </a>
                 {% endfor %}

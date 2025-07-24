@@ -8,6 +8,7 @@
       <nav>
         <a href="{% url 'pages:single' 'about' %}">About</a>
         <a href="{% url 'products:store' %}">Store</a>
+        <a href="{% url 'challenges:challenge_filtered_list' %}">Challenges</a>
         <a href="{% url 'pages:contact' %}">Contact</a>
 
         {% if user.is_authenticated %}

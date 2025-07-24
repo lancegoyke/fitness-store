@@ -11,6 +11,7 @@ from store_project.challenges.models import DIFFICULTY_ORDER
 from store_project.challenges.models import VARIATION_NUMBER_PATTERN
 from store_project.challenges.models import VARIATION_SUFFIX_PATTERN
 from store_project.challenges.models import Challenge
+from store_project.challenges.models import ChallengeTag
 from store_project.challenges.models import DifficultyLevel
 from store_project.challenges.models import Record
 from store_project.users.models import User
@@ -203,7 +204,7 @@ class ChallengeTests(TestCase):
 
     def test_challenge_list_view_for_logged_in_user(self):
         self.client.login(email="recorduser@email.com", password="testpass123")
-        response = self.client.get(reverse("challenge_filtered_list"))
+        response = self.client.get(reverse("challenges:challenge_filtered_list"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Test challenge")
         self.assertTemplateUsed(response, "challenges/challenge_filtered_list.html")
@@ -211,7 +212,7 @@ class ChallengeTests(TestCase):
 
     def test_challenge_list_view_for_logged_out_user(self):
         self.client.logout()
-        response = self.client.get(reverse("challenge_filtered_list"))
+        response = self.client.get(reverse("challenges:challenge_filtered_list"))
         self.assertEqual(response.status_code, 302)
 
     def test_challenge_detail_view_for_logged_in_user(self):
@@ -259,7 +260,7 @@ class ChallengeTests(TestCase):
 
     def test_challenge_create_view_for_logged_in_adminuser(self):
         self.client.login(email="adminuser@email.com", password="testpass123")
-        response = self.client.get(reverse("challenge_create"))
+        response = self.client.get(reverse("challenges:challenge_create"))
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, "challenges/challenge_create.html")
         self.assertContains(response, "Create")
@@ -267,7 +268,7 @@ class ChallengeTests(TestCase):
     def test_challenge_create_view_for_logged_in_user(self):
         self.client.login(email="recorduser@email.com", password="testpass123")
         # with self.assertRaises(PermissionDenied):
-        response = self.client.get(reverse("challenge_create"))
+        response = self.client.get(reverse("challenges:challenge_create"))
         self.assertEqual(response.status_code, 403)
 
     def test_challenge_detail_paginates_records(self):
@@ -642,3 +643,139 @@ class ChallengeFilterOrderingTests(TestCase):
         self.assertEqual(
             base_names, ["Beta Challenge", "Gamma Challenge", "Alpha Challenge"]
         )
+
+
+class ChallengeURLLoadingTests(TestCase):
+    """Test that all Challenge app URLs load correctly."""
+
+    @classmethod
+    def setUpTestData(cls):
+        # Create users
+        cls.user = User.objects.create_user(
+            username="testuser", email="testuser@example.com", password="testpass123"
+        )
+        cls.admin_user = User.objects.create_superuser(
+            username="adminuser", email="admin@example.com", password="testpass123"
+        )
+
+        # Create challenge tag
+        cls.challenge_tag = ChallengeTag.objects.create(
+            name="Test Tag", slug="test-tag"
+        )
+
+        # Create challenge
+        cls.challenge = Challenge.objects.create(
+            name="Test Challenge",
+            description="Test challenge description",
+            slug="test-challenge",
+            difficulty_level=DifficultyLevel.BEGINNER,
+        )
+        cls.challenge.challenge_tags.add(cls.challenge_tag)
+
+    def test_challenge_filtered_list_url_loads_for_authenticated_user(self):
+        """Test that the main challenge list URL loads for authenticated users."""
+        self.client.login(email="testuser@example.com", password="testpass123")
+        response = self.client.get(reverse("challenges:challenge_filtered_list"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pick a Challenge")
+        self.assertContains(response, "Test Challenge")
+
+    def test_challenge_filtered_list_url_redirects_for_unauthenticated_user(self):
+        """Test that the main challenge list URL redirects unauthenticated users."""
+        response = self.client.get(reverse("challenges:challenge_filtered_list"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)
+
+    def test_challenge_detail_url_loads_for_authenticated_user(self):
+        """Test that challenge detail URL loads for authenticated users."""
+        self.client.login(email="testuser@example.com", password="testpass123")
+        response = self.client.get(
+            reverse("challenges:challenge_detail", kwargs={"slug": self.challenge.slug})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Test Challenge")
+        self.assertContains(response, "Test challenge description")
+
+    def test_challenge_detail_url_redirects_for_unauthenticated_user(self):
+        """Test that challenge detail URL redirects unauthenticated users."""
+        response = self.client.get(
+            reverse("challenges:challenge_detail", kwargs={"slug": self.challenge.slug})
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)
+
+    def test_challenge_create_url_loads_for_admin_user(self):
+        """Test that challenge create URL loads for admin users with permissions."""
+        self.client.login(email="admin@example.com", password="testpass123")
+        response = self.client.get(reverse("challenges:challenge_create"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Challenge")
+
+    def test_challenge_create_url_forbidden_for_regular_user(self):
+        """Test that challenge create URL is forbidden for regular users."""
+        self.client.login(email="testuser@example.com", password="testpass123")
+        response = self.client.get(reverse("challenges:challenge_create"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_challenge_create_url_redirects_for_unauthenticated_user(self):
+        """Test that challenge create URL redirects unauthenticated users."""
+        response = self.client.get(reverse("challenges:challenge_create"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)
+
+    def test_challenge_tag_filtered_list_url_loads_for_authenticated_user(self):
+        """Test that tag-filtered challenge list URL loads for authenticated users."""
+        self.client.login(email="testuser@example.com", password="testpass123")
+        response = self.client.get(
+            reverse(
+                "challenges:challenge_tag_filtered_list",
+                kwargs={"slug": self.challenge_tag.slug},
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pick a Challenge")
+        self.assertContains(response, "Test Challenge")
+
+    def test_challenge_tag_filtered_list_url_redirects_for_unauthenticated_user(self):
+        """Test that tag-filtered challenge list URL redirects unauthenticated users."""
+        response = self.client.get(
+            reverse(
+                "challenges:challenge_tag_filtered_list",
+                kwargs={"slug": self.challenge_tag.slug},
+            )
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)
+
+    def test_challenge_tag_list_url_loads_for_authenticated_user(self):
+        """Test that the tag list URL loads for authenticated users."""
+        self.client.login(email="testuser@example.com", password="testpass123")
+        response = self.client.get(reverse("challenges:challenge_tag_list"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pick a Challenge")
+
+    def test_challenge_tag_list_url_redirects_for_unauthenticated_user(self):
+        """Test that the tag list URL redirects unauthenticated users."""
+        response = self.client.get(reverse("challenges:challenge_tag_list"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)
+
+    def test_nonexistent_challenge_detail_returns_404(self):
+        """Test that accessing a nonexistent challenge returns 404."""
+        self.client.login(email="testuser@example.com", password="testpass123")
+        response = self.client.get(
+            reverse("challenges:challenge_detail", kwargs={"slug": "nonexistent-slug"})
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_nonexistent_tag_filtered_list_returns_empty_results(self):
+        """Test that accessing a nonexistent tag returns empty results."""
+        self.client.login(email="testuser@example.com", password="testpass123")
+        response = self.client.get(
+            reverse(
+                "challenges:challenge_tag_filtered_list",
+                kwargs={"slug": "nonexistent-tag"},
+            )
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No challenges found")

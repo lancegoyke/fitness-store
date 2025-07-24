@@ -103,7 +103,7 @@ class RecordCreate(SingleObjectMixin, FormView):
 
     # redirect to challenge_detail page after adding new record
     def get_success_url(self):
-        return reverse("challenge_detail", kwargs={"slug": self.object.slug})
+        return reverse("challenges:challenge_detail", kwargs={"slug": self.object.slug})
 
     def form_valid(self, form):
         # assign current user to the score being recorded
