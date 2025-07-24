@@ -29,7 +29,7 @@
                 <div class="cluster">
                   <div>
                     <input class="button" type="submit" value="Submit" />
-                    <a class="button outline" href="{% url 'challenge_filtered_list' %}">Clear</a>
+                    <a class="button outline" href="{% url 'challenges:challenge_filtered_list' %}">Clear</a>
                   </div>
                 </div>
               </form>
@@ -42,7 +42,7 @@
               <div class="cluster categories">
                 <div>
                   {% for tag in tag_list %}
-                    <a class="tag" href="{% url 'challenge_tag_filtered_list' tag.slug %}">{{ tag.name }}</a>
+                    <a class="tag" href="{% url 'challenges:challenge_tag_filtered_list' tag.slug %}">{{ tag.name }}</a>
                   {% endfor %}
                 </div>
               </div>

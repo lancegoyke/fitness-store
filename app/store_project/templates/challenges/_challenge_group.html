@@ -46,7 +46,7 @@
             <div class="stack">
               <div class="flex-row gap-s-2">
                 <h4 class="margin-0">
-                  <a href="{% url 'challenge_detail' challenge.slug %}">
+                  <a href="{% url 'challenges:challenge_detail' challenge.slug %}">
                     {% if challenge.is_variation %}
                       {{ challenge.name }} - Level {{ challenge.variation_number }}
                     {% else %}

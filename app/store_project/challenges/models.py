@@ -138,7 +138,7 @@ class Challenge(models.Model):
         return self.name
 
     def get_absolute_url(self):
-        return reverse("challenge_detail", kwargs={"slug": self.slug})
+        return reverse("challenges:challenge_detail", kwargs={"slug": self.slug})
 
     @cached_property
     def base_name(self):
