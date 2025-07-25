@@ -38,15 +38,7 @@
 
   <!-- THE CONTENT -->
     <main class="content">
-      {% if messages %}
-        <div class="center messages">
-          <ul>
-            {% for message in messages %}
-              <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
-            {% endfor %}
-          </ul>
-        </div>
-      {% endif %}
+      {% include '_messages.html' %}
 
       {% block content %}
     <!-- No content available -->

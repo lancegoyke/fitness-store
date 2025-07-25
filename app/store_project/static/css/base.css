@@ -1656,6 +1656,10 @@ ul.grid {
   background-color: var(--main-color-light-gray);
 }
 
+.messages {
+  margin-bottom: var(--s1);
+}
+
 .messages ul {
   list-style-type: none;
   padding: 0;

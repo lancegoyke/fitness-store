@@ -5,21 +5,17 @@
 {% block head_title %}{{ challenge.name }}{% endblock head_title %}
 
 {% block layout %}
-  {% if messages %}
-    <div class="center messages">
-      <ul>
-        {% for message in messages %}
-          <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
-        {% endfor %}
-      </ul>
-    </div>
-  {% endif %}
+  {% include '_messages.html' %}
 
   <div class="functional-width">
     <div class="sidebar-main-layout">
       <!-- Left sidebar with submit score and filter forms -->
       <div>
-        {% include "challenges/sidebar.html" %}
+        {% if user.is_authenticated %}
+          {% include "challenges/sidebar.html" %}
+        {% else %}
+          {% include "account/snippets/login_box.html" %}
+        {% endif %}
       </div>
 
       <!-- Main content area -->

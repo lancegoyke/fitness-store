@@ -62,15 +62,7 @@
   <!-- THE CONTENT -->
     <div class="stack-page full-width">
 
-      {% if messages %}
-        <div class="center messages">
-          <ul>
-            {% for message in messages %}
-              <li class="box {% if message.tags %}{{ message.tags }}{% endif %}">{{message}}</li>
-            {% endfor %}
-          </ul>
-        </div>
-      {% endif %}
+      {% include '_messages.html' %}
 
       {% block content %}
 
