@@ -1031,6 +1031,12 @@ ul.grid {
 .cover > h1 {
   margin-top: auto;
   margin-bottom: auto;
+  padding: 0 clamp(1rem, 4vw, 2.5rem);
+}
+
+.cover > .center.box {
+  padding-left: clamp(1rem, 4vw, 2.5rem);
+  padding-right: clamp(1rem, 4vw, 2.5rem);
 }
 
 /*
@@ -1548,6 +1554,7 @@ ul.grid {
 .navbar {
   background-color: var(--main-color-dark);
   color: var(--main-color-light-gray);
+  padding: clamp(1rem, 4vw, var(--s2));
 }
 
 .nav-menu ul {
