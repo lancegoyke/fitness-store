@@ -1283,6 +1283,11 @@ ul.grid {
     width: 100%;
   }
 
+  /* Reduce horizontal padding on mobile for functional layouts */
+  .functional-width {
+    padding: 0 clamp(0.5rem, 2vw, 1rem);
+  }
+
   .box {
     padding: var(--s-1);
   }
