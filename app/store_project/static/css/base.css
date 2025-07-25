@@ -1287,6 +1287,10 @@ ul.grid {
     padding: var(--s-1);
   }
 
+  .scores-section .stack {
+    padding: var(--s-1);
+  }
+
   /* Add more space between performance section and records table on mobile */
   .sidebar-main-layout .stack > * + * {
     margin-top: var(--s2);
@@ -1819,6 +1823,18 @@ table tr:nth-child(even) {
 /* Legacy box-shadow class for compatibility */
 .box-shadow {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Scores section styling - maintains visual consistency without box padding */
+.scores-section {
+  background-color: var(--main-color-light);
+  border: 0 solid;
+  outline: var(--border-thin) solid transparent;
+  outline-offset: calc(var(--border-thin) * -1);
+}
+
+.scores-section .stack {
+  padding: var(--s1);
 }
 
 /* Challenge description enhancement */
