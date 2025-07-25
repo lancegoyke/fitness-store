@@ -409,6 +409,22 @@ a:active {
   margin-top: var(--stack-space);
 }
 
+/* Tighter spacing for form fields within stack-form */
+.stack-form .field + .field {
+  margin-top: var(--s0);
+}
+
+/* Remove excess margin from first field in stack-form */
+.stack-form .field:first-of-type {
+  margin-top: 0;
+}
+
+/* Button spacing in forms */
+.stack-form button,
+.stack-form .button {
+  margin-top: var(--stack-space);
+}
+
 .stack-page {
   display: flex;
   flex-direction: column;
@@ -932,21 +948,20 @@ a.box.login:active {
 }
 
 /* Max two children in a row */
+.two-switcher {
+  container-type: inline-size;
+}
+
 .two-switcher > * {
-  display: flex;
-  flex-wrap: wrap;
-  margin: calc((var(--s5) / 2) * -1);
+  display: grid;
+  gap: var(--s1);
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
 }
 
-.two-switcher > * > * {
-  flex-grow: 1;
-  flex-basis: calc((var(--measure) - (100% - var(--s5))) * 999);
-  margin: calc(var(--s5) / 2);
-}
-
-.two-switcher > * > :nth-last-child(n + 3),
-.two-switcher > * > :nth-last-child(n + 3) ~ * {
-  flex-basis: 100%;
+@container (max-width: 700px) {
+  .two-switcher > * {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Max three children in a row */
@@ -1031,6 +1046,12 @@ ul.grid {
 .cover > h1 {
   margin-top: auto;
   margin-bottom: auto;
+  padding: 0 clamp(1rem, 4vw, 2.5rem);
+}
+
+.cover > .center.box {
+  padding-left: clamp(1rem, 4vw, 2.5rem);
+  padding-right: clamp(1rem, 4vw, 2.5rem);
 }
 
 /*
@@ -1245,18 +1266,74 @@ ul.grid {
 .functional-width {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 0 2rem;
+  padding: 0 clamp(1rem, 4vw, 2rem);
   width: 100%;
 }
 
 @media (max-width: 768px) {
-  .functional-width {
-    padding: 0 1rem;
-  }
-
   /* Stack grid columns on mobile */
   .sidebar-main-layout {
     grid-template-columns: 1fr !important;
+    gap: 1rem;
+  }
+
+  /* Ensure grid items don't overflow on mobile */
+  .sidebar-main-layout > * {
+    min-width: 0; /* Allow grid items to shrink below content size */
+    width: 100%;
+  }
+
+  /* Reduce horizontal padding on mobile for functional layouts */
+  .functional-width {
+    padding: 0 clamp(0.5rem, 2vw, 1rem);
+  }
+
+  .box {
+    padding: var(--s-1);
+  }
+
+  .scores-section .stack {
+    padding: var(--s-1);
+  }
+
+  /* Add more space between performance section and records table on mobile */
+  .sidebar-main-layout .stack > * + * {
+    margin-top: var(--s2);
+  }
+
+  /* Better mobile form styling */
+  .stack-form input,
+  .stack-form select,
+  .stack-form textarea {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Form spacing improvements on mobile */
+  .stack-form {
+    width: 100%;
+  }
+
+  /* Tighter field spacing on mobile */
+  .stack-form .field {
+    margin-bottom: var(--s-1);
+  }
+
+  /* Tighter form container spacing on mobile */
+  .stack-form .stack > * + * {
+    margin-top: var(--s-1);
+  }
+
+  /* Handle long content that might break layout */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
   }
 }
 
@@ -1506,6 +1583,7 @@ ul.grid {
 .navbar {
   background-color: var(--main-color-dark);
   color: var(--main-color-light-gray);
+  padding: clamp(1rem, 4vw, var(--s2));
 }
 
 .nav-menu ul {
@@ -1518,7 +1596,7 @@ ul.grid {
 
 .content {
   background-color: var(--main-color-light);
-  padding: var(--s5);
+  padding: clamp(1rem, 4vw, 2.5rem);
 }
 
 .content.full-width {
@@ -1612,16 +1690,47 @@ ul.grid {
 table {
   background: var(--main-color-light);
   padding: var(--s2);
-  box-shadow: 0 0 40px 5px var(--main-color-light-gray);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 table {
   border-collapse: collapse;
   border: none;
+  width: 100%;
 }
 
 table tr:nth-child(even) {
   background: var(--main-color-light-gray);
+}
+
+/* Mobile table container for horizontal scrolling */
+.table-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--border-radius);
+}
+
+@media (max-width: 768px) {
+  .table-container {
+    margin: 0 calc(-1 * var(--s-1));
+    border-radius: 0;
+  }
+
+  /* Add some breathing room for the heading above tables */
+  .box h3 + .table-container {
+    margin-top: var(--s0);
+  }
+
+  table {
+    min-width: 500px;
+    font-size: var(--s-1);
+  }
+
+  table th,
+  table td {
+    padding: var(--s-1);
+    white-space: nowrap;
+  }
 }
 
 .testimonial-footer {
@@ -1688,8 +1797,166 @@ table tr:nth-child(even) {
   height: 100%;
 }
 
+/* Shadow utility classes */
+.shadow-sm {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.shadow {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.shadow-md {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.shadow-lg {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+/* Elevated background utility classes */
+.elevated {
+  background-color: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.elevated-light {
+  background-color: #f8f9fa;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+/* Legacy box-shadow class for compatibility */
 .box-shadow {
-  box-shadow: 0 0 40px 5px var(--main-color-light-gray);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Scores section styling - maintains visual consistency without box padding */
+.scores-section {
+  background-color: var(--main-color-light);
+  border: 0 solid;
+  outline: var(--border-thin) solid transparent;
+  outline-offset: calc(var(--border-thin) * -1);
+}
+
+.scores-section .stack {
+  padding: var(--s1);
+}
+
+/* Challenge description enhancement */
+.challenge-description {
+  background: var(--main-color-light);
+  border: 2px solid var(--main-color-accent);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(49, 117, 157, 0.15);
+  position: relative;
+  overflow: hidden;
+  padding: var(--s2);
+}
+
+.challenge-description::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--main-color-accent),
+    var(--main-color-dark-accent),
+    var(--main-color-accent)
+  );
+}
+
+.challenge-description::after {
+  content: "🎯";
+  position: absolute;
+  top: var(--s0);
+  right: var(--s1);
+  font-size: var(--s2);
+  opacity: 0.3;
+}
+
+.challenge-description .stack > div:first-child {
+  font-size: var(--s1);
+  line-height: 1.7;
+  color: var(--main-color-dark);
+  margin-top: var(--s-1);
+}
+
+.challenge-description p {
+  margin-bottom: var(--s0);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.challenge-description p:last-child {
+  margin-bottom: 0;
+}
+
+.challenge-description .cluster.categories {
+  margin-top: var(--s1);
+  padding-top: var(--s1);
+  border-top: 1px solid rgba(49, 117, 157, 0.2);
+}
+
+.challenge-description .tag {
+  background: var(--main-color-accent);
+  color: var(--main-color-light);
+  padding: var(--s-2) var(--s0);
+  border-radius: 20px;
+  font-size: var(--s-1);
+  font-weight: 500;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(49, 117, 157, 0.3);
+  transition: all 0.2s ease;
+}
+
+.challenge-description .tag:hover {
+  background: var(--main-color-dark-accent);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(49, 117, 157, 0.4);
+}
+
+/* Info box component styles */
+.info-box {
+  background: var(--color-light);
+  padding: var(--s-1);
+  border-radius: var(--border-radius);
+  margin-bottom: var(--s0);
+}
+
+.info-title {
+  font-weight: bold;
+  color: var(--color-dark);
+}
+
+.info-subtitle {
+  font-size: var(--s-1);
+  color: var(--color-gray);
+}
+
+/* Improved Django Crispy Forms styling */
+.stack-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-bottom: var(--s0);
+}
+
+.stack-form .field .label {
+  font-weight: 500;
+  margin-bottom: 0;
+}
+
+.stack-form .field .control {
+  margin: 0;
+}
+
+.stack-form .field .help {
+  font-size: var(--s-1);
+  color: var(--color-gray);
+  margin-top: 0;
+  line-height: 1.3;
 }
 
 .help-text {

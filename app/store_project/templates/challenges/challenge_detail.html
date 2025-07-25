@@ -35,18 +35,18 @@
 
         {% with estimated_time=challenge.estimated_completion_time %}
           {% if estimated_time %}
-            <div style="background: var(--color-light); padding: var(--s-1); border-radius: var(--border-radius); margin-bottom: var(--s0);">
-              <div style="font-weight: bold; color: var(--color-dark);">
+            <div class="info-box">
+              <div class="info-title">
                 Estimated completion time: {{ estimated_time|duration_humanize }}
               </div>
-              <div style="font-size: var(--s-1); color: var(--color-gray);">
+              <div class="info-subtitle">
                 Based on median of {{ challenge.records.count }} record{{ challenge.records.count|pluralize }}
               </div>
             </div>
           {% endif %}
         {% endwith %}
 
-        <div class="box">
+        <div class="box challenge-description">
           <div class="stack">
             <div>
               {% for line in challenge.description.splitlines %}
@@ -79,7 +79,7 @@
             </div>
             <div class="two-switcher">
               <div>
-                <div class="box {% if user_pr %}success{% else %}error{% endif %}">
+                <div class="box shadow {% if user_pr %}success{% else %}error{% endif %}">
                   <div class="stack">
                     <h4>Your PR</h4>
                     <p class="font-size:big font-monospace">
@@ -92,7 +92,7 @@
                   </div>
                 </div>
 
-                <div class="box info">
+                <div class="box shadow info">
                   <div class="stack">
                     <h4>Top Score</h4>
                     <p class="font-size:big font-monospace">
@@ -105,11 +105,13 @@
           </div>
         {% endif %}
 
-        <div class="box">
-          <div class="stack">
+        <div class="stack">
+          <div>
             <h3>All Submitted Scores</h3>
+          </div>
+          <div class="scores-section">
             {% if page_obj %}
-              <div>
+              <div class="table-container">
                 <table>
                   <thead>
                     <tr>
