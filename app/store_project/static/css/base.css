@@ -948,21 +948,20 @@ a.box.login:active {
 }
 
 /* Max two children in a row */
+.two-switcher {
+  container-type: inline-size;
+}
+
 .two-switcher > * {
-  display: flex;
-  flex-wrap: wrap;
-  margin: calc((var(--s5) / 2) * -1);
+  display: grid;
+  gap: var(--s1);
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
 }
 
-.two-switcher > * > * {
-  flex-grow: 1;
-  flex-basis: calc((var(--measure) - (100% - var(--s5))) * 999);
-  margin: calc(var(--s5) / 2);
-}
-
-.two-switcher > * > :nth-last-child(n + 3),
-.two-switcher > * > :nth-last-child(n + 3) ~ * {
-  flex-basis: 100%;
+@container (max-width: 700px) {
+  .two-switcher > * {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Max three children in a row */
@@ -1284,18 +1283,8 @@ ul.grid {
     width: 100%;
   }
 
-  /* Better mobile spacing for challenge detail elements */
-  .two-switcher > div {
-    gap: var(--s-1);
-  }
-
   .box {
     padding: var(--s-1);
-  }
-
-  /* Ensure challenge performance metrics stack nicely on mobile */
-  .two-switcher .box {
-    margin-bottom: var(--s-1);
   }
 
   /* Add more space between performance section and records table on mobile */
