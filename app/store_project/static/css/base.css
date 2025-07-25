@@ -1245,18 +1245,60 @@ ul.grid {
 .functional-width {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 0 2rem;
+  padding: 0 clamp(1rem, 4vw, 2rem);
   width: 100%;
 }
 
 @media (max-width: 768px) {
-  .functional-width {
-    padding: 0 1rem;
-  }
-
   /* Stack grid columns on mobile */
   .sidebar-main-layout {
     grid-template-columns: 1fr !important;
+    gap: 1rem;
+  }
+
+  /* Ensure grid items don't overflow on mobile */
+  .sidebar-main-layout > * {
+    min-width: 0; /* Allow grid items to shrink below content size */
+    width: 100%;
+  }
+
+  /* Better mobile spacing for challenge detail elements */
+  .two-switcher > div {
+    gap: 1rem;
+  }
+
+  .box {
+    padding: var(--s-1);
+  }
+
+  /* Ensure challenge performance metrics stack nicely on mobile */
+  .two-switcher .box {
+    margin-bottom: var(--s-1);
+  }
+
+  /* Better mobile form styling */
+  .stack-form input,
+  .stack-form select,
+  .stack-form textarea {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Form spacing improvements on mobile */
+  .stack-form {
+    width: 100%;
+  }
+
+  /* Handle long content that might break layout */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
   }
 }
 
@@ -1518,7 +1560,7 @@ ul.grid {
 
 .content {
   background-color: var(--main-color-light);
-  padding: var(--s5);
+  padding: clamp(1rem, 4vw, 2.5rem);
 }
 
 .content.full-width {
@@ -1618,10 +1660,36 @@ table {
 table {
   border-collapse: collapse;
   border: none;
+  width: 100%;
 }
 
 table tr:nth-child(even) {
   background: var(--main-color-light-gray);
+}
+
+/* Mobile table container for horizontal scrolling */
+.table-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--border-radius);
+}
+
+@media (max-width: 768px) {
+  .table-container {
+    margin: 0 calc(-1 * clamp(1rem, 4vw, 2rem));
+    border-radius: 0;
+  }
+
+  table {
+    min-width: 500px;
+    font-size: var(--s-1);
+  }
+
+  table th,
+  table td {
+    padding: var(--s-1);
+    white-space: nowrap;
+  }
 }
 
 .testimonial-footer {
