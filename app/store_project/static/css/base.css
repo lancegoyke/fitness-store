@@ -1821,6 +1821,81 @@ table tr:nth-child(even) {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
+/* Challenge description enhancement */
+.challenge-description {
+  background: var(--main-color-light);
+  border: 2px solid var(--main-color-accent);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(49, 117, 157, 0.15);
+  position: relative;
+  overflow: hidden;
+  padding: var(--s2);
+}
+
+.challenge-description::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--main-color-accent),
+    var(--main-color-dark-accent),
+    var(--main-color-accent)
+  );
+}
+
+.challenge-description::after {
+  content: "🎯";
+  position: absolute;
+  top: var(--s0);
+  right: var(--s1);
+  font-size: var(--s2);
+  opacity: 0.3;
+}
+
+.challenge-description .stack > div:first-child {
+  font-size: var(--s1);
+  line-height: 1.7;
+  color: var(--main-color-dark);
+  margin-top: var(--s-1);
+}
+
+.challenge-description p {
+  margin-bottom: var(--s0);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.challenge-description p:last-child {
+  margin-bottom: 0;
+}
+
+.challenge-description .cluster.categories {
+  margin-top: var(--s1);
+  padding-top: var(--s1);
+  border-top: 1px solid rgba(49, 117, 157, 0.2);
+}
+
+.challenge-description .tag {
+  background: var(--main-color-accent);
+  color: var(--main-color-light);
+  padding: var(--s-2) var(--s0);
+  border-radius: 20px;
+  font-size: var(--s-1);
+  font-weight: 500;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(49, 117, 157, 0.3);
+  transition: all 0.2s ease;
+}
+
+.challenge-description .tag:hover {
+  background: var(--main-color-dark-accent);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(49, 117, 157, 0.4);
+}
+
 /* Info box component styles */
 .info-box {
   background: var(--color-light);
