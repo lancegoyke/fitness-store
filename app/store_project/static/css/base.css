@@ -409,6 +409,17 @@ a:active {
   margin-top: var(--stack-space);
 }
 
+/* Tighter spacing for form fields within stack-form */
+.stack-form .field + .field {
+  margin-top: var(--s0);
+}
+
+/* Button spacing in forms */
+.stack-form button,
+.stack-form .button {
+  margin-top: var(--stack-space);
+}
+
 .stack-page {
   display: flex;
   flex-direction: column;
@@ -1270,7 +1281,7 @@ ul.grid {
 
   /* Better mobile spacing for challenge detail elements */
   .two-switcher > div {
-    gap: 1rem;
+    gap: var(--s-1);
   }
 
   .box {
@@ -1280,6 +1291,11 @@ ul.grid {
   /* Ensure challenge performance metrics stack nicely on mobile */
   .two-switcher .box {
     margin-bottom: var(--s-1);
+  }
+
+  /* Add more space between performance section and records table on mobile */
+  .sidebar-main-layout .stack > * + * {
+    margin-top: var(--s2);
   }
 
   /* Better mobile form styling */
@@ -1817,6 +1833,30 @@ table tr:nth-child(even) {
 .info-subtitle {
   font-size: var(--s-1);
   color: var(--color-gray);
+}
+
+/* Improved Django Crispy Forms styling */
+.stack-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-bottom: var(--s0);
+}
+
+.stack-form .field .label {
+  font-weight: 500;
+  margin-bottom: 0;
+}
+
+.stack-form .field .control {
+  margin: 0;
+}
+
+.stack-form .field .help {
+  font-size: var(--s-1);
+  color: var(--color-gray);
+  margin-top: 0;
+  line-height: 1.3;
 }
 
 .help-text {
