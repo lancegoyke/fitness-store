@@ -1654,7 +1654,7 @@ ul.grid {
 table {
   background: var(--main-color-light);
   padding: var(--s2);
-  box-shadow: 0 0 40px 5px var(--main-color-light-gray);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 table {
@@ -1761,8 +1761,37 @@ table tr:nth-child(even) {
   height: 100%;
 }
 
+/* Shadow utility classes */
+.shadow-sm {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.shadow {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.shadow-md {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.shadow-lg {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+/* Elevated background utility classes */
+.elevated {
+  background-color: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.elevated-light {
+  background-color: #f8f9fa;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+/* Legacy box-shadow class for compatibility */
 .box-shadow {
-  box-shadow: 0 0 40px 5px var(--main-color-light-gray);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .help-text {
