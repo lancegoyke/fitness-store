@@ -1794,6 +1794,24 @@ table tr:nth-child(even) {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
+/* Info box component styles */
+.info-box {
+  background: var(--color-light);
+  padding: var(--s-1);
+  border-radius: var(--border-radius);
+  margin-bottom: var(--s0);
+}
+
+.info-title {
+  font-weight: bold;
+  color: var(--color-dark);
+}
+
+.info-subtitle {
+  font-size: var(--s-1);
+  color: var(--color-gray);
+}
+
 .help-text {
   font-size: var(--s-1);
   font-weight: normal;

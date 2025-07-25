@@ -35,11 +35,11 @@
 
         {% with estimated_time=challenge.estimated_completion_time %}
           {% if estimated_time %}
-            <div style="background: var(--color-light); padding: var(--s-1); border-radius: var(--border-radius); margin-bottom: var(--s0);">
-              <div style="font-weight: bold; color: var(--color-dark);">
+            <div class="info-box">
+              <div class="info-title">
                 Estimated completion time: {{ estimated_time|duration_humanize }}
               </div>
-              <div style="font-size: var(--s-1); color: var(--color-gray);">
+              <div class="info-subtitle">
                 Based on median of {{ challenge.records.count }} record{{ challenge.records.count|pluralize }}
               </div>
             </div>
