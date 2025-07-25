@@ -1676,8 +1676,13 @@ table tr:nth-child(even) {
 
 @media (max-width: 768px) {
   .table-container {
-    margin: 0 calc(-1 * clamp(1rem, 4vw, 2rem));
+    margin: 0 calc(-1 * var(--s-1));
     border-radius: 0;
+  }
+
+  /* Add some breathing room for the heading above tables */
+  .box h3 + .table-container {
+    margin-top: var(--s0);
   }
 
   table {
