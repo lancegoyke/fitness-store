@@ -414,6 +414,11 @@ a:active {
   margin-top: var(--s0);
 }
 
+/* Remove excess margin from first field in stack-form */
+.stack-form .field:first-of-type {
+  margin-top: 0;
+}
+
 /* Button spacing in forms */
 .stack-form button,
 .stack-form .button {
@@ -1310,6 +1315,16 @@ ul.grid {
   /* Form spacing improvements on mobile */
   .stack-form {
     width: 100%;
+  }
+
+  /* Tighter field spacing on mobile */
+  .stack-form .field {
+    margin-bottom: var(--s-1);
+  }
+
+  /* Tighter form container spacing on mobile */
+  .stack-form .stack > * + * {
+    margin-top: var(--s-1);
   }
 
   /* Handle long content that might break layout */
