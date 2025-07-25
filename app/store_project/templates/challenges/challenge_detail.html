@@ -19,7 +19,11 @@
     <div class="sidebar-main-layout">
       <!-- Left sidebar with submit score and filter forms -->
       <div>
-        {% include "challenges/sidebar.html" %}
+        {% if user.is_authenticated %}
+          {% include "challenges/sidebar.html" %}
+        {% else %}
+          {% include "account/snippets/login_box.html" %}
+        {% endif %}
       </div>
 
       <!-- Main content area -->

@@ -238,7 +238,8 @@ class ChallengeTests(TestCase):
     def test_challenge_detail_view_for_logged_out_user(self):
         self.client.logout()
         response = self.client.get(self.challenge.get_absolute_url())
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "/accounts/login/")
 
     def test_challenge_detail_view_record_create_form(self):
         # make sure logged in user can submit record
@@ -697,12 +698,12 @@ class ChallengeURLLoadingTests(TestCase):
         self.assertContains(response, "Test challenge description")
 
     def test_challenge_detail_url_redirects_for_unauthenticated_user(self):
-        """Test that challenge detail URL redirects unauthenticated users."""
+        """Unauthenticated users should still access detail page but see login form."""
         response = self.client.get(
             reverse("challenges:challenge_detail", kwargs={"slug": self.challenge.slug})
         )
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "/accounts/login/")
 
     def test_challenge_create_url_loads_for_admin_user(self):
         """Test that challenge create URL loads for admin users with permissions."""

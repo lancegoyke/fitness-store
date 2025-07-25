@@ -1,6 +1,6 @@
+from allauth.account.forms import LoginForm
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.mixins import PermissionRequiredMixin
 from django.core.paginator import Paginator
 from django.http import HttpResponseForbidden
@@ -65,6 +65,9 @@ class ChallengeDisplay(DetailView):
         )
         context["filter"] = RecordFilter(self.request.GET, queryset=records)
 
+        if not self.request.user.is_authenticated:
+            context["login_form"] = LoginForm()
+
         paginator = Paginator(context["filter"].qs, 50)
         page_number = self.request.GET.get("page")
         page_obj = paginator.get_page(page_number)
@@ -82,11 +85,12 @@ class ChallengeDisplay(DetailView):
             context["top_score"] = (
                 challenge_records.order_by("time_score").first().time_score
             )
-            user_records = challenge_records.filter(user=self.request.user)
-            if user_records.exists():
-                context["user_pr"] = (
-                    user_records.order_by("time_score").first().time_score
-                )
+            if self.request.user.is_authenticated:
+                user_records = challenge_records.filter(user=self.request.user)
+                if user_records.exists():
+                    context["user_pr"] = (
+                        user_records.order_by("time_score").first().time_score
+                    )
         return context
 
 
@@ -116,7 +120,7 @@ class RecordCreate(SingleObjectMixin, FormView):
         return super(RecordCreate, self).form_valid(form)
 
 
-class ChallengeDetail(LoginRequiredMixin, View):
+class ChallengeDetail(View):
     def get(self, request, *args, **kwargs):
         view = ChallengeDisplay.as_view()
         return view(request, *args, **kwargs)
