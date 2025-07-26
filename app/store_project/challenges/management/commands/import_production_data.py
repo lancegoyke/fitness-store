@@ -3,6 +3,8 @@ import os
 
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandError
+from django.db import DEFAULT_DB_ALIAS
+from django.db import connections
 from django.db import transaction
 from store_project.challenges.models import Challenge
 from store_project.challenges.models import Record
@@ -119,6 +121,8 @@ class Command(BaseCommand):
                 raise Exception("Dry run - rolling back transaction")
             else:
                 self.stdout.write(self.style.SUCCESS("All data imported successfully!"))
+                # Ensure auto-increment sequences are correct after importing
+                self._reset_sequences()
 
                 # Report users needing password reset
                 users_needing_reset = self._get_password_reset_list()
@@ -338,6 +342,39 @@ class Command(BaseCommand):
     def _get_password_reset_list(self):
         """Get list of users needing password reset."""
         return getattr(self, "_users_needing_password_reset", [])
+
+    def _reset_sequences(self):
+        """Reset database sequences for imported models with auto-increment IDs."""
+        connection = connections[DEFAULT_DB_ALIAS]
+        # Only reset sequences for models with auto-increment primary keys
+        # User model uses UUID, so it doesn't have a sequence
+        models = [Challenge, Record]
+
+        self.stdout.write("Resetting auto-increment sequences...")
+
+        with connection.cursor() as cursor:
+            for model in models:
+                table_name = model._meta.db_table
+
+                # Get the sequence name using PostgreSQL's built-in function
+                cursor.execute(f"SELECT pg_get_serial_sequence('{table_name}', 'id');")
+                sequence_result = cursor.fetchone()
+
+                if not sequence_result or not sequence_result[0]:
+                    self.stdout.write(f"⚠ No sequence found for {model.__name__}")
+                    continue
+
+                sequence_name = sequence_result[0]
+
+                # Get max ID from table
+                cursor.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table_name};")
+                max_id = cursor.fetchone()[0]
+
+                # Set sequence to max_id + 1 so next insert gets max_id + 1
+                new_value = max_id + 1
+                cursor.execute(f"SELECT setval('{sequence_name}', {new_value});")
+
+                self.stdout.write(f"✓ {model.__name__}: sequence set to {new_value}")
 
     def import_challenges(self, filepath, dry_run, merge_users):
         with open(filepath, "r") as f:
