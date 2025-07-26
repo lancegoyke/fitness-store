@@ -42,7 +42,10 @@ format:
 format-unsafe:
     uv run ruff check --fix --unsafe-fixes
 
-check: lint test
+pre-commit:
+    pre-commit run --all-files
+
+check: pre-commit lint test
 
 # Heroku deployment
 deploy:
