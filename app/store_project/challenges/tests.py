@@ -213,7 +213,9 @@ class ChallengeTests(TestCase):
     def test_challenge_list_view_for_logged_out_user(self):
         self.client.logout()
         response = self.client.get(reverse("challenges:challenge_filtered_list"))
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Test challenge")
+        self.assertTemplateUsed(response, "challenges/challenge_filtered_list.html")
 
     def test_challenge_detail_view_for_logged_in_user(self):
         self.client.login(email="recorduser@email.com", password="testpass123")
@@ -681,11 +683,12 @@ class ChallengeURLLoadingTests(TestCase):
         self.assertContains(response, "Pick a Challenge")
         self.assertContains(response, "Test Challenge")
 
-    def test_challenge_filtered_list_url_redirects_for_unauthenticated_user(self):
-        """Test that the main challenge list URL redirects unauthenticated users."""
+    def test_challenge_filtered_list_url_loads_for_unauthenticated_user(self):
+        """Test that the main challenge list URL loads for unauthenticated users."""
         response = self.client.get(reverse("challenges:challenge_filtered_list"))
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pick a Challenge")
+        self.assertContains(response, "Test Challenge")
 
     def test_challenge_detail_url_loads_for_authenticated_user(self):
         """Test that challenge detail URL loads for authenticated users."""
@@ -737,16 +740,17 @@ class ChallengeURLLoadingTests(TestCase):
         self.assertContains(response, "Pick a Challenge")
         self.assertContains(response, "Test Challenge")
 
-    def test_challenge_tag_filtered_list_url_redirects_for_unauthenticated_user(self):
-        """Test that tag-filtered challenge list URL redirects unauthenticated users."""
+    def test_challenge_tag_filtered_list_url_loads_for_unauthenticated_user(self):
+        """Test that tag-filtered challenge list URL loads for unauthenticated users."""
         response = self.client.get(
             reverse(
                 "challenges:challenge_tag_filtered_list",
                 kwargs={"slug": self.challenge_tag.slug},
             )
         )
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pick a Challenge")
+        self.assertContains(response, "Test Challenge")
 
     def test_challenge_tag_list_url_loads_for_authenticated_user(self):
         """Test that the tag list URL loads for authenticated users."""
@@ -755,11 +759,11 @@ class ChallengeURLLoadingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Pick a Challenge")
 
-    def test_challenge_tag_list_url_redirects_for_unauthenticated_user(self):
-        """Test that the tag list URL redirects unauthenticated users."""
+    def test_challenge_tag_list_url_loads_for_unauthenticated_user(self):
+        """Test that the tag list URL loads for unauthenticated users."""
         response = self.client.get(reverse("challenges:challenge_tag_list"))
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pick a Challenge")
 
     def test_nonexistent_challenge_detail_returns_404(self):
         """Test that accessing a nonexistent challenge returns 404."""

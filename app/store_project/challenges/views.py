@@ -1,6 +1,5 @@
 from allauth.account.forms import LoginForm
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import PermissionRequiredMixin
 from django.core.paginator import Paginator
 from django.http import HttpResponseForbidden
@@ -20,7 +19,6 @@ from .models import Challenge
 from .models import ChallengeTag
 
 
-@login_required()
 def challenge_filtered_list(request, slug=None):
     context = {"tag_list": ChallengeTag.objects.all()}
 
