@@ -6,36 +6,5 @@
   <a class="box login google" id="google" href="{% provider_login_url 'google' %}">
     <h4>Sign in with Google</h4>
   </a>
-  <div class="or-separator">
-    <div></div>
-    <i>or</i>
-    <div></div>
-  </div>
-  <div class="stack-auth-form">
-    <h4 class="text-center font-size:smallish">Sign in with email</h4>
-    <form class="login center" method="POST" action="{% url 'account_login' %}">
-      {% csrf_token %}
-      <div class="messages">
-        {{ login_form.non_field_errors }}
-      </div>
-      <p>
-        <label class="stack" for="{{ login_form.login.id_for_label }}">
-          <span>Email</span>
-          {{ login_form.login }}
-          {{ login_form.login.errors }}
-        </label>
-      </p>
-      <p>
-        <label class="stack" for="{{ login_form.password.id_for_label }}">
-          <span>Password</span>
-          {{ login_form.password }}
-          {{ login_form.password.errors }}
-        </label>
-      </p>
-      <input type="hidden" name="next" value="{{ request.get_full_path }}" />
-      <p>
-        <button class="primaryAction button" type="submit">{% trans "Sign In" %}</button>
-      </p>
-    </form>
-  </div>
+  
 </div>

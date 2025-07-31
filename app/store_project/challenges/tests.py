@@ -241,7 +241,7 @@ class ChallengeTests(TestCase):
         self.client.logout()
         response = self.client.get(self.challenge.get_absolute_url())
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "/accounts/login/")
+        self.assertContains(response, "/accounts/google/login/")
 
     def test_challenge_detail_view_record_create_form(self):
         # make sure logged in user can submit record
@@ -706,7 +706,7 @@ class ChallengeURLLoadingTests(TestCase):
             reverse("challenges:challenge_detail", kwargs={"slug": self.challenge.slug})
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "/accounts/login/")
+        self.assertContains(response, "/accounts/google/login/")
 
     def test_challenge_create_url_loads_for_admin_user(self):
         """Test that challenge create URL loads for admin users with permissions."""
