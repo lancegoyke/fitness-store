@@ -108,9 +108,20 @@ class ChallengeAdmin(admin.ModelAdmin):
 
 @admin.register(Record)
 class RecordAdmin(admin.ModelAdmin):
-    list_display = ("challenge", "user", "time_score", "date_recorded")
-    list_filter = ("date_recorded", "challenge__difficulty_level")
+    list_display = ("challenge", "user", "time_score", "date_recorded", "date_updated")
+    list_filter = ("date_recorded", "date_updated", "challenge__difficulty_level")
     search_fields = ("challenge__name", "user__name", "user__email")
     raw_id_fields = ("user", "challenge")
     list_select_related = ("user", "challenge")
     list_per_page = 50
+    readonly_fields = ("date_recorded", "date_updated")
+    
+    fieldsets = (
+        (None, {
+            'fields': ('challenge', 'user', 'time_score', 'notes')
+        }),
+        ('Timestamps', {
+            'fields': ('date_recorded', 'date_updated'),
+            'classes': ('collapse',),
+        }),
+    )
