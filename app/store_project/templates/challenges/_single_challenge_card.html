@@ -12,16 +12,7 @@
         {% if challenge.summary %}
           <p style="margin: 0; color: var(--color-gray);">{{ challenge.summary }}</p>
         {% else %}
-          {% with description_lines=challenge.description.splitlines %}
-            {% if description_lines %}
-              <p style="margin: 0; color: var(--color-gray);">
-                {{ description_lines.0|truncatewords:25 }}
-                {% if description_lines|length > 1 or description_lines.0|length > 150 %}
-                  ...
-                {% endif %}
-              </p>
-            {% endif %}
-          {% endwith %}
+          <p style="margin: 0; color: var(--color-gray);">{{ challenge.description }}</p>
         {% endif %}
       </div>
 
