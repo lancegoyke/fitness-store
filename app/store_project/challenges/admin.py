@@ -115,13 +115,14 @@ class RecordAdmin(admin.ModelAdmin):
     list_select_related = ("user", "challenge")
     list_per_page = 50
     readonly_fields = ("date_recorded", "date_updated")
-    
+
     fieldsets = (
-        (None, {
-            'fields': ('challenge', 'user', 'time_score', 'notes')
-        }),
-        ('Timestamps', {
-            'fields': ('date_recorded', 'date_updated'),
-            'classes': ('collapse',),
-        }),
+        (None, {"fields": ("challenge", "user", "time_score", "notes")}),
+        (
+            "Timestamps",
+            {
+                "fields": ("date_recorded", "date_updated"),
+                "classes": ("collapse",),
+            },
+        ),
     )
