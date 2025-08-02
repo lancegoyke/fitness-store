@@ -190,6 +190,7 @@ class Record(models.Model):
     )
     notes = models.CharField(max_length=200, blank=True)
     date_recorded = models.DateTimeField(auto_now_add=True)
+    date_updated = models.DateTimeField(auto_now=True)
     user = models.ForeignKey("users.User", on_delete=models.SET_NULL, null=True)
 
     class Meta:
