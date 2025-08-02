@@ -13,8 +13,8 @@ DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 # Register your models here.
 class RecordInline(admin.TabularInline):
     model = Record
-    extra = 0
-    max_num = 20
+    extra = 3
+    list_per_page = 20
     raw_id_fields = ("user",)
 
     def get_queryset(self, request):
