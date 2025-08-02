@@ -53,10 +53,11 @@ jobs:
           allowed_tools: "Bash(just test),Bash(just test-coverage),Bash(just lint),Bash(just check)"
 
           # Optional: Add custom instructions for Claude to customize its behavior for your project
-          # custom_instructions: |
-          #   Follow our coding standards
-          #   Ensure all new code has tests
-          #   Use TypeScript for new files
+          custom_instructions: |
+            This is a Django fitness e-commerce platform. Follow the project guidelines in CLAUDE.md.
+            Use 'just' commands for development tasks.
+            Admin interface is at /backside/ (not /admin/).
+            Follow the existing app structure and Django best practices.
 
           # Optional: Custom environment variables for Claude
           # claude_env: |
