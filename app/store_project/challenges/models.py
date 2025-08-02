@@ -4,6 +4,7 @@ import uuid
 
 from django.db import models
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 
@@ -189,7 +190,8 @@ class Record(models.Model):
         help_text="How long did it take you? HH:MM:SS",
     )
     notes = models.CharField(max_length=200, blank=True)
-    date_recorded = models.DateTimeField(auto_now_add=True)
+    date_recorded = models.DateTimeField(default=timezone.now)
+    date_updated = models.DateTimeField(auto_now=True)
     user = models.ForeignKey("users.User", on_delete=models.SET_NULL, null=True)
 
     class Meta:
