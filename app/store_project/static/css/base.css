@@ -1921,6 +1921,24 @@ table tr:nth-child(even) {
   box-shadow: 0 4px 12px rgba(49, 117, 157, 0.4);
 }
 
+/* Challenge card tag styling - reduce visual weight compared to default black tags */
+.card-box .tag {
+  background: var(--main-color-accent);
+  color: var(--main-color-light);
+  padding: var(--s-4) var(--s-2);
+  border-radius: 12px;
+  font-size: var(--s-2);
+  font-weight: 500;
+  box-shadow: 0 1px 3px rgba(49, 117, 157, 0.2);
+  transition: all 0.2s ease;
+}
+
+.card-box .tag:hover {
+  background: var(--main-color-dark-accent);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(49, 117, 157, 0.3);
+}
+
 /* Info box component styles */
 .info-box {
   background: var(--color-light);
