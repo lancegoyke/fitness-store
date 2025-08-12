@@ -69,12 +69,9 @@ class ChallengeQuerySet(models.QuerySet):
         for challenges in grouped.values():
             challenges.sort(
                 key=lambda c: (
-                    DIFFICULTY_ORDER.get(
-                        c.difficulty_level, 99
-                    ),  # Primary: difficulty level
-                    c.variation_number
-                    or 0,  # Secondary: variation number (L1, L2, etc.)
-                    c.name,  # Tertiary: alphabetical by full name
+                    DIFFICULTY_ORDER.get(c.difficulty_level, 99),  # fmt: skip
+                    c.variation_number or 0,  # fmt: skip
+                    c.name,
                 )
             )
 
