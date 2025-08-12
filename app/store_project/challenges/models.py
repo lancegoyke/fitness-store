@@ -51,8 +51,11 @@ DIFFICULTY_COLOR_MAPPING = {
 }
 
 # Regex patterns for challenge variations (L1, L2, etc.)
-VARIATION_SUFFIX_PATTERN = r"\s*\(L\d+\)$"
-VARIATION_NUMBER_PATTERN = r"\(L(\d+)\)$"
+# Suffix pattern removes everything starting from the variation marker to the end
+# so it works for names like "Name (L1)" and "Name (L1) - Level 1"
+VARIATION_SUFFIX_PATTERN = r"\s*\(L\d+\).*$"
+# Number pattern matches the variation number wherever it appears in the name
+VARIATION_NUMBER_PATTERN = r"\(L(\d+)\)"
 
 
 class ChallengeQuerySet(models.QuerySet):
@@ -65,9 +68,15 @@ class ChallengeQuerySet(models.QuerySet):
             base_name = challenge.base_name
             grouped.setdefault(base_name, []).append(challenge)
 
-        # Sort each group by difficulty level (beginner first, then intermediate, then advanced)
+        # Sort each group by difficulty level first, then by variation number, then alphabetically
         for challenges in grouped.values():
-            challenges.sort(key=lambda c: DIFFICULTY_ORDER.get(c.difficulty_level, 99))
+            challenges.sort(
+                key=lambda c: (
+                    DIFFICULTY_ORDER.get(c.difficulty_level, 99),  # fmt: skip
+                    c.variation_number or 0,  # fmt: skip
+                    c.name,
+                )
+            )
 
         return grouped
 
