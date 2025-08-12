@@ -52,6 +52,9 @@
   --stack-space: var(--s1);
   --stack-page-space: var(--s5);
   --border-thin: 2px;
+  --border-radius: 12px;
+  --border-radius-small: 8px;
+  --border-radius-large: 20px;
 }
 
 * {
@@ -1850,7 +1853,7 @@ table tr:nth-child(even) {
 .challenge-description {
   background: var(--main-color-light);
   border: 2px solid var(--main-color-accent);
-  border-radius: 12px;
+  border-radius: var(--border-radius);
   box-shadow: 0 8px 32px rgba(49, 117, 157, 0.15);
   position: relative;
   overflow: hidden;
@@ -1904,39 +1907,45 @@ table tr:nth-child(even) {
 }
 
 .challenge-description .tag {
-  background: var(--main-color-accent);
-  color: var(--main-color-light);
+  background: var(--main-color-light-gray);
+  color: var(--main-color-gray);
   padding: var(--s-2) var(--s0);
-  border-radius: 20px;
+  border-radius: var(--border-radius-large);
   font-size: var(--s-1);
   font-weight: 500;
   text-decoration: none;
-  box-shadow: 0 2px 8px rgba(49, 117, 157, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   transition: all 0.2s ease;
 }
 
 .challenge-description .tag:hover {
-  background: var(--main-color-dark-accent);
+  background: var(--main-color-gray);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(49, 117, 157, 0.4);
-}
-
-/* Challenge card tag styling - reduce visual weight compared to default black tags */
-.card-box .tag {
-  background: var(--main-color-accent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
   color: var(--main-color-light);
-  padding: var(--s-4) var(--s-2);
-  border-radius: 12px;
-  font-size: var(--s-2);
-  font-weight: 500;
-  box-shadow: 0 1px 3px rgba(49, 117, 157, 0.2);
-  transition: all 0.2s ease;
 }
 
-.card-box .tag:hover {
-  background: var(--main-color-dark-accent);
+/* Challenge card and sidebar tag styling - subtle gray for reduced visual weight */
+.card-box .tag,
+.sidebar-main-layout .tag {
+  background: var(--main-color-light-gray);
+  color: var(--main-color-gray);
+  padding: var(--s-4) var(--s-2);
+  border-radius: var(--border-radius);
+  font-size: var(--s-1);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: all 0.2s ease;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.card-box .tag:hover,
+.sidebar-main-layout .tag:hover {
+  background: var(--main-color-gray);
   transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(49, 117, 157, 0.3);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  color: var(--main-color-light);
 }
 
 /* Info box component styles */
