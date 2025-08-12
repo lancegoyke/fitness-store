@@ -65,9 +65,13 @@ class ChallengeQuerySet(models.QuerySet):
             base_name = challenge.base_name
             grouped.setdefault(base_name, []).append(challenge)
 
-        # Sort each group by difficulty level (beginner first, then intermediate, then advanced)
+        # Sort each group by difficulty level first, then by variation number, then alphabetically
         for challenges in grouped.values():
-            challenges.sort(key=lambda c: DIFFICULTY_ORDER.get(c.difficulty_level, 99))
+            challenges.sort(key=lambda c: (
+                DIFFICULTY_ORDER.get(c.difficulty_level, 99),  # Primary: difficulty level
+                c.variation_number or 0,  # Secondary: variation number (L1, L2, etc.)
+                c.name  # Tertiary: alphabetical by full name
+            ))
 
         return grouped
 
