@@ -51,8 +51,11 @@ DIFFICULTY_COLOR_MAPPING = {
 }
 
 # Regex patterns for challenge variations (L1, L2, etc.)
-VARIATION_SUFFIX_PATTERN = r"\s*\(L\d+\)$"
-VARIATION_NUMBER_PATTERN = r"\(L(\d+)\)$"
+# Suffix pattern removes everything starting from the variation marker to the end
+# so it works for names like "Name (L1)" and "Name (L1) - Level 1"
+VARIATION_SUFFIX_PATTERN = r"\s*\(L\d+\).*$"
+# Number pattern matches the variation number wherever it appears in the name
+VARIATION_NUMBER_PATTERN = r"\(L(\d+)\)"
 
 
 class ChallengeQuerySet(models.QuerySet):
