@@ -1251,15 +1251,15 @@ ul.grid {
 }
 
 .max-width\:measure {
-  max-width: var(--measure);
+  max-width: var(--measure) !important;
 }
 
 .max-width\:measure\*2 {
-  max-width: calc(var(--measure) * 2);
+  max-width: calc(var(--measure) * 2) !important;
 }
 
 .max-width\:measure\/2 {
-  max-width: calc(var(--measure) / 2);
+  max-width: calc(var(--measure) / 2) !important;
 }
 
 /* Functional layout for interface-heavy pages */
