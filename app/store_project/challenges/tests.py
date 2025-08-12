@@ -155,36 +155,36 @@ class ChallengeTests(TestCase):
             difficulty_level=DifficultyLevel.BEGINNER,
         )
         Challenge.objects.create(
-            name="Summer Requests (L2) - Level 2", 
+            name="Summer Requests (L2) - Level 2",
             description="Test L2",
             slug="summer-requests-l2",
             difficulty_level=DifficultyLevel.INTERMEDIATE,
         )
         Challenge.objects.create(
             name="Summer Requests (L4) - Level 4",
-            description="Test L4", 
+            description="Test L4",
             slug="summer-requests-l4",
             difficulty_level=DifficultyLevel.ADVANCED,
         )
         Challenge.objects.create(
             name="Summer Requests (L3) - Level 3",
             description="Test L3",
-            slug="summer-requests-l3", 
+            slug="summer-requests-l3",
             difficulty_level=DifficultyLevel.ADVANCED,
         )
 
         grouped = Challenge.objects.grouped()
-        
+
         # Should have Summer Requests group
         self.assertIn("Summer Requests", grouped)
         summer_challenges = grouped["Summer Requests"]
-        
+
         # Should have all 4 challenges
         self.assertEqual(len(summer_challenges), 4)
-        
+
         # Should be sorted by difficulty first, then by variation number
         # L1 (beginner), L2 (intermediate), L3 (advanced), L4 (advanced)
-        self.assertEqual(summer_challenges[0].name, "Summer Requests (L1) - Level 1") 
+        self.assertEqual(summer_challenges[0].name, "Summer Requests (L1) - Level 1")
         self.assertEqual(summer_challenges[1].name, "Summer Requests (L2) - Level 2")
         self.assertEqual(summer_challenges[2].name, "Summer Requests (L3) - Level 3")
         self.assertEqual(summer_challenges[3].name, "Summer Requests (L4) - Level 4")
