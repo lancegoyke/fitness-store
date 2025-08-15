@@ -773,6 +773,14 @@ a.box.login:active {
   max-inline-size: 340px;
 }
 
+@media (max-width: 800px) {
+  /* Center only when the last child is a media frame or contains media */
+  .with-sidebar-right > :last-child:has(img, video, .frame) {
+    flex-grow: 0;
+    margin-inline: auto;
+  }
+}
+
 /*
     THE FORM SIDEBAR
 */
