@@ -753,25 +753,35 @@ a.box.login:active {
 }
 
 .with-sidebar-right {
-  overflow: hidden;
-}
-
-.with-sidebar-right > * {
   display: flex;
   flex-wrap: wrap;
-  margin: calc(var(--s1) / 2 * -1);
+  gap: var(--s1);
+  align-items: start;
 }
 
-.with-sidebar-right > * > * {
-  margin: calc(var(--s1) / 2);
-  flex-basis: 33%;
-  flex-grow: 1;
-}
-
-.with-sidebar-right > * > :first-child {
+/* Main content (first child) grows to fill available space
+   and enforces at least half of the inline width so the sidebar wraps when tight */
+.with-sidebar-right > :first-child {
   flex-basis: 0;
   flex-grow: 999;
-  min-width: calc(50% - var(--s1));
+  min-inline-size: 50%;
+}
+
+/* Sidebar (last child) takes remaining space and can wrap below when needed */
+.with-sidebar-right > :last-child {
+  flex-grow: 1;
+  /* Keep the sidebar visible but modest in width */
+  flex-basis: 260px;
+  min-inline-size: 200px;
+  max-inline-size: 340px;
+}
+
+@media (max-width: 800px) {
+  /* Center only when the last child is a media frame or contains media */
+  .with-sidebar-right > :last-child:has(img, video, .frame) {
+    flex-grow: 0;
+    margin-inline: auto;
+  }
 }
 
 /*
@@ -1089,29 +1099,20 @@ ul.grid {
 }
 
 .frame {
-  /* --n: 9; */
-  /* --d: 16; */
-  padding-bottom: calc(var(--n) / var(--d) * 100%);
-  position: relative;
-}
-
-.frame > * {
+  /* aspect ratio provided by .square/.landscape/.portrait/.movie */
+  /* Note: legacy variables use n/d as height/width, so invert for aspect-ratio */
+  aspect-ratio: calc(var(--d) / var(--n));
   overflow: hidden;
-  position: absolute;
-  /* ok bc bound to frame */
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
   display: flex;
   justify-content: center;
   align-items: center;
+  inline-size: 100%;
 }
 
 .frame > img,
 .frame > video {
-  width: 100%;
-  height: 100%;
+  inline-size: 100%;
+  block-size: 100%;
   object-fit: cover;
 }
 
@@ -1254,15 +1255,15 @@ ul.grid {
 }
 
 .max-width\:measure {
-  max-width: var(--measure);
+  max-width: var(--measure) !important;
 }
 
 .max-width\:measure\*2 {
-  max-width: calc(var(--measure) * 2);
+  max-width: calc(var(--measure) * 2) !important;
 }
 
 .max-width\:measure\/2 {
-  max-width: calc(var(--measure) / 2);
+  max-width: calc(var(--measure) / 2) !important;
 }
 
 /* Functional layout for interface-heavy pages */
