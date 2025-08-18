@@ -63,7 +63,4 @@ class UserAdmin(auth_admin.UserAdmin):
         "date_joined",
         "is_superuser",
     ]
-    search_fields = [
-        "email",
-        "name",
-    ]
+    search_fields = ["email", "name"]
