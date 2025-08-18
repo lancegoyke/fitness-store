@@ -1,6 +1,6 @@
 {% load i18n account socialaccount %}
 {% get_providers as socialaccount_providers %}
-<div class="stack">
+<div class="stack rounded shadow">
   <h3>{% trans "Login" %}</h3>
   <p class="text-center">{% trans "No account? Then please "%}<a href="{% url 'account_signup' %}">{% trans "sign up" %}</a>.</p>
   <a class="box login google" id="google" href="{% provider_login_url 'google' %}">
