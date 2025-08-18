@@ -1713,17 +1713,16 @@ table tr:nth-child(even) {
 
 /* Mobile table container for horizontal scrolling */
 .table-container {
+  display: block;
+  width: 100%;
+  max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   border-radius: var(--border-radius);
+  overflow-y: hidden; /* clip corners vertically while preserving horizontal scroll */
 }
 
 @media (max-width: 768px) {
-  .table-container {
-    margin: 0 calc(-1 * var(--s-1));
-    border-radius: 0;
-  }
-
   /* Add some breathing room for the heading above tables */
   .box h3 + .table-container {
     margin-top: var(--s0);
