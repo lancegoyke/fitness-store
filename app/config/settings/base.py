@@ -63,6 +63,9 @@ ALLOWED_HOSTS = os.environ.get(
     "DJANGO_ALLOWED_HOSTS", "localhost 127.0.0.1 [::1]"
 ).split(" ")
 
+# Increase limit for forms with many fields (e.g., challenge admin with many records)
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 5000
+
 
 # Application definition
 
