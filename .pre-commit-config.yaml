@@ -24,19 +24,19 @@ repos:
       - id: django-upgrade
         args: [--target-version, "5.2"]
   - repo: https://github.com/rtts/djhtml
-    rev: 3.0.8
+    rev: 3.0.9
     hooks:
       - id: djhtml
         args:
           - --tabwidth=2
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.8
+    rev: v0.12.9
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
   - repo: https://github.com/biomejs/pre-commit
-    rev: v2.1.4
+    rev: v2.2.0
     hooks:
       - id: biome-check
         types: [css]
