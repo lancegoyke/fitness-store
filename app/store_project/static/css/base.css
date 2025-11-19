@@ -163,8 +163,24 @@ th {
   color: #fff;
 }
 
+th:first-child {
+  border-top-left-radius: var(--border-radius);
+}
+
+th:last-child {
+  border-top-right-radius: var(--border-radius);
+}
+
 td {
   padding: var(--s0) var(--s3);
+}
+
+tbody tr:last-child td:first-child {
+  border-bottom-left-radius: var(--border-radius);
+}
+
+tbody tr:last-child td:last-child {
+  border-bottom-right-radius: var(--border-radius);
 }
 
 ::selection {
@@ -1705,6 +1721,7 @@ table {
   border-collapse: collapse;
   border: none;
   width: 100%;
+  border-radius: var(--border-radius);
 }
 
 table tr:nth-child(even) {
@@ -1713,17 +1730,16 @@ table tr:nth-child(even) {
 
 /* Mobile table container for horizontal scrolling */
 .table-container {
+  display: block;
+  width: 100%;
+  max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   border-radius: var(--border-radius);
+  overflow-y: hidden; /* clip corners vertically while preserving horizontal scroll */
 }
 
 @media (max-width: 768px) {
-  .table-container {
-    margin: 0 calc(-1 * var(--s-1));
-    border-radius: 0;
-  }
-
   /* Add some breathing room for the heading above tables */
   .box h3 + .table-container {
     margin-top: var(--s0);
@@ -1820,6 +1836,10 @@ table tr:nth-child(even) {
 
 .shadow-lg {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.rounded {
+  border-radius: var(--border-radius);
 }
 
 /* Elevated background utility classes */
