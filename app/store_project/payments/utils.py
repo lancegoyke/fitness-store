@@ -92,7 +92,6 @@ def stripe_price_get_or_create(product: Product) -> str:
                 id=str(product.id),
                 name=product.name,
                 description=product.description,
-                type="good",
             )
     except stripe.error.InvalidRequestError:
         # Price does not exist, get Product then Price
@@ -103,7 +102,6 @@ def stripe_price_get_or_create(product: Product) -> str:
                 id=str(product.id),
                 name=product.name,
                 description=product.description,
-                type="good",
             )
         price_object = stripe.Price.create(
             currency="USD",
