@@ -19,24 +19,24 @@ repos:
       - id: check-json
       - id: check-xml
   - repo: https://github.com/adamchainz/django-upgrade
-    rev: "1.25.0"
+    rev: "1.29.1"
     hooks:
       - id: django-upgrade
         args: [--target-version, "5.2"]
   - repo: https://github.com/rtts/djhtml
-    rev: 3.0.8
+    rev: 3.0.10
     hooks:
       - id: djhtml
         args:
           - --tabwidth=2
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.8
+    rev: v0.14.10
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
   - repo: https://github.com/biomejs/pre-commit
-    rev: v2.1.4
+    rev: v2.3.10
     hooks:
       - id: biome-check
         types: [css]
