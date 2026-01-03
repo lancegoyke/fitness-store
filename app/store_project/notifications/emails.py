@@ -12,7 +12,7 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
     """
     subject = render_to_string(
         "notifications/contact_email_subject.txt", {"subject": message_subject}
-    )
+    ).strip()
     msg = message
 
     # Email the admin
