@@ -1,12 +1,12 @@
 alias django := dev
 
-# Development commands
+# Development commands (unique port to avoid conflicts)
 dev:
-    uv run python app/manage.py runserver
+    uv run python app/manage.py runserver 8034
 
 # Docker development
 docker-dev:
-    docker-compose up -d --build
+    docker compose up -d --build
 
 # Django management commands
 manage *args:
@@ -62,9 +62,13 @@ shell-c command:
 collectstatic:
     uv run python app/manage.py collectstatic
 
-# Start services
+# Start services (PostgreSQL on 5434, Redis on 6334)
 services:
-    docker-compose up -d
+    docker compose up -d
 
 stop-services:
-    docker-compose down
+    docker compose down
+
+# Database shell (connects to local PostgreSQL)
+db-shell:
+    docker exec -it fitness_store_postgres psql -U postgres
