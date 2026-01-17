@@ -3,7 +3,7 @@
 <div class="stack">
   <h3>{% trans "Login" %}</h3>
   <p class="text-center">{% trans "No account? Then please "%}<a href="{% url 'account_signup' %}">{% trans "sign up" %}</a>.</p>
-  <a class="box login google" id="google" href="{% provider_login_url 'google' %}">
+  <a class="box login google" id="google" href="{% provider_login_url 'google' next=request.get_full_path %}">
     <h4>Sign in with Google</h4>
   </a>
   <div class="or-separator">
