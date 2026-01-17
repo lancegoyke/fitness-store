@@ -16,13 +16,13 @@
 
   <p class="text-center">{% trans "No account? Then please "%} <a href="{% url 'account_signup' %}">{% trans "sign up" %}</a>.</p>
 
-  <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" %}">
+  <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" next=redirect_field_value %}">
     <h2>
       Login with Facebook
     </h2>
   </a>
 
-  <a class="box login google" id="google" href="{% provider_login_url "google" %}">
+  <a class="box login google" id="google" href="{% provider_login_url "google" next=redirect_field_value %}">
     <h2>
       Sign in with Google
     </h2>
