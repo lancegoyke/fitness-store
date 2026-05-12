@@ -4,6 +4,22 @@
 
 {% block head_title %}{% trans exercise.name %}{% endblock head_title %}
 
+{% block header %}
+  <meta name="description" property="og:description" content="Watch the {% trans exercise.name %} exercise demonstration and explanation videos to master your fitness technique.">
+  <meta property="og:title" content="{% trans exercise.name %} - Exercise Tutorial | Mastering Fitness" />
+  {% if yt_demo_id %}
+    <meta property="og:image" content="https://img.youtube.com/vi/{{ yt_demo_id }}/maxresdefault.jpg" />
+    <meta property="og:image:alt" content="{% trans exercise.name %} exercise demonstration video thumbnail" />
+  {% elif yt_explan_id %}
+    <meta property="og:image" content="https://img.youtube.com/vi/{{ yt_explan_id }}/maxresdefault.jpg" />
+    <meta property="og:image:alt" content="{% trans exercise.name %} exercise explanation video thumbnail" />
+  {% else %}
+    {{ block.super }}
+  {% endif %}
+  <meta property="og:type" content="video.other" />
+  <meta property="og:url" content="{{ request.build_absolute_uri }}" />
+{% endblock header %}
+
 {% block content %}
   <h1>{% trans exercise.name %}</h1>
 
