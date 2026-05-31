@@ -80,7 +80,6 @@ fixable = ["ALL"]
 unfixable = []
 
 [tool.ruff.lint.per-file-ignores]
-"add_env_vars.py" = ["INP001"]
 "manage.py" = ["INP001"]
 
 [tool.ruff.lint.pydocstyle]

@@ -35,9 +35,6 @@ jobs:
         with:
           python-version-file: "pyproject.toml"
 
-      - name: Install apt dependencies
-        run: sudo apt-get update && sudo apt-get install swig
-
       - name: Install UV
         uses: astral-sh/setup-uv@v6
         with:

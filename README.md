@@ -30,26 +30,26 @@ Current features:
 - pytest
 - custom User model
 
-This is emulated in docker-compose.prod.yml.
+This is emulated in docker-compose.production.yml.
 
 ## Deployment
 
-This app runs in a container on Heroku with a heroku-postgresql database addon. New code pushed to GitHub is chain-pushed to Heroku.
+This app runs as a Docker Compose stack on a shared [Hetzner](https://www.hetzner.com/) box, managed by the [`deploy`](https://github.com/lancegoyke/deploy) CLI and fronted by a shared Caddy reverse proxy (automatic Let's Encrypt TLS). PostgreSQL and Redis run as their own containers; media stays on AWS S3 and email on AWS SES.
 
 To deploy:
 
 ```
-git push origin main
+just deploy
 ```
+
+This pushes `main` to GitHub, then builds, migrates, and restarts the stack on the box. Pushing to `main` also triggers a GitHub Actions deploy after CI passes. See [`docs/deploy-hetzner.md`](docs/deploy-hetzner.md) for the full runbook (one-time migration, DNS, backups, rollback).
 
 ## Database Migrations
 
-If a new feature requires changes to the database schema, it may be taken care of in `heroku.yml` Release phase. This is untested.
-
-If the release command does not work, run it manually:
+Migrations run automatically on every deploy: the container entrypoint (`docker-entrypoint.sh`) runs `migrate` before starting gunicorn. To run one manually against production:
 
 ```
-heroku run python manage.py migrate
+deploy shell -a fitness-store web "python manage.py migrate"
 ```
 
 ## Django Admin
@@ -58,18 +58,19 @@ The address of Django's admin backend has been changed from `/admin/` to `/backs
 
 ## Static files
 
-Static files must be copied in a similar fashion if updated:
+Static files are collected automatically on each deploy (the entrypoint runs `collectstatic`) and served by WhiteNoise. To collect them manually:
 
 ```
-heroku run python manage.py collectstatic
+deploy shell -a fitness-store web "python manage.py collectstatic"
 ```
 
 ## Users
 
-To create a superuser:
+To create a superuser, open an interactive shell in the production web container and run the command there:
 
 ```
-heroku run python manage.py createsuperuser
+deploy shell -a fitness-store web
+python manage.py createsuperuser
 ```
 
 This should ask for username, email, and password.
