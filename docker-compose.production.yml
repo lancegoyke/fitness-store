@@ -1,0 +1,97 @@
+# Production stack for the Hetzner box (deploy tool sets COMPOSE_FILE to this
+# via .deployment.env). /srv/fitness-store/.env supplies both the compose
+# ${VAR} interpolation below and the container env_file. The web service joins
+# the shared external `proxy` network under the alias the Caddy site expects.
+name: fitness-store
+
+services:
+  postgres:
+    image: postgres:17-alpine # match the Heroku Postgres 17 major for pg_restore
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  redis:
+    image: redis:7-alpine # cache + sessions; AOF persistence keeps logins across restarts
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "96mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  web:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Infra wiring set here (overrides anything in .env). App secrets
+      # (Stripe, AWS, OAuth, reCAPTCHA, Sentry, DOMAIN_URL, CORS, ...) come
+      # from env_file. DATABASE_URL is intentionally NOT set so the SQL_* path
+      # is used (no forced sslmode=require against the local postgres).
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - ENVIRONMENT=PRODUCTION
+      - DEBUG=0
+      - DJANGO_ALLOWED_HOSTS=${ALLOWED_HOSTS} www.${ALLOWED_HOSTS}
+      - CSRF_TRUSTED_ORIGINS=https://${ALLOWED_HOSTS} https://www.${ALLOWED_HOSTS}
+      - SQL_DATABASE=${DB_NAME}
+      - SQL_USER=${DB_USER}
+      - SQL_PASSWORD=${DB_PASSWORD}
+      - SQL_HOST=postgres
+      - SQL_PORT=5432
+      - REDIS_URL=redis://redis:6379/0
+      - WEB_CONCURRENCY=2
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Send X-Forwarded-Proto so SECURE_SSL_REDIRECT doesn't 301 the probe,
+      # and a Host header in ALLOWED_HOSTS so the request isn't rejected.
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8000/', headers={'Host': '${ALLOWED_HOSTS}', 'X-Forwarded-Proto': 'https'}), timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      default: {}
+      proxy:
+        aliases:
+          - fitness-store-web
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  proxy:
+    external: true

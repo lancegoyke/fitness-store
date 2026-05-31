@@ -47,9 +47,22 @@ pre-commit:
 
 check: pre-commit lint test
 
-# Heroku deployment
+# Deploy to Hetzner: push to GitHub, then build + migrate + restart on the box.
 deploy:
     git push origin main
+    deploy deploy -a fitness-store
+
+# Tail production logs (optionally a single service, e.g. `just prod-logs web`)
+prod-logs *args:
+    deploy logs -a fitness-store {{ args }}
+
+# Run an on-demand production database backup (pg_dump -Fc to /srv/.../backups)
+prod-backup:
+    deploy backup run -a fitness-store
+
+# Show production status (containers, ports, TLS)
+prod-status:
+    deploy status -a fitness-store
 
 # Utility commands
 shell:

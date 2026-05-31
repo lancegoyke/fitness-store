@@ -63,6 +63,12 @@ ALLOWED_HOSTS = os.environ.get(
     "DJANGO_ALLOWED_HOSTS", "localhost 127.0.0.1 [::1]"
 ).split(" ")
 
+# Required by Django for HTTPS POST/admin behind a TLS-terminating proxy.
+# Space-separated, scheme-qualified, e.g. "https://mastering.fitness https://www.mastering.fitness".
+CSRF_TRUSTED_ORIGINS = [
+    origin for origin in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(" ") if origin
+]
+
 # Increase limit for forms with many fields (e.g., challenge admin with many records)
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 5000
 
@@ -279,15 +285,19 @@ CRISPY_TEMPLATE_PACK = "bulma"
 
 DEFAULT_CACHE_TIMEOUT = 604800  # one week
 
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
+        "LOCATION": REDIS_URL,
     }
 }
 
-if ENVIRONMENT == "PRODUCTION":
-    # https://devcenter.heroku.com/articles/connecting-heroku-redis#using-the-built-in-redis-backend-support
+# TLS Redis (e.g. Heroku Redis, which uses rediss:// with self-signed certs)
+# needs relaxed certificate verification. A plain self-hosted redis:// must NOT
+# receive this option or the connection errors, so gate it on the URL scheme.
+if REDIS_URL.startswith("rediss://"):
     CACHES["default"]["OPTIONS"] = {"ssl_cert_reqs": None}  # type: ignore
 
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"

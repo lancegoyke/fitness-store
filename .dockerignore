@@ -1,0 +1,36 @@
+# Keep the build context (and image) lean and secret-free. NOTE: on the box the
+# build context is /srv/fitness-store, which contains the runtime .env — it must
+# never be copied into the image.
+.git
+.github
+.gitignore
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+.deployment.env
+
+# Local virtualenv & caches
+.venv
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# Generated / data that doesn't belong in the image
+app/staticfiles/
+app/mediafiles/
+backups/
+data-import/
+*.sqlite3
+*.dump
+
+# Compose/Docker/docs not needed at runtime
+docker-compose*.yml
+Dockerfile
+.dockerignore
+*.md

@@ -11,11 +11,13 @@ INSTALLED_APPS += [  # noqa
     "django_ses",
 ]
 
-# Application performance monitoring (Scout)
+# Application performance monitoring (Scout) — opt-in.
+# On Heroku this came from an add-on. Self-hosted, set SCOUT_KEY + SCOUT_MONITOR
+# (from a direct Scout account) in the environment to re-enable.
 
-INSTALLED_APPS.insert(0, "scout_apm.django")  # should be listed first
-SCOUT_NAME = "Mastering Fitness"
-# SCOUT_KEY & SCOUT_MONITOR configured by Heroku Addon
+if os.environ.get("SCOUT_MONITOR", "").lower() in ("true", "1"):
+    INSTALLED_APPS.insert(0, "scout_apm.django")  # should be listed first
+    SCOUT_NAME = "Mastering Fitness"
 
 # Email [django-ses]
 
@@ -38,25 +40,20 @@ AWS_S3_OBJECT_PARAMETERS = {
     "CacheControl": "max-age=86400",
 }
 
-# Logging [view in logentries]
+# Logging — stdout only, captured by Docker/the deploy tool's `logs` command.
+# (The old /tmp/debug.log FileHandler was ephemeral on Heroku but would grow
+# unbounded on a long-lived container.)
 
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "console": {"format": "%(name)-12s %(levelname)-8s %(message)s"},
-        "file": {"format": "%(asctime)s %(name)-12s %(levelname)-8s %(message)s"},
+        "console": {"format": "%(asctime)s %(name)-12s %(levelname)-8s %(message)s"},
     },
     "handlers": {
         "console": {"class": "logging.StreamHandler", "formatter": "console"},
-        "file": {
-            "level": "DEBUG",
-            "class": "logging.FileHandler",
-            "formatter": "file",
-            "filename": "/tmp/debug.log",
-        },
     },
-    "loggers": {"django": {"level": "DEBUG", "handlers": ["console", "file"]}},
+    "loggers": {"django": {"level": "INFO", "handlers": ["console"]}},
 }
 
 # Error monitoring [Sentry]
