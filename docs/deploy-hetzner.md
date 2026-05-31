@@ -80,7 +80,7 @@ CORS_ALLOWED_ORIGINS  DOMAIN_URL  SENTRY_DSN
 Do **not** copy: `DATABASE_URL`, `REDIS_URL` (compose provides them),
 `DJANGO_ALLOWED_HOSTS`, `DJANGO_SETTINGS_MODULE`, `DEBUG`, `ENVIRONMENT`
 (set in `docker-compose.production.yml`), `SCOUT_KEY`/`SCOUT_MONITOR`/`SCOUT_LOG_LEVEL`
-(Scout is off unless re-enabled), `CRYPTOGRAPHY_DONT_BUILD_RUST` (unused).
+(scout-apm has been removed — these have no effect), `CRYPTOGRAPHY_DONT_BUILD_RUST` (unused).
 Keep the generated `DB_NAME`/`DB_USER`/`DB_PASSWORD`.
 
 Set values with `deploy config set -a fitness-store KEY=VALUE` (or edit
