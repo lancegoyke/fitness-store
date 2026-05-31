@@ -93,6 +93,7 @@ textarea,
 select {
   padding: var(--s-1);
   border: var(--border-thin) solid;
+  border-radius: var(--border-radius);
   color: var(--main-color-dark-gray);
   background-color: var(--main-color-light);
   /* The following is a cool effect, but difficult to implement sitewide */
@@ -120,6 +121,8 @@ input[type="checkbox"] {
   -webkit-appearance: none;
   appearance: none;
   background-color: #fff;
+  /* Keep the small custom checkbox square; the radius above is for text fields */
+  border-radius: 0;
   margin: 0;
   font: inherit;
   color: var(--main-color-dark);
@@ -204,6 +207,7 @@ tbody tr:last-child td:last-child {
   cursor: pointer;
   padding: var(--s0);
   border: 0 solid;
+  border-radius: var(--border-radius);
   outline: var(--border-thin) solid transparent;
   /* for high contrast mode */
   outline-offset: calc(var(--border-thin) * -1);
@@ -492,6 +496,7 @@ a:active {
 .errorlist li {
   padding: var(--s1);
   border: 0 solid;
+  border-radius: var(--border-radius);
   outline: var(--border-thin) solid transparent;
   /* for high contrast mode */
   outline-offset: calc(var(--border-thin) * -1);
@@ -641,7 +646,7 @@ a.box.login:active {
   background-color: var(--color-light);
   position: relative;
   overflow: hidden;
-  border-radius: var(--s-2);
+  border-radius: var(--border-radius);
 }
 
 .card-box * {
@@ -1470,7 +1475,7 @@ ul.grid {
   color: var(--main-color-dark-gray);
   padding: var(--s-1) var(--s0);
   background-color: var(--main-color-light-gray);
-  border-radius: var(--border-thin);
+  border-radius: var(--border-radius);
   border: 1px solid var(--main-color-gray);
 }
 
@@ -1484,7 +1489,7 @@ ul.grid {
   color: var(--main-color-light);
   background-color: var(--main-color-dark);
   border: var(--border-thin) solid var(--main-color-dark);
-  border-radius: var(--border-thin);
+  border-radius: var(--border-radius);
   transition: all 0.2s ease;
   min-width: 5rem;
 }
