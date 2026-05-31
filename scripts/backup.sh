@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # fitness-store nightly DB backup with healthchecks.io dead-man's-switch + S3 off-site.
-# Single entrypoint: runs the deploy tool's pg_dump backup (project-backup.sh),
-# mirrors backups/ to S3 via rclone, and pings healthchecks.io start/success/fail.
+# Single entrypoint: exports RCLONE_REMOTE and runs the deploy tool's backup
+# (project-backup.sh), which does the pg_dump and the rclone S3 mirror; this
+# wrapper wraps that with healthchecks.io start/success/fail pings.
 #
 # DR copy of the box-resident wrapper at /home/lance/fitness-store-backup/backup.sh
 # (run nightly at 03:00 UTC by `lance`'s cron). Kept in version control so the
