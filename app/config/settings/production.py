@@ -11,14 +11,6 @@ INSTALLED_APPS += [  # noqa
     "django_ses",
 ]
 
-# Application performance monitoring (Scout) — opt-in.
-# On Heroku this came from an add-on. Self-hosted, set SCOUT_KEY + SCOUT_MONITOR
-# (from a direct Scout account) in the environment to re-enable.
-
-if os.environ.get("SCOUT_MONITOR", "").lower() in ("true", "1"):
-    INSTALLED_APPS.insert(0, "scout_apm.django")  # should be listed first
-    SCOUT_NAME = "Mastering Fitness"
-
 # Email [django-ses]
 
 EMAIL_BACKEND = "django_ses.SESBackend"
@@ -66,9 +58,11 @@ sentry_sdk.init(
 
 # Security
 
-SECURE_HSTS_SECONDS = 60  # 31536000 is one year, common when things are known to work
+SECURE_HSTS_SECONDS = 31536000  # one year — HTTPS is stable on Hetzner/Caddy
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = True
+# Leave preload off unless mastering.fitness is submitted to hstspreload.org
+# (the browser-baked preload list forces HTTPS on every subdomain and is hard to undo).
+SECURE_HSTS_PRELOAD = False
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True

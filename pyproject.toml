@@ -25,7 +25,6 @@ dependencies = [
   "python-dotenv",
   "redis",
   "sentry-sdk",
-  "scout-apm",
   "stripe",
   "whitenoise[brotli]",
   "django-filter>=25.1",

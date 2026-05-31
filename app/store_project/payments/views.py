@@ -128,7 +128,12 @@ def stripe_webhook(request):
     stripe.api_key = settings.STRIPE_SECRET_KEY
     endpoint_secret = os.environ.get("STRIPE_ENDPOINT_SECRET")
     payload = request.body
-    signature_header = request.headers["stripe-signature"]
+    signature_header = request.headers.get("stripe-signature")
+    if signature_header is None:
+        # Junk/scanner requests with no Stripe-Signature header would otherwise
+        # raise a KeyError (500). Reject them cleanly instead.
+        print("ERROR: Missing Stripe-Signature header")
+        return HttpResponse(status=400)
     event = None
 
     try:
