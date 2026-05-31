@@ -161,7 +161,7 @@ The web container's healthcheck performs an internal HTTPS-style GET, so a
   version-controlled wrapper [`scripts/backup.sh`](../scripts/backup.sh) (deployed
   to `/home/lance/fitness-store-backup/backup.sh`) at **03:00 UTC**:
   ```cron
-  0 3 * * * /home/lance/fitness-store-backup/backup.sh
+  0 3 * * * /home/lance/fitness-store-backup/backup.sh >> /var/log/backups/fitness-store.log 2>&1
   ```
   The wrapper:
   1. runs the deploy tool's `project-backup.sh` (`pg_dump -Fc` →
