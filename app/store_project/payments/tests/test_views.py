@@ -41,7 +41,8 @@ def test_create_checkout_session_view(user: User, program: Program, rf: RequestF
     assert b"sessionId" in response.content
 
 
-def test_stripe_webhook_view(rf: RequestFactory):
+def test_stripe_webhook_view_missing_signature(rf: RequestFactory):
+    """A request with no Stripe-Signature header is rejected with 400, not a 500."""
     request = rf.get("/payments/webhook/")
-    with pytest.raises(KeyError):
-        views.stripe_webhook(request)
+    response = views.stripe_webhook(request)
+    assert response.status_code == 400
