@@ -63,10 +63,18 @@ just stop-services
 ```
 
 ### Production Deployment
+The app runs on a shared Hetzner box as a Docker Compose stack at
+`/srv/fitness-store`, managed by the [`deploy`](https://github.com/lancegoyke/deploy)
+CLI and fronted by a shared Caddy reverse proxy (auto Let's Encrypt TLS).
+
 ```bash
-# Deploy to Heroku
+# Deploy to Hetzner: push to GitHub, then build + migrate + restart on the box
 just deploy
 ```
+
+Pushing to `main` also triggers a GitHub Actions deploy (after "Django CI"
+passes). Full runbook — including the one-time migration, DNS, backups, and
+rollback — lives in `docs/deploy-hetzner.md`.
 
 ### Legacy Commands (if not using just)
 ```bash
@@ -126,7 +134,7 @@ Uses django-allauth with email-only login, social authentication (Facebook, Goog
 - AWS S3 for media storage
 - WhiteNoise for static files
 - docker-compose for development
-- Heroku for production deployment
+- Hetzner (Docker Compose via the `deploy` CLI) for production deployment
 - pytest for testing
 - ruff for code formatting and linting
 

@@ -157,13 +157,28 @@ The web container's healthcheck performs an internal HTTPS-style GET, so a
 - **Deploy:** `just deploy` (push to GitHub, then `deploy deploy -a fitness-store`),
   or push to `main` and let the **Deploy** GitHub Action run after CI passes.
 - **Logs:** `just prod-logs` (or `deploy logs -a fitness-store web -f`).
-- **Backups:** `just prod-backup` on demand. Schedule a nightly cron on the box:
+- **Backups:** A nightly cron under the box user `lance` runs the
+  version-controlled wrapper [`scripts/backup.sh`](../scripts/backup.sh) (deployed
+  to `/home/lance/fitness-store-backup/backup.sh`) at **03:00 UTC**:
   ```cron
-  0 3 * * * PROJECT_DIR=/srv/fitness-store bash /opt/deploy/infra/scripts/project-backup.sh >> /var/log/backups/fitness-store.log 2>&1
+  0 3 * * * /home/lance/fitness-store-backup/backup.sh
   ```
-  For off-site copies, configure an rclone remote on the box and set
-  `RCLONE_REMOTE=` in `.deployment.env`. Restore with
-  `deploy backup restore -a fitness-store <dump>`.
+  The wrapper:
+  1. runs the deploy tool's `project-backup.sh` (`pg_dump -Fc` →
+     `/srv/fitness-store/backups/`, 14-day local retention);
+  2. mirrors off-site with `rclone sync` to the **private** bucket
+     `s3://lance-hetzner-db-backups/fitness-store/` (region `us-east-2`; rclone
+     remote `hetzner-db-backups`, `env_auth` reusing the app's AWS creds). The
+     bucket has all Block-Public-Access flags on;
+  3. pings **healthchecks.io** (`/start`, then `/0` on success or `/<exit-code>`
+     on failure) so a missed or failing run alerts (check "fitness-store nightly
+     DB backup", schedule `0 3 * * *` UTC, 1h grace).
+
+  The healthchecks ping URL is a secret and is **not** in this repo or the script —
+  the wrapper reads it from `/home/lance/fitness-store-backup/healthchecks.url`
+  (mode 600). Run on demand (monitored): `ssh hetzner /home/lance/fitness-store-backup/backup.sh`.
+  Quick un-monitored dump: `just prod-backup` (`deploy backup run -a fitness-store`).
+  Restore: `deploy backup restore -a fitness-store <dump>`.
 
 ## GitHub Actions auto-deploy
 
