@@ -1,0 +1,54 @@
+name: Deploy
+
+# Auto-deploy to the Hetzner box after the "Django CI" workflow succeeds on main.
+# This SSHes in and runs the same on-box script the `deploy` CLI runs
+# (git pull --ff-only -> docker compose build -> migrate -> up -d).
+#
+# Required repository secrets:
+#   DEPLOY_SSH_KEY  - private half of an SSH key authorized for DEPLOY_USER on the box
+#   DEPLOY_HOST     - the box's public IP or resolvable hostname (NOT the local
+#                     `hetzner` SSH alias; GitHub Actions can't see ~/.ssh/config)
+#   DEPLOY_USER     - the box user that runs the deploy. For this Django app the
+#                     deploy builds images with Docker on the box, so the user must
+#                     be in the `docker` group (e.g. `lance`). The scoped `deploy`
+#                     CI user from the deploy tool is static-site-only and cannot
+#                     build images. Use a DEDICATED CI keypair so it can be rotated
+#                     independently of your personal key.
+
+on:
+  workflow_run:
+    workflows: ["Django CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Deploy on manual dispatch, or only when the CI run actually passed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy on the box
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/id_ed25519 "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "PROJECT_DIR=/srv/fitness-store bash /opt/deploy/infra/scripts/project-deploy.sh"

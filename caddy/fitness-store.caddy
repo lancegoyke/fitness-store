@@ -1,0 +1,29 @@
+# Caddy site for Mastering Fitness. `deploy repo create` copies this into
+# /opt/caddy/sites/fitness-store.caddy and rewrites `yourdomain.com` to the
+# real domain. The shared Caddy terminates TLS (auto Let's Encrypt) and proxies
+# to the web container by its `proxy`-network alias.
+yourdomain.com {
+    encode zstd gzip
+
+    log {
+        output file /var/log/caddy/fitness-store.access.log
+        format json
+    }
+
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+
+    reverse_proxy fitness-store-web:8000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+}
+
+# Canonical redirect: www -> apex.
+www.yourdomain.com {
+    redir https://yourdomain.com{uri} permanent
+}
