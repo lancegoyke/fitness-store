@@ -34,32 +34,41 @@ class Command(BaseCommand):
         overwrite = options["overwrite"]
 
         if overwrite:
-            challenges = Challenge.objects.all()
+            candidates = Challenge.objects.all()
         else:
-            challenges = Challenge.objects.filter(
+            candidates = Challenge.objects.filter(
                 Q(summary="") | Q(summary__isnull=True)
             )
-        challenges = challenges.order_by("name")
+        candidates = list(candidates.order_by("name"))
+
+        # Only challenges with a non-blank description can be summarized.
+        # Partition before applying --limit so blank-description rows don't
+        # consume the limit -- otherwise re-running with the same limit keeps
+        # re-selecting them and never reaches later valid challenges.
+        eligible = [c for c in candidates if c.description.strip()]
+        blank = [c for c in candidates if not c.description.strip()]
+
+        for challenge in blank:
+            self.stdout.write(
+                self.style.WARNING(f"⚠ Skipping '{challenge.name}': empty description")
+            )
 
         if limit is not None:
-            challenges = challenges[:limit]
+            eligible = eligible[:limit]
 
-        total = challenges.count()
-        if total == 0:
+        if not eligible:
             self.stdout.write(
-                self.style.SUCCESS(
-                    "All challenges already have a summary. Nothing to do."
-                )
+                self.style.SUCCESS("No challenges need a summary. Nothing to do.")
             )
             return
 
         if dry_run:
             self.stdout.write(
                 self.style.WARNING(
-                    f"DRY RUN - {total} challenge(s) would get a summary:"
+                    f"DRY RUN - {len(eligible)} challenge(s) would get a summary:"
                 )
             )
-            for challenge in challenges:
+            for challenge in eligible:
                 self.stdout.write(f"  - {challenge.name}")
             return
 
@@ -69,21 +78,11 @@ class Command(BaseCommand):
             )
             return
 
-        self.stdout.write(f"Generating summaries for {total} challenge(s)...")
+        self.stdout.write(f"Generating summaries for {len(eligible)} challenge(s)...")
 
         succeeded = 0
-        skipped = 0
         failed = 0
-        for challenge in challenges:
-            if not challenge.description.strip():
-                self.stdout.write(
-                    self.style.WARNING(
-                        f"⚠ Skipping '{challenge.name}': empty description"
-                    )
-                )
-                skipped += 1
-                continue
-
+        for challenge in eligible:
             try:
                 summary = generate_challenge_summary(challenge.description)
             except Exception as exc:  # external API errors, keep going
@@ -100,6 +99,6 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Done. {succeeded} generated, {skipped} skipped, {failed} failed."
+                f"Done. {succeeded} generated, {len(blank)} skipped, {failed} failed."
             )
         )

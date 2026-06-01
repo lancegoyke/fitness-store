@@ -97,6 +97,19 @@ class GenerateSummariesCommandTests(TestCase):
 
         self.assertEqual(mock_generate.call_count, 1)
 
+    @mock.patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @mock.patch(f"{COMMAND}.generate_challenge_summary", return_value="Blurb.")
+    def test_limit_does_not_count_blank_descriptions(self, mock_generate):
+        # "Empty Description" sorts before "Missing Summary" alphabetically.
+        # The blank row must not consume the limit, or --limit 1 would skip it
+        # and never reach the one challenge that can actually be summarized.
+        out = StringIO()
+        call_command("generate_summaries", "--limit", "1", stdout=out)
+
+        mock_generate.assert_called_once_with("Do 10 burpees and 20 squats.")
+        self.missing.refresh_from_db()
+        self.assertEqual(self.missing.summary, "Blurb.")
+
     @mock.patch.dict("os.environ", {}, clear=True)
     @mock.patch(f"{COMMAND}.generate_challenge_summary")
     def test_aborts_without_api_key(self, mock_generate):
