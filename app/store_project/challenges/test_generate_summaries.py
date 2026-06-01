@@ -116,10 +116,11 @@ class GenerateSummariesCommandTests(TestCase):
     def test_aborts_without_api_key(self, mock_generate):
         out = StringIO()
         err = StringIO()
-        call_command("generate_summaries", stdout=out, stderr=err)
+        with self.assertRaises(CommandError) as ctx:
+            call_command("generate_summaries", stdout=out, stderr=err)
 
         mock_generate.assert_not_called()
-        self.assertIn("GOOGLE_API_KEY not configured", err.getvalue())
+        self.assertIn("GOOGLE_API_KEY not configured", str(ctx.exception))
 
     @mock.patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @mock.patch(

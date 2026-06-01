@@ -74,10 +74,9 @@ class Command(BaseCommand):
             return
 
         if not os.environ.get("GOOGLE_API_KEY"):
-            self.stderr.write(
-                self.style.ERROR("GOOGLE_API_KEY not configured. Aborting.")
-            )
-            return
+            # Raise (non-zero exit) so automation treats a misconfigured run as a
+            # failure rather than a successful no-op.
+            raise CommandError("GOOGLE_API_KEY not configured. Aborting.")
 
         self.stdout.write(f"Generating summaries for {len(eligible)} challenge(s)...")
 
