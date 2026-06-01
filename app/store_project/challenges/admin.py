@@ -10,8 +10,7 @@ from django.utils.html import format_html
 
 from .models import Challenge
 from .models import Record
-
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+from .services import generate_challenge_summary
 
 
 class RecentRecordsInlineFormSet(BaseInlineFormSet):
@@ -153,21 +152,6 @@ class ChallengeAdmin(admin.ModelAdmin):
             return redirect("..")
 
         try:
-
-            def generate_challenge_summary(description, api_key):
-                """Generate a summary of a challenge description using the Google Gemini API."""
-                from google import genai
-
-                client = genai.Client(api_key=api_key)
-                prompt = (
-                    "Summarize the following challenge description in no more than 300 characters: "
-                    + description
-                )
-                response = client.models.generate_content(
-                    model=DEFAULT_GEMINI_MODEL, contents=prompt
-                )
-                return response.text[:300]
-
             summary = generate_challenge_summary(challenge.description, api_key)
             challenge.summary = summary
             challenge.save()
