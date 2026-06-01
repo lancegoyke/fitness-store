@@ -1,6 +1,7 @@
 import os
 
 from django.core.management.base import BaseCommand
+from django.core.management.base import CommandError
 from django.core.management.base import CommandParser
 from django.db.models import Q
 from store_project.challenges.models import Challenge
@@ -102,3 +103,7 @@ class Command(BaseCommand):
                 f"Done. {succeeded} generated, {len(blank)} skipped, {failed} failed."
             )
         )
+
+        # Exit non-zero so automation (cron, deploy hooks) can detect failures.
+        if failed:
+            raise CommandError(f"{failed} challenge(s) failed to generate a summary.")

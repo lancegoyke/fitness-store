@@ -2,6 +2,7 @@ from io import StringIO
 from unittest import mock
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 
 from store_project.challenges.models import Challenge
@@ -119,3 +120,17 @@ class GenerateSummariesCommandTests(TestCase):
 
         mock_generate.assert_not_called()
         self.assertIn("GOOGLE_API_KEY not configured", err.getvalue())
+
+    @mock.patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @mock.patch(
+        f"{COMMAND}.generate_challenge_summary", side_effect=RuntimeError("quota")
+    )
+    def test_exits_nonzero_when_generation_fails(self, mock_generate):
+        # A failed generation must surface as a non-zero exit (CommandError) so
+        # automation can detect it, even though the command keeps going.
+        out = StringIO()
+        err = StringIO()
+        with self.assertRaises(CommandError):
+            call_command("generate_summaries", stdout=out, stderr=err)
+
+        self.assertIn("failed", out.getvalue().lower())
