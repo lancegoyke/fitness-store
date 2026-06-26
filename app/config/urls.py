@@ -35,6 +35,7 @@ urlpatterns = [
     path("backside/clearcache/", include("clearcache.urls")),
     path("backside/", admin.site.urls),
     path("cardio/", include("store_project.cardio.urls")),
+    path("meso/", include("store_project.meso.urls", namespace="meso")),
     path(
         "challenges/", include("store_project.challenges.urls", namespace="challenges")
     ),
