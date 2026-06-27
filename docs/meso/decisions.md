@@ -91,8 +91,13 @@ Provider is **Claude** (project standing guidance). Real decisions:
 - **Eval:** golden cases so quality doesn't silently regress.
 - **Model tier + prompt caching:** pin against the `claude-api` reference at build time — not
   guessed here.
-- **Status:** 🟡 Proposed (detailed design after B1–B3).
-- **Decision:** _tbd_
+- **Status:** ✅ Decided & building (Phase 1 merged 2026-06-27, PR #280).
+- **Decision:** **Tool-calling + a server-side validation layer + the human review gate.** Provider =
+  Claude (`claude-opus-4-8`), forced `propose_program_changes` tool, prompt caching; adaptive thinking
+  omitted (incompatible with a forced `tool_choice`). Contraindications enforced deterministically in
+  `meso/agent/validation.py` (not just the prompt); the coach still approves. Execution is sync for
+  now (background job + streamed status deferred); eval golden cases deferred. Full phasing in
+  [`agent-plan.md`](./agent-plan.md).
 
 ---
 
@@ -213,3 +218,14 @@ _(Append dated entries here as decisions land.)_
   left-rail/agent/phone chrome stays static prototype HTML by design — it rebuilds with the agent +
   athlete slices. **Persistence slice complete.** Resume point → the **agent** slice (B6: proposal
   engine behind the review gate).
+- 2026-06-27 — **Agent Phase 1 built & merged** (PR #280, squash `953d9d4`; Django CI green, deployed
+  to Hetzner — migration `meso.0004` applied): the **B6 proposal engine behind the review gate** is
+  live. `AgentProposalBatch` + `ProposedChange` + the `meso/agent/` package (`client`/`validation`/
+  `service`); `POST api/plan/<id>/agent/` runs Claude (`claude-opus-4-8`, forced `propose_program_changes`
+  tool + prompt caching; **adaptive thinking omitted** — incompatible with a forced `tool_choice`),
+  validates server-side, and persists a reviewable batch; read-only `GET review/<batch_id>/` renders
+  it. **Contraindications enforced in a deterministic validation layer** (current-week scoping,
+  target consistency, swap-only contraindication backstop, plural-folded), not just the prompt;
+  human approval gate unchanged. 47 new tests (146 meso / 286 project-wide); local Codex review clean
+  (8 rounds). Build plan + phasing in [`agent-plan.md`](./agent-plan.md). Resume point → agent Phase 2
+  (per-change approve/reject + **apply** back into the program).
