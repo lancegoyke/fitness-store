@@ -1,5 +1,6 @@
 try:
     import factory
+    from django.utils import timezone
     from factory.django import DjangoModelFactory
 
     from store_project.users.factories import UserFactory
@@ -16,6 +17,7 @@ try:
     from .models import SessionLog
     from .models import Unit
     from .models import Week
+    from .models import WeekDelivery
 
     class CoachProfileFactory(DjangoModelFactory):
         class Meta:
@@ -106,6 +108,14 @@ try:
         note = ""
         tags = factory.LazyFunction(list)
 
+    class WeekDeliveryFactory(DjangoModelFactory):
+        class Meta:
+            model = WeekDelivery
+
+        week = factory.SubFactory(WeekFactory)
+        delivered_at = factory.LazyFunction(timezone.now)
+        payload = factory.LazyFunction(dict)
+
     class SessionLogFactory(DjangoModelFactory):
         class Meta:
             model = SessionLog
@@ -152,6 +162,9 @@ except ImportError:
         pass
 
     class ExercisePrescriptionFactory:
+        pass
+
+    class WeekDeliveryFactory:
         pass
 
     class SessionLogFactory:

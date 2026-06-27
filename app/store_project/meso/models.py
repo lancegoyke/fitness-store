@@ -567,6 +567,39 @@ class SessionLog(models.Model):
         return f"{self.athlete.display_name()} · {self.session}"
 
 
+# ---------------------------------------------------------------------------
+# Delivery / lightweight versioning (Phase 4)
+#
+# Delivering a week stamps ``Week.delivered_at`` and records a ``WeekDelivery``
+# snapshot of the week at that moment. "Changes since last delivery" then =
+# diff(current serialization, latest ``payload``); the full diff *UI* is
+# deferred (persistence-plan open assumption #3) — this just captures the data
+# cheaply.
+# ---------------------------------------------------------------------------
+
+
+class WeekDelivery(models.Model):
+    """A snapshot of a week at the moment a coach delivered it to the athlete."""
+
+    week = models.ForeignKey(
+        Week,
+        on_delete=models.CASCADE,
+        related_name="deliveries",
+        verbose_name=_("Week"),
+    )
+    delivered_at = models.DateTimeField(_("Delivered at"))
+    payload = models.JSONField(_("Payload"), default=dict, blank=True)
+    created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+
+    class Meta:
+        ordering = ["-delivered_at"]
+        verbose_name = "Week delivery"
+        verbose_name_plural = "Week deliveries"
+
+    def __str__(self):
+        return f"{self.week} · delivered {self.delivered_at:%Y-%m-%d}"
+
+
 class LoggedSet(models.Model):
     """A single set the athlete logged against a prescription."""
 

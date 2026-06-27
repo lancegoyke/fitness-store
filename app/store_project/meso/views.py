@@ -10,6 +10,7 @@ from django.http import HttpResponseForbidden
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 
@@ -19,8 +20,11 @@ from .models import CoachAthlete
 from .models import ExercisePrescription
 from .models import Plan
 from .models import Session
+from .models import WeekDelivery
+from .serializers import current_week
 from .serializers import serialize_plan
 from .serializers import serialize_prescription
+from .serializers import serialize_week_snapshot
 
 
 class MesoDesignerView(LoginRequiredMixin, TemplateView):
@@ -231,6 +235,32 @@ def session_add_exercise(request, plan_id, pk):
     )
 
 
+@login_required
+@require_POST
+def plan_deliver(request, plan_id):
+    """Deliver the plan's current week: stamp ``delivered_at`` + snapshot it (Phase 4)."""
+    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    week = current_week(plan)
+    if week is None:
+        return HttpResponseBadRequest("This plan has no week to deliver.")
+    now = timezone.now()
+    week.delivered_at = now
+    week.save(update_fields=["delivered_at"])
+    WeekDelivery.objects.create(
+        week=week, delivered_at=now, payload=serialize_week_snapshot(week)
+    )
+    return JsonResponse(
+        {
+            "ok": True,
+            "delivered_at": now.isoformat(),
+            "week": {"id": week.pk, "label": f"Wk {week.index}"},
+        },
+        status=201,
+    )
+
+
 # -- still on fixtures until their own slices ------------------------------
 
 
@@ -248,15 +278,29 @@ class ChangeReviewView(LoginRequiredMixin, TemplateView):
 
 
 class DeliverView(LoginRequiredMixin, TemplateView):
-    """Confirm what gets sent to the athlete, when, and how."""
+    """Confirm what gets sent to the athlete, when, and how.
+
+    With a ``plan_id`` the screen binds to a real, owned plan: it shows that
+    plan's athlete + current week and its "Deliver" button POSTs to
+    ``plan_deliver`` (stamp + snapshot). Without one it falls back to the
+    prototype fixtures until the seed slice (Phase 5) retires them.
+    """
 
     template_name = "meso/deliver.html"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "designer"
-        ctx["deliver"] = mockdata.DELIVER
-        ctx["athlete"] = mockdata.athlete_by_slug(mockdata.DELIVER["athlete"])
+        plan_id = kwargs.get("plan_id")
+        if plan_id is not None:
+            plan = Plan.objects.for_coach(self.request.user).filter(pk=plan_id).first()
+            if plan is None:
+                raise Http404("Unknown plan")
+            ctx["plan_id"] = plan.pk
+            ctx.update(presenters.deliver_screen(plan))
+        else:
+            ctx["deliver"] = mockdata.DELIVER
+            ctx["athlete"] = mockdata.athlete_by_slug(mockdata.DELIVER["athlete"])
         return ctx
 
 

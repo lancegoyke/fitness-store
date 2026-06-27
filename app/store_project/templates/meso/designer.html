@@ -86,7 +86,7 @@
         </div>
         <button data-hover="rail" @click="view = 'athlete'" style="appearance:none;cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px 13px;">Preview as athlete</button>
         <a href="{% url 'meso:review' %}" data-hover="rail" style="text-decoration:none;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px 13px;">Review changes</a>
-        <a href="{% url 'meso:deliver' %}" data-hover="brighten" style="text-decoration:none;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:8px 15px;box-shadow:0 1px 2px rgba(16,18,22,0.12);">Deliver</a>
+        <a href="{% if plan_data %}{% url 'meso:deliver_plan' plan_data.plan.id %}{% else %}{% url 'meso:deliver' %}{% endif %}" data-hover="brighten" style="text-decoration:none;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:8px 15px;box-shadow:0 1px 2px rgba(16,18,22,0.12);">Deliver</a>
       </div>
 
       <!-- ===================== BODY ===================== -->
