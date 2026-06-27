@@ -269,3 +269,55 @@ class TestCleanChange:
         cleaned, errors = validation.clean_change("not a dict", plan)
         assert cleaned is None
         assert errors
+
+
+class TestApplyPayload:
+    """The structured edit ``agent.apply`` performs is built here (Phase 2)."""
+
+    def test_swap_payload_from_new_name(self):
+        plan, _, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(prescription_id=presc.pk, new_name="Box Squat"), plan
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"name": "Box Squat"}
+
+    def test_swap_payload_falls_back_to_introduces_exercise(self):
+        plan, _, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(prescription_id=presc.pk, introduces_exercise="Goblet Squat"),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"name": "Goblet Squat"}
+
+    def test_progress_payload_carries_load(self):
+        plan, _, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="92.5 kg"),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"load": "92.5 kg"}
+
+    def test_volume_payload_carries_sets(self):
+        plan, session, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="volume", session_id=session.pk, new_sets="4"), plan
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"sets": "4"}
+
+    def test_deload_has_empty_payload(self):
+        plan, _, _ = make_plan()
+        cleaned, errors = validation.clean_change(base_change(kind="deload"), plan)
+        assert errors == []
+        assert cleaned["payload"] == {}
+
+    def test_payload_values_are_length_capped(self):
+        plan, _, presc = make_plan()
+        cleaned, _ = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="x" * 99),
+            plan,
+        )
+        assert len(cleaned["payload"]["load"]) == 32

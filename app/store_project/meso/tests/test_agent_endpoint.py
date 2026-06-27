@@ -228,9 +228,19 @@ class TestReviewBatch:
         resp = client.get(reverse("meso:review_batch", kwargs={"batch_id": batch.pk}))
         assert resp.status_code == 404
 
-    def test_bare_review_still_renders_fixtures(self, client):
-        client.force_login(UserFactory())
+    def test_bare_review_redirects_to_latest_pending_batch(self, client):
+        # Fixtures are retired (Phase 2): the bare URL resolves to the coach's
+        # latest pending batch on their working plan.
+        plan, _, _ = make_plan()
+        batch = AgentProposalBatchFactory(plan=plan, coach=plan.coach)
+        client.force_login(plan.coach)
         resp = client.get(reverse("meso:review"))
-        assert resp.status_code == 200
-        # The prototype fixture athlete is Maya.
-        assert "Maya" in resp.content.decode()
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:review_batch", kwargs={"batch_id": batch.pk})
+
+    def test_bare_review_without_a_batch_redirects_to_designer(self, client):
+        plan, _, _ = make_plan()
+        client.force_login(plan.coach)
+        resp = client.get(reverse("meso:review"))
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:designer")

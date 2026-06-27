@@ -129,12 +129,13 @@ class TestInviteActions:
 class TestScreensRender:
     """Every still-seeded Meso screen renders for a logged-in coach.
 
-    The coach-side designer/deliver no longer render on fixtures — their bare
-    URLs redirect (see ``TestBareDesignerDeliver``); only review/results (their
-    own slices) and the roster still render directly.
+    The coach-side designer/deliver/review no longer render on fixtures — their
+    bare URLs redirect (designer/deliver: ``TestBareDesignerDeliver``; review:
+    ``test_agent_endpoint``). Only results (its own slice) and the roster still
+    render directly.
     """
 
-    @pytest.mark.parametrize("name", ["roster", "review", "results"])
+    @pytest.mark.parametrize("name", ["roster", "results"])
     def test_renders(self, client, name):
         client.force_login(UserFactory())
         resp = client.get(reverse(f"meso:{name}"))

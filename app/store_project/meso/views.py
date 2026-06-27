@@ -17,11 +17,13 @@ from django.views.generic import TemplateView
 
 from . import mockdata
 from . import presenters
+from .agent import apply as agent_apply
 from .agent import service as agent_service
 from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import ExercisePrescription
 from .models import Plan
+from .models import ProposedChange
 from .models import Session
 from .models import WeekDelivery
 from .serializers import current_week
@@ -358,30 +360,142 @@ def agent_propose(request, plan_id):
     )
 
 
+# -- review gate: approve/reject + apply (agent slice Phase 2 — B6) --------
+#
+# The human gate is the review screen; these endpoints persist the coach's
+# per-change decisions and then write the approved edits back into the program.
+# Every action is scoped to a batch the requester coaches over an *active*
+# relationship (``Plan.objects.for_coach``) — a foreign/unknown batch is a 404,
+# never a silent write. Apply/dismiss only act on a still-``pending`` batch, so a
+# double-submit is a clean 409 rather than a re-apply.
+
+
+def _coach_batch_or_404(request, batch_id):
+    """The batch the requester coaches, or raise ``Http404``."""
+    batch = (
+        AgentProposalBatch.objects.filter(
+            pk=batch_id, plan__in=Plan.objects.for_coach(request.user)
+        )
+        .select_related("plan", "plan__relationship")
+        .first()
+    )
+    if batch is None:
+        raise Http404("Unknown proposal batch")
+    return batch
+
+
+@login_required
+@require_POST
+def change_set_status(request, pk):
+    """Persist a coach's approve/reject decision on one proposed change."""
+    change = (
+        ProposedChange.objects.filter(
+            pk=pk, batch__plan__in=Plan.objects.for_coach(request.user)
+        )
+        .select_related("batch")
+        .first()
+    )
+    if change is None:
+        raise Http404("Unknown proposed change")
+    if change.batch.status != AgentProposalBatch.Status.PENDING:
+        return JsonResponse(
+            {"ok": False, "error": "This batch has already been resolved."}, status=409
+        )
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+    status = payload.get("status")
+    allowed = {ProposedChange.Status.APPROVED, ProposedChange.Status.REJECTED}
+    if status not in allowed:
+        return HttpResponseBadRequest("status must be 'approved' or 'rejected'.")
+    change.status = status
+    change.save(update_fields=["status"])
+    return JsonResponse({"ok": True, "id": change.pk, "status": change.status})
+
+
+@login_required
+@require_POST
+def batch_apply(request, batch_id):
+    """Apply the batch's approved changes back into the program."""
+    batch = _coach_batch_or_404(request, batch_id)
+    if batch.status != AgentProposalBatch.Status.PENDING:
+        return JsonResponse(
+            {"ok": False, "error": "This batch has already been resolved."}, status=409
+        )
+    result = agent_apply.apply_batch(batch)
+    return JsonResponse(
+        {
+            "ok": True,
+            "applied": result["applied"],
+            "skipped": result["skipped"],
+            "deliver_url": reverse(
+                "meso:deliver_plan", kwargs={"plan_id": batch.plan_id}
+            ),
+        }
+    )
+
+
+@login_required
+@require_POST
+def batch_dismiss(request, batch_id):
+    """Discard a batch without applying anything."""
+    batch = _coach_batch_or_404(request, batch_id)
+    if batch.status != AgentProposalBatch.Status.PENDING:
+        return JsonResponse(
+            {"ok": False, "error": "This batch has already been resolved."}, status=409
+        )
+    agent_apply.dismiss_batch(batch)
+    return JsonResponse(
+        {
+            "ok": True,
+            "designer_url": reverse(
+                "meso:designer_plan", kwargs={"plan_id": batch.plan_id}
+            ),
+        }
+    )
+
+
 # -- still on fixtures until their own slices ------------------------------
 
 
 class ChangeReviewView(LoginRequiredMixin, TemplateView):
     """Review the batch of edits the agent proposes before they hit the program.
 
-    ``review/<batch_id>/`` renders a real, owned ``AgentProposalBatch`` (agent
-    slice Phase 1). The bare ``review/`` stays on fixtures until per-change
-    approve/reject + apply land (Phase 2).
+    ``review/<batch_id>/`` renders a real, owned ``AgentProposalBatch``; the coach
+    approves/rejects per change and applies the batch (Phase 2). The bare
+    ``review/`` redirects to the coach's latest pending batch (fixtures retired).
     """
 
     template_name = "meso/review.html"
 
+    def get(self, request, *args, **kwargs):
+        if kwargs.get("batch_id") is None:
+            plan = _coach_working_plan(request.user)
+            batch = None
+            if plan is not None:
+                batch = (
+                    AgentProposalBatch.objects.filter(
+                        plan=plan, status=AgentProposalBatch.Status.PENDING
+                    )
+                    .order_by("-created_at")
+                    .first()
+                )
+            if batch is None:
+                messages.info(request, "No proposals to review yet.")
+                return redirect("meso:designer")
+            return redirect("meso:review_batch", batch_id=batch.pk)
+        return super().get(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "designer"
-        batch_id = kwargs.get("batch_id")
-        if batch_id is None:
-            ctx["athlete"] = mockdata.athlete_by_slug("maya")
-            ctx["changes"] = mockdata.PROPOSED_CHANGES
-            return ctx
         batch = (
             AgentProposalBatch.objects.filter(
-                pk=batch_id, plan__in=Plan.objects.for_coach(self.request.user)
+                pk=kwargs["batch_id"],
+                plan__in=Plan.objects.for_coach(self.request.user),
             )
             .select_related("plan", "plan__relationship__athlete")
             .first()
@@ -389,6 +503,9 @@ class ChangeReviewView(LoginRequiredMixin, TemplateView):
         if batch is None:
             raise Http404("Unknown proposal batch")
         ctx.update(presenters.review_changes(batch))
+        ctx["batch_id"] = batch.pk
+        ctx["plan_id"] = batch.plan_id
+        ctx["is_pending"] = batch.status == AgentProposalBatch.Status.PENDING
         return ctx
 
 

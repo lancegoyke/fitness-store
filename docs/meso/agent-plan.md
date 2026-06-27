@@ -1,7 +1,7 @@
 # Meso — agent slice plan
 
-**Status:** Phase 1 done & merged (PR #280, squash `953d9d4`; deployed) · created 2026-06-27 ·
-**next = agent Phase 2 (approve/apply)**
+**Status:** Phase 1 done & merged (PR #280, squash `953d9d4`; deployed) · Phase 2 built
+(branch `meso-agent-phase2`) · created 2026-06-27 · **next = agent Phase 3 (designer chat column)**
 **Companion to:** [`decisions.md`](./decisions.md) (B6) · [`persistence-plan.md`](./persistence-plan.md)
 **Goal of this slice:** replace the designer's canned agent-chat engine
 (`detectIntent`/`applyIntent` in `meso.js`) and the review screen
@@ -133,11 +133,23 @@ bypass when `introduces_exercise` was omitted; `rationale` dropped on persist) p
 guardrail-scoping refinements. **Deferred:** approve/apply, the chat rebuild, background job +
 streaming, eval cases.
 
-**Phase 2 — Review gate: approve/reject + apply.**
+**Phase 2 — Review gate: approve/reject + apply. ✅ Built (branch `meso-agent-phase2`).**
 Persist per-change approve/reject on the real review screen; apply approved
 changes back into the program (swap → set prescription name; progress → set
-load; volume → add/remove a set; deload → flag the week); retire
+load; volume → set the prescription's set count; deload → flag the week); retire
 `mockdata.PROPOSED_CHANGES`. `AgentProposalBatch.status` → applied/dismissed.
+
+*Built:* `meso/agent/apply.py` (`apply_change`/`apply_batch`/`dismiss_batch`) applies a
+change's structured `payload` — built deterministically by `agent.validation` from the tool's
+`new_name`/`new_load`/`new_sets` fields (a swap falls back to the contraindication-checked
+`introduces_exercise`). Endpoints (all scoped to a coach-owned batch, 404 otherwise; apply/dismiss
+409 unless still pending): `POST api/change/<pk>/status/` (persist approve/reject),
+`POST api/batch/<id>/apply/` (writes every **non-rejected** change in one transaction → batch
+`applied`, bumps `Plan.modified`, returns the deliver URL), `POST api/batch/<id>/dismiss/`.
+`review.html` now persists each toggle and wires Apply/Discard; the bare `review/` redirects to the
+coach's latest pending batch (fixtures retired). No migration (status/payload already existed). Built
+red→green: +33 tests (179 meso / 319 project-wide). *Done when:* a coach can approve/reject and
+apply a real batch into the program. **No chat UI yet (Phase 3).**
 
 **Phase 3 — Designer agent-chat column.**
 Rebuild the designer's left/agent column (`meso.js` `detectIntent`/`applyIntent`,

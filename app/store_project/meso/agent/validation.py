@@ -46,6 +46,15 @@ _TEXT_FIELDS = {
     "introduces_exercise": 255,
 }
 
+# The structured edit ``agent.apply`` performs per kind, as
+# (prescription/week field, the tool field that supplies it, model ``max_length``).
+# A deload has no value — it flags the week — so it is absent here.
+_APPLY_FIELD = {
+    "swap": ("name", "new_name", 255),
+    "progress": ("load", "new_load", 32),
+    "volume": ("sets", "new_sets", 32),
+}
+
 
 def _singular(word):
     """Cheap plural fold so 'squats' matches 'squat'. Keeps 'ss' (e.g. 'press').
@@ -201,6 +210,21 @@ def clean_change(raw, plan, *, forbidden=None):
                 "introduced movement violates a contraindication "
                 f"({', '.join(sorted(hit))})"
             )
+
+    # The structured edit the apply step (Phase 2) performs. A swap falls back to
+    # the (already contraindication-checked) introduced exercise when the model
+    # omits an explicit new name, so a Phase-1-shaped swap still applies.
+    payload = {}
+    spec = _APPLY_FIELD.get(kind)
+    if spec is not None:
+        field, raw_field, max_len = spec
+        value = raw.get(raw_field, "")
+        value = value.strip()[:max_len] if isinstance(value, str) else ""
+        if not value and kind == "swap":
+            value = cleaned["introduces_exercise"]
+        if value:
+            payload[field] = value
+    cleaned["payload"] = payload
 
     if errors:
         return None, errors
