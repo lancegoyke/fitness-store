@@ -1,6 +1,7 @@
 # Meso — agent slice plan
 
-**Status:** Phase 1 in progress · created 2026-06-27
+**Status:** Phase 1 done & merged (PR #280, squash `953d9d4`; deployed) · created 2026-06-27 ·
+**next = agent Phase 2 (approve/apply)**
 **Companion to:** [`decisions.md`](./decisions.md) (B6) · [`persistence-plan.md`](./persistence-plan.md)
 **Goal of this slice:** replace the designer's canned agent-chat engine
 (`detectIntent`/`applyIntent` in `meso.js`) and the review screen
@@ -109,7 +110,7 @@ clean ones, so a hallucinated or unsafe edit never reaches the review screen.
 
 ## Phasing (one PR each)
 
-**Phase 1 — Proposal engine. ← this PR.**
+**Phase 1 — Proposal engine. ✅ Done & merged (2026-06-27, PR #280).**
 Models (`AgentProposalBatch`, `ProposedChange`) + migration + admin + factories;
 the `agent/` package (client, validation, service); settings; the `POST .../agent/`
 endpoint; read-only `review/<batch_id>/` wiring. Tests: validation unit tests,
@@ -118,6 +119,19 @@ rejection), endpoint tests (ownership / login / method / missing-key guard /
 persists), review-render test.
 *Done when:* a coach instruction produces validated, contraindication-safe
 `ProposedChange` rows the review screen can render. **No real apply, no chat UI.**
+
+*Shipped* (branch `meso-agent-phase1`, **PR #280**, squash `953d9d4`; Django CI green, deployed
+to Hetzner — migration `meso.0004` applied): models + `meso/agent/` (`client`/`validation`/
+`service`) + `POST api/plan/<id>/agent/` (sync; 503 without an API key) + read-only
+`GET review/<batch_id>/`. The validation guardrail enforces, server-side: valid kind, targets
+resolving to the plan's **current week**, consistent session/prescription, a required target per
+kind (swap/progress→prescription, volume→session, deload→none), and a **contraindication backstop**
+that screens only swaps (plural-folded). Model pinned to `claude-opus-4-8`; **adaptive thinking
+omitted** (incompatible with a forced `tool_choice`). Built red→green: 47 new tests (146 meso / 286
+project-wide). **Local Codex review: clean (8 rounds)** — it caught two real bugs (a contraindication
+bypass when `introduces_exercise` was omitted; `rationale` dropped on persist) plus a series of
+guardrail-scoping refinements. **Deferred:** approve/apply, the chat rebuild, background job +
+streaming, eval cases.
 
 **Phase 2 — Review gate: approve/reject + apply.**
 Persist per-change approve/reject on the real review screen; apply approved
