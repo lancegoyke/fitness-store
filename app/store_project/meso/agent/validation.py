@@ -47,10 +47,21 @@ _TEXT_FIELDS = {
 }
 
 
+def _singular(word):
+    """Cheap plural fold so 'squats' matches 'squat'. Keeps 'ss' (e.g. 'press').
+
+    Not a full stemmer — it folds the common plural -s only; richer inflection
+    (e.g. -ing) is left to the later guardrail/eval hardening phase.
+    """
+    if len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
 def _significant_words(text):
     """Movement-meaningful words: alphabetic, length >= 5, not a stopword."""
     return {
-        w
+        _singular(w)
         for w in re.findall(r"[a-z]+", text.lower())
         if len(w) >= 5 and w not in _STOPWORDS
     }
@@ -83,7 +94,8 @@ def forbidden_terms(plan):
 
 
 def _name_words(name):
-    return set(re.findall(r"[a-z]+", name.lower()))
+    # Singular-folded so a plural contraindication term matches a singular name.
+    return {_singular(w) for w in re.findall(r"[a-z]+", name.lower())}
 
 
 def _resolve(model, value, label, errors, **scope):

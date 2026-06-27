@@ -201,6 +201,24 @@ class TestCleanChange:
         assert cleaned is None
         assert any("contraindication" in e for e in errors)
 
+    def test_contraindication_backstop_matches_plural_inflection(self):
+        # 'avoid squats' must still catch a swap introducing a 'Goblet Squat'.
+        athlete = UserFactory()
+        ContraindicationFactory(
+            athlete=athlete, text="Patellar tendinopathy — avoid squats"
+        )
+        plan, _, presc = make_plan(athlete=athlete)
+        cleaned, errors = validation.clean_change(
+            base_change(
+                prescription_id=presc.pk,
+                introduces_exercise="Goblet Squat",
+                after="Goblet Squat 3x10",
+            ),
+            plan,
+        )
+        assert cleaned is None
+        assert any("contraindication" in e for e in errors)
+
     def test_contraindication_backstop_allows_safe_swap(self):
         athlete = UserFactory()
         ContraindicationFactory(
