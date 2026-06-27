@@ -1,0 +1,81 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Session results · Meso{% endblock %}
+
+{% block topnav_actions %}
+  <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer' %}">Adjust next week →</a>
+{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-crumbs">
+      <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span>
+      <a href="{% url 'meso:athlete' athlete.slug %}">{{ athlete.name }}</a> <span>/</span> <span>Session results</span>
+    </div>
+
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Logged session · {{ summary.logged }}</p>
+        <h1 class="meso-h1">{{ summary.session }}</h1>
+        <p class="meso-sub">{{ athlete.name }} · how the delivered targets actually went.</p>
+      </div>
+    </div>
+
+    <!-- summary stats -->
+    <div class="meso-grid meso-grid--3" style="margin-bottom:14px;">
+      <div class="meso-card meso-card--pad">
+        <div style="font-size:26px;font-weight:800;letter-spacing:-0.025em;">{{ summary.completion }}%</div>
+        <div class="meso-row-meta">sets completed</div>
+      </div>
+      <div class="meso-card meso-card--pad">
+        <div style="font-size:26px;font-weight:800;letter-spacing:-0.025em;" class="meso-mono">{{ summary.avg_rpe_delta }}</div>
+        <div class="meso-row-meta">avg RPE vs target</div>
+      </div>
+      <div class="meso-card meso-card--pad">
+        <div style="font-size:26px;font-weight:800;letter-spacing:-0.025em;color:var(--warn);">1</div>
+        <div class="meso-row-meta">flag to act on</div>
+      </div>
+    </div>
+
+    <!-- agent flag -->
+    <div class="meso-card meso-card--pad" style="margin-bottom:14px;display:flex;gap:11px;align-items:flex-start;background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 22%,#fff);">
+      <span style="width:21px;height:21px;border-radius:6px;background:var(--warn);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;flex:0 0 auto;">!</span>
+      <div style="line-height:1.4;">
+        <div style="font-size:13px;font-weight:700;color:var(--warn);">Agent caught a fatigue signal</div>
+        <div style="font-size:12.5px;color:var(--warn);">{{ summary.flag }}</div>
+      </div>
+      <div class="meso-spacer"></div>
+      <a class="meso-btn" href="{% url 'meso:review' %}" style="flex:0 0 auto;">Apply to next week</a>
+    </div>
+
+    <!-- per-exercise results -->
+    <div class="meso-card">
+      <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,1.1fr) 56px minmax(0,1.3fr);gap:10px;padding:9px 18px;background:var(--rail);border-bottom:1px solid var(--line-2);font-size:10px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--dim);">
+        <div>Exercise</div><div>Target</div><div>Logged</div><div style="text-align:center;">RPE</div><div>Note</div>
+      </div>
+      {% for r in rows %}
+        <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,1.1fr) 56px minmax(0,1.3fr);gap:10px;padding:11px 18px;border-bottom:1px solid var(--line-2);align-items:center;">
+          <div style="font-size:13.5px;font-weight:600;letter-spacing:-0.01em;">{{ r.name }}</div>
+          <div class="meso-mono" style="font-size:11.5px;color:var(--dim);">{{ r.target }}</div>
+          <div class="meso-mono" style="font-size:12px;{% if r.rpe_state == 'over' %}color:var(--warn);font-weight:600;{% endif %}">{{ r.logged }}</div>
+          <div style="text-align:center;">
+            {% if r.rpe == '—' %}
+              <span class="meso-row-meta">—</span>
+            {% elif r.rpe_state == 'over' %}
+              <span class="meso-badge meso-badge--warn meso-mono" style="padding:2px 7px;">{{ r.rpe }}↑</span>
+            {% else %}
+              <span class="meso-badge meso-badge--ok meso-mono" style="padding:2px 7px;">{{ r.rpe }}</span>
+            {% endif %}
+          </div>
+          <div style="font-size:11.5px;color:{% if r.note %}var(--warn){% else %}var(--dim){% endif %};">{{ r.note|default:"—" }}</div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;margin-top:16px;">
+      <a class="meso-btn" href="{% url 'meso:athlete' athlete.slug %}">← {{ athlete.name }}'s profile</a>
+      <div class="meso-spacer"></div>
+      <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer' %}">Adjust next week with the agent →</a>
+    </div>
+  </div>
+{% endblock %}

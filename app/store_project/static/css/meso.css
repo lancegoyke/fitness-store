@@ -20,6 +20,29 @@ body.meso {
   font-family: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
 }
 
+/* Default design tokens. The designer also sets these inline on its root (so it
+   stays self-contained); here they live on .meso so the standard pages inherit
+   them without repeating the block. */
+.meso {
+  --bg: #f5f6f7;
+  --surface: #ffffff;
+  --rail: #fbfbfc;
+  --ink: #16181c;
+  --dim: #71777e;
+  --line: #e7e9ec;
+  --line-2: #f1f3f5;
+  --radius: 8px;
+  --pad: 14px;
+  --accent: oklch(0.56 0.14 258);
+  --accent-ink: #ffffff;
+  --soft: color-mix(in srgb, var(--accent) 9%, #fff);
+  --soft-line: color-mix(in srgb, var(--accent) 26%, #fff);
+  --accent-deep: color-mix(in srgb, var(--accent) 82%, #1a1a1a);
+  --warn: #b4541f;
+  --warn-soft: #fbefe8;
+  --ok: #2f8f56;
+}
+
 .meso input,
 .meso textarea {
   font-family: inherit;
@@ -161,4 +184,348 @@ body.meso {
 .meso .meso-seg-btn--p {
   font-size: 12px;
   padding: 4px 11px;
+}
+
+/* ==========================================================================
+   Shared component layer for the spine screens (roster, profile, review,
+   deliver, results). The designer is a full-viewport tool with its own chrome;
+   these classes give the surrounding pages a consistent look built from the
+   same tokens. Standard pages set --bg/--ink/etc. on body.meso and scroll
+   normally (the designer locks the viewport instead).
+   ========================================================================== */
+
+.meso-app {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- top nav --- */
+.meso-topnav {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 55px;
+  padding: 0 22px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.meso-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-decoration: none;
+  color: var(--ink);
+}
+.meso-brand-mark {
+  width: 23px;
+  height: 23px;
+  border-radius: 6px;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.meso-brand-mark i {
+  width: 8px;
+  height: 8px;
+  background: var(--accent-ink);
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+.meso-brand b {
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: -0.025em;
+}
+.meso-navlinks {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.meso-navlink {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--dim);
+  text-decoration: none;
+  padding: 6px 11px;
+  border-radius: 7px;
+}
+.meso-navlink:hover {
+  background: var(--rail);
+  color: var(--ink);
+}
+.meso-navlink.is-active {
+  color: var(--ink);
+  background: var(--soft);
+}
+.meso-spacer {
+  flex: 1;
+}
+
+/* --- page scaffold --- */
+.meso-page {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 26px 24px 64px;
+}
+.meso-page--narrow {
+  max-width: 860px;
+}
+.meso-eyebrow {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 0 0 8px;
+}
+.meso-h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+.meso-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dim);
+}
+.meso-pagehead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.meso-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--dim);
+  margin-bottom: 14px;
+}
+.meso-crumbs a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+/* --- cards --- */
+.meso-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgba(16, 18, 22, 0.03);
+}
+.meso-card--pad {
+  padding: 18px 20px;
+}
+.meso-grid {
+  display: grid;
+  gap: 14px;
+}
+.meso-grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.meso-grid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.meso-grid--profile {
+  grid-template-columns: 320px minmax(0, 1fr);
+  align-items: start;
+}
+
+/* --- buttons --- */
+.meso-btn {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 14px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+.meso-btn:hover {
+  background: var(--rail);
+}
+.meso-btn--primary {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgba(16, 18, 22, 0.12);
+}
+.meso-btn--primary:hover {
+  filter: brightness(1.06);
+  background: var(--accent);
+}
+.meso-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+  padding-left: 0;
+  padding-right: 0;
+}
+.meso-btn--ghost:hover {
+  background: transparent;
+  text-decoration: underline;
+}
+
+/* --- badges / status pills --- */
+.meso-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.meso-badge i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.meso-badge--accent {
+  color: var(--accent-deep);
+  background: var(--soft);
+  border: 1px solid var(--soft-line);
+}
+.meso-badge--warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 22%, #fff);
+}
+.meso-badge--ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, #fff);
+  border: 1px solid color-mix(in srgb, var(--ok) 26%, #fff);
+}
+.meso-badge--muted {
+  color: var(--dim);
+  background: var(--rail);
+  border: 1px solid var(--line);
+}
+.meso-tag {
+  display: inline-flex;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.meso-tag--accent {
+  background: var(--soft);
+  border-color: var(--soft-line);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+/* --- avatars --- */
+.meso-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: 700;
+  flex: 0 0 auto;
+  background: #eef0f2;
+  color: var(--dim);
+  width: 38px;
+  height: 38px;
+  font-size: 13px;
+}
+.meso-avatar--accent {
+  background: var(--soft);
+  border: 1px solid var(--soft-line);
+  color: var(--accent-deep);
+}
+.meso-avatar--sm {
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+}
+.meso-avatar--lg {
+  width: 48px;
+  height: 48px;
+  border-radius: 13px;
+  font-size: 16px;
+}
+
+/* --- athlete rows / list --- */
+.meso-row {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line-2);
+  text-decoration: none;
+  color: var(--ink);
+}
+.meso-row:last-child {
+  border-bottom: 0;
+}
+.meso-row:hover {
+  background: var(--rail);
+}
+.meso-row-name {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.meso-row-meta {
+  font-size: 11.5px;
+  color: var(--dim);
+}
+
+/* --- progress bar --- */
+.meso-meter {
+  height: 6px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+  flex: 1;
+}
+.meso-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+/* --- divider + misc --- */
+.meso-hr {
+  height: 1px;
+  background: var(--line);
+  border: 0;
+  margin: 16px 0;
+}
+.meso-muted {
+  color: var(--dim);
+}
+.meso-mono {
+  font-family: "IBM Plex Mono", monospace;
 }
