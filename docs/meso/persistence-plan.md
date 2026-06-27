@@ -117,12 +117,21 @@ any pending    ─(recipient declines)→ declined        (re-invite reopens a f
 
 ## Phasing (one PR each)
 
-**Phase 1 — Roles + relationships.**
+**Phase 1 — Roles + relationships. ✅ Done (2026-06-26).**
 Models: `CoachProfile`, `AthleteProfile`, `CoachAthlete`, `Contraindication`. Migrations, admin,
 scoped managers, the invite/accept state machine + email, and roster + athlete-profile reading
 **real** scoped data (replacing those mocks). Factories + tests for scoping and the invite flow.
 *Done when:* a coach sees only their athletes; an athlete can accept/decline/end; roster + profile
 render from the DB.
+
+*Shipped:* the four models live in `store_project/meso/models.py` (`CoachAthlete` carries the
+state machine + `CoachAthleteQuerySet`); tokened `accept`/`decline`/`end` POST views; presenters
+(`presenters.py`) map real models → the existing template shape, with Phase-2/3 fields
+(compliance, block/week, status, macrocycle, results) shown as honest placeholders until their
+slices. Athlete profile now routes by `User` UUID (`/meso/athlete/<uuid:pk>/`), not a mock slug.
+28 meso tests (scoping + invite machine + screen-render smoke). **Deferred to a follow-up:** the
+actual invite *email* send (django-ses + `notifications`) — only the state machine + tokened URLs
+landed here.
 
 **Phase 2 — Program schema.**
 Models: `Plan → Mesocycle → Week → Session → ExercisePrescription` + the hybrid `Exercise` FK.

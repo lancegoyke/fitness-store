@@ -10,7 +10,7 @@
   <div class="meso-page">
     <div class="meso-crumbs">
       <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span>
-      <a href="{% url 'meso:athlete' athlete.slug %}">{{ athlete.name }}</a> <span>/</span> <span>Session results</span>
+      <span>{{ athlete.name }}</span> <span>/</span> <span>Session results</span>
     </div>
 
     <div class="meso-pagehead">
@@ -73,7 +73,7 @@
     </div>
 
     <div style="display:flex;align-items:center;gap:12px;margin-top:16px;">
-      <a class="meso-btn" href="{% url 'meso:athlete' athlete.slug %}">← {{ athlete.name }}'s profile</a>
+      <a class="meso-btn" href="{% url 'meso:roster' %}">← Back to roster</a>
       <div class="meso-spacer"></div>
       <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer' %}">Adjust next week with the agent →</a>
     </div>

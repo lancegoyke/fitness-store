@@ -13,7 +13,7 @@
                get approved() { return Object.values(this.status).filter(s => s === 'approved').length } }">
     <div class="meso-crumbs">
       <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span>
-      <a href="{% url 'meso:athlete' athlete.slug %}">{{ athlete.name }}</a> <span>/</span> <span>Review changes</span>
+      <span>{{ athlete.name }}</span> <span>/</span> <span>Review changes</span>
     </div>
 
     <div class="meso-pagehead">

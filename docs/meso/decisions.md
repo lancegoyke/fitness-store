@@ -180,3 +180,9 @@ _(Append dated entries here as decisions land.)_
   multiple coaches; either party can end it). Plans owned per coach↔athlete relationship (D-a);
   contraindications global, goals per-plan (D-b); bidirectional invites (D-c). Schema is now
   unblocked.
+- 2026-06-26 — **Confirmed (build):** role/profile models live in the **`meso`** app (not
+  `users`); PR 1 ships the invite **state machine + tokened URLs**, with real email send as a
+  follow-up. **Phase 1 built** on branch `meso-persistence-phase1`: `CoachProfile`,
+  `AthleteProfile`, `Contraindication`, `CoachAthlete` (M2M-through + state machine + scoped
+  manager); migration `meso.0001_initial`; admin; factories; 28 tests; roster + athlete-profile
+  read real scoped data. Athlete-profile URL is now `<uuid:pk>` (was a mock slug).
