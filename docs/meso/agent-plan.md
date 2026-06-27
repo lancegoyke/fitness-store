@@ -1,7 +1,7 @@
 # Meso — agent slice plan
 
-**Status:** Phase 1 done & merged (PR #280, squash `953d9d4`; deployed) · Phase 2 built
-(branch `meso-agent-phase2`) · created 2026-06-27 · **next = agent Phase 3 (designer chat column)**
+**Status:** Phase 1 done & merged (PR #280, squash `953d9d4`; deployed) · Phase 2 done & merged
+(PR #282, squash `ee7d456`; deployed) · created 2026-06-27 · **next = agent Phase 3 (designer chat column)**
 **Companion to:** [`decisions.md`](./decisions.md) (B6) · [`persistence-plan.md`](./persistence-plan.md)
 **Goal of this slice:** replace the designer's canned agent-chat engine
 (`detectIntent`/`applyIntent` in `meso.js`) and the review screen
@@ -133,7 +133,7 @@ bypass when `introduces_exercise` was omitted; `rationale` dropped on persist) p
 guardrail-scoping refinements. **Deferred:** approve/apply, the chat rebuild, background job +
 streaming, eval cases.
 
-**Phase 2 — Review gate: approve/reject + apply. ✅ Built (branch `meso-agent-phase2`).**
+**Phase 2 — Review gate: approve/reject + apply. ✅ Done & merged (2026-06-27, PR #282, squash `ee7d456`; deployed).**
 Persist per-change approve/reject on the real review screen; apply approved
 changes back into the program (swap → set prescription name; progress → set
 load; volume → set the prescription's set count; deload → flag the week); retire

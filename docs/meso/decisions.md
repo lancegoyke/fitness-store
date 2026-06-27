@@ -229,7 +229,8 @@ _(Append dated entries here as decisions land.)_
   human approval gate unchanged. 47 new tests (146 meso / 286 project-wide); local Codex review clean
   (8 rounds). Build plan + phasing in [`agent-plan.md`](./agent-plan.md). Resume point → agent Phase 2
   (per-change approve/reject + **apply** back into the program).
-- 2026-06-27 — **Agent Phase 2 built** (branch `meso-agent-phase2`): the review gate now **writes
+- 2026-06-27 — **Agent Phase 2 built & merged** (PR #282, squash `ee7d456`; Django CI green, deployed
+  to Hetzner — **no migration**, `status`/`payload` already existed): the review gate now **writes
   back**. `meso/agent/apply.py` applies each approved change's structured `payload` (swap → prescription
   name; progress → load; volume → set count; deload → flags the week), built deterministically by
   `agent.validation` from the tool's new `new_name`/`new_load`/`new_sets` fields. Endpoints (scoped to a
