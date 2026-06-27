@@ -1,11 +1,12 @@
-/* Meso — AI strength-training program designer.
+/* Meso — strength-training program designer.
  *
- * A faithful port of the Meso.dc.html Claude Design prototype to Alpine.js.
- * All program/agent state is client-side; the "agent" is a canned intent
- * engine (swap-knee / lower-volume / progress / deload) that mutates the
- * in-memory program, exactly as the original prototype did. Replacing
- * dispatch()/applyIntent() with a real backend call is the seam to make this
- * live.
+ * A port of the Meso.dc.html Claude Design prototype to Alpine.js. When the
+ * designer view injects a serialized plan (Phase 3), init() hydrates the grid
+ * from it and edits autosave to the JSON API; without one, the program/weeks/
+ * phases below are fixtures and the page runs fully client-side, as the
+ * original prototype did. The "agent" column is still a canned intent engine
+ * (swap-knee / lower-volume / progress / deload) — replacing dispatch()/
+ * applyIntent() with a real backend call is the next seam to make live.
  */
 document.addEventListener("alpine:init", () => {
   Alpine.data("meso", () => ({
@@ -23,6 +24,13 @@ document.addEventListener("alpine:init", () => {
     delivered: false,
     checks: {},
     exSeq: 1,
+
+    // ---- backend hydration (Phase 3) ----
+    // init() flips these on when the view injects a real plan; otherwise the
+    // fixtures below stand and no network calls are made.
+    live: false,
+    planId: null,
+    csrf: "",
 
     messages: [
       {
@@ -280,6 +288,53 @@ document.addEventListener("alpine:init", () => {
       return this.mode !== "group";
     },
 
+    // ---- backend hydration + autosave (Phase 3) ----
+    init() {
+      const el = document.getElementById("meso-plan-data");
+      if (!el) return; // no plan injected → keep the prototype fixtures
+      let data;
+      try {
+        data = JSON.parse(el.textContent);
+      } catch (e) {
+        console.error("Could not parse plan data", e);
+        return;
+      }
+      this.live = true;
+      this.planId = data.plan.id;
+      if (data.plan.unit) this.unit = data.plan.unit;
+      this.program = data.program;
+      this.weeks = data.weeks;
+      this.phases = data.phases;
+      const csrfEl = document.getElementById("meso-csrf");
+      this.csrf = csrfEl ? csrfEl.dataset.token : "";
+    },
+
+    async apiPost(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": this.csrf,
+        },
+        body: body == null ? null : JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Request failed: " + res.status);
+      return res.json();
+    },
+
+    // Autosave one edited row to its prescription. No-op until a plan is loaded.
+    persistRow(ex) {
+      if (!this.live || !ex || ex.id == null) return;
+      this.apiPost(`/meso/api/plan/${this.planId}/prescription/${ex.id}/`, {
+        name: ex.name ?? "",
+        sets: ex.sets ?? "",
+        reps: ex.reps ?? "",
+        load: ex.load ?? "",
+        rpe: ex.rpe ?? "",
+        note: ex.note ?? "",
+      }).catch((err) => console.error("Autosave failed", err));
+    },
+
     // ---- helpers ----
     numeric(v) {
       const s = String(v == null ? "" : v).trim();
@@ -319,6 +374,7 @@ document.addEventListener("alpine:init", () => {
     // ---- athlete (phone) view: first day, first three lifts ----
     get athleteDay() {
       const day = this.program[0];
+      if (!day) return []; // a plan whose current week has no sessions yet
       return day.exercises.slice(0, 3).map((x, xi) => {
         const setN = parseInt(x.sets, 10) || 3;
         const rows = [];
@@ -362,8 +418,21 @@ document.addEventListener("alpine:init", () => {
       }, 2800);
     },
 
-    addExercise(di) {
-      this.program[di].exercises.push({
+    async addExercise(di) {
+      const day = this.program[di];
+      if (this.live) {
+        try {
+          const data = await this.apiPost(
+            `/meso/api/plan/${this.planId}/session/${day.id}/exercise/`,
+            null,
+          );
+          day.exercises.push(data.prescription);
+        } catch (err) {
+          console.error("Add exercise failed", err);
+        }
+        return;
+      }
+      day.exercises.push({
         id: "n" + this.exSeq++,
         name: "New exercise",
         sets: "3",

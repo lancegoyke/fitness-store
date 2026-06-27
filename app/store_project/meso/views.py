@@ -1,8 +1,13 @@
+import json
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db.models import Max
 from django.http import Http404
+from django.http import HttpResponseBadRequest
 from django.http import HttpResponseForbidden
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
 from django.views.decorators.http import require_POST
@@ -11,17 +16,34 @@ from django.views.generic import TemplateView
 from . import mockdata
 from . import presenters
 from .models import CoachAthlete
+from .models import ExercisePrescription
+from .models import Plan
+from .models import Session
+from .serializers import serialize_plan
+from .serializers import serialize_prescription
 
 
 class MesoDesignerView(LoginRequiredMixin, TemplateView):
-    """The Meso AI strength-training program designer.
+    """The Meso strength-training program designer.
 
-    A self-contained, full-screen coach tool. All program/agent state lives
-    client-side (Alpine.js); the view only serves the shell. Wiring it to real
-    athlete profiles, logged sets, and a live agent is a future step (Phase 3).
+    A self-contained, full-screen coach tool. With a ``plan_id`` the view
+    serializes a real, owned plan into the page and the Alpine front-end
+    hydrates from it (then autosaves edits to the API endpoints below); without
+    one it falls back to the prototype's client-side fixtures until the seed
+    slice (Phase 5) retires them. The agent column stays mock until its slice.
     """
 
     template_name = "meso/designer.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        plan_id = kwargs.get("plan_id")
+        if plan_id is not None:
+            plan = Plan.objects.for_coach(self.request.user).filter(pk=plan_id).first()
+            if plan is None:
+                raise Http404("Unknown plan")
+            ctx["plan_data"] = serialize_plan(plan)
+        return ctx
 
 
 class RosterView(LoginRequiredMixin, TemplateView):
@@ -115,6 +137,98 @@ def relationship_end(request, token):
     link.end()
     messages.success(request, "Relationship ended.")
     return redirect("meso:roster")
+
+
+# -- designer autosave API (Phase 3) --------------------------------------
+#
+# Plain JSON endpoints (no DRF) the designer grid POSTs edits to. Every call is
+# scoped to a plan the requester coaches over an *active* relationship — an
+# existing-but-unowned plan is a 403, never a silent no-op (N2 / the plan's
+# "non-owner POST → 403"). Children (prescription, session) must belong to that
+# plan, or it's a 404.
+
+# Free-form text cells the grid edits, mapped to their model ``max_length``.
+PATCHABLE_FIELDS = {
+    "name": 255,
+    "sets": 32,
+    "reps": 32,
+    "load": 32,
+    "rpe": 32,
+    "note": 255,
+}
+
+
+def _coach_plan_or_forbidden(request, plan_id):
+    """The plan the requester coaches, or an ``HttpResponseForbidden``.
+
+    404 when the plan does not exist; 403 when it exists but the requester is
+    not its coach over an active relationship.
+    """
+    plan = get_object_or_404(Plan, pk=plan_id)
+    if plan.relationship.coach_id != request.user.id or not plan.relationship.is_active:
+        return None, HttpResponseForbidden("You do not own this plan.")
+    return plan, None
+
+
+@login_required
+@require_POST
+def prescription_patch(request, plan_id, pk):
+    """Patch one prescription cell (or a small batch of cells)."""
+    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    prescription = get_object_or_404(
+        ExercisePrescription, pk=pk, session__week__mesocycle__plan=plan
+    )
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+
+    updates = {}
+    for field, max_length in PATCHABLE_FIELDS.items():
+        if field not in payload:
+            continue
+        value = payload[field]
+        if not isinstance(value, str):
+            return HttpResponseBadRequest(f"{field} must be a string.")
+        if len(value) > max_length:
+            return HttpResponseBadRequest(f"{field} is too long.")
+        updates[field] = value
+
+    if updates:
+        for field, value in updates.items():
+            setattr(prescription, field, value)
+        prescription.save(update_fields=list(updates))
+    return JsonResponse(
+        {"ok": True, "prescription": serialize_prescription(prescription)}
+    )
+
+
+@login_required
+@require_POST
+def session_add_exercise(request, plan_id, pk):
+    """Append a blank prescription row to a session."""
+    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    session = get_object_or_404(Session, pk=pk, week__mesocycle__plan=plan)
+    next_order = (session.prescriptions.aggregate(m=Max("order"))["m"] or 0) + 1
+    prescription = ExercisePrescription.objects.create(
+        session=session,
+        name="New exercise",
+        order=next_order,
+        sets="3",
+        reps="10",
+        load="",
+        rpe="7",
+        note="",
+    )
+    return JsonResponse(
+        {"ok": True, "prescription": serialize_prescription(prescription)}, status=201
+    )
 
 
 # -- still on fixtures until their own slices ------------------------------
