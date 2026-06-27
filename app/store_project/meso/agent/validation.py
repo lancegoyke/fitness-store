@@ -172,14 +172,16 @@ def clean_change(raw, plan, *, forbidden=None):
     elif required == "session" and session is None:
         errors.append(f"a {kind} change must target a session")
 
-    # Contraindication backstop on the INTRODUCED movement. Check both
-    # ``introduces_exercise`` and ``after`` — a swap may omit the former, but
+    # Contraindication backstop — only a SWAP introduces a new movement, so only
+    # swaps are screened (a volume/progress edit that *mentions* a flagged
+    # movement, e.g. "overhead pressing − 1 set", is safe and must pass). Check
+    # both ``introduces_exercise`` and ``after`` — a swap may omit the former, but
     # ``after`` still names the new exercise. We deliberately do NOT check
     # ``title``/``before``: those name the *removed* exercise, which is often the
     # contraindicated one being swapped out (checking them would reject the fix).
     if forbidden is None:
         forbidden = forbidden_terms(plan)
-    if forbidden:
+    if forbidden and kind == "swap":
         introduced = f"{cleaned['introduces_exercise']} {cleaned['after']}"
         hit = _name_words(introduced) & forbidden
         if hit:

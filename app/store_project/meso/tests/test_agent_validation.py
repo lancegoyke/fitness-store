@@ -216,6 +216,26 @@ class TestCleanChange:
         assert errors == []
         assert cleaned["introduces_exercise"] == "Box Step-Down (low)"
 
+    def test_non_swap_change_mentioning_a_flagged_movement_is_allowed(self):
+        # Only swaps introduce a movement; a volume/progress edit that merely
+        # mentions a flagged movement (e.g. reducing it) is safe.
+        athlete = UserFactory()
+        ContraindicationFactory(
+            athlete=athlete, text="R shoulder — no overhead pressing"
+        )
+        plan, _, presc = make_plan(athlete=athlete)
+        cleaned, errors = validation.clean_change(
+            base_change(
+                kind="volume",
+                prescription_id=presc.pk,
+                after="Overhead Pressing − 1 set",
+                introduces_exercise="",
+            ),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["kind"] == "volume"
+
     def test_field_lengths_are_truncated_and_types_coerced(self):
         plan, _, presc = make_plan()
         cleaned, errors = validation.clean_change(
