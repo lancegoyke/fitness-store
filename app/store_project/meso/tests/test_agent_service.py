@@ -75,6 +75,7 @@ def test_persists_valid_changes_into_a_batch():
     assert len(changes) == 2
     assert changes[0].kind == "swap"
     assert changes[0].prescription == presc
+    assert changes[0].rationale == "Shorter range of motion."
     assert changes[0].order == 0
     assert changes[1].order == 1
 

@@ -131,6 +131,11 @@ def clean_change(raw, plan, *, forbidden=None):
             value = ""
         cleaned[field] = value.strip()[:max_len]
 
+    # ``rationale`` is the model's explanation the review screen shows; it's a
+    # TextField (no length cap), so it's copied separately from the CharFields.
+    rationale = raw.get("rationale", "")
+    cleaned["rationale"] = rationale.strip() if isinstance(rationale, str) else ""
+
     # Structural: targets must belong to the plan's CURRENT week — the agent is
     # grounded on (and only edits) that week, so an id from another week is out
     # of contract even if it belongs to the same plan.

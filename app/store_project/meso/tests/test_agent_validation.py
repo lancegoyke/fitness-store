@@ -83,6 +83,8 @@ class TestCleanChange:
         assert cleaned["prescription"] == presc
         # A prescription backfills its session for display/apply.
         assert cleaned["session"] == session
+        # The model's explanation is preserved for the review screen.
+        assert cleaned["rationale"] == "Shorter range."
 
     def test_unknown_kind_rejected(self):
         plan, _, _ = make_plan()
