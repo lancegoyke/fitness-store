@@ -22,6 +22,16 @@ from ..models import Session
 
 VALID_KINDS = {"swap", "progress", "volume", "deload"}
 
+# What an actionable change of each kind must resolve to within the plan. A swap
+# or progression edits a specific exercise row; a volume change edits a day; a
+# deload is week/plan-level and needs no specific row. (A resolved prescription
+# backfills its session, so a "session" requirement is met by either.)
+_REQUIRED_TARGET = {
+    "swap": "prescription",
+    "progress": "prescription",
+    "volume": "session",
+}
+
 # Generic words that survive the length filter but carry no movement meaning.
 _STOPWORDS = {"under", "while", "without", "every", "other", "their", "during"}
 
@@ -142,6 +152,14 @@ def clean_change(raw, plan, *, forbidden=None):
         session = presc.session
     cleaned["prescription"] = presc
     cleaned["session"] = session
+
+    # An actionable change must target a real row (a swap/progress with no
+    # prescription, or a volume change with no session, can't be applied).
+    required = _REQUIRED_TARGET.get(kind)
+    if required == "prescription" and presc is None:
+        errors.append(f"a {kind} change must target a prescription")
+    elif required == "session" and session is None:
+        errors.append(f"a {kind} change must target a session")
 
     # Contraindication backstop on the INTRODUCED movement. Check both
     # ``introduces_exercise`` and ``after`` — a swap may omit the former, but

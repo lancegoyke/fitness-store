@@ -113,12 +113,30 @@ class TestCleanChange:
         assert cleaned is None
         assert any("integer" in e for e in errors)
 
-    def test_missing_target_is_allowed(self):
+    def test_deload_without_target_is_allowed(self):
         plan, _, _ = make_plan()
         cleaned, errors = validation.clean_change(base_change(kind="deload"), plan)
         assert errors == []
         assert cleaned["session"] is None
         assert cleaned["prescription"] is None
+
+    def test_swap_without_a_target_is_rejected(self):
+        plan, _, _ = make_plan()
+        # The tool schema doesn't require a target id; an untargeted swap can't
+        # be applied, so the guardrail drops it.
+        raw = base_change()  # no prescription_id / session_id
+        cleaned, errors = validation.clean_change(raw, plan)
+        assert cleaned is None
+        assert any("must target a prescription" in e for e in errors)
+
+    def test_volume_change_targets_a_session(self):
+        plan, session, _ = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="volume", session_id=session.pk, introduces_exercise=""),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["session"] == session
 
     def test_contraindication_backstop_rejects_flagged_swap(self):
         athlete = UserFactory()

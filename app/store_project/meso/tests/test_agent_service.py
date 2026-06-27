@@ -55,7 +55,7 @@ def test_persists_valid_changes_into_a_batch():
                 },
                 {
                     "kind": "progress",
-                    "session_id": session.pk,
+                    "prescription_id": presc.pk,
                     "title": "Trap-Bar Deadlift → 92.5 kg",
                     "rationale": "Anchored to last block.",
                 },
