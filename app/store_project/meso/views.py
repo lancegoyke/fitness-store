@@ -473,16 +473,17 @@ class ChangeReviewView(LoginRequiredMixin, TemplateView):
 
     def get(self, request, *args, **kwargs):
         if kwargs.get("batch_id") is None:
-            plan = _coach_working_plan(request.user)
-            batch = None
-            if plan is not None:
-                batch = (
-                    AgentProposalBatch.objects.filter(
-                        plan=plan, status=AgentProposalBatch.Status.PENDING
-                    )
-                    .order_by("-created_at")
-                    .first()
+            # The latest pending batch across *any* plan the coach owns — a
+            # proposal on one athlete shouldn't be missed because another is the
+            # working plan.
+            batch = (
+                AgentProposalBatch.objects.filter(
+                    plan__in=Plan.objects.for_coach(request.user),
+                    status=AgentProposalBatch.Status.PENDING,
                 )
+                .order_by("-created_at")
+                .first()
+            )
             if batch is None:
                 messages.info(request, "No proposals to review yet.")
                 return redirect("meso:designer")

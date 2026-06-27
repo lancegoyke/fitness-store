@@ -226,6 +226,13 @@ def clean_change(raw, plan, *, forbidden=None):
             payload[field] = value
     cleaned["payload"] = payload
 
+    # Progress/volume can only be applied with a concrete value, so an empty
+    # payload means the change can't be applied — drop it rather than persist an
+    # "approved" edit the apply step would silently skip. A swap is exempt: it
+    # falls back to its (contraindication-checked) introduced exercise.
+    if kind in ("progress", "volume") and not payload:
+        errors.append(f"a {kind} change needs a value to apply ({spec[1]})")
+
     if errors:
         return None, errors
     return cleaned, []

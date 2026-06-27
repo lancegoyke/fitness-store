@@ -244,3 +244,19 @@ class TestReviewBatch:
         resp = client.get(reverse("meso:review"))
         assert resp.status_code == 302
         assert resp.url == reverse("meso:designer")
+
+    def test_bare_review_finds_a_batch_on_any_owned_plan(self, client):
+        # A pending batch on a non-working plan must still be reachable.
+        from store_project.meso.factories import CoachAthleteFactory
+        from store_project.meso.factories import PlanFactory
+
+        coach = UserFactory()
+        plan_a = PlanFactory(relationship=CoachAthleteFactory(coach=coach))
+        plan_b = PlanFactory(relationship=CoachAthleteFactory(coach=coach))
+        # plan_b is the more-recently-modified working plan, but the batch is on A.
+        plan_b.save()
+        batch = AgentProposalBatchFactory(plan=plan_a, coach=coach)
+        client.force_login(coach)
+
+        resp = client.get(reverse("meso:review"))
+        assert resp.url == reverse("meso:review_batch", kwargs={"batch_id": batch.pk})

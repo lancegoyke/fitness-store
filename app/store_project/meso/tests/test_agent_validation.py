@@ -165,7 +165,12 @@ class TestCleanChange:
     def test_volume_change_targets_a_session(self):
         plan, session, _ = make_plan()
         cleaned, errors = validation.clean_change(
-            base_change(kind="volume", session_id=session.pk, introduces_exercise=""),
+            base_change(
+                kind="volume",
+                session_id=session.pk,
+                introduces_exercise="",
+                new_sets="4",
+            ),
             plan,
         )
         assert errors == []
@@ -248,6 +253,7 @@ class TestCleanChange:
                 prescription_id=presc.pk,
                 after="Overhead Pressing − 1 set",
                 introduces_exercise="",
+                new_sets="3",
             ),
             plan,
         )
@@ -321,3 +327,21 @@ class TestApplyPayload:
             plan,
         )
         assert len(cleaned["payload"]["load"]) == 32
+
+    def test_progress_without_a_value_is_rejected(self):
+        # A progress change with no new_load can't be applied; persisting it would
+        # show an "approved" edit the apply step silently skips.
+        plan, _, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk), plan
+        )
+        assert cleaned is None
+        assert any("value to apply" in e for e in errors)
+
+    def test_volume_without_a_value_is_rejected(self):
+        plan, session, _ = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="volume", session_id=session.pk), plan
+        )
+        assert cleaned is None
+        assert any("value to apply" in e for e in errors)
