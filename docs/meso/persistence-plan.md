@@ -1,7 +1,8 @@
 # Meso — persistence slice plan
 
 **Status:** in progress — Phase 1 shipped & deployed 2026-06-27 (PR #270); Phase 2 merged
-2026-06-27 (PR #271); Phase 3 merged 2026-06-27 (PR #274); Phase 4 next · created 2026-06-26
+2026-06-27 (PR #271); Phase 3 merged 2026-06-27 (PR #274); Phase 4 merged 2026-06-27
+(PR #276); Phase 5 next · created 2026-06-26
 **Companion to:** [`decisions.md`](./decisions.md)
 **Goal of this slice:** turn the **coach-side** screens (designer, roster, athlete profile)
 from client-side mocks into real, DB-backed, **tenant-scoped** data. No agent, no athlete app
@@ -170,9 +171,21 @@ guards, and patch-survives-reload — 66 meso / 206 project-wide pass. Local Cod
 **Deferred:** CSRF is wired (token injected, `X-CSRFToken` sent) but a save-failure UI (the static
 "Autosaved" indicator stays put on error) is left for a follow-up.
 
-**Phase 4 — Deliver (lightweight).**
+**Phase 4 — Deliver (lightweight). ✅ Done (2026-06-27).**
 `delivered_at` + `WeekDelivery` snapshot; wire the deliver screen to a real action.
 *Done when:* delivering stamps the week and records a snapshot.
+
+*Shipped* (branch `meso-persistence-phase4`, **PR #276**): `WeekDelivery(week, delivered_at,
+payload JSON)` + migration `meso.0003` (admin: Week inline + standalone read-only; factory).
+`POST api/plan/<id>/deliver/` stamps the plan's current week (`serializers.current_week`, promoted
+from the former `_current_week`) and writes a `serialize_week_snapshot` of its sessions/
+prescriptions, behind the same `_coach_plan_or_forbidden` ownership check (non-owner / inactive →
+403; plan with no week → 400). The deliver screen gains a real plan-bound mode
+`/meso/deliver/<plan_id>/` (the no-arg URL stays on fixtures until Phase 5, mirroring the designer);
+its button POSTs the real action and the designer's Deliver link targets it when a plan is loaded.
+Built red→green: 14 new tests (`test_deliver.py`) — 80 meso / 220 project-wide pass. Local Codex
+review: clean. **Deferred:** scheduling, push/email notifications, and the full "changes since last
+delivery" diff UI (the snapshot is captured now; the diff renders with the agent/athlete slices).
 
 **Phase 5 — Seed + retire mock.**
 `seed_meso_demo` management command (demo coach = you, the demo athletes, relationships, a sample
@@ -191,6 +204,8 @@ plans; athlete sees all their coaches'), the **invite state machine**, and **aut
 ## Open assumptions (carried from the plan; flag to override)
 1. ~~**D-a/D-b/D-c** as recorded in `decisions.md`.~~ — **locked** (decisions log, 2026-06-26).
 2. ~~Roles live in the **`meso`** app (not `users`).~~ — **confirmed**; built there in Phase 1.
-3. "Changes since last delivery" = **snapshot-per-delivery now**, full diff UI deferred. *(Phase 4 — still open.)*
+3. ~~"Changes since last delivery" = **snapshot-per-delivery now**, full diff UI deferred.~~ —
+   **snapshot done** in Phase 4 (`WeekDelivery.payload`); the full diff *UI* is still deferred to
+   the agent/athlete slice.
 4. ~~**Logging models defined now**, UI later.~~ — **done**: `SessionLog`/`LoggedSet` built in
    Phase 2 (models + admin + factories only; athlete-facing logging UI lands with the athlete slice).
