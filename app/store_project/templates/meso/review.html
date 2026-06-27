@@ -89,6 +89,7 @@
         pending: pending,
         statuses: statuses,
         busy: false,
+        inflight: [], // in-flight decision saves; Apply waits on these first
         get approved() {
           return Object.values(this.statuses).filter((s) => s === "approved").length;
         },
@@ -105,22 +106,38 @@
           if (!this.pending || this.busy) return;
           const prev = this.statuses[id];
           this.statuses[id] = status; // optimistic
-          try {
-            const res = await fetch(`/meso/api/change/${id}/status/`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "X-CSRFToken": this.csrf },
-              body: JSON.stringify({ status: status }),
-            });
-            if (!res.ok) throw new Error("Request failed: " + res.status);
-          } catch (e) {
-            this.statuses[id] = prev; // roll back on failure
-            console.error("Could not save decision", e);
-          }
+          const save = (async () => {
+            try {
+              const res = await fetch(`/meso/api/change/${id}/status/`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-CSRFToken": this.csrf,
+                },
+                body: JSON.stringify({ status: status }),
+              });
+              if (!res.ok) throw new Error("Request failed: " + res.status);
+            } catch (e) {
+              this.statuses[id] = prev; // roll back on failure
+              console.error("Could not save decision", e);
+            }
+          })();
+          this.inflight.push(save);
+          save.finally(() => {
+            this.inflight = this.inflight.filter((p) => p !== save);
+          });
+          return save;
+        },
+        // Don't resolve a batch until every pending decision save has landed —
+        // otherwise a just-clicked Reject could be applied before it persists.
+        async settle() {
+          await Promise.allSettled(this.inflight);
         },
         async apply() {
           if (!this.pending || this.busy) return;
           this.busy = true;
           try {
+            await this.settle();
             const data = await this.post(`/meso/api/batch/${this.batchId}/apply/`);
             window.location = data.deliver_url;
           } catch (e) {
@@ -132,6 +149,7 @@
           if (!this.pending || this.busy) return;
           this.busy = true;
           try {
+            await this.settle();
             const data = await this.post(`/meso/api/batch/${this.batchId}/dismiss/`);
             window.location = data.designer_url;
           } catch (e) {

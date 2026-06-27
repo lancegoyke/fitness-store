@@ -75,6 +75,27 @@ class TestApplyChange:
         presc.refresh_from_db()
         assert presc.sets == "4"
 
+    def test_volume_targeting_a_session_sets_all_rows(self):
+        # A volume change may target a whole day (session) rather than one row;
+        # apply it across every prescription so it is never a silent no-op.
+        from store_project.meso.factories import ExercisePrescriptionFactory
+
+        plan, session, presc = make_plan()  # one row at sets == "3"
+        presc2 = ExercisePrescriptionFactory(session=session, name="RDL", sets="3")
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.VOLUME,
+            prescription=None,
+            session=session,
+            payload={"sets": "4"},
+        )
+        result = agent_apply.apply_change(change)
+        presc.refresh_from_db()
+        presc2.refresh_from_db()
+        assert presc.sets == "4"
+        assert presc2.sets == "4"
+        assert result["count"] == 2
+
     def test_deload_flags_the_current_week(self):
         plan, session, _ = make_plan()
         assert session.week.is_deload is False

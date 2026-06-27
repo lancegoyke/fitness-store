@@ -33,6 +33,35 @@ def _apply_prescription_field(change, field, value):
     return {"id": change.pk, "kind": change.kind, "field": field, "value": value}
 
 
+def _apply_volume(change):
+    """Set the new set count.
+
+    A volume change may target one exercise row (set that row) or a whole day
+    (set every row in the session) — the validation contract allows either. We
+    handle both so a valid session-scoped proposal is never a silent no-op.
+    """
+    sets = (change.payload or {}).get("sets")
+    if not sets:
+        return None
+    if change.prescription is not None:
+        return _apply_prescription_field(change, "sets", sets)
+    if change.session_id is None:
+        return None
+    prescriptions = list(change.session.prescriptions.all())
+    if not prescriptions:
+        return None
+    for presc in prescriptions:
+        presc.sets = sets
+        presc.save(update_fields=["sets"])
+    return {
+        "id": change.pk,
+        "kind": change.kind,
+        "field": "sets",
+        "value": sets,
+        "count": len(prescriptions),
+    }
+
+
 def _apply_deload(change):
     """Flag the change's week as a deload (its session's week, else current)."""
     week = change.session.week if change.session_id else current_week(change.batch.plan)
@@ -55,7 +84,7 @@ def apply_change(change):
     if change.kind == ProposedChange.Kind.PROGRESS:
         return _apply_prescription_field(change, "load", payload.get("load"))
     if change.kind == ProposedChange.Kind.VOLUME:
-        return _apply_prescription_field(change, "sets", payload.get("sets"))
+        return _apply_volume(change)
     if change.kind == ProposedChange.Kind.DELOAD:
         return _apply_deload(change)
     return None
