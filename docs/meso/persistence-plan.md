@@ -1,7 +1,7 @@
 # Meso — persistence slice plan
 
-**Status:** in progress — Phase 1 shipped & deployed 2026-06-27 (PR #270); Phase 2 built
-2026-06-27 (branch `meso-persistence-phase2`, not yet merged); Phase 3 next · created 2026-06-26
+**Status:** in progress — Phase 1 shipped & deployed 2026-06-27 (PR #270); Phase 2 merged
+2026-06-27 (PR #271); Phase 3 next · created 2026-06-26
 **Companion to:** [`decisions.md`](./decisions.md)
 **Goal of this slice:** turn the **coach-side** screens (designer, roster, athlete profile)
 from client-side mocks into real, DB-backed, **tenant-scoped** data. No agent, no athlete app
@@ -150,7 +150,7 @@ plan→JSON serializer is `meso/serializers.py` (`serialize_plan` → the design
 `plan`/`program`/`weeks`/`phases` shape; `tags[]`→`tag`; `last`/`adj` deferred to the log/agent
 slices). Migration `meso.0002`; admin with nested inlines; factories for all seven models. Built
 test-first (red→green): 18 new tests (`test_program_models.py` + `test_serializers.py`, the Maya
-round-trip) on top of Phase 1's 28 — 46 meso tests, 186 project-wide, green. **Not yet merged.**
+round-trip) on top of Phase 1's 28 — 46 meso tests, 186 project-wide, green. **Merged as PR #271.**
 
 **Phase 3 — Designer save/load.**
 Hydrate `meso.js` from the serialized plan; the JSON autosave endpoints above; ownership checks.

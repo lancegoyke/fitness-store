@@ -189,12 +189,14 @@ _(Append dated entries here as decisions land.)_
 - 2026-06-27 — **Phase 1 merged & deployed:** PR #270 squash-merged to `main` (`ec06974`),
   Django CI green, deployed to Hetzner (migration applied in prod). Resume point → Phase 2
   (program schema).
-- 2026-06-27 — **Phase 2 built** (branch `meso-persistence-phase2`, not yet merged): the program
+- 2026-06-27 — **Phase 2 built & merged** (PR #271, squash `079b891`; Django CI green): the program
   schema `Plan → Mesocycle → Week → Session → ExercisePrescription` (hybrid catalog `Exercise` FK,
   nullable = B4) + `PlanQuerySet` scoping (D-a) + `SessionLog`/`LoggedSet` (models now, UI later)
   in `meso/models.py`; `CoachAthlete.end()` now archives the relationship's plans (D-c); a
   `serialize_plan` (`meso/serializers.py`) round-trips a seeded plan to the designer's
-  `program`/`weeks`/`phases` shape. Migration `meso.0002`; admin + factories; built red→green
-  (18 new tests, 46 meso / 186 project-wide). Resume point → Phase 3 (designer save/load).
-  Settles B3 in build form: distinct entities, full hierarchy; draft/active/archived status on
-  `Plan` (no separate `ProposedChange` yet — that lands with the agent slice).
+  `program`/`weeks`/`phases` shape (macrocycle phase state derived by sequence position, not
+  `order` arithmetic — robust to non-contiguous order). Migration `meso.0002`; admin + factories;
+  built red→green then a local Codex review pass (19 new tests, 47 meso / 187 project-wide).
+  Resume point → Phase 3 (designer save/load). Settles B3 in build form: distinct entities, full
+  hierarchy; draft/active/archived status on `Plan` (no separate `ProposedChange` yet — that lands
+  with the agent slice).
