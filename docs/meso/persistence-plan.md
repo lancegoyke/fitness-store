@@ -1,9 +1,9 @@
 # Meso — persistence slice plan
 
-**Status:** in progress — Phase 1 shipped & deployed 2026-06-27 (PR #270); Phase 2 merged
-2026-06-27 (PR #271); Phase 3 merged 2026-06-27 (PR #274); Phase 4 merged 2026-06-27
-(PR #276); Phase 5 built 2026-06-27 (`seed_meso_demo` + coach-side mock retired) · created
-2026-06-26
+**Status:** persistence slice complete — Phase 1 shipped & deployed 2026-06-27 (PR #270); Phase 2
+merged 2026-06-27 (PR #271); Phase 3 merged 2026-06-27 (PR #274); Phase 4 merged 2026-06-27
+(PR #276); Phase 5 merged & deployed 2026-06-27 (PR #278, `seed_meso_demo` + coach-side mock
+retired) · created 2026-06-26 · **next = the agent slice (B6)**
 **Companion to:** [`decisions.md`](./decisions.md)
 **Goal of this slice:** turn the **coach-side** screens (designer, roster, athlete profile)
 from client-side mocks into real, DB-backed, **tenant-scoped** data. No agent, no athlete app
@@ -193,7 +193,8 @@ delivery" diff UI (the snapshot is captured now; the diff renders with the agent
 plan); remove `mockdata.py` for coach-side screens. *Done when:* a fresh dev DB shows the same
 screens, now real. (Review/results stay seeded until their slices.)
 
-*Shipped* (branch `meso-persistence-phase5`): `meso/management/commands/seed_meso_demo.py` —
+*Shipped* (branch `meso-persistence-phase5`, **PR #278**, squash `5babceb`; Django CI green,
+deployed to Hetzner): `meso/management/commands/seed_meso_demo.py` —
 **idempotent** (`get_or_create`/`update_or_create` throughout; `--delete` tears the demo down;
 `--coach-email` overrides the default `lancegoyke@gmail.com`). It stands up the prototype's roster
 as real rows: the coach + `CoachProfile` (the COACH_STYLE voice), the five athletes
