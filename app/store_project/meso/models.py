@@ -289,14 +289,16 @@ class CoachAthlete(models.Model):
         """Either party ends an active link → ``ended``.
 
         Ending archives this coach's plans for the athlete (never deletes), and
-        leaves the athlete's other coaches untouched. Plan archiving lands with
-        the program schema in Phase 2; for now this just closes the link.
+        leaves the athlete's other coaches untouched (D-c).
         """
         if self.status != self.Status.ACTIVE:
             raise InvalidTransition(f"Cannot end a link that is {self.status}.")
         self.status = self.Status.ENDED
         self.ended_at = timezone.now()
         self.save(update_fields=["status", "ended_at"])
+        self.plans.exclude(status=Plan.Status.ARCHIVED).update(
+            status=Plan.Status.ARCHIVED
+        )
         return self
 
     @property
@@ -314,3 +316,283 @@ class CoachAthlete(models.Model):
         if self.status == self.Status.PENDING_ATHLETE_REQUEST:
             return self.coach
         return None
+
+
+# ---------------------------------------------------------------------------
+# Program schema (Phase 2)
+#
+# The periodized plan a coach builds for an athlete:
+#
+#   Plan → Mesocycle → Week → Session → ExercisePrescription
+#
+# Owned per coach↔athlete relationship (D-a) so each coach programs
+# independently. ``ExercisePrescription`` links to the catalog ``Exercise`` when
+# one matches and falls back to free text otherwise (the B4 hybrid). The shape is
+# driven by what the designer (``static/js/meso.js``) renders; see
+# ``serializers.serialize_plan`` for the mapping back to that shape.
+# ---------------------------------------------------------------------------
+
+
+class PlanQuerySet(models.QuerySet):
+    def for_coach(self, user):
+        """Plans this coach owns through an *active* relationship (N2/D-a)."""
+        return self.filter(
+            relationship__coach=user,
+            relationship__status=CoachAthlete.Status.ACTIVE,
+        )
+
+    def for_athlete(self, user):
+        """Plans across all of the athlete's active coaches."""
+        return self.filter(
+            relationship__athlete=user,
+            relationship__status=CoachAthlete.Status.ACTIVE,
+        )
+
+    def active(self):
+        return self.filter(status=Plan.Status.ACTIVE)
+
+
+class Plan(models.Model):
+    """A periodized training plan, owned by one coach↔athlete relationship (D-a)."""
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", _("Draft")
+        ACTIVE = "active", _("Active")
+        ARCHIVED = "archived", _("Archived")
+
+    relationship = models.ForeignKey(
+        CoachAthlete,
+        on_delete=models.CASCADE,
+        related_name="plans",
+        verbose_name=_("Relationship"),
+    )
+    title = models.CharField(_("Title"), max_length=255)
+    # Goals/focus are per-plan (D-b); the athlete's contraindications stay global.
+    goal = models.CharField(_("Goal"), max_length=255, blank=True)
+    status = models.CharField(
+        _("Status"), max_length=16, choices=Status, default=Status.DRAFT
+    )
+    unit = models.CharField(
+        _("Unit"), max_length=2, choices=Unit, default=Unit.KILOGRAMS
+    )
+    created = models.DateTimeField(_("Time created"), auto_now_add=True)
+    modified = models.DateTimeField(_("Time last modified"), auto_now=True)
+
+    objects = PlanQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-created"]
+        verbose_name = "Plan"
+        verbose_name_plural = "Plans"
+
+    def __str__(self):
+        return f"{self.title} ({self.athlete.display_name()})"
+
+    @property
+    def coach(self):
+        return self.relationship.coach
+
+    @property
+    def athlete(self):
+        return self.relationship.athlete
+
+
+class Mesocycle(models.Model):
+    """A training block within a plan — one bar in the macrocycle rail."""
+
+    plan = models.ForeignKey(
+        Plan,
+        on_delete=models.CASCADE,
+        related_name="mesocycles",
+        verbose_name=_("Plan"),
+    )
+    name = models.CharField(_("Name"), max_length=255)
+    order = models.PositiveIntegerField(_("Order"), default=0)
+    # Planned length; Week rows are only materialized for blocks being designed.
+    week_count = models.PositiveIntegerField(_("Week count"), default=4)
+
+    class Meta:
+        ordering = ["order"]
+        verbose_name = "Mesocycle"
+        verbose_name_plural = "Mesocycles"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["plan", "order"], name="unique_mesocycle_order"
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class Week(models.Model):
+    """One week within a mesocycle — a column in the designer's week strip."""
+
+    mesocycle = models.ForeignKey(
+        Mesocycle,
+        on_delete=models.CASCADE,
+        related_name="weeks",
+        verbose_name=_("Mesocycle"),
+    )
+    index = models.PositiveIntegerField(_("Week number"))
+    phase = models.CharField(_("Phase"), max_length=64, blank=True)
+    volume = models.PositiveIntegerField(_("Volume"), default=0)
+    intensity = models.PositiveIntegerField(_("Intensity"), default=0)
+    is_deload = models.BooleanField(_("Deload"), default=False)
+    is_current = models.BooleanField(_("Current"), default=False)
+    delivered_at = models.DateTimeField(_("Delivered at"), null=True, blank=True)
+
+    class Meta:
+        ordering = ["index"]
+        verbose_name = "Week"
+        verbose_name_plural = "Weeks"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["mesocycle", "index"], name="unique_week_index"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.mesocycle.name} · Wk {self.index}"
+
+
+class Session(models.Model):
+    """A training day within a week — a column in the designer grid."""
+
+    week = models.ForeignKey(
+        Week,
+        on_delete=models.CASCADE,
+        related_name="sessions",
+        verbose_name=_("Week"),
+    )
+    day_number = models.PositiveIntegerField(_("Day number"))
+    name = models.CharField(_("Name"), max_length=255, blank=True)
+    bias = models.CharField(_("Bias"), max_length=255, blank=True)
+    order = models.PositiveIntegerField(_("Order"), default=0)
+
+    class Meta:
+        ordering = ["order", "day_number"]
+        verbose_name = "Session"
+        verbose_name_plural = "Sessions"
+
+    def __str__(self):
+        return f"Day {self.day_number} · {self.name}".rstrip(" ·")
+
+
+class ExercisePrescription(models.Model):
+    """A prescribed exercise row. Hybrid: catalog FK when matched, else free text (B4).
+
+    ``sets``/``reps``/``load``/``rpe`` are free-form text — the prototype grid
+    accepts ``load="BW"``, ``rpe="—"``, and rep ranges. Numeric coercion happens
+    at read time (the designer JS already does this).
+    """
+
+    session = models.ForeignKey(
+        Session,
+        on_delete=models.CASCADE,
+        related_name="prescriptions",
+        verbose_name=_("Session"),
+    )
+    exercise = models.ForeignKey(
+        "exercises.Exercise",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="meso_prescriptions",
+        verbose_name=_("Catalog exercise"),
+    )
+    name = models.CharField(_("Name"), max_length=255)
+    order = models.PositiveIntegerField(_("Order"), default=0)
+    sets = models.CharField(_("Sets"), max_length=32, blank=True)
+    reps = models.CharField(_("Reps"), max_length=32, blank=True)
+    load = models.CharField(_("Load"), max_length=32, blank=True)
+    rpe = models.CharField(_("RPE"), max_length=32, blank=True)
+    note = models.CharField(_("Note"), max_length=255, blank=True)
+    tags = models.JSONField(_("Tags"), default=list, blank=True)
+
+    class Meta:
+        ordering = ["order"]
+        verbose_name = "Exercise prescription"
+        verbose_name_plural = "Exercise prescriptions"
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def is_catalog_linked(self):
+        """True when this row is backed by a catalog ``Exercise`` (B4 hybrid)."""
+        return self.exercise_id is not None
+
+
+# ---------------------------------------------------------------------------
+# Logging (models now, athlete-facing UI in a later slice)
+#
+# Defined here so results/`last`-load derivation has a home; the logging UI and
+# PWA land with the athlete slice.
+# ---------------------------------------------------------------------------
+
+
+class SessionLog(models.Model):
+    """An athlete's record of having trained a planned session."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        DONE = "done", _("Done")
+
+    session = models.ForeignKey(
+        Session,
+        on_delete=models.CASCADE,
+        related_name="logs",
+        verbose_name=_("Session"),
+    )
+    athlete = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="meso_session_logs",
+        verbose_name=_("Athlete"),
+    )
+    date = models.DateField(_("Date"), null=True, blank=True)
+    status = models.CharField(
+        _("Status"), max_length=16, choices=Status, default=Status.PENDING
+    )
+    notes = models.TextField(_("Notes"), blank=True)
+    created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        verbose_name = "Session log"
+        verbose_name_plural = "Session logs"
+
+    def __str__(self):
+        return f"{self.athlete.display_name()} · {self.session}"
+
+
+class LoggedSet(models.Model):
+    """A single set the athlete logged against a prescription."""
+
+    session_log = models.ForeignKey(
+        SessionLog,
+        on_delete=models.CASCADE,
+        related_name="sets",
+        verbose_name=_("Session log"),
+    )
+    prescription = models.ForeignKey(
+        ExercisePrescription,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="logged_sets",
+        verbose_name=_("Prescription"),
+    )
+    set_number = models.PositiveIntegerField(_("Set number"), default=1)
+    reps = models.CharField(_("Reps"), max_length=32, blank=True)
+    load = models.CharField(_("Load"), max_length=32, blank=True)
+    rpe = models.CharField(_("RPE"), max_length=32, blank=True)
+
+    class Meta:
+        ordering = ["set_number"]
+        verbose_name = "Logged set"
+        verbose_name_plural = "Logged sets"
+
+    def __str__(self):
+        return f"Set {self.set_number}"

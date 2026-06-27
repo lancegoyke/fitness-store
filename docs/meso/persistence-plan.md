@@ -1,6 +1,7 @@
 # Meso — persistence slice plan
 
-**Status:** proposed · 2026-06-26
+**Status:** in progress — Phase 1 shipped & deployed 2026-06-27 (PR #270); Phase 2 built
+2026-06-27 (branch `meso-persistence-phase2`, not yet merged); Phase 3 next · created 2026-06-26
 **Companion to:** [`decisions.md`](./decisions.md)
 **Goal of this slice:** turn the **coach-side** screens (designer, roster, athlete profile)
 from client-side mocks into real, DB-backed, **tenant-scoped** data. No agent, no athlete app
@@ -119,8 +120,9 @@ any pending    ─(recipient declines)→ declined        (re-invite reopens a f
 
 **Phase 1 — Roles + relationships. ✅ Done (2026-06-26).**
 Models: `CoachProfile`, `AthleteProfile`, `CoachAthlete`, `Contraindication`. Migrations, admin,
-scoped managers, the invite/accept state machine + email, and roster + athlete-profile reading
-**real** scoped data (replacing those mocks). Factories + tests for scoping and the invite flow.
+scoped managers, the invite/accept state machine (tokened URLs; email send deferred), and roster +
+athlete-profile reading **real** scoped data (replacing those mocks). Factories + tests for scoping
+and the invite flow.
 *Done when:* a coach sees only their athletes; an athlete can accept/decline/end; roster + profile
 render from the DB.
 
@@ -133,10 +135,22 @@ slices. Athlete profile now routes by `User` UUID (`/meso/athlete/<uuid:pk>/`), 
 actual invite *email* send (django-ses + `notifications`) — only the state machine + tokened URLs
 landed here.
 
-**Phase 2 — Program schema.**
+**Phase 2 — Program schema. ✅ Done (2026-06-27).**
 Models: `Plan → Mesocycle → Week → Session → ExercisePrescription` + the hybrid `Exercise` FK.
 Admin, a plan→JSON serializer, factories. *Done when:* a seeded plan round-trips to the designer's
 expected JSON shape.
+
+*Shipped* (branch `meso-persistence-phase2`): the program hierarchy lives in
+`store_project/meso/models.py` (`Plan` with a `PlanQuerySet` — `for_coach`/`for_athlete`/`active`
+— and `coach`/`athlete` properties off `relationship`; `Mesocycle`/`Week`/`Session` with their
+ordering + `unique` constraints; `ExercisePrescription` with the nullable `exercise` FK = the B4
+hybrid + free-form Char `sets`/`reps`/`load`/`rpe`). Logging models `SessionLog`/`LoggedSet` are
+defined now (UI later). `CoachAthlete.end()` now archives the relationship's plans (D-c). The
+plan→JSON serializer is `meso/serializers.py` (`serialize_plan` → the designer's
+`plan`/`program`/`weeks`/`phases` shape; `tags[]`→`tag`; `last`/`adj` deferred to the log/agent
+slices). Migration `meso.0002`; admin with nested inlines; factories for all seven models. Built
+test-first (red→green): 18 new tests (`test_program_models.py` + `test_serializers.py`, the Maya
+round-trip) on top of Phase 1's 28 — 46 meso tests, 186 project-wide, green. **Not yet merged.**
 
 **Phase 3 — Designer save/load.**
 Hydrate `meso.js` from the serialized plan; the JSON autosave endpoints above; ownership checks.
@@ -161,7 +175,8 @@ plans; athlete sees all their coaches'), the **invite state machine**, and **aut
 (non-owner POST → 403).
 
 ## Open assumptions (carried from the plan; flag to override)
-1. **D-a/D-b/D-c** as recorded in `decisions.md`.
-2. Roles live in the **`meso`** app (not `users`).
-3. "Changes since last delivery" = **snapshot-per-delivery now**, full diff UI deferred.
-4. **Logging models defined now**, UI later.
+1. ~~**D-a/D-b/D-c** as recorded in `decisions.md`.~~ — **locked** (decisions log, 2026-06-26).
+2. ~~Roles live in the **`meso`** app (not `users`).~~ — **confirmed**; built there in Phase 1.
+3. "Changes since last delivery" = **snapshot-per-delivery now**, full diff UI deferred. *(Phase 4 — still open.)*
+4. ~~**Logging models defined now**, UI later.~~ — **done**: `SessionLog`/`LoggedSet` built in
+   Phase 2 (models + admin + factories only; athlete-facing logging UI lands with the athlete slice).

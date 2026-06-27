@@ -4,6 +4,13 @@ from .models import AthleteProfile
 from .models import CoachAthlete
 from .models import CoachProfile
 from .models import Contraindication
+from .models import ExercisePrescription
+from .models import LoggedSet
+from .models import Mesocycle
+from .models import Plan
+from .models import Session
+from .models import SessionLog
+from .models import Week
 
 
 @admin.register(CoachProfile)
@@ -53,3 +60,98 @@ class CoachAthleteAdmin(admin.ModelAdmin):
     )
     raw_id_fields = ("coach", "athlete")
     readonly_fields = ("token", "created_at", "responded_at", "ended_at")
+
+
+# -- program schema --------------------------------------------------------
+
+
+class MesocycleInline(admin.TabularInline):
+    model = Mesocycle
+    extra = 0
+
+
+@admin.register(Plan)
+class PlanAdmin(admin.ModelAdmin):
+    list_display = ("title", "relationship", "status", "unit", "modified")
+    list_filter = ("status", "unit")
+    search_fields = (
+        "title",
+        "relationship__coach__email",
+        "relationship__athlete__email",
+    )
+    raw_id_fields = ("relationship",)
+    inlines = (MesocycleInline,)
+
+
+class WeekInline(admin.TabularInline):
+    model = Week
+    extra = 0
+
+
+@admin.register(Mesocycle)
+class MesocycleAdmin(admin.ModelAdmin):
+    list_display = ("name", "plan", "order", "week_count")
+    raw_id_fields = ("plan",)
+    inlines = (WeekInline,)
+
+
+class SessionInline(admin.TabularInline):
+    model = Session
+    extra = 0
+
+
+@admin.register(Week)
+class WeekAdmin(admin.ModelAdmin):
+    list_display = (
+        "__str__",
+        "phase",
+        "volume",
+        "intensity",
+        "is_deload",
+        "is_current",
+    )
+    list_filter = ("is_deload", "is_current")
+    raw_id_fields = ("mesocycle",)
+    inlines = (SessionInline,)
+
+
+class ExercisePrescriptionInline(admin.TabularInline):
+    model = ExercisePrescription
+    extra = 0
+    raw_id_fields = ("exercise",)
+
+
+@admin.register(Session)
+class SessionAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "week", "day_number", "order")
+    raw_id_fields = ("week",)
+    inlines = (ExercisePrescriptionInline,)
+
+
+@admin.register(ExercisePrescription)
+class ExercisePrescriptionAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "session",
+        "sets",
+        "reps",
+        "load",
+        "rpe",
+        "is_catalog_linked",
+    )
+    search_fields = ("name",)
+    raw_id_fields = ("session", "exercise")
+
+
+class LoggedSetInline(admin.TabularInline):
+    model = LoggedSet
+    extra = 0
+    raw_id_fields = ("prescription",)
+
+
+@admin.register(SessionLog)
+class SessionLogAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "athlete", "date", "status")
+    list_filter = ("status",)
+    raw_id_fields = ("session", "athlete")
+    inlines = (LoggedSetInline,)
