@@ -1,0 +1,75 @@
+{% extends "meso/_meso_base.html" %}
+{% load static %}
+
+{% block title %}Review changes · Meso{% endblock %}
+
+{% block head_extra %}
+  <script defer src="{% static 'js/alpine.min.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+  <div class="meso-page meso-page--narrow"
+       x-data="{ status: { {% for c in changes %}'{{ c.id }}': 'approved',{% endfor %} },
+               get approved() { return Object.values(this.status).filter(s => s === 'approved').length } }">
+    <div class="meso-crumbs">
+      <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span>
+      <a href="{% url 'meso:athlete' athlete.slug %}">{{ athlete.name }}</a> <span>/</span> <span>Review changes</span>
+    </div>
+
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Agent · proposed edits</p>
+        <h1 class="meso-h1">{{ changes|length }} changes for {{ athlete.name }}</h1>
+        <p class="meso-sub">Grounded on her profile, contraindications, and last block's logged sessions.</p>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:13px;">
+      {% for c in changes %}
+        <div class="meso-card meso-card--pad"
+             :style="status['{{ c.id }}'] === 'rejected'
+                     ? 'opacity:0.55;border-color:var(--line)'
+                     : 'border-color:var(--soft-line);box-shadow:0 1px 2px rgba(16,18,22,0.05)'">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;">
+            <span class="meso-badge meso-badge--accent">{{ c.kind }}</span>
+            <span class="meso-row-meta">{{ c.day }}</span>
+            <div class="meso-spacer"></div>
+            <span class="meso-badge meso-badge--ok" x-show="status['{{ c.id }}'] === 'approved'"><i></i>Approved</span>
+            <span class="meso-badge meso-badge--muted" x-show="status['{{ c.id }}'] === 'rejected'"><i></i>Rejected</span>
+          </div>
+
+          <div style="font-size:15px;font-weight:700;letter-spacing:-0.01em;margin-bottom:8px;">{{ c.title }}</div>
+
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+            <span class="meso-mono" style="font-size:12px;color:var(--dim);text-decoration:line-through;">{{ c.before }}</span>
+            <span style="color:var(--accent);">→</span>
+            <span class="meso-mono" style="font-size:12px;color:var(--accent-deep);font-weight:600;">{{ c.after }}</span>
+          </div>
+
+          <p style="margin:0 0 10px;font-size:12.5px;color:var(--ink);line-height:1.45;">{{ c.rationale }}</p>
+
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span class="meso-badge meso-badge--warn" style="font-weight:600;">Honors: {{ c.honors }}</span>
+            <div class="meso-spacer"></div>
+            <div class="meso-seg">
+              <button class="meso-seg-btn" :class="{ 'is-on': status['{{ c.id }}'] === 'approved' }"
+                      @click="status['{{ c.id }}'] = 'approved'">Approve</button>
+              <button class="meso-seg-btn" :class="{ 'is-on': status['{{ c.id }}'] === 'rejected' }"
+                      @click="status['{{ c.id }}'] = 'rejected'">Reject</button>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="meso-card meso-card--pad" style="margin-top:16px;display:flex;align-items:center;gap:14px;position:sticky;bottom:16px;">
+      <div style="font-size:13px;font-weight:700;"><span x-text="approved"></span> of {{ changes|length }} changes approved</div>
+      <div class="meso-row-meta">Rejected edits are discarded — the program keeps its current values.</div>
+      <div class="meso-spacer"></div>
+      <a class="meso-btn" href="{% url 'meso:designer' %}">Back to designer</a>
+      <a class="meso-btn meso-btn--primary" href="{% url 'meso:deliver' %}">
+        Apply <span x-text="approved"></span> &amp; deliver →
+      </a>
+    </div>
+  </div>
+{% endblock %}

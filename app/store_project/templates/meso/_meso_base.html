@@ -1,0 +1,38 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}Meso{% endblock %} · Mastering Fitness</title>
+    <link rel="shortcut icon" href="{% static 'png/favicon-black.png' %}" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{% static 'css/meso.css' %}" />
+    {% block head_extra %}{% endblock %}
+  </head>
+  <body class="meso">
+    <div class="meso-app">
+      <nav class="meso-topnav">
+        <a class="meso-brand" href="{% url 'meso:roster' %}">
+          <span class="meso-brand-mark"><i></i></span>
+          <b>Meso</b>
+        </a>
+        <div class="meso-navlinks">
+          <a class="meso-navlink {% if active == 'roster' %}is-active{% endif %}" href="{% url 'meso:roster' %}">Roster</a>
+          <a class="meso-navlink {% if active == 'designer' %}is-active{% endif %}" href="{% url 'meso:designer' %}">Designer</a>
+        </div>
+        <div class="meso-spacer"></div>
+        {% block topnav_actions %}{% endblock %}
+        <div class="meso-avatar meso-avatar--sm meso-avatar--accent" title="Coach">LG</div>
+      </nav>
+
+      {% block content %}{% endblock %}
+    </div>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

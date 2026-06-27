@@ -1,0 +1,97 @@
+{% extends "meso/_meso_base.html" %}
+{% load static %}
+
+{% block title %}Deliver · Meso{% endblock %}
+
+{% block head_extra %}
+  <script defer src="{% static 'js/alpine.min.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+  <div class="meso-page meso-page--narrow"
+       x-data="{ delivered: false, channels: { push: true, email: true }, schedule: 'scheduled' }">
+    <div class="meso-crumbs">
+      <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span>
+      <a href="{% url 'meso:athlete' athlete.slug %}">{{ athlete.name }}</a> <span>/</span> <span>Deliver</span>
+    </div>
+
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Publish</p>
+        <h1 class="meso-h1">Deliver {{ deliver.what }}</h1>
+        <p class="meso-sub">{{ deliver.sessions }} sessions · to {{ athlete.name }} · once delivered she sees it in her app.</p>
+      </div>
+    </div>
+
+    <!-- pre-deliver -->
+    <div x-show="!delivered" style="display:flex;flex-direction:column;gap:14px;">
+      <div class="meso-card meso-card--pad">
+        <div style="display:flex;align-items:center;gap:13px;">
+          <div class="meso-avatar meso-avatar--lg {% if athlete.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ athlete.initials }}</div>
+          <div>
+            <div class="meso-row-name" style="font-size:15px;">{{ athlete.name }}</div>
+            <div class="meso-row-meta">{{ athlete.block }} · {{ athlete.week }} · starts {{ deliver.starts }}</div>
+          </div>
+          <div class="meso-spacer"></div>
+          <span class="meso-badge meso-badge--accent"><i></i>{{ deliver.what }}</span>
+        </div>
+      </div>
+
+      <div class="meso-card meso-card--pad">
+        <p class="meso-eyebrow">Changes since last delivery</p>
+        <div style="display:flex;flex-direction:column;gap:7px;">
+          {% for ch in deliver.changes_since %}
+            <div style="display:flex;gap:9px;align-items:flex-start;">
+              <span style="width:17px;height:17px;border-radius:5px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:var(--accent-ink);font-size:10px;flex:0 0 auto;margin-top:1px;">✓</span>
+              <span style="font-size:12.5px;line-height:1.35;">{{ ch }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="meso-card meso-card--pad">
+        <p class="meso-eyebrow">Schedule</p>
+        <div class="meso-seg" style="margin-bottom:16px;">
+          <button class="meso-seg-btn meso-seg-btn--v" :class="{ 'is-on': schedule === 'now' }" @click="schedule = 'now'">Send now</button>
+          <button class="meso-seg-btn meso-seg-btn--v" :class="{ 'is-on': schedule === 'scheduled' }" @click="schedule = 'scheduled'">On start date ({{ deliver.starts }})</button>
+        </div>
+
+        <p class="meso-eyebrow">Notify via</p>
+        <div style="display:flex;gap:9px;">
+          <button @click="channels.push = !channels.push" class="meso-tag"
+                  :class="channels.push ? 'meso-tag--accent' : ''"
+                  :style="channels.push ? '' : 'opacity:0.6'"
+                  style="cursor:pointer;padding:7px 12px;">
+            <span x-text="channels.push ? '✓ ' : ''"></span>Push notification
+          </button>
+          <button @click="channels.email = !channels.email" class="meso-tag"
+                  :class="channels.email ? 'meso-tag--accent' : ''"
+                  :style="channels.email ? '' : 'opacity:0.6'"
+                  style="cursor:pointer;padding:7px 12px;">
+            <span x-text="channels.email ? '✓ ' : ''"></span>Email summary
+          </button>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;">
+        <a class="meso-btn" href="{% url 'meso:review' %}">← Back to changes</a>
+        <div class="meso-spacer"></div>
+        <button class="meso-btn meso-btn--primary" @click="delivered = true" style="font-size:13.5px;padding:10px 18px;">Deliver to {{ athlete.name }}</button>
+      </div>
+    </div>
+
+    <!-- post-deliver -->
+    <div x-show="delivered" x-cloak class="meso-card meso-card--pad" style="text-align:center;padding:36px 24px;">
+      <div style="width:46px;height:46px;border-radius:50%;background:var(--ok);display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;margin:0 auto 14px;">✓</div>
+      <h2 style="margin:0 0 4px;font-size:19px;font-weight:800;letter-spacing:-0.02em;">Delivered to {{ athlete.name }}</h2>
+      <p class="meso-sub" style="margin-bottom:20px;">{{ deliver.what }} is live — she'll see Day 1 on her phone<span x-show="schedule === 'scheduled'"> on {{ deliver.starts }}</span>.</p>
+      <div style="display:flex;gap:10px;justify-content:center;">
+        <a class="meso-btn" href="{% url 'meso:roster' %}">Back to roster</a>
+        <a class="meso-btn meso-btn--primary" href="{% url 'meso:results' %}">Track her sessions →</a>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+{% block scripts %}
+  <style>[x-cloak]{display:none !important;}</style>
+{% endblock %}
