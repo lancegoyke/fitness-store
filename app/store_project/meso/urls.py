@@ -14,6 +14,11 @@ urlpatterns = [
     path("designer/", MesoDesignerView.as_view(), name="designer"),
     path("designer/<int:plan_id>/", MesoDesignerView.as_view(), name="designer_plan"),
     path("review/", ChangeReviewView.as_view(), name="review"),
+    path(
+        "review/<int:batch_id>/",
+        ChangeReviewView.as_view(),
+        name="review_batch",
+    ),
     path("deliver/", DeliverView.as_view(), name="deliver"),
     path("deliver/<int:plan_id>/", DeliverView.as_view(), name="deliver_plan"),
     path("results/", ResultsView.as_view(), name="results"),
@@ -40,5 +45,11 @@ urlpatterns = [
         "api/plan/<int:plan_id>/deliver/",
         views.plan_deliver,
         name="api_plan_deliver",
+    ),
+    # Agent proposal engine (agent slice Phase 1).
+    path(
+        "api/plan/<int:plan_id>/agent/",
+        views.agent_propose,
+        name="api_plan_agent",
     ),
 ]

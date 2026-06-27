@@ -600,6 +600,124 @@ class WeekDelivery(models.Model):
         return f"{self.week} · delivered {self.delivered_at:%Y-%m-%d}"
 
 
+# ---------------------------------------------------------------------------
+# Agent proposals (Phase 1 of the agent slice — B6)
+#
+# The agent is a *proposal engine behind the existing review gate*: it writes
+# ``ProposedChange`` rows grouped into an ``AgentProposalBatch``; the coach still
+# approves (apply lands in Phase 2). Proposals are inert until then, so writing
+# them is safe. See ``docs/meso/agent-plan.md``.
+# ---------------------------------------------------------------------------
+
+
+class AgentProposalBatch(models.Model):
+    """One agent run: the coach's instruction + the batch of edits it proposed."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending review")
+        APPLIED = "applied", _("Applied")
+        DISMISSED = "dismissed", _("Dismissed")
+
+    plan = models.ForeignKey(
+        Plan,
+        on_delete=models.CASCADE,
+        related_name="proposal_batches",
+        verbose_name=_("Plan"),
+    )
+    coach = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="meso_proposal_batches",
+        verbose_name=_("Coach"),
+    )
+    instruction = models.TextField(_("Instruction"))
+    summary = models.TextField(_("Agent summary"), blank=True)
+    # The Claude model id the batch was produced with (eval/debugging).
+    model = models.CharField(_("Model"), max_length=64, blank=True)
+    status = models.CharField(
+        _("Status"), max_length=16, choices=Status, default=Status.PENDING
+    )
+    created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Agent proposal batch"
+        verbose_name_plural = "Agent proposal batches"
+
+    def __str__(self):
+        return f"Proposal for {self.plan.title} ({self.changes.count()} changes)"
+
+
+class ProposedChange(models.Model):
+    """A single program edit the agent proposes, awaiting coach approval.
+
+    The structured targets (``session``/``prescription``) are validated to belong
+    to the batch's plan before persistence (``agent.validation``). The display
+    fields mirror the prototype's review badges; ``payload`` is reserved for the
+    apply step (Phase 2).
+    """
+
+    class Kind(models.TextChoices):
+        SWAP = "swap", _("Swap")
+        PROGRESS = "progress", _("Progress")
+        VOLUME = "volume", _("Volume")
+        DELOAD = "deload", _("Deload")
+
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        APPROVED = "approved", _("Approved")
+        REJECTED = "rejected", _("Rejected")
+
+    batch = models.ForeignKey(
+        AgentProposalBatch,
+        on_delete=models.CASCADE,
+        related_name="changes",
+        verbose_name=_("Batch"),
+    )
+    kind = models.CharField(_("Kind"), max_length=16, choices=Kind)
+    session = models.ForeignKey(
+        Session,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="proposed_changes",
+        verbose_name=_("Session"),
+    )
+    prescription = models.ForeignKey(
+        ExercisePrescription,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="proposed_changes",
+        verbose_name=_("Prescription"),
+    )
+    day_label = models.CharField(_("Day label"), max_length=128, blank=True)
+    title = models.CharField(_("Title"), max_length=255)
+    before = models.CharField(_("Before"), max_length=255, blank=True)
+    after = models.CharField(_("After"), max_length=255, blank=True)
+    rationale = models.TextField(_("Rationale"), blank=True)
+    honors = models.CharField(_("Honors"), max_length=255, blank=True)
+    # The exercise a swap introduces — what the contraindication backstop checks.
+    introduces_exercise = models.CharField(
+        _("Introduces exercise"), max_length=255, blank=True
+    )
+    # Reserved for the apply step (Phase 2): the structured edit to perform.
+    payload = models.JSONField(_("Payload"), default=dict, blank=True)
+    status = models.CharField(
+        _("Status"), max_length=16, choices=Status, default=Status.PENDING
+    )
+    order = models.PositiveIntegerField(_("Order"), default=0)
+    created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+
+    class Meta:
+        ordering = ["order", "created_at"]
+        verbose_name = "Proposed change"
+        verbose_name_plural = "Proposed changes"
+
+    def __str__(self):
+        return self.title
+
+
 class LoggedSet(models.Model):
     """A single set the athlete logged against a prescription."""
 

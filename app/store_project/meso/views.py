@@ -10,12 +10,15 @@ from django.http import HttpResponseForbidden
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 
 from . import mockdata
 from . import presenters
+from .agent import service as agent_service
+from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import ExercisePrescription
 from .models import Plan
@@ -24,6 +27,7 @@ from .models import WeekDelivery
 from .serializers import current_week
 from .serializers import serialize_plan
 from .serializers import serialize_prescription
+from .serializers import serialize_proposed_change
 from .serializers import serialize_week_snapshot
 
 
@@ -301,19 +305,90 @@ def plan_deliver(request, plan_id):
     )
 
 
+# -- agent proposal engine (agent slice Phase 1 — B6) ---------------------
+#
+# Runs the Claude proposal engine for an owned plan and persists a reviewable
+# batch (the coach still approves — apply lands in Phase 2). Synchronous for now;
+# a background job + streamed status is a later slice. Returns 503 when no API
+# key is configured so the feature degrades cleanly in envs without creds.
+
+MAX_INSTRUCTION_LENGTH = 2000
+
+
+@login_required
+@require_POST
+def agent_propose(request, plan_id):
+    """Run the agent for a plan and return a reviewable batch of changes."""
+    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+    instruction = payload.get("instruction")
+    if not isinstance(instruction, str) or not instruction.strip():
+        return HttpResponseBadRequest("An instruction is required.")
+    instruction = instruction.strip()
+    if len(instruction) > MAX_INSTRUCTION_LENGTH:
+        return HttpResponseBadRequest("Instruction is too long.")
+
+    try:
+        batch, rejected = agent_service.propose_changes(
+            plan, instruction, coach=request.user
+        )
+    except agent_service.AgentNotConfigured as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=503)
+    except agent_service.AgentError as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=502)
+
+    _touch_plan(plan)
+    return JsonResponse(
+        {
+            "ok": True,
+            "batch_id": batch.pk,
+            "summary": batch.summary,
+            "review_url": reverse("meso:review_batch", kwargs={"batch_id": batch.pk}),
+            "changes": [serialize_proposed_change(c) for c in batch.changes.all()],
+            "rejected": len(rejected),
+        },
+        status=201,
+    )
+
+
 # -- still on fixtures until their own slices ------------------------------
 
 
 class ChangeReviewView(LoginRequiredMixin, TemplateView):
-    """Review the batch of edits the agent proposes before they hit the program."""
+    """Review the batch of edits the agent proposes before they hit the program.
+
+    ``review/<batch_id>/`` renders a real, owned ``AgentProposalBatch`` (agent
+    slice Phase 1). The bare ``review/`` stays on fixtures until per-change
+    approve/reject + apply land (Phase 2).
+    """
 
     template_name = "meso/review.html"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "designer"
-        ctx["athlete"] = mockdata.athlete_by_slug("maya")
-        ctx["changes"] = mockdata.PROPOSED_CHANGES
+        batch_id = kwargs.get("batch_id")
+        if batch_id is None:
+            ctx["athlete"] = mockdata.athlete_by_slug("maya")
+            ctx["changes"] = mockdata.PROPOSED_CHANGES
+            return ctx
+        batch = (
+            AgentProposalBatch.objects.filter(
+                pk=batch_id, plan__in=Plan.objects.for_coach(self.request.user)
+            )
+            .select_related("plan", "plan__relationship__athlete")
+            .first()
+        )
+        if batch is None:
+            raise Http404("Unknown proposal batch")
+        ctx.update(presenters.review_changes(batch))
         return ctx
 
 

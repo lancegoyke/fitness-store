@@ -11,6 +11,7 @@ without inventing numbers.
 from django.utils import timezone
 
 from .serializers import current_week
+from .serializers import serialize_proposed_change
 
 
 def initials(name):
@@ -113,6 +114,18 @@ def deliver_screen(plan):
             "sessions": session_count,
             "is_redelivery": is_redelivery,
         },
+    }
+
+
+def review_changes(batch):
+    """Context for the review screen from a real ``AgentProposalBatch`` (B6).
+
+    Feeds the same template the prototype fixtures did, so a real batch renders
+    unchanged; per-change approve/reject persistence + apply land in Phase 2.
+    """
+    return {
+        "athlete": {"name": batch.plan.athlete.display_name()},
+        "changes": [serialize_proposed_change(c) for c in batch.changes.all()],
     }
 
 
