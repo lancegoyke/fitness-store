@@ -15,6 +15,7 @@ urlpatterns = [
     path("designer/<int:plan_id>/", MesoDesignerView.as_view(), name="designer_plan"),
     path("review/", ChangeReviewView.as_view(), name="review"),
     path("deliver/", DeliverView.as_view(), name="deliver"),
+    path("deliver/<int:plan_id>/", DeliverView.as_view(), name="deliver_plan"),
     path("results/", ResultsView.as_view(), name="results"),
     path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
     path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),
@@ -34,5 +35,10 @@ urlpatterns = [
         "api/plan/<int:plan_id>/session/<int:pk>/exercise/",
         views.session_add_exercise,
         name="api_session_add_exercise",
+    ),
+    path(
+        "api/plan/<int:plan_id>/deliver/",
+        views.plan_deliver,
+        name="api_plan_deliver",
     ),
 ]

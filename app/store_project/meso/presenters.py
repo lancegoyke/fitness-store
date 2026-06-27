@@ -10,6 +10,8 @@ without inventing numbers.
 
 from django.utils import timezone
 
+from .serializers import current_week
+
 
 def initials(name):
     parts = [p for p in name.split() if p]
@@ -85,6 +87,32 @@ def profile_athlete(user):
         "compliance": None,
         "status": "",
         "status_label": "",
+    }
+
+
+def deliver_screen(plan):
+    """Context for the plan-bound deliver screen (Phase 4).
+
+    Real athlete + current-week summary. Scheduling and the full "changes since
+    last delivery" diff are later-slice concerns (notifications / agent), so the
+    template hides those controls in plan mode; we only surface whether this is
+    a first delivery or a re-delivery.
+    """
+    week = current_week(plan)
+    mesocycle = week.mesocycle if week else None
+    session_count = week.sessions.count() if week else 0
+    is_redelivery = week is not None and week.deliveries.exists()
+
+    athlete = profile_athlete(plan.athlete)
+    athlete["block"] = mesocycle.name if mesocycle else ""
+    athlete["week"] = f"Wk {week.index}" if week else ""
+    return {
+        "athlete": athlete,
+        "deliver": {
+            "what": plan.title,
+            "sessions": session_count,
+            "is_redelivery": is_redelivery,
+        },
     }
 
 

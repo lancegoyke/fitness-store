@@ -11,6 +11,7 @@ from .models import Plan
 from .models import Session
 from .models import SessionLog
 from .models import Week
+from .models import WeekDelivery
 
 
 @admin.register(CoachProfile)
@@ -100,6 +101,14 @@ class SessionInline(admin.TabularInline):
     extra = 0
 
 
+class WeekDeliveryInline(admin.TabularInline):
+    model = WeekDelivery
+    extra = 0
+    fields = ("delivered_at", "created_at")
+    readonly_fields = ("delivered_at", "created_at")
+    can_delete = False
+
+
 @admin.register(Week)
 class WeekAdmin(admin.ModelAdmin):
     list_display = (
@@ -109,10 +118,18 @@ class WeekAdmin(admin.ModelAdmin):
         "intensity",
         "is_deload",
         "is_current",
+        "delivered_at",
     )
     list_filter = ("is_deload", "is_current")
     raw_id_fields = ("mesocycle",)
-    inlines = (SessionInline,)
+    inlines = (SessionInline, WeekDeliveryInline)
+
+
+@admin.register(WeekDelivery)
+class WeekDeliveryAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "week", "delivered_at", "created_at")
+    raw_id_fields = ("week",)
+    readonly_fields = ("delivered_at", "payload", "created_at")
 
 
 class ExercisePrescriptionInline(admin.TabularInline):

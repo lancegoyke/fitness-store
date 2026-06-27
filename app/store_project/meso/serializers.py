@@ -93,7 +93,29 @@ def _phase_states(mesocycles, current_mesocycle):
     return states
 
 
-def _current_week(plan, week=None):
+def serialize_week_snapshot(week):
+    """A self-contained snapshot of a week, for a ``WeekDelivery`` payload.
+
+    Captures the week's meta plus its full session/prescription grid so a later
+    delivery can diff against it ("changes since last delivery").
+    """
+    return {
+        "week": {
+            "id": week.pk,
+            "index": week.index,
+            "phase": week.phase,
+            "volume": week.volume,
+            "intensity": week.intensity,
+            "is_deload": week.is_deload,
+        },
+        "sessions": [
+            serialize_session(s)
+            for s in week.sessions.prefetch_related("prescriptions")
+        ],
+    }
+
+
+def current_week(plan, week=None):
     """The week the designer opens to.
 
     An explicit ``week`` wins; otherwise the flagged current week, or — failing
@@ -118,11 +140,11 @@ def serialize_plan(plan, week=None):
     ``week`` optionally pins which week populates ``program``/``weeks``;
     otherwise the flagged current week (or the plan's first) is used.
     """
-    current_week = _current_week(plan, week)
-    current_mesocycle = current_week.mesocycle if current_week else None
+    open_week = current_week(plan, week)
+    current_mesocycle = open_week.mesocycle if open_week else None
 
-    if current_week is not None:
-        sessions = current_week.sessions.prefetch_related("prescriptions")
+    if open_week is not None:
+        sessions = open_week.sessions.prefetch_related("prescriptions")
         program = [serialize_session(s) for s in sessions]
         week_strip = [serialize_week(w) for w in current_mesocycle.weeks.all()]
     else:

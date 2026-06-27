@@ -9,7 +9,7 @@
 
 {% block content %}
   <div class="meso-page meso-page--narrow"
-       x-data="{ delivered: false, channels: { push: true, email: true }, schedule: 'scheduled' }">
+       x-data="mesoDeliver({{ plan_id|default:'null' }}, '{{ csrf_token }}')">
     <div class="meso-crumbs">
       <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span>
       <span>{{ athlete.name }}</span> <span>/</span> <span>Deliver</span>
@@ -30,7 +30,7 @@
           <div class="meso-avatar meso-avatar--lg {% if athlete.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ athlete.initials }}</div>
           <div>
             <div class="meso-row-name" style="font-size:15px;">{{ athlete.name }}</div>
-            <div class="meso-row-meta">{{ athlete.block }} · {{ athlete.week }} · starts {{ deliver.starts }}</div>
+            <div class="meso-row-meta">{{ athlete.block }} · {{ athlete.week }}{% if deliver.starts %} · starts {{ deliver.starts }}{% endif %}</div>
           </div>
           <div class="meso-spacer"></div>
           <span class="meso-badge meso-badge--accent"><i></i>{{ deliver.what }}</span>
@@ -40,43 +40,59 @@
       <div class="meso-card meso-card--pad">
         <p class="meso-eyebrow">Changes since last delivery</p>
         <div style="display:flex;flex-direction:column;gap:7px;">
-          {% for ch in deliver.changes_since %}
-            <div style="display:flex;gap:9px;align-items:flex-start;">
-              <span style="width:17px;height:17px;border-radius:5px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:var(--accent-ink);font-size:10px;flex:0 0 auto;margin-top:1px;">✓</span>
-              <span style="font-size:12.5px;line-height:1.35;">{{ ch }}</span>
-            </div>
-          {% endfor %}
+          {% if plan_id %}
+            <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">
+              {% if deliver.is_redelivery %}Re-delivering {{ athlete.week }} with your latest edits.{% else %}First delivery — {{ athlete.week }} ({{ deliver.sessions }} session{{ deliver.sessions|pluralize }}) is sent to {{ athlete.name }}.{% endif %}
+            </span>
+          {% else %}
+            {% for ch in deliver.changes_since %}
+              <div style="display:flex;gap:9px;align-items:flex-start;">
+                <span style="width:17px;height:17px;border-radius:5px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:var(--accent-ink);font-size:10px;flex:0 0 auto;margin-top:1px;">✓</span>
+                <span style="font-size:12.5px;line-height:1.35;">{{ ch }}</span>
+              </div>
+            {% endfor %}
+          {% endif %}
         </div>
       </div>
 
-      <div class="meso-card meso-card--pad">
-        <p class="meso-eyebrow">Schedule</p>
-        <div class="meso-seg" style="margin-bottom:16px;">
-          <button class="meso-seg-btn meso-seg-btn--v" :class="{ 'is-on': schedule === 'now' }" @click="schedule = 'now'">Send now</button>
-          <button class="meso-seg-btn meso-seg-btn--v" :class="{ 'is-on': schedule === 'scheduled' }" @click="schedule = 'scheduled'">On start date ({{ deliver.starts }})</button>
-        </div>
+      {% if not plan_id %}
+        <div class="meso-card meso-card--pad">
+          <p class="meso-eyebrow">Schedule</p>
+          <div class="meso-seg" style="margin-bottom:16px;">
+            <button class="meso-seg-btn meso-seg-btn--v" :class="{ 'is-on': schedule === 'now' }" @click="schedule = 'now'">Send now</button>
+            <button class="meso-seg-btn meso-seg-btn--v" :class="{ 'is-on': schedule === 'scheduled' }" @click="schedule = 'scheduled'">On start date ({{ deliver.starts }})</button>
+          </div>
 
-        <p class="meso-eyebrow">Notify via</p>
-        <div style="display:flex;gap:9px;">
-          <button @click="channels.push = !channels.push" class="meso-tag"
-                  :class="channels.push ? 'meso-tag--accent' : ''"
-                  :style="channels.push ? '' : 'opacity:0.6'"
-                  style="cursor:pointer;padding:7px 12px;">
-            <span x-text="channels.push ? '✓ ' : ''"></span>Push notification
-          </button>
-          <button @click="channels.email = !channels.email" class="meso-tag"
-                  :class="channels.email ? 'meso-tag--accent' : ''"
-                  :style="channels.email ? '' : 'opacity:0.6'"
-                  style="cursor:pointer;padding:7px 12px;">
-            <span x-text="channels.email ? '✓ ' : ''"></span>Email summary
-          </button>
+          <p class="meso-eyebrow">Notify via</p>
+          <div style="display:flex;gap:9px;">
+            <button @click="channels.push = !channels.push" class="meso-tag"
+                    :class="channels.push ? 'meso-tag--accent' : ''"
+                    :style="channels.push ? '' : 'opacity:0.6'"
+                    style="cursor:pointer;padding:7px 12px;">
+              <span x-text="channels.push ? '✓ ' : ''"></span>Push notification
+            </button>
+            <button @click="channels.email = !channels.email" class="meso-tag"
+                    :class="channels.email ? 'meso-tag--accent' : ''"
+                    :style="channels.email ? '' : 'opacity:0.6'"
+                    style="cursor:pointer;padding:7px 12px;">
+              <span x-text="channels.email ? '✓ ' : ''"></span>Email summary
+            </button>
+          </div>
         </div>
-      </div>
+      {% else %}
+        <div class="meso-card meso-card--pad">
+          <p class="meso-eyebrow">Schedule &amp; notifications</p>
+          <p class="meso-sub" style="margin:0;">Scheduling and push/email notifications arrive with the athlete app.</p>
+        </div>
+      {% endif %}
 
       <div style="display:flex;align-items:center;gap:12px;">
         <a class="meso-btn" href="{% url 'meso:review' %}">← Back to changes</a>
         <div class="meso-spacer"></div>
-        <button class="meso-btn meso-btn--primary" @click="delivered = true" style="font-size:13.5px;padding:10px 18px;">Deliver to {{ athlete.name }}</button>
+        <span x-show="error" x-cloak style="font-size:12.5px;color:var(--warn);">Delivery failed — try again.</span>
+        <button class="meso-btn meso-btn--primary" @click="deliver()" :disabled="sending" style="font-size:13.5px;padding:10px 18px;">
+          <span x-text="sending ? 'Delivering…' : 'Deliver to {{ athlete.name }}'"></span>
+        </button>
       </div>
     </div>
 
@@ -84,7 +100,7 @@
     <div x-show="delivered" x-cloak class="meso-card meso-card--pad" style="text-align:center;padding:36px 24px;">
       <div style="width:46px;height:46px;border-radius:50%;background:var(--ok);display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;margin:0 auto 14px;">✓</div>
       <h2 style="margin:0 0 4px;font-size:19px;font-weight:800;letter-spacing:-0.02em;">Delivered to {{ athlete.name }}</h2>
-      <p class="meso-sub" style="margin-bottom:20px;">{{ deliver.what }} is live — she'll see Day 1 on her phone<span x-show="schedule === 'scheduled'"> on {{ deliver.starts }}</span>.</p>
+      <p class="meso-sub" style="margin-bottom:20px;">{{ deliver.what }} is live — she'll see Day 1 on her phone{% if not plan_id %}<span x-show="schedule === 'scheduled'"> on {{ deliver.starts }}</span>{% endif %}.</p>
       <div style="display:flex;gap:10px;justify-content:center;">
         <a class="meso-btn" href="{% url 'meso:roster' %}">Back to roster</a>
         <a class="meso-btn meso-btn--primary" href="{% url 'meso:results' %}">Track her sessions →</a>
@@ -94,4 +110,42 @@
 {% endblock %}
 {% block scripts %}
   <style>[x-cloak]{display:none !important;}</style>
+  <script>
+    // Deliver screen state. With a planId the "Deliver" button POSTs the real
+    // action (stamp current week + snapshot); without one it just shows the
+    // prototype's success state. Channels/schedule are cosmetic until the
+    // notifications slice.
+    document.addEventListener("alpine:init", () => {
+      Alpine.data("mesoDeliver", (planId, csrf) => ({
+        planId: planId,
+        csrf: csrf,
+        delivered: false,
+        sending: false,
+        error: false,
+        channels: { push: true, email: true },
+        schedule: "scheduled",
+        async deliver() {
+          if (this.planId === null) {
+            this.delivered = true;
+            return;
+          }
+          this.sending = true;
+          this.error = false;
+          try {
+            const res = await fetch(`/meso/api/plan/${this.planId}/deliver/`, {
+              method: "POST",
+              headers: { "X-CSRFToken": this.csrf },
+            });
+            if (!res.ok) throw new Error("Request failed: " + res.status);
+            this.delivered = true;
+          } catch (e) {
+            this.error = true;
+            console.error("Deliver failed", e);
+          } finally {
+            this.sending = false;
+          }
+        },
+      }));
+    });
+  </script>
 {% endblock %}
