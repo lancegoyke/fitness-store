@@ -12,6 +12,7 @@ app_name = "meso"
 urlpatterns = [
     path("", RosterView.as_view(), name="roster"),
     path("designer/", MesoDesignerView.as_view(), name="designer"),
+    path("designer/<int:plan_id>/", MesoDesignerView.as_view(), name="designer_plan"),
     path("review/", ChangeReviewView.as_view(), name="review"),
     path("deliver/", DeliverView.as_view(), name="deliver"),
     path("results/", ResultsView.as_view(), name="results"),
@@ -22,5 +23,16 @@ urlpatterns = [
         "relationship/<uuid:token>/end/",
         views.relationship_end,
         name="relationship_end",
+    ),
+    # Designer autosave API (Phase 3).
+    path(
+        "api/plan/<int:plan_id>/prescription/<int:pk>/",
+        views.prescription_patch,
+        name="api_prescription_patch",
+    ),
+    path(
+        "api/plan/<int:plan_id>/session/<int:pk>/exercise/",
+        views.session_add_exercise,
+        name="api_session_add_exercise",
     ),
 ]

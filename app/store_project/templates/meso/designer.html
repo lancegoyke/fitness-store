@@ -19,6 +19,10 @@
   </head>
 
   <body class="meso">
+    {% if plan_data %}
+      {{ plan_data|json_script:"meso-plan-data" }}
+      <span id="meso-csrf" data-token="{{ csrf_token }}" hidden></span>
+    {% endif %}
     <div
       class="meso meso-root"
       x-data="meso()"
@@ -307,7 +311,7 @@
                   <template x-for="(ex, xi) in day.exercises" :key="ex.id">
                     <div style="display:grid;grid-template-columns:minmax(0,1.75fr) 84px 76px 44px minmax(0,0.92fr);gap:10px;padding:8px 16px;border-bottom:1px solid var(--line-2);align-items:center;">
                       <div style="min-width:0;">
-                        <input class="meso-cell" x-model="ex.name" style="width:100%;appearance:none;border:0;background:transparent;font:inherit;font-size:13.5px;font-weight:600;color:var(--ink);padding:3px 6px;border-radius:5px;outline:none;letter-spacing:-0.01em;" />
+                        <input class="meso-cell" x-model="ex.name" @change="persistRow(ex)" style="width:100%;appearance:none;border:0;background:transparent;font:inherit;font-size:13.5px;font-weight:600;color:var(--ink);padding:3px 6px;border-radius:5px;outline:none;letter-spacing:-0.01em;" />
                         <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:1px 6px;margin-top:1px;min-height:15px;">
                           <template x-if="ex.tag"><span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;color:var(--accent-deep);background:var(--soft);border:1px solid var(--soft-line);padding:0 5px;border-radius:4px;" x-text="ex.tag"></span></template>
                           <template x-if="ex.last"><span style="font-size:10.5px;color:var(--dim);font-family:'IBM Plex Mono',monospace;" x-text="'last: ' + ex.last"></span></template>
@@ -315,19 +319,19 @@
                         </div>
                       </div>
                       <div style="display:flex;align-items:center;justify-content:center;gap:2px;">
-                        <input class="meso-cell" x-model="ex.sets" style="width:30px;text-align:center;appearance:none;border:0;background:transparent;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:4px 2px;border-radius:5px;outline:none;" />
+                        <input class="meso-cell" x-model="ex.sets" @change="persistRow(ex)" style="width:30px;text-align:center;appearance:none;border:0;background:transparent;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:4px 2px;border-radius:5px;outline:none;" />
                         <span style="color:var(--dim);font-size:11px;">&#215;</span>
-                        <input class="meso-cell" x-model="ex.reps" style="width:34px;text-align:center;appearance:none;border:0;background:transparent;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:4px 2px;border-radius:5px;outline:none;" />
+                        <input class="meso-cell" x-model="ex.reps" @change="persistRow(ex)" style="width:34px;text-align:center;appearance:none;border:0;background:transparent;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:4px 2px;border-radius:5px;outline:none;" />
                       </div>
                       <div style="display:flex;align-items:center;justify-content:center;gap:3px;">
-                        <input class="meso-cell" x-model="ex.load" style="width:42px;text-align:right;appearance:none;border:0;background:transparent;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:4px 2px;border-radius:5px;outline:none;" />
+                        <input class="meso-cell" x-model="ex.load" @change="persistRow(ex)" style="width:42px;text-align:right;appearance:none;border:0;background:transparent;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:4px 2px;border-radius:5px;outline:none;" />
                         <span style="font-size:10.5px;color:var(--dim);min-width:14px;" x-text="loadSuffix(ex.load)"></span>
                       </div>
                       <div style="display:flex;justify-content:center;">
-                        <input class="meso-cell" x-model="ex.rpe" style="width:38px;text-align:center;appearance:none;border:0;background:transparent;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:4px 2px;border-radius:5px;outline:none;" />
+                        <input class="meso-cell" x-model="ex.rpe" @change="persistRow(ex)" style="width:38px;text-align:center;appearance:none;border:0;background:transparent;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:4px 2px;border-radius:5px;outline:none;" />
                       </div>
                       <div style="min-width:0;">
-                        <input class="meso-note" x-model="ex.note" placeholder="&#8212;" style="width:100%;appearance:none;border:0;background:transparent;font:inherit;font-size:12px;color:var(--dim);padding:4px 6px;border-radius:5px;outline:none;" />
+                        <input class="meso-note" x-model="ex.note" @change="persistRow(ex)" placeholder="&#8212;" style="width:100%;appearance:none;border:0;background:transparent;font:inherit;font-size:12px;color:var(--dim);padding:4px 6px;border-radius:5px;outline:none;" />
                       </div>
                     </div>
                   </template>
