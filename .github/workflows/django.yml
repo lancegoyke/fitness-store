@@ -3,12 +3,25 @@ name: Django CI
 on:
   push:
     branches: ["main"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   pull_request:
     branches: ["main"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+# Cancel superseded runs on the same PR branch, but let main runs finish
+# so every merge gets its CI + downstream deploy.
+concurrency:
+  group: django-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 15
 
     env:
       SECRET_KEY: NotSecureForTesting
