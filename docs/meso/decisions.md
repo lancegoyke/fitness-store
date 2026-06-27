@@ -200,3 +200,13 @@ _(Append dated entries here as decisions land.)_
   Resume point → Phase 3 (designer save/load). Settles B3 in build form: distinct entities, full
   hierarchy; draft/active/archived status on `Plan` (no separate `ProposedChange` yet — that lands
   with the agent slice).
+- 2026-06-27 — **Phase 5 built** (branch `meso-persistence-phase5`): `seed_meso_demo` management
+  command (idempotent; `--delete` / `--coach-email`) stands up the coach + five athletes +
+  active links + Maya's sample plan as real rows, reproducing the prototype roster/designer. The
+  coach-side **mock is retired**: bare `/meso/designer/` + `/meso/deliver/` redirect to the coach's
+  working plan (`_coach_working_plan`) or the roster, `DeliverView`'s `mockdata.DELIVER` fallback is
+  gone, and `meso.js`'s `program`/`weeks`/`phases` fixtures are emptied (the grid always hydrates
+  from an injected plan). `mockdata.py` now serves **only** the review + results screens (their own
+  slices). 16 new tests, 95 meso / 235 project-wide green. The designer's left-rail/agent/phone
+  chrome stays static prototype HTML by design — it rebuilds with the agent + athlete slices.
+  Resume point → the **agent** slice (B6: proposal engine behind the review gate).

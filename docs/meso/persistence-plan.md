@@ -2,7 +2,8 @@
 
 **Status:** in progress — Phase 1 shipped & deployed 2026-06-27 (PR #270); Phase 2 merged
 2026-06-27 (PR #271); Phase 3 merged 2026-06-27 (PR #274); Phase 4 merged 2026-06-27
-(PR #276); Phase 5 next · created 2026-06-26
+(PR #276); Phase 5 built 2026-06-27 (`seed_meso_demo` + coach-side mock retired) · created
+2026-06-26
 **Companion to:** [`decisions.md`](./decisions.md)
 **Goal of this slice:** turn the **coach-side** screens (designer, roster, athlete profile)
 from client-side mocks into real, DB-backed, **tenant-scoped** data. No agent, no athlete app
@@ -187,10 +188,35 @@ Built red→green: 14 new tests (`test_deliver.py`) — 80 meso / 220 project-wi
 review: clean. **Deferred:** scheduling, push/email notifications, and the full "changes since last
 delivery" diff UI (the snapshot is captured now; the diff renders with the agent/athlete slices).
 
-**Phase 5 — Seed + retire mock.**
+**Phase 5 — Seed + retire mock. ✅ Done (2026-06-27).**
 `seed_meso_demo` management command (demo coach = you, the demo athletes, relationships, a sample
 plan); remove `mockdata.py` for coach-side screens. *Done when:* a fresh dev DB shows the same
 screens, now real. (Review/results stay seeded until their slices.)
+
+*Shipped* (branch `meso-persistence-phase5`): `meso/management/commands/seed_meso_demo.py` —
+**idempotent** (`get_or_create`/`update_or_create` throughout; `--delete` tears the demo down;
+`--coach-email` overrides the default `lancegoyke@gmail.com`). It stands up the prototype's roster
+as real rows: the coach + `CoachProfile` (the COACH_STYLE voice), the five athletes
+(Maya/Devon/Priya/Marcus/Lena) as Users with `AthleteProfile` (training history → derived
+`training_started`) + global `Contraindication`s, an **active** `CoachAthlete` link each, and Maya's
+sample `Plan` — the full `Mesocycle → Week → Session → ExercisePrescription` hierarchy reproducing
+the designer's fixture grid (only the current "Hypertrophy" block materializes weeks; only the
+current Wk 2 materializes sessions), so `serialize_plan` round-trips it straight into the designer
+(3 sessions, a 4-week strip, a done/current/next/future macrocycle). Coach-side **mock retired**:
+the bare `/meso/designer/` and `/meso/deliver/` URLs no longer render client-side fixtures — they
+redirect to the coach's most-recently-touched non-archived plan (`_coach_working_plan`), or to the
+roster if they have none; `DeliverView`'s `mockdata.DELIVER` fallback is gone (deliver.html is
+plan-mode-only now) and `meso.js`'s `program`/`weeks`/`phases` fixtures are emptied (the grid always
+hydrates from an injected plan). Built test-first: 20 new tests (`test_seed_demo.py` +
+`TestBareDesignerDeliver`) — 99 meso / 239 project-wide pass. Local Codex review (3 rounds):
+clean — it tightened the seed's reseed-reconcile contract (`update_or_create` restores a
+stale/ended link + a draft/archived plan to active) and made the bare redirect track the
+last-edited plan (`_touch_plan` bumps `Plan.modified` from the autosave/deliver paths).
+**Deferred (still static prototype HTML, by design):** the designer's left-rail identity/goals/
+contraindications/coach-style + macrocycle and the agent-chat / athlete-phone columns rebuild with
+the **agent** and **athlete** slices; the seed reproduces Maya so the demo stays coherent until
+then. `mockdata.py` remains only for **review** + **results**, which keep their seeds until those
+slices.
 
 ## Out of scope (later slices)
 Real agent + `ProposedChange` (agent slice) · athlete logging UI + PWA + notifications (athlete

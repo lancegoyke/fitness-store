@@ -1,9 +1,17 @@
+import json
+
 import pytest
 from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import ContraindicationFactory
+from store_project.meso.factories import ExercisePrescriptionFactory
+from store_project.meso.factories import MesocycleFactory
+from store_project.meso.factories import PlanFactory
+from store_project.meso.factories import SessionFactory
+from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import Plan
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -119,12 +127,91 @@ class TestInviteActions:
 
 
 class TestScreensRender:
-    """Every Meso screen renders for a logged-in coach (guards template reverses)."""
+    """Every still-seeded Meso screen renders for a logged-in coach.
 
-    @pytest.mark.parametrize(
-        "name", ["roster", "designer", "review", "deliver", "results"]
-    )
+    The coach-side designer/deliver no longer render on fixtures — their bare
+    URLs redirect (see ``TestBareDesignerDeliver``); only review/results (their
+    own slices) and the roster still render directly.
+    """
+
+    @pytest.mark.parametrize("name", ["roster", "review", "results"])
     def test_renders(self, client, name):
         client.force_login(UserFactory())
         resp = client.get(reverse(f"meso:{name}"))
         assert resp.status_code == 200
+
+
+class TestBareDesignerDeliver:
+    """The bare ``/designer/`` and ``/deliver/`` URLs resolve to a real plan.
+
+    Phase 5 retired the client-side fixtures: with no ``plan_id`` the view
+    redirects to the coach's working plan, or back to the roster if they have
+    none. (The ``<plan_id>`` forms are covered in ``test_designer_save`` /
+    ``test_deliver``.)
+    """
+
+    def _working_plan(self, coach):
+        rel = CoachAthleteFactory(coach=coach, athlete=UserFactory())
+        return PlanFactory(relationship=rel, status=Plan.Status.ACTIVE)
+
+    @pytest.mark.parametrize(
+        "bare,target", [("designer", "designer_plan"), ("deliver", "deliver_plan")]
+    )
+    def test_redirects_to_working_plan(self, client, bare, target):
+        coach = UserFactory()
+        plan = self._working_plan(coach)
+        client.force_login(coach)
+        resp = client.get(reverse(f"meso:{bare}"))
+        assert resp.status_code == 302
+        assert resp.url == reverse(f"meso:{target}", kwargs={"plan_id": plan.pk})
+
+    @pytest.mark.parametrize("bare", ["designer", "deliver"])
+    def test_redirects_to_roster_without_a_plan(self, client, bare):
+        client.force_login(UserFactory())
+        resp = client.get(reverse(f"meso:{bare}"))
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+
+    @pytest.mark.parametrize("bare", ["designer", "deliver"])
+    def test_archived_plan_is_not_a_target(self, client, bare):
+        coach = UserFactory()
+        rel = CoachAthleteFactory(coach=coach, athlete=UserFactory())
+        PlanFactory(relationship=rel, status=Plan.Status.ARCHIVED)
+        client.force_login(coach)
+        resp = client.get(reverse(f"meso:{bare}"))
+        assert resp.url == reverse("meso:roster")  # archived → no working plan
+
+    def _plan_with_prescription(self, coach):
+        plan = self._working_plan(coach)
+        presc = ExercisePrescriptionFactory(
+            session=SessionFactory(
+                week=WeekFactory(mesocycle=MesocycleFactory(plan=plan))
+            )
+        )
+        return plan, presc
+
+    def test_redirect_follows_the_last_edited_plan(self, client):
+        # Grid autosaves write child rows; _touch_plan keeps Plan.modified in
+        # sync so the bare redirect tracks the plan the coach last worked.
+        coach = UserFactory()
+        plan_a, presc_a = self._plan_with_prescription(coach)
+        plan_b, presc_b = self._plan_with_prescription(coach)
+        client.force_login(coach)
+
+        def patch(plan, presc):
+            client.post(
+                reverse(
+                    "meso:api_prescription_patch",
+                    kwargs={"plan_id": plan.pk, "pk": presc.pk},
+                ),
+                data=json.dumps({"reps": "8"}),
+                content_type="application/json",
+            )
+
+        patch(plan_b, presc_b)
+        resp = client.get(reverse("meso:designer"))
+        assert resp.url == reverse("meso:designer_plan", kwargs={"plan_id": plan_b.pk})
+
+        patch(plan_a, presc_a)  # now A is the most-recently-worked plan
+        resp = client.get(reverse("meso:designer"))
+        assert resp.url == reverse("meso:designer_plan", kwargs={"plan_id": plan_a.pk})

@@ -1,11 +1,11 @@
 /* Meso — strength-training program designer.
  *
- * A port of the Meso.dc.html Claude Design prototype to Alpine.js. When the
- * designer view injects a serialized plan (Phase 3), init() hydrates the grid
- * from it and edits autosave to the JSON API; without one, the program/weeks/
- * phases below are fixtures and the page runs fully client-side, as the
- * original prototype did. The "agent" column is still a canned intent engine
- * (swap-knee / lower-volume / progress / deload) — replacing dispatch()/
+ * A port of the Meso.dc.html Claude Design prototype to Alpine.js. The designer
+ * view injects a serialized plan and init() hydrates the grid (program / weeks /
+ * phases) from it, then edits autosave to the JSON API. The client-side fixtures
+ * were retired in Phase 5 — the page always renders a real, DB-backed plan now
+ * (the bare URL redirects to one). The "agent" column is still a canned intent
+ * engine (swap-knee / lower-volume / progress / deload) — replacing dispatch()/
  * applyIntent() with a real backend call is the next seam to make live.
  */
 document.addEventListener("alpine:init", () => {
@@ -26,12 +26,15 @@ document.addEventListener("alpine:init", () => {
     exSeq: 1,
 
     // ---- backend hydration (Phase 3) ----
-    // init() flips these on when the view injects a real plan; otherwise the
-    // fixtures below stand and no network calls are made.
+    // init() flips `live` on and fills program/weeks/phases from the plan the
+    // view injects. Without an injected plan nothing hydrates and no network
+    // calls are made (the bare designer URL redirects to a real plan, Phase 5).
     live: false,
     planId: null,
     csrf: "",
 
+    // The agent column is still a canned intent engine (its own slice); these
+    // seed messages stay until the real agent backend replaces dispatch().
     messages: [
       {
         id: 1,
@@ -58,217 +61,11 @@ document.addEventListener("alpine:init", () => {
       },
     ],
 
-    program: [
-      {
-        id: "d1",
-        n: 1,
-        name: "Lower",
-        bias: "Quad bias · knee-safe",
-        exercises: [
-          {
-            id: "e1",
-            name: "Box Squat (to parallel)",
-            sets: "4",
-            reps: "6",
-            load: "70",
-            rpe: "7",
-            note: "",
-            last: "4×6 · 70kg · RPE6",
-            tag: "knee-safe",
-            adj: "Maya → box",
-          },
-          {
-            id: "e2",
-            name: "Bulgarian Split Squat (DB)",
-            sets: "3",
-            reps: "10",
-            load: "18",
-            rpe: "7",
-            note: "",
-            last: "3×10 · 16kg",
-          },
-          {
-            id: "e3",
-            name: "Leg Press (controlled ROM)",
-            sets: "3",
-            reps: "12",
-            load: "110",
-            rpe: "8",
-            note: "",
-          },
-          {
-            id: "e4",
-            name: "Seated Leg Curl",
-            sets: "3",
-            reps: "12",
-            load: "41",
-            rpe: "8",
-            note: "",
-          },
-          {
-            id: "e5",
-            name: "Standing Calf Raise",
-            sets: "4",
-            reps: "15",
-            load: "60",
-            rpe: "—",
-            note: "",
-          },
-        ],
-      },
-      {
-        id: "d2",
-        n: 2,
-        name: "Upper",
-        bias: "Push / pull",
-        exercises: [
-          {
-            id: "e6",
-            name: "Incline DB Press",
-            sets: "4",
-            reps: "8",
-            load: "24",
-            rpe: "7",
-            note: "monitor shoulder",
-            adj: "Devon → neutral grip",
-          },
-          {
-            id: "e7",
-            name: "Chest-Supported Row",
-            sets: "4",
-            reps: "10",
-            load: "27",
-            rpe: "7",
-            note: "",
-          },
-          {
-            id: "e8",
-            name: "Lat Pulldown",
-            sets: "3",
-            reps: "12",
-            load: "52",
-            rpe: "8",
-            note: "",
-          },
-          {
-            id: "e9",
-            name: "DB Shoulder Press",
-            sets: "3",
-            reps: "10",
-            load: "16",
-            rpe: "7",
-            note: "neutral grip",
-          },
-          {
-            id: "e10",
-            name: "Cable Lateral Raise",
-            sets: "3",
-            reps: "15",
-            load: "9",
-            rpe: "—",
-            note: "",
-          },
-        ],
-      },
-      {
-        id: "d3",
-        n: 3,
-        name: "Posterior",
-        bias: "Hinge",
-        exercises: [
-          {
-            id: "e11",
-            name: "Trap-Bar Deadlift",
-            sets: "4",
-            reps: "6",
-            load: "92.5",
-            rpe: "7",
-            note: "",
-            last: "4×6 · 90kg · RPE6",
-            adj: "Lena → RDL",
-          },
-          {
-            id: "e12",
-            name: "Hip Thrust",
-            sets: "3",
-            reps: "10",
-            load: "80",
-            rpe: "8",
-            note: "",
-          },
-          {
-            id: "e13",
-            name: "Romanian Deadlift (3-1-1)",
-            sets: "3",
-            reps: "8",
-            load: "60",
-            rpe: "7",
-            note: "tempo eccentric",
-          },
-          {
-            id: "e14",
-            name: "Reverse Lunge (DB)",
-            sets: "3",
-            reps: "12",
-            load: "14",
-            rpe: "—",
-            note: "knee-monitored",
-            tag: "knee-safe",
-          },
-          {
-            id: "e15",
-            name: "Hanging Knee Raise",
-            sets: "3",
-            reps: "12",
-            load: "BW",
-            rpe: "—",
-            note: "",
-          },
-        ],
-      },
-    ],
-
-    weeks: [
-      {
-        label: "Wk 1",
-        phase: "Accum",
-        vol: 70,
-        inten: 62,
-        deload: false,
-        current: false,
-      },
-      {
-        label: "Wk 2",
-        phase: "Accum",
-        vol: 85,
-        inten: 68,
-        deload: false,
-        current: true,
-      },
-      {
-        label: "Wk 3",
-        phase: "Accum",
-        vol: 100,
-        inten: 73,
-        deload: false,
-        current: false,
-      },
-      {
-        label: "Wk 4",
-        phase: "Deload",
-        vol: 55,
-        inten: 70,
-        deload: true,
-        current: false,
-      },
-    ],
-
-    phases: [
-      { name: "Base / GPP", weeks: "4 wk", state: "done" },
-      { name: "Hypertrophy", weeks: "4 wk", state: "current" },
-      { name: "Strength", weeks: "4 wk", state: "next" },
-      { name: "Peak / Test", weeks: "2 wk", state: "future" },
-    ],
+    // Hydrated by init() from the injected plan (program = current week's
+    // sessions, weeks = its mesocycle's week strip, phases = the macrocycle).
+    program: [],
+    weeks: [],
+    phases: [],
 
     chips: [
       { label: "Lower Day 2 volume", intent: "lower-volume-d2" },
@@ -291,7 +88,7 @@ document.addEventListener("alpine:init", () => {
     // ---- backend hydration + autosave (Phase 3) ----
     init() {
       const el = document.getElementById("meso-plan-data");
-      if (!el) return; // no plan injected → keep the prototype fixtures
+      if (!el) return; // no plan injected → empty grid (bare URL redirects away)
       let data;
       try {
         data = JSON.parse(el.textContent);
