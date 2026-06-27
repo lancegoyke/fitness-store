@@ -90,6 +90,7 @@
         statuses: statuses,
         busy: false,
         inflight: [], // in-flight decision saves; Apply waits on these first
+        chains: {}, // id -> last save promise, to serialize per-change saves
         get approved() {
           return Object.values(this.statuses).filter((s) => s === "approved").length;
         },
@@ -105,8 +106,8 @@
         async setStatus(id, status) {
           if (!this.pending || this.busy) return;
           const prev = this.statuses[id];
-          this.statuses[id] = status; // optimistic
-          const save = (async () => {
+          this.statuses[id] = status; // optimistic; last click wins in the UI
+          const run = async () => {
             try {
               const res = await fetch(`/meso/api/change/${id}/status/`, {
                 method: "POST",
@@ -118,15 +119,22 @@
               });
               if (!res.ok) throw new Error("Request failed: " + res.status);
             } catch (e) {
-              this.statuses[id] = prev; // roll back on failure
+              // Only roll back if no newer click has superseded this one.
+              if (this.statuses[id] === status) this.statuses[id] = prev;
               console.error("Could not save decision", e);
             }
-          })();
-          this.inflight.push(save);
-          save.finally(() => {
-            this.inflight = this.inflight.filter((p) => p !== save);
+          };
+          // Chain per change id so saves hit the server in click order — the
+          // last click always wins server-side, even under rapid toggling.
+          const prevChain = this.chains[id] || Promise.resolve();
+          const next = prevChain.then(run, run);
+          this.chains[id] = next;
+          this.inflight.push(next);
+          next.finally(() => {
+            this.inflight = this.inflight.filter((p) => p !== next);
+            if (this.chains[id] === next) delete this.chains[id];
           });
-          return save;
+          return next;
         },
         // Don't resolve a batch until every pending decision save has landed —
         // otherwise a just-clicked Reject could be applied before it persists.
