@@ -27,26 +27,52 @@ from .serializers import serialize_prescription
 from .serializers import serialize_week_snapshot
 
 
+def _coach_working_plan(user):
+    """The coach's most-recently-touched, non-archived plan, or None.
+
+    The target the bare ``/meso/designer/`` and ``/meso/deliver/`` URLs resolve
+    to now that the client-side fixtures are retired (Phase 5): a coach lands on
+    the plan they last worked, or back on the roster if they have none.
+    """
+    return (
+        Plan.objects.for_coach(user)
+        .exclude(status=Plan.Status.ARCHIVED)
+        .order_by("-modified")
+        .first()
+    )
+
+
 class MesoDesignerView(LoginRequiredMixin, TemplateView):
     """The Meso strength-training program designer.
 
-    A self-contained, full-screen coach tool. With a ``plan_id`` the view
-    serializes a real, owned plan into the page and the Alpine front-end
-    hydrates from it (then autosaves edits to the API endpoints below); without
-    one it falls back to the prototype's client-side fixtures until the seed
-    slice (Phase 5) retires them. The agent column stays mock until its slice.
+    A self-contained, full-screen coach tool. The view serializes a real, owned
+    plan into the page and the Alpine front-end hydrates from it (then autosaves
+    edits to the API endpoints below). The bare URL has no fixtures anymore — it
+    redirects to the coach's working plan (or the roster). The agent column
+    stays mock until its slice.
     """
 
     template_name = "meso/designer.html"
 
+    def get(self, request, *args, **kwargs):
+        if kwargs.get("plan_id") is None:
+            plan = _coach_working_plan(request.user)
+            if plan is None:
+                messages.info(request, "Pick an athlete to start a program.")
+                return redirect("meso:roster")
+            return redirect("meso:designer_plan", plan_id=plan.pk)
+        return super().get(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        plan_id = kwargs.get("plan_id")
-        if plan_id is not None:
-            plan = Plan.objects.for_coach(self.request.user).filter(pk=plan_id).first()
-            if plan is None:
-                raise Http404("Unknown plan")
-            ctx["plan_data"] = serialize_plan(plan)
+        plan = (
+            Plan.objects.for_coach(self.request.user)
+            .filter(pk=kwargs["plan_id"])
+            .first()
+        )
+        if plan is None:
+            raise Http404("Unknown plan")
+        ctx["plan_data"] = serialize_plan(plan)
         return ctx
 
 
@@ -174,6 +200,17 @@ def _coach_plan_or_forbidden(request, plan_id):
     return plan, None
 
 
+def _touch_plan(plan):
+    """Bump the plan's ``modified`` so it reads as the coach's working plan.
+
+    The autosave/deliver endpoints write *child* rows (prescriptions, weeks),
+    which would otherwise leave ``Plan.modified`` stale — and ``_coach_working_plan``
+    orders the bare designer/deliver redirect target by it. ``modified`` is
+    ``auto_now``, so saving the field stamps it now.
+    """
+    plan.save(update_fields=["modified"])
+
+
 @login_required
 @require_POST
 def prescription_patch(request, plan_id, pk):
@@ -206,6 +243,7 @@ def prescription_patch(request, plan_id, pk):
         for field, value in updates.items():
             setattr(prescription, field, value)
         prescription.save(update_fields=list(updates))
+        _touch_plan(plan)
     return JsonResponse(
         {"ok": True, "prescription": serialize_prescription(prescription)}
     )
@@ -230,6 +268,7 @@ def session_add_exercise(request, plan_id, pk):
         rpe="7",
         note="",
     )
+    _touch_plan(plan)
     return JsonResponse(
         {"ok": True, "prescription": serialize_prescription(prescription)}, status=201
     )
@@ -251,6 +290,7 @@ def plan_deliver(request, plan_id):
     WeekDelivery.objects.create(
         week=week, delivered_at=now, payload=serialize_week_snapshot(week)
     )
+    _touch_plan(plan)
     return JsonResponse(
         {
             "ok": True,
@@ -280,27 +320,35 @@ class ChangeReviewView(LoginRequiredMixin, TemplateView):
 class DeliverView(LoginRequiredMixin, TemplateView):
     """Confirm what gets sent to the athlete, when, and how.
 
-    With a ``plan_id`` the screen binds to a real, owned plan: it shows that
-    plan's athlete + current week and its "Deliver" button POSTs to
-    ``plan_deliver`` (stamp + snapshot). Without one it falls back to the
-    prototype fixtures until the seed slice (Phase 5) retires them.
+    The screen binds to a real, owned plan: it shows that plan's athlete +
+    current week and its "Deliver" button POSTs to ``plan_deliver`` (stamp +
+    snapshot). The bare URL redirects to the coach's working plan (or the
+    roster) now that the prototype fixtures are retired (Phase 5).
     """
 
     template_name = "meso/deliver.html"
 
+    def get(self, request, *args, **kwargs):
+        if kwargs.get("plan_id") is None:
+            plan = _coach_working_plan(request.user)
+            if plan is None:
+                messages.info(request, "Pick an athlete to deliver a program.")
+                return redirect("meso:roster")
+            return redirect("meso:deliver_plan", plan_id=plan.pk)
+        return super().get(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "designer"
-        plan_id = kwargs.get("plan_id")
-        if plan_id is not None:
-            plan = Plan.objects.for_coach(self.request.user).filter(pk=plan_id).first()
-            if plan is None:
-                raise Http404("Unknown plan")
-            ctx["plan_id"] = plan.pk
-            ctx.update(presenters.deliver_screen(plan))
-        else:
-            ctx["deliver"] = mockdata.DELIVER
-            ctx["athlete"] = mockdata.athlete_by_slug(mockdata.DELIVER["athlete"])
+        plan = (
+            Plan.objects.for_coach(self.request.user)
+            .filter(pk=kwargs["plan_id"])
+            .first()
+        )
+        if plan is None:
+            raise Http404("Unknown plan")
+        ctx["plan_id"] = plan.pk
+        ctx.update(presenters.deliver_screen(plan))
         return ctx
 
 
