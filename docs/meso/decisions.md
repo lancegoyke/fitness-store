@@ -229,3 +229,13 @@ _(Append dated entries here as decisions land.)_
   human approval gate unchanged. 47 new tests (146 meso / 286 project-wide); local Codex review clean
   (8 rounds). Build plan + phasing in [`agent-plan.md`](./agent-plan.md). Resume point → agent Phase 2
   (per-change approve/reject + **apply** back into the program).
+- 2026-06-27 — **Agent Phase 2 built** (branch `meso-agent-phase2`): the review gate now **writes
+  back**. `meso/agent/apply.py` applies each approved change's structured `payload` (swap → prescription
+  name; progress → load; volume → set count; deload → flags the week), built deterministically by
+  `agent.validation` from the tool's new `new_name`/`new_load`/`new_sets` fields. Endpoints (scoped to a
+  coach-owned batch): `POST api/change/<pk>/status/` persists per-change approve/reject;
+  `POST api/batch/<id>/apply/` applies every non-rejected change in one transaction → batch `applied`,
+  bumps `Plan.modified`; `POST api/batch/<id>/dismiss/` → `dismissed`. `review.html` persists toggles
+  and wires Apply/Discard; bare `review/` redirects to the latest pending batch and `mockdata.PROPOSED_CHANGES`
+  is retired. No migration (status/payload already existed). +33 tests (179 meso / 319 project-wide).
+  Resume point → agent Phase 3 (designer agent-chat column).

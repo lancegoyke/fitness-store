@@ -58,6 +58,7 @@ def test_persists_valid_changes_into_a_batch():
                     "prescription_id": presc.pk,
                     "title": "Trap-Bar Deadlift → 92.5 kg",
                     "rationale": "Anchored to last block.",
+                    "new_load": "92.5 kg",
                 },
             ],
         }
@@ -78,6 +79,38 @@ def test_persists_valid_changes_into_a_batch():
     assert changes[0].rationale == "Shorter range of motion."
     assert changes[0].order == 0
     assert changes[1].order == 1
+
+
+def test_persisted_changes_carry_an_apply_payload():
+    plan, _, presc = make_plan()
+    fake = FakeClient(
+        {
+            "summary": "",
+            "changes": [
+                {
+                    "kind": "swap",
+                    "prescription_id": presc.pk,
+                    "title": "Back Squat → Box Squat",
+                    "rationale": "Shorter range.",
+                    "introduces_exercise": "Box Squat",
+                },
+                {
+                    "kind": "progress",
+                    "prescription_id": presc.pk,
+                    "title": "Back Squat → 65 kg",
+                    "rationale": "Small step.",
+                    "new_load": "65 kg",
+                },
+            ],
+        }
+    )
+
+    batch, rejected = service.propose_changes(plan, "go", coach=plan.coach, client=fake)
+
+    assert rejected == []
+    changes = list(batch.changes.all())
+    assert changes[0].payload == {"name": "Box Squat"}
+    assert changes[1].payload == {"load": "65 kg"}
 
 
 def test_grounds_the_client_on_plan_and_contraindications():

@@ -9,8 +9,7 @@
 
 {% block content %}
   <div class="meso-page meso-page--narrow"
-       x-data="{ status: { {% for c in changes %}'{{ c.id }}': 'approved',{% endfor %} },
-               get approved() { return Object.values(this.status).filter(s => s === 'approved').length } }">
+       x-data="mesoReview({{ batch_id }}, '{{ csrf_token }}', {{ is_pending|yesno:'true,false' }}, { {% for c in changes %}'{{ c.id }}': '{% if c.status == 'rejected' %}rejected{% else %}approved{% endif %}',{% endfor %} })">
     <div class="meso-crumbs">
       <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span>
       <span>{{ athlete.name }}</span> <span>/</span> <span>Review changes</span>
@@ -24,18 +23,24 @@
       </div>
     </div>
 
+    {% if not is_pending %}
+      <div class="meso-card meso-card--pad" style="margin-bottom:13px;">
+        <span class="meso-badge meso-badge--muted"><i></i>This batch has already been resolved — it can no longer be edited.</span>
+      </div>
+    {% endif %}
+
     <div style="display:flex;flex-direction:column;gap:13px;">
       {% for c in changes %}
         <div class="meso-card meso-card--pad"
-             :style="status['{{ c.id }}'] === 'rejected'
+             :style="statuses[{{ c.id }}] === 'rejected'
                      ? 'opacity:0.55;border-color:var(--line)'
                      : 'border-color:var(--soft-line);box-shadow:0 1px 2px rgba(16,18,22,0.05)'">
           <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;">
             <span class="meso-badge meso-badge--accent">{{ c.kind }}</span>
             <span class="meso-row-meta">{{ c.day }}</span>
             <div class="meso-spacer"></div>
-            <span class="meso-badge meso-badge--ok" x-show="status['{{ c.id }}'] === 'approved'"><i></i>Approved</span>
-            <span class="meso-badge meso-badge--muted" x-show="status['{{ c.id }}'] === 'rejected'"><i></i>Rejected</span>
+            <span class="meso-badge meso-badge--ok" x-show="statuses[{{ c.id }}] === 'approved'"><i></i>Approved</span>
+            <span class="meso-badge meso-badge--muted" x-show="statuses[{{ c.id }}] === 'rejected'"><i></i>Rejected</span>
           </div>
 
           <div style="font-size:15px;font-weight:700;letter-spacing:-0.01em;margin-bottom:8px;">{{ c.title }}</div>
@@ -49,13 +54,13 @@
           <p style="margin:0 0 10px;font-size:12.5px;color:var(--ink);line-height:1.45;">{{ c.rationale }}</p>
 
           <div style="display:flex;align-items:center;gap:10px;">
-            <span class="meso-badge meso-badge--warn" style="font-weight:600;">Honors: {{ c.honors }}</span>
+            {% if c.honors %}<span class="meso-badge meso-badge--warn" style="font-weight:600;">Honors: {{ c.honors }}</span>{% endif %}
             <div class="meso-spacer"></div>
             <div class="meso-seg">
-              <button class="meso-seg-btn" :class="{ 'is-on': status['{{ c.id }}'] === 'approved' }"
-                      @click="status['{{ c.id }}'] = 'approved'">Approve</button>
-              <button class="meso-seg-btn" :class="{ 'is-on': status['{{ c.id }}'] === 'rejected' }"
-                      @click="status['{{ c.id }}'] = 'rejected'">Reject</button>
+              <button class="meso-seg-btn" :class="{ 'is-on': statuses[{{ c.id }}] === 'approved' }"
+                      @click="setStatus({{ c.id }}, 'approved')" :disabled="!pending || busy">Approve</button>
+              <button class="meso-seg-btn" :class="{ 'is-on': statuses[{{ c.id }}] === 'rejected' }"
+                      @click="setStatus({{ c.id }}, 'rejected')" :disabled="!pending || busy">Reject</button>
             </div>
           </div>
         </div>
@@ -66,10 +71,101 @@
       <div style="font-size:13px;font-weight:700;"><span x-text="approved"></span> of {{ changes|length }} changes approved</div>
       <div class="meso-row-meta">Rejected edits are discarded — the program keeps its current values.</div>
       <div class="meso-spacer"></div>
-      <a class="meso-btn" href="{% url 'meso:designer' %}">Back to designer</a>
-      <a class="meso-btn meso-btn--primary" href="{% url 'meso:deliver' %}">
+      <button class="meso-btn" @click="dismiss()" :disabled="!pending || busy">Discard</button>
+      <button class="meso-btn meso-btn--primary" @click="apply()" :disabled="!pending || busy">
         Apply <span x-text="approved"></span> &amp; deliver →
-      </a>
+      </button>
     </div>
   </div>
+
+  <script>
+    // Review-gate state. Per-change Approve/Reject persists immediately; "Apply"
+    // writes every non-rejected change back into the program then sends the coach
+    // to deliver; "Discard" dismisses the batch without applying anything.
+    document.addEventListener("alpine:init", () => {
+      Alpine.data("mesoReview", (batchId, csrf, pending, statuses) => ({
+        batchId: batchId,
+        csrf: csrf,
+        pending: pending,
+        statuses: statuses,
+        busy: false,
+        inflight: [], // in-flight decision saves; Apply waits on these first
+        chains: {}, // id -> last save promise, to serialize per-change saves
+        get approved() {
+          return Object.values(this.statuses).filter((s) => s === "approved").length;
+        },
+        async post(url) {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-CSRFToken": this.csrf },
+            body: JSON.stringify({}),
+          });
+          if (!res.ok) throw new Error("Request failed: " + res.status);
+          return res.json();
+        },
+        async setStatus(id, status) {
+          if (!this.pending || this.busy) return;
+          const prev = this.statuses[id];
+          this.statuses[id] = status; // optimistic; last click wins in the UI
+          const run = async () => {
+            try {
+              const res = await fetch(`/meso/api/change/${id}/status/`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-CSRFToken": this.csrf,
+                },
+                body: JSON.stringify({ status: status }),
+              });
+              if (!res.ok) throw new Error("Request failed: " + res.status);
+            } catch (e) {
+              // Only roll back if no newer click has superseded this one.
+              if (this.statuses[id] === status) this.statuses[id] = prev;
+              console.error("Could not save decision", e);
+            }
+          };
+          // Chain per change id so saves hit the server in click order — the
+          // last click always wins server-side, even under rapid toggling.
+          const prevChain = this.chains[id] || Promise.resolve();
+          const next = prevChain.then(run, run);
+          this.chains[id] = next;
+          this.inflight.push(next);
+          next.finally(() => {
+            this.inflight = this.inflight.filter((p) => p !== next);
+            if (this.chains[id] === next) delete this.chains[id];
+          });
+          return next;
+        },
+        // Don't resolve a batch until every pending decision save has landed —
+        // otherwise a just-clicked Reject could be applied before it persists.
+        async settle() {
+          await Promise.allSettled(this.inflight);
+        },
+        async apply() {
+          if (!this.pending || this.busy) return;
+          this.busy = true;
+          try {
+            await this.settle();
+            const data = await this.post(`/meso/api/batch/${this.batchId}/apply/`);
+            window.location = data.deliver_url;
+          } catch (e) {
+            this.busy = false;
+            console.error("Apply failed", e);
+          }
+        },
+        async dismiss() {
+          if (!this.pending || this.busy) return;
+          this.busy = true;
+          try {
+            await this.settle();
+            const data = await this.post(`/meso/api/batch/${this.batchId}/dismiss/`);
+            window.location = data.designer_url;
+          } catch (e) {
+            this.busy = false;
+            console.error("Dismiss failed", e);
+          }
+        },
+      }));
+    });
+  </script>
 {% endblock %}

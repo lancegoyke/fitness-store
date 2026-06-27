@@ -46,6 +46,15 @@ _TEXT_FIELDS = {
     "introduces_exercise": 255,
 }
 
+# The structured edit ``agent.apply`` performs per kind, as
+# (prescription/week field, the tool field that supplies it, model ``max_length``).
+# A deload has no value — it flags the week — so it is absent here.
+_APPLY_FIELD = {
+    "swap": ("name", "new_name", 255),
+    "progress": ("load", "new_load", 32),
+    "volume": ("sets", "new_sets", 32),
+}
+
 
 def _singular(word):
     """Cheap plural fold so 'squats' matches 'squat'. Keeps 'ss' (e.g. 'press').
@@ -184,23 +193,49 @@ def clean_change(raw, plan, *, forbidden=None):
     elif required == "session" and session is None:
         errors.append(f"a {kind} change must target a session")
 
+    # The structured edit the apply step (Phase 2) performs, built before the
+    # contraindication backstop so the swap's *apply value* is screened too. A
+    # swap falls back to the introduced exercise when the model omits an explicit
+    # new name, so a Phase-1-shaped swap still applies.
+    payload = {}
+    spec = _APPLY_FIELD.get(kind)
+    if spec is not None:
+        field, raw_field, max_len = spec
+        value = raw.get(raw_field, "")
+        value = value.strip()[:max_len] if isinstance(value, str) else ""
+        if not value and kind == "swap":
+            value = cleaned["introduces_exercise"]
+        if value:
+            payload[field] = value
+    cleaned["payload"] = payload
+
     # Contraindication backstop — only a SWAP introduces a new movement, so only
     # swaps are screened (a volume/progress edit that *mentions* a flagged
     # movement, e.g. "overhead pressing − 1 set", is safe and must pass). Check
-    # both ``introduces_exercise`` and ``after`` — a swap may omit the former, but
-    # ``after`` still names the new exercise. We deliberately do NOT check
-    # ``title``/``before``: those name the *removed* exercise, which is often the
-    # contraindicated one being swapped out (checking them would reject the fix).
+    # the name actually applied (``payload['name']``, which folds in ``new_name``)
+    # plus ``introduces_exercise`` and ``after`` — any of them can carry the new
+    # exercise. We deliberately do NOT check ``title``/``before``: those name the
+    # *removed* exercise, often the contraindicated one being swapped out.
     if forbidden is None:
         forbidden = forbidden_terms(plan)
     if forbidden and kind == "swap":
-        introduced = f"{cleaned['introduces_exercise']} {cleaned['after']}"
+        introduced = (
+            f"{payload.get('name', '')} "
+            f"{cleaned['introduces_exercise']} {cleaned['after']}"
+        )
         hit = _name_words(introduced) & forbidden
         if hit:
             errors.append(
                 "introduced movement violates a contraindication "
                 f"({', '.join(sorted(hit))})"
             )
+
+    # Progress/volume can only be applied with a concrete value, so an empty
+    # payload means the change can't be applied — drop it rather than persist an
+    # "approved" edit the apply step would silently skip. A swap is exempt: it
+    # falls back to its (contraindication-checked) introduced exercise.
+    if kind in ("progress", "volume") and not payload:
+        errors.append(f"a {kind} change needs a value to apply ({spec[1]})")
 
     if errors:
         return None, errors

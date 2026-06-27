@@ -82,6 +82,23 @@ PROPOSE_TOOL = {
                                 "by the contraindication guardrail); else empty."
                             ),
                         },
+                        "new_name": {
+                            "type": "string",
+                            "description": (
+                                "swap only: the exercise name to set on the row "
+                                "(defaults to introduces_exercise if omitted)."
+                            ),
+                        },
+                        "new_load": {
+                            "type": "string",
+                            "description": (
+                                "progress only: the load to set, e.g. '92.5 kg'."
+                            ),
+                        },
+                        "new_sets": {
+                            "type": "string",
+                            "description": "volume only: the set count to set, e.g. '4'.",
+                        },
                     },
                     "required": ["kind", "title", "rationale"],
                 },
@@ -104,6 +121,8 @@ SYSTEM_PROMPT = (
     "alternative and name it in introduces_exercise.\n"
     "- Anchor load progressions to the values already in the plan; prefer small, "
     "defensible steps.\n"
+    "- Give the value to apply: new_name for a swap, new_load for a progress, "
+    "new_sets for a volume change. A deload needs no value.\n"
     "- Set 'honors' to the specific contraindication or coaching rule each change "
     "respects.\n"
     "- If the instruction needs no change, return an empty changes array and say "

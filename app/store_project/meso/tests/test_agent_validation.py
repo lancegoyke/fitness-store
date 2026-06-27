@@ -165,7 +165,12 @@ class TestCleanChange:
     def test_volume_change_targets_a_session(self):
         plan, session, _ = make_plan()
         cleaned, errors = validation.clean_change(
-            base_change(kind="volume", session_id=session.pk, introduces_exercise=""),
+            base_change(
+                kind="volume",
+                session_id=session.pk,
+                introduces_exercise="",
+                new_sets="4",
+            ),
             plan,
         )
         assert errors == []
@@ -219,6 +224,27 @@ class TestCleanChange:
         assert cleaned is None
         assert any("contraindication" in e for e in errors)
 
+    def test_contraindication_backstop_screens_the_apply_value(self):
+        # new_name is what apply writes to the prescription; a contraindicated
+        # movement hidden there (with innocuous after/introduces_exercise) must
+        # still be caught, not just the display fields.
+        athlete = UserFactory()
+        ContraindicationFactory(
+            athlete=athlete, text="L knee — avoid deep knee flexion under load"
+        )
+        plan, _, presc = make_plan(athlete=athlete)
+        cleaned, errors = validation.clean_change(
+            base_change(
+                prescription_id=presc.pk,
+                new_name="Deep Knee Flexion Drill",
+                after="Box Step-Down",
+                introduces_exercise="Box Step-Down",
+            ),
+            plan,
+        )
+        assert cleaned is None
+        assert any("contraindication" in e for e in errors)
+
     def test_contraindication_backstop_allows_safe_swap(self):
         athlete = UserFactory()
         ContraindicationFactory(
@@ -248,6 +274,7 @@ class TestCleanChange:
                 prescription_id=presc.pk,
                 after="Overhead Pressing − 1 set",
                 introduces_exercise="",
+                new_sets="3",
             ),
             plan,
         )
@@ -269,3 +296,73 @@ class TestCleanChange:
         cleaned, errors = validation.clean_change("not a dict", plan)
         assert cleaned is None
         assert errors
+
+
+class TestApplyPayload:
+    """The structured edit ``agent.apply`` performs is built here (Phase 2)."""
+
+    def test_swap_payload_from_new_name(self):
+        plan, _, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(prescription_id=presc.pk, new_name="Box Squat"), plan
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"name": "Box Squat"}
+
+    def test_swap_payload_falls_back_to_introduces_exercise(self):
+        plan, _, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(prescription_id=presc.pk, introduces_exercise="Goblet Squat"),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"name": "Goblet Squat"}
+
+    def test_progress_payload_carries_load(self):
+        plan, _, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="92.5 kg"),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"load": "92.5 kg"}
+
+    def test_volume_payload_carries_sets(self):
+        plan, session, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="volume", session_id=session.pk, new_sets="4"), plan
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"sets": "4"}
+
+    def test_deload_has_empty_payload(self):
+        plan, _, _ = make_plan()
+        cleaned, errors = validation.clean_change(base_change(kind="deload"), plan)
+        assert errors == []
+        assert cleaned["payload"] == {}
+
+    def test_payload_values_are_length_capped(self):
+        plan, _, presc = make_plan()
+        cleaned, _ = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="x" * 99),
+            plan,
+        )
+        assert len(cleaned["payload"]["load"]) == 32
+
+    def test_progress_without_a_value_is_rejected(self):
+        # A progress change with no new_load can't be applied; persisting it would
+        # show an "approved" edit the apply step silently skips.
+        plan, _, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk), plan
+        )
+        assert cleaned is None
+        assert any("value to apply" in e for e in errors)
+
+    def test_volume_without_a_value_is_rejected(self):
+        plan, session, _ = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="volume", session_id=session.pk), plan
+        )
+        assert cleaned is None
+        assert any("value to apply" in e for e in errors)

@@ -134,49 +134,9 @@ MACROCYCLE = [
     {"name": "Peak / Test", "weeks": "2 wk", "state": "future", "note": ""},
 ]
 
-# --- agent change review (proposed batch awaiting coach approval) ----------
-
-PROPOSED_CHANGES = [
-    {
-        "id": "swap-knee",
-        "kind": "Swap",
-        "day": "Day 1 · Lower",
-        "title": "Bulgarian Split Squat → Box Step-Down (low)",
-        "before": "Bulgarian Split Squat (DB) · 3×10 @ 18 kg",
-        "after": "Box Step-Down (low) · 3×10 @ 14 kg",
-        "rationale": (
-            "Same single-leg quad stimulus, but the knee tracks through a shorter, "
-            "controlled range — a better fit for the meniscus history."
-        ),
-        "honors": "L knee — avoid deep knee flexion under load",
-    },
-    {
-        "id": "progress",
-        "kind": "Progress",
-        "day": "Day 3 · Posterior",
-        "title": "Trap-Bar Deadlift → 92.5 kg",
-        "before": "4×6 @ 90 kg · logged RPE 6 last block",
-        "after": "4×6 @ 92.5 kg · projected RPE 7",
-        "rationale": (
-            "Anchored to last block's logged load and RPE — +2.5 kg lands in the "
-            "hypertrophy window without overshooting."
-        ),
-        "honors": "RPE-based load",
-    },
-    {
-        "id": "volume",
-        "kind": "Volume",
-        "day": "Day 2 · Upper",
-        "title": "Day 2 pressing volume − 1 set",
-        "before": "Incline DB Press, Chest-Supported Row, Lat Pulldown · 4 sets each",
-        "after": "Primary lifts · 3 sets each (accessories unchanged)",
-        "rationale": (
-            "Keeps weekly pressing volume in check while the shoulder settles, without "
-            "touching accessory work."
-        ),
-        "honors": "R shoulder — neutral-grip pressing only",
-    },
-]
+# --- agent change review --------------------------------------------------
+# Retired in agent slice Phase 2: the review screen now renders real
+# ``AgentProposalBatch`` rows (see ``meso/agent/`` + ``ChangeReviewView``).
 
 # --- session results (Maya, delivered Week 1 Day 1) -----------------------
 

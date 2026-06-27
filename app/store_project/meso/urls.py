@@ -52,4 +52,20 @@ urlpatterns = [
         views.agent_propose,
         name="api_plan_agent",
     ),
+    # Review gate: approve/reject + apply (agent slice Phase 2).
+    path(
+        "api/change/<int:pk>/status/",
+        views.change_set_status,
+        name="api_change_status",
+    ),
+    path(
+        "api/batch/<int:batch_id>/apply/",
+        views.batch_apply,
+        name="api_batch_apply",
+    ),
+    path(
+        "api/batch/<int:batch_id>/dismiss/",
+        views.batch_dismiss,
+        name="api_batch_dismiss",
+    ),
 ]
