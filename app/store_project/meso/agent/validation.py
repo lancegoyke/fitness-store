@@ -19,6 +19,7 @@ import re
 
 from ..models import ExercisePrescription
 from ..models import Session
+from ..serializers import current_week
 
 VALID_KINDS = {"swap", "progress", "volume", "deload"}
 
@@ -85,8 +86,8 @@ def _name_words(name):
     return set(re.findall(r"[a-z]+", name.lower()))
 
 
-def _resolve(model, value, plan, label, errors, **scope):
-    """Look up ``value`` (an id) within the plan, recording an error if it fails."""
+def _resolve(model, value, label, errors, **scope):
+    """Look up ``value`` (an id) within ``scope``, recording an error if it fails."""
     if value in (None, ""):
         return None
     try:
@@ -96,7 +97,7 @@ def _resolve(model, value, plan, label, errors, **scope):
         return None
     obj = model.objects.filter(pk=pk, **scope).first()
     if obj is None:
-        errors.append(f"{label} {pk} is not in this plan")
+        errors.append(f"{label} {pk} is not in this plan's current week")
     return obj
 
 
@@ -130,22 +131,23 @@ def clean_change(raw, plan, *, forbidden=None):
             value = ""
         cleaned[field] = value.strip()[:max_len]
 
-    # Structural: targets must belong to this plan.
+    # Structural: targets must belong to the plan's CURRENT week — the agent is
+    # grounded on (and only edits) that week, so an id from another week is out
+    # of contract even if it belongs to the same plan.
+    week = current_week(plan)
     presc = _resolve(
         ExercisePrescription,
         raw.get("prescription_id"),
-        plan,
         "prescription",
         errors,
-        session__week__mesocycle__plan=plan,
+        session__week=week,
     )
     session = _resolve(
         Session,
         raw.get("session_id"),
-        plan,
         "session",
         errors,
-        week__mesocycle__plan=plan,
+        week=week,
     )
     # A prescription's own session is authoritative: backfill it when no session
     # was given, and reject a session_id that points at a different day (the

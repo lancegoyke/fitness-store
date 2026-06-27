@@ -105,6 +105,19 @@ class TestCleanChange:
         assert cleaned is None
         assert any("not in this plan" in e for e in errors)
 
+    def test_off_week_target_rejected(self):
+        # The agent is grounded on the current week only; an id from another
+        # week of the same plan is out of contract.
+        plan, session, _ = make_plan()  # week index 1 is current
+        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
+        off_session = SessionFactory(week=week2, day_number=1, name="Lower")
+        off_presc = ExercisePrescriptionFactory(session=off_session, name="Squat")
+        cleaned, errors = validation.clean_change(
+            base_change(prescription_id=off_presc.pk), plan
+        )
+        assert cleaned is None
+        assert any("current week" in e for e in errors)
+
     def test_non_integer_prescription_id_rejected(self):
         plan, _, _ = make_plan()
         cleaned, errors = validation.clean_change(
