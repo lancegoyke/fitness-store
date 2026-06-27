@@ -224,6 +224,27 @@ class TestCleanChange:
         assert cleaned is None
         assert any("contraindication" in e for e in errors)
 
+    def test_contraindication_backstop_screens_the_apply_value(self):
+        # new_name is what apply writes to the prescription; a contraindicated
+        # movement hidden there (with innocuous after/introduces_exercise) must
+        # still be caught, not just the display fields.
+        athlete = UserFactory()
+        ContraindicationFactory(
+            athlete=athlete, text="L knee — avoid deep knee flexion under load"
+        )
+        plan, _, presc = make_plan(athlete=athlete)
+        cleaned, errors = validation.clean_change(
+            base_change(
+                prescription_id=presc.pk,
+                new_name="Deep Knee Flexion Drill",
+                after="Box Step-Down",
+                introduces_exercise="Box Step-Down",
+            ),
+            plan,
+        )
+        assert cleaned is None
+        assert any("contraindication" in e for e in errors)
+
     def test_contraindication_backstop_allows_safe_swap(self):
         athlete = UserFactory()
         ContraindicationFactory(
