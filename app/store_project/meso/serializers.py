@@ -56,23 +56,41 @@ def serialize_week(week):
     }
 
 
-def serialize_mesocycle(mesocycle, current_order):
-    """One bar in the macrocycle rail, with state relative to the current block."""
-    if current_order is None:
-        state = "future"
-    elif mesocycle.order < current_order:
-        state = "done"
-    elif mesocycle.order == current_order:
-        state = "current"
-    elif mesocycle.order == current_order + 1:
-        state = "next"
-    else:
-        state = "future"
+def serialize_mesocycle(mesocycle, state):
+    """One bar in the macrocycle rail."""
     return {
         "name": mesocycle.name,
         "weeks": f"{mesocycle.week_count} wk",
         "state": state,
     }
+
+
+def _phase_states(mesocycles, current_mesocycle):
+    """Map each mesocycle to done/current/next/future by *sequence position*.
+
+    Position, not ``order`` arithmetic: the model enforces unique — not
+    contiguous — ``order``, so reordering/deleting blocks can leave gaps. The
+    block immediately following the current one is always ``next``.
+    """
+    current_index = next(
+        (
+            i
+            for i, m in enumerate(mesocycles)
+            if current_mesocycle is not None and m.pk == current_mesocycle.pk
+        ),
+        None,
+    )
+    states = []
+    for i in range(len(mesocycles)):
+        if current_index is None or i > current_index + 1:
+            states.append("future")
+        elif i < current_index:
+            states.append("done")
+        elif i == current_index:
+            states.append("current")
+        else:  # i == current_index + 1
+            states.append("next")
+    return states
 
 
 def _current_week(plan, week=None):
@@ -102,7 +120,6 @@ def serialize_plan(plan, week=None):
     """
     current_week = _current_week(plan, week)
     current_mesocycle = current_week.mesocycle if current_week else None
-    current_order = current_mesocycle.order if current_mesocycle else None
 
     if current_week is not None:
         sessions = current_week.sessions.prefetch_related("prescriptions")
@@ -112,8 +129,9 @@ def serialize_plan(plan, week=None):
         program = []
         week_strip = []
 
-    mesocycles = plan.mesocycles.all()
-    phases = [serialize_mesocycle(m, current_order) for m in mesocycles]
+    mesocycles = list(plan.mesocycles.all())
+    states = _phase_states(mesocycles, current_mesocycle)
+    phases = [serialize_mesocycle(m, s) for m, s in zip(mesocycles, states)]
 
     return {
         "plan": {

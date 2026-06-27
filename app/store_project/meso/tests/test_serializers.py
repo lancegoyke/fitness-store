@@ -246,6 +246,29 @@ class TestSerializePlan:
                 assert "last" not in ex
                 assert "adj" not in ex
 
+    def test_phase_state_from_sequence_not_order_arithmetic(self):
+        """`next` is the *adjacent* block by position, even with sparse orders.
+
+        The model enforces unique — not contiguous — `order`, so reordering or
+        deleting blocks can leave gaps (e.g. 0/10/20/30). The block right after
+        the current one must still read `next`, not `future`.
+        """
+        rel = CoachAthleteFactory()
+        plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE)
+        sparse = [("Base", 0), ("Hypertrophy", 10), ("Strength", 20), ("Peak", 30)]
+        mesos = [
+            MesocycleFactory(plan=plan, name=name, order=order, week_count=4)
+            for name, order in sparse
+        ]
+        WeekFactory(mesocycle=mesos[1], index=1, is_current=True)
+        result = serialize_plan(plan)
+        assert [p["state"] for p in result["phases"]] == [
+            "done",
+            "current",
+            "next",
+            "future",
+        ]
+
     def test_program_picks_current_week_only(self):
         """`program` is the *current* week's sessions, not every week's."""
         plan = build_maya_plan()
