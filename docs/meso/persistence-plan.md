@@ -1,7 +1,7 @@
 # Meso — persistence slice plan
 
 **Status:** in progress — Phase 1 shipped & deployed 2026-06-27 (PR #270); Phase 2 merged
-2026-06-27 (PR #271); Phase 3 next · created 2026-06-26
+2026-06-27 (PR #271); Phase 3 merged 2026-06-27 (PR #274); Phase 4 next · created 2026-06-26
 **Companion to:** [`decisions.md`](./decisions.md)
 **Goal of this slice:** turn the **coach-side** screens (designer, roster, athlete profile)
 from client-side mocks into real, DB-backed, **tenant-scoped** data. No agent, no athlete app
@@ -152,9 +152,23 @@ slices). Migration `meso.0002`; admin with nested inlines; factories for all sev
 test-first (red→green): 18 new tests (`test_program_models.py` + `test_serializers.py`, the Maya
 round-trip) on top of Phase 1's 28 — 46 meso tests, 186 project-wide, green. **Merged as PR #271.**
 
-**Phase 3 — Designer save/load.**
+**Phase 3 — Designer save/load. ✅ Done (2026-06-27).**
 Hydrate `meso.js` from the serialized plan; the JSON autosave endpoints above; ownership checks.
 *Done when:* editing a cell / adding an exercise persists and survives reload.
+
+*Shipped* (branch `meso-persistence-phase3`, **PR #274**): `MesoDesignerView` now serves
+`/meso/designer/<plan_id>/`, serializing an owned `Plan` (via Phase 2's `serialize_plan`) into the
+page through `{{ plan_data|json_script }}`; `meso.js` `init()` hydrates `program`/`weeks`/`phases`/
+`unit`/`planId` from it, falling back to the prototype fixtures when no plan is injected (retired in
+Phase 5). Two plain-`JsonResponse` endpoints (no DRF), each scoped via `_coach_plan_or_forbidden`
+(non-owner / inactive relationship → **403**; child not under the plan → **404**):
+`POST api/plan/<id>/prescription/<pid>/` patches grid cells (type + `max_length` validated → 400)
+and `POST api/plan/<id>/session/<sid>/exercise/` appends a blank row (order = max + 1). Cell edits
+autosave on `@change`; "+ Add exercise" adopts the server id. Built red→green: 19 new tests
+(`test_designer_save.py`) covering load/serialize, ownership, child-scoping, validation, method/login
+guards, and patch-survives-reload — 66 meso / 206 project-wide pass. Local Codex review: clean.
+**Deferred:** CSRF is wired (token injected, `X-CSRFToken` sent) but a save-failure UI (the static
+"Autosaved" indicator stays put on error) is left for a follow-up.
 
 **Phase 4 — Deliver (lightweight).**
 `delivered_at` + `WeekDelivery` snapshot; wire the deliver screen to a real action.
