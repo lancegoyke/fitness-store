@@ -140,6 +140,26 @@ class TestAgentEndpoint:
         assert resp.status_code == 503
         assert resp.json()["ok"] is False
 
+    def test_provider_failure_returns_502(self, client, monkeypatch):
+        plan, _, _ = make_plan()
+
+        class BoomClient:
+            model = "claude-opus-4-8-test"
+
+            def propose(self, *, context, instruction):
+                raise RuntimeError("provider is down")
+
+        monkeypatch.setattr(client_module, "get_default_client", lambda: BoomClient())
+        client.force_login(plan.coach)
+        resp = client.post(
+            agent_url(plan),
+            data=json.dumps({"instruction": "go"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 502
+        assert resp.json()["ok"] is False
+        assert not AgentProposalBatch.objects.exists()
+
     def test_non_owner_forbidden(self, client, monkeypatch):
         plan, _, _ = make_plan()
         install_fake(monkeypatch, {"summary": "", "changes": []})

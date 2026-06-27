@@ -143,15 +143,19 @@ def clean_change(raw, plan, *, forbidden=None):
     cleaned["prescription"] = presc
     cleaned["session"] = session
 
-    # Contraindication backstop on the introduced exercise (swaps).
+    # Contraindication backstop on the INTRODUCED movement. Check both
+    # ``introduces_exercise`` and ``after`` — a swap may omit the former, but
+    # ``after`` still names the new exercise. We deliberately do NOT check
+    # ``title``/``before``: those name the *removed* exercise, which is often the
+    # contraindicated one being swapped out (checking them would reject the fix).
     if forbidden is None:
         forbidden = forbidden_terms(plan)
-    introduced = cleaned["introduces_exercise"]
-    if introduced and forbidden:
+    if forbidden:
+        introduced = f"{cleaned['introduces_exercise']} {cleaned['after']}"
         hit = _name_words(introduced) & forbidden
         if hit:
             errors.append(
-                f"introduced exercise {introduced!r} violates a contraindication "
+                "introduced movement violates a contraindication "
                 f"({', '.join(sorted(hit))})"
             )
 

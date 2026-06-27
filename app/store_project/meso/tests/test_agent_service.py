@@ -154,3 +154,19 @@ def test_raises_when_no_client_configured(monkeypatch):
     monkeypatch.setattr(client_module, "get_default_client", lambda: None)
     with pytest.raises(service.AgentNotConfigured):
         service.propose_changes(plan, "go", coach=plan.coach)
+
+
+class BoomClient:
+    """A client whose provider call fails (timeout / API error / bad model)."""
+
+    model = "claude-opus-4-8-test"
+
+    def propose(self, *, context, instruction):
+        raise RuntimeError("provider is down")
+
+
+def test_provider_failure_wrapped_as_agent_error():
+    plan, _, _ = make_plan()
+    with pytest.raises(service.AgentError):
+        service.propose_changes(plan, "go", coach=plan.coach, client=BoomClient())
+    assert not AgentProposalBatch.objects.exists()

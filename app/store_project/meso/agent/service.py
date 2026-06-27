@@ -56,8 +56,15 @@ def propose_changes(plan, instruction, *, coach, client=None):
         raise AgentNotConfigured("The Meso agent is not configured (no API key).")
 
     context = build_context(plan)
-    # Network call happens outside the DB transaction.
-    result = client.propose(context=context, instruction=instruction)
+    # Network call happens outside the DB transaction. Wrap provider failures
+    # (timeouts, API errors, a bad configured model) as AgentError so the
+    # endpoint degrades to a 502 instead of an unhandled 500.
+    try:
+        result = client.propose(context=context, instruction=instruction)
+    except AgentError:
+        raise
+    except Exception as exc:  # external boundary
+        raise AgentError(f"The agent request failed: {exc}") from exc
     if not isinstance(result, dict):
         result = {}
     raw_changes = result.get("changes") or []
