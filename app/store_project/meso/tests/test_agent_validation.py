@@ -129,6 +129,24 @@ class TestCleanChange:
         assert cleaned is None
         assert any("must target a prescription" in e for e in errors)
 
+    def test_consistent_prescription_and_session_accepted(self):
+        plan, session, presc = make_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(prescription_id=presc.pk, session_id=session.pk), plan
+        )
+        assert errors == []
+        assert cleaned["prescription"] == presc
+        assert cleaned["session"] == session
+
+    def test_mismatched_prescription_and_session_rejected(self):
+        plan, session, presc = make_plan()
+        other_session = SessionFactory(week=session.week, day_number=2, name="Upper")
+        cleaned, errors = validation.clean_change(
+            base_change(prescription_id=presc.pk, session_id=other_session.pk), plan
+        )
+        assert cleaned is None
+        assert any("not in the given session" in e for e in errors)
+
     def test_volume_change_targets_a_session(self):
         plan, session, _ = make_plan()
         cleaned, errors = validation.clean_change(

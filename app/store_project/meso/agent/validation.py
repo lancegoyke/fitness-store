@@ -147,8 +147,12 @@ def clean_change(raw, plan, *, forbidden=None):
         errors,
         week__mesocycle__plan=plan,
     )
-    # A prescription implies its session; backfill for display/apply.
-    if presc is not None and session is None:
+    # A prescription's own session is authoritative: backfill it when no session
+    # was given, and reject a session_id that points at a different day (the
+    # model supplied contradictory targets).
+    if presc is not None:
+        if session is not None and session.pk != presc.session_id:
+            errors.append("prescription is not in the given session")
         session = presc.session
     cleaned["prescription"] = presc
     cleaned["session"] = session
