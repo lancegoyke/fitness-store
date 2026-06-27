@@ -101,13 +101,24 @@ Provider is **Claude** (project standing guidance). Real decisions:
 Choosing multi-coach SaaS pulls these out of "later" and into the **persistence slice** —
 you can't write ownership/scoping-correct models without settling them.
 
-### N1 · Coach↔athlete relationship & cardinality ⏳
-The load-bearing new model. Decide: one **active** coach per athlete (simple, recommended for
-v1) vs. many concurrent coaches. How an athlete links to a coach (invite — see N4). A `User`
-acting as both coach and athlete (decided: allowed). Edit rights: the coach edits the athlete's
-plan; what can the athlete edit (log sessions only, or also tweak)?
-- **Rec:** `CoachAthlete(coach=User, athlete=User, status)` with one active coach per athlete;
-  coach has plan-edit rights, athlete has log + read. _Confirm cardinality before schema._
+### N1 · Coach↔athlete relationship & cardinality ✅
+The load-bearing new model.
+- **Status:** ✅ Decided (2026-06-26).
+- **Decision:** **Many-to-many, athlete-consented.** An athlete may work with multiple coaches
+  concurrently (and a coach has many athletes). The link is
+  `CoachAthlete(coach, athlete, status, invited_by)`; relationships require the other party's
+  acceptance and the **athlete can decline or end** any coach link ("if they so choose"). A
+  `User` may be both coach and athlete.
+- **Consequences (now load-bearing for the schema):**
+  - **D-a · Plans owned per relationship** — each coach programs independently for the athlete; a
+    `Plan` FKs its `CoachAthlete`. _(rec)_
+  - **D-b · Athlete profile vs plan attributes** — contraindications/injuries + training history
+    are **global** to the athlete (every coach sees them); goals/focus live **per plan**. _(rec)_
+  - **D-c · Bidirectional invites** — coach invites athlete, or athlete requests coach; both need
+    acceptance; either side can end it (archives that coach's plans, never deletes). _(rec)_
+  - **Scoping** — a coach sees only athletes they have an active link to and edits only their own
+    plans; an athlete sees plans from all their coaches. Cross-coach scheduling collisions in the
+    athlete app are a later UX concern.
 
 ### N2 · Tenancy scoping enforcement 🟡
 How isolation is guaranteed so coach A never sees coach B's athletes/plans. Manager-level
@@ -146,7 +157,7 @@ claim, reusing allauth. Detailed design when we build the relationship.
 Chosen first slice: **persistence first.** Note multi-coach (B1) makes this slice bigger than
 plain CRUD — it carries the tenancy/roles/relationship spine (N1–N3).
 
-0. **Confirm N1 cardinality** (one active coach per athlete?) — the one product fork still open before schema.
+0. ~~Confirm N1 cardinality~~ — **done: many-to-many, athlete-consented.**
 1. **Tenancy + persistence slice** — `CoachProfile` / `CoachAthlete`, the program schema (B3),
    hybrid exercises (B4), scoped managers (N2), and designer/roster/profile reading & writing
    real data over htmx (B5). *No agent.* Replaces the most mock-y part; unblocks everything else.
@@ -165,3 +176,7 @@ _(Append dated entries here as decisions land.)_
 - 2026-06-26 — **Decided:** B1 = multi-coach SaaS from day one · B2 = athletes are Users who
   log in (web/PWA), coach can edit their plan · B4 = hybrid exercise source · first slice =
   persistence. Multi-coach promoted N1–N4 into scope. **Open before schema:** N1 cardinality.
+- 2026-06-26 — **Decided:** N1 = many-to-many, athlete-consented (an athlete may work with
+  multiple coaches; either party can end it). Plans owned per coach↔athlete relationship (D-a);
+  contraindications global, goals per-plan (D-b); bidirectional invites (D-c). Schema is now
+  unblocked.
