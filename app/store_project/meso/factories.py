@@ -5,6 +5,7 @@ try:
 
     from store_project.users.factories import UserFactory
 
+    from .models import AgentProposalBatch
     from .models import AthleteProfile
     from .models import CoachAthlete
     from .models import CoachProfile
@@ -13,6 +14,7 @@ try:
     from .models import LoggedSet
     from .models import Mesocycle
     from .models import Plan
+    from .models import ProposedChange
     from .models import Session
     from .models import SessionLog
     from .models import Unit
@@ -116,6 +118,31 @@ try:
         delivered_at = factory.LazyFunction(timezone.now)
         payload = factory.LazyFunction(dict)
 
+    class AgentProposalBatchFactory(DjangoModelFactory):
+        class Meta:
+            model = AgentProposalBatch
+
+        plan = factory.SubFactory(PlanFactory)
+        coach = factory.LazyAttribute(lambda o: o.plan.relationship.coach)
+        instruction = "Make Maya's week knee-safe and progress her deadlift."
+        summary = ""
+        model = "claude-opus-4-8"
+        status = AgentProposalBatch.Status.PENDING
+
+    class ProposedChangeFactory(DjangoModelFactory):
+        class Meta:
+            model = ProposedChange
+
+        batch = factory.SubFactory(AgentProposalBatchFactory)
+        kind = ProposedChange.Kind.SWAP
+        day_label = "Day 1 · Lower"
+        title = factory.Sequence(lambda n: f"Change {n}")
+        before = "Before · 3×10"
+        after = "After · 3×10"
+        rationale = "Rationale."
+        honors = ""
+        order = factory.Sequence(lambda n: n)
+
     class SessionLogFactory(DjangoModelFactory):
         class Meta:
             model = SessionLog
@@ -171,4 +198,10 @@ except ImportError:
         pass
 
     class LoggedSetFactory:
+        pass
+
+    class AgentProposalBatchFactory:
+        pass
+
+    class ProposedChangeFactory:
         pass

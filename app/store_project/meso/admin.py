@@ -1,5 +1,6 @@
 from django.contrib import admin
 
+from .models import AgentProposalBatch
 from .models import AthleteProfile
 from .models import CoachAthlete
 from .models import CoachProfile
@@ -8,6 +9,7 @@ from .models import ExercisePrescription
 from .models import LoggedSet
 from .models import Mesocycle
 from .models import Plan
+from .models import ProposedChange
 from .models import Session
 from .models import SessionLog
 from .models import Week
@@ -172,3 +174,31 @@ class SessionLogAdmin(admin.ModelAdmin):
     list_filter = ("status",)
     raw_id_fields = ("session", "athlete")
     inlines = (LoggedSetInline,)
+
+
+# -- agent proposals -------------------------------------------------------
+
+
+class ProposedChangeInline(admin.TabularInline):
+    model = ProposedChange
+    extra = 0
+    fields = ("kind", "title", "status", "honors", "order")
+    raw_id_fields = ("session", "prescription")
+
+
+@admin.register(AgentProposalBatch)
+class AgentProposalBatchAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "plan", "coach", "status", "model", "created_at")
+    list_filter = ("status",)
+    search_fields = ("plan__title", "coach__email", "coach__name", "instruction")
+    raw_id_fields = ("plan", "coach")
+    readonly_fields = ("created_at",)
+    inlines = (ProposedChangeInline,)
+
+
+@admin.register(ProposedChange)
+class ProposedChangeAdmin(admin.ModelAdmin):
+    list_display = ("title", "batch", "kind", "status", "honors", "order")
+    list_filter = ("kind", "status")
+    search_fields = ("title", "rationale")
+    raw_id_fields = ("batch", "session", "prescription")

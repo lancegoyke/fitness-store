@@ -278,6 +278,11 @@ SOCIALACCOUNT_PROVIDERS = {
 STRIPE_PUBLISHABLE_KEY = get_env_var("STRIPE_PUBLISHABLE_KEY")
 STRIPE_SECRET_KEY = get_env_var("STRIPE_SECRET_KEY")
 
+# Meso agent (Claude proposal engine — B6). Optional: empty key disables the
+# agent endpoint (it returns 503) so the app boots and CI runs without creds.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+MESO_AGENT_MODEL = os.environ.get("MESO_AGENT_MODEL", "claude-opus-4-8")
+
 # Crispy Forms
 CRISPY_ALLOWED_TEMPLATE_PACKS = ("bulma",)
 CRISPY_TEMPLATE_PACK = "bulma"

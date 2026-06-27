@@ -33,6 +33,26 @@ def serialize_prescription(prescription):
     return data
 
 
+def serialize_proposed_change(change):
+    """One agent-proposed edit, in the shape the review screen renders.
+
+    Matches the prototype's ``PROPOSED_CHANGES`` dicts (``id``/``kind``/``day``/
+    ``title``/``before``/``after``/``rationale``/``honors``) so the same template
+    renders real batches; ``status`` is added for the (Phase 2) approve gate.
+    """
+    return {
+        "id": change.pk,
+        "kind": change.get_kind_display(),
+        "day": change.day_label,
+        "title": change.title,
+        "before": change.before,
+        "after": change.after,
+        "rationale": change.rationale,
+        "honors": change.honors,
+        "status": change.status,
+    }
+
+
 def serialize_session(session):
     """One training day (a column in the designer grid)."""
     return {
