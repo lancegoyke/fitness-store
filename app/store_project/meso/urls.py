@@ -1,5 +1,6 @@
 from django.urls import path
 
+from . import views
 from .views import AthleteProfileView
 from .views import ChangeReviewView
 from .views import DeliverView
@@ -14,5 +15,12 @@ urlpatterns = [
     path("review/", ChangeReviewView.as_view(), name="review"),
     path("deliver/", DeliverView.as_view(), name="deliver"),
     path("results/", ResultsView.as_view(), name="results"),
-    path("athlete/<slug:slug>/", AthleteProfileView.as_view(), name="athlete"),
+    path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
+    path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),
+    path("invite/<uuid:token>/decline/", views.invite_decline, name="invite_decline"),
+    path(
+        "relationship/<uuid:token>/end/",
+        views.relationship_end,
+        name="relationship_end",
+    ),
 ]

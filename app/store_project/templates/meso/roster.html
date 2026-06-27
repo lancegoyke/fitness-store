@@ -12,7 +12,7 @@
       <div>
         <p class="meso-eyebrow">Coach workspace</p>
         <h1 class="meso-h1">Your athletes</h1>
-        <p class="meso-sub">{{ athletes|length }} athletes · {{ groups|length }} group · {{ needs_review }} needs review</p>
+        <p class="meso-sub">{{ athletes|length }} athlete{{ athletes|length|pluralize }}{% if needs_review %} · {{ needs_review }} needs review{% endif %}</p>
       </div>
     </div>
 
@@ -24,61 +24,67 @@
           <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
             <p class="meso-eyebrow" style="margin:0;">Individuals</p>
             <div class="meso-spacer"></div>
-            <span class="meso-row-meta">{{ athletes|length }} athletes</span>
+            <span class="meso-row-meta">{{ athletes|length }} athlete{{ athletes|length|pluralize }}</span>
           </div>
           {% for a in athletes %}
-            <a class="meso-row" href="{% url 'meso:athlete' a.slug %}">
+            <a class="meso-row" href="{% url 'meso:athlete' a.id %}">
               <div class="meso-avatar {% if a.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ a.initials }}</div>
               <div style="min-width:0;">
                 <div class="meso-row-name">{{ a.name }}</div>
-                <div class="meso-row-meta">{{ a.level }} · {{ a.block }} · {{ a.week }}</div>
+                <div class="meso-row-meta">{{ a.meta }}</div>
               </div>
               <div class="meso-spacer"></div>
               {% for f in a.flags %}
                 <span class="meso-badge meso-badge--warn"><i></i>{{ f }}</span>
               {% endfor %}
-              <div style="width:108px;display:flex;align-items:center;gap:8px;">
-                <div class="meso-meter"><span style="width:{{ a.compliance }}%;"></span></div>
-                <span class="meso-row-meta meso-mono">{{ a.compliance }}%</span>
-              </div>
+              {% if a.compliance is not None %}
+                <div style="width:108px;display:flex;align-items:center;gap:8px;">
+                  <div class="meso-meter"><span style="width:{{ a.compliance }}%;"></span></div>
+                  <span class="meso-row-meta meso-mono">{{ a.compliance }}%</span>
+                </div>
+              {% endif %}
               {% if a.status == 'needs_review' %}
                 <span class="meso-badge meso-badge--accent"><i></i>{{ a.status_label }}</span>
               {% elif a.status == 'delivered' %}
                 <span class="meso-badge meso-badge--ok"><i></i>{{ a.status_label }}</span>
               {% elif a.status == 'drafting' %}
                 <span class="meso-badge meso-badge--accent"><i></i>{{ a.status_label }}</span>
-              {% else %}
-                <span class="meso-badge meso-badge--muted"><i></i>{{ a.status_label }}</span>
               {% endif %}
               <span class="meso-muted" style="font-size:16px;">›</span>
             </a>
+          {% empty %}
+            <div class="meso-row" style="color:var(--dim);">
+              No athletes yet. Invite one to get started.
+            </div>
           {% endfor %}
         </div>
 
-        <div class="meso-card">
-          <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
-            <p class="meso-eyebrow" style="margin:0;">Groups</p>
+        {% if groups %}
+          <div class="meso-card">
+            <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
+              <p class="meso-eyebrow" style="margin:0;">Groups</p>
+            </div>
+            {% for g in groups %}
+              <a class="meso-row" href="{% url 'meso:designer' %}">
+                <div style="display:flex;">
+                  {% for m in g.member_objs|slice:":3" %}
+                    <div class="meso-avatar meso-avatar--sm {% if m.tone == 'accent' %}meso-avatar--accent{% endif %}" style="border:2px solid var(--surface);{% if not forloop.first %}margin-left:-9px;{% endif %}">{{ m.initials }}</div>
+                  {% endfor %}
+                  {% if g.member_objs|length > 3 %}
+                    <div class="meso-avatar meso-avatar--sm" style="border:2px solid var(--surface);margin-left:-9px;">+{{ g.member_objs|length|add:"-3" }}</div>
+                  {% endif %}
+                </div>
+                <div style="min-width:0;">
+                  <div class="meso-row-name">{{ g.name }}</div>
+                  <div class="meso-row-meta">{{ g.member_objs|length }} participants · {{ g.focus }} · {{ g.week }}</div>
+                </div>
+                <div class="meso-spacer"></div>
+                <span class="meso-badge meso-badge--accent"><i></i>{{ g.status_label }}</span>
+                <span class="meso-muted" style="font-size:16px;">›</span>
+              </a>
+            {% endfor %}
           </div>
-          {% for g in groups %}
-            <a class="meso-row" href="{% url 'meso:designer' %}">
-              <div style="display:flex;">
-                {% for m in g.member_objs|slice:":3" %}
-                  <div class="meso-avatar meso-avatar--sm {% if m.tone == 'accent' %}meso-avatar--accent{% endif %}" style="border:2px solid var(--surface);{% if not forloop.first %}margin-left:-9px;{% endif %}">{{ m.initials }}</div>
-                {% endfor %}
-                {% if g.member_objs|length > 3 %}
-                  <div class="meso-avatar meso-avatar--sm" style="border:2px solid var(--surface);margin-left:-9px;">+{{ g.member_objs|length|add:"-3" }}</div>
-                {% endif %}
-              </div>
-              <div style="min-width:0;">
-                <div class="meso-row-name">{{ g.name }}</div>
-                <div class="meso-row-meta">{{ g.member_objs|length }} participants · {{ g.focus }} · {{ g.week }}</div>
-              </div>
-              <div class="meso-spacer"></div>
-              <span class="meso-badge meso-badge--accent"><i></i>{{ g.status_label }}</span>
-              <span class="meso-muted" style="font-size:16px;">›</span>
-            </a>
-          {% endfor %}
-        </div>
+        {% endif %}
       </div>
 
       <!-- activity column -->
@@ -90,7 +96,7 @@
               <div class="meso-avatar meso-avatar--sm {% if ev.athlete.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ ev.athlete.initials }}</div>
               <div style="min-width:0;line-height:1.35;">
                 <div style="font-size:12.5px;">
-                  <a href="{% url 'meso:athlete' ev.athlete.slug %}" style="font-weight:700;color:var(--ink);text-decoration:none;">{{ ev.athlete.name }}</a>
+                  <a href="{% url 'meso:athlete' ev.athlete.id %}" style="font-weight:700;color:var(--ink);text-decoration:none;">{{ ev.athlete.name }}</a>
                   {% if ev.kind == 'flag' %}
                     <span style="color:var(--warn);"> {{ ev.text }}</span>
                   {% else %}
