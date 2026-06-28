@@ -99,6 +99,7 @@ document.addEventListener("alpine:init", () => {
         if (!res.ok) throw new Error("Request failed: " + res.status);
         const data = await res.json();
         this.status = data.log.status;
+        this.syncFromLog(data.log);
         this.saved = true;
         setTimeout(() => {
           this.saved = false;
@@ -108,6 +109,21 @@ document.addEventListener("alpine:init", () => {
         this.error = true;
       } finally {
         this.saving = false;
+      }
+    },
+
+    // Reconcile the rows with what the server actually persisted so the check
+    // circles and counter match the saved log immediately — without this, rows
+    // that were sent because they carried data (but were never ticked) would
+    // stay un-checked until a reload. The returned log is the source of truth.
+    syncFromLog(log) {
+      const saved = new Set(
+        (log.sets || []).map((s) => `${s.prescription}:${s.set_number}`),
+      );
+      for (const e of this.exercises) {
+        for (const r of e.set_rows) {
+          r.done = saved.has(`${e.id}:${r.set_number}`);
+        }
       }
     },
   }));
