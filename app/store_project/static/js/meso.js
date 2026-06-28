@@ -118,6 +118,9 @@ document.addEventListener("alpine:init", () => {
       }
       if (!Array.isArray(thread) || !thread.length) return;
       this.messages = thread;
+      // Land a restored thread on its latest turn, not the oldest message — a
+      // long conversation would otherwise reload scrolled to the top.
+      this.scrollThread();
       // If the last turn was still drafting at render time, drop that
       // placeholder and resume polling so a run that finishes after the page
       // loads updates the thread instead of leaving it stuck on the note.
