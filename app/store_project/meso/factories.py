@@ -186,6 +186,16 @@ try:
             status=CoachAthlete.Status.ACTIVE,
         )
 
+    class GroupPlanFactory(PlanFactory):
+        """A plan rooted at a ``MesoGroup`` — a group's shared program (S1 Phase 2).
+
+        Overrides ``PlanFactory``'s individual ``relationship`` to ``None`` and
+        roots the plan at a group instead (the ``XOR`` root constraint).
+        """
+
+        relationship = None
+        group = factory.SubFactory(MesoGroupFactory)
+
 except ImportError:
     # Factory Boy is not available (likely in production).
     class CoachProfileFactory:
@@ -201,6 +211,9 @@ except ImportError:
         pass
 
     class PlanFactory:
+        pass
+
+    class GroupPlanFactory:
         pass
 
     class MesocycleFactory:

@@ -59,16 +59,19 @@
               </div>
             </div>
           </template>
-          <template x-if="isGroup">
+          <template x-if="isGroup && group">
             <div style="display:flex;align-items:center;gap:9px;">
               <div style="display:flex;">
-                <div style="width:28px;height:28px;border-radius:50%;background:var(--soft);border:2px solid var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--accent-deep);">MO</div>
-                <div style="width:28px;height:28px;border-radius:50%;background:#eef0f2;border:2px solid var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--dim);margin-left:-9px;">DR</div>
-                <div style="width:28px;height:28px;border-radius:50%;background:#eef0f2;border:2px solid var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--dim);margin-left:-9px;">+3</div>
+                <template x-for="(m, i) in group.members.slice(0, 3)" :key="m.name">
+                  <div :style="`width:28px;height:28px;border-radius:50%;background:${i === 0 ? 'var(--soft)' : '#eef0f2'};border:2px solid var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:${i === 0 ? 'var(--accent-deep)' : 'var(--dim)'};margin-left:${i === 0 ? '0' : '-9px'};`" x-text="m.initials"></div>
+                </template>
+                <template x-if="group.member_count > 3">
+                  <div style="width:28px;height:28px;border-radius:50%;background:#eef0f2;border:2px solid var(--surface);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--dim);margin-left:-9px;" x-text="'+' + (group.member_count - 3)"></div>
+                </template>
               </div>
               <div style="line-height:1.15;">
-                <div style="font-size:13px;font-weight:700;letter-spacing:-0.01em;">Hypertrophy Group</div>
-                <div style="font-size:11px;color:var(--dim);">5 participants</div>
+                <div style="font-size:13px;font-weight:700;letter-spacing:-0.01em;" x-text="group.name"></div>
+                <div style="font-size:11px;color:var(--dim);" x-text="group.member_count + (group.member_count === 1 ? ' participant' : ' participants')"></div>
               </div>
             </div>
           </template>
@@ -86,8 +89,11 @@
           Hypertrophy &#183; Wk 2 / 4
         </div>
         <button data-hover="rail" @click="view = 'athlete'" style="appearance:none;cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px 13px;">Preview as athlete</button>
-        <a href="{% url 'meso:review' %}" data-hover="rail" style="text-decoration:none;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px 13px;">Review changes</a>
-        <a href="{% if plan_data %}{% url 'meso:deliver_plan' plan_data.plan.id %}{% else %}{% url 'meso:deliver' %}{% endif %}" data-hover="brighten" style="text-decoration:none;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:8px 15px;box-shadow:0 1px 2px rgba(16,18,22,0.12);">Deliver</a>
+        <!-- Review + Deliver are individual-only flows; group review + deliver-to-all
+             are groups Phase 3/4, so a group plan shows a "soon" chip instead. -->
+        <a x-show="isIndividual" href="{% url 'meso:review' %}" data-hover="rail" style="text-decoration:none;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px 13px;">Review changes</a>
+        <a x-show="isIndividual" href="{% if plan_data %}{% url 'meso:deliver_plan' plan_data.plan.id %}{% else %}{% url 'meso:deliver' %}{% endif %}" data-hover="brighten" style="text-decoration:none;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:8px 15px;box-shadow:0 1px 2px rgba(16,18,22,0.12);">Deliver</a>
+        <span x-show="isGroup" style="font-size:12.5px;font-weight:600;color:var(--dim);background:var(--rail);border:1px solid var(--line);border-radius:8px;padding:7px 13px;">Deliver to all &#183; soon</span>
       </div>
 
       <!-- ===================== BODY ===================== -->
@@ -128,32 +134,34 @@
             </div>
           </template>
 
-          <template x-if="isGroup">
+          <template x-if="isGroup && group">
             <div>
               <div style="display:flex;align-items:center;gap:11px;margin-bottom:14px;">
                 <div style="width:42px;height:42px;border-radius:11px;background:var(--soft);border:1px solid var(--soft-line);display:flex;align-items:center;justify-content:center;color:var(--accent-deep);">
                   <div style="width:14px;height:14px;border:2px solid var(--accent-deep);border-radius:4px;"></div>
                 </div>
                 <div style="line-height:1.2;">
-                  <div style="font-size:15px;font-weight:700;letter-spacing:-0.015em;">Hypertrophy Group</div>
-                  <div style="font-size:11.5px;color:var(--dim);">5 participants &#183; General fitness</div>
+                  <div style="font-size:15px;font-weight:700;letter-spacing:-0.015em;" x-text="group.name"></div>
+                  <div style="font-size:11.5px;color:var(--dim);" x-text="group.member_count + (group.member_count === 1 ? ' participant' : ' participants') + ' · ' + group.focus"></div>
                 </div>
               </div>
               <div style="margin-bottom:16px;">
                 <p style="font-size:10.5px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--dim);margin:0 0 8px;">Participants</p>
                 <div style="display:flex;flex-direction:column;gap:4px;">
-                  <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;"><div style="width:22px;height:22px;border-radius:50%;background:var(--soft);font-size:9px;font-weight:700;color:var(--accent-deep);display:flex;align-items:center;justify-content:center;">MO</div>Maya Okonkwo</div>
-                  <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;"><div style="width:22px;height:22px;border-radius:50%;background:#eef0f2;font-size:9px;font-weight:700;color:var(--dim);display:flex;align-items:center;justify-content:center;">DR</div>Devon Reyes</div>
-                  <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;"><div style="width:22px;height:22px;border-radius:50%;background:#eef0f2;font-size:9px;font-weight:700;color:var(--dim);display:flex;align-items:center;justify-content:center;">PN</div>Priya Nair</div>
-                  <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;"><div style="width:22px;height:22px;border-radius:50%;background:#eef0f2;font-size:9px;font-weight:700;color:var(--dim);display:flex;align-items:center;justify-content:center;">MT</div>Marcus Tan</div>
-                  <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;"><div style="width:22px;height:22px;border-radius:50%;background:#eef0f2;font-size:9px;font-weight:700;color:var(--dim);display:flex;align-items:center;justify-content:center;">LK</div>Lena Kovic</div>
+                  <template x-for="(m, i) in group.members" :key="m.name">
+                    <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;"><div :style="`width:22px;height:22px;border-radius:50%;background:${i === 0 ? 'var(--soft)' : '#eef0f2'};font-size:9px;font-weight:700;color:${i === 0 ? 'var(--accent-deep)' : 'var(--dim)'};display:flex;align-items:center;justify-content:center;`" x-text="m.initials"></div><span x-text="m.name"></span></div>
+                  </template>
+                  <template x-if="!group.members.length">
+                    <div style="font-size:12px;color:var(--dim);">No active members yet.</div>
+                  </template>
                 </div>
               </div>
-              <div style="margin-bottom:16px;">
+              <div style="margin-bottom:16px;" x-show="group.flags.length">
                 <p style="font-size:10.5px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--dim);margin:0 0 8px;">Flags across group</p>
-                <div style="display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border-radius:7px;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 22%,#fff);">
-                  <div style="width:5px;height:5px;border-radius:50%;background:var(--warn);margin-top:6px;flex:0 0 auto;"></div>
-                  <div style="font-size:12px;color:var(--warn);font-weight:600;line-height:1.3;">3 of 5 carry a knee or shoulder flag &#8212; auto-regressions applied per athlete</div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                  <template x-for="f in group.flags" :key="f">
+                    <span style="display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:7px;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 22%,#fff);font-size:11.5px;color:var(--warn);font-weight:600;"><span style="width:5px;height:5px;border-radius:50%;background:var(--warn);"></span><span x-text="f"></span></span>
+                  </template>
                 </div>
               </div>
             </div>
@@ -259,7 +267,15 @@
             </template>
           </div>
 
-          <div style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:11px 14px 13px;">
+          <!-- The agent grounds on one athlete's profile + logs; a group agent
+               (per-athlete auto-adjusts) is groups Phase 3, so group mode shows a
+               note instead of the live composer. -->
+          <template x-if="isGroup">
+            <div style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:13px 14px 15px;font-size:12px;color:var(--dim);line-height:1.4;">
+              The agent works per athlete &#8212; a group agent that auto-adjusts each member arrives in the next phase. Edit the shared program directly for now.
+            </div>
+          </template>
+          <div x-show="isIndividual" style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:11px 14px 13px;">
             <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:9px;">
               <template x-for="c in chips" :key="c.label">
                 <button data-hover="chip" @click="onChip(c.label)" :disabled="agentTyping" x-text="c.label" style="appearance:none;cursor:pointer;font:inherit;white-space:nowrap;font-size:11.5px;font-weight:550;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 11px;flex:0 0 auto;"></button>
@@ -302,10 +318,8 @@
 
               <template x-if="isGroup">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px;padding:10px 13px;background:var(--soft);border:1px solid var(--soft-line);border-radius:9px;">
-                  <span style="font-size:11.5px;font-weight:700;color:var(--accent-deep);">Shared program &#183; per-athlete auto-adjusts:</span>
-                  <span style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Devon &#8594; neutral-grip press</span><span style="color:var(--soft-line);">&#183;</span>
-                  <span style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Lena &#8594; RDL for trap-bar</span><span style="color:var(--soft-line);">&#183;</span>
-                  <span style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Maya &#8594; box squat</span>
+                  <span style="font-size:11.5px;font-weight:700;color:var(--accent-deep);">Shared program</span>
+                  <span style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Every member trains off this program &#8212; per-athlete auto-adjusts arrive next.</span>
                 </div>
               </template>
 

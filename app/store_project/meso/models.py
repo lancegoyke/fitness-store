@@ -337,17 +337,40 @@ class CoachAthlete(models.Model):
 
 class PlanQuerySet(models.QuerySet):
     def for_coach(self, user):
-        """Plans this coach owns through an *active* relationship (N2/D-a)."""
+        """Individual plans this coach owns through an *active* relationship (N2/D-a).
+
+        Deliberately *individual-only*: it backs the deliver / results / review
+        flows, which assume a single athlete. Group plans (rooted at a
+        ``MesoGroup``) are reached via ``editable_by`` instead, so they never leak
+        into an athlete-shaped flow.
+        """
         return self.filter(
             relationship__coach=user,
             relationship__status=CoachAthlete.Status.ACTIVE,
         )
 
     def for_athlete(self, user):
-        """Plans across all of the athlete's active coaches."""
+        """Plans across all of the athlete's active coaches (individual only)."""
         return self.filter(
             relationship__athlete=user,
             relationship__status=CoachAthlete.Status.ACTIVE,
+        )
+
+    def editable_by(self, user):
+        """Plans this coach may open + edit in the designer (individual *or* group).
+
+        The designer + autosave surface, where a coach works on a plan they own:
+        an individual plan through an *active* relationship, or a *group* plan
+        through owning the group. Group plans stay out of ``for_coach`` (the
+        individual-only deliver/results/review flows) — this is the wider gate for
+        the one screen that handles both. See ``docs/meso/groups-plan.md``.
+        """
+        return self.filter(
+            models.Q(
+                relationship__coach=user,
+                relationship__status=CoachAthlete.Status.ACTIVE,
+            )
+            | models.Q(group__coach=user)
         )
 
     def active(self):
@@ -355,7 +378,16 @@ class PlanQuerySet(models.QuerySet):
 
 
 class Plan(models.Model):
-    """A periodized training plan, owned by one coach↔athlete relationship (D-a)."""
+    """A periodized training plan, rooted at either a relationship or a group.
+
+    Most plans are *individual* — owned by one coach↔athlete ``relationship``
+    (D-a). A *group* plan (groups slice S1, Phase 2) is instead rooted at a
+    ``MesoGroup``: one shared program several athletes train off, with per-athlete
+    auto-adjusts layered on later (Phase 3). Exactly one of ``relationship`` /
+    ``group`` is set — a DB ``XOR`` constraint — so the whole program tree
+    (Mesocycle → … → ExercisePrescription) is reused for both, gaining only a root
+    and (later) an override overlay, not a second hierarchy.
+    """
 
     class Status(models.TextChoices):
         DRAFT = "draft", _("Draft")
@@ -367,6 +399,16 @@ class Plan(models.Model):
         on_delete=models.CASCADE,
         related_name="plans",
         verbose_name=_("Relationship"),
+        null=True,
+        blank=True,
+    )
+    group = models.ForeignKey(
+        "MesoGroup",
+        on_delete=models.CASCADE,
+        related_name="plans",
+        verbose_name=_("Group"),
+        null=True,
+        blank=True,
     )
     title = models.CharField(_("Title"), max_length=255)
     # Goals/focus are per-plan (D-b); the athlete's contraindications stay global.
@@ -386,17 +428,55 @@ class Plan(models.Model):
         ordering = ["-created"]
         verbose_name = "Plan"
         verbose_name_plural = "Plans"
+        constraints = [
+            models.CheckConstraint(
+                # Exactly one root: an individual plan has a relationship, a group
+                # plan has a group, never both and never neither.
+                condition=(
+                    models.Q(relationship__isnull=False, group__isnull=True)
+                    | models.Q(relationship__isnull=True, group__isnull=False)
+                ),
+                name="plan_relationship_xor_group",
+            ),
+        ]
 
     def __str__(self):
+        if self.group_id is not None:
+            return f"{self.title} ({self.group.name})"
         return f"{self.title} ({self.athlete.display_name()})"
 
     @property
+    def is_group(self):
+        """True when this plan is a group's shared program (not an individual)."""
+        return self.group_id is not None
+
+    @property
     def coach(self):
+        """The coach who owns this plan — via the relationship or the group."""
+        if self.group_id is not None:
+            return self.group.coach
         return self.relationship.coach
 
     @property
     def athlete(self):
+        """The single athlete (individual plans only); None for a group plan."""
+        if self.relationship_id is None:
+            return None
         return self.relationship.athlete
+
+    def is_editable_by(self, user):
+        """Whether ``user`` (a coach) may open + edit this plan in the designer.
+
+        An individual plan is editable by its coach over an *active* relationship;
+        a group plan by the coach who owns the group. Mirrors
+        ``PlanQuerySet.editable_by`` for a single fetched plan (the autosave
+        endpoints' ownership gate).
+        """
+        if self.relationship_id is not None:
+            return self.relationship.coach_id == user.id and self.relationship.is_active
+        if self.group_id is not None:
+            return self.group.coach_id == user.id
+        return False
 
 
 class Mesocycle(models.Model):
@@ -863,6 +943,62 @@ class MesoGroup(models.Model):
             )
             .order_by("relationship__athlete__name", "relationship__athlete__email")
         ]
+
+    def shared_plan(self):
+        """The group's current shared program (most-recent non-archived), or None.
+
+        A group can accumulate plans over time the way a relationship can; the
+        designer entry point opens the live one (Phase 2). ``None`` when the group
+        has no program yet — the detail page then offers to design one.
+        """
+        return (
+            self.plans.exclude(status=Plan.Status.ARCHIVED)
+            .order_by("-modified")
+            .first()
+        )
+
+    def create_shared_plan(self):
+        """Create the group's shared program rooted at the group, with a scaffold.
+
+        Seeds a minimal-but-usable structure (one block, the current week, two
+        training days each with a starter row) so the designer opens onto an
+        editable grid — there is no add-session / add-week endpoint yet, so a
+        bare plan would be uneditable. The coach then shapes it (and, Phase 3,
+        layers per-athlete auto-adjusts).
+        """
+        profile = getattr(self.coach, "coach_profile", None)
+        unit = profile.default_unit if profile else Unit.KILOGRAMS
+        plan = Plan.objects.create(
+            group=self,
+            title=f"{self.name} — Shared program",
+            goal=self.focus,
+            status=Plan.Status.DRAFT,
+            unit=unit,
+        )
+        mesocycle = Mesocycle.objects.create(
+            plan=plan, name="Block 1", order=0, week_count=4
+        )
+        week = Week.objects.create(
+            mesocycle=mesocycle,
+            index=1,
+            phase="Accum",
+            volume=70,
+            intensity=65,
+            is_current=True,
+        )
+        for day in (1, 2):
+            session = Session.objects.create(
+                week=week, day_number=day, name=f"Day {day}", order=day - 1
+            )
+            ExercisePrescription.objects.create(
+                session=session,
+                name="New exercise",
+                order=0,
+                sets="3",
+                reps="10",
+                rpe="7",
+            )
+        return plan
 
 
 class GroupMembership(models.Model):
