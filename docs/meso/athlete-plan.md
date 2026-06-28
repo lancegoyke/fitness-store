@@ -1,6 +1,7 @@
 # Meso — athlete-facing slice plan
 
-**Status:** Phase 1 in progress · created 2026-06-27
+**Status:** Phase 1 built (branch `meso-athlete-phase1`; +20 tests, 239 meso /
+379 project-wide; ruff clean; local Codex review clean, 1 round) · created 2026-06-27
 **Companion to:** [`decisions.md`](./decisions.md) (B2, S3, S7, N1/D-a/D-b) ·
 [`persistence-plan.md`](./persistence-plan.md) · [`agent-plan.md`](./agent-plan.md)
 **Goal of this slice:** give the **athlete** a real, logged-in surface — see the
@@ -93,7 +94,7 @@ coach-who-is-also-an-athlete — keeps the roster.
 
 ## Phasing (one PR each)
 
-**Phase 1 — Athlete home + session (the read surface). ⏳ In progress.**
+**Phase 1 — Athlete home + session (the read surface). ✅ Built.**
 The athlete's own logged-in surface, read-only: `/meso/me/` lists their active
 plans with each plan's latest delivered week and its sessions (each marked
 done/pending from the athlete's `SessionLog`); `/meso/me/session/<id>/` shows one
@@ -103,6 +104,28 @@ no migration** (the logging models already exist).
 *Done when:* an athlete logs in, sees only the weeks their coach delivered (never
 another athlete's, never an undelivered week), and opens a session to read its
 prescription. The write path + results-feedback are later phases.
+
+*Built* (branch `meso-athlete-phase1`): `AthleteHomeView` (`/meso/me/`) and
+`AthleteSessionView` (`/meso/me/session/<id>/`), both `LoginRequired`, with the
+athlete-side scoping helpers `_athlete_plans` (active-coach + non-archived) and
+`_athlete_session_or_404` (delivered week + owned plan, else a flat 404).
+`serializers.latest_delivered_week` + `presenters.athlete_home`/`athlete_session`
+format the read shape (reusing `serialize_prescription`); log status reads only
+the athlete's own `SessionLog`. `_meso_base.html` gains overridable `navlinks` +
+`topnav_avatar` blocks so the athlete templates (`athlete_home.html`,
+`athlete_session.html`) carry their own nav while coach screens render
+identically; `RosterView` redirects a pure athlete (active link, no
+`CoachProfile`) to `/meso/me/`. Built red→green: +20 tests
+(`test_athlete_surface.py` — scoping, delivered-only, non-owner/undelivered/
+archived 404s, login guards, log-status, roster redirect); 239 meso / 379
+project-wide pass, no migration. **Local Codex review clean (1 round):** it
+flagged that "delivery is the publish gate" over-claimed (live rows are rendered,
+so post-delivery coach edits show through) — resolved by making the contract
+precise (delivery gates *visibility*; contents are live; the `WeekDelivery`
+snapshot is the deferred-diff record) rather than splitting live vs. snapshot,
+which would fight Phase 2 logging. See the **Design note** above. **Deferred:**
+the logging write path (Phase 2), results-feedback (Phase 3), PWA + notifications
+(Phase 4).
 
 **Phase 2 — Session logging (the write path).**
 The session screen becomes the interactive logger (the phone-style set rows):
