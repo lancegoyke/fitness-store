@@ -23,12 +23,14 @@
           <b>Meso</b>
         </a>
         <div class="meso-navlinks">
-          <a class="meso-navlink {% if active == 'roster' %}is-active{% endif %}" href="{% url 'meso:roster' %}">Roster</a>
-          <a class="meso-navlink {% if active == 'designer' %}is-active{% endif %}" href="{% url 'meso:designer' %}">Designer</a>
+          {% block navlinks %}
+            <a class="meso-navlink {% if active == 'roster' %}is-active{% endif %}" href="{% url 'meso:roster' %}">Roster</a>
+            <a class="meso-navlink {% if active == 'designer' %}is-active{% endif %}" href="{% url 'meso:designer' %}">Designer</a>
+          {% endblock %}
         </div>
         <div class="meso-spacer"></div>
         {% block topnav_actions %}{% endblock %}
-        <div class="meso-avatar meso-avatar--sm meso-avatar--accent" title="Coach">LG</div>
+        {% block topnav_avatar %}<div class="meso-avatar meso-avatar--sm meso-avatar--accent" title="Coach">LG</div>{% endblock %}
       </nav>
 
       {% block content %}{% endblock %}

@@ -8,9 +8,14 @@ activity fields are Phase 2/3 concepts; we pass honest neutral values
 without inventing numbers.
 """
 
+from django.urls import reverse
 from django.utils import timezone
 
+from .models import Plan
+from .models import SessionLog
 from .serializers import current_week
+from .serializers import latest_delivered_week
+from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 
 
@@ -135,3 +140,102 @@ def coach_style(coach):
     if profile is None:
         return {"tags": [], "avoid": ""}
     return {"tags": profile.programming_style or [], "avoid": profile.avoid_rules}
+
+
+# -- athlete surface (athlete slice Phase 1) -------------------------------
+#
+# The athlete's *own* read view (distinct from the coach's view of an athlete).
+# Scoped to delivered weeks across the athlete's active coaches; an undelivered
+# week never reaches these presenters (the view filters first). Log status comes
+# only from the athlete's *own* ``SessionLog`` rows.
+
+
+def _done_session_ids(session_ids, athlete):
+    """Which of ``session_ids`` the athlete has a *done* log for (one query)."""
+    return set(
+        SessionLog.objects.filter(
+            session_id__in=session_ids,
+            athlete=athlete,
+            status=SessionLog.Status.DONE,
+        ).values_list("session_id", flat=True)
+    )
+
+
+def _athlete_session_row(session, *, done):
+    """One session in the athlete's week — a tappable row on the home screen."""
+    status = "done" if done else "pending"
+    return {
+        "id": session.pk,
+        "n": session.day_number,
+        "name": session.name,
+        "bias": session.bias,
+        # ``prescriptions`` is prefetched on the home query — no per-row query.
+        "exercise_count": len(session.prescriptions.all()),
+        "status": status,
+        "status_label": "Logged" if done else "To do",
+        "url": reverse("meso:athlete_session", kwargs={"pk": session.pk}),
+    }
+
+
+def athlete_home(user):
+    """The athlete's active programs, each with its latest delivered week.
+
+    One card per non-archived plan across the athlete's *active* coaches (D-a).
+    A plan with no delivered week is shown as awaiting; otherwise its delivered
+    sessions render with the athlete's own done/pending status.
+    """
+    plans = (
+        Plan.objects.for_athlete(user)
+        .exclude(status=Plan.Status.ARCHIVED)
+        .select_related("relationship__coach")
+        .order_by("-modified")
+    )
+    cards = []
+    for plan in plans:
+        week = latest_delivered_week(plan)
+        sessions = []
+        if week is not None:
+            session_objs = list(week.sessions.prefetch_related("prescriptions"))
+            done = _done_session_ids([s.pk for s in session_objs], user)
+            sessions = [
+                _athlete_session_row(s, done=s.pk in done) for s in session_objs
+            ]
+        cards.append(
+            {
+                "id": plan.pk,
+                "title": plan.title,
+                "goal": plan.goal,
+                "coach": plan.coach.display_name(),
+                "block": week.mesocycle.name if week else "",
+                "week": f"Wk {week.index}" if week else "",
+                "delivered_at": week.delivered_at if week else None,
+                "sessions": sessions,
+                "awaiting": week is None,
+            }
+        )
+    return cards
+
+
+def athlete_session(session, athlete):
+    """One delivered session's prescribed grid, for the athlete's read view.
+
+    ``session`` is already athlete-scoped + delivered by the view; this only
+    formats it (and reads the athlete's own done status). Prescriptions are
+    prefetched on the view query.
+    """
+    done = SessionLog.objects.filter(
+        session=session, athlete=athlete, status=SessionLog.Status.DONE
+    ).exists()
+    week = session.week
+    return {
+        "id": session.pk,
+        "n": session.day_number,
+        "name": session.name,
+        "bias": session.bias,
+        "status": "done" if done else "pending",
+        "status_label": "Logged" if done else "To do",
+        "block": week.mesocycle.name,
+        "week": f"Wk {week.index}",
+        "plan_title": week.mesocycle.plan.title,
+        "exercises": [serialize_prescription(p) for p in session.prescriptions.all()],
+    }

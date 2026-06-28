@@ -1,7 +1,9 @@
 from django.urls import path
 
 from . import views
+from .views import AthleteHomeView
 from .views import AthleteProfileView
+from .views import AthleteSessionView
 from .views import ChangeReviewView
 from .views import DeliverView
 from .views import MesoDesignerView
@@ -22,6 +24,14 @@ urlpatterns = [
     path("deliver/", DeliverView.as_view(), name="deliver"),
     path("deliver/<int:plan_id>/", DeliverView.as_view(), name="deliver_plan"),
     path("results/", ResultsView.as_view(), name="results"),
+    # Athlete surface (athlete slice Phase 1) — the athlete's own training view,
+    # distinct from the coach's ``athlete/<uuid>/`` record.
+    path("me/", AthleteHomeView.as_view(), name="athlete_home"),
+    path(
+        "me/session/<int:pk>/",
+        AthleteSessionView.as_view(),
+        name="athlete_session",
+    ),
     path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
     path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),
     path("invite/<uuid:token>/decline/", views.invite_decline, name="invite_decline"),

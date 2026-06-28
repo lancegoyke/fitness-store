@@ -24,6 +24,7 @@ from .agent import jobs as agent_jobs
 from .agent import service as agent_service
 from .models import AgentProposalBatch
 from .models import CoachAthlete
+from .models import CoachProfile
 from .models import ExercisePrescription
 from .models import Plan
 from .models import ProposedChange
@@ -86,9 +87,21 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
 
 
 class RosterView(LoginRequiredMixin, TemplateView):
-    """Front door: the coach's athletes (scoped to active relationships)."""
+    """Front door: the coach's athletes (scoped to active relationships).
+
+    A *pure* athlete — someone with an active coach link but no ``CoachProfile``
+    — has no roster of their own, so they're sent to their training surface
+    instead. A coach (or a coach who also trains) keeps the roster.
+    """
 
     template_name = "meso/roster.html"
+
+    def get(self, request, *args, **kwargs):
+        is_coach = CoachProfile.objects.filter(user=request.user).exists()
+        is_athlete = CoachAthlete.objects.for_athlete(request.user).active().exists()
+        if not is_coach and is_athlete:
+            return redirect("meso:athlete_home")
+        return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -134,6 +147,73 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         # schema (Phase 2) and logging (Phase 3).
         ctx["macrocycle"] = []
         ctx["results_summary"] = None
+        return ctx
+
+
+# -- athlete surface (athlete slice Phase 1) -------------------------------
+#
+# The athlete's own logged-in surface, distinct from the coach's view of an
+# athlete (``/meso/athlete/<uuid>/``). Read-only here; logging lands in Phase 2.
+# Everything is scoped to the athlete's *active* coaches (``for_athlete``), to
+# **delivered** weeks (delivery gates *visibility* — an undelivered week is
+# hidden; a delivered week's *current* contents are shown, see
+# ``latest_delivered_week``), and to non-archived plans. An out-of-scope session
+# is a flat 404 — never a silent empty render.
+
+
+def _athlete_plans(user):
+    """Plans the athlete may see: active-coach, non-archived (D-a)."""
+    return Plan.objects.for_athlete(user).exclude(status=Plan.Status.ARCHIVED)
+
+
+def _athlete_session_or_404(user, pk):
+    """A delivered session the athlete owns, or ``Http404``.
+
+    404 unless the session's week is delivered *and* its plan is one the athlete
+    reaches through an active coach link — a foreign athlete, an undelivered
+    week, an archived plan, or an unknown id are indistinguishable (no leak).
+    """
+    session = (
+        Session.objects.filter(
+            pk=pk,
+            week__delivered_at__isnull=False,
+            week__mesocycle__plan__in=_athlete_plans(user),
+        )
+        .select_related("week__mesocycle__plan__relationship")
+        .prefetch_related("prescriptions")
+        .first()
+    )
+    if session is None:
+        raise Http404("Unknown session")
+    return session
+
+
+class AthleteHomeView(LoginRequiredMixin, TemplateView):
+    """The athlete's training home: their delivered programs, this week."""
+
+    template_name = "meso/athlete_home.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["active"] = "training"
+        ctx["plans"] = presenters.athlete_home(self.request.user)
+        ctx["athlete_name"] = self.request.user.display_name()
+        ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
+        return ctx
+
+
+class AthleteSessionView(LoginRequiredMixin, TemplateView):
+    """One delivered session's prescribed plan, read-only (logging in Phase 2)."""
+
+    template_name = "meso/athlete_session.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        session = _athlete_session_or_404(self.request.user, kwargs["pk"])
+        ctx["active"] = "training"
+        ctx["session"] = presenters.athlete_session(session, self.request.user)
+        ctx["athlete_name"] = self.request.user.display_name()
+        ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
         return ctx
 
 

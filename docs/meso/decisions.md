@@ -271,3 +271,19 @@ _(Append dated entries here as decisions land.)_
   clean, 1 round; +40 tests, 219 meso / 359 project-wide). **The B6 agent slice is complete.** Resume point
   → either a **persisted chat thread** (saving the designer conversation, deferred since Phase 3) or the
   **athlete-facing slice** (delivery + logging PWA, then results feeding back to the agent — decisions S3/S7).
+- 2026-06-27 — **Athlete-facing slice started** (decision: build item 3 of the suggested sequence — the
+  athlete surface — over the persisted chat thread). Plan + phasing in [`athlete-plan.md`](./athlete-plan.md)
+  (Phase 1 read surface · Phase 2 logging · Phase 3 results-feedback · Phase 4 PWA + notifications, S3/S7).
+  **Phase 1 built** (branch `meso-athlete-phase1`): the athlete's own read surface — `AthleteHomeView`
+  (`/meso/me/`) lists their active-coach, non-archived plans with each plan's latest **delivered** week +
+  sessions (done/pending from the athlete's own `SessionLog`); `AthleteSessionView` (`/meso/me/session/<id>/`)
+  renders one delivered session's prescribed grid read-only. Athlete-side scoping (`_athlete_plans` /
+  `_athlete_session_or_404`) mirrors the coach's `_coach_plan_or_forbidden`: out-of-scope (foreign athlete /
+  undelivered week / archived plan / unknown id) is a flat 404. Role-aware nav (overridable `navlinks` /
+  `topnav_avatar` blocks; pure athletes redirected off the coach roster). **No model change / no migration**
+  (`SessionLog`/`LoggedSet` already exist; B2 confirms athletes are Users who log in). Settles the **delivery
+  contract**: delivery gates a week's *visibility*, contents stay live, the `WeekDelivery` snapshot is the
+  deferred-diff record (Codex-review nit resolved this way — see `athlete-plan.md` design note). Built
+  red→green: +20 tests (239 meso / 379 project-wide); local Codex review clean (1 round). Resume point →
+  athlete Phase 2 (session logging — the write path that produces the rows `serialize_recent_logs` grounds
+  the agent on).
