@@ -116,7 +116,30 @@ document.addEventListener("alpine:init", () => {
         console.error("Could not parse chat thread", e);
         return;
       }
-      if (Array.isArray(thread) && thread.length) this.messages = thread;
+      if (!Array.isArray(thread) || !thread.length) return;
+      this.messages = thread;
+      // If the last turn was still drafting at render time, drop that
+      // placeholder and resume polling so a run that finishes after the page
+      // loads updates the thread instead of leaving it stuck on the note.
+      const last = thread[thread.length - 1];
+      if (last && last.pollUrl) {
+        this.messages.pop();
+        this.resumeDrafting(last.pollUrl);
+      }
+    },
+
+    // Resume polling a batch that was still drafting when the page loaded. The
+    // typing indicator shows while we wait; pollBatch appends the resolved reply
+    // (or an error / timeout note) when the batch lands.
+    async resumeDrafting(pollUrl) {
+      this.agentTyping = true;
+      this.scrollThread();
+      try {
+        await this.pollBatch(pollUrl);
+      } finally {
+        this.agentTyping = false;
+        this.scrollThread();
+      }
     },
 
     async apiPost(url, body) {

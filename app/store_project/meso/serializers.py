@@ -84,9 +84,13 @@ def _agent_reply_for_batch(batch):
         message["error"] = True
         return message
     if batch.status == Status.DRAFTING:
-        # A run that never finished before the reload — a neutral note, not an
-        # error and not a blank bubble.
+        # A run still in flight at render time. Carry the status URL so the
+        # front-end can resume polling and replace this placeholder when the
+        # batch lands; the note is the fallback if the run never resolves.
         message["text"] = _DRAFTING_NOTE
+        message["pollUrl"] = reverse(
+            "meso:api_batch_status", kwargs={"batch_id": batch.pk}
+        )
         return message
 
     changes = [serialize_proposed_change(c) for c in batch.changes.all()]

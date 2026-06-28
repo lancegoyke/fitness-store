@@ -146,8 +146,8 @@ class TestSerializeChatThread:
         assert agent["changes"] == []
 
     def test_drafting_batch_renders_a_neutral_note(self):
-        # A batch left ``drafting`` after a reload (the background job never
-        # finished) is surfaced as a neutral note, not an error or a blank.
+        # A batch still ``drafting`` at reload is surfaced as a neutral note, not
+        # an error or a blank bubble.
         plan, _, _ = seed_plan()
         AgentProposalBatchFactory(plan=plan, status=AgentProposalBatch.Status.DRAFTING)
 
@@ -156,6 +156,26 @@ class TestSerializeChatThread:
         assert agent["text"].strip()
         assert not agent.get("error")
         assert not agent.get("changes")
+
+    def test_drafting_batch_carries_a_poll_url_to_resume(self):
+        # A run still in flight at render time carries its status URL so the
+        # front-end can resume polling and replace the placeholder when it lands,
+        # rather than leaving the thread stuck on the note.
+        plan, _, _ = seed_plan()
+        batch = AgentProposalBatchFactory(
+            plan=plan, status=AgentProposalBatch.Status.DRAFTING
+        )
+
+        agent = serialize_chat_thread(plan)[1]
+        assert agent["pollUrl"] == reverse(
+            "meso:api_batch_status", kwargs={"batch_id": batch.pk}
+        )
+        # A resolved batch never carries a poll URL — nothing left to poll.
+        resolved_plan, _, _ = seed_plan()
+        AgentProposalBatchFactory(
+            plan=resolved_plan, status=AgentProposalBatch.Status.PENDING
+        )
+        assert "pollUrl" not in serialize_chat_thread(resolved_plan)[1]
 
     def test_thread_is_plan_scoped(self):
         plan, _, _ = seed_plan()
@@ -211,3 +231,10 @@ class TestMesoJsHydratesThread:
         # An empty history still shows the orienting greeting.
         js = read_meso_js()
         assert "Tell me how you'd like to adjust this plan" in js
+
+    def test_meso_js_resumes_polling_a_hydrated_drafting_run(self):
+        # A run still drafting at load resumes via its poll URL so a thread
+        # hydrated mid-run isn't left stuck on the placeholder.
+        js = read_meso_js()
+        assert "resumeDrafting" in js
+        assert "pollUrl" in js
