@@ -7,7 +7,7 @@ squash `b8f0966`; 2026-06-28; Django CI green, deployed to Hetzner — no migrat
 +31 tests, 302 meso / 441 project-wide; ruff clean; `mockdata.py` deleted — every
 coach-side screen is DB-backed now; local Codex review 0 blocking across 3 rounds
 → CLEAN, 4 nits fixed) · created 2026-06-27 · **Phase 4 split into 4a (delivery
-notifications — built, branch `meso-athlete-phase4a-delivery-notifications`,
+notifications — done & merged, PR #293, squash `dfbebee`; deployed to Hetzner;
 +9 tests, no migration) + 4b (PWA — next).**
 **Companion to:** [`decisions.md`](./decisions.md) (B2, S3, S7, N1/D-a/D-b) ·
 [`persistence-plan.md`](./persistence-plan.md) · [`agent-plan.md`](./agent-plan.md)
@@ -216,7 +216,7 @@ scope); PWA + notifications (Phase 4).
 notification half (4a) ships independently of the PWA half (4b), since email is
 backend-testable today while the service worker/offline queue is browser-side.
 
-**Phase 4a — Delivery notifications (S3). ✅ Built (2026-06-28, branch `meso-athlete-phase4a-delivery-notifications`; no migration).**
+**Phase 4a — Delivery notifications (S3). ✅ Done & merged (2026-06-28, PR #293, squash `dfbebee`; Django CI green, deployed to Hetzner — no migration).**
 When a coach delivers a week (`POST api/plan/<id>/deliver/`), the athlete is
 emailed that their next training week is ready, with an absolute link to their
 own surface (`/meso/me/`). Channel is the one that exists today — `send_mail`
