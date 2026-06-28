@@ -74,7 +74,10 @@ document.addEventListener("alpine:init", () => {
           });
         }
       }
-      return { status: markDone ? "done" : "pending", sets };
+      // "Log session" completes the session; "Save progress" keeps the current
+      // status, so saving edits to an already-logged session never downgrades it
+      // back to "To do".
+      return { status: markDone ? "done" : this.status, sets };
     },
 
     // POST the session. `markDone` flips it to "done" (Log session) vs "pending"
