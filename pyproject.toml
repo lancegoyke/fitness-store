@@ -32,6 +32,7 @@ dependencies = [
   "crispy-bulma>=0.12.0",
   "google-genai>=1.26.0",
   "anthropic>=0.112.0",
+  "pywebpush>=2.3.0",
 ]
 
 [dependency-groups]

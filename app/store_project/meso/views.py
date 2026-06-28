@@ -8,11 +8,14 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db import transaction
 from django.db.models import Max
 from django.http import Http404
+from django.http import HttpResponse
 from django.http import HttpResponseBadRequest
 from django.http import HttpResponseForbidden
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
+from django.template.loader import render_to_string
+from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET
@@ -22,6 +25,7 @@ from django.views.generic import TemplateView
 from store_project.notifications.emails import send_week_delivered_email
 
 from . import presenters
+from . import push as meso_push
 from .agent import apply as agent_apply
 from .agent import client as agent_client
 from .agent import jobs as agent_jobs
@@ -33,6 +37,7 @@ from .models import ExercisePrescription
 from .models import LoggedSet
 from .models import Plan
 from .models import ProposedChange
+from .models import PushSubscription
 from .models import Session
 from .models import SessionLog
 from .models import WeekDelivery
@@ -210,6 +215,19 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
 # is a flat 404 — never a silent empty render.
 
 
+def _pwa_context():
+    """Push install config for the athlete templates (Phase 4b — S7).
+
+    ``push_enabled`` gates the subscribe affordance + VAPID key in the template;
+    with no keys configured the PWA still installs and logs offline, it just
+    won't offer push.
+    """
+    return {
+        "push_enabled": meso_push.push_enabled(),
+        "vapid_public_key": meso_push.vapid_public_key(),
+    }
+
+
 def _athlete_plans(user):
     """Plans the athlete may see: active-coach, non-archived (D-a)."""
     return Plan.objects.for_athlete(user).exclude(status=Plan.Status.ARCHIVED)
@@ -248,6 +266,7 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         ctx["plans"] = presenters.athlete_home(self.request.user)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
+        ctx.update(_pwa_context())
         return ctx
 
 
@@ -270,6 +289,7 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
         ctx["log_data"] = presenters.athlete_log_payload(sess)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
+        ctx.update(_pwa_context())
         return ctx
 
 
@@ -420,6 +440,172 @@ def _clean_logged_sets(raw_sets, session):
             {"prescription_id": presc_id, "set_number": set_number, **fields}
         )
     return cleaned, None
+
+
+# -- Athlete PWA: manifest, service worker, offline shell (Phase 4b — S7) --
+#
+# The athlete surface is an installable, offline-tolerant PWA. The manifest and
+# service worker are served as *views* (not static files) for two reasons:
+#   1. the static pipeline (``CompressedManifestStaticFilesStorage``) hashes
+#      filenames, which would give the worker an unstable URL across deploys; and
+#   2. a service worker only controls pages at or below its own path, so it must
+#      be served from ``/meso/sw.js`` to control ``/meso/me/``.
+# The worker is rendered from a template that resolves the *hashed* asset URLs via
+# ``{% static %}`` at render time, so its precache list stays valid every deploy.
+
+PWA_THEME_COLOR = "#3c73c5"  # meso accent (oklch(0.56 0.14 258))
+PWA_BACKGROUND_COLOR = "#f5f6f7"  # meso app background (--bg)
+
+
+@require_GET
+def manifest_webmanifest(request):
+    """The web-app manifest — the browser's install descriptor (S7).
+
+    Public (the browser fetches it before any session). Launches into the
+    athlete home, scoped to ``/meso/`` so only the athlete surface is the app.
+    """
+    data = {
+        "name": "Meso — Training",
+        "short_name": "Meso",
+        "description": (
+            "Your coach's training plan — log every session, even offline."
+        ),
+        "start_url": reverse("meso:athlete_home"),
+        "scope": "/meso/",
+        "display": "standalone",
+        "orientation": "portrait",
+        "theme_color": PWA_THEME_COLOR,
+        "background_color": PWA_BACKGROUND_COLOR,
+        "icons": [
+            {
+                "src": static("png/meso-icon-192.png"),
+                "sizes": "192x192",
+                "type": "image/png",
+                "purpose": "any",
+            },
+            {
+                "src": static("png/meso-icon-512.png"),
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "any",
+            },
+            {
+                "src": static("png/meso-icon-maskable-512.png"),
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "maskable",
+            },
+        ],
+    }
+    return JsonResponse(data, content_type="application/manifest+json")
+
+
+# Bumped when the cached shell changes so the worker drops stale caches on
+# activate. Keep in sync with the cache name baked into the worker template.
+PWA_CACHE_VERSION = "meso-pwa-v1"
+
+
+@require_GET
+def service_worker(request):
+    """Serve the athlete service worker from ``/meso/sw.js`` (S7).
+
+    Rendered from a template so its precache list can reference the hashed
+    static URLs (``{% static %}``). ``Service-Worker-Allowed`` is set explicitly
+    even though the served path already scopes it to ``/meso/``.
+    """
+    body = render_to_string(
+        "meso/sw.js",
+        {
+            "cache_version": PWA_CACHE_VERSION,
+            "offline_url": reverse("meso:offline"),
+            "home_url": reverse("meso:athlete_home"),
+        },
+        request=request,
+    )
+    resp = HttpResponse(body, content_type="text/javascript")
+    resp["Service-Worker-Allowed"] = "/meso/"
+    # The worker itself must never be served stale, or a new shell can't ship.
+    resp["Cache-Control"] = "no-cache"
+    return resp
+
+
+class OfflineView(TemplateView):
+    """The offline fallback the worker caches on install (S7).
+
+    Deliberately login-free: the worker pre-caches it on a cold load, so it must
+    render for an anonymous fetch rather than redirect to login (a cached login
+    redirect would be a useless fallback).
+    """
+
+    template_name = "meso/offline.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["active"] = "training"
+        return ctx
+
+
+# -- Athlete web push: subscribe / unsubscribe (Phase 4b — S3/S7) ----------
+
+
+@login_required
+@require_POST
+def push_subscribe(request):
+    """Store the logged-in athlete's push subscription (upsert by endpoint).
+
+    Body is the browser ``PushSubscription`` JSON (``endpoint`` + ``keys.p256dh``
+    / ``keys.auth``). The endpoint is unique: re-subscribing (or a different user
+    on the same device) reassigns the row to the current athlete. Validated
+    before any write; a malformed body is a 400.
+    """
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+
+    endpoint = payload.get("endpoint")
+    keys = payload.get("keys")
+    if not isinstance(endpoint, str) or not endpoint:
+        return HttpResponseBadRequest("endpoint is required.")
+    if not isinstance(keys, dict):
+        return HttpResponseBadRequest("keys is required.")
+    p256dh = keys.get("p256dh")
+    auth = keys.get("auth")
+    if not isinstance(p256dh, str) or not p256dh:
+        return HttpResponseBadRequest("keys.p256dh is required.")
+    if not isinstance(auth, str) or not auth:
+        return HttpResponseBadRequest("keys.auth is required.")
+    if len(endpoint) > 512 or len(p256dh) > 255 or len(auth) > 255:
+        return HttpResponseBadRequest("Subscription fields are too long.")
+
+    PushSubscription.objects.update_or_create(
+        endpoint=endpoint,
+        defaults={"athlete": request.user, "p256dh": p256dh, "auth": auth},
+    )
+    return JsonResponse({"ok": True}, status=201)
+
+
+@login_required
+@require_POST
+def push_unsubscribe(request):
+    """Drop the athlete's own subscription by endpoint (best-effort).
+
+    Scoped to the caller's rows: an athlete can only remove their own
+    subscriptions. An unknown endpoint is a quiet success (idempotent).
+    """
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+    endpoint = payload.get("endpoint")
+    if not isinstance(endpoint, str) or not endpoint:
+        return HttpResponseBadRequest("endpoint is required.")
+    PushSubscription.objects.filter(athlete=request.user, endpoint=endpoint).delete()
+    return JsonResponse({"ok": True})
 
 
 # -- invite / relationship actions ----------------------------------------
@@ -597,13 +783,14 @@ def plan_deliver(request, plan_id):
 
 
 def _notify_athlete_delivered(request, plan, week):
-    """Best-effort: email the athlete that ``week`` was delivered (S3).
+    """Best-effort: email **and** push the athlete that ``week`` was delivered.
 
-    Deferred to ``transaction.on_commit`` so it fires only after the delivery
-    actually commits — under ``ATOMIC_REQUESTS`` the view runs in a transaction,
-    and a rolled-back deliver must not email a false "your week is ready". The
-    send itself is best-effort: a mail failure is swallowed and logged, never a
-    500 or a rolled-back deliver. (Web push waits on the PWA, Phase 4b.)
+    S3 (email, Phase 4a) + S7 (web push, Phase 4b). Deferred to
+    ``transaction.on_commit`` so it fires only after the delivery actually
+    commits — under ``ATOMIC_REQUESTS`` the view runs in a transaction, and a
+    rolled-back deliver must not notify a false "your week is ready". Each
+    channel is independently best-effort: a failure in one is swallowed and
+    logged, never a 500 or a rolled-back deliver, and never blocks the other.
     """
     home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
 
@@ -618,7 +805,21 @@ def _notify_athlete_delivered(request, plan, week):
             )
         except Exception:  # mail is best-effort; never fail a delivery on it
             logger.exception(
-                "Failed to send delivery notification for plan %s week %s",
+                "Failed to send delivery email for plan %s week %s",
+                plan.pk,
+                week.pk,
+            )
+        try:
+            meso_push.notify_week_delivered(
+                athlete=plan.athlete,
+                coach=plan.coach,
+                plan=plan,
+                week=week,
+                home_url=home_url,
+            )
+        except Exception:  # push is best-effort too; never fail a delivery on it
+            logger.exception(
+                "Failed to send delivery push for plan %s week %s",
                 plan.pk,
                 week.pk,
             )

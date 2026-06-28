@@ -291,6 +291,17 @@ MESO_AGENT_RUN_SYNC = os.environ.get("MESO_AGENT_RUN_SYNC", "false").lower() in 
     "yes",
 )
 
+# Meso web push (athlete PWA — decision S3/S7). Optional: with no keys configured,
+# push is a silent no-op (subscriptions are still stored, but nothing is sent) so
+# the app boots and CI runs without VAPID creds — exactly like the delivery email
+# skips an athlete with no address. ``MESO_VAPID_PUBLIC_KEY`` is the base64url
+# applicationServerKey the browser subscribes with; ``MESO_VAPID_PRIVATE_KEY`` is
+# the base64url (PKCS8 DER) signing key pywebpush uses; ``MESO_VAPID_SUBJECT`` is
+# the ``mailto:``/URL contact the push service requires in the VAPID claim.
+MESO_VAPID_PUBLIC_KEY = os.environ.get("MESO_VAPID_PUBLIC_KEY", "")
+MESO_VAPID_PRIVATE_KEY = os.environ.get("MESO_VAPID_PRIVATE_KEY", "")
+MESO_VAPID_SUBJECT = os.environ.get("MESO_VAPID_SUBJECT", "mailto:lance@lancegoyke.com")
+
 # Crispy Forms
 CRISPY_ALLOWED_TEMPLATE_PACKS = ("bulma",)
 CRISPY_TEMPLATE_PACK = "bulma"

@@ -86,6 +86,42 @@ Keep the generated `DB_NAME`/`DB_USER`/`DB_PASSWORD`.
 Set values with `deploy config set -a fitness-store KEY=VALUE` (or edit
 `/srv/fitness-store/.env` directly via sudo). Confirm with `deploy config list -a fitness-store`.
 
+#### Optional: Meso athlete web push (VAPID)
+
+The Meso athlete PWA (athlete slice Phase 4b) can push delivery notifications to
+the athlete's devices. It's **off until VAPID keys are set** — deploys and
+migrations succeed without them; push simply stays dormant (subscriptions are
+stored but nothing is sent, exactly like the delivery email skips a no-address
+athlete). To turn it on, set:
+
+```
+MESO_VAPID_PUBLIC_KEY      # base64url applicationServerKey the browser subscribes with
+MESO_VAPID_PRIVATE_KEY     # base64url PKCS8-DER signing key (pywebpush)
+MESO_VAPID_SUBJECT         # mailto:lance@lancegoyke.com (push-service contact; default is this)
+```
+
+Generate a keypair once (the public/private pair stay paired forever — rotating
+them invalidates every existing subscription, so generate once and keep it):
+
+```bash
+uv run python - <<'PY'
+import base64
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import serialization
+b64u = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+priv = ec.generate_private_key(ec.SECP256R1())
+der = priv.private_bytes(serialization.Encoding.DER,
+    serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+pub = priv.public_key().public_bytes(serialization.Encoding.X962,
+    serialization.PublicFormat.UncompressedPoint)
+print("MESO_VAPID_PUBLIC_KEY =", b64u(pub))
+print("MESO_VAPID_PRIVATE_KEY =", b64u(der))
+PY
+```
+
+Set both with `deploy config set` and restart. (The keys baked into
+`config/settings/test.py` are test-only ephemeral keys — never reuse them.)
+
 ### 3. Migrate the Postgres data (≈14 MB, Postgres 17)
 
 ```bash

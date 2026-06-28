@@ -3,6 +3,8 @@
 
 {% block title %}{{ session.name }} · Meso{% endblock %}
 
+{% block pwa %}{% include "meso/_pwa_head.html" %}{% endblock %}
+
 {% block head_extra %}
   <script defer src="{% static 'js/meso_athlete.js' %}"></script>
   <script defer src="{% static 'js/alpine.min.js' %}"></script>
@@ -71,6 +73,7 @@
       <a class="meso-btn" href="{% url 'meso:athlete_home' %}">&#8592; Back to training</a>
       <div class="meso-spacer"></div>
       <span class="meso-row-meta" style="color:var(--ok);" x-show="saved" x-cloak>Saved &#10003;</span>
+      <span class="meso-row-meta" style="color:var(--dim);" x-show="queued" x-cloak>Saved offline — will sync when you&#8217;re back.</span>
       <span class="meso-row-meta" style="color:var(--warn);" x-show="error" x-cloak>Couldn&#8217;t save — try again.</span>
       <button type="button" class="meso-btn" @click="save(false)" :disabled="saving">Save progress</button>
       <button type="button" class="meso-btn meso-btn--primary" @click="save(true)" :disabled="saving" x-text="saving ? 'Saving…' : 'Log session'">Log session</button>

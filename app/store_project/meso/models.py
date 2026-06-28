@@ -755,3 +755,44 @@ class LoggedSet(models.Model):
 
     def __str__(self):
         return f"Set {self.set_number}"
+
+
+# ---------------------------------------------------------------------------
+# Web push subscriptions (athlete PWA — Phase 4b, decision S3/S7)
+#
+# A browser ``PushSubscription`` an athlete registered so the server can push
+# delivery notifications. The ``endpoint`` is the push service's per-device URL
+# (unique); ``p256dh``/``auth`` are the client keys the payload is encrypted to.
+# An athlete may have several (one per device/browser). Dead endpoints (the push
+# service answers 404/410) are pruned on send.
+# ---------------------------------------------------------------------------
+
+
+class PushSubscription(models.Model):
+    """A device's web-push subscription owned by an athlete."""
+
+    athlete = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="meso_push_subscriptions",
+        verbose_name=_("Athlete"),
+    )
+    endpoint = models.CharField(_("Endpoint"), max_length=512, unique=True)
+    p256dh = models.CharField(_("P256DH key"), max_length=255)
+    auth = models.CharField(_("Auth secret"), max_length=255)
+    created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Push subscription"
+        verbose_name_plural = "Push subscriptions"
+
+    def __str__(self):
+        return f"{self.athlete.display_name()} · {self.endpoint[:32]}…"
+
+    def as_subscription_info(self):
+        """The ``subscription_info`` dict pywebpush expects."""
+        return {
+            "endpoint": self.endpoint,
+            "keys": {"p256dh": self.p256dh, "auth": self.auth},
+        }

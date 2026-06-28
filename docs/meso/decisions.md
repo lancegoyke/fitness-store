@@ -308,3 +308,28 @@ _(Append dated entries here as decisions land.)_
   rely on); the constraint would break grounding, and the re-save path is already idempotent. Resume point →
   **athlete Phase 3** (results feed back: retire `mockdata.RESULTS_*`, light up the designer's `last`/`adj`
   from real logs).
+- 2026-06-28 — **Athlete Phase 4b built — PWA + web push (closes S7, and the S3 push half deferred from 4a)**
+  (branch `meso-athlete-phase4b`). The athlete surface is now **installable, offline-tolerant, and
+  push-capable**. *Installable (S7):* the manifest (`/meso/manifest.webmanifest`) and service worker
+  (`/meso/sw.js`) are served as **views, not static files** — WhiteNoise's `CompressedManifestStaticFilesStorage`
+  hashes static filenames (unstable URL + wrong scope for a worker), and a worker only controls pages at/below
+  its own path, so it lives at `/meso/sw.js` to scope `/meso/`. The worker template resolves the **hashed**
+  precache URLs via `{% static %}` so the cached shell auto-busts every deploy. Strategy: precache shell +
+  offline page on install; network-first navigations (fall back to last-good cached page → offline page);
+  stale-while-revalidate static GETs; POSTs pass through (the page owns offline writes). *Offline logging (S7):*
+  `meso_athlete.js` stashes a save that fails on an unreachable network into a localStorage outbox (one per
+  session, latest wins) and flushes it on `online`/load — safe because the log endpoint is idempotent (pinned
+  by `TestOfflineReplayIsIdempotent`). *Web push (S3):* a `PushSubscription` model (**the one migration this
+  slice**, `0006_pushsubscription`) the browser registers via `api/me/push/subscribe/` (caller-scoped, upsert
+  by endpoint); `meso/push.py` signs with VAPID (`pywebpush`, **new dep**) and `notify_week_delivered` pushes
+  the deliver payload to the athlete's devices — prunes a 404/410-Gone endpoint, swallows other failures, and
+  is a **silent no-op without `MESO_VAPID_*` keys** (same graceful degradation as the no-address email). The
+  deliver hook fires email **and** push, each independently best-effort on `on_commit`; athlete-only. PWA chrome
+  + push subscribe-flow ride an athlete-only `pwa` block (`_pwa_head.html`), so **coach screens stay plain web**.
+  Built red→green: **+43 tests** (`test_athlete_pwa.py`, `test_push.py`; 354 meso / 494 project-wide), ruff
+  clean. Deployment verified locally (collectstatic + hashed SW precache under manifest storage,
+  `makemigrations --check`). **Activating push in prod needs `MESO_VAPID_PUBLIC_KEY` / `MESO_VAPID_PRIVATE_KEY`
+  / `MESO_VAPID_SUBJECT` provisioned** (see `docs/deploy-hetzner.md`); the migration + deploy succeed without
+  them (push just stays dormant). Resume point → **the athlete slice is feature-complete** (install + offline
+  logging + delivery email/push + results feeding the coach & agent). Open follow-ups: Background Sync,
+  re-deliver push debouncing, in-app notification settings.

@@ -29,6 +29,21 @@ import stripe  # noqa
 # deterministic — the batch is resolved by the time dispatch returns.
 MESO_AGENT_RUN_SYNC = True
 
+# Meso web push: a real (ephemeral, test-only) VAPID keypair so the signing path
+# in ``meso.push`` actually runs under test. The network send itself is mocked —
+# these keys never reach a real push service. The public value is a base64url
+# applicationServerKey; the private value is its base64url PKCS8 DER.
+MESO_VAPID_PUBLIC_KEY = (
+    "BGHM4CGuxntiwQWPBTFdfjMsWpqiIjDLriWlfxSCk-_D"
+    "iAcJ0ttNeSR3CJNr0GcktI3le-JgEb7ydvDoQEpUmd0"
+)
+MESO_VAPID_PRIVATE_KEY = (
+    "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgIKQKjrxm3qC3Ja7C2XVf"
+    "vzGySCvOe4gwCL9bJhcKlZmhRANCAARhzOAhrsZ7YsEFjwUxXX4zLFqaoiIwy64lpX8U"
+    "gpPvw4gHCdLbTXkkdwiTa9BnJLSN5XviYBG-8nbw6EBKVJnd"
+)
+MESO_VAPID_SUBJECT = "mailto:test@example.com"
+
 # Mock Stripe API calls for testing
 # Using unittest.mock to prevent real API calls during testing
 
