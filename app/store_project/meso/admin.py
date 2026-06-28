@@ -6,8 +6,10 @@ from .models import CoachAthlete
 from .models import CoachProfile
 from .models import Contraindication
 from .models import ExercisePrescription
+from .models import GroupMembership
 from .models import LoggedSet
 from .models import Mesocycle
+from .models import MesoGroup
 from .models import Plan
 from .models import ProposedChange
 from .models import PushSubscription
@@ -203,6 +205,25 @@ class ProposedChangeAdmin(admin.ModelAdmin):
     list_filter = ("kind", "status")
     search_fields = ("title", "rationale")
     raw_id_fields = ("batch", "session", "prescription")
+
+
+# -- groups (S1) -----------------------------------------------------------
+
+
+class GroupMembershipInline(admin.TabularInline):
+    model = GroupMembership
+    extra = 0
+    raw_id_fields = ("relationship",)
+    readonly_fields = ("created_at",)
+
+
+@admin.register(MesoGroup)
+class MesoGroupAdmin(admin.ModelAdmin):
+    list_display = ("name", "coach", "focus", "status", "modified")
+    list_filter = ("status",)
+    search_fields = ("name", "focus", "coach__email", "coach__name")
+    raw_id_fields = ("coach",)
+    inlines = (GroupMembershipInline,)
 
 
 # -- athlete PWA -----------------------------------------------------------

@@ -6,6 +6,7 @@ from .views import AthleteProfileView
 from .views import AthleteSessionView
 from .views import ChangeReviewView
 from .views import DeliverView
+from .views import GroupDetailView
 from .views import MesoDesignerView
 from .views import OfflineView
 from .views import ResultsView
@@ -57,6 +58,7 @@ urlpatterns = [
         name="push_unsubscribe",
     ),
     path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
+    path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
     path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),
     path("invite/<uuid:token>/decline/", views.invite_decline, name="invite_decline"),
     path(

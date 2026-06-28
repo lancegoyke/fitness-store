@@ -65,7 +65,7 @@
               <p class="meso-eyebrow" style="margin:0;">Groups</p>
             </div>
             {% for g in groups %}
-              <a class="meso-row" href="{% url 'meso:designer' %}">
+              <a class="meso-row" href="{% url 'meso:group' g.id %}">
                 <div style="display:flex;">
                   {% for m in g.member_objs|slice:":3" %}
                     <div class="meso-avatar meso-avatar--sm {% if m.tone == 'accent' %}meso-avatar--accent{% endif %}" style="border:2px solid var(--surface);{% if not forloop.first %}margin-left:-9px;{% endif %}">{{ m.initials }}</div>
@@ -76,7 +76,7 @@
                 </div>
                 <div style="min-width:0;">
                   <div class="meso-row-name">{{ g.name }}</div>
-                  <div class="meso-row-meta">{{ g.member_objs|length }} participants · {{ g.focus }} · {{ g.week }}</div>
+                  <div class="meso-row-meta">{{ g.meta }}</div>
                 </div>
                 <div class="meso-spacer"></div>
                 <span class="meso-badge meso-badge--accent"><i></i>{{ g.status_label }}</span>

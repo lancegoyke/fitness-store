@@ -23,6 +23,7 @@ from store_project.meso.models import CoachProfile
 from store_project.meso.models import Contraindication
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
+from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
@@ -94,6 +95,21 @@ class TestSeedCreatesDemo:
         # Only the current week materializes sessions.
         assert Session.objects.filter(week=current).count() == 3
         assert Session.objects.filter(week__mesocycle=hypertrophy).count() == 3
+
+
+class TestSeedCreatesGroup:
+    def test_creates_demo_group_with_members(self):
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        group = MesoGroup.objects.for_coach(coach).get()
+        assert group.name == "Tue/Thu Strength Squad"
+        assert group.focus == "Strength"
+        member_emails = {u.email for u in group.active_member_users()}
+        assert member_emails == {
+            "devon.reyes@example.com",
+            "priya.nair@example.com",
+            "marcus.tan@example.com",
+        }
 
 
 class TestSamplePlanRoundTrips:
@@ -190,6 +206,9 @@ class TestIdempotent:
         assert Mesocycle.objects.filter(plan__relationship__coach=coach).count() == 4
         maya = User.objects.get(email="maya.okonkwo@example.com")
         assert maya.contraindications.count() == 2
+        # One group with its three members, not duplicated.
+        group = MesoGroup.objects.for_coach(coach).get()
+        assert len(group.active_member_users()) == 3
 
     def test_rerun_preserves_existing_coach_password(self):
         existing = User.objects.create(
@@ -245,6 +264,18 @@ class TestReseedReconciles:
         seed()
         assert plan.mesocycles.count() == 4
 
+    def test_restores_an_archived_group(self):
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        group = MesoGroup.objects.for_coach(coach).get()
+        group.status = MesoGroup.Status.ARCHIVED
+        group.save(update_fields=["status"])
+
+        seed()
+        group.refresh_from_db()
+        assert group.status == MesoGroup.Status.ACTIVE
+        assert group in MesoGroup.objects.for_coach(coach).active()
+
 
 class TestDelete:
     def test_delete_removes_demo_but_keeps_coach(self):
@@ -255,3 +286,4 @@ class TestDelete:
         assert CoachAthlete.objects.for_coach(coach).count() == 0
         assert Plan.objects.for_coach(coach).count() == 0
         assert Contraindication.objects.count() == 0
+        assert MesoGroup.objects.for_coach(coach).count() == 0
