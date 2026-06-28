@@ -221,6 +221,20 @@ class TestDeliverCurrentWeek:
         assert stays.relationship.athlete in athletes
         assert leaves.relationship.athlete not in athletes
 
+    def test_delivers_the_requested_plan_not_the_newest(self):
+        # A group holding more than one program delivers the plan it was *asked*
+        # to, not whichever ``shared_plan()`` (most-recently-modified) reselects.
+        group, older, [m] = seed_group(member_count=1)
+        older.title = "Older block"
+        older.save()  # ``shared_plan()`` would now prefer this newer one
+        newer = group.create_shared_plan()
+        assert group.shared_plan().pk == newer.pk
+
+        group.deliver_current_week(older)
+
+        materialized = Plan.objects.get(source_group=group, relationship=m.relationship)
+        assert materialized.title == older.title
+
 
 # -- queryset tenancy + athlete-surface reuse --------------------------------
 

@@ -1031,8 +1031,14 @@ class MesoGroup(models.Model):
             .order_by("relationship__athlete__name", "relationship__athlete__email")
         )
 
-    def deliver_current_week(self):
+    def deliver_current_week(self, plan=None):
         """Fan the shared program's current week out to every active member (Phase 4).
+
+        ``plan`` pins *which* of the group's plans to deliver — the endpoint passes
+        the exact plan the request addressed so it can't drift to a different one
+        when a group holds more than one program; it defaults to ``shared_plan()``
+        (the canonical current one) for the seed / server button. A plan that
+        isn't this group's is rejected.
 
         Each active member gets their *resolved* week (the shared template + their
         override diffs) materialized into their own individual plan and stamped
@@ -1049,8 +1055,9 @@ class MesoGroup(models.Model):
         from .serializers import current_week
         from .serializers import serialize_week_snapshot
 
-        plan = self.shared_plan()
         if plan is None:
+            plan = self.shared_plan()
+        if plan is None or plan.group_id != self.pk:
             raise InvalidTransition("The group has no shared program to deliver.")
         group_week = current_week(plan)
         if group_week is None:

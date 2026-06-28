@@ -1102,7 +1102,9 @@ def _fan_out_group_delivery(request, plan):
     (``ATOMIC_REQUESTS``), so a partial fan-out can't half-commit.
     """
     try:
-        now, delivered = plan.group.deliver_current_week()
+        # Deliver the *requested* plan, not whichever the group reselects, so a
+        # group holding more than one program can't drift to a different one.
+        now, delivered = plan.group.deliver_current_week(plan)
     except InvalidTransition as exc:
         return None, str(exc)
     for member_plan, member_week in delivered:
