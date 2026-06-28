@@ -19,3 +19,7 @@ credentials.json
 token.json
 test_spreadsheet.json
 repomix-output.*
+
+# Front-end test suite (vitest)
+node_modules/
+coverage/

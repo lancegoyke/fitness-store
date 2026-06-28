@@ -6,8 +6,21 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+      # Front-end test scaffold only — these never affect the Django app, so
+      # they should not run Django CI (and thus never trigger a deploy). The
+      # served JS under static/js/** is deliberately NOT ignored: changing it
+      # ships via collectstatic and must deploy. See .github/workflows/frontend.yml.
+      - "frontend/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vitest.config.js"
+      - ".github/workflows/frontend.yml"
   pull_request:
     branches: ["main"]
+    # No front-end paths-ignore here on purpose: deploys key off the *push*
+    # trigger above, so gating only needs to happen there. Keeping Django CI
+    # running on every PR means it can't get stuck "pending" as a required
+    # status check when a PR only touches the front-end test scaffold.
     paths-ignore:
       - "**.md"
       - "docs/**"

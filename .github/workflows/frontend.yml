@@ -1,0 +1,49 @@
+name: Frontend CI
+
+# Runs the meso front-end unit tests (vitest). This is a SEPARATE workflow from
+# "Django CI" on purpose: the production deploy keys off "Django CI" succeeding,
+# so front-end-test-only changes run here, gate the PR, and never trigger a
+# deploy. Only fires when JS/test files actually change.
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "app/store_project/static/js/**"
+      - "frontend/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vitest.config.js"
+      - ".github/workflows/frontend.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "app/store_project/static/js/**"
+      - "frontend/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vitest.config.js"
+      - ".github/workflows/frontend.yml"
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run front-end tests
+        run: npm test
