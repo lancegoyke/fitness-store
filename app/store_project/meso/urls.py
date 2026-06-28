@@ -59,6 +59,7 @@ urlpatterns = [
     ),
     path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
     path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
+    path("group/<int:pk>/design/", views.group_design, name="group_design"),
     path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),
     path("invite/<uuid:token>/decline/", views.invite_decline, name="invite_decline"),
     path(

@@ -52,7 +52,20 @@ agent, and athlete slices.
   **No shared program yet** — the roster/detail read the membership, not a plan.
 - **Phase 2 — shared group program.** `Plan.group` FK (+ nullable `relationship`); a group
   plan is a `Plan` rooted at a group. The designer renders a group plan in Group mode;
-  scoping (`Plan.objects.for_group` / coach can edit their group's plan). Create-group UI.
+  scoping (`Plan.objects.editable_by` / coach can edit their group's plan). Create-group UI.
+  Split — like the athlete slice's Phase 4 — into:
+  - **Phase 2a — shared program spine + Group-mode designer (built; this PR).** `Plan.group`
+    FK + nullable `relationship` + a DB `XOR` constraint (a plan is rooted at *exactly one* of
+    a relationship or a group). `Plan.coach/athlete/is_group/is_editable_by`,
+    `PlanQuerySet.editable_by` (the designer + autosave surface — individual *or* group;
+    `for_coach` stays individual-only so the deliver/results/review flows never see a group
+    plan), `MesoGroup.shared_plan()/create_shared_plan()` (a starter scaffold so the grid is
+    immediately editable). The designer opens a group plan and renders Group mode off real
+    rows (`serialize_group_identity`); autosave edits its grid; **deliver + the agent reject
+    group plans** (Phases 4/3). A `group_design` POST entry point + the group-detail
+    "Design / Open shared program" card. The seeded demo group gets a shared program.
+  - **Phase 2b — create-group UI.** Create a brand-new group from the roster (name + focus +
+    pick members), so groups no longer come only from the seed/admin.
 - **Phase 3 — per-athlete overrides (the `adj` overlay).** `PrescriptionOverride` per member
   (load %, swap, volume), effective-program resolution (`shared + overrides`), the designer's
   "Shared program · per-athlete auto-adjusts" row + per-row `adj` badge driven by real diffs.
@@ -100,3 +113,60 @@ agent, and athlete slices.
 - `roster_group` / `group_detail` shapes (avatars, meta, folded flags).
 - `RosterView` renders the coach's groups and not another coach's; `GroupDetailView` is
   coach-scoped (foreign/unknown group → 404) and lists members + flags.
+
+## Phase 2a — build notes
+
+- **A plan is rooted at exactly one of relationship / group.** `Plan.relationship` is now
+  nullable and `Plan.group` (FK → `MesoGroup`, `related_name="plans"`) is added, guarded by a
+  `plan_relationship_xor_group` `CheckConstraint` — both-set or neither-set is a DB error, so
+  the program tree (`Mesocycle → … → ExercisePrescription`) is reused for both kinds, gaining
+  only a root (and, Phase 3, an override overlay). Migration `meso.0008`.
+- **Accessors:** `Plan.coach` resolves via the relationship *or* the group; `Plan.athlete` is
+  `None` for a group plan (so `__str__` names the group); `Plan.is_group` /
+  `Plan.is_editable_by(user)` drive the gates below.
+- **Scoping — the key tenancy call:** `PlanQuerySet.editable_by(user)` is the wider gate the
+  *designer + autosave* use — an individual plan over an active relationship **or** a group
+  plan the coach owns. `for_coach` deliberately stays **individual-only**: it backs the
+  deliver / results / review flows, which assume a single athlete, so a group plan must never
+  leak into them. `for_athlete` is unchanged (athletes reach a group's program through the
+  per-athlete delivered snapshot in Phase 4, not the group plan).
+- **Shared-plan helpers:** `MesoGroup.shared_plan()` is the group's current non-archived plan
+  (or `None`); `create_shared_plan()` builds one rooted at the group with a minimal starter
+  scaffold (one block, the current week, two days each with a starter row) — there is no
+  add-session/add-week endpoint yet, so a bare plan would be uneditable.
+- **Designer:** `MesoDesignerView` opens a group plan via `editable_by`; `serialize_plan`
+  carries a `group` identity payload (`serialize_group_identity`: name/focus, active members +
+  avatars + each one's flags, and the folded "flags across group") and **skips** the
+  athlete-scoped "last time" column for a group plan. `meso.js` flips to Group mode and
+  hydrates the top-bar + left-rail identity from that payload (no more hardcoded squad); the
+  fabricated per-athlete adjusts are replaced with an honest Phase-3 placeholder.
+  `initials` moved to `serializers` so the payload builds without a presenters import cycle.
+- **What a group plan can't do yet:** deliver (`plan_deliver`) and the agent (`agent_propose`)
+  reject a group plan with a `400` — deliver-to-all is Phase 4, the group agent is Phase 3, and
+  both dereference `plan.athlete`. The designer hides Review / Deliver and the agent composer in
+  Group mode to match. Autosave (`prescription_patch` / `session_add_exercise`) is
+  athlete-agnostic and works on a group plan.
+- **Entry point:** `group_design` (POST `/meso/group/<id>/design/`) get-or-creates the group's
+  shared plan and redirects into the designer; the group-detail page offers "Design shared
+  program" (none yet) or "Open shared program" (one exists). Idempotent — a double-submit never
+  spawns a second plan. The seed gives the demo group a shared program (created once).
+
+## Tests (Phase 2a)
+
+`meso/tests/test_group_program.py` — model + scoping + serializer + the designer/endpoints:
+
+- The `XOR` root constraint (both-set and neither-set rejected); `coach`/`athlete`/`is_group`/
+  `__str__` for a group plan.
+- `editable_by` includes an owned group plan + an owned active individual plan, excludes a
+  foreign group plan and an ended individual plan; `for_coach` stays individual-only;
+  `for_athlete` excludes group plans; `is_editable_by`.
+- `shared_plan()` (None / created / excludes archived); `create_shared_plan()` roots at the
+  group with a scaffold.
+- `serialize_plan` carries the `group` payload (members + folded flags), omits it for an
+  individual plan, and skips the `last` column for a group plan.
+- `group_design` creates + redirects, is idempotent, 404s a foreign group, requires POST + login.
+- The designer opens a coach's group plan (200, group payload in the page) and 404s a foreign
+  coach's; autosave works for the group coach and 403s a foreigner; deliver + agent 400 a group
+  plan. The group-detail page shows Design vs Open by whether a shared plan exists.
+- Seed: the demo group gets a shared program (rooted at the group, with a scaffold), not
+  duplicated on reseed.

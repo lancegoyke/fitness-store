@@ -22,6 +22,16 @@ from django.urls import reverse
 from . import models
 
 
+def initials(name):
+    """Two-letter monogram for an avatar ("Maya Okonkwo" → "MO")."""
+    parts = [p for p in name.split() if p]
+    if not parts:
+        return "?"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
+
+
 def serialize_prescription(prescription):
     """One exercise row in a session's grid."""
     data = {
@@ -410,11 +420,41 @@ def current_week(plan, week=None):
     return weeks[0] if weeks else None
 
 
+def serialize_group_identity(group):
+    """The group's identity for the designer's Group mode (S1 Phase 2).
+
+    What the designer hydrates Group mode from — the group name/focus, its active
+    members (avatars + each one's contraindication flags), and the unique flags
+    folded across the group. Mirrors ``presenters.group_detail`` but in the JSON
+    shape the Alpine front-end reads, so Group mode renders off real rows instead
+    of the prototype's hardcoded squad. Members are scoped to active links by
+    ``active_member_users``.
+    """
+    members = group.active_member_users()
+    member_data = []
+    flags = set()
+    for user in members:
+        labels = [c.label for c in user.contraindications.all() if c.active]
+        flags.update(labels)
+        name = user.display_name()
+        member_data.append({"name": name, "initials": initials(name), "flags": labels})
+    return {
+        "id": group.pk,
+        "name": group.name,
+        "focus": group.focus or "General",
+        "members": member_data,
+        "member_count": len(member_data),
+        "flags": sorted(flags),
+    }
+
+
 def serialize_plan(plan, week=None):
     """Serialize ``plan`` to the designer's ``program``/``weeks``/``phases`` shape.
 
     ``week`` optionally pins which week populates ``program``/``weeks``;
-    otherwise the flagged current week (or the plan's first) is used.
+    otherwise the flagged current week (or the plan's first) is used. A group plan
+    (rooted at a ``MesoGroup``) carries a ``group`` identity payload and skips the
+    athlete-scoped "last time" column; an individual plan carries ``group: None``.
     """
     open_week = current_week(plan, week)
     current_mesocycle = open_week.mesocycle if open_week else None
@@ -424,13 +464,15 @@ def serialize_plan(plan, week=None):
         program = [serialize_session(s) for s in sessions]
         # Light up the "last time" column from real logs (Phase 3): one query
         # over the plan's logged sets, mapped onto the rendered prescriptions.
-        prescriptions = [p for s in sessions for p in s.prescriptions.all()]
-        last_map = last_logged_labels(plan, prescriptions, plan.unit)
-        for session_data in program:
-            for exercise in session_data["exercises"]:
-                label = last_map.get(exercise["id"])
-                if label:
-                    exercise["last"] = label
+        # A group plan has no single athlete, so there is no per-athlete "last".
+        if not plan.is_group:
+            prescriptions = [p for s in sessions for p in s.prescriptions.all()]
+            last_map = last_logged_labels(plan, prescriptions, plan.unit)
+            for session_data in program:
+                for exercise in session_data["exercises"]:
+                    label = last_map.get(exercise["id"])
+                    if label:
+                        exercise["last"] = label
         week_strip = [serialize_week(w) for w in current_mesocycle.weeks.all()]
     else:
         program = []
@@ -448,6 +490,7 @@ def serialize_plan(plan, week=None):
             "status": plan.status,
             "unit": plan.unit,
         },
+        "group": serialize_group_identity(plan.group) if plan.is_group else None,
         "program": program,
         "weeks": week_strip,
         "phases": phases,

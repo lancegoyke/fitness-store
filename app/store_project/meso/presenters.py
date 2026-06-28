@@ -18,18 +18,10 @@ from .models import SessionLog
 from .serializers import _fmt_num
 from .serializers import _num
 from .serializers import current_week
+from .serializers import initials
 from .serializers import latest_delivered_week
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
-
-
-def initials(name):
-    parts = [p for p in name.split() if p]
-    if not parts:
-        return "?"
-    if len(parts) == 1:
-        return parts[0][:2].upper()
-    return (parts[0][0] + parts[-1][0]).upper()
 
 
 def _age(user):
@@ -152,6 +144,9 @@ def group_detail(group):
                 "flags": labels,
             }
         )
+    # The shared program (Phase 2): its id when the group already has one (the
+    # detail page links straight to the designer), else None (offer to design it).
+    shared = group.shared_plan()
     return {
         "id": group.pk,
         "name": group.name,
@@ -160,6 +155,7 @@ def group_detail(group):
         "members": member_data,
         "member_count": len(member_data),
         "flags": sorted(flags),
+        "shared_plan_id": shared.pk if shared else None,
     }
 
 

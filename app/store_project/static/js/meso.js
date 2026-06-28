@@ -19,7 +19,11 @@ function createMeso() {
     unit: "kg",
 
     // ---- ui state ----
-    mode: "individual", // individual | group
+    mode: "individual", // individual | group — set from the plan on load
+    // Group identity (name / focus / members / folded flags) when the open plan
+    // is a group's shared program; null for an individual plan. Hydrated by
+    // init() from the injected plan's `group` payload (serialize_group_identity).
+    group: null,
     view: "week", // week | block | athlete
     periodStyle: "timeline", // timeline | ladder | calendar
     inputText: "",
@@ -97,6 +101,22 @@ function createMeso() {
       this.program = data.program;
       this.weeks = data.weeks;
       this.phases = data.phases;
+      // A group shared program opens in Group mode and renders its real identity
+      // (members / flags); an individual plan stays in Individual mode. The group
+      // agent (per-athlete auto-adjusts) is a later phase, so swap the agent
+      // greeting for a group-appropriate one (the live composer is hidden in the
+      // template — hydrateThread keeps this when the plan has no batches).
+      this.group = data.group || null;
+      if (this.group) {
+        this.mode = "group";
+        this.messages = [
+          {
+            id: 1,
+            role: "agent",
+            text: "This is the group's shared program — every member trains off it. Edit it directly here; a group agent that auto-adjusts each athlete arrives in the next phase.",
+          },
+        ];
+      }
       const csrfEl = document.getElementById("meso-csrf");
       this.csrf = csrfEl ? csrfEl.dataset.token : "";
       this.hydrateThread();

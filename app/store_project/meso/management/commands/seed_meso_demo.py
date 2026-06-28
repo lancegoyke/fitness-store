@@ -13,7 +13,8 @@ database renders the roster, athlete profile, and designer from actual data:
   ExercisePrescription`` hierarchy reproducing the designer's fixture grid, so
   ``serialize_plan`` round-trips it straight into the designer;
 - one demo **MesoGroup** (groups slice S1) with three of the athletes as
-  members, so the roster's *Groups* card renders off real rows.
+  members + a **shared program** rooted at the group (Phase 2a), so the roster's
+  *Groups* card and the group designer both render off real rows.
 
 The command is **idempotent**: re-running ``get_or_create``s every row, so it
 never duplicates. ``--delete`` tears the demo back down (the demo athletes and,
@@ -327,9 +328,9 @@ SAMPLE_LOG = {
 }
 
 
-# A demo group (groups slice S1, Phase 1): three of the athletes who train
-# together, so a fresh DB renders the roster's *Groups* card off real rows. The
-# shared program + per-athlete auto-adjusts arrive in groups Phase 2/3.
+# A demo group (groups slice S1): three of the athletes who train together, so a
+# fresh DB renders the roster's *Groups* card off real rows. Phase 2a also gives
+# it a shared program (rooted at the group); per-athlete auto-adjusts are Phase 3.
 GROUP = {
     "name": "Tue/Thu Strength Squad",
     "focus": "Strength",
@@ -385,7 +386,8 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"✓ Meso demo seeded for {coach.email}: "
-                f"{len(ATHLETES)} athletes, 1 group, 1 sample plan, 1 logged session."
+                f"{len(ATHLETES)} athletes, 1 group (+ shared program), "
+                "1 sample plan, 1 logged session."
             )
         )
 
@@ -499,6 +501,11 @@ class Command(BaseCommand):
         members = User.objects.filter(email__in=emails)
         for athlete in members:
             group.add_athlete(athlete)
+        # Groups Phase 2a: a shared program rooted at the group (created once, so
+        # a reseed never spawns a second) — the group designer renders off it.
+        if group.shared_plan() is None:
+            group.create_shared_plan()
+            self.stdout.write(f"  - built shared program for group '{group.name}'")
         self.stdout.write(
             f"  - ensured group '{group.name}' ({members.count()} members)"
         )

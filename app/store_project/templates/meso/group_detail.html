@@ -33,9 +33,18 @@
           {% endif %}
         </div>
 
-        <div class="meso-card meso-card--pad" style="color:var(--dim);">
+        <div class="meso-card meso-card--pad">
           <p class="meso-eyebrow">Shared program</p>
-          <p class="meso-sub" style="margin-top:8px;">A shared program for this group lands soon — for now, program each member individually.</p>
+          {% if group.shared_plan_id %}
+            <p class="meso-sub" style="margin:8px 0 12px;">One program the whole group trains off — open it in the designer.</p>
+            <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer_plan' group.shared_plan_id %}">Open shared program</a>
+          {% else %}
+            <p class="meso-sub" style="margin:8px 0 12px;">Build one program the whole group trains off; per-athlete auto-adjusts come next.</p>
+            <form method="post" action="{% url 'meso:group_design' group.id %}">
+              {% csrf_token %}
+              <button type="submit" class="meso-btn meso-btn--primary">Design shared program</button>
+            </form>
+          {% endif %}
         </div>
       </div>
 

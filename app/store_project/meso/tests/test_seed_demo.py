@@ -111,6 +111,25 @@ class TestSeedCreatesGroup:
             "marcus.tan@example.com",
         }
 
+    def test_creates_a_shared_group_program(self):
+        # Groups Phase 2a: the demo group gets a shared plan (rooted at the group)
+        # with a usable scaffold so the group designer renders off real rows.
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        group = MesoGroup.objects.for_coach(coach).get()
+        plan = group.shared_plan()
+        assert plan is not None
+        assert plan.group_id == group.pk
+        assert plan.relationship_id is None
+        assert Session.objects.filter(week__mesocycle__plan=plan).exists()
+
+    def test_reseed_does_not_duplicate_shared_program(self):
+        seed()
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        group = MesoGroup.objects.for_coach(coach).get()
+        assert group.plans.count() == 1
+
 
 class TestSamplePlanRoundTrips:
     def test_serializes_to_designer_shape(self):

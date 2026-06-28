@@ -56,19 +56,18 @@ from .serializers import serialize_week_snapshot
 logger = logging.getLogger(__name__)
 
 
-def _coach_working_plan(user):
+def _coach_working_plan(user, *, plans=None):
     """The coach's most-recently-touched, non-archived plan, or None.
 
-    The target the bare ``/meso/designer/`` and ``/meso/deliver/`` URLs resolve
-    to now that the client-side fixtures are retired (Phase 5): a coach lands on
-    the plan they last worked, or back on the roster if they have none.
+    The target a bare ``/meso/designer/`` or ``/meso/deliver/`` URL resolves to:
+    the plan the coach last worked, or back on the roster if they have none.
+    ``plans`` scopes the candidate set — the *designer* passes
+    ``Plan.objects.editable_by(user)`` so a group shared program can be the
+    working plan too (the designer handles both kinds), while deliver keeps the
+    individual-only default (``for_coach``) since deliver-to-all is Phase 4.
     """
-    return (
-        Plan.objects.for_coach(user)
-        .exclude(status=Plan.Status.ARCHIVED)
-        .order_by("-modified")
-        .first()
-    )
+    qs = plans if plans is not None else Plan.objects.for_coach(user)
+    return qs.exclude(status=Plan.Status.ARCHIVED).order_by("-modified").first()
 
 
 def _coach_session_or_404(user, pk):
@@ -126,7 +125,12 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
 
     def get(self, request, *args, **kwargs):
         if kwargs.get("plan_id") is None:
-            plan = _coach_working_plan(request.user)
+            # The designer opens individual *or* group plans, so its bare-URL
+            # target spans both (``editable_by``) — a coach who just edited a
+            # group's shared program lands back on it, not an older individual one.
+            plan = _coach_working_plan(
+                request.user, plans=Plan.objects.editable_by(request.user)
+            )
             if plan is None:
                 messages.info(request, "Pick an athlete to start a program.")
                 return redirect("meso:roster")
@@ -135,8 +139,10 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        # ``editable_by`` (not ``for_coach``) so a *group* shared program — rooted
+        # at a group the coach owns — opens here too, not just individual plans.
         plan = (
-            Plan.objects.for_coach(self.request.user)
+            Plan.objects.editable_by(self.request.user)
             .filter(pk=kwargs["plan_id"])
             .first()
         )
@@ -241,6 +247,30 @@ class GroupDetailView(LoginRequiredMixin, TemplateView):
         ctx["active"] = "roster"
         ctx["group"] = presenters.group_detail(group)
         return ctx
+
+
+@login_required
+@require_POST
+def group_design(request, pk):
+    """Open (or create) a group's shared program and land in the designer (Phase 2).
+
+    Coach-scoped: a foreign or unknown group is a flat 404. Idempotent — reuses
+    the group's existing non-archived shared plan, only creating (with a starter
+    scaffold) when there is none. The lookup + create run under a row lock on the
+    group so two concurrent submits can't both see "no plan" and each create one
+    (the second waits, then reuses the first's plan).
+    """
+    with transaction.atomic():
+        group = (
+            MesoGroup.objects.select_for_update()
+            .for_coach(request.user)
+            .filter(pk=pk)
+            .first()
+        )
+        if group is None:
+            raise Http404("Unknown group")
+        plan = group.shared_plan() or group.create_shared_plan()
+    return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
 # -- athlete surface (athlete slice Phase 1) -------------------------------
@@ -741,11 +771,12 @@ PATCHABLE_FIELDS = {
 def _coach_plan_or_forbidden(request, plan_id):
     """The plan the requester coaches, or an ``HttpResponseForbidden``.
 
-    404 when the plan does not exist; 403 when it exists but the requester is
-    not its coach over an active relationship.
+    404 when the plan does not exist; 403 when it exists but the requester may
+    not edit it — for an individual plan, its coach over an active relationship;
+    for a group plan, the coach who owns the group (``Plan.is_editable_by``).
     """
     plan = get_object_or_404(Plan, pk=plan_id)
-    if plan.relationship.coach_id != request.user.id or not plan.relationship.is_active:
+    if not plan.is_editable_by(request.user):
         return None, HttpResponseForbidden("You do not own this plan.")
     return plan, None
 
@@ -831,6 +862,11 @@ def plan_deliver(request, plan_id):
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
+    if plan.is_group:
+        # Deliver-to-all fans a per-athlete snapshot out to each member; that is
+        # groups Phase 4. Until then a group plan has no single athlete to deliver
+        # to, so reject it here rather than crash on ``plan.athlete``.
+        return HttpResponseBadRequest("Group delivery isn't available yet.")
     week = current_week(plan)
     if week is None:
         return HttpResponseBadRequest("This plan has no week to deliver.")
@@ -917,6 +953,11 @@ def agent_propose(request, plan_id):
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
+    if plan.is_group:
+        # The agent grounds on a single athlete's profile + logs; a group agent
+        # (per-athlete auto-adjusts) is groups Phase 3. Reject before any work so
+        # it never dereferences ``plan.athlete``.
+        return HttpResponseBadRequest("The agent isn't available for groups yet.")
     try:
         payload = json.loads(request.body or "{}")
     except json.JSONDecodeError:
