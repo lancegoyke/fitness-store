@@ -501,12 +501,18 @@ class Plan(models.Model):
         """Whether ``user`` (a coach) may open + edit this plan in the designer.
 
         An individual plan is editable by its coach over an *active* relationship;
-        a group plan by the coach who owns the group. Mirrors
-        ``PlanQuerySet.editable_by`` for a single fetched plan (the autosave
-        endpoints' ownership gate).
+        a group plan by the coach who owns the group. A *materialized*
+        group-delivery plan (``source_group`` set) is never editable — it is a
+        derived snapshot the coach manages only through the shared program, so the
+        autosave / deliver / agent endpoints (which gate on this) reject it.
+        Mirrors ``PlanQuerySet.editable_by`` for a single fetched plan.
         """
         if self.relationship_id is not None:
-            return self.relationship.coach_id == user.id and self.relationship.is_active
+            return (
+                self.source_group_id is None
+                and self.relationship.coach_id == user.id
+                and self.relationship.is_active
+            )
         if self.group_id is not None:
             return self.group.coach_id == user.id
         return False
@@ -970,7 +976,19 @@ class MesoGroup(models.Model):
         return membership
 
     def remove_athlete(self, athlete):
-        """Remove an athlete from the group (a no-op if they aren't a member)."""
+        """Remove an athlete from the group (a no-op if they aren't a member).
+
+        Also **archives** any materialized group-delivery plan this athlete holds
+        from this group. The membership row gated the *fan-out*, but the athlete's
+        *visibility* of an already-delivered program comes from the active
+        ``Plan(relationship=…, source_group=self)`` (``for_athlete`` returns it
+        regardless of membership) — so removing a delivered member must archive
+        that snapshot or they keep seeing and logging it on ``/meso/me/``. A
+        re-add + re-deliver restores it (``sync_delivered_plan`` reactivates).
+        """
+        self.materialized_plans.filter(
+            relationship__athlete=athlete, relationship__coach=self.coach
+        ).update(status=Plan.Status.ARCHIVED)
         self.memberships.filter(relationship__athlete=athlete).delete()
 
     def active_member_users(self):

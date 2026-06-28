@@ -260,6 +260,43 @@ class TestMaterializedPlanScoping:
 
         assert resp.status_code == 200
 
+    def test_coach_cannot_edit_or_redeliver_a_materialized_plan(self, client):
+        # The single-plan write gate (``is_editable_by``) must also exclude a
+        # materialized snapshot — a coach posting its id directly to deliver /
+        # autosave must not be able to mutate the athlete-facing copy.
+        group, plan, [m] = seed_group(member_count=1)
+        group.deliver_current_week()
+        member_plan = Plan.objects.get(source_group=group)
+        assert member_plan.is_editable_by(group.coach) is False
+        client.force_login(group.coach)
+
+        resp = client.post(deliver_url(member_plan))
+
+        assert resp.status_code == 403
+
+
+class TestRemovedMemberLosesAccess:
+    def test_remove_athlete_archives_their_materialized_plan(self):
+        group, plan, [stays, leaves] = seed_group(member_count=2)
+        group.deliver_current_week()
+        gone = leaves.relationship.athlete
+        leaves_plan = Plan.objects.get(source_group=group, relationship__athlete=gone)
+
+        group.remove_athlete(gone)
+
+        leaves_plan.refresh_from_db()
+        assert leaves_plan.status == Plan.Status.ARCHIVED
+        # The removed member no longer sees the group's delivered program on their
+        # surface (``_athlete_plans`` excludes archived), while the remaining
+        # member keeps theirs.
+        visible = Plan.objects.for_athlete(gone).exclude(status=Plan.Status.ARCHIVED)
+        assert leaves_plan not in visible
+        kept = stays.relationship.athlete
+        kept_visible = Plan.objects.for_athlete(kept).exclude(
+            status=Plan.Status.ARCHIVED
+        )
+        assert kept_visible.filter(source_group=group).exists()
+
 
 # -- endpoint: plan_deliver (group-aware) ------------------------------------
 
