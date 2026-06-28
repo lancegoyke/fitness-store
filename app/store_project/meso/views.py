@@ -1,8 +1,10 @@
+import datetime
 import json
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db import transaction
 from django.db.models import Max
 from django.http import Http404
 from django.http import HttpResponseBadRequest
@@ -26,14 +28,17 @@ from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachProfile
 from .models import ExercisePrescription
+from .models import LoggedSet
 from .models import Plan
 from .models import ProposedChange
 from .models import Session
+from .models import SessionLog
 from .models import WeekDelivery
 from .serializers import current_week
 from .serializers import serialize_plan
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
+from .serializers import serialize_session_log
 from .serializers import serialize_week_snapshot
 
 
@@ -203,18 +208,174 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
 
 
 class AthleteSessionView(LoginRequiredMixin, TemplateView):
-    """One delivered session's prescribed plan, read-only (logging in Phase 2)."""
+    """One delivered session — the athlete's interactive logger (Phase 2).
+
+    Renders the prescribed grid as set-input rows pre-filled from the athlete's
+    own existing log, and injects ``log_data`` for the Alpine logger to hydrate
+    from and POST back to ``athlete_log_session``.
+    """
 
     template_name = "meso/athlete_session.html"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         session = _athlete_session_or_404(self.request.user, kwargs["pk"])
+        sess = presenters.athlete_session(session, self.request.user)
         ctx["active"] = "training"
-        ctx["session"] = presenters.athlete_session(session, self.request.user)
+        ctx["session"] = sess
+        ctx["log_data"] = presenters.athlete_log_payload(sess)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
         return ctx
+
+
+# Free-form text cells per logged set, mapped to their model ``max_length``.
+LOG_SET_FIELDS = {"reps": 32, "load": 32, "rpe": 32}
+# A generous ceiling on a set's number — no real session has this many sets, and
+# bounding it here stops a malformed client from storing an enormous ``set_number``
+# that would later balloon the session page's set-row render (presenters._set_rows).
+MAX_LOGGED_SET_NUMBER = 50
+
+
+@login_required
+@require_POST
+def athlete_log_session(request, pk):
+    """Upsert the athlete's log for a delivered session they own (Phase 2).
+
+    Replaces the athlete's own ``SessionLog`` + ``LoggedSet`` rows for this
+    session with the posted state, flips the session done (unless an explicit
+    ``status`` says otherwise), and stamps the date (today when none is given).
+    Scoped by ``_athlete_session_or_404`` — a foreign, undelivered, archived, or
+    unknown session is a flat 404, never a silent write. The body is fully
+    validated *before* any write, so a bad request is a 400 that persists
+    nothing; the write itself is idempotent (re-logging updates the one log,
+    replacing its set rows rather than appending). These are the first real rows
+    ``serialize_recent_logs`` grounds the agent on.
+    """
+    session = _athlete_session_or_404(request.user, pk)
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+
+    status = payload.get("status", SessionLog.Status.DONE)
+    if status not in (SessionLog.Status.PENDING, SessionLog.Status.DONE):
+        return HttpResponseBadRequest("status must be 'pending' or 'done'.")
+
+    # An explicit date is honored; a missing one defaults to today only when
+    # *creating* the log — re-saving an existing log without a date keeps its
+    # original date so editing a set days later doesn't move the workout (which
+    # would reorder recent-log grounding). ``explicit_date`` is None when none
+    # was sent.
+    raw_date = payload.get("date")
+    explicit_date = None
+    if raw_date not in (None, ""):
+        if not isinstance(raw_date, str):
+            return HttpResponseBadRequest("date must be an ISO date string.")
+        try:
+            explicit_date = datetime.date.fromisoformat(raw_date)
+        except ValueError:
+            return HttpResponseBadRequest("date must be an ISO date (YYYY-MM-DD).")
+
+    notes = payload.get("notes", "")
+    if not isinstance(notes, str):
+        return HttpResponseBadRequest("notes must be a string.")
+
+    cleaned_sets, error = _clean_logged_sets(payload.get("sets", []), session)
+    if error is not None:
+        return error
+
+    with transaction.atomic():
+        log = (
+            SessionLog.objects.filter(session=session, athlete=request.user)
+            .order_by("-created_at")
+            .first()
+        )
+        if log is None:
+            log = SessionLog(session=session, athlete=request.user)
+        log.status = status
+        if explicit_date is not None:
+            log.date = explicit_date
+        elif log.date is None:  # first save (or a log never dated) → stamp today
+            log.date = timezone.localdate()
+        # else: a re-save with no date keeps the existing workout date.
+        log.notes = notes
+        log.save()
+        log.sets.all().delete()
+        LoggedSet.objects.bulk_create(
+            [
+                LoggedSet(
+                    session_log=log,
+                    prescription_id=cs["prescription_id"],
+                    set_number=cs["set_number"],
+                    reps=cs["reps"],
+                    load=cs["load"],
+                    rpe=cs["rpe"],
+                )
+                for cs in cleaned_sets
+            ]
+        )
+    return JsonResponse({"ok": True, "log": serialize_session_log(log)})
+
+
+def _clean_logged_sets(raw_sets, session):
+    """Validate the posted ``sets`` against this session, or return a 400.
+
+    Returns ``(cleaned, None)`` on success or ``(None, HttpResponseBadRequest)``.
+    Every set must reference a prescription **in this session** (no foreign rows),
+    carry a positive integer ``set_number`` (defaulting to its position), and have
+    string reps/load/rpe within the model's ``max_length``.
+    """
+    if not isinstance(raw_sets, list):
+        return None, HttpResponseBadRequest("sets must be a list.")
+    allowed_ids = {p.pk for p in session.prescriptions.all()}
+    cleaned = []
+    seen = set()
+    for position, raw in enumerate(raw_sets, start=1):
+        if not isinstance(raw, dict):
+            return None, HttpResponseBadRequest("Each set must be an object.")
+        presc_id = raw.get("prescription")
+        # ``bool`` is an ``int`` subclass — reject it explicitly so ``true`` isn't an id.
+        if (
+            not isinstance(presc_id, int)
+            or isinstance(presc_id, bool)
+            or presc_id not in allowed_ids
+        ):
+            return None, HttpResponseBadRequest(
+                "Each set must reference a prescription in this session."
+            )
+        set_number = raw.get("set_number", position)
+        if (
+            not isinstance(set_number, int)
+            or isinstance(set_number, bool)
+            or not 1 <= set_number <= MAX_LOGGED_SET_NUMBER
+        ):
+            return None, HttpResponseBadRequest(
+                f"set_number must be between 1 and {MAX_LOGGED_SET_NUMBER}."
+            )
+        # Each (prescription, set_number) is logged at most once — duplicates
+        # would persist as two rows that the presenter collapses on reload but
+        # the agent's grounding still double-counts, breaking idempotency.
+        key = (presc_id, set_number)
+        if key in seen:
+            return None, HttpResponseBadRequest(
+                "Duplicate set for the same prescription and set number."
+            )
+        seen.add(key)
+        fields = {}
+        for field, max_length in LOG_SET_FIELDS.items():
+            value = raw.get(field, "")
+            if not isinstance(value, str):
+                return None, HttpResponseBadRequest(f"{field} must be a string.")
+            if len(value) > max_length:
+                return None, HttpResponseBadRequest(f"{field} is too long.")
+            fields[field] = value
+        cleaned.append(
+            {"prescription_id": presc_id, "set_number": set_number, **fields}
+        )
+    return cleaned, None
 
 
 # -- invite / relationship actions ----------------------------------------

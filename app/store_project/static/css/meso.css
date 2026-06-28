@@ -43,6 +43,11 @@ body.meso {
   --ok: #2f8f56;
 }
 
+/* Hide Alpine-managed elements until Alpine initializes (avoids a flash). */
+[x-cloak] {
+  display: none !important;
+}
+
 .meso input,
 .meso textarea {
   font-family: inherit;

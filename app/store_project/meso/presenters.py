@@ -216,16 +216,80 @@ def athlete_home(user):
     return cards
 
 
-def athlete_session(session, athlete):
-    """One delivered session's prescribed grid, for the athlete's read view.
+def _prescribed_set_count(sets_text):
+    """How many set rows a prescription's ``sets`` cell asks for, or 0.
 
-    ``session`` is already athlete-scoped + delivered by the view; this only
-    formats it (and reads the athlete's own done status). Prescriptions are
+    ``sets`` is free text — "3" is a plain count, but "3-4"/"AMRAP" aren't. We
+    only expand a plain integer; the caller falls back to a default otherwise.
+    """
+    try:
+        return max(int(str(sets_text).strip()), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
+    """Pre-filled set-input rows for one prescription (Phase 2 logger).
+
+    ``logged`` maps ``(prescription_id, set_number)`` to the athlete's own
+    ``LoggedSet``. The row count is the prescribed sets (capped, or ``default``
+    when the cell is free-form), widened to show every set the athlete already
+    logged so a reload never hides logged data — but ``hard_cap`` bounds the
+    render unconditionally so a stray large ``set_number`` can never balloon the
+    page (the log endpoint also rejects set numbers above its own ceiling).
+    """
+    prescribed = _prescribed_set_count(prescription.sets) or default
+    logged_numbers = [n for (pid, n) in logged if pid == prescription.pk]
+    count = max(min(prescribed, cap), max(logged_numbers, default=0), 1)
+    count = min(count, hard_cap)
+    rows = []
+    for n in range(1, count + 1):
+        s = logged.get((prescription.pk, n))
+        rows.append(
+            {
+                "set_number": n,
+                "reps": s.reps if s else "",
+                "load": s.load if s else "",
+                "rpe": s.rpe if s else "",
+                "done": s is not None,
+            }
+        )
+    return rows
+
+
+def _target_label(prescription):
+    """The prescribed target shown above a logger's set rows.
+
+    Carries the coach's full prescription — sets×reps plus load and RPE when set
+    — so the athlete sees what to aim for before entering what they did, e.g.
+    "3 × 6 · 70 · RPE 7".
+    """
+    parts = [f"{prescription.sets or '—'} × {prescription.reps or '—'}"]
+    if prescription.load:
+        parts.append(prescription.load)
+    if prescription.rpe:
+        parts.append(f"RPE {prescription.rpe}")
+    return " · ".join(parts)
+
+
+def athlete_session(session, athlete):
+    """One delivered session as the athlete's interactive logger (Phase 2).
+
+    ``session`` is already athlete-scoped + delivered by the view; this formats
+    the prescribed grid into set-input rows, pre-filled from the athlete's own
+    most-recent ``SessionLog``, and reports its done status. Prescriptions are
     prefetched on the view query.
     """
-    done = SessionLog.objects.filter(
-        session=session, athlete=athlete, status=SessionLog.Status.DONE
-    ).exists()
+    log = (
+        SessionLog.objects.filter(session=session, athlete=athlete)
+        .order_by("-created_at")
+        .prefetch_related("sets")
+        .first()
+    )
+    logged = (
+        {(s.prescription_id, s.set_number): s for s in log.sets.all()} if log else {}
+    )
+    done = log is not None and log.status == SessionLog.Status.DONE
     week = session.week
     return {
         "id": session.pk,
@@ -237,5 +301,39 @@ def athlete_session(session, athlete):
         "block": week.mesocycle.name,
         "week": f"Wk {week.index}",
         "plan_title": week.mesocycle.plan.title,
-        "exercises": [serialize_prescription(p) for p in session.prescriptions.all()],
+        "notes": log.notes if log else "",
+        "log_url": reverse("meso:athlete_log_session", kwargs={"pk": session.pk}),
+        "exercises": [
+            {
+                **serialize_prescription(p),
+                "target": _target_label(p),
+                "set_rows": _set_rows(p, logged),
+            }
+            for p in session.prescriptions.all()
+        ],
+    }
+
+
+def athlete_log_payload(session_ctx):
+    """The JSON the Alpine logger hydrates from (and POSTs back).
+
+    A trimmed view of ``athlete_session``: just what the client needs to render
+    the set rows and submit them — the log URL, current status, and per-exercise
+    rows. Kept separate from the display dict so the template's ``json_script``
+    payload stays small and intentional.
+    """
+    return {
+        "log_url": session_ctx["log_url"],
+        "status": session_ctx["status"],
+        "exercises": [
+            {
+                "id": e["id"],
+                "name": e["name"],
+                "target": e["target"],
+                "note": e.get("note", ""),
+                "tag": e.get("tag", ""),
+                "set_rows": e["set_rows"],
+            }
+            for e in session_ctx["exercises"]
+        ],
     }

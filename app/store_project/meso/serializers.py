@@ -135,6 +135,31 @@ def serialize_week_snapshot(week):
     }
 
 
+def serialize_session_log(log):
+    """The athlete's saved log for a session, in the shape the log endpoint returns.
+
+    Echoes back what was persisted (status/date/notes + the logged sets) so the
+    athlete's logger can confirm the write and the page can re-hydrate on reload.
+    """
+    return {
+        "id": log.pk,
+        "status": log.status,
+        "date": log.date.isoformat() if log.date else None,
+        "notes": log.notes,
+        "sets": [
+            {
+                "id": s.pk,
+                "prescription": s.prescription_id,
+                "set_number": s.set_number,
+                "reps": s.reps,
+                "load": s.load,
+                "rpe": s.rpe,
+            }
+            for s in log.sets.order_by("set_number")
+        ],
+    }
+
+
 def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
     """A compact summary of the athlete's most recent logged sessions on this plan.
 

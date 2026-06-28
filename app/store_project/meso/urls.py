@@ -32,6 +32,11 @@ urlpatterns = [
         AthleteSessionView.as_view(),
         name="athlete_session",
     ),
+    path(
+        "api/me/session/<int:pk>/log/",
+        views.athlete_log_session,
+        name="athlete_log_session",
+    ),
     path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
     path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),
     path("invite/<uuid:token>/decline/", views.invite_decline, name="invite_decline"),

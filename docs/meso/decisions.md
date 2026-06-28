@@ -290,3 +290,21 @@ _(Append dated entries here as decisions land.)_
 - 2026-06-27 — **Athlete Phase 1 merged & deployed** (PR #288, squash `42bb805`; Django CI green, deployed
   to Hetzner — **no migration**; `/meso/me/` + `/meso/me/session/<id>/` live and login-gated in prod). The
   athlete read surface is live. Resume point → **athlete Phase 2** (session logging — the write path).
+- 2026-06-27 — **Athlete Phase 2 built** (branch `meso-athlete-phase2`): the **write path** —
+  `athlete_log_session` (`POST /meso/api/me/session/<id>/log/`) upserts the logged-in athlete's own
+  `SessionLog` + `LoggedSet` rows (most-recent-wins, idempotent), flips the session done, stamps the date.
+  Scoped by the read surface's `_athlete_session_or_404` (foreign/undelivered/archived/unknown → flat 404),
+  **validated before any write** (`_clean_logged_sets`; bad input is a 400 that persists nothing), wrapped in
+  a transaction (replace, not append, the set rows). The session screen becomes the interactive logger
+  (`presenters.athlete_session` pre-fills set rows from the existing log carrying the coach's full target;
+  `athlete_log_payload` + `athlete_session.html` + `meso_athlete.js`). **These are the first real rows
+  `serialize_recent_logs` grounds the agent on** — the agent slice already consumed `recent_logs`, this
+  produces them. **No model change / no migration** (`SessionLog`/`LoggedSet` already existed). Built
+  red→green: **+33 tests** (272 meso / 412 project-wide), ruff clean. **Local Codex review: 0 blocking
+  across 5 rounds**; nits fixed (set_number bound + render cap, duplicate-key reject, prescribed load/RPE
+  shown, Save-progress keeps done, row-state sync, **workout-date preserved on later edits**). **Declined by
+  design:** a `unique(session, athlete)` constraint — the model intentionally permits multiple logs per
+  athlete/session (dated history that `serialize_recent_logs` + `test_recent_logs_are_capped_and_newest_first`
+  rely on); the constraint would break grounding, and the re-save path is already idempotent. Resume point →
+  **athlete Phase 3** (results feed back: retire `mockdata.RESULTS_*`, light up the designer's `last`/`adj`
+  from real logs).
