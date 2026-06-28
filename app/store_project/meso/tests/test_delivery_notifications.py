@@ -19,6 +19,12 @@ These tests cover that seam:
 - only the athlete is emailed (never the coach);
 - re-delivering (a fix-in-place) notifies again;
 - the forbidden / unauthenticated guard paths send nothing.
+
+The notification is deferred to ``transaction.on_commit`` (the view runs under
+``ATOMIC_REQUESTS``), so the tests that assert a send wrap the request in
+``django_capture_on_commit_callbacks(execute=True)`` to run those callbacks —
+the same idiom as ``test_agent_jobs``. The guard-path tests need no capture:
+they return before a callback is ever registered.
 """
 
 from unittest import mock
@@ -61,25 +67,31 @@ def deliver_url(plan):
 
 
 class TestDeliveryNotification:
-    def test_deliver_emails_the_athlete_once(self, client, mailoutbox):
+    def test_deliver_emails_the_athlete_once(
+        self, client, mailoutbox, django_capture_on_commit_callbacks
+    ):
         coach = UserFactory(name="Coach Lance", email="coach@example.com")
         athlete = UserFactory(name="Maya Okonkwo", email="maya@example.com")
         plan, _ = seed_plan(coach=coach, athlete=athlete)
         client.force_login(coach)
 
-        resp = client.post(deliver_url(plan))
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = client.post(deliver_url(plan))
 
         assert resp.status_code == 201
         assert len(mailoutbox) == 1
         assert mailoutbox[0].to == ["maya@example.com"]
 
-    def test_email_names_coach_plan_and_week(self, client, mailoutbox):
+    def test_email_names_coach_plan_and_week(
+        self, client, mailoutbox, django_capture_on_commit_callbacks
+    ):
         coach = UserFactory(name="Coach Lance", email="coach@example.com")
         athlete = UserFactory(name="Maya Okonkwo", email="maya@example.com")
         plan, _ = seed_plan(coach=coach, athlete=athlete)
         client.force_login(coach)
 
-        client.post(deliver_url(plan))
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(deliver_url(plan))
 
         email = mailoutbox[0]
         haystack = f"{email.subject}\n{email.body}"
@@ -87,24 +99,30 @@ class TestDeliveryNotification:
         assert "Hypertrophy Block" in haystack
         assert "Week 1" in haystack
 
-    def test_email_links_to_athlete_home(self, client, mailoutbox):
+    def test_email_links_to_athlete_home(
+        self, client, mailoutbox, django_capture_on_commit_callbacks
+    ):
         plan, _ = seed_plan()
         client.force_login(plan.relationship.coach)
 
-        client.post(deliver_url(plan))
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(deliver_url(plan))
 
         body = mailoutbox[0].body
         assert reverse("meso:athlete_home") in body  # /meso/me/
         # An absolute link the athlete can click from their inbox.
         assert "http://testserver" in body
 
-    def test_no_email_when_athlete_has_no_address(self, client, mailoutbox):
+    def test_no_email_when_athlete_has_no_address(
+        self, client, mailoutbox, django_capture_on_commit_callbacks
+    ):
         coach = UserFactory(email="coach@example.com")
         athlete = UserFactory(email="")
         plan, week = seed_plan(coach=coach, athlete=athlete)
         client.force_login(coach)
 
-        resp = client.post(deliver_url(plan))
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = client.post(deliver_url(plan))
 
         # Delivery still succeeds; we simply skip the (impossible) email.
         assert resp.status_code == 201
@@ -112,40 +130,53 @@ class TestDeliveryNotification:
         week.refresh_from_db()
         assert week.delivered_at is not None
 
-    def test_email_failure_does_not_break_delivery(self, client):
+    def test_email_failure_does_not_break_delivery(
+        self, client, django_capture_on_commit_callbacks
+    ):
         plan, week = seed_plan()
         client.force_login(plan.relationship.coach)
 
-        with mock.patch(
-            "store_project.meso.views.send_week_delivered_email",
-            side_effect=RuntimeError("SES is down"),
+        with (
+            mock.patch(
+                "store_project.meso.views.send_week_delivered_email",
+                side_effect=RuntimeError("SES is down"),
+            ),
+            django_capture_on_commit_callbacks(execute=True),
         ):
             resp = client.post(deliver_url(plan))
 
-        # The mail blew up, but the deliver write committed.
+        # The mail blew up inside the on_commit callback, but the deliver
+        # committed and the swallow kept it from surfacing as a 500.
         assert resp.status_code == 201
         week.refresh_from_db()
         assert week.delivered_at is not None
         assert WeekDelivery.objects.filter(week=week).count() == 1
 
-    def test_only_the_athlete_is_emailed(self, client, mailoutbox):
+    def test_only_the_athlete_is_emailed(
+        self, client, mailoutbox, django_capture_on_commit_callbacks
+    ):
         coach = UserFactory(name="Coach Lance", email="coach@example.com")
         athlete = UserFactory(name="Maya Okonkwo", email="maya@example.com")
         plan, _ = seed_plan(coach=coach, athlete=athlete)
         client.force_login(coach)
 
-        client.post(deliver_url(plan))
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(deliver_url(plan))
 
         recipients = [addr for email in mailoutbox for addr in email.to]
         assert recipients == ["maya@example.com"]
         assert "coach@example.com" not in recipients
 
-    def test_redelivering_notifies_again(self, client, mailoutbox):
+    def test_redelivering_notifies_again(
+        self, client, mailoutbox, django_capture_on_commit_callbacks
+    ):
         plan, _ = seed_plan()
         client.force_login(plan.relationship.coach)
 
-        client.post(deliver_url(plan))
-        client.post(deliver_url(plan))
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(deliver_url(plan))
+        with django_capture_on_commit_callbacks(execute=True):
+            client.post(deliver_url(plan))
 
         assert len(mailoutbox) == 2
 

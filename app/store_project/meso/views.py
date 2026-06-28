@@ -599,25 +599,31 @@ def plan_deliver(request, plan_id):
 def _notify_athlete_delivered(request, plan, week):
     """Best-effort: email the athlete that ``week`` was delivered (S3).
 
-    Delivery has already committed by the time we get here, so a mail failure
-    must never surface as a 500 or roll the deliver back — swallow and log.
-    (Web push waits on the PWA, Phase 4b.)
+    Deferred to ``transaction.on_commit`` so it fires only after the delivery
+    actually commits — under ``ATOMIC_REQUESTS`` the view runs in a transaction,
+    and a rolled-back deliver must not email a false "your week is ready". The
+    send itself is best-effort: a mail failure is swallowed and logged, never a
+    500 or a rolled-back deliver. (Web push waits on the PWA, Phase 4b.)
     """
     home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
-    try:
-        send_week_delivered_email(
-            athlete=plan.athlete,
-            coach=plan.coach,
-            plan=plan,
-            week=week,
-            home_url=home_url,
-        )
-    except Exception:  # mail is best-effort; never fail a delivery on it
-        logger.exception(
-            "Failed to send delivery notification for plan %s week %s",
-            plan.pk,
-            week.pk,
-        )
+
+    def _send():
+        try:
+            send_week_delivered_email(
+                athlete=plan.athlete,
+                coach=plan.coach,
+                plan=plan,
+                week=week,
+                home_url=home_url,
+            )
+        except Exception:  # mail is best-effort; never fail a delivery on it
+            logger.exception(
+                "Failed to send delivery notification for plan %s week %s",
+                plan.pk,
+                week.pk,
+            )
+
+    transaction.on_commit(_send)
 
 
 # -- agent proposal engine (agent slice Phase 1 / Phase 4 — B6) -----------
