@@ -147,7 +147,7 @@ claim, reusing allauth. Detailed design when we build the relationship.
 
 | # | Decision | Note |
 |---|----------|------|
-| S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) built; plan in [`groups-plan.md`](./groups-plan.md) |
+| S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) + Phase 2a (shared group program + Group-mode designer) built; plan in [`groups-plan.md`](./groups-plan.md) |
 | S2 | **Units & RPE vs %1RM** | Per-athlete/coach setting; needs a home |
 | S3 | **Delivery & notifications** | Push needs PWA + push infra; email via existing `django-ses` + `notifications` app |
 | S4 | **Results ↔ `challenges`/records** | Results screen shows a PR — reuse the records model or keep separate? |
@@ -369,3 +369,25 @@ _(Append dated entries here as decisions land.)_
   --check` clean. **Local Codex review: 0 blocking → CLEAN** (3 rounds; two P2 membership-tenancy nits fixed).
   Plan + phasing in [`groups-plan.md`](./groups-plan.md). Resume point → **groups Phase 2** (the shared group
   program: `Plan.group` FK + nullable `relationship`, the designer's Group mode, create-group UI).
+- 2026-06-28 — **Groups slice (S1) Phase 2a built** (branch `meso-groups-phase2a`). The **shared group
+  program**: a `Plan` rooted at a `MesoGroup` instead of a `CoachAthlete` relationship. Phase 2 is split (like
+  the athlete slice's Phase 4) into **2a** (this — the program spine + Group-mode designer) and **2b**
+  (create-group-from-roster UI). `Plan.relationship` is now nullable and `Plan.group` (FK → `MesoGroup`,
+  `related_name="plans"`) added, with a `plan_relationship_xor_group` `CheckConstraint` so a plan is rooted at
+  **exactly one** of the two — the program tree is reused, gaining only a root (and, Phase 3, an override
+  overlay). Migration `meso.0008`. **The load-bearing scoping decision:** `PlanQuerySet.editable_by(user)` is
+  the wider designer/autosave gate (individual-active **or** group-owned), while **`for_coach` stays
+  individual-only** so the athlete-shaped deliver/results/review flows never see a group plan (which has no
+  single `athlete` — `Plan.athlete` returns `None`). `MesoGroup.shared_plan()/create_shared_plan()` (a starter
+  scaffold — there's no add-session/week endpoint yet, so a bare plan would be uneditable). The designer opens a
+  group plan (`MesoDesignerView` via `editable_by`), `serialize_plan` carries a `group` identity payload
+  (`serialize_group_identity`: members + folded flags) and skips the athlete-scoped "last" column; `meso.js`
+  hydrates Group mode off it (no more hardcoded squad; fabricated per-athlete adjusts → honest Phase-3
+  placeholder). **Deliver + the agent reject a group plan with 400** (Phases 4/3; both deref `plan.athlete`);
+  autosave is athlete-agnostic and works. A `group_design` POST entry point + the group-detail "Design / Open
+  shared program" card; the seeded demo group gets a shared program. `initials` moved to `serializers` (avoids a
+  presenters import cycle). Built red→green: **+29 tests** (`test_group_program.py` + seed coverage; 583
+  project-wide), ruff clean, `makemigrations --check` clean. Plan + build notes in
+  [`groups-plan.md`](./groups-plan.md). Resume point → **groups Phase 3** (per-athlete overrides: the `adj`
+  overlay — `PrescriptionOverride`, effective-program resolution, the designer's per-row `adj` badge), then
+  **Phase 2b** (create-group UI) and **Phase 4** (deliver-to-all).

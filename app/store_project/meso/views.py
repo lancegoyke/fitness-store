@@ -56,19 +56,18 @@ from .serializers import serialize_week_snapshot
 logger = logging.getLogger(__name__)
 
 
-def _coach_working_plan(user):
+def _coach_working_plan(user, *, plans=None):
     """The coach's most-recently-touched, non-archived plan, or None.
 
-    The target the bare ``/meso/designer/`` and ``/meso/deliver/`` URLs resolve
-    to now that the client-side fixtures are retired (Phase 5): a coach lands on
-    the plan they last worked, or back on the roster if they have none.
+    The target a bare ``/meso/designer/`` or ``/meso/deliver/`` URL resolves to:
+    the plan the coach last worked, or back on the roster if they have none.
+    ``plans`` scopes the candidate set — the *designer* passes
+    ``Plan.objects.editable_by(user)`` so a group shared program can be the
+    working plan too (the designer handles both kinds), while deliver keeps the
+    individual-only default (``for_coach``) since deliver-to-all is Phase 4.
     """
-    return (
-        Plan.objects.for_coach(user)
-        .exclude(status=Plan.Status.ARCHIVED)
-        .order_by("-modified")
-        .first()
-    )
+    qs = plans if plans is not None else Plan.objects.for_coach(user)
+    return qs.exclude(status=Plan.Status.ARCHIVED).order_by("-modified").first()
 
 
 def _coach_session_or_404(user, pk):
@@ -126,7 +125,12 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
 
     def get(self, request, *args, **kwargs):
         if kwargs.get("plan_id") is None:
-            plan = _coach_working_plan(request.user)
+            # The designer opens individual *or* group plans, so its bare-URL
+            # target spans both (``editable_by``) — a coach who just edited a
+            # group's shared program lands back on it, not an older individual one.
+            plan = _coach_working_plan(
+                request.user, plans=Plan.objects.editable_by(request.user)
+            )
             if plan is None:
                 messages.info(request, "Pick an athlete to start a program.")
                 return redirect("meso:roster")
@@ -252,12 +256,20 @@ def group_design(request, pk):
 
     Coach-scoped: a foreign or unknown group is a flat 404. Idempotent — reuses
     the group's existing non-archived shared plan, only creating (with a starter
-    scaffold) when there is none — so a double-submit never spawns a second plan.
+    scaffold) when there is none. The lookup + create run under a row lock on the
+    group so two concurrent submits can't both see "no plan" and each create one
+    (the second waits, then reuses the first's plan).
     """
-    group = MesoGroup.objects.for_coach(request.user).filter(pk=pk).first()
-    if group is None:
-        raise Http404("Unknown group")
-    plan = group.shared_plan() or group.create_shared_plan()
+    with transaction.atomic():
+        group = (
+            MesoGroup.objects.select_for_update()
+            .for_coach(request.user)
+            .filter(pk=pk)
+            .first()
+        )
+        if group is None:
+            raise Http404("Unknown group")
+        plan = group.shared_plan() or group.create_shared_plan()
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 

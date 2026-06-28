@@ -279,6 +279,22 @@ class TestDesignerGroupPlan:
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 404
 
+    def test_bare_designer_redirects_to_a_group_working_plan(self, client):
+        # The bare /designer/ target spans both kinds: a coach whose most-recent
+        # plan is a group's shared program lands back on it, not an older one.
+        coach = UserFactory()
+        CoachProfileFactory(user=coach)
+        link = CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)
+        PlanFactory(relationship=link)  # an older individual plan
+        group = MesoGroupFactory(coach=coach)
+        group_plan = group.create_shared_plan()  # the most-recently created plan
+        client.force_login(coach)
+        resp = client.get(reverse("meso:designer"))
+        assert resp.status_code == 302
+        assert resp.url == reverse(
+            "meso:designer_plan", kwargs={"plan_id": group_plan.pk}
+        )
+
 
 # -- view: autosave works on a group plan, athlete-only endpoints don't -----
 
