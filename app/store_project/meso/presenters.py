@@ -228,17 +228,20 @@ def _prescribed_set_count(sets_text):
         return 0
 
 
-def _set_rows(prescription, logged, *, default=3, cap=12):
+def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
     """Pre-filled set-input rows for one prescription (Phase 2 logger).
 
     ``logged`` maps ``(prescription_id, set_number)`` to the athlete's own
     ``LoggedSet``. The row count is the prescribed sets (capped, or ``default``
-    when the cell is free-form), always widened to show every set the athlete
-    already logged so a reload never hides logged data.
+    when the cell is free-form), widened to show every set the athlete already
+    logged so a reload never hides logged data — but ``hard_cap`` bounds the
+    render unconditionally so a stray large ``set_number`` can never balloon the
+    page (the log endpoint also rejects set numbers above its own ceiling).
     """
     prescribed = _prescribed_set_count(prescription.sets) or default
     logged_numbers = [n for (pid, n) in logged if pid == prescription.pk]
     count = max(min(prescribed, cap), max(logged_numbers, default=0), 1)
+    count = min(count, hard_cap)
     rows = []
     for n in range(1, count + 1):
         s = logged.get((prescription.pk, n))

@@ -404,6 +404,18 @@ class TestLogValidation:
         )
         assert resp.status_code == 400
 
+    def test_excessive_set_number_rejected(self, client):
+        """A wild set_number can't be stored — it would balloon the next render."""
+        s = seed()
+        client.force_login(s.athlete)
+        resp = post(
+            client,
+            s.session,
+            {"sets": [{"prescription": s.squat.pk, "set_number": 10_000, "reps": "5"}]},
+        )
+        assert resp.status_code == 400
+        assert SessionLog.objects.count() == 0
+
 
 # -- ownership isolation ---------------------------------------------------
 

@@ -231,6 +231,10 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
 
 # Free-form text cells per logged set, mapped to their model ``max_length``.
 LOG_SET_FIELDS = {"reps": 32, "load": 32, "rpe": 32}
+# A generous ceiling on a set's number — no real session has this many sets, and
+# bounding it here stops a malformed client from storing an enormous ``set_number``
+# that would later balloon the session page's set-row render (presenters._set_rows).
+MAX_LOGGED_SET_NUMBER = 50
 
 
 @login_required
@@ -337,10 +341,10 @@ def _clean_logged_sets(raw_sets, session):
         if (
             not isinstance(set_number, int)
             or isinstance(set_number, bool)
-            or set_number < 1
+            or not 1 <= set_number <= MAX_LOGGED_SET_NUMBER
         ):
             return None, HttpResponseBadRequest(
-                "set_number must be a positive integer."
+                f"set_number must be between 1 and {MAX_LOGGED_SET_NUMBER}."
             )
         fields = {}
         for field, max_length in LOG_SET_FIELDS.items():
