@@ -118,6 +118,15 @@ document.addEventListener("alpine:init", () => {
         return;
       }
       try {
+        // A redirect means the session expired and we were bounced to login —
+        // the write never reached the endpoint (res.ok is true for the login
+        // HTML). Don't lose it: queue for retry, where the next online flush
+        // (after re-login) carries a fresh CSRF.
+        if (res.redirected) {
+          this.enqueue(payload);
+          this.queued = true;
+          return;
+        }
         if (!res.ok) throw new Error("Request failed: " + res.status);
         const data = await res.json();
         this.status = data.log.status;
@@ -185,7 +194,10 @@ document.addEventListener("alpine:init", () => {
           remaining.push(item); // still offline — keep it for next time
           continue;
         }
-        if (!res.ok) {
+        // A redirect means we were bounced to login (expired session); res.ok is
+        // true for the login HTML but the log was never saved — keep it queued
+        // so a real re-login + flush delivers it instead of dropping the workout.
+        if (res.redirected || !res.ok) {
           remaining.push(item);
           continue;
         }
