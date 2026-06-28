@@ -6,7 +6,9 @@ Hetzner — no migration). Phase 2 (session logging) done & merged (PR #290, squ
 squash `b8f0966`; 2026-06-28; Django CI green, deployed to Hetzner — no migration;
 +31 tests, 302 meso / 441 project-wide; ruff clean; `mockdata.py` deleted — every
 coach-side screen is DB-backed now; local Codex review 0 blocking across 3 rounds
-→ CLEAN, 4 nits fixed) · created 2026-06-27
+→ CLEAN, 4 nits fixed) · created 2026-06-27 · **Phase 4 split into 4a (delivery
+notifications — built, branch `meso-athlete-phase4a-delivery-notifications`,
++9 tests, no migration) + 4b (PWA — next).**
 **Companion to:** [`decisions.md`](./decisions.md) (B2, S3, S7, N1/D-a/D-b) ·
 [`persistence-plan.md`](./persistence-plan.md) · [`agent-plan.md`](./agent-plan.md)
 **Goal of this slice:** give the **athlete** a real, logged-in surface — see the
@@ -210,12 +212,36 @@ a **rep** shortfall (a 3×12 logged as 12,12,9), not just a missing-set one. Non
 declined. **Deferred:** the group-only `adj` overlay rides with groups (S1, out of
 scope); PWA + notifications (Phase 4).
 
-**Phase 4 — PWA + delivery notifications (S3 / S7).**
-A web-app manifest + service worker (installable, offline-tolerant logging), and
-delivery notifications (email via `django-ses` + the `notifications` app; web
-push deferred). The coach's "Deliver to her app" becomes literally true.
-*Done when:* the athlete can install Meso, log with flaky wifi, and gets notified
-when a week is delivered.
+**Phase 4 — PWA + delivery notifications (S3 / S7).** Split into two PRs — the
+notification half (4a) ships independently of the PWA half (4b), since email is
+backend-testable today while the service worker/offline queue is browser-side.
+
+**Phase 4a — Delivery notifications (S3). ✅ Built (2026-06-28, branch `meso-athlete-phase4a-delivery-notifications`; no migration).**
+When a coach delivers a week (`POST api/plan/<id>/deliver/`), the athlete is
+emailed that their next training week is ready, with an absolute link to their
+own surface (`/meso/me/`). Channel is the one that exists today — `send_mail`
+via `django-ses`, templated through the `notifications` app (plain + HTML).
+`notifications.emails.send_week_delivered_email` is pure/testable (takes the
+resolved athlete/coach/plan/week + an absolute `home_url`; returns `False` and
+sends nothing when the athlete has no address); the view's
+`_notify_athlete_delivered` builds the URL from the request and calls it
+**best-effort** — delivery has already committed, so a mail failure is swallowed
+and logged, never a 500 or a rolled-back deliver. Only fires on a *successful*
+deliver (the 403/404/400 guards return before the email) and only reaches the
+athlete (never the coach). Built red→green: **+9 tests**
+(`test_delivery_notifications.py` — emails the athlete once, names coach/plan/
+week + links home, skips a no-address athlete, survives a backend failure,
+athlete-only, re-deliver notifies again, forbidden/unauthenticated send nothing);
+311 meso / project-wide pass, ruff clean, **no migration**. *Done when:* a coach
+delivers and the athlete gets a "your week is ready" email linking to `/meso/me/`.
+**Deferred:** debouncing rapid re-delivers (each explicit deliver notifies);
+async send off the request thread (synchronous best-effort matches the existing
+`payments`/`notifications` pattern); web push (rides with the PWA, 4b).
+
+**Phase 4b — PWA (S7). ⏳ Next.**
+A web-app manifest + service worker (installable, offline-tolerant logging) so
+the athlete can install Meso and log through flaky gym wifi. *Done when:* the
+athlete can install Meso and log offline, syncing when wifi returns.
 
 ## Out of scope (later)
 Groups (S1, shared program + per-athlete override) · cross-coach scheduling
