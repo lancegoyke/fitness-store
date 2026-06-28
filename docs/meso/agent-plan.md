@@ -2,8 +2,8 @@
 
 **Status:** Phase 1 done & merged (PR #280, squash `953d9d4`; deployed) · Phase 2 done & merged
 (PR #282, squash `ee7d456`; deployed) · Phase 3 done & merged (PR #284, squash `5bfe754`; deployed) ·
-Phase 4 **built** (background job + streamed status + logs-in-grounding + golden evals) ·
-created 2026-06-27 · **agent slice complete after Phase 4**
+Phase 4 done & merged (PR #286, squash `82fd360`; Django CI green, deployed to Hetzner —
+migration `meso.0005` applied) · created 2026-06-27 · **agent slice complete**
 **Companion to:** [`decisions.md`](./decisions.md) (B6) · [`persistence-plan.md`](./persistence-plan.md)
 **Goal of this slice:** replace the designer's canned agent-chat engine
 (`detectIntent`/`applyIntent` in `meso.js`) and the review screen
@@ -178,7 +178,7 @@ Codex review: clean (1 round, no findings).** *Done when:* a coach can chat the
 agent into a real proposal batch and jump to review. **Deferred:** persisted chat
 thread, background job + streamed "drafting…" status (Phase 4).
 
-**Phase 4 — Execution + eval. ✅ Built (2026-06-27).**
+**Phase 4 — Execution + eval. ✅ Done & merged (2026-06-27, PR #286, squash `82fd360`; deployed to Hetzner — migration `meso.0005` applied; local Codex review clean, 1 round).**
 Background job + streamed "drafting…" status; golden eval cases; logged sessions
 fed into grounding.
 

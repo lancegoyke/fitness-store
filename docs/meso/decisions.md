@@ -266,3 +266,8 @@ _(Append dated entries here as decisions land.)_
   (`agent/evals.py` model-agnostic invariants responsive/grounded/safe + `manage.py meso_agent_eval`,
   side-effect-free, `--dry-run` without a key). Built red→green (+40 tests). **Closes the B6 agent slice**
   (only persisted chat thread + athlete-facing surfaces remain, both later slices).
+- 2026-06-27 — **Agent Phase 4 merged & deployed** (PR #286, squash `82fd360`; Django CI green, deployed to
+  Hetzner — migration `meso.0005_agentproposalbatch_error_and_more` applied in prod; local Codex review
+  clean, 1 round; +40 tests, 219 meso / 359 project-wide). **The B6 agent slice is complete.** Resume point
+  → either a **persisted chat thread** (saving the designer conversation, deferred since Phase 3) or the
+  **athlete-facing slice** (delivery + logging PWA, then results feeding back to the agent — decisions S3/S7).
