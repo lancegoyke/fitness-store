@@ -441,7 +441,12 @@ def resolve_load(load, load_pct):
     base = _num(load)
     if base is None:
         return load
-    return _fmt_num(round(base * load_pct / 100 / 2.5) * 2.5)
+    # Match the designer's ``Math.round(n / 2.5) * 2.5`` exactly: JS rounds a
+    # half up, while Python's ``round`` is banker's (half-to-even), which would
+    # diverge on exact half-steps (e.g. 112.5 @ 90% → 102.5 in the UI, not 100).
+    # The scaled value is non-negative (load_pct ≥ 1), so ``int(x + 0.5)`` floors
+    # to the same result as ``Math.round``.
+    return _fmt_num(int(base * load_pct / 100 / 2.5 + 0.5) * 2.5)
 
 
 def resolve_prescription(prescription, override):

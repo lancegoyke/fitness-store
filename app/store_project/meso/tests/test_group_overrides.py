@@ -201,6 +201,14 @@ class TestResolvePrescription:
         override = PrescriptionOverride(load_pct=90)
         assert serializers.resolve_prescription(presc, override)["load"] == "90"
 
+    def test_load_pct_rounds_half_up_like_the_designer(self):
+        # 112.5 @ 90% = 101.25 → 40.5 half-steps. The designer's Math.round rounds
+        # the half up to 102.5; Python's banker's round would give 100, so the
+        # resolver must match the UI here.
+        presc = ExercisePrescriptionFactory(load="112.5")
+        override = PrescriptionOverride(load_pct=90)
+        assert serializers.resolve_prescription(presc, override)["load"] == "102.5"
+
     def test_load_pct_leaves_non_numeric_load_unchanged(self):
         presc = ExercisePrescriptionFactory(load="BW")
         override = PrescriptionOverride(load_pct=90)
