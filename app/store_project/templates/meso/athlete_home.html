@@ -2,6 +2,8 @@
 
 {% block title %}Training · Meso{% endblock %}
 
+{% block pwa %}{% include "meso/_pwa_head.html" %}{% endblock %}
+
 {% block navlinks %}
   <a class="meso-navlink {% if active == 'training' %}is-active{% endif %}" href="{% url 'meso:athlete_home' %}">Training</a>
 {% endblock %}
@@ -19,6 +21,19 @@
         <p class="meso-sub">What your coach delivered — tap a session to see the plan.</p>
       </div>
     </div>
+
+    {% if push_enabled %}
+      {# Revealed by meso_push.js only when notifications are usable + undecided. #}
+      <button type="button" id="meso-push-cta" class="meso-card meso-card--pad" hidden
+              style="display:flex;align-items:center;gap:12px;width:100%;text-align:left;margin-bottom:14px;cursor:pointer;border:1px solid var(--line);background:var(--surface);">
+        <span style="font-size:18px;">🔔</span>
+        <span style="flex:1;min-width:0;">
+          <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Get notified when your coach delivers</span>
+          <span class="meso-row-meta">Turn on notifications so you know the moment a new week is ready.</span>
+        </span>
+        <span class="meso-badge">Enable</span>
+      </button>
+    {% endif %}
 
     {% for plan in plans %}
       <div class="meso-card meso-card--pad" style="margin-bottom:14px;">

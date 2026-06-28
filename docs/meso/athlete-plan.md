@@ -8,7 +8,9 @@ squash `b8f0966`; 2026-06-28; Django CI green, deployed to Hetzner — no migrat
 coach-side screen is DB-backed now; local Codex review 0 blocking across 3 rounds
 → CLEAN, 4 nits fixed) · created 2026-06-27 · **Phase 4 split into 4a (delivery
 notifications — done & merged, PR #293, squash `dfbebee`; deployed to Hetzner;
-+9 tests, no migration) + 4b (PWA — next).**
++9 tests, no migration) + 4b (PWA + web push — **built**, see Phase 4b below;
++43 tests, 354 meso / 494 project-wide; ruff clean; **one migration**
+`0006_pushsubscription`; new dep `pywebpush`).**
 **Companion to:** [`decisions.md`](./decisions.md) (B2, S3, S7, N1/D-a/D-b) ·
 [`persistence-plan.md`](./persistence-plan.md) · [`agent-plan.md`](./agent-plan.md)
 **Goal of this slice:** give the **athlete** a real, logged-in surface — see the
@@ -238,10 +240,69 @@ delivers and the athlete gets a "your week is ready" email linking to `/meso/me/
 async send off the request thread (synchronous best-effort matches the existing
 `payments`/`notifications` pattern); web push (rides with the PWA, 4b).
 
-**Phase 4b — PWA (S7). ⏳ Next.**
-A web-app manifest + service worker (installable, offline-tolerant logging) so
-the athlete can install Meso and log through flaky gym wifi. *Done when:* the
-athlete can install Meso and log offline, syncing when wifi returns.
+**Phase 4b — PWA + web push (S7 / S3). ✅ Built (2026-06-28, branch `meso-athlete-phase4b`; one migration `0006_pushsubscription`).**
+The athlete surface becomes installable, offline-tolerant, **and push-capable**:
+a web-app manifest + service worker so Meso installs and opens through flaky gym
+wifi, plus web push so a coach's deliver reaches the athlete's lock screen (the
+push half S3 deferred from 4a — "web push rides with the PWA"). *Done when:* the
+athlete installs Meso, logs offline (syncing when wifi returns), and gets a push
+when their coach delivers.
+
+*Built (installable PWA, S7):* the manifest (`/meso/manifest.webmanifest`) and
+service worker (`/meso/sw.js`) are served as **views, not static files** —
+WhiteNoise's `CompressedManifestStaticFilesStorage` hashes static filenames, so
+a worker shipped as a static file would have an unstable URL and the wrong scope;
+a worker only controls pages at/below its own path, so it lives at `/meso/sw.js`
+to control `/meso/me/`. The worker is rendered from a template (`meso/sw.js`)
+that resolves the **hashed** precache URLs via `{% static %}` at render time, so
+the cached shell auto-busts every deploy (verified: under production `DEBUG=False`
++ manifest storage the precache lists `meso_push.<hash>.js` etc.; the worker
+itself is served `Cache-Control: no-cache`). Strategy: precache the static shell
++ offline page on install; **network-first** for navigations, falling back to the
+last-good cached page then the offline page (so a session opened online keeps
+working when wifi drops mid-set); stale-while-revalidate for static GETs; POSTs
+(logging) pass through untouched — the page's own offline queue owns writes
+(more reliable on iOS than Background Sync). `meso/offline.html` is the
+login-free fallback the worker caches. The PWA chrome (manifest link, theme/apple
+meta, apple-touch icon, SW registration) rides an athlete-only `pwa` block on
+`_meso_base.html` via the `_pwa_head.html` include, so **coach screens stay plain
+web** (no manifest, no worker) — mirroring Phase 1's athlete-only nav blocks.
+Generated square install icons (192/512 + maskable + apple-touch) from the brand
+mark. *Note:* the offline **logging queue** itself (stash a failed save, flush on
+reconnect) lives in `meso_athlete.js`'s save path / is browser-side; the
+server-side guarantee that makes it safe — replaying the same log POST is
+idempotent — is pinned by a test.
+
+*Built (web push, S3):* a `PushSubscription` model (athlete FK, unique
+`endpoint`, `p256dh`/`auth` keys; the only migration this slice) the browser
+registers via `POST api/me/push/subscribe/` (login-scoped to the caller, upsert
+by endpoint so a device reassigns to whoever's logged in; `unsubscribe/` drops
+only your own). `meso/push.py` signs + sends with VAPID (`pywebpush`):
+`notify_week_delivered` pushes the delivery payload to each of the athlete's
+devices, **prunes a dead endpoint** (404/410 Gone), swallows+logs any other
+per-device failure, and is a **silent no-op when VAPID keys aren't configured**
+(`settings.MESO_VAPID_*`) — the same graceful degradation as the no-address
+email, so the app boots and CI runs without creds. The deliver hook
+(`_notify_athlete_delivered`) now fires email **and** push, each independently
+best-effort on `transaction.on_commit` — a push failure never rolls back or 500s
+the deliver, and only the athlete is pushed (never the coach). The service
+worker's `push`/`notificationclick` handlers render the notification and focus/
+open `/meso/me/`; `meso_push.js` runs the gesture-driven subscribe flow (an
+"Enable notifications" CTA on the home, shown only when push is usable + the user
+hasn't decided), reading the VAPID key + CSRF from the `_pwa_head.html` config.
+
+Built red→green: **+43 tests** — `test_athlete_pwa.py` (manifest install fields,
+worker content-type + `Service-Worker-Allowed` scope + precache, login-free
+offline page, athlete templates wire manifest/worker while the coach roster does
+not, offline-replay idempotency) and `test_push.py` (subscribe/unsubscribe access
+control + validation + upsert + ownership, the signer's VAPID args + disabled
+no-op, `notify_week_delivered` payload/pruning/scoping, deliver-triggers-push
+best-effort + athlete-only, push config in the page). 354 meso / 494 project-wide
+pass, ruff clean. **Deployment verified:** `collectstatic` succeeds, the worker
+view renders hashed precache URLs under manifest storage, `makemigrations --check`
+clean, `check --deploy` unchanged. **Deferred:** Background Sync (the page queue
+covers offline logging cross-browser incl. iOS); debouncing rapid re-deliver
+pushes; a richer in-app notification-settings surface.
 
 ## Out of scope (later)
 Groups (S1, shared program + per-athlete override) · cross-coach scheduling

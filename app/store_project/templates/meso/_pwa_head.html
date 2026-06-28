@@ -1,0 +1,36 @@
+{% load static %}
+{% comment %}
+PWA install chrome for the athlete surface (Phase 4b — S7). Pulled into the
+`pwa` block by the athlete templates only, so the coach screens stay plain web
+(mirroring Phase 1's athlete-only nav blocks). Carries the manifest link, the
+theme/apple meta, the service-worker registration, and the push config the
+`meso_push.js` subscribe flow reads.
+{% endcomment %}
+<link rel="manifest" href="{% url 'meso:manifest' %}" />
+<meta name="theme-color" content="#3c73c5" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Meso" />
+<link rel="apple-touch-icon" href="{% static 'png/meso-apple-touch-180.png' %}" />
+{% if push_enabled %}<meta name="meso-vapid-key" content="{{ vapid_public_key }}" />{% endif %}
+<span id="meso-pwa-config"
+      hidden
+      data-subscribe-url="{% url 'meso:push_subscribe' %}"
+      data-unsubscribe-url="{% url 'meso:push_unsubscribe' %}"
+      data-csrf="{{ csrf_token }}"
+      data-push-enabled="{% if push_enabled %}1{% else %}0{% endif %}"></span>
+<script>
+  // Register the athlete service worker (scope /meso/) so the shell opens
+  // offline. Kept inline + tiny so it runs on every athlete page.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker
+        .register("{% url 'meso:service_worker' %}", { scope: "/meso/" })
+        .catch(function (err) {
+          console.error("Meso SW registration failed", err);
+        });
+    });
+  }
+</script>
+<script defer src="{% static 'js/meso_push.js' %}"></script>

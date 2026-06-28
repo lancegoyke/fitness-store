@@ -7,6 +7,7 @@ from .views import AthleteSessionView
 from .views import ChangeReviewView
 from .views import DeliverView
 from .views import MesoDesignerView
+from .views import OfflineView
 from .views import ResultsView
 from .views import RosterView
 
@@ -41,6 +42,19 @@ urlpatterns = [
         "api/me/session/<int:pk>/log/",
         views.athlete_log_session,
         name="athlete_log_session",
+    ),
+    # Athlete PWA (Phase 4b — S7): manifest + service worker + offline shell.
+    # Served as views (not static files) so the worker has a stable /meso/-scoped
+    # URL the hashing static pipeline can't give it.
+    path("manifest.webmanifest", views.manifest_webmanifest, name="manifest"),
+    path("sw.js", views.service_worker, name="service_worker"),
+    path("offline/", OfflineView.as_view(), name="offline"),
+    # Web push subscribe / unsubscribe (Phase 4b — S3/S7).
+    path("api/me/push/subscribe/", views.push_subscribe, name="push_subscribe"),
+    path(
+        "api/me/push/unsubscribe/",
+        views.push_unsubscribe,
+        name="push_unsubscribe",
     ),
     path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
     path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),

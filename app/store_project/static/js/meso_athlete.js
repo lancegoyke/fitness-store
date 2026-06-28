@@ -16,6 +16,7 @@ document.addEventListener("alpine:init", () => {
     saving: false,
     saved: false,
     error: false,
+    queued: false, // a save is stashed locally, waiting for the network
 
     init() {
       const el = document.getElementById("meso-log-data");
@@ -32,6 +33,9 @@ document.addEventListener("alpine:init", () => {
       this.exercises = data.exercises || [];
       const csrfEl = document.getElementById("meso-csrf");
       this.csrf = csrfEl ? csrfEl.dataset.token : "";
+      // Flush anything logged while offline (S7), now and whenever wifi returns.
+      this.flushQueue();
+      window.addEventListener("online", () => this.flushQueue());
     },
 
     // ---- derived progress ----
@@ -81,21 +85,48 @@ document.addEventListener("alpine:init", () => {
     },
 
     // POST the session. `markDone` flips it to "done" (Log session) vs "pending"
-    // (Save progress); both upsert the same log.
+    // (Save progress); both upsert the same log. When the network is unreachable
+    // (flaky gym wifi — S7), the save is stashed locally and flushed on
+    // reconnect instead of being lost; an HTTP error (the server answered) is a
+    // real error the athlete should retry.
     async save(markDone) {
       if (this.saving || !this.logUrl) return;
       this.saving = true;
       this.saved = false;
       this.error = false;
+      this.queued = false;
+      const payload = this.buildPayload(markDone);
+      // Reflect the intended status locally right away so the UI is responsive
+      // whether the request lands now or after a sync.
+      if (markDone) this.status = "done";
+      let res;
       try {
-        const res = await fetch(this.logUrl, {
+        res = await fetch(this.logUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "X-CSRFToken": this.csrf,
           },
-          body: JSON.stringify(this.buildPayload(markDone)),
+          body: JSON.stringify(payload),
         });
+      } catch (netErr) {
+        // Network unreachable → queue it; the upsert endpoint is idempotent, so
+        // replaying on reconnect is safe (latest save for a session wins).
+        this.enqueue(payload);
+        this.queued = true;
+        this.saving = false;
+        return;
+      }
+      try {
+        // A redirect means the session expired and we were bounced to login —
+        // the write never reached the endpoint (res.ok is true for the login
+        // HTML). Don't lose it: queue for retry, where the next online flush
+        // (after re-login) carries a fresh CSRF.
+        if (res.redirected) {
+          this.enqueue(payload);
+          this.queued = true;
+          return;
+        }
         if (!res.ok) throw new Error("Request failed: " + res.status);
         const data = await res.json();
         this.status = data.log.status;
@@ -109,6 +140,86 @@ document.addEventListener("alpine:init", () => {
         this.error = true;
       } finally {
         this.saving = false;
+      }
+    },
+
+    // ---- offline queue (S7) ----
+    // A tiny localStorage-backed outbox keyed by the session's log URL: one
+    // pending save per session (the latest supersedes an earlier queued one), so
+    // replaying after reconnect can't pile up duplicate writes.
+    queueKey: "meso-log-queue",
+
+    readQueue() {
+      try {
+        return JSON.parse(localStorage.getItem(this.queueKey) || "[]");
+      } catch (e) {
+        return [];
+      }
+    },
+
+    writeQueue(items) {
+      try {
+        localStorage.setItem(this.queueKey, JSON.stringify(items));
+      } catch (e) {
+        console.error("Could not persist offline log queue", e);
+      }
+    },
+
+    enqueue(payload) {
+      const queue = this.readQueue().filter((item) => item.url !== this.logUrl);
+      queue.push({ url: this.logUrl, body: payload });
+      this.writeQueue(queue);
+    },
+
+    // Replay queued saves. Items that still fail (offline, or the server errored)
+    // stay queued for the next attempt. Uses the live CSRF token, never a stale
+    // stored one.
+    async flushQueue() {
+      const queue = this.readQueue();
+      if (!queue.length) return;
+      const remaining = [];
+      let flushedMine = false;
+      for (const item of queue) {
+        let res;
+        try {
+          res = await fetch(item.url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRFToken": this.csrf,
+            },
+            body: JSON.stringify(item.body),
+          });
+        } catch (netErr) {
+          remaining.push(item); // still offline — keep it for next time
+          continue;
+        }
+        // A redirect means we were bounced to login (expired session); res.ok is
+        // true for the login HTML but the log was never saved — keep it queued
+        // so a real re-login + flush delivers it instead of dropping the workout.
+        if (res.redirected || !res.ok) {
+          remaining.push(item);
+          continue;
+        }
+        if (item.url === this.logUrl) {
+          try {
+            const data = await res.json();
+            this.status = data.log.status;
+            this.syncFromLog(data.log);
+            flushedMine = true;
+          } catch (e) {
+            /* synced server-side regardless; UI reconciles on next load */
+          }
+        }
+      }
+      this.writeQueue(remaining);
+      // If this session's queued save went through, clear the "will sync" hint.
+      if (flushedMine && !remaining.some((i) => i.url === this.logUrl)) {
+        this.queued = false;
+        this.saved = true;
+        setTimeout(() => {
+          this.saved = false;
+        }, 2400);
       }
     },
 

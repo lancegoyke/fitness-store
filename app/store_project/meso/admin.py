@@ -10,6 +10,7 @@ from .models import LoggedSet
 from .models import Mesocycle
 from .models import Plan
 from .models import ProposedChange
+from .models import PushSubscription
 from .models import Session
 from .models import SessionLog
 from .models import Week
@@ -202,3 +203,14 @@ class ProposedChangeAdmin(admin.ModelAdmin):
     list_filter = ("kind", "status")
     search_fields = ("title", "rationale")
     raw_id_fields = ("batch", "session", "prescription")
+
+
+# -- athlete PWA -----------------------------------------------------------
+
+
+@admin.register(PushSubscription)
+class PushSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "athlete", "created_at")
+    search_fields = ("athlete__email", "athlete__name", "endpoint")
+    raw_id_fields = ("athlete",)
+    readonly_fields = ("created_at",)
