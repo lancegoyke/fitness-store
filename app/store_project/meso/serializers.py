@@ -173,6 +173,21 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
     return summary
 
 
+def latest_delivered_week(plan):
+    """The most recently delivered week of ``plan``, or None.
+
+    Delivery is the athlete's publish gate (``Week.delivered_at`` is stamped by
+    ``plan_deliver``); an undelivered week is invisible on the athlete surface.
+    Newest delivery wins so the athlete lands on the week their coach just sent.
+    """
+    return (
+        models.Week.objects.filter(mesocycle__plan=plan, delivered_at__isnull=False)
+        .select_related("mesocycle")
+        .order_by("-delivered_at")
+        .first()
+    )
+
+
 def current_week(plan, week=None):
     """The week the designer opens to.
 

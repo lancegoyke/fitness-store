@@ -1,0 +1,58 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Training · Meso{% endblock %}
+
+{% block navlinks %}
+  <a class="meso-navlink {% if active == 'training' %}is-active{% endif %}" href="{% url 'meso:athlete_home' %}">Training</a>
+{% endblock %}
+
+{% block topnav_avatar %}
+  <div class="meso-avatar meso-avatar--sm meso-avatar--accent" title="{{ athlete_name }}">{{ athlete_initials }}</div>
+{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Your training</p>
+        <h1 class="meso-h1">This week</h1>
+        <p class="meso-sub">What your coach delivered — tap a session to see the plan.</p>
+      </div>
+    </div>
+
+    {% for plan in plans %}
+      <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px;flex-wrap:wrap;">
+          <span style="font-size:17px;font-weight:800;letter-spacing:-0.02em;">{{ plan.title }}</span>
+          {% if plan.block %}<span class="meso-row-meta">{{ plan.block }} · {{ plan.week }}</span>{% endif %}
+        </div>
+        <p class="meso-row-meta" style="margin-bottom:12px;">Coach {{ plan.coach }}{% if plan.goal %} · {{ plan.goal }}{% endif %}</p>
+
+        {% if plan.sessions %}
+          <div class="meso-flex" style="flex-direction:column;gap:8px;">
+            {% for s in plan.sessions %}
+              <a class="meso-row" href="{{ s.url }}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;text-decoration:none;color:inherit;">
+                <div class="meso-mono" style="font-size:12px;font-weight:700;color:var(--dim);">D{{ s.n }}</div>
+                <div style="flex:1;min-width:0;">
+                  <div style="font-size:14px;font-weight:700;letter-spacing:-0.01em;">{{ s.name }}{% if s.bias %} · {{ s.bias }}{% endif %}</div>
+                  <div class="meso-row-meta">{{ s.exercise_count }} exercise{{ s.exercise_count|pluralize }}</div>
+                </div>
+                {% if s.status == 'done' %}
+                  <span class="meso-badge meso-badge--ok">{{ s.status_label }}</span>
+                {% else %}
+                  <span class="meso-badge">{{ s.status_label }}</span>
+                {% endif %}
+              </a>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="meso-row-meta">Nothing delivered yet — your coach is still building this week.</p>
+        {% endif %}
+      </div>
+    {% empty %}
+      <div class="meso-card meso-card--pad">
+        <p class="meso-row-meta">No active programs yet. Once a coach delivers a week, it shows up here.</p>
+      </div>
+    {% endfor %}
+  </div>
+{% endblock %}
