@@ -265,10 +265,12 @@ def _summarize_last_sets(logged_sets, unit):
 def last_logged_labels(plan, prescriptions, unit):
     """Map each prescription's pk to a "last time" label from the athlete's logs.
 
-    For every rendered prescription, find the athlete's most recent logged sets
-    for that lift (by exercise identity) anywhere on this plan and summarize
-    them. One query over the plan's logged sets — no per-row lookups; a lift the
-    athlete has never logged is simply absent from the map.
+    For every rendered prescription, find the athlete's most recent *completed*
+    logged sets for that lift (by exercise identity) anywhere on this plan and
+    summarize them. Only ``DONE`` logs count — a pending "Save progress" draft is
+    a partial session, not the athlete's last performance (the results screen
+    treats it the same way). One query over the plan's logged sets — no per-row
+    lookups; a lift the athlete has never logged is simply absent from the map.
     """
     target_keys = {p.pk: _exercise_key(p.exercise_id, p.name) for p in prescriptions}
     wanted = set(target_keys.values())
@@ -278,6 +280,7 @@ def last_logged_labels(plan, prescriptions, unit):
         models.LoggedSet.objects.filter(
             session_log__session__week__mesocycle__plan=plan,
             session_log__athlete=plan.athlete,
+            session_log__status=models.SessionLog.Status.DONE,
         )
         .select_related("session_log", "prescription")
         .order_by("-session_log__date", "-session_log__created_at", "set_number")

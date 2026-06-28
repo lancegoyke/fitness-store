@@ -157,6 +157,9 @@ class TestSeedLogsASession:
         # Box Squat's top set ran hot → a real flag the coach can act on.
         assert ctx["summary"]["flag_count"] == 1
         assert "Box Squat" in ctx["summary"]["flag"]
+        # The leg curl's last set fell short on reps (12, 12, 9 vs 3×12).
+        rows = {r["name"]: r for r in ctx["rows"]}
+        assert rows["Seated Leg Curl"]["note"] == "missed 3 reps on set 3"
 
     def test_log_lights_the_designer_last_column(self):
         seed()

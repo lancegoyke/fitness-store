@@ -241,6 +241,15 @@ class TestSessionResultsPresenter:
         rows = {r["name"]: r for r in ctx["rows"]}
         assert rows["RDL"]["note"] == "1/3 sets logged"
 
+    def test_rep_shortfall_note(self):
+        """All sets done but reps fell short on one → a rep-shortfall note."""
+        s = seed()  # Box Squat prescribed 3×6
+        log_session(
+            s, squat_sets=[("6", "70", "7"), ("6", "70", "7"), ("4", "70", "7")]
+        )
+        rows = {r["name"]: r for r in session_results(s.session)["rows"]}
+        assert rows["Box Squat"]["note"] == "missed 2 reps on set 3"
+
     def test_no_flag_when_on_target(self):
         s = seed()
         log_session(

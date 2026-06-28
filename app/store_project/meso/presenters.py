@@ -194,13 +194,36 @@ def _logged_label(logged_sets, unit):
     return label
 
 
+def _worst_rep_shortfall(prescription, logged_sets):
+    """The biggest rep miss vs the prescribed reps, as ``(deficit, set_number)``.
+
+    Only meaningful when the prescribed reps are a plain number (not "AMRAP" /
+    "8-10"); returns None otherwise, or when every logged set met the target.
+    Catches the case a set-count check misses — all sets done, but reps fell
+    short on one (e.g. a 3×12 logged as 12, 12, 9).
+    """
+    target_reps = _num(prescription.reps)
+    if target_reps is None:
+        return None
+    worst = None
+    for s in logged_sets:
+        reps = _num(s.reps)
+        if reps is None or reps >= target_reps:
+            continue
+        deficit = target_reps - reps
+        if worst is None or deficit > worst[0]:
+            worst = (deficit, s.set_number)
+    return worst
+
+
 def _exercise_result(prescription, logged_sets, unit):
     """One results row + its RPE overshoot (None when not comparable).
 
     The row mirrors the prototype's columns (target / logged / RPE / note); the
     RPE shown is the *hardest* logged set, and ``rpe_state`` lights "over" on any
-    overshoot. The note is the most actionable fact we can derive: a set
-    shortfall, else a meaningful RPE overshoot.
+    overshoot. The note is the most actionable fact we can derive, in order: a
+    set shortfall, a rep shortfall (the prescribed reps missed on a set), then a
+    meaningful RPE overshoot.
     """
     target_rpe = _num(prescription.rpe)
     logged_rpes = [_num(s.rpe) for s in logged_sets if _num(s.rpe) is not None]
@@ -210,8 +233,13 @@ def _exercise_result(prescription, logged_sets, unit):
     )
     prescribed_n = _prescribed_set_count(prescription.sets)
     logged_n = len(logged_sets)
+    rep_short = _worst_rep_shortfall(prescription, logged_sets)
     if prescribed_n and 0 < logged_n < prescribed_n:
         note = f"{logged_n}/{prescribed_n} sets logged"
+    elif rep_short is not None:
+        deficit, set_number = rep_short
+        plural = "s" if deficit != 1 else ""
+        note = f"missed {_fmt_num(deficit)} rep{plural} on set {set_number}"
     elif overshoot is not None and overshoot >= RPE_FLAG_THRESHOLD:
         note = f"RPE {_fmt_num(top_rpe)} over target"
     else:
