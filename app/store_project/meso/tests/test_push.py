@@ -170,6 +170,7 @@ class TestSubscribe:
             "https://127.0.0.1/abc",
             "https://10.0.0.5/abc",  # private
             "https://169.254.169.254/latest/meta-data/",  # cloud metadata (SSRF)
+            "https://100.64.0.1/abc",  # CGNAT — non-private but not globally routable
         ],
     )
     def test_unsafe_endpoint_rejected(self, client, endpoint):

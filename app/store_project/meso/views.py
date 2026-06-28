@@ -574,14 +574,9 @@ def _is_safe_push_endpoint(endpoint):
         ip = ipaddress.ip_address(host)
     except ValueError:
         return True  # a hostname, not an IP literal — accept
-    return not (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
-        or ip.is_unspecified
-    )
+    # One property covers every non-public range (private, loopback, link-local,
+    # reserved, CGNAT 100.64/10, documentation, …) — stricter than enumerating.
+    return ip.is_global
 
 
 @login_required
