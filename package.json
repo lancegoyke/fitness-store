@@ -1,0 +1,19 @@
+{
+  "name": "fitness-store-frontend",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Front-end test suite for the Mastering Fitness Django app (meso designer + athlete logger).",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.4",
+    "jsdom": "^26.1.0",
+    "vitest": "^3.2.4"
+  }
+}

@@ -7,8 +7,8 @@
  * — re-saving updates the one log — so "Save progress" and "Log session" hit the
  * same endpoint, differing only in the status they stamp (pending vs done).
  */
-document.addEventListener("alpine:init", () => {
-  Alpine.data("logger", () => ({
+function createLogger() {
+  return {
     logUrl: "",
     csrf: "",
     status: "pending",
@@ -237,5 +237,22 @@ document.addEventListener("alpine:init", () => {
         }
       }
     },
-  }));
-});
+  };
+}
+
+// Register the Alpine component in the browser. Loaded as a classic <script>,
+// so `document` exists here but no module system does.
+if (
+  typeof document !== "undefined" &&
+  typeof document.addEventListener === "function"
+) {
+  document.addEventListener("alpine:init", () => {
+    Alpine.data("logger", () => createLogger());
+  });
+}
+
+// Test hook: expose the factory to Node-based runners (vitest). Skipped in the
+// browser, where `module` is undefined.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { createLogger };
+}

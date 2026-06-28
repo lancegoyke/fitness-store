@@ -11,8 +11,8 @@
  * so the chat never mutates the grid here. (The canned keyword intent engine it
  * replaced — a client-side matcher that edited the grid in place — is gone.)
  */
-document.addEventListener("alpine:init", () => {
-  Alpine.data("meso", () => ({
+function createMeso() {
+  return {
     // ---- design tokens (the prototype exposed these as editor props) ----
     accent: "Cobalt",
     theme: "Clinical",
@@ -435,5 +435,22 @@ document.addEventListener("alpine:init", () => {
         return "That message couldn't be sent — try a shorter instruction.";
       return (data && data.error) || "The agent couldn't process that request.";
     },
-  }));
-});
+  };
+}
+
+// Register the Alpine component in the browser. Loaded as a classic <script>,
+// so `document` exists here but no module system does.
+if (
+  typeof document !== "undefined" &&
+  typeof document.addEventListener === "function"
+) {
+  document.addEventListener("alpine:init", () => {
+    Alpine.data("meso", () => createMeso());
+  });
+}
+
+// Test hook: expose the factory to Node-based runners (vitest). Skipped in the
+// browser, where `module` is undefined.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { createMeso };
+}

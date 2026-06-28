@@ -33,6 +33,10 @@ test-coverage:
     uv run coverage run -m pytest
     uv run coverage report -m
 
+# Front-end unit tests for the meso JS (vitest). Run `npm install` once first.
+test-js:
+    npm test
+
 lint:
     uv run ruff check
 
