@@ -1031,6 +1031,48 @@ class GroupMembership(models.Model):
     def __str__(self):
         return f"{self.relationship.athlete.display_name()} ∈ {self.group.name}"
 
+    # -- per-athlete overrides (groups Phase 3) ---------------------------
+
+    def set_override(
+        self, prescription, *, swap_name="", load_pct=None, sets="", reps="", note=""
+    ):
+        """Upsert this member's auto-adjust for one shared-program prescription.
+
+        A member's effective program = the shared template **+** their override
+        diffs (the ``adj`` overlay). The prescription must live in *this* group's
+        shared program (the same group the membership belongs to) — otherwise the
+        override would target a lift the member doesn't train (raises
+        ``InvalidTransition``, mirroring ``add_athlete``'s tenancy guard).
+
+        ``load_pct`` of 100 is a no-op (100% of the shared load) and is dropped.
+        An override with no remaining diff is meaningless, so it clears any
+        existing row and returns ``None`` instead of storing a no-op.
+        """
+        if prescription.session.week.mesocycle.plan.group_id != self.group_id:
+            raise InvalidTransition(
+                "The prescription is not in this group's shared program."
+            )
+        if load_pct == 100:
+            load_pct = None
+        diff = {
+            "swap_name": swap_name,
+            "load_pct": load_pct,
+            "sets": sets,
+            "reps": reps,
+            "note": note,
+        }
+        if not PrescriptionOverride.has_diff_from(diff):
+            self.clear_override(prescription)
+            return None
+        override, _ = PrescriptionOverride.objects.update_or_create(
+            membership=self, prescription=prescription, defaults=diff
+        )
+        return override
+
+    def clear_override(self, prescription):
+        """Drop this member's override for a prescription (a no-op if none)."""
+        self.overrides.filter(prescription=prescription).delete()
+
     def clean(self):
         """Backstop ``add_athlete``'s contract on the admin inline (raw FKs).
 
@@ -1064,6 +1106,109 @@ class GroupMembership(models.Model):
         ):
             raise ValidationError(
                 {"relationship": _("The relationship must be active to add a member.")}
+            )
+
+
+class PrescriptionOverride(models.Model):
+    """One member's auto-adjust over a group's shared prescription (S1 Phase 3).
+
+    A group plan is a *shared* program every member trains off; this overlay lets
+    a coach diverge one member's row from the shared base — a contraindication
+    swap, a per-athlete load %, or a volume tweak — without forking the program.
+    A member's effective program = the shared template **+** their override diffs
+    (the designer's per-row ``adj`` badge). The override hangs off the
+    ``GroupMembership`` (and so, transitively, the same ``CoachAthlete`` link that
+    owns the member's individual plans — D-a), and targets a prescription in the
+    membership's group's shared program (a same-group invariant enforced by
+    ``GroupMembership.set_override`` and ``clean``). One override per
+    member+prescription. See ``docs/meso/groups-plan.md``.
+    """
+
+    # The widest sane load scaling — a 50% deload through a +100% bump. Outside
+    # this is almost certainly a client bug; the endpoint rejects it as a 400.
+    MIN_LOAD_PCT = 1
+    MAX_LOAD_PCT = 200
+
+    membership = models.ForeignKey(
+        GroupMembership,
+        on_delete=models.CASCADE,
+        related_name="overrides",
+        verbose_name=_("Membership"),
+    )
+    prescription = models.ForeignKey(
+        ExercisePrescription,
+        on_delete=models.CASCADE,
+        related_name="overrides",
+        verbose_name=_("Prescription"),
+    )
+    # The exercise this member trains instead (the "swap"); blank = the shared one.
+    swap_name = models.CharField(_("Swap exercise"), max_length=255, blank=True)
+    # Scale the shared numeric load to this percentage (90 = −10%); null = no change.
+    load_pct = models.PositiveSmallIntegerField(_("Load %"), null=True, blank=True)
+    # Per-athlete volume; blank inherits the shared sets/reps.
+    sets = models.CharField(_("Sets"), max_length=32, blank=True)
+    reps = models.CharField(_("Reps"), max_length=32, blank=True)
+    note = models.CharField(_("Note"), max_length=255, blank=True)
+    created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+    modified = models.DateTimeField(_("Time last modified"), auto_now=True)
+
+    class Meta:
+        ordering = ["prescription_id", "membership_id"]
+        verbose_name = "Prescription override"
+        verbose_name_plural = "Prescription overrides"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["membership", "prescription"],
+                name="unique_prescription_override",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.membership.relationship.athlete.display_name()} · {self.prescription.name}"
+
+    @staticmethod
+    def has_diff_from(diff):
+        """Whether an override dict carries a real adjust (vs an empty no-op)."""
+        return bool(
+            diff.get("swap_name")
+            or diff.get("sets")
+            or diff.get("reps")
+            or diff.get("note")
+            or diff.get("load_pct") is not None
+        )
+
+    @property
+    def has_diff(self):
+        """Whether this override carries a real adjust (vs an empty no-op)."""
+        return self.has_diff_from(
+            {
+                "swap_name": self.swap_name,
+                "load_pct": self.load_pct,
+                "sets": self.sets,
+                "reps": self.reps,
+                "note": self.note,
+            }
+        )
+
+    def clean(self):
+        """Backstop the same-group invariant on the admin (raw FKs).
+
+        ``set_override`` only ever targets a prescription in the membership's
+        group's shared program; ``clean`` enforces the same for any path that runs
+        ``full_clean`` (the admin) so an override can never point at a lift the
+        member doesn't train.
+        """
+        if not (self.membership_id and self.prescription_id):
+            return
+        plan_group_id = self.prescription.session.week.mesocycle.plan.group_id
+        if plan_group_id != self.membership.group_id:
+            raise ValidationError(
+                {
+                    "prescription": _(
+                        "The prescription must belong to the membership's group's "
+                        "shared program."
+                    )
+                }
             )
 
 

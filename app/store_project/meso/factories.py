@@ -16,6 +16,7 @@ try:
     from .models import Mesocycle
     from .models import MesoGroup
     from .models import Plan
+    from .models import PrescriptionOverride
     from .models import ProposedChange
     from .models import Session
     from .models import SessionLog
@@ -196,6 +197,21 @@ try:
         relationship = None
         group = factory.SubFactory(MesoGroupFactory)
 
+    class PrescriptionOverrideFactory(DjangoModelFactory):
+        """A member's auto-adjust over a shared prescription (S1 Phase 3).
+
+        Callers pass a same-group ``membership`` + ``prescription`` explicitly (the
+        same-group invariant ``set_override``/``clean`` enforce); the SubFactory
+        defaults only exist so the factory is constructible.
+        """
+
+        class Meta:
+            model = PrescriptionOverride
+
+        membership = factory.SubFactory(GroupMembershipFactory)
+        prescription = factory.SubFactory(ExercisePrescriptionFactory)
+        load_pct = 90
+
 except ImportError:
     # Factory Boy is not available (likely in production).
     class CoachProfileFactory:
@@ -244,6 +260,9 @@ except ImportError:
         pass
 
     class GroupMembershipFactory:
+        pass
+
+    class PrescriptionOverrideFactory:
         pass
 
     class ProposedChangeFactory:

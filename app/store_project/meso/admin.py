@@ -11,6 +11,7 @@ from .models import LoggedSet
 from .models import Mesocycle
 from .models import MesoGroup
 from .models import Plan
+from .models import PrescriptionOverride
 from .models import ProposedChange
 from .models import PushSubscription
 from .models import Session
@@ -224,6 +225,26 @@ class MesoGroupAdmin(admin.ModelAdmin):
     search_fields = ("name", "focus", "coach__email", "coach__name")
     raw_id_fields = ("coach",)
     inlines = (GroupMembershipInline,)
+
+
+@admin.register(PrescriptionOverride)
+class PrescriptionOverrideAdmin(admin.ModelAdmin):
+    list_display = (
+        "__str__",
+        "membership",
+        "swap_name",
+        "load_pct",
+        "sets",
+        "reps",
+        "modified",
+    )
+    search_fields = (
+        "membership__group__name",
+        "prescription__name",
+        "swap_name",
+    )
+    raw_id_fields = ("membership", "prescription")
+    readonly_fields = ("created_at", "modified")
 
 
 # -- athlete PWA -----------------------------------------------------------
