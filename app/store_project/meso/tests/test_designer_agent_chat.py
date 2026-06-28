@@ -79,6 +79,20 @@ class TestRealAgentWiring:
         assert "reviewUrl" in html
 
 
+class TestPhase4BackgroundJobWiring:
+    """The chat kicks off a background job and polls its status (Phase 4)."""
+
+    def test_meso_js_polls_the_batch_status_endpoint(self):
+        js = read_meso_js()
+        assert "pollBatch" in js
+        assert "status_url" in js
+
+    def test_meso_js_handles_drafting_and_failed_states(self):
+        js = read_meso_js()
+        assert '"drafting"' in js or "'drafting'" in js
+        assert '"failed"' in js or "'failed'" in js
+
+
 class TestDesignerStillRendersChatColumn:
     def test_designer_page_renders_the_agent_column(self, client):
         plan, _, _ = seed_plan()

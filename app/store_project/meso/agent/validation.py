@@ -107,6 +107,18 @@ def _name_words(name):
     return {_singular(w) for w in re.findall(r"[a-z]+", name.lower())}
 
 
+def introduced_terms(*texts):
+    """Significant, singular-folded movement words across name/text fragments.
+
+    The public form of the swap-introduces tokenizer — used by the eval harness
+    to check, end-to-end, that no persisted change re-introduces a forbidden term.
+    """
+    terms = set()
+    for text in texts:
+        terms |= _name_words(text or "")
+    return terms
+
+
 def _resolve(model, value, label, errors, **scope):
     """Look up ``value`` (an id) within ``scope``, recording an error if it fails."""
     if value in (None, ""):

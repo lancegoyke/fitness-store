@@ -135,6 +135,44 @@ def serialize_week_snapshot(week):
     }
 
 
+def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
+    """A compact summary of the athlete's most recent logged sessions on this plan.
+
+    Grounds the agent (Phase 4) in what the athlete actually did — newest first —
+    so a progression/deload proposal can anchor on logged loads, not just the
+    prescribed grid. Scoped to the plan's athlete and this plan's sessions, and
+    capped (``limit`` sessions, ``sets_cap`` sets each) to keep the context small.
+    """
+    logs = (
+        models.SessionLog.objects.filter(
+            session__week__mesocycle__plan=plan, athlete=plan.athlete
+        )
+        .select_related("session")
+        .prefetch_related("sets__prescription")
+        .order_by("-date", "-created_at")[:limit]
+    )
+    summary = []
+    for log in logs:
+        summary.append(
+            {
+                "date": log.date.isoformat() if log.date else None,
+                "session": str(log.session),
+                "status": log.status,
+                "sets": [
+                    {
+                        "exercise": s.prescription.name if s.prescription else "",
+                        "set": s.set_number,
+                        "reps": s.reps,
+                        "load": s.load,
+                        "rpe": s.rpe,
+                    }
+                    for s in list(log.sets.all())[:sets_cap]
+                ],
+            }
+        )
+    return summary
+
+
 def current_week(plan, week=None):
     """The week the designer opens to.
 

@@ -614,7 +614,12 @@ class AgentProposalBatch(models.Model):
     """One agent run: the coach's instruction + the batch of edits it proposed."""
 
     class Status(models.TextChoices):
+        # The agent run happens off the request thread (Phase 4): a batch starts
+        # DRAFTING, then the background job flips it to PENDING (ready for review)
+        # or FAILED (with the reason in ``error``).
+        DRAFTING = "drafting", _("Drafting")
         PENDING = "pending", _("Pending review")
+        FAILED = "failed", _("Failed")
         APPLIED = "applied", _("Applied")
         DISMISSED = "dismissed", _("Dismissed")
 
@@ -637,6 +642,8 @@ class AgentProposalBatch(models.Model):
     status = models.CharField(
         _("Status"), max_length=16, choices=Status, default=Status.PENDING
     )
+    # Why a background run failed — surfaced to the coach via the status poll.
+    error = models.TextField(_("Error"), blank=True)
     created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
 
     class Meta:

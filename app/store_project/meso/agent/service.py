@@ -1,11 +1,22 @@
 """Orchestrate one agent run: ground → call Claude → validate → persist (B6).
 
-``propose_changes`` is the entry point the endpoint calls. It builds the grounding
-context from the plan, calls the client (the network boundary), validates every
-candidate it returns, and persists a batch holding only the clean ones. Rejected
-candidates are returned (for logging), never persisted — so the review screen only
-ever sees safe, in-plan edits. The human review gate is unchanged.
+Phase 4 splits the run so it can happen off the request thread:
+
+- ``create_drafting_batch`` persists a ``drafting`` batch the endpoint returns
+  immediately (the coach sees "drafting…" while the work runs in the background).
+- ``run_proposal_job`` does the work for an existing batch — grounds, calls the
+  client (the network boundary), validates every candidate, persists the clean
+  ones, and flips the batch to ``pending`` (ready for review) or ``failed`` (with
+  the reason recorded in ``error``). It never raises: a background thread has no
+  caller to surface to, so a failure becomes a ``failed`` batch.
+
+``propose_changes`` keeps the original synchronous contract (raise on failure,
+no batch persisted) for callers/tests that want a blocking run. Rejected
+candidates are returned (for logging), never persisted — the review screen only
+ever sees safe, in-plan edits, and the human review gate is unchanged.
 """
+
+import logging
 
 from django.db import transaction
 
@@ -13,6 +24,11 @@ from .. import models
 from .. import serializers
 from . import client as client_module
 from . import validation
+
+logger = logging.getLogger(__name__)
+
+# How many recent logged sessions feed the agent's grounding.
+RECENT_LOG_LIMIT = 5
 
 
 class AgentError(Exception):
@@ -41,15 +57,105 @@ def build_context(plan):
             ],
         },
         "coach_style": _coach_style(plan.coach),
+        # What the athlete actually logged recently (Phase 4 grounding).
+        "recent_logs": serializers.serialize_recent_logs(plan, limit=RECENT_LOG_LIMIT),
     }
 
 
-def propose_changes(plan, instruction, *, coach, client=None):
-    """Run the agent for ``plan`` and persist a reviewable batch.
+def create_drafting_batch(plan, instruction, *, coach):
+    """Persist a ``drafting`` batch the endpoint returns before the job runs."""
+    return models.AgentProposalBatch.objects.create(
+        plan=plan,
+        coach=coach,
+        instruction=instruction,
+        status=models.AgentProposalBatch.Status.DRAFTING,
+    )
 
-    Returns ``(batch, rejected)`` — ``rejected`` is a list of
-    ``{"raw": ..., "errors": [...]}`` for candidates the guardrail dropped.
-    Raises ``AgentNotConfigured`` when no client is available.
+
+def _persist_result(batch, result, *, model):
+    """Validate the model's candidates and persist the clean ones onto ``batch``.
+
+    Flips the batch to ``pending`` in one transaction and returns the list of
+    rejected candidates (``{"raw": ..., "errors": [...]}``) for logging.
+    """
+    if not isinstance(result, dict):
+        result = {}
+    raw_changes = result.get("changes") or []
+    summary = result.get("summary") or ""
+
+    forbidden = validation.forbidden_terms(batch.plan)
+    rejected = []
+
+    with transaction.atomic():
+        batch.summary = summary
+        batch.model = model
+        order = 0
+        for raw in raw_changes:
+            cleaned, errors = validation.clean_change(
+                raw, batch.plan, forbidden=forbidden
+            )
+            if cleaned is None:
+                rejected.append({"raw": raw, "errors": errors})
+                continue
+            models.ProposedChange.objects.create(batch=batch, order=order, **cleaned)
+            order += 1
+        batch.status = models.AgentProposalBatch.Status.PENDING
+        batch.error = ""
+        batch.save(update_fields=["summary", "model", "status", "error"])
+
+    if rejected:
+        logger.info(
+            "Meso agent batch %s dropped %s unsafe/invalid candidate(s).",
+            batch.pk,
+            len(rejected),
+        )
+    return rejected
+
+
+def _fail(batch, message):
+    """Mark a drafting batch as ``failed`` with the reason for the status poll."""
+    batch.status = models.AgentProposalBatch.Status.FAILED
+    batch.error = (message or "The agent run failed.")[:2000]
+    batch.save(update_fields=["status", "error"])
+    return batch, []
+
+
+def run_proposal_job(batch_id, *, client=None):
+    """Run the agent for an existing ``drafting`` batch (the background path).
+
+    Never raises — flips the batch to ``pending`` or ``failed``. Returns
+    ``(batch, rejected)``.
+    """
+    batch = models.AgentProposalBatch.objects.select_related(
+        "plan", "plan__relationship", "plan__relationship__athlete"
+    ).get(pk=batch_id)
+    try:
+        client = client or client_module.get_default_client()
+        if client is None:
+            return _fail(batch, "The Meso agent is not configured (no API key).")
+
+        # Network call outside any DB transaction; wrap provider failures.
+        try:
+            result = client.propose(
+                context=build_context(batch.plan), instruction=batch.instruction
+            )
+        except Exception as exc:  # external boundary
+            return _fail(batch, f"The agent request failed: {exc}")
+
+        rejected = _persist_result(batch, result, model=getattr(client, "model", ""))
+        return batch, rejected
+    except Exception:  # never leave a batch stuck drafting
+        logger.exception("Meso agent job crashed for batch %s", batch_id)
+        return _fail(batch, "The agent run failed unexpectedly.")
+
+
+def propose_changes(plan, instruction, *, coach, client=None):
+    """Run the agent synchronously and persist a reviewable batch.
+
+    Blocking contract (kept for direct callers + tests): raises
+    ``AgentNotConfigured`` when no client is available and ``AgentError`` on a
+    provider failure — and persists no batch in either case. Returns
+    ``(batch, rejected)`` on success.
     """
     client = client or client_module.get_default_client()
     if client is None:
@@ -65,29 +171,14 @@ def propose_changes(plan, instruction, *, coach, client=None):
         raise
     except Exception as exc:  # external boundary
         raise AgentError(f"The agent request failed: {exc}") from exc
-    if not isinstance(result, dict):
-        result = {}
-    raw_changes = result.get("changes") or []
-    summary = result.get("summary") or ""
-
-    forbidden = validation.forbidden_terms(plan)
-    rejected = []
 
     with transaction.atomic():
         batch = models.AgentProposalBatch.objects.create(
             plan=plan,
             coach=coach,
             instruction=instruction,
-            summary=summary,
-            model=getattr(client, "model", ""),
+            status=models.AgentProposalBatch.Status.PENDING,
         )
-        order = 0
-        for raw in raw_changes:
-            cleaned, errors = validation.clean_change(raw, plan, forbidden=forbidden)
-            if cleaned is None:
-                rejected.append({"raw": raw, "errors": errors})
-                continue
-            models.ProposedChange.objects.create(batch=batch, order=order, **cleaned)
-            order += 1
+        rejected = _persist_result(batch, result, model=getattr(client, "model", ""))
 
     return batch, rejected

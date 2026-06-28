@@ -2,7 +2,8 @@
 
 **Status:** Phase 1 done & merged (PR #280, squash `953d9d4`; deployed) · Phase 2 done & merged
 (PR #282, squash `ee7d456`; deployed) · Phase 3 done & merged (PR #284, squash `5bfe754`; deployed) ·
-created 2026-06-27 · **next = agent Phase 4 (execution + eval)**
+Phase 4 **built** (background job + streamed status + logs-in-grounding + golden evals) ·
+created 2026-06-27 · **agent slice complete after Phase 4**
 **Companion to:** [`decisions.md`](./decisions.md) (B6) · [`persistence-plan.md`](./persistence-plan.md)
 **Goal of this slice:** replace the designer's canned agent-chat engine
 (`detectIntent`/`applyIntent` in `meso.js`) and the review screen
@@ -177,9 +178,43 @@ Codex review: clean (1 round, no findings).** *Done when:* a coach can chat the
 agent into a real proposal batch and jump to review. **Deferred:** persisted chat
 thread, background job + streamed "drafting…" status (Phase 4).
 
-**Phase 4 — Execution + eval.**
-Background job + streamed "drafting…" status (Redis); golden eval cases; logged
-sessions fed into grounding.
+**Phase 4 — Execution + eval. ✅ Built (2026-06-27).**
+Background job + streamed "drafting…" status; golden eval cases; logged sessions
+fed into grounding.
+
+*Built:* the proposal run now happens **off the request thread**. The run is
+split — `agent/service.py` gains `create_drafting_batch` (persists a `drafting`
+batch) and `run_proposal_job` (grounds → calls Claude → validates → persists,
+flipping the batch to `pending` or `failed`; it never raises, so a background
+failure becomes a recorded `failed` batch). `agent/jobs.py` dispatches the job in
+a **daemon thread** deferred to `transaction.on_commit` (ATOMIC_REQUESTS means the
+drafting row isn't visible to the thread until the request commits); a real task
+queue is a drop-in later behind `run_proposal_job`. The endpoint
+`POST api/plan/<id>/agent/` now returns **202** + a `status_url` (checking the API
+key first, so no dead batch on 503), and `GET api/batch/<id>/status/` is polled by
+the designer chat until the batch lands (`pending` → changes + review link;
+`failed` → the reason). `meso.js` `pollBatch` keeps the "drafting…" indicator up
+through the poll. `MESO_AGENT_RUN_SYNC` runs the job inline (tests; on in
+`test.py`) so behavior is deterministic without a thread. Schema: `meso.0005`
+adds `AgentProposalBatch.Status` `drafting`/`failed` + an `error` field.
+
+*Grounding:* `build_context` now includes `recent_logs` — a compact, capped
+summary of the athlete's most recent **logged sessions** (`serialize_recent_logs`,
+scoped to the plan's athlete), so progression/deload proposals anchor on what was
+actually done.
+
+*Eval:* `agent/evals.py` is a golden corpus (`GOLDEN_CASES`) checked against
+**model-agnostic invariants** (responsive / grounded / safe — the last verifying
+the deterministic guardrail end-to-end) with soft warnings for the expected
+edit-kind. `manage.py meso_agent_eval` runs it against the real model (or
+`--dry-run` with a scripted client, no key/network), side-effect-free (the run is
+rolled back), exiting non-zero on failure so a scheduled quality check can gate
+on it. CI tests run the corpus through scripted clients.
+
+Built red→green: +40 tests (≈232 meso / ≈372 project-wide). *Done when:* a coach's
+instruction drafts in the background, streams a "drafting…" state, and lands a
+reviewable batch — and a golden-eval command guards quality. **Agent slice
+complete.**
 
 ## Out of scope (later)
 Athlete-facing surfaces · groups · the full "changes since last delivery" diff UI.
