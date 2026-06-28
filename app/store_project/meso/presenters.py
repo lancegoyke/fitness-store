@@ -1,18 +1,22 @@
 """Adapt real Meso models into the dict shapes the templates expect.
 
-The roster/profile templates were built against ``mockdata.py``. Phase 1 feeds
-them real, scoped data for everything that exists yet — the athlete, their
-training history, and their (global) contraindications. Program/compliance/
-activity fields are Phase 2/3 concepts; we pass honest neutral values
-(``compliance=None``, ``status=""``, ``has_program=False``) so the layout holds
-without inventing numbers.
+The roster/profile templates were built against a fixtures module (since
+retired). Phase 1 feeds them real, scoped data for everything that exists yet —
+the athlete, their training history, and their (global) contraindications.
+Program/compliance/activity fields are Phase 2/3 concepts; we pass honest
+neutral values (``compliance=None``, ``status=""``, ``has_program=False``) so
+the layout holds without inventing numbers.
 """
+
+from collections import defaultdict
 
 from django.urls import reverse
 from django.utils import timezone
 
 from .models import Plan
 from .models import SessionLog
+from .serializers import _fmt_num
+from .serializers import _num
 from .serializers import current_week
 from .serializers import latest_delivered_week
 from .serializers import serialize_prescription
@@ -140,6 +144,181 @@ def coach_style(coach):
     if profile is None:
         return {"tags": [], "avoid": ""}
     return {"tags": profile.programming_style or [], "avoid": profile.avoid_rules}
+
+
+# -- session results (athlete slice Phase 3) -------------------------------
+#
+# The coach's results screen, off real logs (``mockdata.RESULTS_*`` retired):
+# the athlete's most recent ``SessionLog`` for a session, scored against the
+# prescribed targets — completion, RPE vs target, and the flags that drive the
+# "adjust next week" hand-off to the agent. The same logged truth the agent
+# grounds on (``serialize_recent_logs``), now shown to the coach.
+
+# A logged set running this many RPE points over target is worth acting on — it
+# becomes a "flag" (the row still lights up for *any* overshoot).
+RPE_FLAG_THRESHOLD = 1.0
+
+
+def _results_target_label(prescription, unit):
+    """The prescribed target, e.g. "3×6 @ 70 kg · RPE 7" (no unit for "BW")."""
+    label = f"{prescription.sets or '—'}×{prescription.reps or '—'}"
+    if prescription.load:
+        suffix = f" {unit}" if _num(prescription.load) is not None else ""
+        label += f" @ {prescription.load}{suffix}"
+    if prescription.rpe and prescription.rpe != "—":
+        label += f" · RPE {prescription.rpe}"
+    return label
+
+
+def _logged_label(logged_sets, unit):
+    """What the athlete did, e.g. "2×12, 1×9 @ 41 kg" (reps grouped, load suffixed).
+
+    Equal-rep runs collapse to ``count×reps``; a uniform load is appended once,
+    a varying numeric load as a range. A non-numeric load ("BW") carries no unit.
+    """
+    groups = []  # [count, reps] runs, in logged order
+    for s in logged_sets:
+        reps = s.reps or "—"
+        if groups and groups[-1][1] == reps:
+            groups[-1][0] += 1
+        else:
+            groups.append([1, reps])
+    label = ", ".join(f"{count}×{reps}" for count, reps in groups)
+    loads = [s.load for s in logged_sets if s.load]
+    if loads and all(x == loads[0] for x in loads):
+        suffix = f" {unit}" if _num(loads[0]) is not None else ""
+        label += f" @ {loads[0]}{suffix}"
+    elif loads and all(_num(x) is not None for x in loads):
+        nums = [_num(x) for x in loads]
+        label += f" @ {_fmt_num(min(nums))}–{_fmt_num(max(nums))} {unit}"
+    return label
+
+
+def _exercise_result(prescription, logged_sets, unit):
+    """One results row + its RPE overshoot (None when not comparable).
+
+    The row mirrors the prototype's columns (target / logged / RPE / note); the
+    RPE shown is the *hardest* logged set, and ``rpe_state`` lights "over" on any
+    overshoot. The note is the most actionable fact we can derive: a set
+    shortfall, else a meaningful RPE overshoot.
+    """
+    target_rpe = _num(prescription.rpe)
+    logged_rpes = [_num(s.rpe) for s in logged_sets if _num(s.rpe) is not None]
+    top_rpe = max(logged_rpes) if logged_rpes else None
+    overshoot = (
+        top_rpe - target_rpe if top_rpe is not None and target_rpe is not None else None
+    )
+    prescribed_n = _prescribed_set_count(prescription.sets)
+    logged_n = len(logged_sets)
+    if prescribed_n and 0 < logged_n < prescribed_n:
+        note = f"{logged_n}/{prescribed_n} sets logged"
+    elif overshoot is not None and overshoot >= RPE_FLAG_THRESHOLD:
+        note = f"RPE {_fmt_num(top_rpe)} over target"
+    else:
+        note = ""
+    row = {
+        "name": prescription.name,
+        "target": _results_target_label(prescription, unit),
+        "logged": _logged_label(logged_sets, unit) if logged_sets else "—",
+        "rpe": _fmt_num(top_rpe) if top_rpe is not None else "—",
+        "rpe_state": "over" if overshoot is not None and overshoot > 0 else "on",
+        "note": note,
+    }
+    return row, overshoot
+
+
+def _avg_rpe_delta(prescriptions, sets_by_prescription):
+    """Mean (logged − target) RPE across comparable sets, signed; "—" if none."""
+    deltas = []
+    for prescription in prescriptions:
+        target = _num(prescription.rpe)
+        if target is None:
+            continue
+        for s in sets_by_prescription.get(prescription.pk, []):
+            logged = _num(s.rpe)
+            if logged is not None:
+                deltas.append(logged - target)
+    if not deltas:
+        return "—"
+    avg = sum(deltas) / len(deltas)
+    return "0.0" if round(avg, 1) == 0 else f"{avg:+.1f}"
+
+
+def _session_label(session):
+    week = session.week
+    label = f"Wk {week.index} · Day {session.day_number}"
+    return f"{label} — {session.name}" if session.name else label
+
+
+def _logged_date(log):
+    if log is None or log.date is None:
+        return None
+    return f"{log.date:%a, %b} {log.date.day}"
+
+
+def session_results(session):
+    """The coach's results screen for one session, off the athlete's real log.
+
+    Reads the athlete's most recent ``SessionLog`` for ``session`` and scores its
+    sets against the prescribed targets. An unlogged session renders an honest
+    awaiting state (targets only, 0% complete) rather than inventing numbers.
+    ``session`` arrives coach-scoped with its prescriptions prefetched.
+    """
+    plan = session.week.mesocycle.plan
+    athlete = plan.athlete
+    prescriptions = list(session.prescriptions.all())
+    log = (
+        SessionLog.objects.filter(session=session, athlete=athlete)
+        .order_by("-date", "-created_at")
+        .prefetch_related("sets")
+        .first()
+    )
+    sets_by_prescription = defaultdict(list)
+    if log is not None:
+        for s in log.sets.all():
+            if s.prescription_id is not None:
+                sets_by_prescription[s.prescription_id].append(s)
+
+    results = [
+        _exercise_result(p, sets_by_prescription.get(p.pk, []), plan.unit)
+        for p in prescriptions
+    ]
+    rows = [row for row, _ in results]
+
+    prescribed_total = sum(_prescribed_set_count(p.sets) for p in prescriptions)
+    logged_total = sum(len(sets_by_prescription.get(p.pk, [])) for p in prescriptions)
+    completion = (
+        min(round(100 * logged_total / prescribed_total), 100)
+        if prescribed_total
+        else 0
+    )
+
+    flagged = [
+        (row, o) for row, o in results if o is not None and o >= RPE_FLAG_THRESHOLD
+    ]
+    if flagged:
+        worst_row, worst_over = max(flagged, key=lambda pair: pair[1])
+        flag = (
+            f"{worst_row['name']} ran {_fmt_num(worst_over)} RPE over target "
+            "— consider holding load next session."
+        )
+    else:
+        flag = ""
+
+    return {
+        "athlete": {"name": athlete.display_name()},
+        "plan_id": plan.pk,
+        "rows": rows,
+        "summary": {
+            "session": _session_label(session),
+            "logged": _logged_date(log),
+            "completion": completion,
+            "avg_rpe_delta": _avg_rpe_delta(prescriptions, sets_by_prescription),
+            "flag": flag,
+            "flag_count": len(flagged),
+            "logged_state": log is not None,
+        },
+    }
 
 
 # -- athlete surface (athlete slice Phase 1) -------------------------------

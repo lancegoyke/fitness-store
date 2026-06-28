@@ -8,10 +8,14 @@ The designer (``static/js/meso.js``) keeps three in-memory arrays:
 
 ``serialize_plan`` reproduces that shape from the ``Plan → Mesocycle → Week →
 Session → ExercisePrescription`` hierarchy so Phase 3 can hydrate the designer
-from the database instead of fixtures. Fields the designer derives from *other*
-slices — ``last`` (from logged sets) and ``adj`` (from the agent) — are not
-emitted here; they arrive with those slices.
+from the database instead of fixtures. The designer's ``last`` column (what the
+athlete actually did last time, per lift) is derived from real logged sets here
+(athlete slice Phase 3); ``adj`` (a group-only agent overlay) arrives with the
+groups slice (S1, out of scope) and is still not emitted.
 """
+
+from collections import Counter
+from collections import defaultdict
 
 from . import models
 
@@ -198,6 +202,106 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
     return summary
 
 
+# -- the designer's "last time" column (athlete slice Phase 3) -------------
+#
+# Each prescription in the week being designed carries a compact ``last`` —
+# what the athlete actually did the most recent time they logged that lift — so
+# the coach sets loads against real performance, not just the prescribed grid.
+# The same logged truth the agent grounds on (``serialize_recent_logs``).
+
+
+def _num(value):
+    """``value`` as a float, or None when it isn't a plain number ("BW", "—")."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_num(value):
+    """A number without a trailing ``.0`` (70.0 → "70", 72.5 → "72.5")."""
+    f = float(value)
+    return str(int(f)) if f == int(f) else str(f)
+
+
+def _exercise_key(exercise_id, name):
+    """Identity for matching a logged set to a prescription across sessions.
+
+    A catalog-linked lift matches by FK; a free-text one by case-folded name —
+    so last week's "Box Squat" surfaces against this week's "Box Squat".
+    """
+    if exercise_id is not None:
+        return ("id", exercise_id)
+    return ("name", (name or "").strip().lower())
+
+
+def _mode(values):
+    """The most common value, ties broken by first appearance (or None)."""
+    present = [v for v in values if v not in (None, "")]
+    if not present:
+        return None
+    return Counter(present).most_common(1)[0][0]
+
+
+def _summarize_last_sets(logged_sets, unit):
+    """A compact one-line summary of one lift's logged sets, e.g. "3×6 · 70kg · RPE8".
+
+    Collapses the typical (uniform) working set to ``{n}×{reps} · {load}{unit}``
+    — modal reps/load, the hardest set's RPE — matching the prototype's badge.
+    The unit suffix is dropped for a non-numeric load ("BW").
+    """
+    n = len(logged_sets)
+    reps = _mode([s.reps for s in logged_sets]) or "—"
+    parts = [f"{n}×{reps}"]
+    load = _mode([s.load for s in logged_sets])
+    if load is not None:
+        parts.append(f"{load}{unit}" if _num(load) is not None else load)
+    rpes = [_num(s.rpe) for s in logged_sets if _num(s.rpe) is not None]
+    if rpes:
+        parts.append(f"RPE{_fmt_num(max(rpes))}")
+    return " · ".join(parts)
+
+
+def last_logged_labels(plan, prescriptions, unit):
+    """Map each prescription's pk to a "last time" label from the athlete's logs.
+
+    For every rendered prescription, find the athlete's most recent logged sets
+    for that lift (by exercise identity) anywhere on this plan and summarize
+    them. One query over the plan's logged sets — no per-row lookups; a lift the
+    athlete has never logged is simply absent from the map.
+    """
+    target_keys = {p.pk: _exercise_key(p.exercise_id, p.name) for p in prescriptions}
+    wanted = set(target_keys.values())
+    if not wanted:
+        return {}
+    logged_sets = (
+        models.LoggedSet.objects.filter(
+            session_log__session__week__mesocycle__plan=plan,
+            session_log__athlete=plan.athlete,
+        )
+        .select_related("session_log", "prescription")
+        .order_by("-session_log__date", "-session_log__created_at", "set_number")
+    )
+    # ``logged_sets`` is newest-log-first; the first log that mentions a lift is
+    # its most recent, and we collect only that log's sets for the lift.
+    best_log = {}
+    sets_by_key = defaultdict(list)
+    for ls in logged_sets:
+        if ls.prescription is None:
+            continue
+        key = _exercise_key(ls.prescription.exercise_id, ls.prescription.name)
+        if key not in wanted:
+            continue
+        best_log.setdefault(key, ls.session_log_id)
+        if best_log[key] == ls.session_log_id:
+            sets_by_key[key].append(ls)
+    return {
+        pk: _summarize_last_sets(sets_by_key[key], unit)
+        for pk, key in target_keys.items()
+        if sets_by_key.get(key)
+    }
+
+
 def latest_delivered_week(plan):
     """The most recently delivered week of ``plan``, or None.
 
@@ -247,8 +351,17 @@ def serialize_plan(plan, week=None):
     current_mesocycle = open_week.mesocycle if open_week else None
 
     if open_week is not None:
-        sessions = open_week.sessions.prefetch_related("prescriptions")
+        sessions = list(open_week.sessions.prefetch_related("prescriptions"))
         program = [serialize_session(s) for s in sessions]
+        # Light up the "last time" column from real logs (Phase 3): one query
+        # over the plan's logged sets, mapped onto the rendered prescriptions.
+        prescriptions = [p for s in sessions for p in s.prescriptions.all()]
+        last_map = last_logged_labels(plan, prescriptions, plan.unit)
+        for session_data in program:
+            for exercise in session_data["exercises"]:
+                label = last_map.get(exercise["id"])
+                if label:
+                    exercise["last"] = label
         week_strip = [serialize_week(w) for w in current_mesocycle.weeks.all()]
     else:
         program = []

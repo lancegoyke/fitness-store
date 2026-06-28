@@ -24,6 +24,11 @@ urlpatterns = [
     path("deliver/", DeliverView.as_view(), name="deliver"),
     path("deliver/<int:plan_id>/", DeliverView.as_view(), name="deliver_plan"),
     path("results/", ResultsView.as_view(), name="results"),
+    path(
+        "results/<int:session_id>/",
+        ResultsView.as_view(),
+        name="results_session",
+    ),
     # Athlete surface (athlete slice Phase 1) — the athlete's own training view,
     # distinct from the coach's ``athlete/<uuid>/`` record.
     path("me/", AthleteHomeView.as_view(), name="athlete_home"),

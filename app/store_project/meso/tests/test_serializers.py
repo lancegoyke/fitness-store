@@ -13,15 +13,21 @@ derived from *other* slices (``last`` from logged sets, ``adj`` from the agent)
 are intentionally absent here; only the program-schema-owned fields round-trip.
 """
 
+from datetime import date
+from types import SimpleNamespace
+
 import pytest
 
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import ExercisePrescriptionFactory
+from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionFactory
+from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
+from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
 from store_project.meso.serializers import serialize_plan
 
@@ -278,3 +284,130 @@ class TestSerializePlan:
         SessionFactory(week=wk1, day_number=1, name="Should Not Appear", order=1)
         result = serialize_plan(plan)
         assert "Should Not Appear" not in [s["name"] for s in result["program"]]
+
+
+class TestLastLoggedColumn:
+    """Phase 3 — the designer's "last time" column lights up from real logs.
+
+    ``serialize_plan`` adds a per-exercise ``last`` (a compact summary of the
+    athlete's most recent logged sets for that exercise) so the coach sees what
+    was actually done next to what they're prescribing. It is *absent* until a
+    log exists — the no-log round-trip (``test_exercise_rows_round_trip``) still
+    holds — and matches by exercise identity (name / catalog FK), so a prior
+    week's log surfaces against the current week's same lift.
+    """
+
+    def _plan(self, *, sets="3", reps="6", load="70", rpe="7", unit=Unit.KILOGRAMS):
+        rel = CoachAthleteFactory()
+        plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE, unit=unit)
+        meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
+        week = WeekFactory(mesocycle=meso, index=2, is_current=True)
+        session = SessionFactory(week=week, day_number=1, name="Lower")
+        presc = ExercisePrescriptionFactory(
+            session=session,
+            name="Box Squat",
+            order=0,
+            sets=sets,
+            reps=reps,
+            load=load,
+            rpe=rpe,
+        )
+        return SimpleNamespace(
+            plan=plan,
+            meso=meso,
+            week=week,
+            session=session,
+            presc=presc,
+            athlete=plan.athlete,
+        )
+
+    def _log(self, session, athlete, *, when, sets):
+        """Log ``sets`` (list of (reps, load, rpe)) against the session's lift."""
+        log = SessionLogFactory(
+            session=session,
+            athlete=athlete,
+            status=SessionLog.Status.DONE,
+            date=when,
+        )
+        for n, (reps, load, rpe) in enumerate(sets, start=1):
+            LoggedSetFactory(
+                session_log=log,
+                prescription=session.prescriptions.get(),
+                set_number=n,
+                reps=reps,
+                load=load,
+                rpe=rpe,
+            )
+        return log
+
+    def _box_squat(self, plan):
+        return serialize_plan(plan)["program"][0]["exercises"][0]
+
+    def test_no_logs_no_last(self):
+        s = self._plan()
+        assert "last" not in self._box_squat(s.plan)
+
+    def test_last_from_logged_sets(self):
+        s = self._plan()
+        self._log(
+            s.session,
+            s.athlete,
+            when=date(2026, 6, 24),
+            sets=[("6", "70", "7"), ("6", "70", "7"), ("6", "70", "8")],
+        )
+        # Uniform reps/load collapse to the prototype's compact form; the badge
+        # carries the hardest set's RPE.
+        assert self._box_squat(s.plan)["last"] == "3×6 · 70kg · RPE8"
+
+    def test_last_uses_plan_unit(self):
+        s = self._plan(load="135", unit=Unit.POUNDS)
+        self._log(
+            s.session, s.athlete, when=date(2026, 6, 24), sets=[("6", "135", "7")]
+        )
+        assert self._box_squat(s.plan)["last"] == "1×6 · 135lb · RPE7"
+
+    def test_last_omits_unit_for_non_numeric_load(self):
+        s = self._plan(load="BW")
+        self._log(s.session, s.athlete, when=date(2026, 6, 24), sets=[("12", "BW", "")])
+        # No RPE logged → no RPE segment; "BW" carries no unit suffix.
+        assert self._box_squat(s.plan)["last"] == "1×12 · BW"
+
+    def test_last_picks_most_recent_log(self):
+        s = self._plan()
+        self._log(s.session, s.athlete, when=date(2026, 6, 10), sets=[("6", "60", "7")])
+        self._log(
+            s.session, s.athlete, when=date(2026, 6, 24), sets=[("6", "72.5", "7")]
+        )
+        assert self._box_squat(s.plan)["last"] == "1×6 · 72.5kg · RPE7"
+
+    def test_last_matches_same_lift_across_weeks(self):
+        """A prior week's log surfaces against the current week's same lift."""
+        s = self._plan()
+        wk1 = WeekFactory(mesocycle=s.meso, index=1, is_current=False)
+        wk1_session = SessionFactory(week=wk1, day_number=1, name="Lower")
+        ExercisePrescriptionFactory(
+            session=wk1_session,
+            name="Box Squat",
+            order=0,
+            sets="3",
+            reps="6",
+            load="65",
+            rpe="7",
+        )
+        self._log(
+            wk1_session, s.athlete, when=date(2026, 6, 17), sets=[("6", "65", "7")]
+        )
+        # The current (Wk 2) Box Squat shows last week's logged Box Squat.
+        assert self._box_squat(s.plan)["last"] == "1×6 · 65kg · RPE7"
+
+    def test_last_is_scoped_to_this_athlete(self):
+        """Another athlete's log on a same-named lift never bleeds in."""
+        s = self._plan()
+        stranger = self._plan()  # different plan + athlete, also "Box Squat"
+        self._log(
+            stranger.session,
+            stranger.athlete,
+            when=date(2026, 6, 24),
+            sets=[("6", "200", "9")],
+        )
+        assert "last" not in self._box_squat(s.plan)
