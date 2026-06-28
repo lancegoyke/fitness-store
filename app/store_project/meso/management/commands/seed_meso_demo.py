@@ -11,7 +11,9 @@ database renders the roster, athlete profile, and designer from actual data:
 - an **active** ``CoachAthlete`` link per athlete (coach-invited, accepted);
 - one sample **Plan** for Maya — the full ``Mesocycle → Week → Session →
   ExercisePrescription`` hierarchy reproducing the designer's fixture grid, so
-  ``serialize_plan`` round-trips it straight into the designer.
+  ``serialize_plan`` round-trips it straight into the designer;
+- one demo **MesoGroup** (groups slice S1) with three of the athletes as
+  members, so the roster's *Groups* card renders off real rows.
 
 The command is **idempotent**: re-running ``get_or_create``s every row, so it
 never duplicates. ``--delete`` tears the demo back down (the demo athletes and,
@@ -37,6 +39,7 @@ from store_project.meso.models import Contraindication
 from store_project.meso.models import ExercisePrescription
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
+from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
@@ -324,6 +327,16 @@ SAMPLE_LOG = {
 }
 
 
+# A demo group (groups slice S1, Phase 1): three of the athletes who train
+# together, so a fresh DB renders the roster's *Groups* card off real rows. The
+# shared program + per-athlete auto-adjusts arrive in groups Phase 2/3.
+GROUP = {
+    "name": "Tue/Thu Strength Squad",
+    "focus": "Strength",
+    "member_slugs": ["devon", "priya", "marcus"],
+}
+
+
 def _months_before(today, months):
     """The date ``months`` whole months before ``today`` (day clamped to ≤28)."""
     total = today.year * 12 + (today.month - 1) - months
@@ -356,7 +369,7 @@ class Command(BaseCommand):
         coach_email = options["coach_email"]
 
         if options["delete"]:
-            self._delete_demo()
+            self._delete_demo(coach_email)
             return
 
         today = date.today()
@@ -367,17 +380,21 @@ class Command(BaseCommand):
             if spec["slug"] == "maya":
                 plan = self._ensure_plan(coach, athlete)
                 self._ensure_log(athlete, plan, today)
+        self._ensure_group(coach)
 
         self.stdout.write(
             self.style.SUCCESS(
                 f"✓ Meso demo seeded for {coach.email}: "
-                f"{len(ATHLETES)} athletes, 1 sample plan, 1 logged session."
+                f"{len(ATHLETES)} athletes, 1 group, 1 sample plan, 1 logged session."
             )
         )
 
     # -- teardown ---------------------------------------------------------
 
-    def _delete_demo(self):
+    def _delete_demo(self, coach_email):
+        # The demo group is owned by the (kept) coach, so deleting the demo
+        # athletes only cascade-removes its memberships; drop the group too.
+        MesoGroup.objects.filter(coach__email=coach_email, name=GROUP["name"]).delete()
         emails = [spec["email"] for spec in ATHLETES]
         deleted, _ = User.objects.filter(email__in=emails).delete()
         self.stdout.write(
@@ -461,6 +478,31 @@ class Command(BaseCommand):
             },
         )
         return link
+
+    # -- the demo group ---------------------------------------------------
+
+    def _ensure_group(self, coach):
+        """A demo group with three of the athletes (idempotent).
+
+        ``update_or_create`` restores the group to active on reseed; ``add_athlete``
+        is idempotent and requires the active link the loop above already ensured.
+        """
+        group, _ = MesoGroup.objects.update_or_create(
+            coach=coach,
+            name=GROUP["name"],
+            defaults={
+                "focus": GROUP["focus"],
+                "status": MesoGroup.Status.ACTIVE,
+            },
+        )
+        emails = [s["email"] for s in ATHLETES if s["slug"] in GROUP["member_slugs"]]
+        members = User.objects.filter(email__in=emails)
+        for athlete in members:
+            group.add_athlete(athlete)
+        self.stdout.write(
+            f"  - ensured group '{group.name}' ({members.count()} members)"
+        )
+        return group
 
     # -- the sample plan --------------------------------------------------
 

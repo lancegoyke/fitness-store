@@ -100,6 +100,69 @@ def profile_athlete(user):
     }
 
 
+def roster_group(group):
+    """A row in the coach's roster *Groups* card (groups slice Phase 1).
+
+    Members are scoped to active links (``active_member_users``). There is no
+    shared program until groups Phase 2, so the meta line says so rather than
+    inventing a current-week label.
+    """
+    members = group.active_member_users()
+    member_objs = [
+        {"initials": initials(u.display_name()), "tone": "neutral"} for u in members
+    ]
+    count = len(member_objs)
+    focus = group.focus or "General"
+    meta = " · ".join(
+        [
+            f"{count} participant{'' if count == 1 else 's'}",
+            focus,
+            "No shared program yet",
+        ]
+    )
+    return {
+        "id": group.pk,
+        "name": group.name,
+        "focus": focus,
+        "member_objs": member_objs,
+        "meta": meta,
+        "status_label": group.get_status_display(),
+    }
+
+
+def group_detail(group):
+    """The group detail page: members + their cross-group contraindication flags.
+
+    The "flags across group" set folds every active member's contraindication
+    labels into one unique, sorted list (the designer prototype's panel).
+    """
+    members = group.active_member_users()
+    member_data = []
+    flags = set()
+    for user in members:
+        labels = [c.label for c in _active_contraindications(user)]
+        flags.update(labels)
+        name = user.display_name()
+        member_data.append(
+            {
+                "id": user.pk,
+                "name": name,
+                "initials": initials(name),
+                "tone": "neutral",
+                "flags": labels,
+            }
+        )
+    return {
+        "id": group.pk,
+        "name": group.name,
+        "focus": group.focus or "General",
+        "status_label": group.get_status_display(),
+        "members": member_data,
+        "member_count": len(member_data),
+        "flags": sorted(flags),
+    }
+
+
 def deliver_screen(plan):
     """Context for the plan-bound deliver screen (Phase 4).
 

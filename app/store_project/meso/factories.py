@@ -11,8 +11,10 @@ try:
     from .models import CoachProfile
     from .models import Contraindication
     from .models import ExercisePrescription
+    from .models import GroupMembership
     from .models import LoggedSet
     from .models import Mesocycle
+    from .models import MesoGroup
     from .models import Plan
     from .models import ProposedChange
     from .models import Session
@@ -162,6 +164,28 @@ try:
         load = "60"
         rpe = "7"
 
+    class MesoGroupFactory(DjangoModelFactory):
+        class Meta:
+            model = MesoGroup
+
+        coach = factory.SubFactory(UserFactory)
+        name = factory.Sequence(lambda n: f"Group {n}")
+        focus = "Hypertrophy"
+        status = MesoGroup.Status.ACTIVE
+
+    class GroupMembershipFactory(DjangoModelFactory):
+        class Meta:
+            model = GroupMembership
+
+        group = factory.SubFactory(MesoGroupFactory)
+        # The link's coach defaults to the group's coach so the membership is
+        # same-coach-consistent without the caller wiring it up.
+        relationship = factory.SubFactory(
+            CoachAthleteFactory,
+            coach=factory.SelfAttribute("..group.coach"),
+            status=CoachAthlete.Status.ACTIVE,
+        )
+
 except ImportError:
     # Factory Boy is not available (likely in production).
     class CoachProfileFactory:
@@ -201,6 +225,12 @@ except ImportError:
         pass
 
     class AgentProposalBatchFactory:
+        pass
+
+    class MesoGroupFactory:
+        pass
+
+    class GroupMembershipFactory:
         pass
 
     class ProposedChangeFactory:

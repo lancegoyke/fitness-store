@@ -14,6 +14,7 @@ relationship (N1). Roles are marked by the presence of a ``CoachProfile`` /
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -755,6 +756,179 @@ class LoggedSet(models.Model):
 
     def __str__(self):
         return f"Set {self.set_number}"
+
+
+# ---------------------------------------------------------------------------
+# Groups (S1) — Phase 1: the group + membership spine
+#
+# A coach groups several of their athletes who train together; later phases give
+# the group a *shared program* (a ``Plan`` rooted at the group) and per-athlete
+# *auto-adjusts* (override diffs — the ``adj`` overlay). Phase 1 is just the
+# tenancy-correct foundation: a coach-owned ``MesoGroup`` and a
+# ``GroupMembership`` linking it to an **active** ``CoachAthlete`` relationship,
+# so membership structurally implies an active coaching link and per-athlete
+# overrides/delivered plans (later) hang off the same relationship that owns
+# individual plans (D-a). See ``docs/meso/groups-plan.md``.
+# ---------------------------------------------------------------------------
+
+
+class MesoGroupQuerySet(models.QuerySet):
+    def for_coach(self, user):
+        """Groups this coach owns."""
+        return self.filter(coach=user)
+
+    def active(self):
+        """Non-archived groups (the roster shows these)."""
+        return self.filter(status=MesoGroup.Status.ACTIVE)
+
+
+class MesoGroup(models.Model):
+    """A coach's training group — several athletes sharing one program (S1)."""
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", _("Draft")
+        ACTIVE = "active", _("Active")
+        ARCHIVED = "archived", _("Archived")
+
+    coach = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="meso_groups",
+        verbose_name=_("Coach"),
+    )
+    name = models.CharField(_("Name"), max_length=255)
+    focus = models.CharField(_("Focus"), max_length=255, blank=True)
+    status = models.CharField(
+        _("Status"), max_length=16, choices=Status, default=Status.ACTIVE
+    )
+    created = models.DateTimeField(_("Time created"), auto_now_add=True)
+    modified = models.DateTimeField(_("Time last modified"), auto_now=True)
+
+    objects = MesoGroupQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "Group"
+        verbose_name_plural = "Groups"
+
+    def __str__(self):
+        return self.name
+
+    def add_athlete(self, athlete):
+        """Add one of the coach's *active* athletes to the group (idempotent).
+
+        Membership hangs off the ``CoachAthlete`` link, so the athlete must have
+        an active link with this group's coach — otherwise there is nothing to
+        program against. Raises ``InvalidTransition`` if no such link exists
+        (which also rejects a cross-coach athlete or the coach themselves).
+        """
+        link = (
+            CoachAthlete.objects.for_coach(self.coach)
+            .active()
+            .filter(athlete=athlete)
+            .first()
+        )
+        if link is None:
+            raise InvalidTransition(
+                "Can only add an athlete with an active link to this coach."
+            )
+        membership, _ = GroupMembership.objects.get_or_create(
+            group=self, relationship=link
+        )
+        return membership
+
+    def remove_athlete(self, athlete):
+        """Remove an athlete from the group (a no-op if they aren't a member)."""
+        self.memberships.filter(relationship__athlete=athlete).delete()
+
+    def active_member_users(self):
+        """The member athletes whose coaching link is still active, name-ordered.
+
+        A membership whose link ended is hidden here but the row survives, so
+        reopening the link restores the member (read-side scoping, not deletion).
+        Scoped to *this* coach's links so a membership written outside
+        ``add_athlete`` (e.g. a raw admin inline) can never leak a foreign coach's
+        athlete onto the roster/detail page — defense in depth alongside
+        ``GroupMembership.clean``.
+        """
+        return [
+            m.relationship.athlete
+            for m in self.memberships.select_related(
+                "relationship", "relationship__athlete"
+            )
+            .prefetch_related("relationship__athlete__contraindications")
+            .filter(
+                relationship__coach=self.coach,
+                relationship__status=CoachAthlete.Status.ACTIVE,
+            )
+            .order_by("relationship__athlete__name", "relationship__athlete__email")
+        ]
+
+
+class GroupMembership(models.Model):
+    """A coach's athlete (via their ``CoachAthlete`` link) belonging to a group."""
+
+    group = models.ForeignKey(
+        MesoGroup,
+        on_delete=models.CASCADE,
+        related_name="memberships",
+        verbose_name=_("Group"),
+    )
+    relationship = models.ForeignKey(
+        CoachAthlete,
+        on_delete=models.CASCADE,
+        related_name="group_memberships",
+        verbose_name=_("Relationship"),
+    )
+    created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        verbose_name = "Group membership"
+        verbose_name_plural = "Group memberships"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["group", "relationship"], name="unique_group_membership"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.relationship.athlete.display_name()} ∈ {self.group.name}"
+
+    def clean(self):
+        """Backstop ``add_athlete``'s contract on the admin inline (raw FKs).
+
+        ``add_athlete`` only ever creates a membership off the group coach's
+        *active* link, so ``clean`` enforces the same two rules for any path that
+        runs ``full_clean`` (the admin):
+
+        - the relationship must belong to the group's coach (never another
+          coach's athlete);
+        - on **creation**, the relationship must be active — adding a member via a
+          pending/ended link would just be hidden by ``active_member_users``.
+
+        The active check is creation-only on purpose: a membership row outlives
+        its link ending (the row persists so reopening the link restores the
+        member — read-side scoping, not deletion), so re-saving an existing row
+        whose link has since ended must stay valid.
+        """
+        if not (self.group_id and self.relationship_id):
+            return
+        if self.relationship.coach_id != self.group.coach_id:
+            raise ValidationError(
+                {
+                    "relationship": _(
+                        "The relationship must belong to the group's coach."
+                    )
+                }
+            )
+        if (
+            self._state.adding
+            and self.relationship.status != CoachAthlete.Status.ACTIVE
+        ):
+            raise ValidationError(
+                {"relationship": _("The relationship must be active to add a member.")}
+            )
 
 
 # ---------------------------------------------------------------------------

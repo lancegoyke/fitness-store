@@ -1,0 +1,71 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}{{ group.name }} · Meso{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-crumbs">
+      <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span> <span>{{ group.name }}</span>
+    </div>
+
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Group</p>
+        <h1 class="meso-h1">{{ group.name }}</h1>
+        <p class="meso-sub">{{ group.member_count }} member{{ group.member_count|pluralize }} · {{ group.focus }}</p>
+      </div>
+      <span class="meso-badge meso-badge--accent"><i></i>{{ group.status_label }}</span>
+    </div>
+
+    <div class="meso-grid meso-grid--profile">
+      <!-- left rail: flags across the group -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="meso-card meso-card--pad">
+          <p class="meso-eyebrow">Flags across group</p>
+          {% if group.flags %}
+            <div style="display:flex;flex-wrap:wrap;gap:6px;">
+              {% for flag in group.flags %}
+                <span class="meso-badge meso-badge--warn"><i></i>{{ flag }}</span>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="meso-sub">No contraindications on file.</p>
+          {% endif %}
+        </div>
+
+        <div class="meso-card meso-card--pad" style="color:var(--dim);">
+          <p class="meso-eyebrow">Shared program</p>
+          <p class="meso-sub" style="margin-top:8px;">A shared program for this group lands soon — for now, program each member individually.</p>
+        </div>
+      </div>
+
+      <!-- main: members -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="meso-card">
+          <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
+            <p class="meso-eyebrow" style="margin:0;">Members</p>
+            <div class="meso-spacer"></div>
+            <span class="meso-row-meta">{{ group.member_count }} member{{ group.member_count|pluralize }}</span>
+          </div>
+          {% for m in group.members %}
+            <a class="meso-row" href="{% url 'meso:athlete' m.id %}">
+              <div class="meso-avatar {% if m.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ m.initials }}</div>
+              <div style="min-width:0;">
+                <div class="meso-row-name">{{ m.name }}</div>
+              </div>
+              <div class="meso-spacer"></div>
+              {% for f in m.flags %}
+                <span class="meso-badge meso-badge--warn"><i></i>{{ f }}</span>
+              {% endfor %}
+              <span class="meso-muted" style="font-size:16px;">›</span>
+            </a>
+          {% empty %}
+            <div class="meso-row" style="color:var(--dim);">
+              No members yet.
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

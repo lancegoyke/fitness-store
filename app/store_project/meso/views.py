@@ -38,6 +38,7 @@ from .models import CoachAthlete
 from .models import CoachProfile
 from .models import ExercisePrescription
 from .models import LoggedSet
+from .models import MesoGroup
 from .models import Plan
 from .models import ProposedChange
 from .models import PushSubscription
@@ -176,11 +177,17 @@ class RosterView(LoginRequiredMixin, TemplateView):
             .order_by("athlete__name", "athlete__email")
         )
         athletes = [presenters.roster_athlete(link.athlete) for link in links]
+        groups = (
+            MesoGroup.objects.for_coach(self.request.user)
+            .active()
+            .prefetch_related("memberships__relationship__athlete")
+        )
         ctx["active"] = "roster"
         ctx["athletes"] = athletes
-        # Groups (S1) need shared programs; activity (Phase 3) needs logged
+        # Groups (S1 Phase 1) read real rows; the shared program + per-athlete
+        # auto-adjusts land in groups Phase 2/3. Activity (Phase 3) needs logged
         # sessions; needs-review (Phase 2) needs agent state. Empty until then.
-        ctx["groups"] = []
+        ctx["groups"] = [presenters.roster_group(g) for g in groups]
         ctx["activity"] = []
         ctx["needs_review"] = 0
         return ctx
@@ -210,6 +217,29 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         # schema (Phase 2) and logging (Phase 3).
         ctx["macrocycle"] = []
         ctx["results_summary"] = None
+        return ctx
+
+
+class GroupDetailView(LoginRequiredMixin, TemplateView):
+    """A coach's training group — members + their cross-group flags (S1 Phase 1).
+
+    Coach-scoped: a foreign or unknown group is a flat 404. The shared program +
+    per-athlete auto-adjusts land in groups Phase 2/3; this is the read surface.
+    """
+
+    template_name = "meso/group_detail.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        group = (
+            MesoGroup.objects.for_coach(self.request.user)
+            .filter(pk=kwargs["pk"])
+            .first()
+        )
+        if group is None:
+            raise Http404("Unknown group")
+        ctx["active"] = "roster"
+        ctx["group"] = presenters.group_detail(group)
         return ctx
 
 
