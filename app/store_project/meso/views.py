@@ -18,7 +18,6 @@ from django.views.decorators.http import require_GET
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 
-from . import mockdata
 from . import presenters
 from .agent import apply as agent_apply
 from .agent import client as agent_client
@@ -55,6 +54,46 @@ def _coach_working_plan(user):
         .order_by("-modified")
         .first()
     )
+
+
+def _coach_session_or_404(user, pk):
+    """A session on a plan the coach owns (active relationship), or ``Http404``.
+
+    The coach-side analogue of ``_athlete_session_or_404``: a foreign athlete's
+    session or an unknown id are an indistinguishable flat 404 (no leak). Used by
+    the results screen; delivery isn't required — a logged session is logged.
+    """
+    session = (
+        Session.objects.filter(
+            pk=pk, week__mesocycle__plan__in=Plan.objects.for_coach(user)
+        )
+        .select_related("week__mesocycle__plan__relationship")
+        .prefetch_related("prescriptions")
+        .first()
+    )
+    if session is None:
+        raise Http404("Unknown session")
+    return session
+
+
+def _coach_latest_logged_session(user):
+    """The coach's most-recently *completed* session across their athletes, or None.
+
+    The target the bare ``/meso/results/`` resolves to. Only *done* logs count —
+    a pending draft isn't a result yet (the results screen would render it as an
+    awaiting session anyway). Ordered by the workout date (then created) so the
+    coach lands on the session most recently trained.
+    """
+    log = (
+        SessionLog.objects.filter(
+            session__week__mesocycle__plan__in=Plan.objects.for_coach(user),
+            status=SessionLog.Status.DONE,
+        )
+        .select_related("session")
+        .order_by("-date", "-created_at")
+        .first()
+    )
+    return log.session if log else None
 
 
 class MesoDesignerView(LoginRequiredMixin, TemplateView):
@@ -816,14 +855,29 @@ class DeliverView(LoginRequiredMixin, TemplateView):
 
 
 class ResultsView(LoginRequiredMixin, TemplateView):
-    """Logged session results vs targets — closes the loop back to the agent."""
+    """Logged session results vs targets — closes the loop back to the agent.
+
+    Binds to a real, owned session (``results/<session_id>/``): the athlete's
+    logged sets scored against the prescribed grid (athlete slice Phase 3, the
+    coach-side fixtures retired). The bare ``results/`` redirects to the coach's
+    most-recently-logged session, or back to the roster if none — mirroring the
+    designer/deliver bare redirects.
+    """
 
     template_name = "meso/results.html"
 
+    def get(self, request, *args, **kwargs):
+        if kwargs.get("session_id") is None:
+            session = _coach_latest_logged_session(request.user)
+            if session is None:
+                messages.info(request, "No logged sessions yet.")
+                return redirect("meso:roster")
+            return redirect("meso:results_session", session_id=session.pk)
+        return super().get(request, *args, **kwargs)
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        session = _coach_session_or_404(self.request.user, kwargs["session_id"])
         ctx["active"] = "roster"
-        ctx["summary"] = mockdata.RESULTS_SUMMARY
-        ctx["rows"] = mockdata.RESULTS_ROWS
-        ctx["athlete"] = mockdata.athlete_by_slug(mockdata.RESULTS_SUMMARY["athlete"])
+        ctx.update(presenters.session_results(session))
         return ctx

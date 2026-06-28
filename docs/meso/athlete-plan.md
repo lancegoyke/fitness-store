@@ -1,10 +1,10 @@
 # Meso — athlete-facing slice plan
 
 **Status:** Phase 1 done & merged (PR #288, squash `42bb805`; deployed to
-Hetzner — no migration). **Phase 2 (session logging) built** on branch
-`meso-athlete-phase2` (+33 tests, 272 meso / 412 project-wide; ruff clean; no
-migration; local Codex review clean — 0 blocking across 5 rounds, one
-`unique(session, athlete)` nit declined by design, see Phase 2 note) ·
+Hetzner — no migration). Phase 2 (session logging) done & merged (PR #290, squash
+`31d2913`; no migration). **Phase 3 (results feed back) built** on branch
+`meso-athlete-phase3` (+27 tests, 297 meso / 437 project-wide; ruff clean; no
+migration; `mockdata.py` deleted — every coach-side screen is now DB-backed) ·
 created 2026-06-27
 **Companion to:** [`decisions.md`](./decisions.md) (B2, S3, S7, N1/D-a/D-b) ·
 [`persistence-plan.md`](./persistence-plan.md) · [`agent-plan.md`](./agent-plan.md)
@@ -170,13 +170,38 @@ grounding; the sequential re-save path stays idempotent and a concurrent
 double-submit at worst adds one history row, not corruption. **Deferred:**
 results-feedback (Phase 3), PWA + notifications (Phase 4).
 
-**Phase 3 — Results feed back (close the loop).**
+**Phase 3 — Results feed back (close the loop). ✅ Built (2026-06-27, branch `meso-athlete-phase3`; no migration).**
 Retire `mockdata.RESULTS_*`: the coach's results screen reads real
 `SessionLog`/`LoggedSet` against the prescribed targets (completion, RPE vs
-target, flags), and the designer's `last`/`adj` fields light up from logs. The
+target, flags), and the designer's `last` field lights up from logs. The
 agent already consumes `recent_logs`; this surfaces the same truth to the coach.
 *Done when:* a logged session drives a real results screen and the designer's
 "last time" column, with no fixtures left on the coach side.
+
+*Built:* the designer's **"last time" column** — `serializers.last_logged_labels`
+maps each rendered prescription to a compact summary of the athlete's most recent
+logged sets for that lift (matched by exercise identity — catalog FK, else
+case-folded name — so a prior week's "Box Squat" surfaces against the current
+week's), threaded into `serialize_plan` as a per-exercise `last` (e.g.
+`4×6 · 70kg · RPE8.5`); one query over the plan's logged sets, absent when the
+lift was never logged (the no-log round-trip still holds). The **results screen**
+is now session-bound (`results/<session_id>/`, coach-scoped via
+`_coach_session_or_404`; the bare `results/` redirects to the coach's
+most-recently-logged session, else the roster — mirroring designer/deliver).
+`presenters.session_results` scores the athlete's most recent `SessionLog`
+against the prescribed grid: per-exercise target/logged/RPE rows (reps grouped,
+load suffixed, the hardest set's RPE; `rpe_state` lights "over" on any overshoot),
+plus completion %, mean RPE-vs-target, and the **flags** worth acting on (an RPE
+overshoot ≥ 1.0); an unlogged session renders an honest awaiting state, not
+invented numbers. **`mockdata.py` is deleted** — its `RESULTS_*` were its last
+users, so every coach-side screen is DB-backed now. `seed_meso_demo` delivers +
+logs Maya's current-week "Lower" session so the deployed demo's results screen
+and designer `last` column light up off real rows. Built red→green: **+27 tests**
+(`test_results.py` — scoping, bare redirect, the metrics, the awaiting state;
+`test_serializers.py::TestLastLoggedColumn`; `test_seed_demo.py` — the demo log
+drives results + the `last` column). 297 meso / 437 project-wide pass, ruff clean,
+**no migration**. **Deferred:** the group-only `adj` overlay rides with groups
+(S1, out of scope); PWA + notifications (Phase 4).
 
 **Phase 4 — PWA + delivery notifications (S3 / S7).**
 A web-app manifest + service worker (installable, offline-tolerant logging), and

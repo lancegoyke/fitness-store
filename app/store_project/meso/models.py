@@ -1,8 +1,9 @@
 """Tenancy, roles, and the coach↔athlete relationship spine for Meso.
 
 This is the first real (DB-backed) slice of the Meso program designer, which
-until now ran entirely on the fixtures in ``mockdata.py``. See
-``docs/meso/persistence-plan.md`` (Phase 1) and ``docs/meso/decisions.md``.
+once ran entirely on a fixtures module (since retired now every screen is
+DB-backed). See ``docs/meso/persistence-plan.md`` (Phase 1) and
+``docs/meso/decisions.md``.
 
 Multi-coach SaaS (B1): every coach is an account, athletes are Users who log in
 (B2), and the link between them is a many-to-many, athlete-consented

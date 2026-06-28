@@ -15,15 +15,19 @@ database renders the roster, athlete profile, and designer from actual data:
 
 The command is **idempotent**: re-running ``get_or_create``s every row, so it
 never duplicates. ``--delete`` tears the demo back down (the demo athletes and,
-by cascade, their links and plans) for a clean re-seed. The review and results
-screens stay on ``mockdata.py`` until their own slices.
+by cascade, their links and plans) for a clean re-seed. Maya's current-week
+"Lower" session is delivered and **logged** so the coach's results screen and
+the designer's "last time" column light up off real data (athlete slice Phase
+3); the review screen renders real agent batches once a proposal is run.
 """
 
 from datetime import date
+from datetime import timedelta
 
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandParser
 from django.db import transaction
+from django.utils import timezone
 from django.utils.crypto import get_random_string
 
 from store_project.meso.models import AthleteProfile
@@ -31,9 +35,11 @@ from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import Contraindication
 from store_project.meso.models import ExercisePrescription
+from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import Plan
 from store_project.meso.models import Session
+from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
 from store_project.meso.models import Week
 from store_project.users.models import User
@@ -293,6 +299,30 @@ SAMPLE_PLAN = {
     ],
 }
 
+# Maya's logged "Lower" session (the current week, Day 1) — the first real logged
+# rows on the demo. Worked mostly to target, with the Box Squat top set running
+# hot and the last leg-curl set falling short, so the results screen shows a real
+# completion %, an RPE-over flag, and a shortfall note. ``(reps, load, rpe)`` per
+# set, keyed by the prescription's name.
+SAMPLE_LOG = {
+    "mesocycle": "Hypertrophy",
+    "week_index": 2,
+    "day_number": 1,
+    "logged_days_ago": 2,
+    "sets": {
+        "Box Squat (to parallel)": [
+            ("6", "70", "7"),
+            ("6", "70", "7"),
+            ("6", "70", "7"),
+            ("6", "70", "8.5"),
+        ],
+        "Bulgarian Split Squat (DB)": [("10", "18", "7")] * 3,
+        "Leg Press (controlled ROM)": [("12", "110", "8")] * 3,
+        "Seated Leg Curl": [("12", "41", "8"), ("12", "41", "8"), ("9", "41", "8.5")],
+        "Standing Calf Raise": [("15", "60", "")] * 4,
+    },
+}
+
 
 def _months_before(today, months):
     """The date ``months`` whole months before ``today`` (day clamped to ≤28)."""
@@ -335,12 +365,13 @@ class Command(BaseCommand):
             athlete = self._ensure_athlete(spec, today)
             self._ensure_link(coach, athlete)
             if spec["slug"] == "maya":
-                self._ensure_plan(coach, athlete)
+                plan = self._ensure_plan(coach, athlete)
+                self._ensure_log(athlete, plan, today)
 
         self.stdout.write(
             self.style.SUCCESS(
                 f"✓ Meso demo seeded for {coach.email}: "
-                f"{len(ATHLETES)} athletes, 1 sample plan."
+                f"{len(ATHLETES)} athletes, 1 sample plan, 1 logged session."
             )
         )
 
@@ -493,3 +524,69 @@ class Command(BaseCommand):
                         )
         self.stdout.write(f"  - built sample plan '{plan.title}' for {athlete.name}")
         return plan
+
+    # -- the sample logged session ----------------------------------------
+
+    def _ensure_log(self, athlete, plan, today):
+        """Deliver + log Maya's current-week "Lower" session (the first real log).
+
+        Idempotent: the week is delivered once (the visibility gate the real
+        logging flow requires), and the ``SessionLog`` + ``LoggedSet`` rows are
+        created only if absent, so a reseed never duplicates or clobbers a hand-
+        edited log. Returns None if the plan's hierarchy isn't present.
+        """
+        session = (
+            Session.objects.filter(
+                week__mesocycle__plan=plan,
+                week__mesocycle__name=SAMPLE_LOG["mesocycle"],
+                week__index=SAMPLE_LOG["week_index"],
+                day_number=SAMPLE_LOG["day_number"],
+            )
+            .select_related("week")
+            .first()
+        )
+        if session is None:
+            return None
+
+        week = session.week
+        if week.delivered_at is None:
+            week.delivered_at = timezone.now()
+            week.save(update_fields=["delivered_at"])
+
+        log, created = SessionLog.objects.get_or_create(
+            session=session,
+            athlete=athlete,
+            defaults={
+                "status": SessionLog.Status.DONE,
+                "date": today - timedelta(days=SAMPLE_LOG["logged_days_ago"]),
+            },
+        )
+        if not created and log.sets.exists():
+            self.stdout.write("  - sample logged session present; left intact")
+            return log
+
+        log.sets.all().delete()
+        prescriptions = {
+            p.name: p for p in ExercisePrescription.objects.filter(session=session)
+        }
+        rows = []
+        for name, sets in SAMPLE_LOG["sets"].items():
+            prescription = prescriptions.get(name)
+            if prescription is None:
+                continue
+            for set_number, (reps, load, rpe) in enumerate(sets, start=1):
+                rows.append(
+                    LoggedSet(
+                        session_log=log,
+                        prescription=prescription,
+                        set_number=set_number,
+                        reps=reps,
+                        load=load,
+                        rpe=rpe,
+                    )
+                )
+        LoggedSet.objects.bulk_create(rows)
+        self.stdout.write(
+            f"  - logged sample session '{session.name}' for {athlete.name}"
+        )
+        return log

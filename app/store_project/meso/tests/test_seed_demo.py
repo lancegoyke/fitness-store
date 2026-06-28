@@ -21,9 +21,12 @@ from store_project.meso.models import AthleteProfile
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import Contraindication
+from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import Plan
 from store_project.meso.models import Session
+from store_project.meso.models import SessionLog
+from store_project.meso.presenters import session_results
 from store_project.meso.serializers import serialize_plan
 from store_project.users.models import User
 
@@ -118,6 +121,61 @@ class TestSamplePlanRoundTrips:
         box_squat = lower["exercises"][0]
         assert box_squat["name"] == "Box Squat (to parallel)"
         assert box_squat["tag"] == "knee-safe"
+
+
+class TestSeedLogsASession:
+    """Maya's current-week "Lower" session is delivered + logged (Phase 3).
+
+    The demo's first real logged rows — so the coach's results screen and the
+    designer's "last time" column render off actual data, not fixtures.
+    """
+
+    def _lower_session(self):
+        coach = User.objects.get(email=COACH_EMAIL)
+        plan = Plan.objects.for_coach(coach).get()
+        return Session.objects.get(
+            week__mesocycle__plan=plan,
+            week__mesocycle__name="Hypertrophy",
+            week__index=2,
+            day_number=1,
+        )
+
+    def test_delivers_and_logs_the_lower_session(self):
+        seed()
+        session = self._lower_session()
+        assert session.week.delivered_at is not None  # visibility gate stamped
+        maya = User.objects.get(email="maya.okonkwo@example.com")
+        log = SessionLog.objects.get(session=session, athlete=maya)
+        assert log.status == SessionLog.Status.DONE
+        assert log.sets.count() == 17  # 4 + 3 + 3 + 3 + 4
+
+    def test_log_drives_the_results_screen(self):
+        seed()
+        ctx = session_results(self._lower_session())
+        assert ctx["summary"]["logged_state"] is True
+        assert ctx["summary"]["completion"] == 100
+        # Box Squat's top set ran hot → a real flag the coach can act on.
+        assert ctx["summary"]["flag_count"] == 1
+        assert "Box Squat" in ctx["summary"]["flag"]
+        # The leg curl's last set fell short on reps (12, 12, 9 vs 3×12).
+        rows = {r["name"]: r for r in ctx["rows"]}
+        assert rows["Seated Leg Curl"]["note"] == "missed 3 reps on set 3"
+
+    def test_log_lights_the_designer_last_column(self):
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        plan = Plan.objects.for_coach(coach).get()
+        lower = next(s for s in serialize_plan(plan)["program"] if s["name"] == "Lower")
+        box_squat = lower["exercises"][0]
+        assert box_squat["last"] == "4×6 · 70kg · RPE8.5"
+
+    def test_reseed_does_not_duplicate_the_log(self):
+        seed()
+        seed()
+        session = self._lower_session()
+        maya = User.objects.get(email="maya.okonkwo@example.com")
+        assert SessionLog.objects.filter(session=session, athlete=maya).count() == 1
+        assert LoggedSet.objects.filter(session_log__session=session).count() == 17
 
 
 class TestIdempotent:
