@@ -70,9 +70,9 @@ agent, and athlete slices.
   `PrescriptionOverride` per member (load %, swap, volume), effective-program resolution
   (`shared + overrides`), the designer's "Shared program · per-athlete auto-adjusts" row +
   per-row `adj` badge driven by real diffs.
-- **Phase 4 — deliver to all members.** Delivering a group week fans out a per-athlete
-  delivered snapshot (each member's *resolved* program), reusing the athlete surface + the
-  delivery email/push from the athlete slice.
+- **Phase 4 — deliver to all members (built; this PR).** Delivering a group week fans out a
+  per-athlete delivered snapshot (each member's *resolved* program), reusing the athlete
+  surface + the delivery email/push from the athlete slice.
 
 ## Phase 1 — build notes
 
@@ -273,3 +273,79 @@ agent, and athlete slices.
 - The endpoint: a coach sets / clears; 403 foreign coach; 400 individual plan / non-member
   athlete / bad `load_pct`; 404 foreign prescription; 405 GET; redirect when anonymous.
 - Seed (`test_seed_demo.py`): the demo group gets per-athlete overrides, not duplicated on reseed.
+
+## Phase 4 — build notes
+
+- **The fan-out modeling — a per-member *materialized* individual plan.** The athlete surface
+  (`/meso/me/`, the session logger) only ever reads **individual** plans' live delivered weeks
+  (`Plan.objects.for_athlete` is individual-only; a group plan never reaches an athlete). So
+  delivering a group week can't just stamp the shared plan — each member needs their *resolved*
+  program (shared template **+** their override diffs) as live rows in an individual plan they
+  own. Phase 4 **materializes** that: per active member, a `Plan` rooted at their `CoachAthlete`
+  relationship whose current week mirrors the group's delivered week with `resolve_prescription`
+  applied. The athlete then sees it through the exact same surface + delivery email/push the
+  individual slice already built — no athlete-side change at all.
+- **`Plan.source_group` — provenance, distinct from the root.** A new nullable FK records *which
+  group a materialized individual plan was fanned out from*. It is **orthogonal** to the
+  `relationship`-XOR-`group` root constraint (a materialized plan is rooted at a `relationship`
+  like any individual plan; `source_group` is just where it came from). A partial
+  `unique(relationship, source_group)` constraint (where `source_group` is set) makes the per-
+  member plan a singleton — re-delivery refreshes the *same* plan, never spawns a second.
+  Migration `meso.0010`.
+- **Coach surfaces never see a materialized plan.** A materialized plan is rooted at the coach's
+  own relationship, so without guarding it would leak into the coach's individual designer /
+  deliver / results flows (and the bare-URL "working plan"). `PlanQuerySet.for_coach` and
+  `editable_by` now both exclude `source_group`-rooted plans (`source_group__isnull=True`), so the
+  coach manages the group *only* through the shared program; the derived snapshots are
+  **athlete-facing only**. `for_athlete` is deliberately left unfiltered — the materialized plan
+  is exactly what the athlete should see.
+- **Materialization + re-delivery (log-preserving).** `GroupMembership.sync_delivered_plan(group_week)`
+  get-or-creates the member's materialized plan and **syncs its current week in place** to the
+  resolved group week: sessions matched by `day_number`, prescriptions by `order` (both via
+  `update_or_create`, so a surviving row — and its `SessionLog`/`LoggedSet` — is *updated*, not
+  recreated); sessions/prescriptions dropped from the shared program are deleted (a removed lift's
+  logged sets `SET_NULL` off, a removed day's `SessionLog` cascades). Re-delivery therefore
+  **propagates override/program edits** to the athlete while **preserving their logged work** for
+  unchanged rows — the same "contents stay live" contract the individual flow has.
+- **The fan-out.** `MesoGroup.deliver_current_week()` resolves the shared plan + its current week,
+  then for each **active** membership (`active_memberships()`) syncs + stamps the member week
+  (`delivered_at`) + writes a per-member `WeekDelivery` snapshot; it also stamps the shared (group)
+  week as the coach-side record. Raises `InvalidTransition` when there's nothing to deliver (no
+  shared plan / no week / no members). Returns `(now, [(member_plan, member_week), …])` so the
+  caller notifies each athlete. No `request`/notify in the model layer (the seed reuses it).
+- **Endpoints.** `plan_deliver` is now group-aware: for a group plan it runs the fan-out (was a
+  Phase-2a `400` placeholder) and returns `201 {members, delivered_at}`; per-athlete email + push
+  fire on `transaction.on_commit`, each best-effort, exactly as the individual deliver. The
+  coach-facing entry is `group_deliver` (POST `/meso/group/<id>/deliver/`) — a plain form POST from
+  the group-detail page's *Deliver this week to all N members* button; coach-scoped (foreign → 404),
+  requires a shared program + members (else a flashed error), lands back on group detail with a
+  success message. Both share `_fan_out_group_delivery` (maps `InvalidTransition` → the human
+  message).
+- **Seed.** The demo group's shared week is delivered once (idempotent — skipped when already
+  stamped), so a fresh DB gives the three demo members a materialized, *resolved* delivered plan
+  (Devon's −10% load, Priya's Box Squat swap, Marcus's volume tweak all visible on their athlete
+  surface).
+
+## Tests (Phase 4)
+
+`meso/tests/test_group_deliver.py` — model fan-out + scoping + the endpoints:
+
+- `sync_delivered_plan` materializes one plan per member (rooted at their relationship, tagged
+  `source_group`), with the resolved week (a swap / load % / volume applied per member, the base
+  for an un-adjusted member); re-running updates the *same* plan (no duplicate) and **preserves a
+  `SessionLog`** logged between deliveries while **propagating an override change**; a prescription
+  dropped from the shared program drops from the member week.
+- `deliver_current_week` stamps each member week + the group week, writes per-member snapshots, and
+  raises `InvalidTransition` for no shared plan / no week / no members.
+- `for_coach` / `editable_by` exclude a materialized plan; `for_athlete` includes it; the member
+  reaches the delivered session through the unchanged athlete surface (`/meso/me/` shows it, the
+  session logger opens it).
+- `plan_deliver` on a group plan fans out (`201`, `members` count), notifies each member once
+  (email, with `django_capture_on_commit_callbacks`), and `400`s with no members / no week; a
+  non-owner is `403`.
+- `group_deliver`: a coach delivers from group detail (`302` back, members get plans, success
+  message); a group with no shared program flashes an error and delivers nothing; foreign group →
+  `404`; GET → `405`; anonymous → login redirect. The group-detail page renders the deliver button
+  only with a shared program + members.
+- Seed (`test_seed_demo.py`): the demo group's members get a materialized delivered plan, not
+  duplicated on reseed.

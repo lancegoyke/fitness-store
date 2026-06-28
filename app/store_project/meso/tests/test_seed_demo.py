@@ -28,6 +28,8 @@ from store_project.meso.models import Plan
 from store_project.meso.models import PrescriptionOverride
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
+from store_project.meso.models import Week
+from store_project.meso.models import WeekDelivery
 from store_project.meso.presenters import session_results
 from store_project.meso.serializers import serialize_plan
 from store_project.users.models import User
@@ -150,6 +152,34 @@ class TestSeedCreatesGroup:
             == count
         )
 
+    def test_delivers_a_materialized_plan_to_each_member(self):
+        # Groups Phase 4: the demo group's shared week is delivered, so each member
+        # gets a resolved, delivered individual plan on their own athlete surface.
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        group = MesoGroup.objects.for_coach(coach).get()
+        materialized = Plan.objects.filter(source_group=group)
+        assert materialized.count() == 3
+        for plan in materialized:
+            assert Week.objects.filter(
+                mesocycle__plan=plan, delivered_at__isnull=False
+            ).exists()
+
+    def test_reseed_does_not_redeliver(self):
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        group = MesoGroup.objects.for_coach(coach).get()
+        deliveries = WeekDelivery.objects.filter(
+            week__mesocycle__plan__source_group=group
+        ).count()
+        seed()
+        assert (
+            WeekDelivery.objects.filter(
+                week__mesocycle__plan__source_group=group
+            ).count()
+            == deliveries
+        )
+
 
 class TestSamplePlanRoundTrips:
     def test_serializes_to_designer_shape(self):
@@ -241,8 +271,12 @@ class TestIdempotent:
         assert User.objects.filter(email__in=ATHLETE_EMAILS).count() == 5
         assert CoachAthlete.objects.for_coach(coach).count() == 5
         assert Plan.objects.for_coach(coach).count() == 1
-        # Children are not re-created on a second run.
-        assert Mesocycle.objects.filter(plan__relationship__coach=coach).count() == 4
+        # Children are not re-created on a second run (the individual sample plan;
+        # ``for_coach`` excludes the group-delivery snapshots seeded in Phase 4).
+        assert (
+            Mesocycle.objects.filter(plan__in=Plan.objects.for_coach(coach)).count()
+            == 4
+        )
         maya = User.objects.get(email="maya.okonkwo@example.com")
         assert maya.contraindications.count() == 2
         # One group with its three members, not duplicated.
@@ -283,7 +317,9 @@ class TestReseedReconciles:
     def test_restores_an_archived_sample_plan(self):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
-        plan = Plan.objects.filter(relationship__coach=coach).get()
+        # The individual sample plan — ``for_coach`` excludes the group-delivery
+        # snapshots seeded in Phase 4 (which also hang off the coach's links).
+        plan = Plan.objects.for_coach(coach).get()
         plan.status = Plan.Status.ARCHIVED
         plan.save(update_fields=["status"])
 
@@ -296,7 +332,7 @@ class TestReseedReconciles:
     def test_rebuilds_a_plan_missing_its_hierarchy(self):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
-        plan = Plan.objects.filter(relationship__coach=coach).get()
+        plan = Plan.objects.for_coach(coach).get()  # the individual sample plan
         plan.mesocycles.all().delete()  # stale plan row with no children
         assert plan.mesocycles.count() == 0
 

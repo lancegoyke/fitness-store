@@ -330,8 +330,10 @@ class TestGroupPlanEndpoints:
         )
         assert resp.status_code == 403
 
-    def test_deliver_rejects_group_plan(self, client):
-        # Deliver-to-all is Phase 4; a group plan has no single athlete to notify.
+    def test_deliver_group_without_members_400(self, client):
+        # Deliver-to-all (Phase 4) fans out to active members; a group with none
+        # is a 400 (delivering to nobody is a coach mistake, not a silent no-op).
+        # The full fan-out is covered in ``test_group_deliver.py``.
         coach = UserFactory()
         group = MesoGroupFactory(coach=coach)
         plan = group.create_shared_plan()
