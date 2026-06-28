@@ -2,10 +2,11 @@
 
 **Status:** Phase 1 done & merged (PR #288, squash `42bb805`; deployed to
 Hetzner — no migration). Phase 2 (session logging) done & merged (PR #290, squash
-`31d2913`; no migration). **Phase 3 (results feed back) built** on branch
-`meso-athlete-phase3` (+27 tests, 297 meso / 437 project-wide; ruff clean; no
-migration; `mockdata.py` deleted — every coach-side screen is now DB-backed) ·
-created 2026-06-27
+`31d2913`; no migration). **Phase 3 (results feed back) done & merged** (PR #291,
+squash `b8f0966`; 2026-06-28; Django CI green, deployed to Hetzner — no migration;
++31 tests, 302 meso / 441 project-wide; ruff clean; `mockdata.py` deleted — every
+coach-side screen is DB-backed now; local Codex review 0 blocking across 3 rounds
+→ CLEAN, 4 nits fixed) · created 2026-06-27
 **Companion to:** [`decisions.md`](./decisions.md) (B2, S3, S7, N1/D-a/D-b) ·
 [`persistence-plan.md`](./persistence-plan.md) · [`agent-plan.md`](./agent-plan.md)
 **Goal of this slice:** give the **athlete** a real, logged-in surface — see the
@@ -170,7 +171,7 @@ grounding; the sequential re-save path stays idempotent and a concurrent
 double-submit at worst adds one history row, not corruption. **Deferred:**
 results-feedback (Phase 3), PWA + notifications (Phase 4).
 
-**Phase 3 — Results feed back (close the loop). ✅ Built (2026-06-27, branch `meso-athlete-phase3`; no migration).**
+**Phase 3 — Results feed back (close the loop). ✅ Done & merged (2026-06-28, PR #291, squash `b8f0966`; Django CI green, deployed to Hetzner — no migration).**
 Retire `mockdata.RESULTS_*`: the coach's results screen reads real
 `SessionLog`/`LoggedSet` against the prescribed targets (completion, RPE vs
 target, flags), and the designer's `last` field lights up from logs. The
@@ -196,12 +197,18 @@ overshoot ≥ 1.0); an unlogged session renders an honest awaiting state, not
 invented numbers. **`mockdata.py` is deleted** — its `RESULTS_*` were its last
 users, so every coach-side screen is DB-backed now. `seed_meso_demo` delivers +
 logs Maya's current-week "Lower" session so the deployed demo's results screen
-and designer `last` column light up off real rows. Built red→green: **+27 tests**
-(`test_results.py` — scoping, bare redirect, the metrics, the awaiting state;
-`test_serializers.py::TestLastLoggedColumn`; `test_seed_demo.py` — the demo log
-drives results + the `last` column). 297 meso / 437 project-wide pass, ruff clean,
-**no migration**. **Deferred:** the group-only `adj` overlay rides with groups
-(S1, out of scope); PWA + notifications (Phase 4).
+and designer `last` column light up off real rows. Built red→green: **+31 tests**
+(`test_results.py` — scoping, bare redirect, the metrics, pending-draft/awaiting
+states, rep-shortfall, free-form completion; `test_serializers.py::TestLastLoggedColumn`;
+`test_seed_demo.py` — the demo log drives results + the `last` column). 302 meso /
+441 project-wide pass, ruff clean, **no migration**. **Local Codex review: 0
+blocking across 3 rounds → CLEAN.** Four nits fixed: a pending "Save progress"
+draft is excluded from both the results screen and the `last` column (a partial
+session isn't completed feedback); completion falls back to the logged count for
+a free-form set cell ("AMRAP") so it can't divide by zero; and results notes catch
+a **rep** shortfall (a 3×12 logged as 12,12,9), not just a missing-set one. None
+declined. **Deferred:** the group-only `adj` overlay rides with groups (S1, out of
+scope); PWA + notifications (Phase 4).
 
 **Phase 4 — PWA + delivery notifications (S3 / S7).**
 A web-app manifest + service worker (installable, offline-tolerant logging), and
