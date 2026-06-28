@@ -1,6 +1,12 @@
 {% extends "meso/_meso_base.html" %}
+{% load static %}
 
 {% block title %}{{ session.name }} · Meso{% endblock %}
+
+{% block head_extra %}
+  <script defer src="{% static 'js/meso_athlete.js' %}"></script>
+  <script defer src="{% static 'js/alpine.min.js' %}"></script>
+{% endblock %}
 
 {% block navlinks %}
   <a class="meso-navlink {% if active == 'training' %}is-active{% endif %}" href="{% url 'meso:athlete_home' %}">Training</a>
@@ -11,7 +17,9 @@
 {% endblock %}
 
 {% block content %}
-  <div class="meso-page">
+  {{ log_data|json_script:"meso-log-data" }}
+  <span id="meso-csrf" data-token="{{ csrf_token }}" hidden></span>
+  <div class="meso-page" x-data="logger()">
     <div class="meso-crumbs">
       <a href="{% url 'meso:athlete_home' %}">Training</a> <span>/</span>
       <span>{{ session.block }} · {{ session.week }}</span> <span>/</span> <span>{{ session.name }}</span>
@@ -24,36 +32,48 @@
         <p class="meso-sub">{{ session.plan_title }}</p>
       </div>
       <div class="meso-spacer"></div>
-      {% if session.status == 'done' %}
-        <span class="meso-badge meso-badge--ok">{{ session.status_label }}</span>
-      {% else %}
-        <span class="meso-badge">{{ session.status_label }}</span>
-      {% endif %}
+      <span class="meso-badge" :class="status === 'done' ? 'meso-badge--ok' : ''" x-text="status === 'done' ? 'Logged' : 'To do'">{{ session.status_label }}</span>
     </div>
 
-    <div class="meso-card">
-      <div style="display:grid;grid-template-columns:minmax(0,2fr) 48px 64px minmax(0,1fr) 48px;gap:10px;padding:9px 18px;background:var(--rail);border-bottom:1px solid var(--line-2);font-size:10px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--dim);">
-        <div>Exercise</div><div style="text-align:center;">Sets</div><div style="text-align:center;">Reps</div><div>Load</div><div style="text-align:center;">RPE</div>
-      </div>
-      {% for e in session.exercises %}
-        <div style="display:grid;grid-template-columns:minmax(0,2fr) 48px 64px minmax(0,1fr) 48px;gap:10px;padding:11px 18px;border-bottom:1px solid var(--line-2);align-items:center;">
-          <div style="font-size:13.5px;font-weight:600;letter-spacing:-0.01em;min-width:0;">
-            {{ e.name }}
-            {% if e.tag %}<span class="meso-badge meso-badge--ok" style="margin-left:6px;">{{ e.tag }}</span>{% endif %}
-            {% if e.note %}<div class="meso-row-meta">{{ e.note }}</div>{% endif %}
-          </div>
-          <div class="meso-mono" style="text-align:center;font-size:12px;">{{ e.sets|default:"—" }}</div>
-          <div class="meso-mono" style="text-align:center;font-size:12px;">{{ e.reps|default:"—" }}</div>
-          <div class="meso-mono" style="font-size:12px;">{{ e.load|default:"—" }}</div>
-          <div class="meso-mono" style="text-align:center;font-size:12px;">{{ e.rpe|default:"—" }}</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      <span class="meso-mono" style="font-size:12px;font-weight:700;color:var(--ink);" x-text="doneSets + '/' + totalSets"></span>
+      <span class="meso-row-meta">sets logged — fill in what you did, then log the session.</span>
+    </div>
+
+    <template x-for="ex in exercises" :key="ex.id">
+      <div class="meso-card" style="margin-bottom:12px;overflow:hidden;">
+        <div style="padding:11px 16px 9px;border-bottom:1px solid var(--line-2);">
+          <div style="font-size:14px;font-weight:700;letter-spacing:-0.01em;" x-text="ex.name"></div>
+          <div class="meso-row-meta meso-mono">target <span x-text="ex.target"></span><template x-if="ex.note"><span> · <span x-text="ex.note"></span></span></template></div>
         </div>
-      {% endfor %}
-    </div>
+        <template x-for="r in ex.set_rows" :key="r.set_number">
+          <div style="display:flex;align-items:center;gap:9px;padding:9px 16px;border-bottom:1px solid var(--line-2);">
+            <div class="meso-mono" style="width:42px;font-size:11px;font-weight:700;color:var(--dim);">Set <span x-text="r.set_number"></span></div>
+            <input class="meso-phone-input" x-model="r.reps" placeholder="reps" inputmode="numeric"
+                   style="width:52px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 4px;outline:none;color:var(--ink);" />
+            <span style="font-size:11px;color:var(--dim);">&#215;</span>
+            <input class="meso-phone-input" x-model="r.load" placeholder="load" inputmode="decimal"
+                   style="width:60px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 4px;outline:none;color:var(--ink);" />
+            <input class="meso-phone-input" x-model="r.rpe" placeholder="rpe" inputmode="decimal"
+                   style="width:48px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 4px;outline:none;color:var(--ink);" />
+            <div class="meso-spacer"></div>
+            <button type="button" @click="toggle(r)" :aria-pressed="r.done" aria-label="Mark set done"
+                    style="appearance:none;border:0;background:none;cursor:pointer;padding:0;flex:0 0 auto;">
+              <template x-if="r.done"><div style="width:26px;height:26px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:var(--accent-ink);font-size:13px;">&#10003;</div></template>
+              <template x-if="!r.done"><div style="width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line);background:var(--surface);"></div></template>
+            </button>
+          </div>
+        </template>
+      </div>
+    </template>
 
-    <div style="display:flex;align-items:center;gap:12px;margin-top:16px;">
-      <a class="meso-btn" href="{% url 'meso:athlete_home' %}">← Back to training</a>
+    <div style="display:flex;align-items:center;gap:12px;margin-top:16px;flex-wrap:wrap;">
+      <a class="meso-btn" href="{% url 'meso:athlete_home' %}">&#8592; Back to training</a>
       <div class="meso-spacer"></div>
-      <span class="meso-row-meta">Logging arrives next — for now this is your delivered plan.</span>
+      <span class="meso-row-meta" style="color:var(--ok);" x-show="saved" x-cloak>Saved &#10003;</span>
+      <span class="meso-row-meta" style="color:var(--warn);" x-show="error" x-cloak>Couldn&#8217;t save — try again.</span>
+      <button type="button" class="meso-btn" @click="save(false)" :disabled="saving">Save progress</button>
+      <button type="button" class="meso-btn meso-btn--primary" @click="save(true)" :disabled="saving" x-text="saving ? 'Saving…' : 'Log session'">Log session</button>
     </div>
   </div>
 {% endblock %}
