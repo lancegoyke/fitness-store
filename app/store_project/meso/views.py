@@ -264,16 +264,20 @@ def athlete_log_session(request, pk):
     if status not in (SessionLog.Status.PENDING, SessionLog.Status.DONE):
         return HttpResponseBadRequest("status must be 'pending' or 'done'.")
 
+    # An explicit date is honored; a missing one defaults to today only when
+    # *creating* the log — re-saving an existing log without a date keeps its
+    # original date so editing a set days later doesn't move the workout (which
+    # would reorder recent-log grounding). ``explicit_date`` is None when none
+    # was sent.
     raw_date = payload.get("date")
-    if raw_date in (None, ""):
-        log_date = timezone.localdate()
-    elif isinstance(raw_date, str):
+    explicit_date = None
+    if raw_date not in (None, ""):
+        if not isinstance(raw_date, str):
+            return HttpResponseBadRequest("date must be an ISO date string.")
         try:
-            log_date = datetime.date.fromisoformat(raw_date)
+            explicit_date = datetime.date.fromisoformat(raw_date)
         except ValueError:
             return HttpResponseBadRequest("date must be an ISO date (YYYY-MM-DD).")
-    else:
-        return HttpResponseBadRequest("date must be an ISO date string.")
 
     notes = payload.get("notes", "")
     if not isinstance(notes, str):
@@ -292,7 +296,11 @@ def athlete_log_session(request, pk):
         if log is None:
             log = SessionLog(session=session, athlete=request.user)
         log.status = status
-        log.date = log_date
+        if explicit_date is not None:
+            log.date = explicit_date
+        elif log.date is None:  # first save (or a log never dated) → stamp today
+            log.date = timezone.localdate()
+        # else: a re-save with no date keeps the existing workout date.
         log.notes = notes
         log.save()
         log.sets.all().delete()

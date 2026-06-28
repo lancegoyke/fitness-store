@@ -276,6 +276,28 @@ class TestLogWrite:
         log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
         assert log.date == datetime.date(2026, 6, 20)
 
+    def test_relog_without_date_keeps_original_date(self, client):
+        """Editing a set later (no date sent) must not move the workout to today."""
+        s = seed()
+        client.force_login(s.athlete)
+        # Logged as having trained on the 20th...
+        post(
+            client,
+            s.session,
+            {
+                "date": "2026-06-20",
+                "sets": [{"prescription": s.squat.pk, "set_number": 1, "reps": "6"}],
+            },
+        )
+        # ...then a later edit that omits the date entirely.
+        post(
+            client,
+            s.session,
+            {"sets": [{"prescription": s.squat.pk, "set_number": 1, "reps": "5"}]},
+        )
+        log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
+        assert log.date == datetime.date(2026, 6, 20)  # not today
+
     def test_saves_notes(self, client):
         s = seed()
         client.force_login(s.athlete)
