@@ -287,3 +287,6 @@ _(Append dated entries here as decisions land.)_
   red→green: +20 tests (239 meso / 379 project-wide); local Codex review clean (1 round). Resume point →
   athlete Phase 2 (session logging — the write path that produces the rows `serialize_recent_logs` grounds
   the agent on).
+- 2026-06-27 — **Athlete Phase 1 merged & deployed** (PR #288, squash `42bb805`; Django CI green, deployed
+  to Hetzner — **no migration**; `/meso/me/` + `/meso/me/session/<id>/` live and login-gated in prod). The
+  athlete read surface is live. Resume point → **athlete Phase 2** (session logging — the write path).
