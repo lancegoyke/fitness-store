@@ -14,6 +14,7 @@ relationship (N1). Roles are marked by the presence of a ``CoachProfile`` /
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -845,6 +846,10 @@ class MesoGroup(models.Model):
 
         A membership whose link ended is hidden here but the row survives, so
         reopening the link restores the member (read-side scoping, not deletion).
+        Scoped to *this* coach's links so a membership written outside
+        ``add_athlete`` (e.g. a raw admin inline) can never leak a foreign coach's
+        athlete onto the roster/detail page — defense in depth alongside
+        ``GroupMembership.clean``.
         """
         return [
             m.relationship.athlete
@@ -852,7 +857,10 @@ class MesoGroup(models.Model):
                 "relationship", "relationship__athlete"
             )
             .prefetch_related("relationship__athlete__contraindications")
-            .filter(relationship__status=CoachAthlete.Status.ACTIVE)
+            .filter(
+                relationship__coach=self.coach,
+                relationship__status=CoachAthlete.Status.ACTIVE,
+            )
             .order_by("relationship__athlete__name", "relationship__athlete__email")
         ]
 
@@ -886,6 +894,26 @@ class GroupMembership(models.Model):
 
     def __str__(self):
         return f"{self.relationship.athlete.display_name()} ∈ {self.group.name}"
+
+    def clean(self):
+        """A membership's relationship must belong to the group's coach.
+
+        ``add_athlete`` only ever creates same-coach memberships; this backstops
+        the admin inline (which exposes a raw ``relationship``) so a coach can't
+        attach another coach's athlete to their group.
+        """
+        if (
+            self.group_id
+            and self.relationship_id
+            and self.relationship.coach_id != self.group.coach_id
+        ):
+            raise ValidationError(
+                {
+                    "relationship": _(
+                        "The relationship must belong to the group's coach."
+                    )
+                }
+            )
 
 
 # ---------------------------------------------------------------------------

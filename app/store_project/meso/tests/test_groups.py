@@ -13,6 +13,7 @@ row (reopening the link restores them).
 """
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.urls import reverse
 
 from store_project.meso import presenters
@@ -135,6 +136,19 @@ class TestAddRemoveMember:
         with pytest.raises(Exception):
             GroupMembership.objects.create(group=group, relationship=link)
 
+    def test_clean_rejects_cross_coach_relationship(self):
+        # A relationship belonging to another coach must not be attachable to
+        # this group, even when wired directly (e.g. the admin inline).
+        group = MesoGroupFactory()
+        other_coach = UserFactory()
+        athlete = UserFactory()
+        foreign_link = CoachAthleteFactory(
+            coach=other_coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        )
+        membership = GroupMembership(group=group, relationship=foreign_link)
+        with pytest.raises(ValidationError):
+            membership.full_clean()
+
 
 class TestActiveMemberUsers:
     def test_lists_active_members(self):
@@ -163,6 +177,18 @@ class TestActiveMemberUsers:
         link.refresh_from_db()
         link.accept()
         assert [u.name for u in group.active_member_users()] == ["Dana Diaz"]
+
+    def test_excludes_cross_coach_membership_written_directly(self):
+        # Defense in depth: even a membership row bypassing add_athlete/clean
+        # (a foreign coach's active link) never leaks onto the read surface.
+        group = MesoGroupFactory()
+        other_coach = UserFactory()
+        athlete = UserFactory(name="Foreign Athlete")
+        foreign_link = CoachAthleteFactory(
+            coach=other_coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        )
+        GroupMembership.objects.create(group=group, relationship=foreign_link)
+        assert group.active_member_users() == []
 
 
 # -- presenters -------------------------------------------------------------
