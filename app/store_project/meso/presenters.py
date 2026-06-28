@@ -258,8 +258,18 @@ def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
 
 
 def _target_label(prescription):
-    """The prescribed target shown above a logger's set rows, e.g. "3 × 6"."""
-    return f"{prescription.sets or '—'} × {prescription.reps or '—'}"
+    """The prescribed target shown above a logger's set rows.
+
+    Carries the coach's full prescription — sets×reps plus load and RPE when set
+    — so the athlete sees what to aim for before entering what they did, e.g.
+    "3 × 6 · 70 · RPE 7".
+    """
+    parts = [f"{prescription.sets or '—'} × {prescription.reps or '—'}"]
+    if prescription.load:
+        parts.append(prescription.load)
+    if prescription.rpe:
+        parts.append(f"RPE {prescription.rpe}")
+    return " · ".join(parts)
 
 
 def athlete_session(session, athlete):

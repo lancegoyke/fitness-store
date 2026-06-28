@@ -416,6 +416,24 @@ class TestLogValidation:
         assert resp.status_code == 400
         assert SessionLog.objects.count() == 0
 
+    def test_duplicate_set_key_rejected(self, client):
+        """Two sets with the same (prescription, set_number) are ambiguous — 400."""
+        s = seed()
+        client.force_login(s.athlete)
+        resp = post(
+            client,
+            s.session,
+            {
+                "sets": [
+                    {"prescription": s.squat.pk, "set_number": 1, "reps": "6"},
+                    {"prescription": s.squat.pk, "set_number": 1, "reps": "5"},
+                ]
+            },
+        )
+        assert resp.status_code == 400
+        assert SessionLog.objects.count() == 0
+        assert LoggedSet.objects.count() == 0
+
 
 # -- ownership isolation ---------------------------------------------------
 
@@ -450,6 +468,19 @@ class TestLogOwnership:
         )
         mine = SessionLog.objects.get(session=s.session, athlete=s.athlete)
         assert mine.status == SessionLog.Status.DONE
+
+
+# -- the logger surfaces the prescribed target -----------------------------
+
+
+class TestLogPage:
+    def test_shows_prescribed_load_and_rpe(self, client):
+        """The athlete sees the coach's prescribed load/RPE before logging."""
+        s = seed()  # Box Squat is prescribed 3 × 6 · load 70 · RPE 7
+        client.force_login(s.athlete)
+        body = client.get(session_url(s.session)).content.decode()
+        assert "70" in body
+        assert "RPE 7" in body
 
 
 # -- closes the loop: logged rows survive reload + reach the agent ---------

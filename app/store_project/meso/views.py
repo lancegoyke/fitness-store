@@ -324,6 +324,7 @@ def _clean_logged_sets(raw_sets, session):
         return None, HttpResponseBadRequest("sets must be a list.")
     allowed_ids = {p.pk for p in session.prescriptions.all()}
     cleaned = []
+    seen = set()
     for position, raw in enumerate(raw_sets, start=1):
         if not isinstance(raw, dict):
             return None, HttpResponseBadRequest("Each set must be an object.")
@@ -346,6 +347,15 @@ def _clean_logged_sets(raw_sets, session):
             return None, HttpResponseBadRequest(
                 f"set_number must be between 1 and {MAX_LOGGED_SET_NUMBER}."
             )
+        # Each (prescription, set_number) is logged at most once — duplicates
+        # would persist as two rows that the presenter collapses on reload but
+        # the agent's grounding still double-counts, breaking idempotency.
+        key = (presc_id, set_number)
+        if key in seen:
+            return None, HttpResponseBadRequest(
+                "Duplicate set for the same prescription and set number."
+            )
+        seen.add(key)
         fields = {}
         for field, max_length in LOG_SET_FIELDS.items():
             value = raw.get(field, "")
