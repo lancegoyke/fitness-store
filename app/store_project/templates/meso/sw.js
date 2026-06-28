@@ -66,6 +66,13 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return; // leave cross-origin alone
 
   if (isNavigation(request)) {
+    // Only the athlete surface opts into the PWA. Once an athlete page registers
+    // this worker it controls the whole /meso/ scope, so coach routes
+    // (/meso/roster/, designer, …) reach here too — let them pass straight
+    // through, never cached or served offline, matching the athlete-only wiring.
+    if (!(url.pathname.startsWith(HOME_URL) || url.pathname === OFFLINE_URL)) {
+      return;
+    }
     event.respondWith(
       fetch(request)
         .then((response) => {

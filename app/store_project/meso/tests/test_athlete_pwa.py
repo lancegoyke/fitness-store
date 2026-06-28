@@ -124,6 +124,12 @@ class TestServiceWorker:
         assert settings.STATIC_URL in body
         assert "startsWith(STATIC_PREFIX)" in body
 
+    def test_navigation_cache_is_gated_to_athlete_pages(self, client):
+        # The athlete-only PWA: coach navigations (/meso/roster/, designer) pass
+        # through, only /meso/me/ pages + the offline page are cached/served.
+        body = client.get(SW).content.decode()
+        assert "startsWith(HOME_URL)" in body
+
 
 class TestOfflinePage:
     def test_renders_without_auth(self, client):
