@@ -28,6 +28,12 @@ document.addEventListener("alpine:init", () => {
     checks: {},
     exSeq: 1,
 
+    // The agent runs as a background job (Phase 4): POST kicks it off, then we
+    // poll the batch's status until it lands. `agentTyping` stays true (the
+    // "drafting…" indicator) for the whole poll.
+    pollIntervalMs: 1500,
+    pollMaxAttempts: 40,
+
     // ---- backend hydration (Phase 3) ----
     // init() flips `live` on and fills program/weeks/phases from the plan the
     // view injects. Without an injected plan nothing hydrates and no network
@@ -262,7 +268,8 @@ document.addEventListener("alpine:init", () => {
       this.sendInstruction(instruction);
     },
 
-    // POST the instruction to the agent, then render the batch (or an error).
+    // POST the instruction to kick off the background job, then poll the batch's
+    // status until it lands and render it (or an error).
     async sendInstruction(instruction) {
       if (!this.live) {
         this.pushAgent({
@@ -287,7 +294,7 @@ document.addEventListener("alpine:init", () => {
           this.pushAgent({ text: this.agentErrorText(res.status, data), error: true });
           return;
         }
-        this.pushAgent(this.batchMessage(data));
+        await this.pollBatch(data.status_url);
       } catch (err) {
         console.error("Agent request failed", err);
         this.pushAgent({
@@ -298,6 +305,62 @@ document.addEventListener("alpine:init", () => {
         this.agentTyping = false;
         this.scrollThread();
       }
+    },
+
+    // Poll the batch's status endpoint while the background job runs. Resolves
+    // (rendering the batch or an error) when the batch lands, fails, or the poll
+    // gives up — the caller clears `agentTyping` afterward.
+    async pollBatch(statusUrl) {
+      if (!statusUrl) {
+        this.pushAgent({
+          text: "The agent couldn't process that request.",
+          error: true,
+        });
+        return;
+      }
+      for (let attempt = 0; attempt < this.pollMaxAttempts; attempt++) {
+        let data;
+        try {
+          const res = await fetch(statusUrl);
+          data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            this.pushAgent({
+              text: this.agentErrorText(res.status, data),
+              error: true,
+            });
+            return;
+          }
+        } catch (err) {
+          console.error("Agent status poll failed", err);
+          this.pushAgent({
+            text: "Something went wrong reaching the agent. Please try again.",
+            error: true,
+          });
+          return;
+        }
+        if (data.status === "drafting") {
+          await this.sleep(this.pollIntervalMs);
+          continue;
+        }
+        if (data.status === "failed") {
+          this.pushAgent({
+            text: data.error || "The agent had trouble responding. Give it another try.",
+            error: true,
+          });
+          return;
+        }
+        // pending / applied / dismissed — a resolved batch.
+        this.pushAgent(this.batchMessage(data));
+        return;
+      }
+      this.pushAgent({
+        text: "The agent is taking longer than expected. Check the review screen in a moment.",
+        error: true,
+      });
+    },
+
+    sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
     },
 
     // Shape the endpoint's batch response into an agent chat message. Changes

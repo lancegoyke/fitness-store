@@ -46,11 +46,16 @@ urlpatterns = [
         views.plan_deliver,
         name="api_plan_deliver",
     ),
-    # Agent proposal engine (agent slice Phase 1).
+    # Agent proposal engine (agent slice Phase 1; async + status poll Phase 4).
     path(
         "api/plan/<int:plan_id>/agent/",
         views.agent_propose,
         name="api_plan_agent",
+    ),
+    path(
+        "api/batch/<int:batch_id>/status/",
+        views.batch_status,
+        name="api_batch_status",
     ),
     # Review gate: approve/reject + apply (agent slice Phase 2).
     path(

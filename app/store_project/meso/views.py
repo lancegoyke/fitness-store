@@ -12,12 +12,15 @@ from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.http import require_GET
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 
 from . import mockdata
 from . import presenters
 from .agent import apply as agent_apply
+from .agent import client as agent_client
+from .agent import jobs as agent_jobs
 from .agent import service as agent_service
 from .models import AgentProposalBatch
 from .models import CoachAthlete
@@ -307,12 +310,15 @@ def plan_deliver(request, plan_id):
     )
 
 
-# -- agent proposal engine (agent slice Phase 1 — B6) ---------------------
+# -- agent proposal engine (agent slice Phase 1 / Phase 4 — B6) -----------
 #
 # Runs the Claude proposal engine for an owned plan and persists a reviewable
-# batch (the coach still approves — apply lands in Phase 2). Synchronous for now;
-# a background job + streamed status is a later slice. Returns 503 when no API
-# key is configured so the feature degrades cleanly in envs without creds.
+# batch (the coach still approves at the review gate). Phase 4 runs it off the
+# request thread: the endpoint creates a ``drafting`` batch, dispatches the job,
+# and returns 202 + a ``status_url``; the frontend polls ``batch_status`` until
+# the batch resolves to ``pending`` (changes + review link) or ``failed`` (with
+# the reason). Returns 503 — before creating a batch — when no API key is
+# configured, so the feature degrades cleanly in envs without creds.
 
 MAX_INSTRUCTION_LENGTH = 2000
 
@@ -320,7 +326,7 @@ MAX_INSTRUCTION_LENGTH = 2000
 @login_required
 @require_POST
 def agent_propose(request, plan_id):
-    """Run the agent for a plan and return a reviewable batch of changes."""
+    """Kick off an agent run for a plan and return a drafting batch to poll."""
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
@@ -337,27 +343,50 @@ def agent_propose(request, plan_id):
     if len(instruction) > MAX_INSTRUCTION_LENGTH:
         return HttpResponseBadRequest("Instruction is too long.")
 
-    try:
-        batch, rejected = agent_service.propose_changes(
-            plan, instruction, coach=request.user
+    # Guard on the key here so we answer 503 without persisting a dead batch.
+    if agent_client.get_default_client() is None:
+        return JsonResponse(
+            {"ok": False, "error": "The Meso agent is not configured (no API key)."},
+            status=503,
         )
-    except agent_service.AgentNotConfigured as exc:
-        return JsonResponse({"ok": False, "error": str(exc)}, status=503)
-    except agent_service.AgentError as exc:
-        return JsonResponse({"ok": False, "error": str(exc)}, status=502)
 
+    batch = agent_service.create_drafting_batch(plan, instruction, coach=request.user)
+    agent_jobs.dispatch_proposal(batch.pk)
     _touch_plan(plan)
     return JsonResponse(
         {
             "ok": True,
             "batch_id": batch.pk,
-            "summary": batch.summary,
-            "review_url": reverse("meso:review_batch", kwargs={"batch_id": batch.pk}),
-            "changes": [serialize_proposed_change(c) for c in batch.changes.all()],
-            "rejected": len(rejected),
+            "status": batch.status,
+            "status_url": reverse(
+                "meso:api_batch_status", kwargs={"batch_id": batch.pk}
+            ),
         },
-        status=201,
+        status=202,
     )
+
+
+@login_required
+@require_GET
+def batch_status(request, batch_id):
+    """Poll a proposal batch's state while/after the background job runs.
+
+    Scoped to a batch the requester coaches (404 otherwise). ``drafting`` while
+    the job runs; ``pending`` with the serialized changes + a review link once it
+    lands; ``failed`` with the reason when the provider/run failed.
+    """
+    batch = _coach_batch_or_404(request, batch_id)
+    data = {"ok": True, "status": batch.status, "summary": batch.summary}
+    if batch.status == AgentProposalBatch.Status.FAILED:
+        data["error"] = batch.error
+    elif batch.status != AgentProposalBatch.Status.DRAFTING:
+        changes = [serialize_proposed_change(c) for c in batch.changes.all()]
+        data["changes"] = changes
+        if changes:
+            data["review_url"] = reverse(
+                "meso:review_batch", kwargs={"batch_id": batch.pk}
+            )
+    return JsonResponse(data)
 
 
 # -- review gate: approve/reject + apply (agent slice Phase 2 — B6) --------

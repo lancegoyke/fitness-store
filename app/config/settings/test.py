@@ -25,6 +25,10 @@ import stripe  # noqa
 
 # TESTING
 # ------------------------------------------------------------------------------
+# Run the Meso agent proposal job inline (no background thread) so tests are
+# deterministic — the batch is resolved by the time dispatch returns.
+MESO_AGENT_RUN_SYNC = True
+
 # Mock Stripe API calls for testing
 # Using unittest.mock to prevent real API calls during testing
 

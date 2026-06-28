@@ -1,11 +1,14 @@
-"""Agent slice Phase 1 — the endpoint seam + read-only review wiring.
+"""Agent slice Phase 4 — the async endpoint seam + status poll.
 
-``POST api/plan/<id>/agent/`` runs the proposal engine synchronously behind the
-same ownership check as the other autosave endpoints, and returns the batch +
-serialized changes. ``GET review/<batch_id>/`` renders a real batch into the
-existing review screen (the bare ``review/`` stays on fixtures until approve/apply
-lands in Phase 2). The Claude client is monkeypatched to a fake — these tests
-never touch the network.
+``POST api/plan/<id>/agent/`` now creates a ``drafting`` batch, dispatches the
+proposal job (run inline under ``MESO_AGENT_RUN_SYNC`` in tests), and returns
+**202** with a ``status_url``. The frontend polls
+``GET api/batch/<id>/status/`` until the batch resolves to ``pending`` (changes +
+review link) or ``failed`` (with the reason). Both are scoped to a batch the
+requester coaches. The pre-dispatch guards (login / method / ownership / missing
+key / bad instruction) still answer on the POST. The Claude client is a fake —
+these never touch the network. ``GET review/<batch_id>/`` render coverage stays
+in ``TestReviewBatch``.
 """
 
 import json
@@ -28,15 +31,19 @@ def agent_url(plan):
     return reverse("meso:api_plan_agent", kwargs={"plan_id": plan.pk})
 
 
+def status_url(batch_id):
+    return reverse("meso:api_batch_status", kwargs={"batch_id": batch_id})
+
+
 def install_fake(monkeypatch, result):
     fake = FakeClient(result)
     monkeypatch.setattr(client_module, "get_default_client", lambda: fake)
     return fake
 
 
-def two_change_result(presc):
+def one_swap_result(presc):
     return {
-        "summary": "Knee-safe swap + a small progression.",
+        "summary": "Knee-safe swap.",
         "changes": [
             {
                 "kind": "swap",
@@ -53,30 +60,50 @@ def two_change_result(presc):
     }
 
 
+def propose(client, plan, instruction="Make it knee-safe."):
+    return client.post(
+        agent_url(plan),
+        data=json.dumps({"instruction": instruction}),
+        content_type="application/json",
+    )
+
+
 class TestAgentEndpoint:
-    def test_happy_path_persists_and_returns_batch(self, client, monkeypatch):
+    def test_accepts_and_dispatches_a_drafting_batch(self, client, monkeypatch):
         plan, _, presc = make_plan()
-        install_fake(monkeypatch, two_change_result(presc))
+        install_fake(monkeypatch, one_swap_result(presc))
         client.force_login(plan.coach)
 
-        resp = client.post(
-            agent_url(plan),
-            data=json.dumps({"instruction": "Make it knee-safe."}),
-            content_type="application/json",
-        )
+        resp = propose(client, plan)
 
-        assert resp.status_code == 201
+        assert resp.status_code == 202
         data = resp.json()
         assert data["ok"] is True
+        assert data["status"] == AgentProposalBatch.Status.DRAFTING
+        assert data["status_url"] == status_url(data["batch_id"])
+        # The job ran inline (MESO_AGENT_RUN_SYNC), so the row is already resolved.
+        batch = AgentProposalBatch.objects.get(pk=data["batch_id"])
+        assert batch.coach == plan.coach
+        assert batch.status == AgentProposalBatch.Status.PENDING
+        assert batch.changes.count() == 1
+
+    def test_status_poll_returns_changes_when_pending(self, client, monkeypatch):
+        plan, _, presc = make_plan()
+        install_fake(monkeypatch, one_swap_result(presc))
+        client.force_login(plan.coach)
+
+        batch_id = propose(client, plan).json()["batch_id"]
+        resp = client.get(status_url(batch_id))
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == AgentProposalBatch.Status.PENDING
         assert data["summary"].startswith("Knee-safe")
         assert len(data["changes"]) == 1
         assert data["changes"][0]["title"] == "Back Squat → Box Squat"
-        assert f"/meso/review/{data['batch_id']}/" in data["review_url"]
-        batch = AgentProposalBatch.objects.get(pk=data["batch_id"])
-        assert batch.coach == plan.coach
-        assert batch.changes.count() == 1
+        assert f"/meso/review/{batch_id}/" in data["review_url"]
 
-    def test_unsafe_change_dropped_reported_as_rejected(self, client, monkeypatch):
+    def test_unsafe_change_dropped_leaves_no_changes(self, client, monkeypatch):
         from store_project.meso.factories import ContraindicationFactory
 
         plan, _, presc = make_plan()
@@ -100,14 +127,32 @@ class TestAgentEndpoint:
         )
         client.force_login(plan.coach)
 
-        data = client.post(
-            agent_url(plan),
-            data=json.dumps({"instruction": "go"}),
-            content_type="application/json",
-        ).json()
+        batch_id = propose(client, plan, "go").json()["batch_id"]
+        data = client.get(status_url(batch_id)).json()
 
-        assert data["rejected"] == 1
+        assert data["status"] == AgentProposalBatch.Status.PENDING
         assert data["changes"] == []
+        assert "review_url" not in data
+
+    def test_provider_failure_surfaces_as_failed_status(self, client, monkeypatch):
+        plan, _, _ = make_plan()
+
+        class BoomClient:
+            model = "claude-opus-4-8-test"
+
+            def propose(self, *, context, instruction):
+                raise RuntimeError("provider is down")
+
+        monkeypatch.setattr(client_module, "get_default_client", lambda: BoomClient())
+        client.force_login(plan.coach)
+
+        resp = propose(client, plan, "go")
+        assert resp.status_code == 202
+        batch_id = resp.json()["batch_id"]
+
+        data = client.get(status_url(batch_id)).json()
+        assert data["status"] == AgentProposalBatch.Status.FAILED
+        assert "provider is down" in data["error"]
 
     def test_missing_instruction_400(self, client, monkeypatch):
         plan, _, _ = make_plan()
@@ -128,47 +173,21 @@ class TestAgentEndpoint:
         )
         assert resp.status_code == 400
 
-    def test_not_configured_returns_503(self, client, monkeypatch):
+    def test_not_configured_returns_503_without_a_batch(self, client, monkeypatch):
         plan, _, _ = make_plan()
         monkeypatch.setattr(client_module, "get_default_client", lambda: None)
         client.force_login(plan.coach)
-        resp = client.post(
-            agent_url(plan),
-            data=json.dumps({"instruction": "go"}),
-            content_type="application/json",
-        )
+        resp = propose(client, plan, "go")
         assert resp.status_code == 503
         assert resp.json()["ok"] is False
-
-    def test_provider_failure_returns_502(self, client, monkeypatch):
-        plan, _, _ = make_plan()
-
-        class BoomClient:
-            model = "claude-opus-4-8-test"
-
-            def propose(self, *, context, instruction):
-                raise RuntimeError("provider is down")
-
-        monkeypatch.setattr(client_module, "get_default_client", lambda: BoomClient())
-        client.force_login(plan.coach)
-        resp = client.post(
-            agent_url(plan),
-            data=json.dumps({"instruction": "go"}),
-            content_type="application/json",
-        )
-        assert resp.status_code == 502
-        assert resp.json()["ok"] is False
+        # The key is checked before a batch is created — nothing persisted.
         assert not AgentProposalBatch.objects.exists()
 
     def test_non_owner_forbidden(self, client, monkeypatch):
         plan, _, _ = make_plan()
         install_fake(monkeypatch, {"summary": "", "changes": []})
         client.force_login(UserFactory())
-        resp = client.post(
-            agent_url(plan),
-            data=json.dumps({"instruction": "go"}),
-            content_type="application/json",
-        )
+        resp = propose(client, plan, "go")
         assert resp.status_code == 403
         assert not AgentProposalBatch.objects.exists()
 
@@ -178,11 +197,7 @@ class TestAgentEndpoint:
         coach = plan.coach
         plan.relationship.end()
         client.force_login(coach)
-        resp = client.post(
-            agent_url(plan),
-            data=json.dumps({"instruction": "go"}),
-            content_type="application/json",
-        )
+        resp = propose(client, plan, "go")
         assert resp.status_code == 403
 
     def test_unknown_plan_404(self, client, monkeypatch):
@@ -205,6 +220,55 @@ class TestAgentEndpoint:
         plan, _, _ = make_plan()
         client.force_login(plan.coach)
         assert client.get(agent_url(plan)).status_code == 405
+
+
+class TestBatchStatus:
+    def test_drafting_batch_reports_drafting(self, client):
+        plan, _, _ = make_plan()
+        batch = AgentProposalBatchFactory(
+            plan=plan, coach=plan.coach, status=AgentProposalBatch.Status.DRAFTING
+        )
+        client.force_login(plan.coach)
+        data = client.get(status_url(batch.pk)).json()
+        assert data["status"] == AgentProposalBatch.Status.DRAFTING
+        assert "changes" not in data
+
+    def test_failed_batch_reports_error(self, client):
+        plan, _, _ = make_plan()
+        batch = AgentProposalBatchFactory(
+            plan=plan,
+            coach=plan.coach,
+            status=AgentProposalBatch.Status.FAILED,
+            error="The agent request failed: boom",
+        )
+        client.force_login(plan.coach)
+        data = client.get(status_url(batch.pk)).json()
+        assert data["status"] == AgentProposalBatch.Status.FAILED
+        assert data["error"] == "The agent request failed: boom"
+
+    def test_non_owned_batch_404(self, client):
+        plan, _, _ = make_plan()
+        batch = AgentProposalBatchFactory(plan=plan, coach=plan.coach)
+        client.force_login(UserFactory())
+        assert client.get(status_url(batch.pk)).status_code == 404
+
+    def test_unknown_batch_404(self, client):
+        plan, _, _ = make_plan()
+        client.force_login(plan.coach)
+        assert client.get(status_url(999999)).status_code == 404
+
+    def test_requires_login(self, client):
+        plan, _, _ = make_plan()
+        batch = AgentProposalBatchFactory(plan=plan, coach=plan.coach)
+        resp = client.get(status_url(batch.pk))
+        assert resp.status_code == 302
+        assert "/accounts/login/" in resp.url
+
+    def test_post_not_allowed(self, client):
+        plan, _, _ = make_plan()
+        batch = AgentProposalBatchFactory(plan=plan, coach=plan.coach)
+        client.force_login(plan.coach)
+        assert client.post(status_url(batch.pk)).status_code == 405
 
 
 class TestReviewBatch:

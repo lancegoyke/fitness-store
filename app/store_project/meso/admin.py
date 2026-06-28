@@ -192,7 +192,7 @@ class AgentProposalBatchAdmin(admin.ModelAdmin):
     list_filter = ("status",)
     search_fields = ("plan__title", "coach__email", "coach__name", "instruction")
     raw_id_fields = ("plan", "coach")
-    readonly_fields = ("created_at",)
+    readonly_fields = ("error", "created_at")
     inlines = (ProposedChangeInline,)
 
 

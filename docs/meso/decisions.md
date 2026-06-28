@@ -253,3 +253,16 @@ _(Append dated entries here as decisions land.)_
   the retirement + real wiring at the source level + a render check. +8 tests (192 meso / 332 project-wide);
   local Codex review clean (1 round). Resume point → agent Phase 4 (background job + streamed status +
   golden eval cases).
+- 2026-06-27 — **Agent Phase 4 built** (execution + eval; branch `meso-agent-phase4`): the proposal run
+  moved **off the request thread**. `agent/service.py` split into `create_drafting_batch` +
+  `run_proposal_job` (never raises — flips a `drafting` batch to `pending`/`failed`); `agent/jobs.py`
+  dispatches it in a daemon thread deferred to `transaction.on_commit` (ATOMIC_REQUESTS visibility), with
+  `MESO_AGENT_RUN_SYNC` for inline/deterministic test runs. The endpoint returns **202** + a `status_url`;
+  the designer chat **polls** `GET api/batch/<id>/status/` (`meso.js` `pollBatch`) keeping the "drafting…"
+  state up until the batch lands. **No real task queue** — a daemon thread is right-sized for a single
+  short call behind the human gate on this box (Redis is cache/sessions only); a worker queue is a drop-in
+  later behind `run_proposal_job`. Schema `meso.0005` (batch `drafting`/`failed` + `error`). **Logged
+  sessions feed grounding** (`build_context.recent_logs` via `serialize_recent_logs`). **Golden evals**
+  (`agent/evals.py` model-agnostic invariants responsive/grounded/safe + `manage.py meso_agent_eval`,
+  side-effect-free, `--dry-run` without a key). Built red→green (+40 tests). **Closes the B6 agent slice**
+  (only persisted chat thread + athlete-facing surfaces remain, both later slices).
