@@ -330,6 +330,37 @@ def group_design(request, pk):
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
+@login_required
+@require_POST
+def group_deliver(request, pk):
+    """Deliver a group's shared current week to every active member (Phase 4).
+
+    The coach-facing entry — a plain form POST from the group-detail page's
+    "Deliver this week to all members" button. Coach-scoped (a foreign or unknown
+    group is a flat 404). Requires a shared program (else a flashed prompt to
+    design one) and at least one member (else a flashed error from the fan-out);
+    on success it flashes how many members were delivered to. Always lands back on
+    the group-detail page.
+    """
+    group = MesoGroup.objects.for_coach(request.user).filter(pk=pk).first()
+    if group is None:
+        raise Http404("Unknown group")
+    plan = group.shared_plan()
+    if plan is None:
+        messages.error(request, "Design a shared program before delivering.")
+        return redirect("meso:group", pk=group.pk)
+    summary, error = _fan_out_group_delivery(request, plan)
+    if error is not None:
+        messages.error(request, error)
+    else:
+        n = summary["members"]
+        messages.success(
+            request,
+            f"Delivered this week to {n} member{'' if n == 1 else 's'}.",
+        )
+    return redirect("meso:group", pk=group.pk)
+
+
 # -- athlete surface (athlete slice Phase 1) -------------------------------
 #
 # The athlete's own logged-in surface, distinct from the coach's view of an
@@ -1059,6 +1090,26 @@ def prescription_override(request, plan_id, pk):
     return _override_response(plan, prescription)
 
 
+def _fan_out_group_delivery(request, plan):
+    """Deliver a group plan's current week to every active member (groups Phase 4).
+
+    Runs the model fan-out (``MesoGroup.deliver_current_week``) — each member's
+    *resolved* week materialized + stamped + snapshotted — then notifies each
+    athlete (email + push, best-effort on commit), reusing the individual deliver
+    hook. Returns ``(summary, error)``: ``error`` is a human message when there is
+    nothing to deliver (no week / no members), which the callers map to a 400 /
+    flashed error. The whole fan-out runs inside the request's transaction
+    (``ATOMIC_REQUESTS``), so a partial fan-out can't half-commit.
+    """
+    try:
+        now, delivered = plan.group.deliver_current_week()
+    except InvalidTransition as exc:
+        return None, str(exc)
+    for member_plan, member_week in delivered:
+        _notify_athlete_delivered(request, member_plan, member_week)
+    return {"members": len(delivered), "delivered_at": now.isoformat()}, None
+
+
 @login_required
 @require_POST
 def plan_deliver(request, plan_id):
@@ -1067,10 +1118,12 @@ def plan_deliver(request, plan_id):
     if forbidden is not None:
         return forbidden
     if plan.is_group:
-        # Deliver-to-all fans a per-athlete snapshot out to each member; that is
-        # groups Phase 4. Until then a group plan has no single athlete to deliver
-        # to, so reject it here rather than crash on ``plan.athlete``.
-        return HttpResponseBadRequest("Group delivery isn't available yet.")
+        # A group plan fans its current week out to every active member (each
+        # member's *resolved* program), groups Phase 4.
+        summary, error = _fan_out_group_delivery(request, plan)
+        if error is not None:
+            return HttpResponseBadRequest(error)
+        return JsonResponse({"ok": True, **summary}, status=201)
     week = current_week(plan)
     if week is None:
         return HttpResponseBadRequest("This plan has no week to deliver.")

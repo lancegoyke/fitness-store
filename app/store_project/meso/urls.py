@@ -61,6 +61,7 @@ urlpatterns = [
     path("group/new/", views.group_create, name="group_create"),
     path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
     path("group/<int:pk>/design/", views.group_design, name="group_design"),
+    path("group/<int:pk>/deliver/", views.group_deliver, name="group_deliver"),
     path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),
     path("invite/<uuid:token>/decline/", views.invite_decline, name="invite_decline"),
     path(

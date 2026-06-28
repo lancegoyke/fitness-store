@@ -342,15 +342,24 @@ class PlanQuerySet(models.QuerySet):
         Deliberately *individual-only*: it backs the deliver / results / review
         flows, which assume a single athlete. Group plans (rooted at a
         ``MesoGroup``) are reached via ``editable_by`` instead, so they never leak
-        into an athlete-shaped flow.
+        into an athlete-shaped flow. A *materialized* group-delivery plan
+        (``source_group`` set — a member's resolved snapshot, groups Phase 4) is
+        excluded too: it is athlete-facing only, never something the coach designs
+        or delivers directly.
         """
         return self.filter(
             relationship__coach=user,
             relationship__status=CoachAthlete.Status.ACTIVE,
+            source_group__isnull=True,
         )
 
     def for_athlete(self, user):
-        """Plans across all of the athlete's active coaches (individual only)."""
+        """Plans across all of the athlete's active coaches (individual only).
+
+        Includes a member's *materialized* group-delivery plan (``source_group``
+        set) — that resolved snapshot is exactly what the athlete should see for a
+        group they train in (groups Phase 4).
+        """
         return self.filter(
             relationship__athlete=user,
             relationship__status=CoachAthlete.Status.ACTIVE,
@@ -363,12 +372,15 @@ class PlanQuerySet(models.QuerySet):
         an individual plan through an *active* relationship, or a *group* plan
         through owning the group. Group plans stay out of ``for_coach`` (the
         individual-only deliver/results/review flows) — this is the wider gate for
-        the one screen that handles both. See ``docs/meso/groups-plan.md``.
+        the one screen that handles both. A materialized group-delivery plan
+        (``source_group`` set) is excluded: the coach edits the *shared* program,
+        never a member's derived snapshot. See ``docs/meso/groups-plan.md``.
         """
         return self.filter(
             models.Q(
                 relationship__coach=user,
                 relationship__status=CoachAthlete.Status.ACTIVE,
+                source_group__isnull=True,
             )
             | models.Q(group__coach=user)
         )
@@ -410,6 +422,20 @@ class Plan(models.Model):
         null=True,
         blank=True,
     )
+    # Provenance (groups Phase 4), *distinct* from the XOR root above: when set,
+    # this is a member's **materialized** group-delivery plan — an individual plan
+    # (rooted at ``relationship``) whose week mirrors the group's delivered week
+    # with that member's overrides resolved in. One per (member, group), refreshed
+    # on re-delivery. Hidden from the coach's individual surfaces (``for_coach`` /
+    # ``editable_by``); the athlete sees it like any individual plan.
+    source_group = models.ForeignKey(
+        "MesoGroup",
+        on_delete=models.CASCADE,
+        related_name="materialized_plans",
+        verbose_name=_("Source group"),
+        null=True,
+        blank=True,
+    )
     title = models.CharField(_("Title"), max_length=255)
     # Goals/focus are per-plan (D-b); the athlete's contraindications stay global.
     goal = models.CharField(_("Goal"), max_length=255, blank=True)
@@ -437,6 +463,13 @@ class Plan(models.Model):
                     | models.Q(relationship__isnull=True, group__isnull=False)
                 ),
                 name="plan_relationship_xor_group",
+            ),
+            models.UniqueConstraint(
+                # A member's materialized group-delivery plan is a singleton:
+                # re-delivery refreshes the same row, never spawns a second.
+                fields=["relationship", "source_group"],
+                condition=models.Q(source_group__isnull=False),
+                name="unique_materialized_group_plan",
             ),
         ]
 
@@ -963,6 +996,74 @@ class MesoGroup(models.Model):
             .order_by("relationship__athlete__name", "relationship__athlete__email")
         ]
 
+    def active_memberships(self):
+        """Memberships whose coaching link is still active, name-ordered.
+
+        The membership analogue of ``active_member_users`` (the fan-out reads each
+        member's *overrides* off the membership, so it needs the rows, not just the
+        users). Scoped to *this* coach's active links so a membership written
+        outside ``add_athlete`` can never deliver to a foreign coach's athlete.
+        """
+        return list(
+            self.memberships.select_related("relationship", "relationship__athlete")
+            .filter(
+                relationship__coach=self.coach,
+                relationship__status=CoachAthlete.Status.ACTIVE,
+            )
+            .order_by("relationship__athlete__name", "relationship__athlete__email")
+        )
+
+    def deliver_current_week(self):
+        """Fan the shared program's current week out to every active member (Phase 4).
+
+        Each active member gets their *resolved* week (the shared template + their
+        override diffs) materialized into their own individual plan and stamped
+        ``delivered_at``, plus a ``WeekDelivery`` snapshot; the shared (group) week
+        is stamped too as the coach-side record. Returns ``(now, [(member_plan,
+        member_week), ...])`` so a caller (the view) can notify each athlete — the
+        model layer stays request-free so the seed can reuse it.
+
+        Raises ``InvalidTransition`` when there is nothing to deliver: no shared
+        program, no current week, or no active members (delivering to nobody is a
+        coach mistake, surfaced as a 400 / flashed error rather than a silent no-op).
+        """
+        # Local import avoids a models→serializers cycle at module load.
+        from .serializers import current_week
+        from .serializers import serialize_week_snapshot
+
+        plan = self.shared_plan()
+        if plan is None:
+            raise InvalidTransition("The group has no shared program to deliver.")
+        group_week = current_week(plan)
+        if group_week is None:
+            raise InvalidTransition("The shared program has no week to deliver.")
+        memberships = self.active_memberships()
+        if not memberships:
+            raise InvalidTransition("The group has no members to deliver to.")
+
+        now = timezone.now()
+        delivered = []
+        for membership in memberships:
+            member_plan, member_week = membership.sync_delivered_plan(group_week)
+            member_week.delivered_at = now
+            member_week.save(update_fields=["delivered_at"])
+            WeekDelivery.objects.create(
+                week=member_week,
+                delivered_at=now,
+                payload=serialize_week_snapshot(member_week),
+            )
+            delivered.append((member_plan, member_week))
+        group_week.delivered_at = now
+        group_week.save(update_fields=["delivered_at"])
+        WeekDelivery.objects.create(
+            week=group_week,
+            delivered_at=now,
+            payload=serialize_week_snapshot(group_week),
+        )
+        # Bump the shared plan so it stays the coach's working plan after a deliver.
+        plan.save(update_fields=["modified"])
+        return now, delivered
+
     def shared_plan(self):
         """The group's current shared program (most-recent non-archived), or None.
 
@@ -1091,6 +1192,98 @@ class GroupMembership(models.Model):
     def clear_override(self, prescription):
         """Drop this member's override for a prescription (a no-op if none)."""
         self.overrides.filter(prescription=prescription).delete()
+
+    # -- delivery fan-out (groups Phase 4) --------------------------------
+
+    def sync_delivered_plan(self, group_week):
+        """Materialize/refresh this member's resolved copy of ``group_week`` (Phase 4).
+
+        Get-or-creates the member's individual plan for this group (rooted at their
+        relationship, tagged ``source_group``) and syncs its current week *in
+        place* to the resolved group week — the shared template **+** this member's
+        override diffs (``resolve_prescription``). Syncing in place (sessions
+        matched by ``day_number``, prescriptions by ``order``) preserves any
+        ``SessionLog`` the athlete already wrote against an unchanged row while
+        propagating the coach's edits; a row dropped from the shared program drops
+        here too. Returns ``(member_plan, member_week)`` — the week is *not* yet
+        stamped delivered (``deliver_current_week`` stamps + snapshots it).
+        """
+        from .serializers import resolve_prescription
+
+        shared_plan = group_week.mesocycle.plan
+        member_plan, _ = Plan.objects.get_or_create(
+            relationship=self.relationship,
+            source_group=self.group,
+            defaults={
+                "title": shared_plan.title,
+                "goal": shared_plan.goal,
+                "unit": shared_plan.unit,
+                "status": Plan.Status.ACTIVE,
+            },
+        )
+        # Keep the snapshot's identity + active status current (a reopened link's
+        # plan may have been archived by ``CoachAthlete.end``); the full ``save``
+        # bumps ``modified`` so the athlete's home orders it freshly.
+        member_plan.title = shared_plan.title
+        member_plan.goal = shared_plan.goal
+        member_plan.unit = shared_plan.unit
+        member_plan.status = Plan.Status.ACTIVE
+        member_plan.save()
+
+        src_meso = group_week.mesocycle
+        member_meso, _ = Mesocycle.objects.update_or_create(
+            plan=member_plan,
+            order=src_meso.order,
+            defaults={"name": src_meso.name, "week_count": src_meso.week_count},
+        )
+        member_week, _ = Week.objects.update_or_create(
+            mesocycle=member_meso,
+            index=group_week.index,
+            defaults={
+                "phase": group_week.phase,
+                "volume": group_week.volume,
+                "intensity": group_week.intensity,
+                "is_deload": group_week.is_deload,
+                "is_current": True,
+            },
+        )
+
+        overrides = {o.prescription_id: o for o in self.overrides.all()}
+        src_sessions = list(group_week.sessions.prefetch_related("prescriptions"))
+        for src_session in src_sessions:
+            member_session, _ = Session.objects.update_or_create(
+                week=member_week,
+                day_number=src_session.day_number,
+                defaults={
+                    "name": src_session.name,
+                    "bias": src_session.bias,
+                    "order": src_session.order,
+                },
+            )
+            src_orders = []
+            for src_p in src_session.prescriptions.all():
+                resolved = resolve_prescription(src_p, overrides.get(src_p.pk))
+                # A swap means the catalog FK no longer names the lift trained.
+                swapped = resolved["name"] != src_p.name
+                ExercisePrescription.objects.update_or_create(
+                    session=member_session,
+                    order=src_p.order,
+                    defaults={
+                        "name": resolved["name"],
+                        "sets": resolved["sets"],
+                        "reps": resolved["reps"],
+                        "load": resolved["load"],
+                        "rpe": resolved["rpe"],
+                        "note": resolved["note"],
+                        "exercise": None if swapped else src_p.exercise,
+                        "tags": src_p.tags,
+                    },
+                )
+                src_orders.append(src_p.order)
+            member_session.prescriptions.exclude(order__in=src_orders).delete()
+        src_day_numbers = [s.day_number for s in src_sessions]
+        member_week.sessions.exclude(day_number__in=src_day_numbers).delete()
+        return member_plan, member_week
 
     def clean(self):
         """Backstop ``add_athlete``'s contract on the admin inline (raw FKs).

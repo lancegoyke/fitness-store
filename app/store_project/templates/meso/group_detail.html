@@ -8,6 +8,16 @@
       <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span> <span>{{ group.name }}</span>
     </div>
 
+    {% if messages %}
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
+        {% for message in messages %}
+          <div class="meso-card meso-card--pad {% if message.tags %}{{ message.tags }}{% endif %}" style="padding:10px 14px;">
+            <p class="meso-sub" style="margin:0;">{{ message }}</p>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
     <div class="meso-pagehead">
       <div>
         <p class="meso-eyebrow">Group</p>
@@ -38,6 +48,12 @@
           {% if group.shared_plan_id %}
             <p class="meso-sub" style="margin:8px 0 12px;">One program the whole group trains off — open it in the designer.</p>
             <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer_plan' group.shared_plan_id %}">Open shared program</a>
+            {% if group.member_count %}
+              <form method="post" action="{% url 'meso:group_deliver' group.id %}" style="margin-top:10px;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn">Deliver this week to all {{ group.member_count }} member{{ group.member_count|pluralize }}</button>
+              </form>
+            {% endif %}
           {% else %}
             <p class="meso-sub" style="margin:8px 0 12px;">Build one program the whole group trains off; per-athlete auto-adjusts come next.</p>
             <form method="post" action="{% url 'meso:group_design' group.id %}">
