@@ -896,23 +896,38 @@ class GroupMembership(models.Model):
         return f"{self.relationship.athlete.display_name()} ∈ {self.group.name}"
 
     def clean(self):
-        """A membership's relationship must belong to the group's coach.
+        """Backstop ``add_athlete``'s contract on the admin inline (raw FKs).
 
-        ``add_athlete`` only ever creates same-coach memberships; this backstops
-        the admin inline (which exposes a raw ``relationship``) so a coach can't
-        attach another coach's athlete to their group.
+        ``add_athlete`` only ever creates a membership off the group coach's
+        *active* link, so ``clean`` enforces the same two rules for any path that
+        runs ``full_clean`` (the admin):
+
+        - the relationship must belong to the group's coach (never another
+          coach's athlete);
+        - on **creation**, the relationship must be active — adding a member via a
+          pending/ended link would just be hidden by ``active_member_users``.
+
+        The active check is creation-only on purpose: a membership row outlives
+        its link ending (the row persists so reopening the link restores the
+        member — read-side scoping, not deletion), so re-saving an existing row
+        whose link has since ended must stay valid.
         """
-        if (
-            self.group_id
-            and self.relationship_id
-            and self.relationship.coach_id != self.group.coach_id
-        ):
+        if not (self.group_id and self.relationship_id):
+            return
+        if self.relationship.coach_id != self.group.coach_id:
             raise ValidationError(
                 {
                     "relationship": _(
                         "The relationship must belong to the group's coach."
                     )
                 }
+            )
+        if (
+            self._state.adding
+            and self.relationship.status != CoachAthlete.Status.ACTIVE
+        ):
+            raise ValidationError(
+                {"relationship": _("The relationship must be active to add a member.")}
             )
 
 

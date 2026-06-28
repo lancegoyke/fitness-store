@@ -149,6 +149,29 @@ class TestAddRemoveMember:
         with pytest.raises(ValidationError):
             membership.full_clean()
 
+    def test_clean_rejects_adding_inactive_relationship(self):
+        # Adding a member via a pending/ended link would just be hidden by the
+        # read surface — reject it at creation (the admin inline path).
+        group = MesoGroupFactory()
+        athlete = UserFactory()
+        pending = CoachAthleteFactory(
+            coach=group.coach,
+            athlete=athlete,
+            status=CoachAthlete.Status.PENDING_COACH_INVITE,
+        )
+        membership = GroupMembership(group=group, relationship=pending)
+        with pytest.raises(ValidationError):
+            membership.full_clean()
+
+    def test_clean_tolerates_resaving_a_since_ended_membership(self):
+        # The active check is creation-only: an existing membership whose link
+        # later ended (a by-design persisted row) must still validate on re-save.
+        group = MesoGroupFactory()
+        membership = make_member(group, name="Casey Cole")
+        membership.relationship.end()
+        membership.relationship.refresh_from_db()
+        membership.full_clean()  # does not raise
+
 
 class TestActiveMemberUsers:
     def test_lists_active_members(self):
