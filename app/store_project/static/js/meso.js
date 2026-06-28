@@ -4,9 +4,12 @@
  * view injects a serialized plan and init() hydrates the grid (program / weeks /
  * phases) from it, then edits autosave to the JSON API. The client-side fixtures
  * were retired in Phase 5 — the page always renders a real, DB-backed plan now
- * (the bare URL redirects to one). The "agent" column is still a canned intent
- * engine (swap-knee / lower-volume / progress / deload) — replacing dispatch()/
- * applyIntent() with a real backend call is the next seam to make live.
+ * (the bare URL redirects to one). The agent column is live as of agent Phase 3:
+ * the coach's message POSTs to the real proposal endpoint (api/plan/<id>/agent/),
+ * the returned batch renders inline, and a link sends the coach to the review
+ * gate. The agent only *proposes* — changes stay inert until applied at review,
+ * so the chat never mutates the grid here. (The canned keyword intent engine it
+ * replaced — a client-side matcher that edited the grid in place — is gone.)
  */
 document.addEventListener("alpine:init", () => {
   Alpine.data("meso", () => ({
@@ -33,31 +36,14 @@ document.addEventListener("alpine:init", () => {
     planId: null,
     csrf: "",
 
-    // The agent column is still a canned intent engine (its own slice); these
-    // seed messages stay until the real agent backend replaces dispatch().
+    // The thread starts with a single orienting greeting. Real agent turns are
+    // appended as the coach sends instructions; the thread is not persisted yet
+    // (a later slice adds the background job + saved conversation).
     messages: [
       {
         id: 1,
         role: "agent",
-        text: "Here's Week 2 of Maya's hypertrophy block — 3 sessions, all knee-safe. I used box squats to parallel instead of back squats and kept deep knee flexion out of the loaded work.",
-        change: {
-          title: "Drafted Week 2 · 3 sessions",
-          detail: "Honors: avoid deep knee flexion under load",
-        },
-      },
-      {
-        id: 2,
-        role: "coach",
-        text: "Nice. Bump her trap-bar pull — she sat at RPE 6 last block.",
-      },
-      {
-        id: 3,
-        role: "agent",
-        text: "Done. Progressed the trap-bar deadlift to 92.5 kg. She logged 4×6 @ 90 / RPE 6 last session, so this lands around RPE 7 — right in the hypertrophy window.",
-        change: {
-          title: "Trap-Bar Deadlift → 92.5 kg",
-          detail: "From logged 4×6 @ 90 kg · RPE 6",
-        },
+        text: "Tell me how you'd like to adjust this plan — swap a lift, change a day's volume, progress loads, or add a deload. I'll propose changes for you to review before anything touches the program.",
       },
     ],
 
@@ -67,11 +53,12 @@ document.addEventListener("alpine:init", () => {
     weeks: [],
     phases: [],
 
+    // Each chip's label is sent verbatim as the agent instruction.
     chips: [
-      { label: "Lower Day 2 volume", intent: "lower-volume-d2" },
-      { label: "Swap a knee-sensitive lift", intent: "swap-knee" },
-      { label: "Progress from last block", intent: "progress" },
-      { label: "Add a deload week", intent: "deload" },
+      { label: "Lower Day 2 volume" },
+      { label: "Swap a knee-sensitive lift" },
+      { label: "Progress from last block" },
+      { label: "Add a deload week" },
     ],
 
     calDays: ["M", "T", "W", "T", "F", "S", "S"],
@@ -241,8 +228,16 @@ document.addEventListener("alpine:init", () => {
     },
 
     // ---- agent chat ----
+    //
+    // Each coach turn POSTs to the real proposal endpoint and renders the
+    // returned batch inline. The agent only proposes — the program grid is not
+    // mutated here; the coach applies (or discards) the batch at the review gate.
     pushCoach(text) {
       this.messages.push({ id: Date.now(), role: "coach", text });
+      this.scrollThread();
+    },
+    pushAgent(msg) {
+      this.messages.push({ id: Date.now() + 1, role: "agent", ...msg });
       this.scrollThread();
     },
     onInputKey(e) {
@@ -253,107 +248,83 @@ document.addEventListener("alpine:init", () => {
     },
     onSend() {
       const t = (this.inputText || "").trim();
-      if (!t) return;
-      this.pushCoach(t);
+      if (!t || this.agentTyping) return;
       this.inputText = "";
-      this.dispatch(this.detectIntent(t));
+      this.send(t);
     },
-    onChip(intent, label) {
-      this.pushCoach(label);
-      this.dispatch(intent);
-    },
-
-    detectIntent(t) {
-      const s = t.toLowerCase();
-      if (/knee|meniscus|swap|substitut|replace/.test(s)) return "swap-knee";
-      if (/deload|recover|fatigue|back off/.test(s)) return "deload";
-      if (/volume|lighter|reduce|less|trim|drop a set/.test(s))
-        return "lower-volume-d2";
-      if (/progress|heavier|bump|increase|overload|add (weight|load)/.test(s))
-        return "progress";
-      return "generic";
+    onChip(label) {
+      if (this.agentTyping) return;
+      this.send(label);
     },
 
-    dispatch(intent) {
+    send(instruction) {
+      this.pushCoach(instruction);
+      this.sendInstruction(instruction);
+    },
+
+    // POST the instruction to the agent, then render the batch (or an error).
+    async sendInstruction(instruction) {
+      if (!this.live) {
+        this.pushAgent({
+          text: "Load an athlete's plan first — there's nothing for me to edit yet.",
+          error: true,
+        });
+        return;
+      }
       this.agentTyping = true;
       this.scrollThread();
-      setTimeout(() => this.applyIntent(intent), 780);
+      try {
+        const res = await fetch(`/meso/api/plan/${this.planId}/agent/`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": this.csrf,
+          },
+          body: JSON.stringify({ instruction }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          this.pushAgent({ text: this.agentErrorText(res.status, data), error: true });
+          return;
+        }
+        this.pushAgent(this.batchMessage(data));
+      } catch (err) {
+        console.error("Agent request failed", err);
+        this.pushAgent({
+          text: "Something went wrong reaching the agent. Please try again.",
+          error: true,
+        });
+      } finally {
+        this.agentTyping = false;
+        this.scrollThread();
+      }
     },
 
-    applyIntent(intent) {
-      let msg;
-
-      if (intent === "swap-knee") {
-        const d = this.program[0];
-        const ix = d.exercises.findIndex((x) => /bulgarian/i.test(x.name));
-        const tgt = ix >= 0 ? ix : 1;
-        Object.assign(d.exercises[tgt], {
-          name: "Box Step-Down (low)",
-          load: "14",
-          tag: "knee-safe",
-          note: "pain-free ROM, slow eccentric",
-        });
-        msg = {
-          text: "Swapped the Bulgarian split squat for a low box step-down. Same single-leg quad stimulus, but the knee tracks through a shorter, controlled range — a better fit for the meniscus history.",
-          change: {
-            title: "Bulgarian Split Squat → Box Step-Down",
-            detail: "Single-leg quad work · controlled ROM",
-          },
-        };
-      } else if (intent === "lower-volume-d2") {
-        const d = this.program[1];
-        d.exercises.forEach((x, i) => {
-          if (i < 3)
-            x.sets = String(Math.max(2, (parseInt(x.sets, 10) || 3) - 1));
-        });
-        msg = {
-          text: "Trimmed Day 2 — dropped a set on the three main upper-body lifts. Keeps weekly pressing volume in check while her shoulder settles, without touching the accessory work.",
-          change: {
-            title: "Day 2 volume − 1 set",
-            detail: "Applied to the 3 primary lifts",
-          },
-        };
-      } else if (intent === "progress") {
-        this.program.forEach((d) => {
-          d.exercises.forEach((x) => {
-            const n = parseFloat(x.load);
-            if (!isNaN(n) && this.numeric(x.load) && x.rpe !== "—") {
-              x.load = String(this.round25(n + 2.5));
-            }
-          });
-        });
-        msg = {
-          text: "Progressed the main lifts by ~2.5 kg across the week, anchored to last block's logged loads and RPEs. Accessories held steady so the added stimulus stays on the big patterns.",
-          change: {
-            title: "+2.5 kg on primary lifts",
-            detail: "Driven by logged session data",
-          },
-        };
-      } else if (intent === "deload") {
-        this.view = "block";
-        const w = this.weeks[3];
-        Object.assign(w, { vol: 50, inten: 70, deload: true, phase: "Deload" });
-        msg = {
-          text: "Set Week 4 as a deload — volume drops ~45% while intensity holds near 70%. That clears accumulated fatigue and sets up a clean hand-off into the strength block.",
-          change: {
-            title: "Week 4 → Deload",
-            detail: "Volume −45% · intensity held",
-          },
-        };
-      } else {
-        msg = {
-          text: "Got it — I've noted that against Maya's profile and coaching rules. Want me to apply it to this week, or carry it into the next block's plan?",
-        };
+    // Shape the endpoint's batch response into an agent chat message. Changes
+    // are inert here; the review link is the only way to act on them.
+    batchMessage(data) {
+      const changes = data.changes || [];
+      let text = data.summary || "";
+      if (!changes.length) {
+        text =
+          text ||
+          "I couldn't find any safe changes to propose for that. Try rephrasing or adjusting the plan directly.";
       }
+      return {
+        text,
+        changes,
+        reviewUrl: changes.length ? data.review_url : null,
+      };
+    },
 
-      this.messages.push({
-        id: Date.now() + 1,
-        role: "agent",
-        text: msg.text,
-        change: msg.change,
-      });
-      this.agentTyping = false;
-      this.scrollThread();
+    agentErrorText(status, data) {
+      if (status === 503)
+        return "The agent isn't configured in this environment yet.";
+      if (status === 502)
+        return "The agent had trouble responding. Give it another try.";
+      if (status === 400)
+        return "That message couldn't be sent — try a shorter instruction.";
+      return (data && data.error) || "The agent couldn't process that request.";
     },
   }));
 });
