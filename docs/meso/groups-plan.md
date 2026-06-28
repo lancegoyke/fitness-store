@@ -43,7 +43,7 @@ the membership row persists so reopening the link restores them — no change to
 Small vertical slices, red→green, each its own PR — the same cadence as the persistence,
 agent, and athlete slices.
 
-- **Phase 1 — group foundation + roster/detail read surface (this PR).** `MesoGroup`
+- **Phase 1 — group foundation + roster/detail read surface (built; this PR).** `MesoGroup`
   (coach-owned: name, focus, status) + `GroupMembership` (group ↔ active `CoachAthlete`).
   Scoped queryset (`for_coach` / `active`), add/remove-member helpers (guard same-coach +
   active link). The roster *Groups* card lights up from real rows, and a new
@@ -71,6 +71,12 @@ agent, and athlete slices.
   whose link is still active). Migration `meso.0007`.
 - **Scoping:** a coach sees only their own groups; a group's displayed members are scoped to
   *active* links so an ended relationship drops out without deleting the membership row.
+- **Membership tenancy (defense in depth, from the Codex review):** besides
+  `add_athlete`'s guard, `active_member_users` filters `relationship.coach == group.coach` (a
+  row written outside the helper — e.g. a raw admin inline — can never leak a foreign coach's
+  athlete onto the read surface), and `GroupMembership.clean` rejects a cross-coach
+  relationship and an inactive link **on creation only** (`self._state.adding`), so a
+  membership row whose link *later* ended stays re-savable in the admin.
 - **Read surface:** `presenters.roster_group(group)` (name, focus, member avatars, a `meta`
   line, status label) feeds the roster card; `presenters.group_detail(group)` feeds
   `GroupDetailView` (members + each member's active contraindication labels, folded into a

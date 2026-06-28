@@ -147,7 +147,7 @@ claim, reusing allauth. Detailed design when we build the relationship.
 
 | # | Decision | Note |
 |---|----------|------|
-| S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | Defer until individuals work |
+| S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) built; plan in [`groups-plan.md`](./groups-plan.md) |
 | S2 | **Units & RPE vs %1RM** | Per-athlete/coach setting; needs a home |
 | S3 | **Delivery & notifications** | Push needs PWA + push infra; email via existing `django-ses` + `notifications` app |
 | S4 | **Results ↔ `challenges`/records** | Results screen shows a PR — reuse the records model or keep separate? |
@@ -350,3 +350,22 @@ _(Append dated entries here as decisions land.)_
   `ChatMessage` model (only if the agent ever sends text not tied to a batch) · editing past turns ·
   pagination of a very long thread. Resume point → next-slice options: **groups (S1)** is the main remaining
   Meso feature area.
+- 2026-06-28 — **Groups slice (S1) started — Phase 1 built** (branch `meso-groups-phase1`). The
+  tenancy-correct **group + membership spine** + the read surface, no shared program yet. `MesoGroup`
+  (coach-owned: name, focus, status; `MesoGroupQuerySet.for_coach/active`) + `GroupMembership` (group ↔ an
+  **active** `CoachAthlete` link, `unique(group, relationship)`); helpers `add_athlete` (off the coach's
+  active link — raises on no-link / cross-coach / self; idempotent), `remove_athlete`, `active_member_users`
+  (scoped to *active* links so an ended relationship hides the member **without deleting the row** — reopening
+  the link restores them; read-side scoping, not deletion). Migration `meso.0007`. The roster's dead
+  `groups = []` lights up off real rows (`presenters.roster_group`), and a coach-scoped `GroupDetailView`
+  (`/meso/group/<id>/`) lists members + the folded "flags across group" (`presenters.group_detail`); the
+  roster card links to it (was a dead designer link). Admin (group + membership inline), factories, and a
+  seeded demo group ("Tue/Thu Strength Squad", 3 members) in `seed_meso_demo` (idempotent; torn down on
+  `--delete`). **Membership tenancy is enforced two ways** (both from the Codex review): `active_member_users`
+  scopes to `relationship.coach == group.coach` (a row written outside `add_athlete`, e.g. a raw admin inline,
+  can't leak a foreign coach's athlete onto the read surface) and `GroupMembership.clean` rejects a cross-coach
+  relationship + an inactive link **on creation only** (so a since-ended row stays re-savable). Built red→green:
+  **+28 tests** (`test_groups.py` + seed coverage; 407 meso / 545 project-wide), ruff clean, `makemigrations
+  --check` clean. **Local Codex review: 0 blocking → CLEAN** (3 rounds; two P2 membership-tenancy nits fixed).
+  Plan + phasing in [`groups-plan.md`](./groups-plan.md). Resume point → **groups Phase 2** (the shared group
+  program: `Plan.group` FK + nullable `relationship`, the designer's Group mode, create-group UI).
