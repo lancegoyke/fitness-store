@@ -32,6 +32,11 @@ function createMeso() {
     checks: {},
     exSeq: 1,
 
+    // Group mode only: the open per-athlete override editor (one shared row),
+    // or null when closed. Holds the targeted row (`ex`), the group's members,
+    // the selected member id, and an editable `draft` of their adjust.
+    override: null,
+
     // The agent runs as a background job (Phase 4): POST kicks it off, then we
     // poll the batch's status until it lands. `agentTyping` stays true (the
     // "drafting…" indicator) for the whole poll.
@@ -189,6 +194,120 @@ function createMeso() {
         rpe: ex.rpe ?? "",
         note: ex.note ?? "",
       }).catch((err) => console.error("Autosave failed", err));
+    },
+
+    // ---- per-athlete override editor (group mode) ----
+    //
+    // In Group mode every shared row can be adjusted per athlete. openOverride
+    // opens an editor for one prescription; the coach picks a member and edits
+    // their diff (swap / load% / volume / note), and saveOverride POSTs it to
+    // the override endpoint. The reply recomputes the row's `adj` badge, which
+    // we paint straight back onto the row. The editor pre-fills from the
+    // member's stored adjust (`ex.adjusts`), so editing and clearing both work
+    // off the real diffs the serializer injected.
+
+    // The member's stored diff on this row as editable strings (blank if unset).
+    overrideDraft(ex, memberId) {
+      const found = (ex.adjusts || []).find((a) => a.id === memberId);
+      return {
+        swap: (found && found.swap) || "",
+        load_pct: found && found.load_pct != null ? String(found.load_pct) : "",
+        sets: (found && found.sets) || "",
+        reps: (found && found.reps) || "",
+        note: (found && found.note) || "",
+      };
+    },
+
+    openOverride(ex) {
+      if (!this.isGroup || !this.live) return;
+      const members = (this.group && this.group.members) || [];
+      if (!members.length) return;
+      const memberId = members[0].id;
+      this.override = {
+        ex,
+        members,
+        memberId,
+        draft: this.overrideDraft(ex, memberId),
+        saving: false,
+        error: "",
+      };
+    },
+
+    selectOverrideMember(memberId) {
+      if (!this.override) return;
+      this.override.memberId = memberId;
+      this.override.draft = this.overrideDraft(this.override.ex, memberId);
+      this.override.error = "";
+    },
+
+    closeOverride() {
+      this.override = null;
+    },
+
+    // True when the selected member already has a stored adjust on the open row
+    // (so the editor can offer "Clear").
+    get overrideHasExisting() {
+      if (!this.override) return false;
+      return (this.override.ex.adjusts || []).some(
+        (a) => a.id === this.override.memberId,
+      );
+    },
+
+    // Parse the load% field to the endpoint's int | null. Blank → null (clear
+    // that part); anything but a whole number in the model's 1–200 band is
+    // rejected here so the badge never repaints off a server 400.
+    parseOverrideLoadPct() {
+      const raw = (this.override.draft.load_pct || "").trim();
+      if (raw === "") return { ok: true, value: null };
+      if (!/^[0-9]+$/.test(raw)) return { ok: false };
+      const n = parseInt(raw, 10);
+      if (n < 1 || n > 200) return { ok: false };
+      return { ok: true, value: n };
+    },
+
+    async saveOverride() {
+      if (!this.override || this.override.saving) return;
+      const parsed = this.parseOverrideLoadPct();
+      if (!parsed.ok) {
+        this.override.error = "Load % must be a whole number from 1 to 200.";
+        return;
+      }
+      const { ex, memberId, draft } = this.override;
+      await this.submitOverride(ex, {
+        athlete: memberId,
+        swap: draft.swap.trim(),
+        load_pct: parsed.value,
+        sets: draft.sets.trim(),
+        reps: draft.reps.trim(),
+        note: draft.note.trim(),
+      });
+    },
+
+    async clearOverride() {
+      if (!this.override || this.override.saving) return;
+      const { ex, memberId } = this.override;
+      await this.submitOverride(ex, { athlete: memberId, clear: true });
+    },
+
+    // POST the override change, repaint the row's adj badge from the reply, and
+    // close the editor. On failure the editor stays open with an error so the
+    // coach can retry without losing their edits.
+    async submitOverride(ex, body) {
+      this.override.saving = true;
+      this.override.error = "";
+      try {
+        const data = await this.apiPost(
+          `/meso/api/plan/${this.planId}/prescription/${ex.id}/override/`,
+          body,
+        );
+        ex.adj = data.adj || null;
+        ex.adjusts = data.adjusts || [];
+        this.closeOverride();
+      } catch (err) {
+        console.error("Override save failed", err);
+        this.override.error = "Couldn't save that adjust. Please try again.";
+        this.override.saving = false;
+      }
     },
 
     // ---- helpers ----

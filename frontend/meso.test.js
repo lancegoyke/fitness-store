@@ -34,6 +34,55 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
+// A meso component in Group mode with two members and one shared row, wired
+// enough to drive the in-grid per-athlete override editor without Alpine/DOM.
+function makeGroupMeso(overrides = {}) {
+  const c = makeMeso();
+  c.mode = "group";
+  c.group = {
+    id: 3,
+    name: "Squad",
+    members: [
+      { id: "a1", name: "Maya Okonkwo", initials: "MO" },
+      { id: "a2", name: "Aaron Adams", initials: "AA" },
+    ],
+  };
+  return Object.assign(c, overrides);
+}
+
+// A shared-program row Maya already adjusts (load 90% of a 100kg base).
+function groupRow(overrides = {}) {
+  return Object.assign(
+    {
+      id: 11,
+      name: "Back Squat",
+      sets: "3",
+      reps: "10",
+      load: "100",
+      adj: "MO -10%",
+      adjusts: [
+        {
+          id: "a1",
+          name: "Maya Okonkwo",
+          initials: "MO",
+          label: "-10%",
+          swap: "",
+          load_pct: 90,
+          sets: "",
+          reps: "",
+          note: "",
+        },
+      ],
+    },
+    overrides,
+  );
+}
+
+// The body sent on the nth fetch call, parsed back from JSON.
+function sentBody(n = 0) {
+  return JSON.parse(global.fetch.mock.calls[n][1].body);
+}
+
 describe("agentErrorText", () => {
   const c = createMeso();
   it("maps known statuses to friendly copy", () => {
@@ -136,5 +185,125 @@ describe("pollBatch", () => {
     expect(global.fetch).toHaveBeenCalledTimes(3);
     expect(lastAgent(c).error).toBe(true);
     expect(lastAgent(c).text).toMatch(/taking longer than expected/);
+  });
+});
+
+describe("override editor", () => {
+  it("opens on a shared row, selecting the first member with their stored diff", () => {
+    const c = makeGroupMeso();
+    const ex = groupRow();
+    c.openOverride(ex);
+    expect(c.override).not.toBe(null);
+    expect(c.override.ex).toBe(ex);
+    expect(c.override.memberId).toBe("a1");
+    // Maya's stored 90% pre-fills the draft (as a string for the text input).
+    expect(c.override.draft.load_pct).toBe("90");
+    expect(c.override.draft.swap).toBe("");
+    expect(c.overrideHasExisting).toBe(true);
+  });
+
+  it("blanks the draft when switching to a member with no adjust", () => {
+    const c = makeGroupMeso();
+    c.openOverride(groupRow());
+    c.selectOverrideMember("a2");
+    expect(c.override.memberId).toBe("a2");
+    expect(c.override.draft.load_pct).toBe("");
+    expect(c.override.draft.swap).toBe("");
+    expect(c.overrideHasExisting).toBe(false);
+  });
+
+  it("is a no-op outside group mode or with no members", () => {
+    const indiv = makeMeso();
+    indiv.openOverride(groupRow());
+    expect(indiv.override == null).toBe(true);
+
+    const empty = makeGroupMeso({ group: { id: 3, name: "Squad", members: [] } });
+    empty.openOverride(groupRow());
+    expect(empty.override == null).toBe(true);
+  });
+
+  it("saves a member's adjust, posts the full diff, and repaints the row", async () => {
+    const c = makeGroupMeso();
+    const ex = groupRow();
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          adj: "2 adjusts",
+          adjusts: [{ id: "a1" }, { id: "a2" }],
+        },
+      }),
+    );
+    c.openOverride(ex);
+    c.selectOverrideMember("a2");
+    c.override.draft.swap = "Box Squat";
+    c.override.draft.load_pct = "85";
+    await c.saveOverride();
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toBe(
+      "/meso/api/plan/7/prescription/11/override/",
+    );
+    expect(sentBody()).toEqual({
+      athlete: "a2",
+      swap: "Box Squat",
+      load_pct: 85,
+      sets: "",
+      reps: "",
+      note: "",
+    });
+    // The reply repaints the badge and closes the editor.
+    expect(ex.adj).toBe("2 adjusts");
+    expect(ex.adjusts).toHaveLength(2);
+    expect(c.override).toBe(null);
+  });
+
+  it("sends load_pct null when the field is left blank", async () => {
+    const c = makeGroupMeso();
+    global.fetch = vi.fn().mockResolvedValue(res({ body: { adj: null, adjusts: [] } }));
+    c.openOverride(groupRow());
+    c.selectOverrideMember("a2");
+    c.override.draft.note = "tempo";
+    await c.saveOverride();
+    expect(sentBody().load_pct).toBe(null);
+    expect(sentBody().note).toBe("tempo");
+  });
+
+  it("rejects a non-numeric or out-of-band load% without posting", async () => {
+    const c = makeGroupMeso();
+    global.fetch = vi.fn();
+    c.openOverride(groupRow());
+    c.override.draft.load_pct = "abc";
+    await c.saveOverride();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(c.override.error).toMatch(/Load %/);
+
+    c.override.draft.load_pct = "500";
+    await c.saveOverride();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("clears a member's adjust and repaints the row", async () => {
+    const c = makeGroupMeso();
+    const ex = groupRow();
+    global.fetch = vi.fn().mockResolvedValue(res({ body: { adj: null, adjusts: [] } }));
+    c.openOverride(ex);
+    await c.clearOverride();
+    expect(sentBody()).toEqual({ athlete: "a1", clear: true });
+    expect(ex.adj).toBe(null);
+    expect(ex.adjusts).toEqual([]);
+    expect(c.override).toBe(null);
+  });
+
+  it("keeps the editor open and surfaces an error when the save fails", async () => {
+    const c = makeGroupMeso();
+    const ex = groupRow();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 500 }));
+    c.openOverride(ex);
+    c.override.draft.load_pct = "80";
+    await c.saveOverride();
+    expect(c.override).not.toBe(null);
+    expect(c.override.error).toMatch(/Couldn't save/);
+    expect(ex.adj).toBe("MO -10%"); // unchanged
   });
 });

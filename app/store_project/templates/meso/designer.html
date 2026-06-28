@@ -319,7 +319,7 @@
               <template x-if="isGroup">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px;padding:10px 13px;background:var(--soft);border:1px solid var(--soft-line);border-radius:9px;">
                   <span style="font-size:11.5px;font-weight:700;color:var(--accent-deep);">Shared program &#183; per-athlete auto-adjusts</span>
-                  <span style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Every member trains off this program &#8212; a member's badge marks where their plan auto-adjusts.</span>
+                  <span style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Every member trains off this program &#8212; tap a row's adjust to tune one athlete's load, swap, or volume.</span>
                 </div>
               </template>
 
@@ -342,7 +342,12 @@
                         <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:1px 6px;margin-top:1px;min-height:15px;">
                           <template x-if="ex.tag"><span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;color:var(--accent-deep);background:var(--soft);border:1px solid var(--soft-line);padding:0 5px;border-radius:4px;" x-text="ex.tag"></span></template>
                           <template x-if="ex.last"><span style="font-size:10.5px;color:var(--dim);font-family:'IBM Plex Mono',monospace;" x-text="'last: ' + ex.last"></span></template>
-                          <template x-if="isGroup && ex.adj"><span :title="(ex.adjusts || []).map(a => a.name + ': ' + a.label).join('\n')" style="font-size:10px;font-weight:600;color:var(--accent-deep);background:var(--soft);padding:0 5px;border-radius:4px;cursor:help;" x-text="ex.adj"></span></template>
+                          <template x-if="isGroup">
+                            <button @click="openOverride(ex)" data-hover="brighten" :title="ex.adj ? (ex.adjusts || []).map(a => a.name + ': ' + a.label).join('\n') : 'Set a per-athlete adjust'" style="appearance:none;cursor:pointer;font:inherit;font-size:10px;font-weight:600;line-height:1.6;border:1px solid var(--soft-line);border-radius:4px;padding:0 5px;color:var(--accent-deep);background:var(--soft);">
+                              <span x-show="ex.adj" x-text="ex.adj"></span>
+                              <span x-show="!ex.adj" style="color:var(--dim);">+ adjust</span>
+                            </button>
+                          </template>
                         </div>
                       </div>
                       <div style="display:flex;align-items:center;justify-content:center;gap:2px;">
@@ -493,6 +498,65 @@
           </div>
         </div>
       </div>
+
+      <!-- ===== PER-ATHLETE OVERRIDE EDITOR (group mode) ===== -->
+      <template x-if="override">
+        <div @click.self="closeOverride()" @keydown.escape.window="closeOverride()" style="position:fixed;inset:0;z-index:90;background:rgba(16,18,22,0.34);display:flex;align-items:center;justify-content:center;padding:24px;">
+          <div style="width:430px;max-width:100%;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:0 24px 60px rgba(16,18,22,0.28);overflow:hidden;">
+            <!-- header -->
+            <div style="padding:15px 18px 13px;border-bottom:1px solid var(--line-2);">
+              <div style="font-size:10.5px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--dim);margin-bottom:3px;">Per-athlete adjust</div>
+              <div style="font-size:15px;font-weight:700;letter-spacing:-0.015em;" x-text="override.ex.name"></div>
+              <div style="font-size:11.5px;color:var(--dim);font-family:'IBM Plex Mono',monospace;margin-top:1px;">shared <span x-text="override.ex.sets + '×' + override.ex.reps"></span><span x-show="numeric(override.ex.load)" x-text="' · ' + override.ex.load + ' ' + unit"></span></div>
+            </div>
+            <!-- member selector -->
+            <div style="padding:13px 18px 6px;">
+              <p style="font-size:10.5px;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:var(--dim);margin:0 0 8px;">Athlete</p>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                <template x-for="m in override.members" :key="m.id">
+                  <button @click="selectOverrideMember(m.id)" :style="`appearance:none;cursor:pointer;font:inherit;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:5px 10px;border-radius:7px;border:1px solid ${m.id === override.memberId ? 'var(--accent)' : 'var(--line)'};background:${m.id === override.memberId ? 'var(--soft)' : 'var(--surface)'};color:${m.id === override.memberId ? 'var(--accent-deep)' : 'var(--ink)'};`">
+                    <span x-text="m.name"></span>
+                    <template x-if="(override.ex.adjusts || []).some(a => a.id === m.id)"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent);"></span></template>
+                  </button>
+                </template>
+              </div>
+            </div>
+            <!-- fields -->
+            <div style="padding:10px 18px 4px;display:grid;grid-template-columns:1fr 1fr;gap:11px 12px;">
+              <div style="grid-column:1 / -1;">
+                <label style="display:block;font-size:11px;font-weight:600;color:var(--dim);margin-bottom:4px;">Swap exercise</label>
+                <input x-model="override.draft.swap" :placeholder="override.ex.name" style="width:100%;box-sizing:border-box;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:7px 9px;outline:none;" />
+              </div>
+              <div>
+                <label style="display:block;font-size:11px;font-weight:600;color:var(--dim);margin-bottom:4px;">Load %</label>
+                <input x-model="override.draft.load_pct" inputmode="numeric" placeholder="100" style="width:100%;box-sizing:border-box;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:7px 9px;outline:none;" />
+              </div>
+              <div>
+                <label style="display:block;font-size:11px;font-weight:600;color:var(--dim);margin-bottom:4px;">Sets &#215; Reps</label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <input x-model="override.draft.sets" :placeholder="override.ex.sets" style="width:100%;box-sizing:border-box;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:7px 9px;outline:none;text-align:center;" />
+                  <span style="color:var(--dim);">&#215;</span>
+                  <input x-model="override.draft.reps" :placeholder="override.ex.reps" style="width:100%;box-sizing:border-box;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink);padding:7px 9px;outline:none;text-align:center;" />
+                </div>
+              </div>
+              <div style="grid-column:1 / -1;">
+                <label style="display:block;font-size:11px;font-weight:600;color:var(--dim);margin-bottom:4px;">Note</label>
+                <input x-model="override.draft.note" placeholder="&#8212;" style="width:100%;box-sizing:border-box;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:7px 9px;outline:none;" />
+              </div>
+            </div>
+            <div style="padding:2px 18px 0;min-height:18px;">
+              <div x-show="override.error" x-text="override.error" style="font-size:11.5px;color:var(--warn);font-weight:600;"></div>
+            </div>
+            <!-- footer -->
+            <div style="padding:12px 18px 15px;display:flex;align-items:center;gap:9px;">
+              <button x-show="overrideHasExisting" @click="clearOverride()" :disabled="override.saving" data-hover="rail" style="appearance:none;cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;color:var(--warn);background:var(--surface);border:1px solid color-mix(in srgb,var(--warn) 30%,#fff);border-radius:8px;padding:8px 13px;">Clear adjust</button>
+              <div style="flex:1;"></div>
+              <button @click="closeOverride()" :disabled="override.saving" data-hover="rail" style="appearance:none;cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 13px;">Cancel</button>
+              <button @click="saveOverride()" :disabled="override.saving" :style="override.saving ? 'opacity:0.6;cursor:default;' : ''" data-hover="brighten" style="appearance:none;cursor:pointer;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border:0;border-radius:8px;padding:8px 15px;">Save adjust</button>
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
   </body>
 </html>
