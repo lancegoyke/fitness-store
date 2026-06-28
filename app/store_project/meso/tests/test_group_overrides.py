@@ -383,6 +383,42 @@ class TestOverrideEndpoint:
         assert membership.overrides.count() == 1
         assert resp.json()["adj"] == "MO -10%"
 
+    def test_partial_update_preserves_other_fields(self, client):
+        # A later request updating only load_pct must not drop an earlier swap
+        # (merge semantics, matching the autosave prescription_patch endpoint).
+        group = MesoGroupFactory()
+        membership = make_member(group)
+        plan = group.create_shared_plan()
+        presc = first_prescription(plan)
+        membership.set_override(presc, swap_name="Box Squat")
+        client.force_login(group.coach)
+        resp = client.post(
+            self._url(plan, presc),
+            data={"athlete": str(membership.relationship.athlete.pk), "load_pct": 90},
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        override = membership.overrides.get(prescription=presc)
+        assert override.swap_name == "Box Squat"  # preserved
+        assert override.load_pct == 90  # applied
+
+    def test_present_empty_field_clears_just_that_part(self, client):
+        group = MesoGroupFactory()
+        membership = make_member(group)
+        plan = group.create_shared_plan()
+        presc = first_prescription(plan)
+        membership.set_override(presc, swap_name="Box Squat", load_pct=90)
+        client.force_login(group.coach)
+        resp = client.post(
+            self._url(plan, presc),
+            data={"athlete": str(membership.relationship.athlete.pk), "swap": ""},
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        override = membership.overrides.get(prescription=presc)
+        assert override.swap_name == ""  # cleared
+        assert override.load_pct == 90  # preserved
+
     def test_coach_clears_override(self, client):
         group = MesoGroupFactory()
         membership = make_member(group)

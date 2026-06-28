@@ -888,37 +888,51 @@ def _group_member_or_none(group, athlete_id):
         return None  # athlete_id wasn't a valid UUID
 
 
-def _clean_override_diff(payload):
-    """Validate the posted override fields, or return a 400.
+def _clean_override_diff(payload, existing):
+    """Validate the posted override fields onto ``existing``, or return a 400.
 
     Returns ``(diff, None)`` on success or ``(None, HttpResponseBadRequest)``.
+    **Merge** semantics, matching the autosave ``prescription_patch`` convention:
+    a field *absent* from the payload keeps its current value (from ``existing``,
+    or empty/None when creating), so a partial update never silently drops the
+    other parts of a multi-field adjust. A field *present* overwrites — send it
+    empty (``"swap": ""`` / ``"load_pct": null``) to clear just that part.
     ``swap``/``sets``/``reps``/``note`` are free text within their model lengths;
-    ``load_pct`` is an integer in the model's sane band (or absent/None).
+    ``load_pct`` is an integer in the model's sane band (or null).
     """
-    diff = {}
+    diff = {
+        "swap_name": existing.swap_name if existing else "",
+        "sets": existing.sets if existing else "",
+        "reps": existing.reps if existing else "",
+        "note": existing.note if existing else "",
+        "load_pct": existing.load_pct if existing else None,
+    }
     for field, max_length in OVERRIDE_TEXT_FIELDS.items():
-        value = payload.get(field, "")
+        if field not in payload:
+            continue
+        value = payload[field]
         if not isinstance(value, str):
             return None, HttpResponseBadRequest(f"{field} must be a string.")
         if len(value) > max_length:
             return None, HttpResponseBadRequest(f"{field} is too long.")
         diff["swap_name" if field == "swap" else field] = value
-    load_pct = payload.get("load_pct")
-    if load_pct is not None and (
-        not isinstance(load_pct, int)
-        or isinstance(load_pct, bool)
-        or not (
-            PrescriptionOverride.MIN_LOAD_PCT
-            <= load_pct
-            <= PrescriptionOverride.MAX_LOAD_PCT
-        )
-    ):
-        return None, HttpResponseBadRequest(
-            f"load_pct must be an integer between "
-            f"{PrescriptionOverride.MIN_LOAD_PCT} and "
-            f"{PrescriptionOverride.MAX_LOAD_PCT}."
-        )
-    diff["load_pct"] = load_pct
+    if "load_pct" in payload:
+        load_pct = payload["load_pct"]
+        if load_pct is not None and (
+            not isinstance(load_pct, int)
+            or isinstance(load_pct, bool)
+            or not (
+                PrescriptionOverride.MIN_LOAD_PCT
+                <= load_pct
+                <= PrescriptionOverride.MAX_LOAD_PCT
+            )
+        ):
+            return None, HttpResponseBadRequest(
+                f"load_pct must be an integer between "
+                f"{PrescriptionOverride.MIN_LOAD_PCT} and "
+                f"{PrescriptionOverride.MAX_LOAD_PCT}."
+            )
+        diff["load_pct"] = load_pct
     return diff, None
 
 
@@ -950,8 +964,10 @@ def prescription_override(request, plan_id, pk):
     if not the group's coach); the prescription must belong to the plan (404
     otherwise) and ``athlete`` must be an active member of the group (400). Body:
     ``{"athlete": <uuid>, "swap"/"load_pct"/"sets"/"reps"/"note"}`` to set, or
-    ``{"athlete": <uuid>, "clear": true}`` (or an empty diff) to clear. Fully
-    validated before any write.
+    ``{"athlete": <uuid>, "clear": true}`` to drop the whole adjust. Field updates
+    **merge** (an omitted field keeps its current value, like the autosave
+    ``prescription_patch``); send a field empty to clear just that part, and an
+    adjust left with no parts is removed. Fully validated before any write.
     """
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
@@ -977,7 +993,8 @@ def prescription_override(request, plan_id, pk):
         _touch_plan(plan)
         return _override_response(plan, prescription)
 
-    diff, error = _clean_override_diff(payload)
+    existing = membership.overrides.filter(prescription=prescription).first()
+    diff, error = _clean_override_diff(payload, existing)
     if error is not None:
         return error
     try:
