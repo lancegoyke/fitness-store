@@ -68,9 +68,14 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          // Cache a copy of the rendered page so it re-opens offline next time.
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put(request, copy));
+          // Cache a copy of the rendered page so it re-opens offline next time —
+          // but only a genuine 200. After the session expires the fetch follows
+          // the login redirect; caching that would overwrite the last-good
+          // athlete page with a login screen, breaking offline reopen.
+          if (response.ok && !response.redirected) {
+            const copy = response.clone();
+            caches.open(CACHE).then((cache) => cache.put(request, copy));
+          }
           return response;
         })
         .catch(() =>
