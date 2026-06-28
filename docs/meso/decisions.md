@@ -240,8 +240,9 @@ _(Append dated entries here as decisions land.)_
   and wires Apply/Discard; bare `review/` redirects to the latest pending batch and `mockdata.PROPOSED_CHANGES`
   is retired. No migration (status/payload already existed). +33 tests (179 meso / 319 project-wide).
   Resume point → agent Phase 3 (designer agent-chat column).
-- 2026-06-27 — **Agent Phase 3 built** (branch `meso-agent-phase3`): the designer's agent-chat column
-  goes **live**. The canned keyword intent engine (`detectIntent`/`applyIntent`/`dispatch` in `meso.js`,
+- 2026-06-27 — **Agent Phase 3 done & merged** (PR #284, squash `5bfe754`; Django CI green, deployed to
+  Hetzner — no migration; deployed `meso.js` serving the new chat confirmed live): the designer's
+  agent-chat column goes **live**. The canned keyword intent engine (`detectIntent`/`applyIntent`/`dispatch` in `meso.js`,
   which matched the coach's text to one of four scripted edits and mutated the grid in place) is retired;
   a coach turn — typed or via a chip — now POSTs to `api/plan/<id>/agent/` (the Phase 1 endpoint) and the
   returned batch renders inline (per-change `title`/`before`→`after` under the summary) with a

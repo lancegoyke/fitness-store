@@ -1,8 +1,8 @@
 # Meso — agent slice plan
 
 **Status:** Phase 1 done & merged (PR #280, squash `953d9d4`; deployed) · Phase 2 done & merged
-(PR #282, squash `ee7d456`; deployed) · Phase 3 built (branch `meso-agent-phase3`) · created 2026-06-27 ·
-**next = agent Phase 4 (execution + eval)**
+(PR #282, squash `ee7d456`; deployed) · Phase 3 done & merged (PR #284, squash `5bfe754`; deployed) ·
+created 2026-06-27 · **next = agent Phase 4 (execution + eval)**
 **Companion to:** [`decisions.md`](./decisions.md) (B6) · [`persistence-plan.md`](./persistence-plan.md)
 **Goal of this slice:** replace the designer's canned agent-chat engine
 (`detectIntent`/`applyIntent` in `meso.js`) and the review screen
@@ -152,7 +152,7 @@ coach's latest pending batch (fixtures retired). No migration (status/payload al
 red→green: +33 tests (179 meso / 319 project-wide). *Done when:* a coach can approve/reject and
 apply a real batch into the program. **No chat UI yet (Phase 3).**
 
-**Phase 3 — Designer agent-chat column. ✅ Built (branch `meso-agent-phase3`).**
+**Phase 3 — Designer agent-chat column. ✅ Done & merged (2026-06-27, PR #284, squash `5bfe754`; Django CI green, deployed to Hetzner — no migration).**
 Rebuild the designer's left/agent column (`meso.js` `detectIntent`/`applyIntent`,
 currently canned: swap-knee / lower-volume-d2 / progress / deload) to POST the
 coach's message to `.../agent/` and render the returned batch inline, linking to
