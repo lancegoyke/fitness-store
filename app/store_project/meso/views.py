@@ -45,6 +45,7 @@ from .models import Session
 from .models import SessionLog
 from .models import WeekDelivery
 from .serializers import current_week
+from .serializers import serialize_chat_thread
 from .serializers import serialize_plan
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
@@ -115,8 +116,9 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
     A self-contained, full-screen coach tool. The view serializes a real, owned
     plan into the page and the Alpine front-end hydrates from it (then autosaves
     edits to the API endpoints below). The bare URL has no fixtures anymore — it
-    redirects to the coach's working plan (or the roster). The agent column
-    stays mock until its slice.
+    redirects to the coach's working plan (or the roster). The agent column is
+    live (agent slice) and its conversation is persisted: ``chat_thread``
+    rebuilds the thread from the plan's proposal batches so it survives a reload.
     """
 
     template_name = "meso/designer.html"
@@ -140,6 +142,10 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         if plan is None:
             raise Http404("Unknown plan")
         ctx["plan_data"] = serialize_plan(plan)
+        # The persisted agent conversation, rebuilt from this plan's proposal
+        # batches so the chat survives a reload (the JS hydrates ``messages``
+        # from it, falling back to the greeting when empty).
+        ctx["chat_thread"] = serialize_chat_thread(plan)
         return ctx
 
 

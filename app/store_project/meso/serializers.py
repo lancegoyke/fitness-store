@@ -17,6 +17,8 @@ groups slice (S1, out of scope) and is still not emitted.
 from collections import Counter
 from collections import defaultdict
 
+from django.urls import reverse
+
 from . import models
 
 
@@ -55,6 +57,66 @@ def serialize_proposed_change(change):
         "honors": change.honors,
         "status": change.status,
     }
+
+
+# A change-less, summary-less agent reply still says *something* so the bubble
+# never renders blank — mirrors ``meso.js``'s ``batchMessage`` fallback.
+_NO_CHANGES_NOTE = (
+    "I couldn't find any safe changes to propose for that. "
+    "Try rephrasing or adjusting the plan directly."
+)
+_DRAFTING_NOTE = "Still working on this proposal…"
+_FAILED_NOTE = "The agent had trouble responding. Give it another try."
+
+
+def _agent_reply_for_batch(batch):
+    """The agent's side of one batch, in the ``meso.js`` message shape.
+
+    The agent never sends free-form chat — its reply is exactly the batch's
+    outcome: a failure note, a still-drafting note, or a summary plus the inline
+    proposed changes (with a review link when there are any).
+    """
+    Status = models.AgentProposalBatch.Status
+    message = {"id": f"agent-{batch.pk}", "role": "agent"}
+
+    if batch.status == Status.FAILED:
+        message["text"] = batch.error or _FAILED_NOTE
+        message["error"] = True
+        return message
+    if batch.status == Status.DRAFTING:
+        # A run that never finished before the reload — a neutral note, not an
+        # error and not a blank bubble.
+        message["text"] = _DRAFTING_NOTE
+        return message
+
+    changes = [serialize_proposed_change(c) for c in batch.changes.all()]
+    message["text"] = batch.summary or (_NO_CHANGES_NOTE if not changes else "")
+    message["changes"] = changes
+    message["reviewUrl"] = (
+        reverse("meso:review_batch", kwargs={"batch_id": batch.pk}) if changes else None
+    )
+    return message
+
+
+def serialize_chat_thread(plan):
+    """The designer's persisted agent conversation, oldest message first.
+
+    Every coach turn is an ``AgentProposalBatch`` (``instruction`` = the coach's
+    message; ``summary`` + ``ProposedChange`` rows = the agent's reply), so the
+    plan's batches *are* the thread — no separate chat model. Each batch expands
+    to a coach message then an agent message, in the exact shape ``meso.js``'s
+    ``messages`` array renders, so the front-end hydrates without remapping.
+    """
+    batches = plan.proposal_batches.order_by("created_at", "pk").prefetch_related(
+        "changes"
+    )
+    thread = []
+    for batch in batches:
+        thread.append(
+            {"id": f"coach-{batch.pk}", "role": "coach", "text": batch.instruction}
+        )
+        thread.append(_agent_reply_for_batch(batch))
+    return thread
 
 
 def serialize_session(session):

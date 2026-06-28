@@ -42,9 +42,11 @@ document.addEventListener("alpine:init", () => {
     planId: null,
     csrf: "",
 
-    // The thread starts with a single orienting greeting. Real agent turns are
-    // appended as the coach sends instructions; the thread is not persisted yet
-    // (a later slice adds the background job + saved conversation).
+    // The thread starts with a single orienting greeting. On load, init()
+    // replaces it with the plan's persisted conversation (rebuilt server-side
+    // from the proposal batches and injected as `meso-chat-thread`) when there
+    // is one; an empty history keeps this greeting. Real agent turns are
+    // appended live as the coach sends instructions.
     messages: [
       {
         id: 1,
@@ -97,6 +99,24 @@ document.addEventListener("alpine:init", () => {
       this.phases = data.phases;
       const csrfEl = document.getElementById("meso-csrf");
       this.csrf = csrfEl ? csrfEl.dataset.token : "";
+      this.hydrateThread();
+    },
+
+    // Replace the greeting with the plan's persisted conversation when the view
+    // injects one. The thread is rebuilt server-side from the proposal batches
+    // (serialize_chat_thread) in the exact `messages` shape, so it drops in
+    // without remapping. An empty history (no batches) keeps the greeting.
+    hydrateThread() {
+      const el = document.getElementById("meso-chat-thread");
+      if (!el) return;
+      let thread;
+      try {
+        thread = JSON.parse(el.textContent);
+      } catch (e) {
+        console.error("Could not parse chat thread", e);
+        return;
+      }
+      if (Array.isArray(thread) && thread.length) this.messages = thread;
     },
 
     async apiPost(url, body) {
