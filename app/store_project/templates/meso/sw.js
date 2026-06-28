@@ -18,6 +18,7 @@
 const CACHE = "{{ cache_version }}";
 const OFFLINE_URL = "{{ offline_url }}";
 const HOME_URL = "{{ home_url }}";
+const STATIC_PREFIX = "{{ static_url }}"; // only these GETs are cacheable
 
 // Static shell — safe to precache (no auth, hashed URLs resolved at render time).
 const PRECACHE = [
@@ -86,6 +87,12 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
+
+  // Only static assets are cacheable. Everything else same-origin in scope —
+  // dynamic API GETs like /meso/api/.../status/ (coach agent polling), the
+  // manifest, the worker itself — passes straight through so it's never served
+  // stale from Cache Storage.
+  if (!url.pathname.startsWith(STATIC_PREFIX)) return;
 
   // Static GETs: stale-while-revalidate.
   event.respondWith(

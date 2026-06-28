@@ -4,6 +4,7 @@ import json
 import logging
 from urllib.parse import urlparse
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -521,6 +522,7 @@ def service_worker(request):
             "cache_version": PWA_CACHE_VERSION,
             "offline_url": reverse("meso:offline"),
             "home_url": reverse("meso:athlete_home"),
+            "static_url": settings.STATIC_URL,
         },
         request=request,
     )

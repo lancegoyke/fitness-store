@@ -114,6 +114,16 @@ class TestServiceWorker:
     def test_no_login_required(self, client):
         assert client.get(SW).status_code == 200
 
+    def test_runtime_cache_is_gated_to_static_assets(self, client):
+        # Dynamic GETs (e.g. /meso/api/.../status/ agent polling) must pass
+        # through, never be served stale from Cache Storage — the runtime-cache
+        # branch is gated on the static-asset prefix.
+        from django.conf import settings
+
+        body = client.get(SW).content.decode()
+        assert settings.STATIC_URL in body
+        assert "startsWith(STATIC_PREFIX)" in body
+
 
 class TestOfflinePage:
     def test_renders_without_auth(self, client):
