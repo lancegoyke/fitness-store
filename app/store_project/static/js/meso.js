@@ -222,7 +222,14 @@ function createMeso() {
       if (!this.isGroup || !this.live) return;
       const members = (this.group && this.group.members) || [];
       if (!members.length) return;
-      const memberId = members[0].id;
+      // Land on a member who already adjusts this row (the badge the coach
+      // tapped) so a save edits the existing adjust rather than overwriting the
+      // wrong athlete; fall back to the first member for a fresh adjust. Guard
+      // against a stored adjust whose member has since left the roster.
+      const adjusted = (ex.adjusts || []).find((a) =>
+        members.some((m) => m.id === a.id),
+      );
+      const memberId = adjusted ? adjusted.id : members[0].id;
       this.override = {
         ex,
         members,

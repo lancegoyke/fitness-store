@@ -202,6 +202,21 @@ describe("override editor", () => {
     expect(c.overrideHasExisting).toBe(true);
   });
 
+  it("preselects the adjusted member when the badge isn't the first member", () => {
+    const c = makeGroupMeso();
+    // Only Aaron (the second member) adjusts this row.
+    const ex = groupRow({
+      adj: "AA -10%",
+      adjusts: [
+        { id: "a2", name: "Aaron Adams", initials: "AA", label: "-10%", swap: "", load_pct: 90, sets: "", reps: "", note: "" },
+      ],
+    });
+    c.openOverride(ex);
+    expect(c.override.memberId).toBe("a2");
+    expect(c.override.draft.load_pct).toBe("90");
+    expect(c.overrideHasExisting).toBe(true);
+  });
+
   it("blanks the draft when switching to a member with no adjust", () => {
     const c = makeGroupMeso();
     c.openOverride(groupRow());
