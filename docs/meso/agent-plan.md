@@ -1,7 +1,8 @@
 # Meso — agent slice plan
 
 **Status:** Phase 1 done & merged (PR #280, squash `953d9d4`; deployed) · Phase 2 done & merged
-(PR #282, squash `ee7d456`; deployed) · created 2026-06-27 · **next = agent Phase 3 (designer chat column)**
+(PR #282, squash `ee7d456`; deployed) · Phase 3 built (branch `meso-agent-phase3`) · created 2026-06-27 ·
+**next = agent Phase 4 (execution + eval)**
 **Companion to:** [`decisions.md`](./decisions.md) (B6) · [`persistence-plan.md`](./persistence-plan.md)
 **Goal of this slice:** replace the designer's canned agent-chat engine
 (`detectIntent`/`applyIntent` in `meso.js`) and the review screen
@@ -151,11 +152,30 @@ coach's latest pending batch (fixtures retired). No migration (status/payload al
 red→green: +33 tests (179 meso / 319 project-wide). *Done when:* a coach can approve/reject and
 apply a real batch into the program. **No chat UI yet (Phase 3).**
 
-**Phase 3 — Designer agent-chat column.**
+**Phase 3 — Designer agent-chat column. ✅ Built (branch `meso-agent-phase3`).**
 Rebuild the designer's left/agent column (`meso.js` `detectIntent`/`applyIntent`,
 currently canned: swap-knee / lower-volume-d2 / progress / deload) to POST the
 coach's message to `.../agent/` and render the returned batch inline, linking to
 the review screen. Retire the canned intent engine.
+
+*Built:* the canned keyword engine (`detectIntent`/`applyIntent`/`dispatch` in
+`meso.js`, which matched the coach's text to one of four scripted edits and
+mutated the in-memory grid in place) is gone. A coach turn — typed or via a chip
+(chips now send their label verbatim as the instruction) — POSTs to
+`api/plan/<id>/agent/` (the Phase 1 endpoint), and the returned batch renders
+inline: a per-change list (`title` + `before`→`after`) under the agent's summary,
+plus a **"Review N changes →"** link to the review gate. The agent only
+*proposes* — the chat never mutates `program`/`weeks`/`phases`; changes stay inert
+until the coach applies them at review. Friendly fallbacks for 503 (no key) / 502
+(provider) / 400 / network errors; the composer + chips disable while the agent is
+drafting (`agentTyping`). The fabricated seed thread is dropped for one orienting
+greeting; the thread is **not persisted yet** (a later slice). Tests
+(`test_designer_agent_chat.py`, red→green): no JS runner in-project, so they guard
+the engine's retirement + the real endpoint wiring at the source level, plus a
+render check. 192 meso / 332 project-wide pass; `ruff` + pre-commit clean. **Local
+Codex review: clean (1 round, no findings).** *Done when:* a coach can chat the
+agent into a real proposal batch and jump to review. **Deferred:** persisted chat
+thread, background job + streamed "drafting…" status (Phase 4).
 
 **Phase 4 — Execution + eval.**
 Background job + streamed "drafting…" status (Redis); golden eval cases; logged

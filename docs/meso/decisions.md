@@ -240,3 +240,15 @@ _(Append dated entries here as decisions land.)_
   and wires Apply/Discard; bare `review/` redirects to the latest pending batch and `mockdata.PROPOSED_CHANGES`
   is retired. No migration (status/payload already existed). +33 tests (179 meso / 319 project-wide).
   Resume point → agent Phase 3 (designer agent-chat column).
+- 2026-06-27 — **Agent Phase 3 built** (branch `meso-agent-phase3`): the designer's agent-chat column
+  goes **live**. The canned keyword intent engine (`detectIntent`/`applyIntent`/`dispatch` in `meso.js`,
+  which matched the coach's text to one of four scripted edits and mutated the grid in place) is retired;
+  a coach turn — typed or via a chip — now POSTs to `api/plan/<id>/agent/` (the Phase 1 endpoint) and the
+  returned batch renders inline (per-change `title`/`before`→`after` under the summary) with a
+  **"Review N changes →"** link to the review gate. The agent only **proposes** — the chat never mutates
+  the program grid; changes stay inert until applied at review. Friendly fallbacks for 503/502/400/network
+  errors; composer + chips disable while drafting. No backend change (the endpoint already existed); chat
+  is **not persisted yet**. Tests (`test_designer_agent_chat.py`): no JS runner in-project, so they guard
+  the retirement + real wiring at the source level + a render check. +8 tests (192 meso / 332 project-wide);
+  local Codex review clean (1 round). Resume point → agent Phase 4 (background job + streamed status +
+  golden eval cases).
