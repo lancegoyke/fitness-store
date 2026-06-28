@@ -1,7 +1,8 @@
 # Meso — athlete-facing slice plan
 
-**Status:** Phase 1 built (branch `meso-athlete-phase1`; +20 tests, 239 meso /
-379 project-wide; ruff clean; local Codex review clean, 1 round) · created 2026-06-27
+**Status:** Phase 1 done & merged (PR #288, squash `42bb805`; Django CI green,
+deployed to Hetzner — no migration; +20 tests, 239 meso / 379 project-wide;
+ruff clean; local Codex review clean, 1 round) · created 2026-06-27
 **Companion to:** [`decisions.md`](./decisions.md) (B2, S3, S7, N1/D-a/D-b) ·
 [`persistence-plan.md`](./persistence-plan.md) · [`agent-plan.md`](./agent-plan.md)
 **Goal of this slice:** give the **athlete** a real, logged-in surface — see the
@@ -94,7 +95,7 @@ coach-who-is-also-an-athlete — keeps the roster.
 
 ## Phasing (one PR each)
 
-**Phase 1 — Athlete home + session (the read surface). ✅ Built.**
+**Phase 1 — Athlete home + session (the read surface). ✅ Done & merged (2026-06-27, PR #288, squash `42bb805`; Django CI green, deployed to Hetzner — no migration; `/meso/me/` live, login-gated).**
 The athlete's own logged-in surface, read-only: `/meso/me/` lists their active
 plans with each plan's latest delivered week and its sessions (each marked
 done/pending from the athlete's `SessionLog`); `/meso/me/session/<id>/` shows one
