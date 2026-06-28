@@ -59,32 +59,65 @@
           {% endfor %}
         </div>
 
-        {% if groups %}
-          <div class="meso-card">
-            <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
-              <p class="meso-eyebrow" style="margin:0;">Groups</p>
-            </div>
-            {% for g in groups %}
-              <a class="meso-row" href="{% url 'meso:group' g.id %}">
-                <div style="display:flex;">
-                  {% for m in g.member_objs|slice:":3" %}
-                    <div class="meso-avatar meso-avatar--sm {% if m.tone == 'accent' %}meso-avatar--accent{% endif %}" style="border:2px solid var(--surface);{% if not forloop.first %}margin-left:-9px;{% endif %}">{{ m.initials }}</div>
-                  {% endfor %}
-                  {% if g.member_objs|length > 3 %}
-                    <div class="meso-avatar meso-avatar--sm" style="border:2px solid var(--surface);margin-left:-9px;">+{{ g.member_objs|length|add:"-3" }}</div>
-                  {% endif %}
-                </div>
-                <div style="min-width:0;">
-                  <div class="meso-row-name">{{ g.name }}</div>
-                  <div class="meso-row-meta">{{ g.meta }}</div>
-                </div>
-                <div class="meso-spacer"></div>
-                <span class="meso-badge meso-badge--accent"><i></i>{{ g.status_label }}</span>
-                <span class="meso-muted" style="font-size:16px;">›</span>
-              </a>
-            {% endfor %}
+        <div class="meso-card">
+          <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
+            <p class="meso-eyebrow" style="margin:0;">Groups</p>
+            <div class="meso-spacer"></div>
+            <span class="meso-row-meta">{{ groups|length }} group{{ groups|length|pluralize }}</span>
           </div>
-        {% endif %}
+          {% for g in groups %}
+            <a class="meso-row" href="{% url 'meso:group' g.id %}">
+              <div style="display:flex;">
+                {% for m in g.member_objs|slice:":3" %}
+                  <div class="meso-avatar meso-avatar--sm {% if m.tone == 'accent' %}meso-avatar--accent{% endif %}" style="border:2px solid var(--surface);{% if not forloop.first %}margin-left:-9px;{% endif %}">{{ m.initials }}</div>
+                {% endfor %}
+                {% if g.member_objs|length > 3 %}
+                  <div class="meso-avatar meso-avatar--sm" style="border:2px solid var(--surface);margin-left:-9px;">+{{ g.member_objs|length|add:"-3" }}</div>
+                {% endif %}
+              </div>
+              <div style="min-width:0;">
+                <div class="meso-row-name">{{ g.name }}</div>
+                <div class="meso-row-meta">{{ g.meta }}</div>
+              </div>
+              <div class="meso-spacer"></div>
+              <span class="meso-badge meso-badge--accent"><i></i>{{ g.status_label }}</span>
+              <span class="meso-muted" style="font-size:16px;">›</span>
+            </a>
+          {% empty %}
+            <div class="meso-row" style="color:var(--dim);">
+              No groups yet. Create one to program several athletes together.
+            </div>
+          {% endfor %}
+
+          <!-- Create a brand-new group (Phase 2b): name + focus + pick members. -->
+          <details style="border-top:1px solid var(--line-2);">
+            <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent-ink);">+ New group</summary>
+            <form method="post" action="{% url 'meso:group_create' %}" style="display:flex;flex-direction:column;gap:11px;padding:4px 16px 16px;">
+              {% csrf_token %}
+              <input name="name" required maxlength="255" placeholder="Group name" style="appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
+              <input name="focus" maxlength="255" placeholder="Focus (optional) — e.g. Hypertrophy" style="appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
+              {% if athletes %}
+                <div>
+                  <p class="meso-eyebrow" style="margin:2px 0 7px;">Members</p>
+                  <div style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;">
+                    {% for a in athletes %}
+                      <label style="display:flex;align-items:center;gap:9px;font-size:13px;color:var(--ink);cursor:pointer;">
+                        <input type="checkbox" name="athletes" value="{{ a.id }}" />
+                        <span class="meso-avatar meso-avatar--sm {% if a.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ a.initials }}</span>
+                        {{ a.name }}
+                      </label>
+                    {% endfor %}
+                  </div>
+                </div>
+              {% else %}
+                <p class="meso-sub" style="margin:0;">Invite an athlete first to add members.</p>
+              {% endif %}
+              <div>
+                <button type="submit" class="meso-btn meso-btn--primary">Create group</button>
+              </div>
+            </form>
+          </details>
+        </div>
       </div>
 
       <!-- activity column -->

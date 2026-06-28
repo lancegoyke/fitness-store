@@ -64,8 +64,8 @@ agent, and athlete slices.
     rows (`serialize_group_identity`); autosave edits its grid; **deliver + the agent reject
     group plans** (Phases 4/3). A `group_design` POST entry point + the group-detail
     "Design / Open shared program" card. The seeded demo group gets a shared program.
-  - **Phase 2b — create-group UI.** Create a brand-new group from the roster (name + focus +
-    pick members), so groups no longer come only from the seed/admin.
+  - **Phase 2b — create-group UI (built; this PR).** Create a brand-new group from the roster
+    (name + focus + pick members), so groups no longer come only from the seed/admin.
 - **Phase 3 — per-athlete overrides (the `adj` overlay) (built; this PR).**
   `PrescriptionOverride` per member (load %, swap, volume), effective-program resolution
   (`shared + overrides`), the designer's "Shared program · per-athlete auto-adjusts" row +
@@ -171,6 +171,48 @@ agent, and athlete slices.
   plan. The group-detail page shows Design vs Open by whether a shared plan exists.
 - Seed: the demo group gets a shared program (rooted at the group, with a scaffold), not
   duplicated on reseed.
+
+## Phase 2b — build notes
+
+- **A group can finally be born from the product, not just the seed/admin.**
+  `MesoGroup.create_for_coach(coach, *, name, focus="", athletes=())` is the model
+  entry point: it creates the coach's group, then adds each athlete through the
+  existing `add_athlete` so the same active-link tenancy guard applies — an
+  athlete without an active link to this coach is *skipped*, not raised, because
+  the create form only ever offers the coach's own athletes and a stale/foreign
+  pick shouldn't fail the whole create. No migration (no schema change — just a
+  helper + a view + a form).
+- **Endpoint:** `group_create` (POST `/meso/group/new/`) is a plain form POST (not
+  JSON), the roster's "New group" disclosure. `name` is required (a blank one
+  creates nothing and routes back to the roster — the field is also `required`
+  client-side); `focus` is optional; `athletes` is the multi-valued list of
+  picked ids. `_coach_active_athletes` resolves the posted ids: it sanitizes each
+  to a UUID (a malformed value is skipped, never reaching the ORM as a query
+  error → no 500) and scopes to the coach's own *active* links, so only their
+  current athletes resolve and a foreign/stale pick simply drops out. On success
+  it lands on the new group's **detail page**, where the coach designs the shared
+  program (Phase 2a) — the natural next step.
+- **Roster:** the *Groups* card now always renders (was gated on `{% if groups %}`),
+  with a group count, an empty state, and a `<details>` "New group" disclosure
+  holding the form — name + focus inputs and a checkbox per roster athlete (the
+  same `athletes` the *Individuals* card lists, already coach-scoped to active
+  links). JS-free (a native `<details>`), so it needs no Alpine on the roster.
+
+## Tests (Phase 2b)
+
+`meso/tests/test_group_create.py` — model helper + the view + the roster form:
+
+- `create_for_coach` creates a coach-owned group (name/focus/active status), adds
+  the given athletes off their active links, defaults `focus` blank with athletes
+  optional, and *skips* (doesn't raise on) an athlete with no active link.
+- `group_create`: a POST creates the group with its picked members and redirects
+  to the group detail; a foreign athlete / a pending-link athlete / a malformed
+  (non-UUID) id are each ignored (no member, no 500); a blank name creates nothing
+  and redirects to the roster; GET is 405; anonymous is redirected to login and
+  writes nothing.
+- The roster offers the create form (posts to `group_create`, a `name="athletes"`
+  checkbox per athlete carrying the athlete id) and excludes another coach's
+  athlete from the picker.
 
 ## Phase 3 — build notes
 
