@@ -1,6 +1,14 @@
 # Meso — persisted designer chat thread plan
 
-**Status:** building (branch `meso-chat-thread`) · created 2026-06-28
+**Status:** **Built** (branch `meso-chat-thread`; 2026-06-28). Built red→green:
+**+16 tests** (`test_chat_thread.py` — serializer shape/ordering/scoping/states,
+the drafting resume-poll, view injection, JS wiring); 379 meso / 519 project-wide
+pass, ruff clean, **no migration** (the conversation is already in the
+`AgentProposalBatch` rows). **Local Codex review: 0 blocking across 3 rounds →
+CLEAN.** Two nits fixed: a thread hydrated while a run was still `drafting`
+resumes polling (carries `pollUrl`, `meso.js` `resumeDrafting`) instead of going
+stale; and a long restored thread scrolls to its latest turn on load. · created
+2026-06-28
 **Companion to:** [`agent-plan.md`](./agent-plan.md) (the chat went live in agent
 Phase 3, but the thread was never persisted) · [`decisions.md`](./decisions.md) (B6)
 **Goal of this slice:** the designer's agent-chat conversation **survives a page
@@ -43,9 +51,11 @@ two messages, in the exact shape `meso.js`'s `messages` array renders:
 - **coach** — `{id: "coach-<pk>", role: "coach", text: instruction}`.
 - **agent** — depends on the batch's terminal state:
   - `failed`   → `{role: "agent", text: error-or-fallback, error: true}` (no changes).
-  - `drafting` → `{role: "agent", text: "Still working on this proposal…"}` (a
-    stuck/in-flight run after a reload — rendered as a neutral note, never silently
-    dropped).
+  - `drafting` → `{role: "agent", text: "Still working on this proposal…",
+    pollUrl: <batch-status-url>}` (an in-flight run at render time — rendered as a
+    neutral note, and `meso.js` drops the placeholder and **resumes polling** that
+    URL so a run finishing after load updates the thread instead of going stale;
+    the note is the fallback if it never resolves).
   - `pending` / `applied` / `dismissed` → `{role: "agent", text: summary-or-fallback,
     changes: [serialize_proposed_change…], reviewUrl: review_batch-url-when-changes}`.
 
@@ -62,10 +72,12 @@ existing `{% if plan_data %}` block (the thread only matters when a plan loads).
 
 ### JS (`meso.js`)
 
-`init()` reads `#meso-chat-thread`; when present and non-empty it **replaces** the
-default greeting (`this.messages = thread`). An empty history (no batches) keeps
-the orienting greeting. Hydrated message ids are strings (`coach-<pk>`); runtime
-turns keep appending with `Date.now()` — no key collision.
+`init()` → `hydrateThread()` reads `#meso-chat-thread`; when present and non-empty
+it **replaces** the default greeting (`this.messages = thread`), scrolls to the
+latest turn, and — if the last message carries a `pollUrl` (a still-drafting run)
+— drops that placeholder and `resumeDrafting()`s the poll. An empty history (no
+batches) keeps the orienting greeting. Hydrated message ids are strings
+(`coach-<pk>`); runtime turns keep appending with `Date.now()` — no key collision.
 
 ## Out of scope (later)
 A `ChatMessage` model (only needed if the agent ever sends free-form text not
@@ -78,9 +90,11 @@ pytest + factory_boy, mirroring the slice discipline:
 - **serializer** — empty plan → `[]`; one pending batch → `[coach, agent]` with
   the instruction/summary text + changes + a review url; ordering (oldest first,
   interleaved); a `failed` batch → an error message, no changes/link; a
-  no-changes batch → no review link + a summary fallback; **plan-scoping** (a
-  batch on another plan never bleeds in).
+  no-changes batch → no review link + a summary fallback; a `drafting` batch → a
+  neutral note **carrying a `pollUrl`** (resolved batches carry none);
+  **plan-scoping** (a batch on another plan never bleeds in).
 - **view** — the designer page injects `meso-chat-thread` with the prior
   instruction; a plan with no batches injects an empty `[]`.
 - **wiring** (source-level, as the project has no JS runner) — `meso.js` reads
-  `meso-chat-thread` and hydrates `messages`, keeping the greeting fallback.
+  `meso-chat-thread` and hydrates `messages`, keeping the greeting fallback, and
+  resumes the poll for a hydrated drafting run.

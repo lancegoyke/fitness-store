@@ -217,4 +217,9 @@ reviewable batch — and a golden-eval command guards quality. **Agent slice
 complete.**
 
 ## Out of scope (later)
-Athlete-facing surfaces · groups · the full "changes since last delivery" diff UI.
+Athlete-facing surfaces (**done** — see [`athlete-plan.md`](./athlete-plan.md)) ·
+groups · the full "changes since last delivery" diff UI.
+
+**Follow-up shipped:** the persisted chat thread deferred from Phase 3/4 (the
+designer conversation now survives a reload, rebuilt from the proposal batches —
+no new model). See [`chat-thread-plan.md`](./chat-thread-plan.md).
