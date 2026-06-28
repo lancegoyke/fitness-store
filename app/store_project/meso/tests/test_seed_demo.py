@@ -25,6 +25,7 @@ from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
+from store_project.meso.models import PrescriptionOverride
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.presenters import session_results
@@ -129,6 +130,25 @@ class TestSeedCreatesGroup:
         coach = User.objects.get(email=COACH_EMAIL)
         group = MesoGroup.objects.for_coach(coach).get()
         assert group.plans.count() == 1
+
+    def test_seeds_per_athlete_overrides(self):
+        # Groups Phase 3: the demo group's shared program carries a couple of
+        # per-athlete auto-adjusts so a fresh DB renders the designer's adj badge.
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        group = MesoGroup.objects.for_coach(coach).get()
+        assert PrescriptionOverride.objects.filter(membership__group=group).exists()
+
+    def test_reseed_does_not_duplicate_overrides(self):
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        group = MesoGroup.objects.for_coach(coach).get()
+        count = PrescriptionOverride.objects.filter(membership__group=group).count()
+        seed()
+        assert (
+            PrescriptionOverride.objects.filter(membership__group=group).count()
+            == count
+        )
 
 
 class TestSamplePlanRoundTrips:

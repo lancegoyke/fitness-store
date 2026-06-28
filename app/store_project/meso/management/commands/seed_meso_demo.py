@@ -13,8 +13,9 @@ database renders the roster, athlete profile, and designer from actual data:
   ExercisePrescription`` hierarchy reproducing the designer's fixture grid, so
   ``serialize_plan`` round-trips it straight into the designer;
 - one demo **MesoGroup** (groups slice S1) with three of the athletes as
-  members + a **shared program** rooted at the group (Phase 2a), so the roster's
-  *Groups* card and the group designer both render off real rows.
+  members + a **shared program** rooted at the group (Phase 2a) carrying a couple
+  of per-athlete **auto-adjusts** (Phase 3), so the roster's *Groups* card and the
+  group designer (including its ``adj`` badge) all render off real rows.
 
 The command is **idempotent**: re-running ``get_or_create``s every row, so it
 never duplicates. ``--delete`` tears the demo back down (the demo athletes and,
@@ -497,19 +498,48 @@ class Command(BaseCommand):
                 "status": MesoGroup.Status.ACTIVE,
             },
         )
+        email_to_slug = {s["email"]: s["slug"] for s in ATHLETES}
         emails = [s["email"] for s in ATHLETES if s["slug"] in GROUP["member_slugs"]]
         members = User.objects.filter(email__in=emails)
+        memberships = {}
         for athlete in members:
-            group.add_athlete(athlete)
+            memberships[email_to_slug[athlete.email]] = group.add_athlete(athlete)
         # Groups Phase 2a: a shared program rooted at the group (created once, so
         # a reseed never spawns a second) — the group designer renders off it.
         if group.shared_plan() is None:
             group.create_shared_plan()
             self.stdout.write(f"  - built shared program for group '{group.name}'")
+        self._ensure_group_overrides(group, memberships)
         self.stdout.write(
             f"  - ensured group '{group.name}' ({members.count()} members)"
         )
         return group
+
+    def _ensure_group_overrides(self, group, memberships):
+        """A couple of per-athlete auto-adjusts on the shared program (Phase 3).
+
+        So a fresh DB renders the designer's ``adj`` badge off real diffs: two
+        members adjust the first shared lift (a load % + a contraindication swap →
+        a "2 adjusts" badge) and a third tweaks the second lift's volume. Idempotent
+        — ``set_override`` upserts, so a reseed never piles up extra overrides.
+        """
+        plan = group.shared_plan()
+        if plan is None:
+            return
+        prescriptions = list(
+            ExercisePrescription.objects.filter(
+                session__week__mesocycle__plan=plan
+            ).order_by("session__order", "order")
+        )
+        if len(prescriptions) < 2:
+            return
+        first, second = prescriptions[0], prescriptions[1]
+        if "devon" in memberships:
+            memberships["devon"].set_override(first, load_pct=90)
+        if "priya" in memberships:
+            memberships["priya"].set_override(first, swap_name="Box Squat")
+        if "marcus" in memberships:
+            memberships["marcus"].set_override(second, sets="2", reps="8")
 
     # -- the sample plan --------------------------------------------------
 

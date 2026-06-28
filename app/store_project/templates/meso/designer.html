@@ -318,8 +318,8 @@
 
               <template x-if="isGroup">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px;padding:10px 13px;background:var(--soft);border:1px solid var(--soft-line);border-radius:9px;">
-                  <span style="font-size:11.5px;font-weight:700;color:var(--accent-deep);">Shared program</span>
-                  <span style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Every member trains off this program &#8212; per-athlete auto-adjusts arrive next.</span>
+                  <span style="font-size:11.5px;font-weight:700;color:var(--accent-deep);">Shared program &#183; per-athlete auto-adjusts</span>
+                  <span style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Every member trains off this program &#8212; a member's badge marks where their plan auto-adjusts.</span>
                 </div>
               </template>
 
@@ -342,7 +342,7 @@
                         <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:1px 6px;margin-top:1px;min-height:15px;">
                           <template x-if="ex.tag"><span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;color:var(--accent-deep);background:var(--soft);border:1px solid var(--soft-line);padding:0 5px;border-radius:4px;" x-text="ex.tag"></span></template>
                           <template x-if="ex.last"><span style="font-size:10.5px;color:var(--dim);font-family:'IBM Plex Mono',monospace;" x-text="'last: ' + ex.last"></span></template>
-                          <template x-if="isGroup && ex.adj"><span style="font-size:10px;font-weight:600;color:var(--accent-deep);background:var(--soft);padding:0 5px;border-radius:4px;" x-text="ex.adj"></span></template>
+                          <template x-if="isGroup && ex.adj"><span :title="(ex.adjusts || []).map(a => a.name + ': ' + a.label).join('\n')" style="font-size:10px;font-weight:600;color:var(--accent-deep);background:var(--soft);padding:0 5px;border-radius:4px;cursor:help;" x-text="ex.adj"></span></template>
                         </div>
                       </div>
                       <div style="display:flex;align-items:center;justify-content:center;gap:2px;">

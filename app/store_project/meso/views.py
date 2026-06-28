@@ -8,6 +8,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Max
 from django.http import Http404
@@ -37,15 +38,19 @@ from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachProfile
 from .models import ExercisePrescription
+from .models import GroupMembership
+from .models import InvalidTransition
 from .models import LoggedSet
 from .models import MesoGroup
 from .models import Plan
+from .models import PrescriptionOverride
 from .models import ProposedChange
 from .models import PushSubscription
 from .models import Session
 from .models import SessionLog
 from .models import WeekDelivery
 from .serializers import current_week
+from .serializers import group_adjustments
 from .serializers import serialize_chat_thread
 from .serializers import serialize_plan
 from .serializers import serialize_prescription
@@ -853,6 +858,153 @@ def session_add_exercise(request, plan_id, pk):
     return JsonResponse(
         {"ok": True, "prescription": serialize_prescription(prescription)}, status=201
     )
+
+
+# Free-form per-athlete override cells, mapped to their model ``max_length``.
+OVERRIDE_TEXT_FIELDS = {"swap": 255, "sets": 32, "reps": 32, "note": 255}
+
+
+def _group_member_or_none(group, athlete_id):
+    """The group's *active* membership for ``athlete_id`` (a User UUID), or None.
+
+    Scoped to the group's own coach + active links so an override can only ever
+    target a current member; a malformed id, a stranger, or an ended member all
+    resolve to None (the endpoint answers 400).
+    """
+    if not isinstance(athlete_id, str) or not athlete_id:
+        return None
+    try:
+        return (
+            GroupMembership.objects.filter(
+                group=group,
+                relationship__athlete_id=athlete_id,
+                relationship__coach=group.coach,
+                relationship__status=CoachAthlete.Status.ACTIVE,
+            )
+            .select_related("relationship__athlete")
+            .first()
+        )
+    except (ValueError, ValidationError):
+        return None  # athlete_id wasn't a valid UUID
+
+
+def _clean_override_diff(payload, existing):
+    """Validate the posted override fields onto ``existing``, or return a 400.
+
+    Returns ``(diff, None)`` on success or ``(None, HttpResponseBadRequest)``.
+    **Merge** semantics, matching the autosave ``prescription_patch`` convention:
+    a field *absent* from the payload keeps its current value (from ``existing``,
+    or empty/None when creating), so a partial update never silently drops the
+    other parts of a multi-field adjust. A field *present* overwrites — send it
+    empty (``"swap": ""`` / ``"load_pct": null``) to clear just that part.
+    ``swap``/``sets``/``reps``/``note`` are free text within their model lengths;
+    ``load_pct`` is an integer in the model's sane band (or null).
+    """
+    diff = {
+        "swap_name": existing.swap_name if existing else "",
+        "sets": existing.sets if existing else "",
+        "reps": existing.reps if existing else "",
+        "note": existing.note if existing else "",
+        "load_pct": existing.load_pct if existing else None,
+    }
+    for field, max_length in OVERRIDE_TEXT_FIELDS.items():
+        if field not in payload:
+            continue
+        value = payload[field]
+        if not isinstance(value, str):
+            return None, HttpResponseBadRequest(f"{field} must be a string.")
+        if len(value) > max_length:
+            return None, HttpResponseBadRequest(f"{field} is too long.")
+        diff["swap_name" if field == "swap" else field] = value
+    if "load_pct" in payload:
+        load_pct = payload["load_pct"]
+        if load_pct is not None and (
+            not isinstance(load_pct, int)
+            or isinstance(load_pct, bool)
+            or not (
+                PrescriptionOverride.MIN_LOAD_PCT
+                <= load_pct
+                <= PrescriptionOverride.MAX_LOAD_PCT
+            )
+        ):
+            return None, HttpResponseBadRequest(
+                f"load_pct must be an integer between "
+                f"{PrescriptionOverride.MIN_LOAD_PCT} and "
+                f"{PrescriptionOverride.MAX_LOAD_PCT}."
+            )
+        diff["load_pct"] = load_pct
+    return diff, None
+
+
+def _override_response(plan, prescription):
+    """The override endpoint's reply: the row + its (recomputed) adj badge.
+
+    ``adj`` reflects *all* the row's remaining active-member adjusts, so the
+    front-end can repaint the badge after a set or a clear (it may still be lit by
+    another member, or now dark).
+    """
+    entry = group_adjustments(plan, [prescription]).get(prescription.pk)
+    return JsonResponse(
+        {
+            "ok": True,
+            "prescription": serialize_prescription(prescription),
+            "adj": entry["adj"] if entry else None,
+            "adjusts": entry["adjusts"] if entry else [],
+        }
+    )
+
+
+@login_required
+@require_POST
+def prescription_override(request, plan_id, pk):
+    """Set or clear one member's per-athlete adjust on a shared-program row (Phase 3).
+
+    Group plans only — the adjust overlay layers on a *shared* program, so an
+    individual plan is a 400. Coach-scoped via ``_coach_plan_or_forbidden`` (403
+    if not the group's coach); the prescription must belong to the plan (404
+    otherwise) and ``athlete`` must be an active member of the group (400). Body:
+    ``{"athlete": <uuid>, "swap"/"load_pct"/"sets"/"reps"/"note"}`` to set, or
+    ``{"athlete": <uuid>, "clear": true}`` to drop the whole adjust. Field updates
+    **merge** (an omitted field keeps its current value, like the autosave
+    ``prescription_patch``); send a field empty to clear just that part, and an
+    adjust left with no parts is removed. Fully validated before any write.
+    """
+    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    if not plan.is_group:
+        return HttpResponseBadRequest("Overrides apply to a group's shared program.")
+    prescription = get_object_or_404(
+        ExercisePrescription, pk=pk, session__week__mesocycle__plan=plan
+    )
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+
+    membership = _group_member_or_none(plan.group, payload.get("athlete"))
+    if membership is None:
+        return HttpResponseBadRequest("athlete must be an active member of the group.")
+
+    if payload.get("clear"):
+        membership.clear_override(prescription)
+        _touch_plan(plan)
+        return _override_response(plan, prescription)
+
+    existing = membership.overrides.filter(prescription=prescription).first()
+    diff, error = _clean_override_diff(payload, existing)
+    if error is not None:
+        return error
+    try:
+        membership.set_override(prescription, **diff)
+    except InvalidTransition:
+        # The prescription is scoped to this plan above, so its group always
+        # matches the membership; this stays defensive against future drift.
+        return HttpResponseBadRequest("The prescription is not in this program.")
+    _touch_plan(plan)
+    return _override_response(plan, prescription)
 
 
 @login_required

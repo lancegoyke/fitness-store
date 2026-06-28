@@ -10,8 +10,9 @@ The designer (``static/js/meso.js``) keeps three in-memory arrays:
 Session → ExercisePrescription`` hierarchy so Phase 3 can hydrate the designer
 from the database instead of fixtures. The designer's ``last`` column (what the
 athlete actually did last time, per lift) is derived from real logged sets here
-(athlete slice Phase 3); ``adj`` (a group-only agent overlay) arrives with the
-groups slice (S1, out of scope) and is still not emitted.
+(athlete slice Phase 3); ``adj`` (a group plan's per-row per-athlete auto-adjust
+badge) is emitted from real ``PrescriptionOverride`` diffs (groups slice S1,
+Phase 3 — ``group_adjustments``).
 """
 
 from collections import Counter
@@ -420,6 +421,126 @@ def current_week(plan, week=None):
     return weeks[0] if weeks else None
 
 
+# -- per-athlete overrides: the ``adj`` overlay (groups slice S1, Phase 3) --
+#
+# A group plan is a *shared* program; each member can carry per-row auto-adjusts
+# (a ``PrescriptionOverride`` — a swap, a load %, a volume tweak). A member's
+# *effective* program = the shared template + their override diffs. The designer
+# renders these as a per-row ``adj`` badge driven by the real diffs.
+
+
+def resolve_load(load, load_pct):
+    """Scale a numeric ``load`` by ``load_pct``, rounded to the nearest 2.5.
+
+    Mirrors the designer's ``round25`` so a coach-set per-athlete % lands on a
+    loadable plate. A non-numeric base ("BW") or an absent ``load_pct`` is
+    returned unchanged — a percentage can't apply to "BW".
+    """
+    if load_pct is None:
+        return load
+    base = _num(load)
+    if base is None:
+        return load
+    # Match the designer's ``Math.round(n / 2.5) * 2.5`` exactly: JS rounds a
+    # half up, while Python's ``round`` is banker's (half-to-even), which would
+    # diverge on exact half-steps (e.g. 112.5 @ 90% → 102.5 in the UI, not 100).
+    # The scaled value is non-negative (load_pct ≥ 1), so ``int(x + 0.5)`` floors
+    # to the same result as ``Math.round``.
+    return _fmt_num(int(base * load_pct / 100 / 2.5 + 0.5) * 2.5)
+
+
+def resolve_prescription(prescription, override):
+    """A member's effective row = the shared prescription + their override diff.
+
+    ``override`` of ``None`` yields the shared base unchanged. A swap replaces the
+    name; ``load_pct`` scales the load; ``sets``/``reps``/``note`` override the
+    shared volume/note when set. RPE is not per-athlete in this slice.
+    """
+    base = {
+        "name": prescription.name,
+        "sets": prescription.sets,
+        "reps": prescription.reps,
+        "load": prescription.load,
+        "rpe": prescription.rpe,
+        "note": prescription.note,
+    }
+    if override is None:
+        return base
+    return {
+        "name": override.swap_name or prescription.name,
+        "sets": override.sets or prescription.sets,
+        "reps": override.reps or prescription.reps,
+        "load": resolve_load(prescription.load, override.load_pct),
+        "rpe": prescription.rpe,
+        "note": override.note or prescription.note,
+    }
+
+
+def override_adj_label(override):
+    """A short badge for one member's adjust, e.g. "→ Box Squat · -10%".
+
+    Folds the present diff parts into a compact label: a swap (``→ name``), a load
+    delta (``-10%`` / ``+5%``, a no-op 100% omitted), and a volume tweak
+    (``2×8``). A note-only adjust (no swap/load/volume) marks as ``note`` so it
+    still surfaces. A truly empty override yields an empty string.
+    """
+    parts = []
+    if override.swap_name:
+        parts.append(f"→ {override.swap_name}")
+    if override.load_pct is not None and override.load_pct != 100:
+        delta = override.load_pct - 100
+        parts.append(f"{'+' if delta > 0 else '-'}{abs(delta)}%")
+    if override.sets or override.reps:
+        parts.append(f"{override.sets or '—'}×{override.reps or '—'}")
+    # A note-only adjust is still a real diff (``resolve_prescription`` applies it
+    # and the model stores it), so it must not vanish from the badge — mark it
+    # rather than emit an empty label that ``group_adjustments`` would skip.
+    if not parts and override.note:
+        parts.append("note")
+    return " · ".join(parts)
+
+
+def group_adjustments(plan, prescriptions):
+    """Map each prescription's pk to its members' adjust badges (group plans).
+
+    One query over the plan's overrides for the rendered prescriptions, scoped to
+    the group's *active* members (an ended member's adjust drops off, matching
+    ``active_member_users``). Returns ``{presc_id: {"adj", "adjusts"}}`` where
+    ``adj`` is a per-row summary — one member's ``"{initials} {label}"``, or
+    ``"N adjusts"`` for several — and ``adjusts`` the per-member breakdown. A row
+    with no (effective) adjust is simply absent from the map.
+    """
+    if not prescriptions:
+        return {}
+    overrides = (
+        models.PrescriptionOverride.objects.filter(
+            prescription_id__in=[p.pk for p in prescriptions],
+            membership__group=plan.group,
+            membership__relationship__coach=plan.group.coach,
+            membership__relationship__status=models.CoachAthlete.Status.ACTIVE,
+        )
+        .select_related("membership__relationship__athlete")
+        .order_by("membership__relationship__athlete__name")
+    )
+    by_presc = defaultdict(list)
+    for override in overrides:
+        label = override_adj_label(override)
+        if not label:
+            continue
+        name = override.membership.relationship.athlete.display_name()
+        by_presc[override.prescription_id].append(
+            {"name": name, "initials": initials(name), "label": label}
+        )
+    result = {}
+    for presc_id, adjusts in by_presc.items():
+        if len(adjusts) == 1:
+            summary = f"{adjusts[0]['initials']} {adjusts[0]['label']}"
+        else:
+            summary = f"{len(adjusts)} adjusts"
+        result[presc_id] = {"adj": summary, "adjusts": adjusts}
+    return result
+
+
 def serialize_group_identity(group):
     """The group's identity for the designer's Group mode (S1 Phase 2).
 
@@ -437,7 +558,14 @@ def serialize_group_identity(group):
         labels = [c.label for c in user.contraindications.all() if c.active]
         flags.update(labels)
         name = user.display_name()
-        member_data.append({"name": name, "initials": initials(name), "flags": labels})
+        member_data.append(
+            {
+                "id": str(user.pk),
+                "name": name,
+                "initials": initials(name),
+                "flags": labels,
+            }
+        )
     return {
         "id": group.pk,
         "name": group.name,
@@ -462,17 +590,28 @@ def serialize_plan(plan, week=None):
     if open_week is not None:
         sessions = list(open_week.sessions.prefetch_related("prescriptions"))
         program = [serialize_session(s) for s in sessions]
-        # Light up the "last time" column from real logs (Phase 3): one query
-        # over the plan's logged sets, mapped onto the rendered prescriptions.
-        # A group plan has no single athlete, so there is no per-athlete "last".
+        prescriptions = [p for s in sessions for p in s.prescriptions.all()]
         if not plan.is_group:
-            prescriptions = [p for s in sessions for p in s.prescriptions.all()]
+            # Light up the "last time" column from real logs (athlete Phase 3):
+            # one query over the plan's logged sets, mapped onto the rendered
+            # prescriptions. A group plan has no single athlete, so no "last".
             last_map = last_logged_labels(plan, prescriptions, plan.unit)
             for session_data in program:
                 for exercise in session_data["exercises"]:
                     label = last_map.get(exercise["id"])
                     if label:
                         exercise["last"] = label
+        else:
+            # A group plan instead carries the per-athlete adjust overlay (groups
+            # Phase 3): a per-row ``adj`` badge driven by the members' real
+            # override diffs (one query over the plan's overrides).
+            adj_map = group_adjustments(plan, prescriptions)
+            for session_data in program:
+                for exercise in session_data["exercises"]:
+                    entry = adj_map.get(exercise["id"])
+                    if entry:
+                        exercise["adj"] = entry["adj"]
+                        exercise["adjusts"] = entry["adjusts"]
         week_strip = [serialize_week(w) for w in current_mesocycle.weeks.all()]
     else:
         program = []

@@ -147,7 +147,7 @@ claim, reusing allauth. Detailed design when we build the relationship.
 
 | # | Decision | Note |
 |---|----------|------|
-| S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) + Phase 2a (shared group program + Group-mode designer) built; plan in [`groups-plan.md`](./groups-plan.md) |
+| S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) + Phase 2a (shared group program + Group-mode designer) + Phase 3 (per-athlete overrides — the `adj` overlay) built; plan in [`groups-plan.md`](./groups-plan.md) |
 | S2 | **Units & RPE vs %1RM** | Per-athlete/coach setting; needs a home |
 | S3 | **Delivery & notifications** | Push needs PWA + push infra; email via existing `django-ses` + `notifications` app |
 | S4 | **Results ↔ `challenges`/records** | Results screen shows a PR — reuse the records model or keep separate? |
@@ -391,3 +391,26 @@ _(Append dated entries here as decisions land.)_
   [`groups-plan.md`](./groups-plan.md). Resume point → **groups Phase 3** (per-athlete overrides: the `adj`
   overlay — `PrescriptionOverride`, effective-program resolution, the designer's per-row `adj` badge), then
   **Phase 2b** (create-group UI) and **Phase 4** (deliver-to-all).
+- 2026-06-28 — **Groups slice (S1) Phase 3 built** (branch `meso-groups-phase3`). **Per-athlete overrides —
+  the `adj` overlay.** A `PrescriptionOverride(membership FK → GroupMembership, prescription FK →
+  ExercisePrescription, swap_name, load_pct, sets, reps, note)` with `unique(membership, prescription)` is a
+  thin diff layered on a group's *shared* `ExercisePrescription`: a member's **effective program = shared
+  template + their override diffs** (no second hierarchy). It hangs off the `GroupMembership` (so the same
+  `CoachAthlete` link that owns the member's individual plans — D-a), guarded by a **same-group invariant**
+  (the override's prescription must live in the membership's group's shared program — `set_override` raises
+  `InvalidTransition`, `clean` backstops the admin). Migration `meso.0009`. `serializers.resolve_prescription`
+  is the pure resolver (swap replaces the name, `load_pct` scales a numeric load 2.5-rounded à la the
+  designer's `round25`, `sets`/`reps`/`note` override volume/note); `group_adjustments` is one query over the
+  plan's overrides scoped to **active** members → a per-row `adj` summary (`"{initials} {label}"` for one,
+  `"N adjusts"` for several) + an `adjusts` breakdown, which `serialize_plan` attaches to group-plan grid rows
+  (the group analogue of the individual plan's logged `last` column). `prescription_override` (POST
+  `/meso/api/plan/<id>/prescription/<pk>/override/`) sets/clears one member's adjust — group-only (individual
+  → 400), coach-scoped (403), prescription-in-plan (404), active-member (400), `load_pct` bounded; the reply
+  carries the recomputed row `adj` so the badge repaints. The designer grid renders the badge off real diffs
+  (per-athlete breakdown on hover); the seeded demo group gets a few overrides (idempotent). **No in-grid
+  override *editor* yet** — the badge renders off seed/admin/API-created diffs; the click-to-adjust UI is the
+  immediate follow-up. Built red→green: **+41 tests** (`test_group_overrides.py` + seed coverage; 625
+  project-wide), full suite + 30 JS tests green, ruff + format clean, `makemigrations --check` clean. Plan +
+  build notes in [`groups-plan.md`](./groups-plan.md). Resume point → the **override editor UI** (click a row
+  to set a member's adjust), then **Phase 2b** (create-group UI) and **Phase 4** (deliver-to-all — fan a
+  per-athlete *resolved* snapshot out to each member, reusing `resolve_prescription`).

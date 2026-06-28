@@ -78,6 +78,12 @@ urlpatterns = [
         views.session_add_exercise,
         name="api_session_add_exercise",
     ),
+    # Per-athlete override on a group's shared program (groups Phase 3).
+    path(
+        "api/plan/<int:plan_id>/prescription/<int:pk>/override/",
+        views.prescription_override,
+        name="api_prescription_override",
+    ),
     path(
         "api/plan/<int:plan_id>/deliver/",
         views.plan_deliver,

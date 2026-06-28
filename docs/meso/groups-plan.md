@@ -66,9 +66,10 @@ agent, and athlete slices.
     "Design / Open shared program" card. The seeded demo group gets a shared program.
   - **Phase 2b — create-group UI.** Create a brand-new group from the roster (name + focus +
     pick members), so groups no longer come only from the seed/admin.
-- **Phase 3 — per-athlete overrides (the `adj` overlay).** `PrescriptionOverride` per member
-  (load %, swap, volume), effective-program resolution (`shared + overrides`), the designer's
-  "Shared program · per-athlete auto-adjusts" row + per-row `adj` badge driven by real diffs.
+- **Phase 3 — per-athlete overrides (the `adj` overlay) (built; this PR).**
+  `PrescriptionOverride` per member (load %, swap, volume), effective-program resolution
+  (`shared + overrides`), the designer's "Shared program · per-athlete auto-adjusts" row +
+  per-row `adj` badge driven by real diffs.
 - **Phase 4 — deliver to all members.** Delivering a group week fans out a per-athlete
   delivered snapshot (each member's *resolved* program), reusing the athlete surface + the
   delivery email/push from the athlete slice.
@@ -170,3 +171,63 @@ agent, and athlete slices.
   plan. The group-detail page shows Design vs Open by whether a shared plan exists.
 - Seed: the demo group gets a shared program (rooted at the group, with a scaffold), not
   duplicated on reseed.
+
+## Phase 3 — build notes
+
+- **The overlay model.** `PrescriptionOverride(membership FK → GroupMembership, prescription FK
+  → ExercisePrescription, swap_name, load_pct, sets, reps, note)` with `unique(membership,
+  prescription)` — one adjust per member per shared lift. It hangs off the `GroupMembership`
+  (so, transitively, the same `CoachAthlete` link that owns the member's individual plans — D-a),
+  and a **same-group invariant** ties the override's prescription to the membership's group's
+  shared program. Migration `meso.0009`.
+- **A member's effective program = shared template + their diffs.** No second hierarchy — the
+  override is a thin diff layered on the shared `ExercisePrescription`: `swap_name` replaces the
+  name, `load_pct` scales a numeric load (rounded to 2.5, matching the designer's `round25`),
+  `sets`/`reps` override the volume, `note` the note. RPE isn't per-athlete in this slice.
+  `serializers.resolve_prescription(prescription, override)` is the pure resolver (used by the
+  designer overlay now and deliver-to-all in Phase 4).
+- **Helpers + tenancy.** `GroupMembership.set_override(prescription, **diff)` upserts (raising
+  `InvalidTransition` on a cross-group prescription, dropping a no-op `load_pct=100`, and
+  clearing instead of storing an empty diff — returning `None`); `clear_override(prescription)`
+  drops it. `PrescriptionOverride.clean()` backstops the same-group rule on the admin (raw FKs),
+  and `has_diff`/`has_diff_from` gate the empty-diff case.
+- **The `adj` badge, driven by real diffs.** `serializers.group_adjustments(plan, prescriptions)`
+  is one query over the plan's overrides scoped to the group's *active* members (an ended
+  member's adjust drops off, like `active_member_users`); it maps each prescription to a per-row
+  `adj` summary — one member's `"{initials} {label}"` (e.g. `MO -10%`), or `"N adjusts"` for
+  several — plus an `adjusts` breakdown. `override_adj_label` folds a swap (`→ Box Squat`), a
+  load delta (`-10%`/`+5%`), and a volume tweak (`2×8`) into the badge text. `serialize_plan`
+  attaches `adj`/`adjusts` onto a group plan's grid rows (the group analogue of the individual
+  plan's `last` column); `serialize_group_identity` members now carry their athlete `id` so the
+  endpoint can target them.
+- **Endpoint.** `prescription_override` (POST
+  `/meso/api/plan/<plan_id>/prescription/<pk>/override/`) sets or clears one member's adjust.
+  Group plans only (individual → 400); coach-scoped via `_coach_plan_or_forbidden` (403); the
+  prescription must belong to the plan (404) and `athlete` must be an active member (400);
+  `load_pct` is bounded (`MIN/MAX_LOAD_PCT`). Body: `{athlete, swap/load_pct/sets/reps/note}` to
+  set, `{athlete, clear: true}` (or an empty diff) to clear; the reply carries the recomputed
+  row `adj` so the badge repaints. **No in-grid override *editor* yet** — the badge renders off
+  real diffs (seed/admin/API created); the click-to-adjust UI is the immediate follow-up.
+- **Designer + seed.** The group grid's `adj` badge renders from the serialized diffs (with a
+  per-athlete breakdown on hover); the "Shared program · per-athlete auto-adjusts" banner now
+  reflects that the badges are live. The seeded demo group gets a few overrides (a load %, a
+  contraindication swap → a "2 adjusts" row, and a volume tweak), idempotent across reseeds.
+
+## Tests (Phase 3)
+
+`meso/tests/test_group_overrides.py` — model + helpers + resolution + serializer + endpoint:
+
+- Model: `unique(membership, prescription)`; `has_diff`; `clean` rejects a cross-group
+  prescription; `__str__` names the athlete.
+- `set_override` creates/updates, normalizes `load_pct=100` to a no-op, returns `None` (and
+  clears) on an empty diff, and raises on a cross-group prescription; `clear_override` deletes /
+  is a no-op.
+- `resolve_prescription` applies a swap / load % (2.5-rounded, non-numeric load left alone) /
+  volume, and yields the base for a `None` override; `override_adj_label` for each diff kind.
+- `group_adjustments` shows initials + label for one member, `"N adjusts"` for several, excludes
+  an ended member's override, and is empty with no overrides.
+- `serialize_plan` emits `adj`/`adjusts` on overridden group-plan rows, never on un-overridden
+  rows or an individual plan; the group payload members carry their athlete `id`.
+- The endpoint: a coach sets / clears; 403 foreign coach; 400 individual plan / non-member
+  athlete / bad `load_pct`; 404 foreign prescription; 405 GET; redirect when anonymous.
+- Seed (`test_seed_demo.py`): the demo group gets per-athlete overrides, not duplicated on reseed.
