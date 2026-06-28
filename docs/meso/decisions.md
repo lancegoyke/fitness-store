@@ -333,3 +333,20 @@ _(Append dated entries here as decisions land.)_
   them (push just stays dormant). Resume point → **the athlete slice is feature-complete** (install + offline
   logging + delivery email/push + results feeding the coach & agent). Open follow-ups: Background Sync,
   re-deliver push debouncing, in-app notification settings.
+- 2026-06-28 — **Persisted designer chat thread built** (branch `meso-chat-thread`; the loose end deferred
+  since agent Phase 3/4). The designer's agent conversation now **survives a reload**. Key realization: the
+  thread is **already persisted, losslessly**, in the `AgentProposalBatch` rows — each coach turn is a batch
+  (`instruction` = the coach's message, `summary` + the `ProposedChange` rows = the agent's reply,
+  `status`/`created_at` = state + order), and the agent never sends free-form chat, so the batches **are** the
+  thread. So we rebuild it rather than adding a model: `serializers.serialize_chat_thread(plan)` expands the
+  plan's batches (oldest first) into the exact `meso.js` `messages` shape (failed → an error note; drafting →
+  a neutral note carrying a `pollUrl`; else the summary + inline changes + a review link), the designer view
+  injects it via `json_script`, and `meso.js` `hydrateThread()` replaces the lone greeting (kept only for an
+  empty history), scrolls to the latest turn, and **resumes polling** a still-drafting run so a reload mid-run
+  doesn't go stale. **No model, no migration** — same "reuse what exists, defer new tables" taste as the
+  athlete slice. Built red→green: **+16 tests** (`test_chat_thread.py`; 379 meso / 519 project-wide), ruff
+  clean. **Local Codex review: 0 blocking across 3 rounds → CLEAN** (two nits fixed: the drafting resume-poll
+  and the scroll-to-latest). Plan in [`chat-thread-plan.md`](./chat-thread-plan.md). **Deferred:** a dedicated
+  `ChatMessage` model (only if the agent ever sends text not tied to a batch) · editing past turns ·
+  pagination of a very long thread. Resume point → next-slice options: **groups (S1)** is the main remaining
+  Meso feature area.

@@ -21,6 +21,7 @@
   <body class="meso">
     {% if plan_data %}
       {{ plan_data|json_script:"meso-plan-data" }}
+      {{ chat_thread|json_script:"meso-chat-thread" }}
       <span id="meso-csrf" data-token="{{ csrf_token }}" hidden></span>
     {% endif %}
     <div
