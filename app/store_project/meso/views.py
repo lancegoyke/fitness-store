@@ -1,6 +1,8 @@
 import datetime
+import ipaddress
 import json
 import logging
+from urllib.parse import urlparse
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -548,6 +550,38 @@ class OfflineView(TemplateView):
 # -- Athlete web push: subscribe / unsubscribe (Phase 4b — S3/S7) ----------
 
 
+def _is_safe_push_endpoint(endpoint):
+    """A plausible browser push endpoint: HTTPS to a public host.
+
+    Hardens the SSRF surface — the stored endpoint is later fetched server-side
+    by ``pywebpush`` during delivery, so reject the obvious internal targets
+    (non-HTTPS, ``localhost``, private/loopback/link-local/reserved IP literals)
+    before persisting. A DNS name is accepted (real push services are named
+    hosts); name→private-IP rebinding is out of scope for this gate.
+    """
+    try:
+        parsed = urlparse(endpoint)
+    except ValueError:
+        return False
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    host = parsed.hostname
+    if host.lower() == "localhost":
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a hostname, not an IP literal — accept
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
 @login_required
 @require_POST
 def push_subscribe(request):
@@ -556,7 +590,8 @@ def push_subscribe(request):
     Body is the browser ``PushSubscription`` JSON (``endpoint`` + ``keys.p256dh``
     / ``keys.auth``). The endpoint is unique: re-subscribing (or a different user
     on the same device) reassigns the row to the current athlete. Validated
-    before any write; a malformed body is a 400.
+    before any write — a malformed body, or an endpoint that isn't HTTPS to a
+    public host (SSRF guard), is a 400.
     """
     try:
         payload = json.loads(request.body or "{}")
@@ -579,6 +614,8 @@ def push_subscribe(request):
         return HttpResponseBadRequest("keys.auth is required.")
     if len(endpoint) > 512 or len(p256dh) > 255 or len(auth) > 255:
         return HttpResponseBadRequest("Subscription fields are too long.")
+    if not _is_safe_push_endpoint(endpoint):
+        return HttpResponseBadRequest("endpoint must be an https URL to a public host.")
 
     PushSubscription.objects.update_or_create(
         endpoint=endpoint,

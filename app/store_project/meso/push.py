@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 # after a day rather than have it surface long after it's relevant.
 DEFAULT_TTL_SECONDS = 60 * 60 * 24
 
+# The send runs synchronously inside the deliver request's on_commit callback, so
+# a slow or unresponsive push endpoint must not tie up the worker — cap the
+# network wait so best-effort push can never hang a delivery.
+PUSH_TIMEOUT_SECONDS = 10
+
 
 def push_enabled():
     """True when VAPID keys are configured (otherwise sends are no-ops)."""
@@ -58,6 +63,7 @@ def send_web_push(subscription_info, payload, *, ttl=DEFAULT_TTL_SECONDS):
         vapid_private_key=settings.MESO_VAPID_PRIVATE_KEY,
         vapid_claims=dict(_vapid_claims()),
         ttl=ttl,
+        timeout=PUSH_TIMEOUT_SECONDS,
     )
     return True
 

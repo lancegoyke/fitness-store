@@ -161,6 +161,27 @@ class TestSubscribe:
         assert resp.status_code == 400
         assert PushSubscription.objects.count() == 0
 
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "http://push.example.com/abc",  # not HTTPS
+            "ftp://push.example.com/abc",  # not HTTPS
+            "https://localhost/abc",
+            "https://127.0.0.1/abc",
+            "https://10.0.0.5/abc",  # private
+            "https://169.254.169.254/latest/meta-data/",  # cloud metadata (SSRF)
+        ],
+    )
+    def test_unsafe_endpoint_rejected(self, client, endpoint):
+        # The stored endpoint is fetched server-side by pywebpush at deliver time,
+        # so an internal/non-HTTPS target must be refused before it's persisted.
+        client.force_login(UserFactory())
+        resp = client.post(
+            SUBSCRIBE, data=sub_body(endpoint=endpoint), content_type="application/json"
+        )
+        assert resp.status_code == 400
+        assert PushSubscription.objects.count() == 0
+
 
 # -- unsubscribe endpoint --------------------------------------------------
 
@@ -224,6 +245,8 @@ class TestSendWebPush:
         assert json.loads(kwargs["data"]) == {"title": "Hi", "url": "/meso/me/"}
         assert kwargs["vapid_private_key"]  # the configured signing key
         assert kwargs["vapid_claims"]["sub"].startswith("mailto:")
+        # A bounded network wait so a slow endpoint can't hang the deliver hook.
+        assert kwargs["timeout"]
 
     @override_settings(**DISABLED)
     def test_noop_when_disabled(self):
