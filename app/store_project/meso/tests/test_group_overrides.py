@@ -243,6 +243,14 @@ class TestOverrideAdjLabel:
         override = PrescriptionOverride(swap_name="Box Squat", load_pct=90)
         assert serializers.override_adj_label(override) == "→ Box Squat · -10%"
 
+    def test_note_only_label_is_marked(self):
+        # A note-only adjust still changes the resolved row, so it must not vanish.
+        override = PrescriptionOverride(note="tempo 3-1-1")
+        assert serializers.override_adj_label(override) == "note"
+
+    def test_empty_override_has_blank_label(self):
+        assert serializers.override_adj_label(PrescriptionOverride()) == ""
+
 
 # -- aggregation: group_adjustments -----------------------------------------
 
@@ -282,6 +290,15 @@ class TestGroupAdjustments:
         m2.relationship.end()  # Beth leaves — her adjust drops off the badge
         adj_map = serializers.group_adjustments(plan, [presc])
         assert adj_map[presc.pk]["adj"] == "AA -10%"
+
+    def test_includes_note_only_override(self):
+        group = MesoGroupFactory()
+        membership = make_member(group, name="Maya Okonkwo")
+        plan = group.create_shared_plan()
+        presc = first_prescription(plan)
+        membership.set_override(presc, note="tempo 3-1-1")
+        adj_map = serializers.group_adjustments(plan, [presc])
+        assert adj_map[presc.pk]["adj"] == "MO note"
 
     def test_empty_when_no_overrides(self):
         group = MesoGroupFactory()

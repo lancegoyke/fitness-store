@@ -481,7 +481,8 @@ def override_adj_label(override):
 
     Folds the present diff parts into a compact label: a swap (``→ name``), a load
     delta (``-10%`` / ``+5%``, a no-op 100% omitted), and a volume tweak
-    (``2×8``). An empty override yields an empty string.
+    (``2×8``). A note-only adjust (no swap/load/volume) marks as ``note`` so it
+    still surfaces. A truly empty override yields an empty string.
     """
     parts = []
     if override.swap_name:
@@ -491,6 +492,11 @@ def override_adj_label(override):
         parts.append(f"{'+' if delta > 0 else '-'}{abs(delta)}%")
     if override.sets or override.reps:
         parts.append(f"{override.sets or '—'}×{override.reps or '—'}")
+    # A note-only adjust is still a real diff (``resolve_prescription`` applies it
+    # and the model stores it), so it must not vanish from the badge — mark it
+    # rather than emit an empty label that ``group_adjustments`` would skip.
+    if not parts and override.note:
+        parts.append("note")
     return " · ".join(parts)
 
 
