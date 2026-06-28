@@ -294,6 +294,16 @@ describe("override editor", () => {
     expect(c.override).toBe(null);
   });
 
+  it("ignores a dismiss while a save is in flight", () => {
+    // Escape / backdrop both route through closeOverride; if it nulled the
+    // editor mid-save, a later save failure would throw setting override.error.
+    const c = makeGroupMeso();
+    c.openOverride(groupRow());
+    c.override.saving = true;
+    c.closeOverride();
+    expect(c.override).not.toBe(null);
+  });
+
   it("keeps the editor open and surfaces an error when the save fails", async () => {
     const c = makeGroupMeso();
     const ex = groupRow();

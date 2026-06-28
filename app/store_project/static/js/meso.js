@@ -241,6 +241,11 @@ function createMeso() {
     },
 
     closeOverride() {
+      // Don't dismiss mid-save: submitOverride keeps the editor open on failure
+      // to surface a retry, which relies on `this.override` staying non-null for
+      // the whole request. Escape / backdrop both route through here, so this is
+      // the one place that guard belongs (the footer buttons are also disabled).
+      if (this.override && this.override.saving) return;
       this.override = null;
     },
 
@@ -302,6 +307,7 @@ function createMeso() {
         );
         ex.adj = data.adj || null;
         ex.adjusts = data.adjusts || [];
+        this.override.saving = false; // clear before the guarded close
         this.closeOverride();
       } catch (err) {
         console.error("Override save failed", err);
