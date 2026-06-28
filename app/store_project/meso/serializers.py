@@ -529,7 +529,19 @@ def group_adjustments(plan, prescriptions):
             continue
         name = override.membership.relationship.athlete.display_name()
         by_presc[override.prescription_id].append(
-            {"name": name, "initials": initials(name), "label": label}
+            {
+                "id": str(override.membership.relationship.athlete_id),
+                "name": name,
+                "initials": initials(name),
+                "label": label,
+                # The raw stored diff, so the in-grid editor can pre-fill the
+                # member's existing adjust (the label is display-only).
+                "swap": override.swap_name,
+                "load_pct": override.load_pct,
+                "sets": override.sets,
+                "reps": override.reps,
+                "note": override.note,
+            }
         )
     result = {}
     for presc_id, adjusts in by_presc.items():

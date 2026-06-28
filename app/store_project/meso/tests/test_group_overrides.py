@@ -307,6 +307,25 @@ class TestGroupAdjustments:
         presc = first_prescription(plan)
         assert serializers.group_adjustments(plan, [presc]) == {}
 
+    def test_adjust_carries_member_id_and_raw_diff(self):
+        # The in-grid override editor pre-fills a member's existing adjust, so
+        # each adjust must carry the athlete id + the raw stored diff (not just
+        # the rendered label).
+        group = MesoGroupFactory()
+        membership = make_member(group, name="Maya Okonkwo")
+        plan = group.create_shared_plan()
+        presc = first_prescription(plan)
+        membership.set_override(
+            presc, swap_name="Box Squat", load_pct=90, sets="4", reps="6", note="slow"
+        )
+        adjust = serializers.group_adjustments(plan, [presc])[presc.pk]["adjusts"][0]
+        assert adjust["id"] == str(membership.relationship.athlete.pk)
+        assert adjust["swap"] == "Box Squat"
+        assert adjust["load_pct"] == 90
+        assert adjust["sets"] == "4"
+        assert adjust["reps"] == "6"
+        assert adjust["note"] == "slow"
+
 
 # -- serializer: the adj overlay the designer renders -----------------------
 
@@ -382,6 +401,29 @@ class TestOverrideEndpoint:
         assert resp.status_code == 200
         assert membership.overrides.count() == 1
         assert resp.json()["adj"] == "MO -10%"
+
+    def test_reply_adjusts_carry_member_id_and_raw_diff(self, client):
+        # The reply repaints the badge *and* re-seeds the editor, so its adjusts
+        # carry the athlete id + raw diff like group_adjustments.
+        group = MesoGroupFactory()
+        membership = make_member(group, name="Maya Okonkwo")
+        plan = group.create_shared_plan()
+        presc = first_prescription(plan)
+        client.force_login(group.coach)
+        resp = client.post(
+            self._url(plan, presc),
+            data={
+                "athlete": str(membership.relationship.athlete.pk),
+                "swap": "Box Squat",
+                "load_pct": 90,
+            },
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        adjust = resp.json()["adjusts"][0]
+        assert adjust["id"] == str(membership.relationship.athlete.pk)
+        assert adjust["swap"] == "Box Squat"
+        assert adjust["load_pct"] == 90
 
     def test_partial_update_preserves_other_fields(self, client):
         # A later request updating only load_pct must not drop an earlier swap
@@ -522,3 +564,27 @@ class TestOverrideEndpoint:
         presc = first_prescription(plan)
         resp = client.post(self._url(plan, presc))
         assert resp.status_code == 302
+
+
+# -- view: the designer surfaces the in-grid override editor -----------------
+
+
+class TestDesignerOverrideEditor:
+    """The designer page wires the in-grid click-to-adjust editor.
+
+    Alpine gates it to Group mode at runtime; this guards the markup the editor
+    methods drive from regressing.
+    """
+
+    def test_group_designer_includes_the_override_editor(self, client):
+        group = MesoGroupFactory(name="Squad")
+        make_member(group, name="Maya Okonkwo")
+        plan = group.create_shared_plan()
+        client.force_login(group.coach)
+        resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        # The per-row affordance and the modal the editor methods drive.
+        assert "openOverride(ex)" in body
+        assert "saveOverride()" in body
+        assert 'x-if="override"' in body
