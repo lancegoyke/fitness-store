@@ -155,8 +155,10 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
 # The athlete's own logged-in surface, distinct from the coach's view of an
 # athlete (``/meso/athlete/<uuid>/``). Read-only here; logging lands in Phase 2.
 # Everything is scoped to the athlete's *active* coaches (``for_athlete``), to
-# **delivered** weeks (delivery is the publish gate), and to non-archived plans.
-# An out-of-scope session is a flat 404 — never a silent empty render.
+# **delivered** weeks (delivery gates *visibility* — an undelivered week is
+# hidden; a delivered week's *current* contents are shown, see
+# ``latest_delivered_week``), and to non-archived plans. An out-of-scope session
+# is a flat 404 — never a silent empty render.
 
 
 def _athlete_plans(user):

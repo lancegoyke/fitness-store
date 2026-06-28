@@ -176,9 +176,14 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
 def latest_delivered_week(plan):
     """The most recently delivered week of ``plan``, or None.
 
-    Delivery is the athlete's publish gate (``Week.delivered_at`` is stamped by
-    ``plan_deliver``); an undelivered week is invisible on the athlete surface.
-    Newest delivery wins so the athlete lands on the week their coach just sent.
+    Delivery gates *visibility*: a week the coach has delivered
+    (``Week.delivered_at`` stamped by ``plan_deliver``) becomes visible to the
+    athlete; an undelivered week is not. The athlete then sees that week's
+    **current** (live) contents — a coach correcting an already-delivered week
+    is reflected, by design; the frozen ``WeekDelivery`` snapshot is the
+    historical record for the (deferred) "changes since last delivery" diff, not
+    a separate athlete-facing view. Newest delivery wins so the athlete lands on
+    the week their coach just sent. See ``docs/meso/athlete-plan.md``.
     """
     return (
         models.Week.objects.filter(mesocycle__plan=plan, delivered_at__isnull=False)

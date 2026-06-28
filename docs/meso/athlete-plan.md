@@ -32,9 +32,20 @@ logging models (`SessionLog`/`LoggedSet`) and the delivery snapshot
 - Plans via `Plan.objects.for_athlete(user)` — i.e. across every **active**
   coach link. A declined/ended/pending link shows nothing.
 - Within a plan, only **delivered** weeks (`Week.delivered_at` is set). A coach's
-  in-progress, undelivered week is invisible — delivery is the publish gate.
+  in-progress, undelivered week is invisible — delivery is the *visibility* gate.
 - Logging writes only the athlete's own `SessionLog`/`LoggedSet` rows; an athlete
   can never read or write another athlete's logs, nor any coach surface.
+
+**Design note — live contents vs. the delivery snapshot.** Delivery gates whether
+a week is *visible* to the athlete, not whether its contents are *frozen*. Once a
+week is delivered, the athlete sees its **current (live)** sessions/prescriptions,
+so a coach correcting an already-delivered week is reflected immediately — the
+intended behaviour for a fix-in-place. The frozen `WeekDelivery.payload` snapshot
+is the historical record that powers the (deferred) "changes since last delivery"
+diff, *not* a second athlete-facing render. This deliberately avoids a live/snapshot
+split that would also fight Phase 2 logging (which targets live prescription rows).
+A stricter "re-deliver to publish edits" gate (e.g. flag a delivered week dirty on
+edit) is a later-slice option if coaches want edits staged rather than live.
 
 ---
 
