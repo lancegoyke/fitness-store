@@ -894,6 +894,25 @@ class MesoGroup(models.Model):
     def __str__(self):
         return self.name
 
+    @classmethod
+    def create_for_coach(cls, coach, *, name, focus="", athletes=()):
+        """Create a new group for ``coach`` and add the given athletes (S1 Phase 2b).
+
+        The create-group entry point from the roster. ``name`` is required by the
+        caller (the view rejects a blank one); ``focus`` is optional. Each athlete
+        is added via ``add_athlete``, so the same active-link tenancy guard
+        applies — one without an active link to this coach is skipped rather than
+        raising, since the create form only ever offers the coach's own athletes
+        and a stale/foreign pick shouldn't fail the whole create.
+        """
+        group = cls.objects.create(coach=coach, name=name, focus=focus)
+        for athlete in athletes:
+            try:
+                group.add_athlete(athlete)
+            except InvalidTransition:
+                continue
+        return group
+
     def add_athlete(self, athlete):
         """Add one of the coach's *active* athletes to the group (idempotent).
 

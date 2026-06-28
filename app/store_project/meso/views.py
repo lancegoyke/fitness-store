@@ -2,6 +2,7 @@ import datetime
 import ipaddress
 import json
 import logging
+import uuid
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -252,6 +253,57 @@ class GroupDetailView(LoginRequiredMixin, TemplateView):
         ctx["active"] = "roster"
         ctx["group"] = presenters.group_detail(group)
         return ctx
+
+
+def _coach_active_athletes(coach, athlete_ids):
+    """Resolve posted athlete ids to this coach's *active*-link athletes.
+
+    Sanitizes each id to a UUID (a malformed value is skipped, never reaching the
+    ORM as a query error) and scopes to the coach's own active links, so only
+    their current athletes resolve — a foreign or stale pick simply drops out.
+    The order follows the posted ids' resolution, deduped by the link set.
+    """
+    valid_ids = []
+    for raw in athlete_ids:
+        try:
+            valid_ids.append(uuid.UUID(str(raw)))
+        except (ValueError, TypeError, AttributeError):
+            continue
+    if not valid_ids:
+        return []
+    links = (
+        CoachAthlete.objects.for_coach(coach)
+        .active()
+        .filter(athlete_id__in=valid_ids)
+        .select_related("athlete")
+    )
+    return [link.athlete for link in links]
+
+
+@login_required
+@require_POST
+def group_create(request):
+    """Create a new group from the roster: name + focus + picked members (Phase 2b).
+
+    A normal form POST (not JSON), the roster's "New group" disclosure. ``name``
+    is required; ``focus`` is optional; ``athletes`` is the multi-valued list of
+    picked athlete ids, each resolved against the coach's *active* links so only
+    their own current athletes can be added (a foreign/stale/malformed pick is
+    silently ignored — ``MesoGroup.create_for_coach`` carries the same tenancy
+    guard). Lands on the new group's detail page, where the coach designs its
+    shared program. A blank name creates nothing and returns to the roster (the
+    field is also ``required`` client-side).
+    """
+    name = (request.POST.get("name") or "").strip()
+    if not name:
+        messages.error(request, "A group needs a name.")
+        return redirect("meso:roster")
+    focus = (request.POST.get("focus") or "").strip()
+    athletes = _coach_active_athletes(request.user, request.POST.getlist("athletes"))
+    group = MesoGroup.create_for_coach(
+        request.user, name=name, focus=focus, athletes=athletes
+    )
+    return redirect("meso:group", pk=group.pk)
 
 
 @login_required
