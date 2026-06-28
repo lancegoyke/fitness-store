@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -17,6 +18,8 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
+
+from store_project.notifications.emails import send_week_delivered_email
 
 from . import presenters
 from .agent import apply as agent_apply
@@ -39,6 +42,8 @@ from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 from .serializers import serialize_session_log
 from .serializers import serialize_week_snapshot
+
+logger = logging.getLogger(__name__)
 
 
 def _coach_working_plan(user):
@@ -580,6 +585,7 @@ def plan_deliver(request, plan_id):
         week=week, delivered_at=now, payload=serialize_week_snapshot(week)
     )
     _touch_plan(plan)
+    _notify_athlete_delivered(request, plan, week)
     return JsonResponse(
         {
             "ok": True,
@@ -588,6 +594,30 @@ def plan_deliver(request, plan_id):
         },
         status=201,
     )
+
+
+def _notify_athlete_delivered(request, plan, week):
+    """Best-effort: email the athlete that ``week`` was delivered (S3).
+
+    Delivery has already committed by the time we get here, so a mail failure
+    must never surface as a 500 or roll the deliver back — swallow and log.
+    (Web push waits on the PWA, Phase 4b.)
+    """
+    home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
+    try:
+        send_week_delivered_email(
+            athlete=plan.athlete,
+            coach=plan.coach,
+            plan=plan,
+            week=week,
+            home_url=home_url,
+        )
+    except Exception:  # mail is best-effort; never fail a delivery on it
+        logger.exception(
+            "Failed to send delivery notification for plan %s week %s",
+            plan.pk,
+            week.pk,
+        )
 
 
 # -- agent proposal engine (agent slice Phase 1 / Phase 4 — B6) -----------
