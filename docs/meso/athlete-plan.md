@@ -1,8 +1,11 @@
 # Meso — athlete-facing slice plan
 
-**Status:** Phase 1 done & merged (PR #288, squash `42bb805`; Django CI green,
-deployed to Hetzner — no migration; +20 tests, 239 meso / 379 project-wide;
-ruff clean; local Codex review clean, 1 round) · created 2026-06-27
+**Status:** Phase 1 done & merged (PR #288, squash `42bb805`; deployed to
+Hetzner — no migration). **Phase 2 (session logging) built** on branch
+`meso-athlete-phase2` (+33 tests, 272 meso / 412 project-wide; ruff clean; no
+migration; local Codex review clean — 0 blocking across 5 rounds, one
+`unique(session, athlete)` nit declined by design, see Phase 2 note) ·
+created 2026-06-27
 **Companion to:** [`decisions.md`](./decisions.md) (B2, S3, S7, N1/D-a/D-b) ·
 [`persistence-plan.md`](./persistence-plan.md) · [`agent-plan.md`](./agent-plan.md)
 **Goal of this slice:** give the **athlete** a real, logged-in surface — see the
@@ -128,7 +131,7 @@ which would fight Phase 2 logging. See the **Design note** above. **Deferred:**
 the logging write path (Phase 2), results-feedback (Phase 3), PWA + notifications
 (Phase 4).
 
-**Phase 2 — Session logging (the write path).**
+**Phase 2 — Session logging (the write path). ✅ Built (2026-06-27, branch `meso-athlete-phase2`; no migration).**
 The session screen becomes the interactive logger (the phone-style set rows):
 `POST /meso/api/me/session/<id>/log/` upserts the athlete's `SessionLog` and its
 `LoggedSet` rows (reps/load/rpe per set), flips the session done, and stamps the
@@ -136,6 +139,36 @@ date. Athlete-scoped (only the logged-in athlete's own logs; only delivered
 sessions). This produces the first real rows `serialize_recent_logs` grounds the
 agent on. *Done when:* an athlete logs a session and it survives reload — and the
 agent's grounding sees it.
+
+*Built:* `athlete_log_session` (`POST /meso/api/me/session/<id>/log/`), scoped by
+the same `_athlete_session_or_404` as the read surface (foreign / undelivered /
+archived / unknown session → flat 404). The body is **validated before any
+write** (`_clean_logged_sets`) — bad input is a 400 that persists nothing — and
+the write is wrapped in a transaction: it upserts the athlete's own `SessionLog`
+(most-recent-wins, so re-logging updates the one log) and **replaces** its
+`LoggedSet` rows. `serialize_session_log` echoes the saved state back.
+`presenters.athlete_session` now formats the prescribed grid into set-input rows
+pre-filled from the athlete's existing log (carrying the coach's full target —
+sets×reps · load · RPE); `athlete_log_payload` trims that to the JSON the
+`athlete_session.html` + `meso_athlete.js` Alpine logger hydrates from and POSTs
+("Save progress" / "Log session" hit the same idempotent endpoint, differing
+only in the status they stamp). Built red→green: **+33 tests**
+(`test_athlete_logging.py` — access control, write semantics, validation,
+ownership isolation, survives-reload, agent grounding); 272 meso / 412
+project-wide pass, ruff clean, **no migration** (`SessionLog`/`LoggedSet` already
+exist). **Local Codex review: 0 blocking across 5 rounds.** Nits fixed: bound
+`set_number` (1–50) + hard-cap the render so a wild value can't balloon the page;
+reject duplicate `(prescription, set_number)` keys; show the prescribed load/RPE;
+"Save progress" preserves a done status (no downgrade); sync row check-state from
+the saved log; and **preserve the workout date on later edits** (a missing date
+defaults to today only on create — re-saving keeps the original date, so a later
+fix doesn't reorder grounding). **Declined by design:** a `unique(session,
+athlete)` constraint Codex raised twice — the model intentionally allows multiple
+logs per athlete/session (`serialize_recent_logs` + the capped-newest-first
+grounding test treat them as dated history), so the constraint would break
+grounding; the sequential re-save path stays idempotent and a concurrent
+double-submit at worst adds one history row, not corruption. **Deferred:**
+results-feedback (Phase 3), PWA + notifications (Phase 4).
 
 **Phase 3 — Results feed back (close the loop).**
 Retire `mockdata.RESULTS_*`: the coach's results screen reads real
