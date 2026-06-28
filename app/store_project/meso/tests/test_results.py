@@ -266,3 +266,35 @@ class TestSessionResultsPresenter:
         log_session(s, squat_sets=[("6", "60", "7"), ("6", "70", "8")])
         rows = {r["name"]: r for r in session_results(s.session)["rows"]}
         assert rows["Box Squat"]["logged"] == "2×6 @ 60–70 kg"
+
+    def test_pending_draft_is_not_feedback(self):
+        """A 'Save progress' draft (pending) renders awaiting, not completed."""
+        s = seed()
+        log_session(
+            s, squat_sets=[("6", "70", "7")] * 3, status=SessionLog.Status.PENDING
+        )
+        ctx = session_results(s.session)
+        assert ctx["summary"]["logged_state"] is False
+        assert ctx["summary"]["completion"] == 0
+        rows = {r["name"]: r for r in ctx["rows"]}
+        assert rows["Box Squat"]["logged"] == "—"
+
+    def test_completion_with_free_form_set_count(self):
+        """An "AMRAP"-style set cell can't divide by zero — it falls back to logged."""
+        s = seed()
+        s.rdl.delete()
+        s.squat.sets = "AMRAP"
+        s.squat.save(update_fields=["sets"])
+        log_session(s, squat_sets=[("8", "70", "8"), ("6", "70", "9")])
+        # Without the fallback this session would read 0% (0 prescribed sets).
+        assert session_results(s.session)["summary"]["completion"] == 100
+
+
+class TestResultsDraftRedirect:
+    def test_bare_redirect_ignores_a_pending_draft(self, client):
+        """Only a pending draft exists → the coach lands on the roster, not it."""
+        s = seed()
+        log_session(s, squat_sets=[("6", "70", "7")], status=SessionLog.Status.PENDING)
+        client.force_login(s.coach)
+        resp = client.get(reverse("meso:results"))
+        assert resp.url == reverse("meso:roster")

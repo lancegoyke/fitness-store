@@ -259,16 +259,20 @@ def _logged_date(log):
 def session_results(session):
     """The coach's results screen for one session, off the athlete's real log.
 
-    Reads the athlete's most recent ``SessionLog`` for ``session`` and scores its
-    sets against the prescribed targets. An unlogged session renders an honest
-    awaiting state (targets only, 0% complete) rather than inventing numbers.
-    ``session`` arrives coach-scoped with its prescriptions prefetched.
+    Reads the athlete's most recent *done* ``SessionLog`` for ``session`` and
+    scores its sets against the prescribed targets. A pending draft (the athlete
+    hit "Save progress" but hasn't finished) is not feedback yet, so it — like an
+    unlogged session — renders an honest awaiting state (targets only, 0%
+    complete) rather than inventing numbers. ``session`` arrives coach-scoped
+    with its prescriptions prefetched.
     """
     plan = session.week.mesocycle.plan
     athlete = plan.athlete
     prescriptions = list(session.prescriptions.all())
     log = (
-        SessionLog.objects.filter(session=session, athlete=athlete)
+        SessionLog.objects.filter(
+            session=session, athlete=athlete, status=SessionLog.Status.DONE
+        )
         .order_by("-date", "-created_at")
         .prefetch_related("sets")
         .first()
@@ -285,8 +289,15 @@ def session_results(session):
     ]
     rows = [row for row, _ in results]
 
-    prescribed_total = sum(_prescribed_set_count(p.sets) for p in prescriptions)
-    logged_total = sum(len(sets_by_prescription.get(p.pk, [])) for p in prescriptions)
+    # Completion = logged sets / prescribed sets. A free-form set cell ("AMRAP",
+    # "3-4") has no integer target, so fall back to what was logged for that row
+    # — it neither divides by zero nor skews the ratio with an empty denominator.
+    prescribed_total = 0
+    logged_total = 0
+    for p in prescriptions:
+        logged_n = len(sets_by_prescription.get(p.pk, []))
+        prescribed_total += _prescribed_set_count(p.sets) or logged_n
+        logged_total += logged_n
     completion = (
         min(round(100 * logged_total / prescribed_total), 100)
         if prescribed_total

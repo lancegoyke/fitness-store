@@ -77,14 +77,17 @@ def _coach_session_or_404(user, pk):
 
 
 def _coach_latest_logged_session(user):
-    """The coach's most-recently-logged session across their athletes, or None.
+    """The coach's most-recently *completed* session across their athletes, or None.
 
-    The target the bare ``/meso/results/`` resolves to. Ordered by the workout
-    date (then created) so the coach lands on the session most recently trained.
+    The target the bare ``/meso/results/`` resolves to. Only *done* logs count —
+    a pending draft isn't a result yet (the results screen would render it as an
+    awaiting session anyway). Ordered by the workout date (then created) so the
+    coach lands on the session most recently trained.
     """
     log = (
         SessionLog.objects.filter(
-            session__week__mesocycle__plan__in=Plan.objects.for_coach(user)
+            session__week__mesocycle__plan__in=Plan.objects.for_coach(user),
+            status=SessionLog.Status.DONE,
         )
         .select_related("session")
         .order_by("-date", "-created_at")
