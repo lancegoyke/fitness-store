@@ -680,3 +680,28 @@ _(Append dated entries here as decisions land.)_
   migration + the gating accessor + local trial + comped seed/admin, **no Stripe, no enforcement
   wired** (same state-machine-first order as the invite slice). **Open values** (not architecture):
   free seat count (rec 1), per-seat price (TBD — owner's number), trial 14d.
+- 2026-06-29 — **First-time UX — Phase 1 built & merged** (PR #326): individual
+  plan creation, the headline structural fix (`Plan.scaffold` + `CoachAthlete.create_plan` /
+  `working_plan` + `plan_create` / `session_add` endpoints + wired CTAs). A real coach can now
+  build an individual program in the UI with no seed. Plan in
+  [`first-time-ux-plan.md`](./first-time-ux-plan.md).
+- 2026-06-29 — **First-time UX — Phase 2 built** (branch `meso-first-time-ux-phase2`): **coach
+  first-run — one-click demo + empty-state teaching** (Q3). `meso/demo.py`
+  (`load_demo` / `clear_demo` / `has_demo`) is a coach-scoped, idempotent wrapper over the
+  `seed_meso_demo` data that stands up five demo athletes + a built/delivered/logged individual
+  program + a group (shared program + a couple of per-athlete overrides), **namespaced per coach**
+  (non-routable `@<coach-hex>.demo.invalid` addresses, collision-free across coaches). New
+  **`is_demo`** flag on `CoachAthlete` + `MesoGroup` (migration `0022`) makes demo data **clearly
+  labeled** (roster banner + per-row "Demo" badge), **fully removable** (`clear_demo` deletes the
+  demo group + demo athlete users, cascading their links/plans/logs/memberships/overrides), and
+  **billing-neutral** — a new `CoachAthlete.billable()` (= `active().exclude(is_demo=True)`) backs
+  `access.active_seat_count` / `suspended_athlete_ids` so loading the demo never trips the paywall
+  or suspends real athletes. **No demo-athlete email/push:** the load delivers at the model layer
+  (no notification), the addresses are non-routable, and each carries `delivery_email_opt_out`.
+  `POST /meso/demo/{load,clear}/`; the empty roster gets a first-run onboarding card (teach
+  Invite → Build → Deliver + the demo CTA); `_meso_base.html` now renders flashed messages
+  (previously swallowed on every meso page). **Q1 dropped** — its "allowlisted-coach access"
+  premise (*no billing yet*) was obsoleted by billing S6 Phase 4 (#323, open self-serve coach
+  signup), so the closed-beta allowlist was **not** built (it would contradict shipped behavior).
+  Built red→green: **+23 pytest** (`test_demo.py`); ruff + `makemigrations --check` clean.
+  Resume point → first-time-UX **Phase 3** (anon `/meso/` landing + main-site link).

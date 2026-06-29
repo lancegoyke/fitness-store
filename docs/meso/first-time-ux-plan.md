@@ -1,6 +1,8 @@
 # Meso — first-time UX / onboarding slice plan
 
-**Status:** 🟡 Proposed · decisions Q1–Q4 resolved 2026-06-29 · build not started
+**Status:** 🟢 Building · Q1–Q4 resolved 2026-06-29 · **Phase 1 (individual plan
+creation) + Phase 2 (coach first-run: one-click demo + empty-state teaching)
+done** · Phases 3–5 remain
 **Companion to:** [`decisions.md`](./decisions.md) (B1 multi-coach, B2 athlete
 login, N3 roles, N4 invites) · [`invites-plan.md`](./invites-plan.md) ·
 [`athlete-plan.md`](./athlete-plan.md) · [`groups-plan.md`](./groups-plan.md)
@@ -209,15 +211,36 @@ program"** CTAs to actually create (and rename their dead-end copy).
 *Done when:* a fresh coach can invite an athlete, click **New program**, and land
 in a working, editable, deliverable designer — **with no seed required**.
 
-### Phase 2 — Coach first-run & active empty states (coach)
-Allowlisted-coach access (Q1): `CoachProfile` **auto-creates on the first coach
-action for an allowlisted user** (non-allowlisted users see "request access", not
-the roster). Empty states that **teach the Invite → Build → Deliver model** with
-inline CTAs promoted out of the `<details>` disclosures, and a **"Load a demo
-athlete & program"** button (Q3, removable, no demo-athlete email/push) so a coach
-can explore a populated app before committing real clients.
-*Done when:* an allowlisted brand-new coach immediately understands the 3-step
-model and can either start for real or one-click a demo, then clear it.
+### Phase 2 — Coach first-run & active empty states (coach) ✅ Built
+Empty states that **teach the Invite → Build → Deliver model** (a first-run
+onboarding card on an empty roster) and a **"Load a demo athlete & program"**
+button (Q3, removable, no demo-athlete email/push) so a coach can explore a
+populated app before committing real clients.
+*Done when:* a brand-new coach immediately understands the 3-step model and can
+either start for real or one-click a demo, then clear it.
+
+> **Reconciled with `main` (Q1 dropped).** Q1's "allowlisted-coach access" was
+> forced by *"no billing yet"*; **billing S6 shipped after this plan was written
+> (Phases 1–5), and Phase 4 (#323) shipped open self-serve coach signup**
+> (`become_coach` → `start_coaching` creates the `CoachProfile`). So the closed-beta
+> allowlist is obsolete and was **not** built — it would contradict shipped
+> behavior. Phase 2 therefore narrowed to the demo + empty-state teaching.
+>
+> **What shipped:** `meso/demo.py` (`load_demo` / `clear_demo` / `has_demo`) — a
+> coach-scoped, idempotent wrapper over the `seed_meso_demo` data that stands up
+> five demo athletes, a built/delivered/logged individual program, and a group
+> (shared program + a couple of per-athlete overrides), all **namespaced per coach**
+> (non-routable `@<coach-hex>.demo.invalid` addresses) so two coaches never collide.
+> A new **`is_demo`** flag on `CoachAthlete` + `MesoGroup` (migration `0022`) makes
+> demo data **clearly labeled** (roster banner + per-row "Demo" badge), **fully
+> removable** (`clear_demo` deletes exactly the demo group + demo athlete users,
+> cascading their links/plans/logs), and **billing-neutral** (a new
+> `CoachAthlete.billable()` excludes demo links so `access.active_seat_count` /
+> `suspended_athlete_ids` never let the demo trip the paywall). Demo athletes get
+> **no email/push**: the load delivers weeks at the model layer (no notification),
+> the addresses are non-routable, and each carries `delivery_email_opt_out`.
+> `POST /meso/demo/load/` + `/meso/demo/clear/`; the meso base template now renders
+> flashed messages (previously swallowed). +23 tests (`test_demo.py`).
 
 ### Phase 3 — The front door (anonymous visitor + routing)
 A real logged-out `/meso/` landing (what Meso is · two entry actions — **"I have

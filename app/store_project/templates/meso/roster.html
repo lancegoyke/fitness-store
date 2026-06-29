@@ -16,6 +16,52 @@
       <!-- main column -->
       <div style="display:flex;flex-direction:column;gap:18px;">
 
+        {% if has_demo %}
+          <!-- Demo workspace banner (first-time-UX Phase 2, Q3): clearly labeled,
+               one-click removable. -->
+          <div class="meso-card meso-card--pad" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+            <div style="min-width:0;flex:1;">
+              <p class="meso-eyebrow" style="margin:0 0 3px;">Demo workspace</p>
+              <p class="meso-sub" style="margin:0;">You're exploring demo data — sample athletes, a built program, and a group. It's visible only to you and never emails anyone. Remove it whenever you're ready for real clients.</p>
+            </div>
+            <form method="post" action="{% url 'meso:demo_clear' %}" style="margin:0;">
+              {% csrf_token %}
+              <button type="submit" class="meso-btn meso-btn--ghost">Remove demo data</button>
+            </form>
+          </div>
+        {% elif is_empty %}
+          <!-- First-run onboarding (first-time-UX Phase 2): teach Invite → Build →
+               Deliver and offer the one-click demo. -->
+          <div class="meso-card meso-card--pad" style="display:flex;flex-direction:column;gap:15px;">
+            <div>
+              <p class="meso-eyebrow" style="margin:0 0 4px;">Get started</p>
+              <div style="font-size:18px;font-weight:750;color:var(--ink);line-height:1.25;">Welcome to your coaching workspace</div>
+              <p class="meso-sub" style="margin:5px 0 0;">Three steps to coaching with Meso:</p>
+            </div>
+            <ol style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:11px;">
+              <li style="display:flex;gap:11px;align-items:flex-start;">
+                <span class="meso-avatar meso-avatar--sm meso-avatar--accent">1</span>
+                <div style="min-width:0;"><div class="meso-row-name">Invite an athlete</div><div class="meso-row-meta">They get an email to join and train with you.</div></div>
+              </li>
+              <li style="display:flex;gap:11px;align-items:flex-start;">
+                <span class="meso-avatar meso-avatar--sm meso-avatar--accent">2</span>
+                <div style="min-width:0;"><div class="meso-row-name">Build their program</div><div class="meso-row-meta">Lay out their mesocycle in the designer — solo or with the AI agent.</div></div>
+              </li>
+              <li style="display:flex;gap:11px;align-items:flex-start;">
+                <span class="meso-avatar meso-avatar--sm meso-avatar--accent">3</span>
+                <div style="min-width:0;"><div class="meso-row-name">Deliver the week</div><div class="meso-row-meta">Push it to their phone; their logged results flow back to you.</div></div>
+              </li>
+            </ol>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+              <form method="post" action="{% url 'meso:demo_load' %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--primary">Load a demo athlete &amp; program</button>
+              </form>
+              <span class="meso-sub" style="margin:0;">Not sure yet? Explore a populated workspace first — or invite your first athlete below.</span>
+            </div>
+          </div>
+        {% endif %}
+
         <div class="meso-card">
           <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
             <p class="meso-eyebrow" style="margin:0;">Individuals</p>
@@ -30,6 +76,9 @@
                 <div class="meso-row-meta">{{ a.meta }}</div>
               </div>
               <div class="meso-spacer"></div>
+              {% if a.is_demo %}
+                <span class="meso-badge meso-badge--muted"><i></i>Demo</span>
+              {% endif %}
               {% for f in a.flags %}
                 <span class="meso-badge meso-badge--warn"><i></i>{{ f }}</span>
               {% endfor %}
