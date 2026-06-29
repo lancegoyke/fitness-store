@@ -57,6 +57,7 @@ function loadForPercent(oneRm, percent) {
 function createLogger() {
   return {
     logUrl: "",
+    oneRmUrl: "", // where a manually-entered 1RM is persisted server-side (Phase 2)
     csrf: "",
     status: "pending",
     unit: "", // the plan's load unit (kg/lb), for the %1RM helper
@@ -65,6 +66,7 @@ function createLogger() {
     saved: false,
     error: false,
     queued: false, // a save is stashed locally, waiting for the network
+    _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
 
     init() {
       const el = document.getElementById("meso-log-data");
@@ -77,17 +79,24 @@ function createLogger() {
         return;
       }
       this.logUrl = data.log_url;
+      this.oneRmUrl = data.one_rm_url || "";
       this.status = data.status;
       this.unit = data.unit || "";
       this.exercises = data.exercises || [];
-      // Each exercise carries `one_rm` — the athlete's persisted, log-derived 1RM
-      // (server) — and `e1rm`, an optional per-device typed override restored from
-      // localStorage. The typed value wins when present; otherwise the derived
-      // value seeds the suggested load with no manual entry needed.
-      const e1rms = this.readE1rms();
+      // Each exercise carries the athlete's persisted 1RM (`one_rm`) and its
+      // `one_rm_source`. A `manual` value is the athlete's own number — it seeds
+      // the editable `e1rm` input. A `logged` value is auto-derived from their
+      // logs — it stays in `one_rm` as the placeholder + suggested-load default,
+      // with the input blank so a manual override layers cleanly on top.
       for (const ex of this.exercises) {
-        ex.one_rm = ex.one_rm || "";
-        ex.e1rm = e1rms[ex.id] || "";
+        const value = ex.one_rm || "";
+        if (ex.one_rm_source === "manual") {
+          ex.e1rm = value;
+          ex.one_rm = "";
+        } else {
+          ex.e1rm = "";
+          ex.one_rm = value;
+        }
       }
       const csrfEl = document.getElementById("meso-csrf");
       this.csrf = csrfEl ? csrfEl.dataset.token : "";
@@ -336,35 +345,52 @@ function createLogger() {
       return fmtNum(one) + (this.unit ? " " + this.unit : "");
     },
 
-    // ---- estimated-1RM store (localStorage, keyed by exercise id) ----
-    // The estimate is per-device convenience, not coach-owned program data, so it
-    // lives client-side — same "reuse what exists, defer new tables" taste as the
-    // offline log queue.
-    e1rmKey: "meso-e1rm",
-
-    readE1rms() {
-      try {
-        return JSON.parse(localStorage.getItem(this.e1rmKey) || "{}") || {};
-      } catch (e) {
-        return {};
-      }
+    // ---- manual 1RM persistence (server-side, Phase 2) ----
+    // The athlete's typed 1RM was per-device localStorage (Phase 2b); it now
+    // persists server-side as a `source=manual` row so it syncs across devices
+    // and the coach can see it. Debounced so a quick edit doesn't POST every
+    // keystroke.
+    saveOneRm(ex) {
+      if (!this.oneRmUrl || !ex) return;
+      if (this._oneRmTimers[ex.id]) clearTimeout(this._oneRmTimers[ex.id]);
+      this._oneRmTimers[ex.id] = setTimeout(() => this._postOneRm(ex), 600);
     },
 
-    writeE1rms(map) {
-      try {
-        localStorage.setItem(this.e1rmKey, JSON.stringify(map));
-      } catch (e) {
-        console.error("Could not persist 1RM estimates", e);
-      }
-    },
-
-    // Persist (or clear) one exercise's 1RM estimate as the athlete edits it.
-    persistE1rm(ex) {
-      const map = this.readE1rms();
+    // POST one exercise's manual 1RM. A blank value clears it (reverting to the
+    // server's log-derived estimate); a non-blank non-numeric value isn't worth a
+    // round-trip (the server would 400 it). Best-effort: an unreachable network or
+    // an error leaves the typed value in this session and retries on the next edit.
+    async _postOneRm(ex) {
+      if (!this.oneRmUrl || !ex) return;
       const value = (ex.e1rm || "").toString().trim();
-      if (value === "") delete map[ex.id];
-      else map[ex.id] = value;
-      this.writeE1rms(map);
+      if (value !== "" && parseNum(value) == null) return;
+      let res;
+      try {
+        res = await fetch(this.oneRmUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": this.csrf,
+          },
+          body: JSON.stringify({ prescription: ex.id, value }),
+        });
+      } catch (netErr) {
+        return; // offline — keep the in-session value; next edit re-attempts
+      }
+      if (res.redirected || !res.ok) return;
+      try {
+        const data = await res.json();
+        // Reconcile with what the server stored: a manual value stays in the
+        // input; a cleared one reverts to the server's log-derived estimate.
+        if (data.source === "manual") {
+          ex.one_rm = "";
+        } else {
+          ex.e1rm = "";
+          ex.one_rm = data.one_rm || "";
+        }
+      } catch (e) {
+        /* stored server-side regardless; the UI reconciles on next load */
+      }
     },
   };
 }

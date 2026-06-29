@@ -266,7 +266,16 @@ class PushSubscriptionAdmin(admin.ModelAdmin):
 
 @admin.register(AthleteOneRm)
 class AthleteOneRmAdmin(admin.ModelAdmin):
-    list_display = ("__str__", "athlete", "name", "value", "unit", "updated_at")
+    list_display = (
+        "__str__",
+        "athlete",
+        "name",
+        "value",
+        "unit",
+        "source",
+        "updated_at",
+    )
+    list_filter = ("source", "unit")
     search_fields = ("athlete__email", "athlete__name", "name")
     raw_id_fields = ("athlete", "exercise")
     readonly_fields = ("key", "created_at", "updated_at")

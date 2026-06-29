@@ -603,13 +603,20 @@ def athlete_session(session, athlete):
         "unit": week.mesocycle.plan.unit,
         "notes": log.notes if log else "",
         "log_url": reverse("meso:athlete_log_session", kwargs={"pk": session.pk}),
+        # Where the logger persists a manually-entered 1RM (Phase 2) — server-side
+        # now, so it syncs across devices and the coach can see it.
+        "one_rm_url": reverse("meso:athlete_set_one_rm", kwargs={"pk": session.pk}),
         "exercises": [
             {
                 **serialize_prescription(p),
                 "target": _target_label(p),
-                # The derived 1RM as a bare number string ("140"), or "" — the
+                # The stored 1RM as a bare number string ("140"), or "" — the
                 # client appends the unit and may layer a typed override on top.
                 "one_rm": _one_rm_label(one_rm_map.get(p.pk)),
+                # Whether that value is auto-derived from logs or manually entered
+                # ("logged"/"manual"/""), so the logger seeds the input from a
+                # manual value but treats a logged one as a placeholder.
+                "one_rm_source": _one_rm_source(one_rm_map.get(p.pk)),
                 "set_rows": _set_rows(p, logged),
             }
             for p in prescriptions
@@ -622,6 +629,11 @@ def _one_rm_label(one_rm):
     return _fmt_num(one_rm.value) if one_rm is not None else ""
 
 
+def _one_rm_source(one_rm):
+    """A stored ``AthleteOneRm``'s ``source`` ("logged"/"manual"), or "" when none."""
+    return one_rm.source if one_rm is not None else ""
+
+
 def athlete_log_payload(session_ctx):
     """The JSON the Alpine logger hydrates from (and POSTs back).
 
@@ -632,6 +644,8 @@ def athlete_log_payload(session_ctx):
     """
     return {
         "log_url": session_ctx["log_url"],
+        # Where a manually-entered 1RM is persisted server-side (Phase 2).
+        "one_rm_url": session_ctx["one_rm_url"],
         "status": session_ctx["status"],
         # The unit lets the %1RM helper render a suggested bar load (S2 Phase 2b).
         "unit": session_ctx["unit"],
@@ -644,9 +658,11 @@ def athlete_log_payload(session_ctx):
                 # %1RM (and the percent value) to offer the estimated-1RM helper.
                 "load": e["load"],
                 "load_type": e["load_type"],
-                # The persisted, log-derived 1RM ("140"/"") — the suggested-load
-                # default before the athlete types a per-device override.
+                # The persisted 1RM ("140"/"") + its source — a manual value seeds
+                # the input; a log-derived one is the suggested-load default shown
+                # as a placeholder.
                 "one_rm": e.get("one_rm", ""),
+                "one_rm_source": e.get("one_rm_source", ""),
                 "note": e.get("note", ""),
                 "tag": e.get("tag", ""),
                 "set_rows": e["set_rows"],

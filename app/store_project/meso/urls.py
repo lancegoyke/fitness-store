@@ -44,6 +44,12 @@ urlpatterns = [
         views.athlete_log_session,
         name="athlete_log_session",
     ),
+    # Set/clear the athlete's manual 1RM for a lift (Phase 2 — server-persisted).
+    path(
+        "api/me/session/<int:pk>/one-rm/",
+        views.athlete_set_one_rm,
+        name="athlete_set_one_rm",
+    ),
     # Athlete PWA (Phase 4b — S7): manifest + service worker + offline shell.
     # Served as views (not static files) so the worker has a stable /meso/-scoped
     # URL the hashing static pipeline can't give it.

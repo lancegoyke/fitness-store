@@ -1532,7 +1532,19 @@ class AthleteOneRm(models.Model):
     key)`` constraint holds whether or not the lift is catalog-backed. ``value``
     is the estimate in ``unit`` (the unit the logged work was recorded in); a
     %1RM target scaled against it is plate-rounded client-side.
+
+    ``source`` records whether the estimate is **auto-derived from the athlete's
+    logs** (the default) or **manually entered** by the athlete (Phase 2). A
+    manual value is the athlete's own number: ``refresh_one_rms`` never clobbers
+    it (logs only ever raised the derived estimate), and it survives a device
+    change and is visible to the coach — the gap the per-device localStorage
+    override left open. Clearing a manual value reverts the lift to its
+    log-derived estimate. See ``one_rm.py`` and ``docs/meso/one-rm-plan.md``.
     """
+
+    class Source(models.TextChoices):
+        LOGGED = "logged", _("Auto-derived from logs")
+        MANUAL = "manual", _("Athlete-entered")
 
     athlete = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -1556,6 +1568,9 @@ class AthleteOneRm(models.Model):
     value = models.DecimalField(_("Estimated 1RM"), max_digits=7, decimal_places=2)
     unit = models.CharField(
         _("Unit"), max_length=2, choices=Unit, default=Unit.KILOGRAMS
+    )
+    source = models.CharField(
+        _("Source"), max_length=10, choices=Source, default=Source.LOGGED
     )
     created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
     updated_at = models.DateTimeField(_("Time last modified"), auto_now=True)
