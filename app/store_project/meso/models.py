@@ -332,6 +332,19 @@ class CoachAthlete(models.Model):
             return self.coach
         return None
 
+    def initiator(self):
+        """The party who opened a pending link (None if not pending).
+
+        The mirror of ``recipient()``: a coach invite is initiated by the coach,
+        an athlete request by the athlete. The initiator is who may *withdraw* a
+        pending link, as the recipient is who may accept/decline it.
+        """
+        if self.status == self.Status.PENDING_COACH_INVITE:
+            return self.coach
+        if self.status == self.Status.PENDING_ATHLETE_REQUEST:
+            return self.athlete
+        return None
+
 
 class CoachInviteQuerySet(models.QuerySet):
     def for_coach(self, user):

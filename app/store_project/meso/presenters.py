@@ -13,6 +13,7 @@ from collections import defaultdict
 from django.urls import reverse
 from django.utils import timezone
 
+from .models import CoachAthlete
 from .models import LoadType
 from .models import Plan
 from .models import SessionLog
@@ -131,6 +132,51 @@ def pending_invite(invite):
         "token": invite.token,
         "when": invite.created_at,
     }
+
+
+def pending_request(link):
+    """A pending athlete→coach request row in the coach's roster (N4 Phase 2).
+
+    The coach accepts/declines via the recipient token views, so the row carries
+    the link's ``token`` to address them.
+    """
+    name = link.athlete.display_name()
+    return {
+        "name": name,
+        "initials": initials(name),
+        "token": link.token,
+        "when": link.created_at,
+    }
+
+
+def athlete_pending(user):
+    """Pending coach links the athlete sees on their training home (N4 Phase 2).
+
+    Splits the athlete's pending links into ``invites`` (a coach invited them —
+    they accept/decline) and ``requests`` (they asked a coach — awaiting, with a
+    withdraw). Each row names the coach and carries the link ``token`` for the
+    accept/decline/withdraw forms.
+    """
+    links = (
+        CoachAthlete.objects.for_athlete(user)
+        .pending()
+        .select_related("coach")
+        .order_by("-created_at")
+    )
+    invites, requests = [], []
+    for link in links:
+        name = link.coach.display_name()
+        row = {
+            "coach": name,
+            "initials": initials(name),
+            "token": link.token,
+            "when": link.created_at,
+        }
+        if link.status == CoachAthlete.Status.PENDING_COACH_INVITE:
+            invites.append(row)
+        else:
+            requests.append(row)
+    return {"invites": invites, "requests": requests}
 
 
 def group_detail(group):

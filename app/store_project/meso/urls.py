@@ -84,6 +84,13 @@ urlpatterns = [
         views.relationship_end,
         name="relationship_end",
     ),
+    # Athlete → coach requests (N4 Phase 2): the athlete asks, then may withdraw.
+    path("request/", views.athlete_request_coach, name="athlete_request_coach"),
+    path(
+        "request/<uuid:token>/withdraw/",
+        views.request_withdraw,
+        name="request_withdraw",
+    ),
     # Designer autosave API (Phase 3).
     path(
         "api/plan/<int:plan_id>/prescription/<int:pk>/",
