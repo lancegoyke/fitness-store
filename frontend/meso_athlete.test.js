@@ -6,7 +6,12 @@
 // (rowFilled / buildPayload / syncFromLog) are covered too since the queue
 // payloads are built from them.
 
-import { createLogger } from "../app/store_project/static/js/meso_athlete.js";
+import {
+  createLogger,
+  epleyOneRm,
+  roundToStep,
+  loadForPercent,
+} from "../app/store_project/static/js/meso_athlete.js";
 
 const LOG_URL = "/meso/api/me/session/42/log/";
 
@@ -221,5 +226,122 @@ describe("flushQueue", () => {
     global.fetch = vi.fn();
     await c.flushQueue();
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// ---- %1RM logging ergonomics (S2 Phase 2b) ----
+// A %1RM target is an intensity, not a weight. These helpers turn the coach's
+// "75%" into a bar load (given the athlete's estimated 1RM) and back — the
+// estimate is entered in the logger and persisted client-side.
+
+describe("epleyOneRm", () => {
+  it("returns the load itself for a single rep", () => {
+    expect(epleyOneRm("100", "1")).toBe(100);
+  });
+  it("estimates 1RM from reps via Epley", () => {
+    // 100 × (1 + 5/30) = 116.666…
+    expect(epleyOneRm("100", "5")).toBeCloseTo(116.667, 2);
+  });
+  it("is null for a non-numeric load or reps (BW, AMRAP, ranges)", () => {
+    expect(epleyOneRm("BW", "5")).toBeNull();
+    expect(epleyOneRm("100", "AMRAP")).toBeNull();
+    expect(epleyOneRm("100", "8-10")).toBeNull();
+    expect(epleyOneRm("", "")).toBeNull();
+  });
+  it("is null for non-positive load or sub-1 reps", () => {
+    expect(epleyOneRm("0", "5")).toBeNull();
+    expect(epleyOneRm("100", "0")).toBeNull();
+  });
+});
+
+describe("roundToStep", () => {
+  it("rounds to the nearest plate step", () => {
+    expect(roundToStep(91.2, 2.5)).toBe(90);
+    expect(roundToStep(81.3, 2.5)).toBe(82.5);
+  });
+});
+
+describe("loadForPercent", () => {
+  it("scales an estimated 1RM by a percent, rounded to a loadable plate", () => {
+    expect(loadForPercent("120", "75")).toBe(90); // 0.75 × 120 = 90
+    expect(loadForPercent("100", "82")).toBe(82.5); // 82 → nearest 2.5
+  });
+  it("is null without a usable 1RM or percent", () => {
+    expect(loadForPercent("", "75")).toBeNull();
+    expect(loadForPercent("120", "")).toBeNull();
+    expect(loadForPercent("0", "75")).toBeNull();
+  });
+});
+
+describe("isPercentLift / suggestedLoad / setImpliedOneRm", () => {
+  function pctLogger() {
+    const c = createLogger();
+    c.unit = "kg";
+    c.exercises = [
+      { id: 1, load: "75", load_type: "pct", e1rm: "120", set_rows: [] },
+      { id: 2, load: "70", load_type: "abs", e1rm: "", set_rows: [] },
+    ];
+    return c;
+  }
+
+  it("identifies a %1RM lift", () => {
+    const c = pctLogger();
+    expect(c.isPercentLift(c.exercises[0])).toBe(true);
+    expect(c.isPercentLift(c.exercises[1])).toBe(false);
+  });
+
+  it("suggests a bar load (with unit) for a %1RM lift with a known 1RM", () => {
+    const c = pctLogger();
+    expect(c.suggestedLoad(c.exercises[0])).toBe("90 kg");
+  });
+
+  it("suggests nothing for an absolute lift or a missing 1RM", () => {
+    const c = pctLogger();
+    expect(c.suggestedLoad(c.exercises[1])).toBe("");
+    c.exercises[0].e1rm = "";
+    expect(c.suggestedLoad(c.exercises[0])).toBe("");
+  });
+
+  it("shows the implied 1RM from a logged set", () => {
+    const c = pctLogger();
+    expect(c.setImpliedOneRm({ load: "100", reps: "1" })).toBe("100 kg");
+    expect(c.setImpliedOneRm({ load: "", reps: "" })).toBe("");
+  });
+});
+
+describe("estimated-1RM persistence", () => {
+  it("round-trips per-exercise 1RM estimates through localStorage", () => {
+    const c = createLogger();
+    c.exercises = [{ id: 7, e1rm: "" }];
+    c.exercises[0].e1rm = "140";
+    c.persistE1rm(c.exercises[0]);
+    expect(c.readE1rms()).toEqual({ 7: "140" });
+  });
+
+  it("drops an estimate cleared back to blank", () => {
+    const c = createLogger();
+    c.exercises = [{ id: 7, e1rm: "140" }];
+    c.persistE1rm(c.exercises[0]);
+    c.exercises[0].e1rm = "";
+    c.persistE1rm(c.exercises[0]);
+    expect(c.readE1rms()).toEqual({});
+  });
+
+  it("hydrates each exercise's 1RM from storage on init", () => {
+    document.body.innerHTML =
+      '<span id="meso-csrf" data-token="tok"></span>' +
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        status: "pending",
+        unit: "kg",
+        exercises: [{ id: 7, load: "75", load_type: "pct", set_rows: [] }],
+      }) +
+      "</script>";
+    localStorage.setItem("meso-e1rm", JSON.stringify({ 7: "140" }));
+    const c = createLogger();
+    c.init();
+    expect(c.unit).toBe("kg");
+    expect(c.exercises[0].e1rm).toBe("140");
   });
 });

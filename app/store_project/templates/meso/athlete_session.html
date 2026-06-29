@@ -47,6 +47,17 @@
         <div style="padding:11px 16px 9px;border-bottom:1px solid var(--line-2);">
           <div style="font-size:14px;font-weight:700;letter-spacing:-0.01em;" x-text="ex.name"></div>
           <div class="meso-row-meta meso-mono">target <span x-text="ex.target"></span><template x-if="ex.note"><span> · <span x-text="ex.note"></span></span></template></div>
+          <template x-if="isPercentLift(ex)">
+            <div style="display:flex;align-items:center;gap:8px;margin-top:7px;flex-wrap:wrap;">
+              <span class="meso-badge meso-badge--accent">%1RM</span>
+              <label class="meso-row-meta" style="display:flex;align-items:center;gap:5px;margin:0;">your 1RM
+                <input class="meso-phone-input" x-model="ex.e1rm" @input="persistE1rm(ex)" placeholder="1RM" inputmode="decimal"
+                       style="width:58px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:5px 4px;outline:none;color:var(--ink);" />
+                <span x-text="unit"></span>
+              </label>
+              <span class="meso-row-meta meso-mono" style="color:var(--accent);font-weight:700;" x-show="suggestedLoad(ex)" x-cloak x-text="ex.load + '% ≈ ' + suggestedLoad(ex)"></span>
+            </div>
+          </template>
         </div>
         <template x-for="r in ex.set_rows" :key="r.set_number">
           <div style="display:flex;align-items:center;gap:9px;padding:9px 16px;border-bottom:1px solid var(--line-2);">
@@ -58,6 +69,9 @@
                    style="width:60px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 4px;outline:none;color:var(--ink);" />
             <input class="meso-phone-input" x-model="r.rpe" placeholder="rpe" inputmode="decimal"
                    style="width:48px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 4px;outline:none;color:var(--ink);" />
+            <template x-if="isPercentLift(ex)">
+              <span class="meso-row-meta meso-mono" style="white-space:nowrap;" x-show="setImpliedOneRm(r)" x-cloak x-text="'1RM ≈ ' + setImpliedOneRm(r)"></span>
+            </template>
             <div class="meso-spacer"></div>
             <button type="button" @click="toggle(r)" :aria-pressed="r.done" aria-label="Mark set done"
                     style="appearance:none;border:0;background:none;cursor:pointer;padding:0;flex:0 0 auto;">
