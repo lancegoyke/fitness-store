@@ -270,7 +270,13 @@ class RosterView(LoginRequiredMixin, TemplateView):
             .prefetch_related("athlete__contraindications")
             .order_by("athlete__name", "athlete__email")
         )
-        athletes = [presenters.roster_athlete(link.athlete) for link in links]
+        # The downgrade soft-suspends every active link beyond the oldest free cap
+        # (S6 Phase 5); flag those rows so the roster shows a "Suspended" badge.
+        suspended = billing_access.suspended_athlete_ids(self.request.user)
+        athletes = [
+            presenters.roster_athlete(link.athlete, suspended=link.pk in suspended)
+            for link in links
+        ]
         groups = (
             MesoGroup.objects.for_coach(self.request.user)
             .active()
@@ -1361,14 +1367,16 @@ def _editable_plan_or_response(request, plan_id):
     """The plan the requester may *edit*, or an error response (S6 Phase 3, D6).
 
     Ownership first (``_coach_plan_or_forbidden`` → 404/403), then the billing
-    gate: a coach over their seat limit after a downgrade (``can_edit`` False) gets
-    a 402 instead of mutating — they keep read access but can't change or deliver a
-    program until back within the cap or re-subscribed.
+    gate: a coach over their seat limit after a downgrade gets a 402 instead of
+    mutating — they keep read access but can't change or deliver a program until
+    back within the cap or re-subscribed. The freeze is **per athlete** (S6 Phase
+    5, ``can_edit_plan``): only the soft-suspended links — the active ones beyond
+    the oldest ``FREE_SEAT_LIMIT`` — are frozen; the kept athletes stay editable.
     """
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return None, forbidden
-    if not billing_access.can_edit(plan.coach):
+    if not billing_access.can_edit_plan(plan):
         return None, _over_limit_json()
     return plan, None
 
@@ -1965,9 +1973,10 @@ def batch_apply(request, batch_id):
     """Apply the batch's approved changes back into the program."""
     batch = _coach_batch_or_404(request, batch_id)
     # Applying a batch writes the approved edits into the program — an edit, so it
-    # respects the D6 over-limit freeze (a batch drafted before a downgrade can't
-    # be applied while the coach is over their seat limit).
-    if not billing_access.can_edit(batch.plan.coach):
+    # respects the D6 over-limit freeze (a batch drafted before a downgrade can't be
+    # applied while its athlete's link is soft-suspended). Per-plan (S6 Phase 5), so
+    # a batch for a kept athlete still applies while the coach is over the cap.
+    if not billing_access.can_edit_plan(batch.plan):
         return _over_limit_json()
     if batch.status != AgentProposalBatch.Status.PENDING:
         return JsonResponse(

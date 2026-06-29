@@ -61,8 +61,14 @@ def _active_contraindications(user):
     return [c for c in user.contraindications.all() if c.active]
 
 
-def roster_athlete(user):
-    """A row in the coach's roster list."""
+def roster_athlete(user, *, suspended=False):
+    """A row in the coach's roster list.
+
+    ``suspended`` marks an athlete whose link a downgrade froze (S6 Phase 5): the
+    coach keeps read access but can't edit/deliver this athlete's program until back
+    within the free cap. It surfaces as a warning badge so the coach sees *which*
+    athletes are frozen, not just that they're over the limit.
+    """
     name = user.display_name()
     meta_parts = [p for p in [_training_label(user)] if p]
     return {
@@ -74,8 +80,8 @@ def roster_athlete(user):
         "flags": [c.label for c in _active_contraindications(user)],
         # Phase 2 (program/agent) and Phase 3 (logs) — hidden until they exist.
         "compliance": None,
-        "status": "",
-        "status_label": "",
+        "status": "suspended" if suspended else "",
+        "status_label": "Suspended" if suspended else "",
     }
 
 
@@ -195,8 +201,9 @@ def billing_state(coach):
     the tier, seat usage, and which upgrade CTAs to offer. The free tier sees
     "start your no-card trial" (single-use) and "subscribe"; a coach with a real
     Stripe subscription sees "manage billing" (the hosted Portal); an over-limit
-    coach (post-downgrade, D6) sees the freeze warning. ``seat_limit`` is ``None``
-    for an unlimited (active/trial/comped) coach so the template hides the cap.
+    coach (post-downgrade, D6) sees the freeze warning naming how many athletes are
+    suspended (``suspended_count``, S6 Phase 5). ``seat_limit`` is ``None`` for an
+    unlimited (active/trial/comped) coach so the template hides the cap.
     """
     sub = getattr(coach, "coach_subscription", None)
     status = sub.status if sub else CoachSubscription.Status.FREE
@@ -221,6 +228,9 @@ def billing_state(coach):
         "can_use_agent": billing_access.can_use_agent(coach),
         "agent": agent_allowance(coach),
         "over_limit": billing_access.is_over_limit(coach),
+        # How many active athletes are soft-suspended by the downgrade (S6 Phase 5):
+        # 0 unless over the limit, then the count beyond the oldest free cap.
+        "suspended_count": len(billing_access.suspended_athlete_ids(coach)),
         "can_start_trial": can_start_trial,
         "has_stripe_subscription": bool(sub and sub.stripe_subscription_id),
     }

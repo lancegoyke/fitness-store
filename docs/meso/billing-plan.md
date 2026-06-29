@@ -22,7 +22,7 @@ pricing assumptions into the schema.
 | D3 | **Free access** | **Free tier + 14-day no-card trial.** A forever-free tier (a few free seats), plus a frictionless trial that needs no card; the free tier is also the lapse/cancel landing spot. |
 | D4 | **What the paywall gates** | **Active-athlete count + the AI agent.** The Claude-powered program agent (B6) has real per-call API cost, so it's paid-only — trial/paid/comped get the full agent. Groups (S1) and notifications stay free at every tier. (v1 gave the free tier **no** agent; **Phase 5 meters it** — a free coach gets a small monthly `FREE_AGENT_ALLOWANCE` of runs, then 402s. The seat gate still shares the `is_active` predicate.) |
 | D5 | **Cadence + currency** | **Monthly, USD** for v1 (annual deferred — annualizing a fluctuating seat count adds proration complexity for little v1 value). |
-| D6 | **Lapse / cancel** | Stripe Smart Retries → on final failure / cancel, **downgrade to free at period end**. Over the free limit ⇒ block *new* athletes + block edits/deliver until back within the limit or re-subscribed; **never delete data** (matches how an ended relationship archives, not deletes). |
+| D6 | **Lapse / cancel** | Stripe Smart Retries → on final failure / cancel, **downgrade to free at period end**. Over the free limit ⇒ block *new* athletes + block edits/deliver until back within the limit or re-subscribed; **never delete data** (matches how an ended relationship archives, not deletes). (Phase 5 makes the edit freeze **per athlete** — the oldest `FREE_SEAT_LIMIT` links stay editable, the rest soft-suspend; v1 froze the whole coach.) |
 | D11 | **First slice** | **The subscription spine** for existing logged-in coaches. The public self-serve coach-signup funnel is a later phase. |
 
 ### Architecture decisions (recommended; proceed unless overridden)
@@ -127,12 +127,17 @@ are unaffected. (Defended at the endpoint, not just the UI — the API cost is r
 
 On trial-end-without-subscription or a final failed payment / cancel at
 `current_period_end`: `status=free`. If the coach is over `FREE_SEAT_LIMIT`,
-they keep **read access** to everything but cannot deliver / edit / add until
-they end relationships to get back within the free limit or re-subscribe.
-Nothing is deleted; re-subscribing restores full access. (A finer per-athlete
-suspension — auto-keeping the N oldest active links live and soft-suspending the
-rest — is a Phase-5 refinement; v1 keeps the coarse "coach is over the limit"
-rule to avoid the app arbitrarily choosing which athletes to freeze.)
+they keep **read access** to everything and cannot **add** new athletes; nothing
+is deleted; re-subscribing restores full access. The edit/deliver freeze is
+**per athlete** (Phase 5): the app keeps the coach's **oldest `FREE_SEAT_LIMIT`
+active links** editable and soft-suspends the rest — those plans go read-only
+(no edit/deliver/agent-apply) until the coach re-subscribes or ends relationships
+to get back within the cap. Keeping the *oldest* avoids the app arbitrarily
+choosing which athletes to freeze. (A **group** plan serves many athletes through
+no single relationship, so it falls back to the coarse coach-wide freeze.)
+`billing/access.py` owns this: `suspended_athlete_ids(coach)` (the frozen-link
+set) and `can_edit_plan(plan)` (the per-plan gate at the mutating endpoints);
+v1 froze the whole coach via the coarse `can_edit(coach)`.
 
 ## Phasing
 
@@ -152,8 +157,13 @@ rule to avoid the app arbitrarily choosing which athletes to freeze.)
 > binary agent gate: a free coach gets `FREE_AGENT_ALLOWANCE` (5) agent runs per
 > calendar month (counted from the `AgentProposalBatch` ledger — no new model),
 > then the endpoint 402s; the designer shows a "N of M runs left" meter / upgrade
-> CTA and the roster card reflects it. Remaining Phase-5 items: annual prices,
-> per-athlete suspension granularity on downgrade.
+> CTA and the roster card reflects it. Phase 5 also adds **per-athlete suspension
+> granularity** (this slice, no migration) — the D6 downgrade edit freeze is now
+> per-athlete (`can_edit_plan` / `suspended_athlete_ids`): an over-limit coach
+> keeps editing/delivering their oldest `FREE_SEAT_LIMIT` athletes and is frozen
+> only on the rest (group plans keep the coarse coach-wide freeze), with a
+> per-athlete "Suspended" badge on the roster. Remaining Phase-5 item: annual
+> prices.
 
 ### Deploying Phase 2 (Stripe configuration)
 
@@ -206,8 +216,15 @@ deploy succeeds without them (like the VAPID push keys):
    `presenters.agent_allowance` meter wired into the designer (composer + "N of M
    runs left" / upgrade CTA) and the roster card + the allowance-aware 402 copy at
    `agent_propose`. Tested in `test_billing.py::TestAgentAllowance` and
-   `test_billing_enforcement.py`. **Still later:** annual prices; per-athlete
-   suspension granularity on downgrade.
+   `test_billing_enforcement.py`. **Per-athlete suspension granularity** is also
+   done (this slice, no migration): `billing/access.py` gains
+   `suspended_athlete_ids(coach)` (the active links beyond the oldest
+   `FREE_SEAT_LIMIT`, frozen on a downgrade) + `can_edit_plan(plan)` (per-plan
+   gate; a group plan falls back to the coarse `can_edit(coach)`), wired into
+   `_editable_plan_or_response` + `batch_apply` so an over-limit coach keeps
+   editing/delivering their kept athletes; `presenters` surface a per-athlete
+   "Suspended" roster badge + a `suspended_count` on the billing card. Tested in
+   `test_billing_suspension.py`. **Still later:** annual prices.
 
 ## Open values (numbers, not architecture — confirm before/with Phase 1)
 
@@ -229,6 +246,5 @@ deploy succeeds without them (like the VAPID push keys):
 ## Deferred
 
 - Annual billing; promo codes / coupons (Stripe supports both when wanted).
-- Per-athlete soft-suspension on downgrade (v1: coarse over-limit rule).
 - Tax / VAT handling (Stripe Tax) if selling internationally.
 - Email receipts beyond Stripe's own invoice emails.

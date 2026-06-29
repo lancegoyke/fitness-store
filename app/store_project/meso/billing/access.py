@@ -18,7 +18,10 @@ Phase 3 wired these gates into the choke points: ``can_add_athlete`` at the
 invite/request endpoints (block a free coach past the cap), ``can_use_agent`` at
 the agent endpoint (402 for the free tier), and ``can_edit`` at the edit/deliver
 endpoints (the D6 over-limit freeze). Phase 5 meters ``can_use_agent`` (free-tier
-allowance). See ``docs/meso/billing-plan.md``.
+allowance) and refines the edit freeze **per athlete** (``can_edit_plan`` /
+``suspended_athlete_ids``): an over-limit coach keeps editing their oldest
+``FREE_SEAT_LIMIT`` athletes and is frozen only on the rest. See
+``docs/meso/billing-plan.md``.
 """
 
 import math
@@ -134,11 +137,56 @@ def is_over_limit(coach):
 
 
 def can_edit(coach):
-    """Edit/deliver gate (D6) — may this coach mutate or deliver programs?
+    """Coarse edit/deliver gate (D6) — may this coach mutate or deliver *anything*?
 
     Everyone can edit/deliver *except* a coach who is over their seat limit after a
     downgrade (``is_over_limit``); they keep read access but can't change or deliver
     a program until they re-subscribe or end relationships to get back within the
-    free cap. Never deletes data — only freezes writes.
+    free cap. Never deletes data — only freezes writes. This is the coach-wide
+    predicate; ``can_edit_plan`` is the per-athlete refinement (S6 Phase 5) and the
+    fallback for a group plan, which has no single relationship to keep live.
     """
     return not is_over_limit(coach)
+
+
+def suspended_athlete_ids(coach):
+    """Active ``CoachAthlete`` ids a downgrade has soft-suspended (D6, S6 Phase 5).
+
+    When a coach drops below their active-athlete count (``is_over_limit``), the app
+    keeps their **oldest** ``FREE_SEAT_LIMIT`` active relationships live and freezes
+    the rest: those plans go read-only for the coach (no edit/deliver) until they
+    re-subscribe or end relationships to get back within the cap. Nothing is deleted.
+    Keeping the *oldest* avoids the app arbitrarily picking which athletes to
+    freeze — the longest-standing relationships stay editable; the most recently
+    added (likely the ones that pushed the coach onto a paid plan) are the ones that
+    suspend on a lapse.
+
+    An active/comped coach (or one within the cap) is never over the limit, so this
+    is an empty set for them — cheap, since ``is_over_limit`` short-circuits before
+    any per-link query.
+    """
+    if not is_over_limit(coach):
+        return frozenset()
+    active_ids = list(
+        CoachAthlete.objects.for_coach(coach)
+        .active()
+        .order_by("created_at", "pk")
+        .values_list("pk", flat=True)
+    )
+    # Keep the oldest FREE_SEAT_LIMIT live; everything after the cutoff is frozen.
+    return frozenset(active_ids[CoachSubscription.FREE_SEAT_LIMIT :])
+
+
+def can_edit_plan(plan):
+    """Per-plan edit/deliver gate (D6) — may this plan be mutated or delivered?
+
+    The per-athlete refinement of ``can_edit`` (S6 Phase 5): an **individual** plan
+    is frozen only when *its own* relationship is soft-suspended, so an over-limit
+    coach keeps full control of their oldest ``FREE_SEAT_LIMIT`` athletes' plans and
+    is blocked only on the suspended ones. A **group** plan serves many athletes
+    through no single relationship, so it falls back to the coarse coach-wide freeze
+    (``can_edit``). Defended at the mutating endpoints, not just the UI.
+    """
+    if plan.relationship_id is None:  # a group plan — no single link to keep live
+        return can_edit(plan.coach)
+    return plan.relationship_id not in suspended_athlete_ids(plan.coach)
