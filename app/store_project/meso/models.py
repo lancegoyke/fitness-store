@@ -358,10 +358,16 @@ class CoachAthlete(models.Model):
         """This relationship's current individual program (most-recent non-archived).
 
         The individual-side analogue of ``MesoGroup.shared_plan`` — the plan the
-        designer reopens, or ``None`` when the coach hasn't built one yet.
+        designer reopens, or ``None`` when the coach hasn't built one yet. A
+        *materialized* group-delivery plan (``source_group`` set — a member's
+        resolved snapshot, groups Phase 4) is excluded, matching
+        ``PlanQuerySet.for_coach``/``editable_by``: it's athlete-facing only and
+        the designer 404s on it, so it must never be returned as the editable
+        working plan.
         """
         return (
             self.plans.exclude(status=Plan.Status.ARCHIVED)
+            .filter(source_group__isnull=True)
             .order_by("-modified")
             .first()
         )
