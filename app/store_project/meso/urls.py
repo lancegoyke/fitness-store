@@ -63,6 +63,13 @@ urlpatterns = [
         views.push_unsubscribe,
         name="push_unsubscribe",
     ),
+    # Login-free, tokened opt-out from training-delivery emails (the email's
+    # List-Unsubscribe link). The signed token authorizes; no login required.
+    path(
+        "unsubscribe/<str:token>/",
+        views.unsubscribe_delivery_email,
+        name="unsubscribe_delivery_email",
+    ),
     path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
     path("group/new/", views.group_create, name="group_create"),
     path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),

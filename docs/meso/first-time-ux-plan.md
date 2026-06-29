@@ -37,7 +37,7 @@ findings below are from the deployed code, with references.
 This is the load-bearing problem; the rest is refinement on top of it.
 
 - `Plan.objects.create` appears in exactly one place in app code —
-  `MesoGroup.create_shared_plan` (`models.py:1480`), i.e. **groups only**. There
+  `MesoGroup.create_shared_plan` (`models.py:1488`), i.e. **groups only**. There
   is **no individual-plan create**, and **no add-mesocycle / add-week /
   add-session endpoint** in `meso/urls.py` (only `session_add_exercise` adds an
   exercise to an *existing* session). The designer is an **editor for
@@ -45,7 +45,7 @@ This is the load-bearing problem; the rest is refinement on top of it.
 - Both individual-plan CTAs are dead ends:
   - **"+ New program"** (roster top nav, `roster.html:6`) → bare `/meso/designer/`
     → `_coach_working_plan` returns `None` for a fresh coach → redirect back to the
-    roster with *"Pick an athlete to start a program."* (`views.py:151`).
+    roster with *"Pick an athlete to start a program."* (`views.py:156`).
   - **"Build a program"** (athlete profile empty state, `athlete_profile.html:131`)
     → same bare designer → same bounce.
 - The only thing that builds an individual `Plan → Mesocycle → Week → Session →
@@ -70,7 +70,7 @@ all.** "Obvious to use" presupposes "usable," so this is Phase 1.
 - Lands on `/meso/` and — post-#311 — is **redirected to `/meso/me/`** (the
   athlete home), because `RosterView.get` now treats only a user with a
   `CoachProfile` *or* a coach-side link *or* a sent invite as a coach
-  (`views.py:196`). So a genuine new coach is shown the **athlete** surface and has
+  (`views.py:201`). So a genuine new coach is shown the **athlete** surface and has
   **no path *onto* the coach surface**: there's **no self-serve `CoachProfile`
   creation** (only `seed_meso_demo.py:451` and the test factory create one), and
   the only "become a coach" action that exists — sending an invite — lives on the

@@ -158,11 +158,11 @@ items in [`invites-plan.md`](./invites-plan.md).
 |---|----------|------|
 | S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) + Phase 2a (shared group program + Group-mode designer) + Phase 3 (per-athlete overrides — the `adj` overlay) built; plan in [`groups-plan.md`](./groups-plan.md) |
 | S2 | **Units & RPE vs %1RM** | ✅ Complete — units (kg/lb) shipped with earlier slices; Phase 1 (first-class `load_type` `abs`/`pct`) + Phase 2a (agent %1RM-awareness — prompt + a deterministic %1RM progression bound) + Phase 2b (athlete %1RM logging ergonomics — the estimated-1RM helper) all built & deployed. **Follow-up: persisted, coach-visible 1RM** (Phase 1 — `AthleteOneRm`, auto-derived from logged history) built. Plans in [`units-rpe-plan.md`](./units-rpe-plan.md) / [`one-rm-plan.md`](./one-rm-plan.md) |
-| S3 | **Delivery & notifications** | Push needs PWA + push infra; email via existing `django-ses` + `notifications` app |
-| S4 | **Results ↔ `challenges`/records** | Results screen shows a PR — reuse the records model or keep separate? |
-| S5 | **Real-time transport** | HTMX polling vs SSE/websockets for chat/drafting |
-| S6 | **Billing** | Paid/sub feature (Stripe is here) or internal-only? Tied to B1 |
-| S7 | **Offline logging** | Gym wifi is bad — does the athlete logger need offline/PWA? |
+| S3 | **Delivery & notifications** | ✅ Built — push (PWA, Phase 4b) + email (`django-ses` + `notifications`). **Email opt-out shipped** (2026-06-29): the delivery email now carries a working one-click `List-Unsubscribe` (RFC 8058) honored by a per-athlete flag — see decision log. |
+| S4 | **Results ↔ `challenges`/records** | ✅ Resolved (2026-06-29, YAGNI review): **keep separate, build nothing now.** The "results screen shows a PR" premise was mock-only (the real results screen never showed a PR), and `challenges.Record` is time-based (wrong domain for a strength PR). Meso already owns best-lift data via `AthleteOneRm`. A motivational PR badge stays deferred until there's a concrete need. |
+| S5 | **Real-time transport** | ❌ Deferred (YAGNI, 2026-06-29): the agent result is atomic behind a human review gate and the stack is WSGI — SSE/websockets buy ~1.5s over a cheap bounded poll for disproportionate ASGI/channels/Redis-channel-layer infra. Revisit only if the agent itself becomes genuinely streaming. |
+| S6 | **Billing** | 🟢 **Planned** (2026-06-29): Meso is **not** a single-operator tool — multi-coach SaaS is the intended direction. Billing (Stripe is here) is a forthcoming slice; the schema is already cleanly multi-tenant (B1), so it is an additive retrofit. Needs the pricing/packaging product decisions first (see decision log + suggested sequence). |
+| S7 | **Offline logging** | ✅ Built — athlete PWA offline log queue (Phase 4b). |
 
 ---
 
@@ -178,7 +178,15 @@ plain CRUD — it carries the tenancy/roles/relationship spine (N1–N3).
 2. **Agent as proposal engine** behind the existing review gate (B6). Writes `ProposedChange`s;
    coach still approves. Safe — the human gate already exists.
 3. **Athlete delivery + logging** — the athlete PWA surface, notifications, then results feeding
-   back to the agent.
+   back to the agent. *(Built.)*
+4. **Billing (S6) — the next major slice.** Meso is intended as a multi-coach SaaS, not a
+   single-operator tool, so coaches will eventually pay. The tenancy spine (B1) is already in
+   place; what's missing is (a) the **product/pricing decisions** — what's charged for (per-coach
+   seat? per-athlete? flat?), tiers, trial, free ceiling — and (b) the **subscription
+   infrastructure** (today's Stripe is one-time-payment only: subscription mode + webhooks, a
+   paid/tier/seat marker on `CoachProfile`, a self-serve coach-signup/upgrade flow, dunning). The
+   pricing/packaging calls are the owner's and gate the build; the engineering is then an additive
+   retrofit. A dedicated `billing-plan.md` should capture those decisions before code.
 
 ---
 
@@ -585,13 +593,53 @@ _(Append dated entries here as decisions land.)_
   invariant). No compose change — the `qcluster` already runs and shares web's image + `.env`. Built
   red→green: **+3 pytest** (`test_agent_jobs.py` `TestDispatch`, net; the daemon-thread test
   retired). Plan + remaining deferred in [`scheduling-plan.md`](./scheduling-plan.md).
+- 2026-06-29 — **"What's next?" YAGNI review + delivery-email opt-out built.** With the whole
+  Meso area shipped and no obvious next big slice, each remaining candidate was reviewed
+  one-by-one (a skeptical agent per candidate, grounded in the real code) to decide *build now* vs
+  YAGNI. **Verdicts:**
+  - **S4 (results ↔ records) — skip.** The "results screen shows a PR" premise was mock-only (the
+    real results screen never showed a PR; the lone PR string lived in a retired roster mock), and
+    `challenges.Record` is a `DurationField`/time-based model — wrong domain for a strength PR.
+    Meso already owns best-lift data (`AthleteOneRm`). Embedded modeling question resolves for
+    free: **keep separate**; build a PR surface only on a concrete need.
+  - **S5 (real-time transport) — skip.** The agent emits one atomic tool-call result behind the
+    human review gate (no partial output to stream), the status poll is cheap + bounded (1.5s,
+    ≤40 attempts), and the stack is pure WSGI. SSE/websockets would pull in ASGI + channels + a
+    Redis channel layer on a `noeviction` box for a ~1.5s cosmetic win. Revisit only if the agent
+    becomes genuinely streaming.
+  - **Deferred follow-ups — 5 of 6 skip:** cross-unit 1RM (no in-app way to change a plan's unit),
+    1RM `set_by` attribution (no consumer), push re-deliver debounce (already mitigated by the
+    push `tag` collapse), invite configurable-TTL (one-line constant), invite stub-athlete (a
+    *deliberately rejected* design — `decisions.md` N4). **The 1 that made the cut → built (below).**
+  - **S6 (billing) — re-added to the plan, NOT skipped.** The review found Meso is single-operator
+    *today* (no self-serve coach signup, no subscription infra), but the owner's direction is that
+    Meso is **not** to be planned as a single-operator tool — multi-coach SaaS with paid coaches is
+    intended. So billing is promoted to the **next major slice** (suggested-sequence item 4); it
+    needs the pricing/packaging product decisions first, then an additive Stripe-subscription
+    build. (A `billing-plan.md` should capture those decisions before code.)
+- 2026-06-29 — **Delivery-email opt-out built** (branch `meso-email-unsubscribe`, migration
+  `0019_athleteprofile_delivery_email_opt_out`). The one follow-up that made the YAGNI cut: the
+  delivered-week email — the single transactional message a coached athlete receives — had **no
+  off switch** (web push is opt-in via the browser permission; email was not). Built the email
+  best-practice: a working, login-free, RFC 8058 **one-click `List-Unsubscribe`**. New
+  `meso/unsubscribe.py` mints a signed token (`django.core.signing`, no token column, no expiry)
+  naming the athlete; `send_week_delivered_email` (switched `send_mail` → `EmailMultiAlternatives`)
+  sets `List-Unsubscribe` + `List-Unsubscribe-Post` headers and a visible footer link when given an
+  `unsubscribe_url`. The `unsubscribe_delivery_email` view (`/meso/unsubscribe/<token>/`,
+  `@csrf_exempt`, login-free) **never mutates on GET** (scanners/prefetchers issue GETs → a confirm
+  page); POST (one-click or the human form) flips a single **`AthleteProfile.delivery_email_opt_out`**
+  flag. The deliver hook (`_notify_athlete_delivered`) gates the email on the flag — an opted-out
+  athlete is emailed nothing, but **push still fires** (separate channel) and delivery still
+  succeeds. Intentionally *not* a notification-preferences system — one flag for the one email that
+  needed an off switch. Admin surfaces + filters the flag. Built red→green: **+16 pytest**
+  (`test_unsubscribe.py`); ruff + format + `makemigrations --check` clean.
 - 2026-06-29 — **First-time UX / onboarding slice planned** (not built; plan in
   [`first-time-ux-plan.md`](./first-time-ux-plan.md)). The feature area is broad
   and deployed but has never had an onboarding pass. The plan covers all three
   first-timers (cold visitor · new coach · new athlete) and surfaces the
   **headline blocker**: a coach **cannot create an individual program in the UI** —
   `Plan.objects.create` lives only in `MesoGroup.create_shared_plan`
-  (`models.py:1480`), there's no individual-plan / add-week / add-session endpoint,
+  (`models.py:1488`), there's no individual-plan / add-week / add-session endpoint,
   and both "+ New program" and "Build a program" CTAs bounce off the bare designer
   back to the roster; only `seed_meso_demo` builds an individual plan tree. Phased
   fix (Phase 1 = individual plan creation, the structural fix; 2–5 = front
@@ -603,9 +651,11 @@ _(Append dated entries here as decisions land.)_
   **Decisions Q1–Q4 resolved (2026-06-29):** **Q1** coaches = **closed beta /
   allowlisted** (`CoachProfile` auto-creates on first coach action for an
   allowlisted user; open self-serve deferred to billing S6 — no billing yet + a
-  per-coach Claude cost + a single box make open signup premature); **Q2** plan
-  creation = **blank editable scaffold first**, optional agent draft as a fast
-  follow (template library deferred); **Q3** = **yes** to a removable one-click
-  demo (no demo-athlete email/push); **Q4** = a **logged-out `/meso/` landing**
-  with "I have an invite" + "Request coach access" + one main-site link (not
-  instant-signup). Q1 is the most consequential and the easiest to revisit.
+  per-coach Claude cost + a single box make open signup premature; the YAGNI-review
+  entry above promotes **billing/S6 to the next major slice**, which is exactly when
+  open coach self-serve becomes viable); **Q2** plan creation = **blank editable
+  scaffold first**, optional agent draft as a fast follow (template library
+  deferred); **Q3** = **yes** to a removable one-click demo (no demo-athlete
+  email/push); **Q4** = a **logged-out `/meso/` landing** with "I have an invite" +
+  "Request coach access" + one main-site link (not instant-signup). Q1 is the most
+  consequential and the easiest to revisit.

@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.core.mail import EmailMessage
+from django.core.mail import EmailMultiAlternatives
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 
@@ -172,12 +173,20 @@ def send_coach_request_email(*, athlete, coach, roster_url) -> bool:
     return True
 
 
-def send_week_delivered_email(*, athlete, coach, plan, week, home_url) -> bool:
+def send_week_delivered_email(
+    *, athlete, coach, plan, week, home_url, unsubscribe_url=None
+) -> bool:
     """Email an athlete that their coach delivered a new training week.
 
     Meso athlete slice Phase 4a (decision S3): when a coach delivers a week, the
     athlete is notified through the channel that exists today — email via
     ``django-ses``. Web push waits on the PWA (Phase 4b).
+
+    When ``unsubscribe_url`` is given, the message carries the email
+    best-practice ``List-Unsubscribe`` + ``List-Unsubscribe-Post`` headers
+    (RFC 8058 one-click) and a visible footer link, so Gmail/Apple Mail render a
+    working unsubscribe control. The caller is responsible for *honoring* an
+    opt-out (it gates this call); this function only advertises the link.
 
     Args:
         athlete: the ``User`` who trains the plan (the recipient).
@@ -185,6 +194,8 @@ def send_week_delivered_email(*, athlete, coach, plan, week, home_url) -> bool:
         plan: the delivered week's ``Plan`` (for its title).
         week: the delivered ``Week`` (for its index label).
         home_url: absolute URL of the athlete's training surface (``/meso/me/``).
+        unsubscribe_url: absolute URL of the tokened, login-free unsubscribe
+            page; ``None`` omits the headers and footer.
 
     Returns:
         ``True`` if a message was sent, ``False`` if skipped because the athlete
@@ -201,18 +212,26 @@ def send_week_delivered_email(*, athlete, coach, plan, week, home_url) -> bool:
         "plan_title": plan.title,
         "week_label": f"Week {week.index}",
         "home_url": home_url,
+        "unsubscribe_url": unsubscribe_url,
     }
     subject = render_to_string(
         "notifications/week_delivered_subject.txt", context
     ).strip()
     msg_plain = render_to_string("notifications/week_delivered.md", context)
     msg_html = render_to_string("notifications/week_delivered.html", context)
-    send_mail(
+    headers = {}
+    if unsubscribe_url:
+        # RFC 2369 + RFC 8058: a header List-Unsubscribe (https for one-click)
+        # plus List-Unsubscribe-Post turns it into a one-click mail-client button.
+        headers["List-Unsubscribe"] = f"<{unsubscribe_url}>"
+        headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    message = EmailMultiAlternatives(
         subject=subject,
-        message=msg_plain,
-        html_message=msg_html,
+        body=msg_plain,
         from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
-        recipient_list=[athlete.email],
-        fail_silently=False,
+        to=[athlete.email],
+        headers=headers,
     )
+    message.attach_alternative(msg_html, "text/html")
+    message.send(fail_silently=False)
     return True

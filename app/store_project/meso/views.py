@@ -26,6 +26,7 @@ from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
@@ -66,6 +67,10 @@ from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 from .serializers import serialize_session_log
 from .serializers import serialize_week_snapshot
+from .unsubscribe import athlete_opted_out
+from .unsubscribe import make_unsubscribe_token
+from .unsubscribe import resolve_unsubscribe_user
+from .unsubscribe import set_delivery_email_opt_out
 
 logger = logging.getLogger(__name__)
 
@@ -1588,16 +1593,27 @@ def _notify_athlete_delivered(request, plan, week):
     logged, never a 500 or a rolled-back deliver, and never blocks the other.
     """
     home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
+    unsubscribe_url = request.build_absolute_uri(
+        reverse(
+            "meso:unsubscribe_delivery_email",
+            kwargs={"token": make_unsubscribe_token(plan.athlete)},
+        )
+    )
 
     def _send():
         try:
-            send_week_delivered_email(
-                athlete=plan.athlete,
-                coach=plan.coach,
-                plan=plan,
-                week=week,
-                home_url=home_url,
-            )
+            # The athlete can opt out of delivery emails (the email's
+            # List-Unsubscribe link). Push is a separate, browser-opt-in channel
+            # and is never gated by the email opt-out.
+            if not athlete_opted_out(plan.athlete):
+                send_week_delivered_email(
+                    athlete=plan.athlete,
+                    coach=plan.coach,
+                    plan=plan,
+                    week=week,
+                    home_url=home_url,
+                    unsubscribe_url=unsubscribe_url,
+                )
         except Exception:  # mail is best-effort; never fail a delivery on it
             logger.exception(
                 "Failed to send delivery email for plan %s week %s",
@@ -1620,6 +1636,27 @@ def _notify_athlete_delivered(request, plan, week):
             )
 
     transaction.on_commit(_send)
+
+
+@csrf_exempt
+def unsubscribe_delivery_email(request, token):
+    """Login-free, tokened opt-out from training-delivery emails.
+
+    Reached from the delivery email's ``List-Unsubscribe`` link. A mail client
+    honoring RFC 8058 one-click POSTs here directly (``List-Unsubscribe=
+    One-Click``, no CSRF token — hence ``@csrf_exempt``); a human who clicks the
+    visible footer link lands on a GET confirm page and POSTs the form. We never
+    mutate on GET: mail scanners and link prefetchers issue GETs and must not
+    silently unsubscribe anyone. The signed token authorizes — no login needed
+    (the recipient may not be signed in, or signed in under a different address).
+    """
+    user = resolve_unsubscribe_user(token)
+    if user is None:
+        return render(request, "meso/unsubscribe_invalid.html", status=400)
+    if request.method == "POST":
+        set_delivery_email_opt_out(user, True)
+        return render(request, "meso/unsubscribe_done.html", {"email": user.email})
+    return render(request, "meso/unsubscribe_confirm.html", {"email": user.email})
 
 
 # -- agent proposal engine (agent slice Phase 1 / Phase 4 — B6) -----------
