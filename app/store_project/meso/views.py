@@ -2075,6 +2075,82 @@ def billing_start_trial(request):
     return redirect("meso:roster")
 
 
+# -- self-serve coach signup (S6 Phase 4, D11) ----------------------------
+#
+# The public funnel that turns a visitor into a coach. Until now a
+# ``CoachProfile`` was created only by admin or the demo seed (B1 made Meso a
+# multi-coach SaaS, but there was no front door). The landing page pitches the
+# plan tiers; ``start_coaching`` creates the ``CoachProfile``. Plan choice after
+# signup is the existing Phase 3 roster billing card — this slice only needs to
+# create the coach. See ``docs/meso/billing-plan.md``.
+
+
+class BecomeCoachView(TemplateView):
+    """Public "become a coach" landing — the front door to self-serve signup.
+
+    Pitches Meso coaching and the plan tiers (free / no-card trial / per-seat
+    paid), then routes the visitor:
+
+    - an **existing coach** has no use for the pitch → straight to the roster;
+    - an **anonymous** visitor is sent through allauth signup/login first (the
+      template offers those CTAs with ``?next=`` back here) — the POST action is
+      login-required and a login redirect would return as a GET it rejects;
+    - a **logged-in non-coach** sees the "start coaching" form.
+    """
+
+    template_name = "meso/become_coach.html"
+
+    def get(self, request, *args, **kwargs):
+        if request.user.is_authenticated and _is_coach(request.user):
+            return redirect("meso:roster")
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["free_seats"] = CoachSubscription.FREE_SEAT_LIMIT
+        ctx["trial_days"] = CoachSubscription.TRIAL_DAYS
+        # allauth returns here after signup/login (?next=), where the visitor —
+        # now authenticated — sees the start-coaching form.
+        ctx["next_url"] = reverse("meso:become_coach")
+        return ctx
+
+
+@login_required
+@require_POST
+def start_coaching(request):
+    """Create the coach's ``CoachProfile`` and land them on the roster (Phase 4).
+
+    The funnel's payoff: turns a logged-in visitor into a coach. Idempotent — a
+    user who already has a profile just goes to the roster (a re-POST / double
+    submit is harmless). With ``plan=trial`` it also starts the no-card local
+    trial in the same step (single-use; an already-trialed coach is silently left
+    as-is, never a 500). The free path creates **no** subscription row — free is
+    "no row" — and subscribing is the roster's Subscribe CTA (Phase 3).
+    """
+    CoachProfile.objects.get_or_create(user=request.user)
+    started_trial = False
+    if request.POST.get("plan") == "trial":
+        try:
+            CoachSubscription.start_trial_for(request.user)
+        except InvalidTransition:
+            # Already trialed (e.g. a returning coach) — keep their current state.
+            pass
+        else:
+            started_trial = True
+    if started_trial:
+        messages.success(
+            request,
+            f"Welcome! Your {CoachSubscription.TRIAL_DAYS}-day free trial has "
+            "started — the full Meso toolkit is unlocked.",
+        )
+    else:
+        messages.success(
+            request,
+            "Welcome to Meso coaching! Invite your first athlete to get started.",
+        )
+    return redirect("meso:roster")
+
+
 @csrf_exempt
 @require_POST
 def billing_webhook(request):

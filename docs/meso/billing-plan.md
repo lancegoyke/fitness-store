@@ -142,8 +142,13 @@ rule to avoid the app arbitrarily choosing which athletes to freeze.)
 > slice) — the gates have teeth: `can_add_athlete` at the invite/request choke
 > points, `can_use_agent` at the agent endpoint (402), `can_edit` (the D6
 > over-limit freeze) at the edit/deliver endpoints, the local trial-start
-> endpoint, and the paywall UI (roster billing card + designer agent CTA). Next:
-> Phase 4 (self-serve coach signup).
+> endpoint, and the paywall UI (roster billing card + designer agent CTA).
+> Phase 4 ✅ (this slice, no migration) — the self-serve signup funnel: a public
+> `become_coach` landing page (plan tiers + adaptive CTAs) and a `start_coaching`
+> action that creates the `CoachProfile` (idempotent; `plan=trial` also starts
+> the no-card trial), plus an entry-point link from the athlete home. A
+> `CoachProfile` is no longer admin/seed-only. Next: Phase 5 (annual prices,
+> per-athlete suspension, free-tier agent allowance).
 
 ### Deploying Phase 2 (Stripe configuration)
 
@@ -178,9 +183,16 @@ deploy succeeds without them (like the VAPID push keys):
    endpoints, the local trial-start endpoint (`billing/trial/`), and the roster
    billing card (tier + seat usage + start-trial / subscribe / manage-billing
    CTAs). Billing now has teeth. Fully tested in `test_billing_enforcement.py`.
-4. **Phase 4 — self-serve coach signup.** The public become-a-coach → choose
-   plan → subscribe → `CoachProfile` created funnel (today coach creation is
-   admin/seed-only).
+4. **Phase 4 — self-serve coach signup (DONE).** The public become-a-coach
+   funnel: a `become_coach` landing page (GET `/meso/coach/`, public — pitches
+   the free / trial / paid tiers; an existing coach is bounced to the roster, an
+   anonymous visitor gets allauth signup/login CTAs with `?next=` back, a
+   logged-in non-coach gets the start form) and `start_coaching` (POST
+   `/meso/coach/start/`, login-required) which `get_or_create`s the
+   `CoachProfile` (idempotent) and — with `plan=trial` — starts the no-card local
+   trial in the same step, then lands on the roster where the Phase 3 billing
+   card owns plan choice (free / trial / subscribe). An entry-point link sits on
+   the athlete home. No new model/migration. Tested in `test_coach_signup.py`.
 5. **Phase 5 — later.** Annual prices; per-athlete suspension granularity on
    downgrade; a small free-tier agent *allowance* / metering (Phase 3 ships the
    binary free=no-agent gate; an allowance is the refinement).

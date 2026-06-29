@@ -1,0 +1,59 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Become a coach · Meso{% endblock %}
+
+{# Public marketing page — keep the coach nav (Roster/Designer) out of it. #}
+{% block navlinks %}{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Meso for coaches</p>
+        <h1 class="meso-h1">Coach smarter with Meso</h1>
+        <p class="meso-sub">Design periodized programs, deliver them straight to your athletes' phones, and let the AI agent draft adjustments you approve. Start free — no card required.</p>
+      </div>
+    </div>
+
+    <!-- Plan tiers -->
+    <div class="meso-flex" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:18px;">
+      <div class="meso-card meso-card--pad">
+        <span class="meso-badge meso-badge--muted"><i></i>Free</span>
+        <p style="font-size:15px;font-weight:800;letter-spacing:-0.01em;margin:10px 0 4px;">Get started</p>
+        <p class="meso-row-meta">Coach up to {{ free_seats }} athlete{{ free_seats|pluralize }}. Groups and delivery included. No AI agent.</p>
+      </div>
+      <div class="meso-card meso-card--pad">
+        <span class="meso-badge meso-badge--ok"><i></i>Free trial</span>
+        <p style="font-size:15px;font-weight:800;letter-spacing:-0.01em;margin:10px 0 4px;">{{ trial_days }} days, full access</p>
+        <p class="meso-row-meta">The whole toolkit — unlimited athletes and the AI program agent — free for {{ trial_days }} days. No card.</p>
+      </div>
+      <div class="meso-card meso-card--pad">
+        <span class="meso-badge"><i></i>Paid</span>
+        <p style="font-size:15px;font-weight:800;letter-spacing:-0.01em;margin:10px 0 4px;">Per active athlete</p>
+        <p class="meso-row-meta">Pay only for the athletes you actively coach, monthly. Unlimited athletes plus the AI agent.</p>
+      </div>
+    </div>
+
+    <!-- Call to action -->
+    <div class="meso-card meso-card--pad">
+      {% if user.is_authenticated %}
+        <p class="meso-eyebrow">Ready when you are</p>
+        <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:6px 0 14px;">Start coaching with Meso</p>
+        <form method="post" action="{% url 'meso:start_coaching' %}" style="display:flex;gap:10px;flex-wrap:wrap;margin:0;">
+          {% csrf_token %}
+          <button type="submit" name="plan" value="free" class="meso-btn meso-btn--primary">Start coaching free</button>
+          <button type="submit" name="plan" value="trial" class="meso-btn meso-btn--ghost">Start {{ trial_days }}-day free trial</button>
+        </form>
+        <p class="meso-row-meta" style="margin-top:12px;">You can subscribe for unlimited athletes and the AI agent anytime from your dashboard.</p>
+      {% else %}
+        <p class="meso-eyebrow">First, your account</p>
+        <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:6px 0 14px;">Create an account to start coaching</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <a class="meso-btn meso-btn--primary" href="{% url 'account_signup' %}?next={{ next_url|urlencode }}">Create your account</a>
+          <a class="meso-btn meso-btn--ghost" href="{% url 'account_login' %}?next={{ next_url|urlencode }}">Log in</a>
+        </div>
+        <p class="meso-row-meta" style="margin-top:12px;">It's free to begin — you'll choose your plan once you're in.</p>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}
