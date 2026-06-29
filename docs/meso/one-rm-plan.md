@@ -66,9 +66,16 @@ already in place is never clobbered.
   for the lifts in a session. Called from the **log endpoint** after a *done*
   save, so the estimate tracks what the athlete actually did (a heavier set
   raises it; an edit that drops the PR lowers it — it recomputes from scratch).
-- `one_rm_values(athlete, prescriptions)` — read the stored rows for a batch of
-  prescriptions (one query, by identity so the same lift surfaces against every
-  prescription of it), for the two display surfaces.
+- `one_rm_values(athlete, prescriptions, unit)` — read the stored rows for a
+  batch of prescriptions (one query, by identity so the same lift surfaces
+  against every prescription of it), for the two display surfaces.
+
+**Unit-awareness.** A logged `load` is a bare number whose unit is the plan's, so
+the estimate is derived *and* read **per unit**: `refresh` pools only same-unit
+logs (the stored value is unambiguously in its `unit`), and `one_rm_values`
+returns a row only when its unit matches the reading plan's. A mixed-unit athlete
+(a lift trained in both kg and lb) gets the helper on plans matching their
+most-recent logging unit; cross-unit *conversion* is deferred.
 
 ## Surfaces
 

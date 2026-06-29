@@ -42,34 +42,49 @@ def backfill(apps, schema_editor):
     LoggedSet = apps.get_model("meso", "LoggedSet")
     AthleteOneRm = apps.get_model("meso", "AthleteOneRm")
 
-    logged_sets = LoggedSet.objects.filter(
-        session_log__status="done",
-        prescription__isnull=False,
-    ).select_related(
-        "session_log",
-        "prescription",
-        "prescription__session__week__mesocycle__plan",
+    # Newest log first: the most recent completed log for a lift fixes the unit
+    # the stored estimate is denominated in (mirroring the runtime, where a fresh
+    # log overwrites the row with its plan's unit). A logged ``load`` is a bare
+    # number whose unit is the plan's, so only same-unit sets are pooled.
+    logged_sets = (
+        LoggedSet.objects.filter(
+            session_log__status="done",
+            prescription__isnull=False,
+        )
+        .select_related(
+            "session_log",
+            "prescription",
+            "prescription__session__week__mesocycle__plan",
+        )
+        .order_by("-session_log__date", "-session_log__created_at")
     )
 
     # best[(athlete_id, key)] = {value, exercise_id, name, unit}
     best = {}
     for ls in logged_sets:
         presc = ls.prescription
-        est = _epley(ls.load, ls.reps)
-        if est is None:
-            continue
         identity = (ls.session_log.athlete_id, _key_str(presc.exercise_id, presc.name))
         plan = presc.session.week.mesocycle.plan
-        current = best.get(identity)
-        if current is None or est > current["value"]:
-            best[identity] = {
-                "value": est,
+        entry = best.get(identity)
+        if entry is None:
+            # First (most recent) sighting fixes the unit + display name.
+            entry = best[identity] = {
+                "value": None,
                 "exercise_id": presc.exercise_id,
                 "name": presc.name,
                 "unit": plan.unit,
             }
+        if plan.unit != entry["unit"]:
+            continue  # an older log of this lift in the other unit — not pooled
+        est = _epley(ls.load, ls.reps)
+        if est is None:
+            continue
+        if entry["value"] is None or est > entry["value"]:
+            entry["value"] = est
 
     for (athlete_id, key), data in best.items():
+        if data["value"] is None:
+            continue  # the lift had no usable (numeric) logged set
         value = Decimal(str(round(data["value"], 2)))
         # Skip an absurd value the Decimal(7, 2) column can't hold (a fat-fingered
         # logged load) rather than crash the migration.

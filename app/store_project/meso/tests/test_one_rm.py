@@ -13,6 +13,7 @@ helper, the log-endpoint integration, the presenter/serializer threading, and
 the backfill of existing history. See ``docs/meso/one-rm-plan.md``.
 """
 
+import datetime
 import importlib
 import json
 from decimal import Decimal
@@ -199,6 +200,25 @@ class TestDeriveOneRmValues:
         log_session(other, session, [(squat, 1, "1", "999", "9")])
         assert meso_one_rm.derive_one_rm_values(athlete) == {}
 
+    def test_unit_scopes_the_scan(self):
+        # The same lift logged in a kg plan and a lb plan: each unit derives only
+        # from its own logs (a bare logged load can't be pooled across units).
+        athlete = UserFactory()
+        _, kg_session, (kg_squat,) = make_session(
+            athlete, unit=Unit.KILOGRAMS, prescriptions=[{"name": "Back Squat"}]
+        )
+        _, lb_session, (lb_squat,) = make_session(
+            athlete, unit=Unit.POUNDS, prescriptions=[{"name": "Back Squat"}]
+        )
+        log_session(athlete, kg_session, [(kg_squat, 1, "1", "150", "9")])
+        log_session(athlete, lb_session, [(lb_squat, 1, "1", "300", "9")])
+        assert meso_one_rm.derive_one_rm_values(athlete, unit=Unit.KILOGRAMS) == {
+            "name:back squat": pytest.approx(150.0)
+        }
+        assert meso_one_rm.derive_one_rm_values(athlete, unit=Unit.POUNDS) == {
+            "name:back squat": pytest.approx(300.0)
+        }
+
 
 # -- refresh_one_rms -------------------------------------------------------
 
@@ -238,6 +258,22 @@ class TestRefreshOneRms:
         meso_one_rm.refresh_one_rms(athlete, [squat], plan.unit)
         assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
 
+    def test_refresh_pools_only_same_unit_logs(self):
+        # A lb log of the same lift must not pollute the kg estimate.
+        athlete = UserFactory()
+        kg_plan, kg_session, (kg_squat,) = make_session(
+            athlete, unit=Unit.KILOGRAMS, prescriptions=[{"name": "Back Squat"}]
+        )
+        _, lb_session, (lb_squat,) = make_session(
+            athlete, unit=Unit.POUNDS, prescriptions=[{"name": "Back Squat"}]
+        )
+        log_session(athlete, kg_session, [(kg_squat, 1, "1", "150", "9")])
+        log_session(athlete, lb_session, [(lb_squat, 1, "1", "300", "9")])
+        meso_one_rm.refresh_one_rms(athlete, [kg_squat], kg_plan.unit)
+        row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
+        assert row.value == Decimal("150.00")
+        assert row.unit == Unit.KILOGRAMS
+
     def test_absurd_load_is_skipped_not_an_overflow(self):
         # A fat-fingered logged load whose estimate won't fit Decimal(7, 2) must
         # not raise (which would roll back the whole log) — it's simply skipped.
@@ -258,7 +294,7 @@ class TestOneRmValues:
         athlete = UserFactory()
         _, _, (squat,) = make_session(athlete, prescriptions=[{"name": "Back Squat"}])
         AthleteOneRmFactory(athlete=athlete, name="Back Squat", value=Decimal("150"))
-        values = meso_one_rm.one_rm_values(athlete, [squat])
+        values = meso_one_rm.one_rm_values(athlete, [squat], Unit.KILOGRAMS)
         assert values[squat.pk].value == Decimal("150")
 
     def test_same_lift_surfaces_against_every_prescription(self):
@@ -268,13 +304,25 @@ class TestOneRmValues:
         _, _, (wk1,) = make_session(athlete, prescriptions=[{"name": "Back Squat"}])
         _, _, (wk2,) = make_session(athlete, prescriptions=[{"name": "Back Squat"}])
         AthleteOneRmFactory(athlete=athlete, name="Back Squat", value=Decimal("150"))
-        values = meso_one_rm.one_rm_values(athlete, [wk1, wk2])
+        values = meso_one_rm.one_rm_values(athlete, [wk1, wk2], Unit.KILOGRAMS)
         assert values[wk1.pk].pk == values[wk2.pk].pk
 
     def test_absent_when_no_row(self):
         athlete = UserFactory()
         _, _, (squat,) = make_session(athlete, prescriptions=[{"name": "Back Squat"}])
-        assert meso_one_rm.one_rm_values(athlete, [squat]) == {}
+        assert meso_one_rm.one_rm_values(athlete, [squat], Unit.KILOGRAMS) == {}
+
+    def test_a_row_in_another_unit_is_not_surfaced(self):
+        # A 1RM stored in lb must not be read against a kg plan (it would render as
+        # "150 kg" and drive an unsafe suggested load).
+        athlete = UserFactory()
+        _, _, (squat,) = make_session(
+            athlete, unit=Unit.KILOGRAMS, prescriptions=[{"name": "Back Squat"}]
+        )
+        AthleteOneRmFactory(
+            athlete=athlete, name="Back Squat", value=Decimal("150"), unit=Unit.POUNDS
+        )
+        assert meso_one_rm.one_rm_values(athlete, [squat], Unit.KILOGRAMS) == {}
 
 
 # -- log-endpoint integration ----------------------------------------------
@@ -485,3 +533,30 @@ class TestBackfillMigration:
         row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
         assert row.value == Decimal("180")
         assert AthleteOneRm.objects.filter(athlete=athlete).count() == 1
+
+    def test_backfill_uses_the_most_recent_unit_for_mixed_history(self):
+        # The same lift logged in a kg plan (older) and a lb plan (newer): the
+        # backfill stores the most-recent unit's estimate, never pooling the two.
+        athlete = UserFactory()
+        _, kg_session, (kg_squat,) = make_session(
+            athlete, unit=Unit.KILOGRAMS, prescriptions=[{"name": "Back Squat"}]
+        )
+        _, lb_session, (lb_squat,) = make_session(
+            athlete, unit=Unit.POUNDS, prescriptions=[{"name": "Back Squat"}]
+        )
+        log_session(
+            athlete,
+            kg_session,
+            [(kg_squat, 1, "1", "150", "9")],
+            date=datetime.date(2026, 1, 1),
+        )
+        log_session(
+            athlete,
+            lb_session,
+            [(lb_squat, 1, "1", "300", "9")],
+            date=datetime.date(2026, 6, 1),
+        )
+        self._backfill()
+        row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
+        assert row.unit == Unit.POUNDS
+        assert row.value == Decimal("300.00")

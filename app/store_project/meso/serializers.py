@@ -623,7 +623,7 @@ def serialize_plan(plan, week=None):
             # ``one_rm`` imports this module. A group plan has no single athlete.
             from .one_rm import one_rm_values
 
-            one_rm_map = one_rm_values(plan.athlete, prescriptions)
+            one_rm_map = one_rm_values(plan.athlete, prescriptions, plan.unit)
             for session_data in program:
                 for exercise in session_data["exercises"]:
                     label = last_map.get(exercise["id"])

@@ -53,7 +53,7 @@ def epley_one_rm(load, reps):
     return w * (1 + r / 30)
 
 
-def derive_one_rm_values(athlete, *, keys=None):
+def derive_one_rm_values(athlete, *, keys=None, unit=None):
     """Best Epley 1RM per lift identity from the athlete's *completed* logged sets.
 
     One query over the athlete's ``DONE`` logged sets (a pending "Save progress"
@@ -61,12 +61,21 @@ def derive_one_rm_values(athlete, *, keys=None):
     same). Returns ``{key: float}`` — the maximum implied 1RM across every set of
     that lift. ``keys``, when given, restricts the scan to those lift identities
     (the lifts in a session just logged); a lift with no usable set is absent.
+
+    ``unit`` scopes the scan to logged sets from plans in that unit — a logged
+    ``load`` is a bare number whose unit is the plan's, so pooling kg and lb sets
+    for one lift would be unit-confused. The estimate is therefore derived (and
+    stored) per unit.
     """
     logged_sets = models.LoggedSet.objects.filter(
         session_log__athlete=athlete,
         session_log__status=models.SessionLog.Status.DONE,
         prescription__isnull=False,
     ).select_related("prescription")
+    if unit is not None:
+        logged_sets = logged_sets.filter(
+            session_log__session__week__mesocycle__plan__unit=unit
+        )
     best = {}
     for ls in logged_sets:
         key = key_str(ls.prescription.exercise_id, ls.prescription.name)
@@ -109,7 +118,9 @@ def refresh_one_rms(athlete, prescriptions, unit):
         reps_by_key[key_str(p.exercise_id, p.name)] = (p.exercise_id, p.name)
     if not reps_by_key:
         return
-    derived = derive_one_rm_values(athlete, keys=set(reps_by_key))
+    # Derive from same-unit logs only, so the stored value is unambiguously in
+    # ``unit`` (the unit it's written with).
+    derived = derive_one_rm_values(athlete, keys=set(reps_by_key), unit=unit)
     for key, (exercise_id, name) in reps_by_key.items():
         value = derived.get(key)
         if value is None:
@@ -129,12 +140,15 @@ def refresh_one_rms(athlete, prescriptions, unit):
         )
 
 
-def one_rm_values(athlete, prescriptions):
+def one_rm_values(athlete, prescriptions, unit):
     """Map each prescription pk to ``athlete``'s stored ``AthleteOneRm``, if any.
 
     One query over the athlete's stored estimates for the rendered lifts (by
     identity, so the same 1RM surfaces against every prescription of that lift).
-    A lift the athlete has no estimate for is simply absent from the map.
+    Scoped to ``unit`` (the reading plan's): the stored value is a bare number in
+    its *own* unit, so surfacing it under a different unit would be wrong — a row
+    in the other unit is simply omitted (the athlete will re-derive one by logging
+    in this unit). A lift the athlete has no estimate for is absent from the map.
     """
     keys = {p.pk: key_str(p.exercise_id, p.name) for p in prescriptions}
     wanted = set(keys.values())
@@ -142,6 +156,8 @@ def one_rm_values(athlete, prescriptions):
         return {}
     rows = {
         row.key: row
-        for row in models.AthleteOneRm.objects.filter(athlete=athlete, key__in=wanted)
+        for row in models.AthleteOneRm.objects.filter(
+            athlete=athlete, key__in=wanted, unit=unit
+        )
     }
     return {pk: rows[key] for pk, key in keys.items() if key in rows}

@@ -585,9 +585,9 @@ def athlete_session(session, athlete):
     done = log is not None and log.status == SessionLog.Status.DONE
     week = session.week
     prescriptions = list(session.prescriptions.all())
-    # The athlete's persisted, log-derived 1RM per lift — the %1RM logger seeds its
-    # suggested bar load from it (no manual estimate needed). One query.
-    one_rm_map = one_rm_values(athlete, prescriptions)
+    # The athlete's persisted, log-derived 1RM per lift (in this plan's unit) — the
+    # %1RM logger seeds its suggested bar load from it (no manual estimate needed).
+    one_rm_map = one_rm_values(athlete, prescriptions, week.mesocycle.plan.unit)
     return {
         "id": session.pk,
         "n": session.day_number,
