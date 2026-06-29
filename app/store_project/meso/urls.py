@@ -4,6 +4,7 @@ from . import views
 from .views import AthleteHomeView
 from .views import AthleteProfileView
 from .views import AthleteSessionView
+from .views import BecomeCoachView
 from .views import ChangeReviewView
 from .views import DeliverView
 from .views import GroupDetailView
@@ -158,6 +159,10 @@ urlpatterns = [
         views.batch_dismiss,
         name="api_batch_dismiss",
     ),
+    # Self-serve coach signup (S6 Phase 4): the public become-a-coach funnel —
+    # a landing page + the action that creates the CoachProfile.
+    path("coach/", BecomeCoachView.as_view(), name="become_coach"),
+    path("coach/start/", views.start_coaching, name="start_coaching"),
     # Billing (S6): subscribe via Stripe Checkout, manage via the hosted Portal,
     # and the clean subscription webhook (separate from the products webhook).
     path("billing/subscribe/", views.billing_subscribe, name="billing_subscribe"),
