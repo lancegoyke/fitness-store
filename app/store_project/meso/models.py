@@ -374,6 +374,25 @@ class CoachInviteQuerySet(models.QuerySet):
             status__in=[CoachInvite.Status.PENDING, CoachInvite.Status.EXPIRED]
         )
 
+    def due_for_reminder(self):
+        """Pending invites in their reminder window that haven't been nudged yet.
+
+        A claim link nearing its TTL — within ``INVITE_REMINDER_LEAD`` of
+        ``expires_at`` but not yet past due — for which no reminder has gone out.
+        A null-clock legacy invite never expires, so never needs a reminder
+        (excluded by the clock filter). The ``meso_remind_expiring_invites``
+        sweep's input; ``mark_reminded`` stamps each so a later sweep skips it
+        (one reminder per arming cycle).
+        """
+        now = timezone.now()
+        return self.filter(
+            status=CoachInvite.Status.PENDING,
+            reminder_sent_at__isnull=True,
+            expires_at__isnull=False,
+            expires_at__gt=now,
+            expires_at__lte=now + CoachInvite.INVITE_REMINDER_LEAD,
+        )
+
 
 class CoachInvite(models.Model):
     """A coach's email invitation to an athlete who may not have an account yet (N4).
@@ -397,6 +416,9 @@ class CoachInvite(models.Model):
 
     #: How long a fresh claim link stays valid before it must be resent (N4 P3).
     INVITE_TTL = timedelta(days=14)
+
+    #: How far ahead of ``expires_at`` an invite earns a reminder email (N4 P4).
+    INVITE_REMINDER_LEAD = timedelta(days=3)
 
     class Status(models.TextChoices):
         PENDING = "pending", _("Pending")
@@ -441,6 +463,15 @@ class CoachInvite(models.Model):
         help_text=_(
             "When the claim link stops working. Null = never expires "
             "(legacy invites predating the TTL)."
+        ),
+    )
+    reminder_sent_at = models.DateTimeField(
+        _("Reminder sent at"),
+        null=True,
+        blank=True,
+        help_text=_(
+            "When the expiry-reminder email went out. Null = not yet reminded "
+            "this arming cycle; cleared on resend."
         ),
     )
 
@@ -525,6 +556,30 @@ class CoachInvite(models.Model):
         """A pending invite still within its TTL — the only state a claim accepts."""
         return self.is_pending and not self.is_expired
 
+    @property
+    def needs_reminder(self):
+        """Single-invite mirror of ``due_for_reminder`` — is a reminder due now?
+
+        A claimable invite (pending, not yet expired) with a real clock, nearing
+        ``expires_at`` (within ``INVITE_REMINDER_LEAD``) and not yet reminded this
+        cycle. A null clock never expires, so never qualifies.
+        """
+        if not self.is_claimable or self.reminder_sent_at is not None:
+            return False
+        if self.expires_at is None:
+            return False
+        return self.expires_at <= timezone.now() + self.INVITE_REMINDER_LEAD
+
+    def mark_reminded(self):
+        """Stamp that an expiry reminder went out (bookkeeping, not a transition).
+
+        A reminded invite drops out of ``due_for_reminder`` so the sweep won't
+        nudge it again this arming cycle; ``resend`` clears the stamp.
+        """
+        self.reminder_sent_at = timezone.now()
+        self.save(update_fields=["reminder_sent_at"])
+        return self
+
     def accept(self, user):
         """A claiming user accepts → an **active** ``CoachAthlete`` link.
 
@@ -600,9 +655,11 @@ class CoachInvite(models.Model):
         The explicit *resend* action — and the re-arm path ``open_for`` uses. A
         **new token** rotates the secret so the previously emailed link dies (per
         the Phase-3 decision); the clock resets and an expired invite returns to
-        pending so it's claimable again. Only an outstanding invite (pending or
-        expired) can be resent — an answered one (accepted/declined/revoked) is
-        terminal; a fresh invite goes through ``open_for`` instead.
+        pending so it's claimable again. The reminder stamp is cleared so the
+        fresh cycle re-earns a reminder near its new expiry. Only an outstanding
+        invite (pending or expired) can be resent — an answered one
+        (accepted/declined/revoked) is terminal; a fresh invite goes through
+        ``open_for`` instead.
         """
         if self.status not in (self.Status.PENDING, self.Status.EXPIRED):
             raise InvalidTransition(f"Cannot resend an invite that is {self.status}.")
@@ -610,7 +667,16 @@ class CoachInvite(models.Model):
         self.status = self.Status.PENDING
         self.expires_at = self._default_expiry()
         self.responded_at = None
-        self.save(update_fields=["token", "status", "expires_at", "responded_at"])
+        self.reminder_sent_at = None
+        self.save(
+            update_fields=[
+                "token",
+                "status",
+                "expires_at",
+                "responded_at",
+                "reminder_sent_at",
+            ]
+        )
         return self
 
 

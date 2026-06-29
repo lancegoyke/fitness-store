@@ -73,7 +73,14 @@ class CoachAthleteAdmin(admin.ModelAdmin):
 
 @admin.register(CoachInvite)
 class CoachInviteAdmin(admin.ModelAdmin):
-    list_display = ("email", "coach", "status", "created_at", "expires_at")
+    list_display = (
+        "email",
+        "coach",
+        "status",
+        "created_at",
+        "expires_at",
+        "reminder_sent_at",
+    )
     list_filter = ("status",)
     search_fields = ("email", "coach__email", "coach__name")
     raw_id_fields = ("coach", "accepted_by", "accepted_link")
