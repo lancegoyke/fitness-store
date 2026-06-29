@@ -218,10 +218,13 @@ class RosterView(LoginRequiredMixin, TemplateView):
         # auto-adjusts land in groups Phase 2/3. Activity (Phase 3) needs logged
         # sessions; needs-review (Phase 2) needs agent state. Empty until then.
         ctx["groups"] = [presenters.roster_group(g) for g in groups]
-        # Pending email invites the coach has sent but no one has claimed yet (N4).
-        pending_invites = CoachInvite.objects.for_coach(self.request.user).pending()
+        # Outstanding email invites the coach has sent — pending *or* expired (N4);
+        # an expired one still shows so the coach can Resend it (Phase 3).
+        outstanding_invites = CoachInvite.objects.for_coach(
+            self.request.user
+        ).outstanding()
         ctx["pending_invites"] = [
-            presenters.pending_invite(inv) for inv in pending_invites
+            presenters.pending_invite(inv) for inv in outstanding_invites
         ]
         # Pending athlete→coach requests awaiting this coach's reply (N4 Phase 2).
         pending_requests = (
@@ -1084,9 +1087,50 @@ def coach_invite_revoke(request, token):
             token=token,
             coach=request.user,
         )
-        if invite.is_pending:
+        if invite.status in (CoachInvite.Status.PENDING, CoachInvite.Status.EXPIRED):
             invite.revoke()
             messages.success(request, "Invite revoked.")
+    return redirect("meso:roster")
+
+
+@login_required
+@require_POST
+def coach_invite_resend(request, token):
+    """Coach re-arms an outstanding invite they sent (N4 Phase 3).
+
+    Resends a pending **or expired** invite: ``resend`` rotates the token (the
+    old emailed link dies), resets the TTL, and brings an expired invite back to
+    pending; the fresh claim email goes out best-effort on
+    ``transaction.on_commit``. Coach-scoped (a foreign invite is a 404). An
+    already-answered invite (accepted/declined/revoked) is a friendly no-op, not
+    a 500. Locks the row so a resend can't race a concurrent claim/revoke.
+    """
+    with transaction.atomic():
+        invite = get_object_or_404(
+            CoachInvite.objects.select_for_update(),
+            token=token,
+            coach=request.user,
+        )
+        try:
+            invite.resend()
+        except InvalidTransition:
+            messages.info(request, "That invite has already been answered.")
+            return redirect("meso:roster")
+
+    email = invite.email
+    accept_url = request.build_absolute_uri(
+        reverse("meso:invite_claim", kwargs={"token": invite.token})
+    )
+    coach = request.user
+
+    def _send():
+        try:
+            send_coach_invite_email(coach=coach, email=email, accept_url=accept_url)
+        except Exception:  # mail is best-effort; never fail the resend on it
+            logger.exception("Failed to resend coach invite email to %s", email)
+
+    transaction.on_commit(_send)
+    messages.success(request, f"Invite resent to {email}.")
     return redirect("meso:roster")
 
 
@@ -1114,11 +1158,22 @@ def invite_claim(request, token):
         if action not in ("accept", "decline"):
             return HttpResponseBadRequest("action must be 'accept' or 'decline'.")
         with transaction.atomic():
+            # Lock by the *submitted token*, not the pk: a resend that rotated the
+            # token out from under this in-flight claim must invalidate the old
+            # link (Phase-3 "resend kills the previous token"), so a superseded
+            # token finds no row → 404 rather than accepting on stale authority.
             invite = get_object_or_404(
-                CoachInvite.objects.select_for_update(), pk=invite.pk
+                CoachInvite.objects.select_for_update(), token=token
             )
             if not invite.is_pending:
                 messages.info(request, "This invite has already been answered.")
+                return redirect("meso:athlete_home")
+            if invite.is_expired:
+                invite.expire()
+                messages.info(
+                    request,
+                    "This invite has expired. Ask your coach to resend it.",
+                )
                 return redirect("meso:athlete_home")
             if action == "accept":
                 try:
@@ -1134,6 +1189,20 @@ def invite_claim(request, token):
             invite.decline()
         messages.success(request, "Invite declined.")
         return redirect("meso:athlete_home")
+    # Lazily age out an overdue link on view so the confirm page shows the
+    # "expired" state (and the status sticks) rather than offering a dead Accept.
+    # The cheap pre-check avoids locking on every GET; the real transition runs
+    # under a row lock + re-check (like the POST path), reloading by the
+    # *submitted token* so a concurrent resend — which rotates the token and
+    # resets the clock — invalidates this stale link (→ 404) instead of letting
+    # us render the claim form with, and leak, the freshly rotated token.
+    if invite.is_pending and invite.is_expired:
+        with transaction.atomic():
+            invite = get_object_or_404(
+                CoachInvite.objects.select_for_update(), token=token
+            )
+            if invite.is_pending and invite.is_expired:
+                invite.expire()
     return render(
         request,
         "meso/invite_claim.html",

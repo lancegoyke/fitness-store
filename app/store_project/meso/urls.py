@@ -75,6 +75,11 @@ urlpatterns = [
         views.coach_invite_revoke,
         name="coach_invite_revoke",
     ),
+    path(
+        "invite/<uuid:token>/resend/",
+        views.coach_invite_resend,
+        name="coach_invite_resend",
+    ),
     path("claim/<uuid:token>/", views.invite_claim, name="invite_claim"),
     # Peer-invite token actions on an existing CoachAthlete (Phase 1 spine).
     path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),

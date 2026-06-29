@@ -488,14 +488,11 @@ class Command(BaseCommand):
     def _ensure_pending_invite(self, coach):
         """A pending email invite (N4) so the roster's onboarding surface shows.
 
-        ``get_or_create`` keyed on the open invite so a reseed doesn't pile up
-        duplicate rows (and respects the one-pending-per-(coach,email) constraint).
+        ``open_for`` reuses the coach's open row on reseed (so duplicates don't
+        pile up) and stamps a real TTL (N4 Phase 3), re-arming it if a prior run's
+        invite has since aged out.
         """
-        CoachInvite.objects.get_or_create(
-            coach=coach,
-            email=PENDING_INVITE_EMAIL,
-            status=CoachInvite.Status.PENDING,
-        )
+        CoachInvite.open_for(coach=coach, email=PENDING_INVITE_EMAIL)
 
     def _ensure_pending_request(self, coach):
         """A pending athlete→coach request (N4 Phase 2) so the surface shows.
