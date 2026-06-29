@@ -43,7 +43,9 @@
                   <span class="meso-row-meta meso-mono">{{ a.compliance }}%</span>
                 </div>
               {% endif %}
-              {% if a.status == 'needs_review' %}
+              {% if a.status == 'suspended' %}
+                <span class="meso-badge meso-badge--warn"><i></i>{{ a.status_label }}</span>
+              {% elif a.status == 'needs_review' %}
                 <span class="meso-badge meso-badge--accent"><i></i>{{ a.status_label }}</span>
               {% elif a.status == 'delivered' %}
                 <span class="meso-badge meso-badge--ok"><i></i>{{ a.status_label }}</span>
@@ -191,7 +193,7 @@
             <span class="meso-badge {% if billing.is_active %}meso-badge--ok{% else %}meso-badge--muted{% endif %}"><i></i>{{ billing.status_label }}</span>
           </div>
           {% if billing.over_limit %}
-            <p class="meso-sub" style="margin:0;color:var(--warn);">Over your plan limit &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }}. Re-subscribe or end a relationship to edit or deliver programs.</p>
+            <p class="meso-sub" style="margin:0;color:var(--warn);">Over your plan limit &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }}. Your longest-standing athletes stay editable; the other {{ billing.suspended_count }} {{ billing.suspended_count|pluralize:"is,are" }} suspended until you re-subscribe or end a relationship.</p>
           {% elif billing.on_trial %}
             <p class="meso-sub" style="margin:0;">Free trial &#8212; ends {{ billing.trial_end|date:"M j" }}. Subscribe to keep full access when it ends.</p>
           {% elif billing.is_active %}

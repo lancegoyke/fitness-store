@@ -271,8 +271,11 @@ def _patch_url(plan, presc):
 class TestEditGateIndividual:
     def test_over_limit_coach_cannot_patch(self, client):
         coach = UserFactory()
-        plan, _, presc = _plan_with_prescription(coach)  # 1 active link
-        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)  # → over
+        # The plan under test belongs to a *suspended* link: an older link (created
+        # first → kept live) plus this newer one pushes the coach over the cap, so
+        # the per-athlete freeze (S6 Phase 5) freezes the newer one.
+        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)  # kept
+        plan, _, presc = _plan_with_prescription(coach)  # newer → suspended → over
         assert access.is_over_limit(coach) is True
         client.force_login(coach)
         resp = client.post(
@@ -301,8 +304,8 @@ class TestEditGateIndividual:
 
     def test_over_limit_coach_cannot_deliver(self, client):
         coach = UserFactory()
-        plan, _, _ = _plan_with_prescription(coach)
-        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)
+        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)  # kept
+        plan, _, _ = _plan_with_prescription(coach)  # newer → suspended → over
         client.force_login(coach)
         resp = client.post(
             reverse("meso:api_plan_deliver", kwargs={"plan_id": plan.pk})
@@ -312,10 +315,11 @@ class TestEditGateIndividual:
     def test_over_limit_coach_cannot_apply_pending_batch(self, client):
         # A batch drafted while paid, then a downgrade: applying it would mutate
         # the program, so the D6 freeze must block it (the agent gate alone only
-        # stops *new* runs).
+        # stops *new* runs). The batch's plan is on a suspended link (an older link
+        # is kept live; this newer one is frozen).
         coach = UserFactory()
-        plan, _, _ = _plan_with_prescription(coach)
-        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)  # → over
+        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)  # kept
+        plan, _, _ = _plan_with_prescription(coach)  # newer → suspended → over
         batch = AgentProposalBatchFactory(plan=plan, coach=coach)
         client.force_login(coach)
         resp = client.post(
