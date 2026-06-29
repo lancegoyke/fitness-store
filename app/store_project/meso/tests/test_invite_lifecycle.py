@@ -336,6 +336,18 @@ class TestClaimViewExpiry:
         assert fresh.status_code == 302
         assert CoachAthlete.objects.filter(coach=coach, athlete=athlete).exists()
 
+    def test_get_old_token_after_resend_404_no_leak(self, client):
+        """A stale GET link can't render the form (nor leak the rotated token)."""
+        coach = UserFactory()
+        athlete = UserFactory()
+        invite, _ = CoachInvite.open_for(coach=coach, email=athlete.email)
+        old_token = invite.token
+        invite.resend()  # rotates the token
+        client.force_login(athlete)
+        resp = client.get(self._url(old_token))
+        assert resp.status_code == 404
+        assert str(invite.token).encode() not in resp.content  # new token not leaked
+
 
 # -- coach resend view -----------------------------------------------------
 

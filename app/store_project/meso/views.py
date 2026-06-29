@@ -1192,13 +1192,14 @@ def invite_claim(request, token):
     # Lazily age out an overdue link on view so the confirm page shows the
     # "expired" state (and the status sticks) rather than offering a dead Accept.
     # The cheap pre-check avoids locking on every GET; the real transition runs
-    # under a row lock + re-check (like the POST path) so a concurrent resend —
-    # which rotates the token and pushes the clock forward — isn't clobbered back
-    # to expired by this stale in-memory copy.
+    # under a row lock + re-check (like the POST path), reloading by the
+    # *submitted token* so a concurrent resend — which rotates the token and
+    # resets the clock — invalidates this stale link (→ 404) instead of letting
+    # us render the claim form with, and leak, the freshly rotated token.
     if invite.is_pending and invite.is_expired:
         with transaction.atomic():
             invite = get_object_or_404(
-                CoachInvite.objects.select_for_update(), pk=invite.pk
+                CoachInvite.objects.select_for_update(), token=token
             )
             if invite.is_pending and invite.is_expired:
                 invite.expire()
