@@ -101,8 +101,12 @@ def can_use_agent(coach):
 
 
 def active_seat_count(coach):
-    """Billable seats in use — the coach's *active* ``CoachAthlete`` links."""
-    return CoachAthlete.objects.for_coach(coach).active().count()
+    """Billable seats in use — the coach's *active*, non-demo ``CoachAthlete`` links.
+
+    Demo athletes (the one-click first-run demo, ``meso/demo.py``) are active links
+    on the roster but not paid seats, so loading the demo never trips the paywall.
+    """
+    return CoachAthlete.objects.for_coach(coach).billable().count()
 
 
 def effective_seat_limit(coach):
@@ -169,7 +173,7 @@ def suspended_athlete_ids(coach):
         return frozenset()
     active_ids = list(
         CoachAthlete.objects.for_coach(coach)
-        .active()
+        .billable()
         .order_by("created_at", "pk")
         .values_list("pk", flat=True)
     )

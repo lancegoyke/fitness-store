@@ -39,6 +39,14 @@
         {% block topnav_avatar %}<div class="meso-avatar meso-avatar--sm meso-avatar--accent" title="Coach">LG</div>{% endblock %}
       </nav>
 
+      {% if messages %}
+        <div style="display:flex;flex-direction:column;gap:8px;margin:14px 0 0;">
+          {% for message in messages %}
+            <div class="meso-card meso-card--pad" style="padding:11px 14px;font-size:13px;color:var(--ink);border-left:3px solid {% if message.tags == 'error' %}var(--warn){% else %}var(--accent-ink){% endif %};">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
       {% block content %}{% endblock %}
     </div>
     {% block scripts %}{% endblock %}

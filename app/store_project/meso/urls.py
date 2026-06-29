@@ -75,6 +75,10 @@ urlpatterns = [
     # Create (or open) an individual program for an athlete (first-time-UX
     # Phase 1) — the "+ New program" / "Build a program" CTAs.
     path("athlete/<uuid:pk>/plan/new/", views.plan_create, name="plan_create"),
+    # One-click coach demo (first-time-UX Phase 2, Q3): load / remove a populated,
+    # coach-scoped demo workspace.
+    path("demo/load/", views.demo_load, name="demo_load"),
+    path("demo/clear/", views.demo_clear, name="demo_clear"),
     path("group/new/", views.group_create, name="group_create"),
     path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
     path("group/<int:pk>/design/", views.group_design, name="group_design"),

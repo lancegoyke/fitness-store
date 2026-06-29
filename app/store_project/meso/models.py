@@ -158,6 +158,16 @@ class CoachAthleteQuerySet(models.QuerySet):
     def active(self):
         return self.filter(status=CoachAthlete.Status.ACTIVE)
 
+    def billable(self):
+        """Active links that count as a paid **seat** — i.e. excluding demo ones.
+
+        A demo athlete (the one-click first-run demo, ``meso/demo.py``) is a real
+        active link the coach manages on their roster, but it must not consume a
+        paid seat or trip the paywall — so the billing accessors count seats off
+        this, not ``active``.
+        """
+        return self.active().exclude(is_demo=True)
+
     def pending(self):
         return self.filter(status__in=CoachAthlete.PENDING_STATUSES)
 
@@ -214,6 +224,10 @@ class CoachAthlete(models.Model):
         _("Invited by"), max_length=8, choices=InvitedBy.choices
     )
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    # A demo relationship (the coach-scoped first-run demo, ``meso/demo.py``):
+    # shown on the roster like any athlete, but not a billable seat and removable
+    # in one click. Real relationships are never demo.
+    is_demo = models.BooleanField(_("Demo relationship"), default=False)
     created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
     responded_at = models.DateTimeField(_("Time responded"), null=True, blank=True)
     ended_at = models.DateTimeField(_("Time ended"), null=True, blank=True)
@@ -1555,6 +1569,9 @@ class MesoGroup(models.Model):
     status = models.CharField(
         _("Status"), max_length=16, choices=Status, default=Status.ACTIVE
     )
+    # A demo group (the coach-scoped first-run demo, ``meso/demo.py``) — removed
+    # wholesale on demo teardown. Real groups are never demo.
+    is_demo = models.BooleanField(_("Demo group"), default=False)
     created = models.DateTimeField(_("Time created"), auto_now_add=True)
     modified = models.DateTimeField(_("Time last modified"), auto_now=True)
 

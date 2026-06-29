@@ -36,6 +36,7 @@ from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
 from store_project.notifications.emails import send_week_delivered_email
 
+from . import demo as meso_demo
 from . import one_rm as meso_one_rm
 from . import presenters
 from . import push as meso_push
@@ -276,7 +277,11 @@ class RosterView(LoginRequiredMixin, TemplateView):
         # (S6 Phase 5); flag those rows so the roster shows a "Suspended" badge.
         suspended = billing_access.suspended_athlete_ids(self.request.user)
         athletes = [
-            presenters.roster_athlete(link.athlete, suspended=link.pk in suspended)
+            presenters.roster_athlete(
+                link.athlete,
+                suspended=link.pk in suspended,
+                demo=link.is_demo,
+            )
             for link in links
         ]
         groups = (
@@ -313,6 +318,11 @@ class RosterView(LoginRequiredMixin, TemplateView):
         ctx["billing"] = presenters.billing_state(self.request.user)
         ctx["activity"] = []
         ctx["needs_review"] = 0
+        # First-run UX (Phase 2): a fresh coach with nothing yet gets an
+        # onboarding card that teaches the model and offers the one-click demo;
+        # once demo data is loaded a banner offers to remove it (Q3).
+        ctx["has_demo"] = meso_demo.has_demo(self.request.user)
+        ctx["is_empty"] = not athletes and not ctx["groups"]
         return ctx
 
 
@@ -480,6 +490,37 @@ def plan_create(request, pk):
             return redirect("meso:athlete", pk=pk)
         plan = relationship.working_plan() or relationship.create_plan()
     return redirect("meso:designer_plan", plan_id=plan.pk)
+
+
+@login_required
+@require_POST
+def demo_load(request):
+    """Load a coach-scoped demo workspace so a new coach can explore (Q3, Phase 2).
+
+    A populated, **clearly-labeled, fully-removable** workspace — five athletes, a
+    built/delivered/logged program, and a group — scoped to this coach, idempotent,
+    billing-neutral, and silent (no demo-athlete email/push). Lands on the roster
+    where the data now shows, with a "Remove demo data" affordance.
+    """
+    # Loading a demo is an implicit "I'm coaching now": ensure the CoachProfile
+    # exists (mirrors start_coaching's free path) so demo links never make a user a
+    # coach via a side door without one — keeping coach state consistent.
+    CoachProfile.objects.get_or_create(user=request.user)
+    meso_demo.load_demo(request.user)
+    messages.success(
+        request,
+        "Demo data loaded — explore a populated workspace. Remove it any time.",
+    )
+    return redirect("meso:roster")
+
+
+@login_required
+@require_POST
+def demo_clear(request):
+    """Remove exactly this coach's demo data (never their real data) — the teardown."""
+    meso_demo.clear_demo(request.user)
+    messages.success(request, "Demo data removed.")
+    return redirect("meso:roster")
 
 
 @login_required

@@ -65,10 +65,11 @@ class CoachAthleteAdmin(admin.ModelAdmin):
         "athlete",
         "status",
         "invited_by",
+        "is_demo",
         "created_at",
         "responded_at",
     )
-    list_filter = ("status", "invited_by")
+    list_filter = ("status", "invited_by", "is_demo")
     search_fields = (
         "coach__email",
         "coach__name",
@@ -268,8 +269,8 @@ class GroupMembershipInline(admin.TabularInline):
 
 @admin.register(MesoGroup)
 class MesoGroupAdmin(admin.ModelAdmin):
-    list_display = ("name", "coach", "focus", "status", "modified")
-    list_filter = ("status",)
+    list_display = ("name", "coach", "focus", "status", "is_demo", "modified")
+    list_filter = ("status", "is_demo")
     search_fields = ("name", "focus", "coach__email", "coach__name")
     raw_id_fields = ("coach",)
     inlines = (GroupMembershipInline,)
