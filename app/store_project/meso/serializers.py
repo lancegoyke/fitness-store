@@ -430,24 +430,28 @@ def current_week(plan, week=None):
 # renders these as a per-row ``adj`` badge driven by the real diffs.
 
 
-def resolve_load(load, load_pct):
-    """Scale a numeric ``load`` by ``load_pct``, rounded to the nearest 2.5.
+def resolve_load(load, load_pct, *, load_type=None):
+    """Scale a numeric ``load`` by ``load_pct``, rounded to its natural step.
 
-    Mirrors the designer's ``round25`` so a coach-set per-athlete % lands on a
-    loadable plate. A non-numeric base ("BW") or an absent ``load_pct`` is
-    returned unchanged — a percentage can't apply to "BW".
+    An **absolute** load rounds to the nearest 2.5, mirroring the designer's
+    ``round25`` so a coach-set per-athlete % lands on a loadable plate. A
+    **%1RM** load (``LoadType.PERCENT``) isn't plate-constrained, so it rounds to
+    the nearest 0.5% instead — 80% @ 90% is 72%, not 72.5%. A non-numeric base
+    ("BW") or an absent ``load_pct`` is returned unchanged.
     """
     if load_pct is None:
         return load
     base = _num(load)
     if base is None:
         return load
-    # Match the designer's ``Math.round(n / 2.5) * 2.5`` exactly: JS rounds a
-    # half up, while Python's ``round`` is banker's (half-to-even), which would
-    # diverge on exact half-steps (e.g. 112.5 @ 90% → 102.5 in the UI, not 100).
-    # The scaled value is non-negative (load_pct ≥ 1), so ``int(x + 0.5)`` floors
-    # to the same result as ``Math.round``.
-    return _fmt_num(int(base * load_pct / 100 / 2.5 + 0.5) * 2.5)
+    scaled = base * load_pct / 100
+    # Both round a half *up* (``int(x + 0.5)``) to match the designer's
+    # ``Math.round``; the scaled value is non-negative (load_pct ≥ 1), so the
+    # truncating ``int`` floors to the same result. A %1RM uses a 0.5% step (no
+    # plate constraint); an absolute load uses the 2.5 plate step.
+    if load_type == models.LoadType.PERCENT:
+        return _fmt_num(int(scaled * 2 + 0.5) / 2)
+    return _fmt_num(int(scaled / 2.5 + 0.5) * 2.5)
 
 
 def resolve_prescription(prescription, override):
@@ -473,7 +477,9 @@ def resolve_prescription(prescription, override):
         "name": override.swap_name or prescription.name,
         "sets": override.sets or prescription.sets,
         "reps": override.reps or prescription.reps,
-        "load": resolve_load(prescription.load, override.load_pct),
+        "load": resolve_load(
+            prescription.load, override.load_pct, load_type=prescription.load_type
+        ),
         "load_type": prescription.load_type,
         "rpe": prescription.rpe,
         "note": override.note or prescription.note,

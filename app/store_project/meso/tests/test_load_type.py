@@ -102,6 +102,24 @@ class TestSerializeLoadType:
         assert resolved["load_type"] == LoadType.PERCENT
         assert resolved["load"] == "67.5"
 
+    def test_percent_scaling_uses_a_half_percent_step_not_plates(self):
+        # A %1RM isn't plate-constrained: 80% @ 90% is 72%, not the 72.5% that
+        # absolute (2.5 plate) rounding would give.
+        _, _, presc = seed_plan()
+        presc.load = "80"
+        presc.load_type = LoadType.PERCENT
+        presc.save(update_fields=["load", "load_type"])
+        override = PrescriptionOverride(load_pct=90)
+        assert serializers.resolve_prescription(presc, override)["load"] == "72"
+
+    def test_absolute_scaling_still_rounds_to_plates(self):
+        # The absolute path is unchanged: 80 kg @ 90% → 72.5 (nearest 2.5 plate).
+        _, _, presc = seed_plan()
+        presc.load = "80"  # default ABSOLUTE
+        presc.save(update_fields=["load"])
+        override = PrescriptionOverride(load_pct=90)
+        assert serializers.resolve_prescription(presc, override)["load"] == "72.5"
+
 
 # -- autosave endpoint -------------------------------------------------------
 
