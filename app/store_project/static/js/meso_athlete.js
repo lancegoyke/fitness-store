@@ -420,9 +420,12 @@ function createLogger() {
       // newer edit (already sent, or still debouncing) owns it — reconciling now
       // would wipe the in-progress value (e.g. a lagging clear over a fresh type).
       if ((ex.e1rm || "").toString().trim() !== value) return;
-      // Reconcile with what the server stored: a manual value stays in the input;
-      // a cleared one reverts to the server's log-derived estimate.
+      // Reconcile with what the server stored: a manual value stays in the input
+      // as the server's *normalized* form (140.999 → "141"), so the suggested
+      // load matches what's persisted; a cleared one reverts to the log-derived
+      // estimate.
       if (data.source === "manual") {
+        ex.e1rm = data.one_rm || ex.e1rm;
         ex.one_rm = "";
       } else {
         ex.e1rm = "";

@@ -122,10 +122,15 @@ def refresh_one_rms(athlete, prescriptions, unit):
     # A manually-entered estimate (Phase 2) is the athlete's own number — logs
     # never touch it (before, logs only ever *raised* the derived value). Skip
     # those lifts entirely so neither the upsert nor the stale-clear below runs.
+    # Scoped to ``unit``: a manual row records one unit (the single row is
+    # last-unit-wins, cross-unit conversion deferred), so a manual kg value must
+    # not block a lb log from producing its own lb estimate — only a *same-unit*
+    # manual row is protected here.
     manual_keys = set(
         models.AthleteOneRm.objects.filter(
             athlete=athlete,
             key__in=reps_by_key,
+            unit=unit,
             source=models.AthleteOneRm.Source.MANUAL,
         ).values_list("key", flat=True)
     )

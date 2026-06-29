@@ -454,6 +454,15 @@ describe("manual 1RM persistence (server-side, Phase 2)", () => {
     expect(c.exercises[0].one_rm).toBe(""); // no separate derived value while manual
   });
 
+  it("reflects the server's normalized manual value in the input", async () => {
+    const c = logger({ id: 7, e1rm: "140.999", one_rm: "" });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { one_rm: "141", source: "manual" } }));
+    await c._postOneRm(c.exercises[0]);
+    expect(c.exercises[0].e1rm).toBe("141"); // server quantized 140.999 -> 141
+  });
+
   it("reverts to the log-derived estimate when cleared", async () => {
     const c = logger({ id: 7, e1rm: "", one_rm: "" });
     global.fetch = vi

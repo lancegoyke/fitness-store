@@ -685,6 +685,27 @@ class TestRefreshSkipsManual:
             athlete=athlete, source=AthleteOneRm.Source.MANUAL
         ).exists()
 
+    def test_manual_in_one_unit_does_not_block_a_logged_estimate_in_another(self):
+        # A manual kg row must not suppress the lb estimate when the athlete trains
+        # + logs the same lift in a lb plan. The skip is same-unit only (the single
+        # row is last-unit-wins; reads are unit-scoped, so the kg row can't surface
+        # on a lb plan anyway).
+        athlete = UserFactory()
+        _, lb_session, (lb_squat,) = make_session(
+            athlete, unit=Unit.POUNDS, prescriptions=[{"name": "Back Squat"}]
+        )
+        AthleteOneRmFactory(
+            athlete=athlete,
+            name="Back Squat",
+            value=Decimal("150"),
+            unit=Unit.KILOGRAMS,
+            source=AthleteOneRm.Source.MANUAL,
+        )
+        log_session(athlete, lb_session, [(lb_squat, 1, "1", "300", "9")])
+        meso_one_rm.refresh_one_rms(athlete, [lb_squat], Unit.POUNDS)
+        values = meso_one_rm.one_rm_values(athlete, [lb_squat], Unit.POUNDS)
+        assert values[lb_squat.pk].value == Decimal("300.00")
+
 
 class TestCleanManualValue:
     @pytest.mark.parametrize("raw", [None, ""])
