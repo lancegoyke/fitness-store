@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import ValidationError
@@ -30,6 +31,7 @@ from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 
 from store_project.notifications.emails import send_coach_invite_email
+from store_project.notifications.emails import send_coach_request_email
 from store_project.notifications.emails import send_week_delivered_email
 
 from . import one_rm as meso_one_rm
@@ -66,6 +68,8 @@ from .serializers import serialize_session_log
 from .serializers import serialize_week_snapshot
 
 logger = logging.getLogger(__name__)
+
+User = get_user_model()
 
 
 def _coach_working_plan(user, *, plans=None):
@@ -171,17 +175,25 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
 class RosterView(LoginRequiredMixin, TemplateView):
     """Front door: the coach's athletes (scoped to active relationships).
 
-    A *pure* athlete — someone with an active coach link but no ``CoachProfile``
-    — has no roster of their own, so they're sent to their training surface
-    instead. A coach (or a coach who also trains) keeps the roster.
+    The roster is a *coach* surface, so anyone who isn't acting as a coach is
+    sent to their training home instead — where they see their delivered
+    programs, respond to a coach's invite, and request a coach (N4 Phase 2). A
+    user counts as a coach if they have a ``CoachProfile`` *or* any coach-side
+    link (athletes they coach, including a pending request awaiting them) *or* a
+    sent email invite. Everyone else — a pure athlete, an athlete awaiting an
+    invite, or a brand-new user — lands on ``/meso/me/``.
     """
 
     template_name = "meso/roster.html"
 
     def get(self, request, *args, **kwargs):
-        is_coach = CoachProfile.objects.filter(user=request.user).exists()
-        is_athlete = CoachAthlete.objects.for_athlete(request.user).active().exists()
-        if not is_coach and is_athlete:
+        user = request.user
+        is_coach = (
+            CoachProfile.objects.filter(user=user).exists()
+            or CoachAthlete.objects.for_coach(user).exists()
+            or CoachInvite.objects.for_coach(user).exists()
+        )
+        if not is_coach:
             return redirect("meso:athlete_home")
         return super().get(request, *args, **kwargs)
 
@@ -210,6 +222,16 @@ class RosterView(LoginRequiredMixin, TemplateView):
         pending_invites = CoachInvite.objects.for_coach(self.request.user).pending()
         ctx["pending_invites"] = [
             presenters.pending_invite(inv) for inv in pending_invites
+        ]
+        # Pending athlete→coach requests awaiting this coach's reply (N4 Phase 2).
+        pending_requests = (
+            CoachAthlete.objects.for_coach(self.request.user)
+            .filter(status=CoachAthlete.Status.PENDING_ATHLETE_REQUEST)
+            .select_related("athlete")
+            .order_by("-created_at")
+        )
+        ctx["pending_requests"] = [
+            presenters.pending_request(link) for link in pending_requests
         ]
         ctx["activity"] = []
         ctx["needs_review"] = 0
@@ -432,6 +454,9 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "training"
         ctx["plans"] = presenters.athlete_home(self.request.user)
+        # Pending coach links (N4 Phase 2): invites awaiting my reply + requests
+        # I've sent + the request-a-coach form all live on this surface.
+        ctx["pending"] = presenters.athlete_pending(self.request.user)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
         ctx.update(_pwa_context())
@@ -909,6 +934,93 @@ def relationship_end(request, token):
     link.end()
     messages.success(request, "Relationship ended.")
     return redirect("meso:roster")
+
+
+# -- athlete → coach requests (N4 Phase 2) ---------------------------------
+#
+# The reverse of the coach email invite: an athlete who already has an account
+# asks to train under a coach (CoachAthlete.request → pending_athlete_request).
+# The coach accepts/declines it via the recipient views above (invite_accept /
+# invite_decline); the athlete may withdraw their own pending request.
+
+
+@login_required
+@require_POST
+def athlete_request_coach(request):
+    """An athlete asks to train under a coach, found by the coach's email.
+
+    A plain form POST from the athlete's training home. The email is validated
+    and resolved to a *coach* (a User with a ``CoachProfile`` — a non-coach or
+    unknown address is rejected, as is the requester's own). An already-active
+    link is left untouched; an already-pending request is a no-op; otherwise a
+    pending request is opened (reopening a previously closed link). The coach is
+    notified by email on ``transaction.on_commit``, best-effort — a mail failure
+    is logged, never a 500 or a lost request. Always lands back on the home.
+    """
+    email = CoachInvite.normalize_email(request.POST.get("email"))
+    try:
+        validate_email(email)
+    except ValidationError:
+        messages.error(request, "Enter a valid email address.")
+        return redirect("meso:athlete_home")
+    coach = (
+        User.objects.filter(email__iexact=email, coach_profile__isnull=False)
+        .exclude(pk=request.user.pk)
+        .first()
+    )
+    if coach is None:
+        messages.error(request, "We couldn't find a coach with that email.")
+        return redirect("meso:athlete_home")
+
+    existing = CoachAthlete.objects.filter(coach=coach, athlete=request.user).first()
+    if existing and existing.is_active:
+        messages.info(request, f"You're already training with {coach.display_name()}.")
+        return redirect("meso:athlete_home")
+    if existing and existing.status == CoachAthlete.Status.PENDING_ATHLETE_REQUEST:
+        messages.info(
+            request, f"You've already asked to train with {coach.display_name()}."
+        )
+        return redirect("meso:athlete_home")
+    if existing and existing.status == CoachAthlete.Status.PENDING_COACH_INVITE:
+        messages.info(
+            request,
+            f"{coach.display_name()} already invited you — accept it below.",
+        )
+        return redirect("meso:athlete_home")
+
+    CoachAthlete.request(athlete=request.user, coach=coach)
+    athlete = request.user
+    roster_url = request.build_absolute_uri(reverse("meso:roster"))
+
+    def _send():
+        try:
+            send_coach_request_email(
+                athlete=athlete, coach=coach, roster_url=roster_url
+            )
+        except Exception:  # mail is best-effort; never fail the request on it
+            logger.exception("Failed to send coach request email to %s", coach.email)
+
+    transaction.on_commit(_send)
+    messages.success(request, f"Request sent to {coach.display_name()}.")
+    return redirect("meso:athlete_home")
+
+
+@login_required
+@require_POST
+def request_withdraw(request, token):
+    """The initiator of a pending link withdraws it (an athlete cancels a request).
+
+    The mirror of ``invite_decline`` (the *recipient* declines): only the party
+    who opened the pending link may withdraw it, which marks it declined. Lands
+    the athlete back on their home, a coach on the roster.
+    """
+    link = get_object_or_404(CoachAthlete, token=token)
+    if not link.is_pending or request.user != link.initiator():
+        return HttpResponseForbidden("You cannot withdraw this request.")
+    link.decline()
+    messages.success(request, "Request withdrawn.")
+    target = "meso:athlete_home" if request.user == link.athlete else "meso:roster"
+    return redirect(target)
 
 
 # -- email invites / onboarding (N4) ---------------------------------------

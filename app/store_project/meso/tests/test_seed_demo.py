@@ -96,6 +96,33 @@ class TestSeedCreatesDemo:
         seed(delete=True)
         assert not CoachInvite.objects.filter(email="prospect@example.com").exists()
 
+    def test_creates_a_pending_request(self):
+        # N4 Phase 2: an athlete who has asked to train under the coach, so the
+        # roster's pending-request surface is visible on a fresh DB.
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        pending = CoachAthlete.objects.for_coach(coach).filter(
+            status=CoachAthlete.Status.PENDING_ATHLETE_REQUEST
+        )
+        assert pending.count() == 1
+        assert pending.get().athlete.email == "hopeful@example.com"
+
+    def test_reseed_does_not_duplicate_pending_request(self):
+        seed()
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        assert (
+            CoachAthlete.objects.for_coach(coach)
+            .filter(status=CoachAthlete.Status.PENDING_ATHLETE_REQUEST)
+            .count()
+            == 1
+        )
+
+    def test_delete_removes_pending_request(self):
+        seed()
+        seed(delete=True)
+        assert not User.objects.filter(email="hopeful@example.com").exists()
+
     def test_creates_one_sample_plan(self):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
@@ -315,7 +342,9 @@ class TestIdempotent:
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
         assert User.objects.filter(email__in=ATHLETE_EMAILS).count() == 5
-        assert CoachAthlete.objects.for_coach(coach).count() == 5
+        # 5 active athletes + 1 pending athlete→coach request (N4 Phase 2).
+        assert CoachAthlete.objects.for_coach(coach).active().count() == 5
+        assert CoachAthlete.objects.for_coach(coach).count() == 6
         assert Plan.objects.for_coach(coach).count() == 1
         # Children are not re-created on a second run (the individual sample plan;
         # ``for_coach`` excludes the group-delivery snapshots seeded in Phase 4).

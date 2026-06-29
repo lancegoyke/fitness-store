@@ -348,6 +348,11 @@ GROUP = {
 # person the coach invited who hasn't claimed an account yet.
 PENDING_INVITE_EMAIL = "prospect@example.com"
 
+# A pending athlete→coach request (N4 Phase 2) so the roster's request surface is
+# visible — an existing user who has asked to train under the coach.
+PENDING_REQUEST_EMAIL = "hopeful@example.com"
+PENDING_REQUEST_NAME = "Hopeful Newcomer"
+
 
 def _months_before(today, months):
     """The date ``months`` whole months before ``today`` (day clamped to ≤28)."""
@@ -394,12 +399,14 @@ class Command(BaseCommand):
                 self._ensure_log(athlete, plan, today)
         self._ensure_group(coach)
         self._ensure_pending_invite(coach)
+        self._ensure_pending_request(coach)
 
         self.stdout.write(
             self.style.SUCCESS(
                 f"✓ Meso demo seeded for {coach.email}: "
                 f"{len(ATHLETES)} athletes, 1 group (+ shared program), "
-                "1 sample plan, 1 logged session, 1 pending invite."
+                "1 sample plan, 1 logged session, 1 pending invite, "
+                "1 pending request."
             )
         )
 
@@ -412,6 +419,8 @@ class Command(BaseCommand):
         CoachInvite.objects.filter(
             coach__email=coach_email, email=PENDING_INVITE_EMAIL
         ).delete()
+        # Drop the requester (their pending request link cascades with the user).
+        User.objects.filter(email=PENDING_REQUEST_EMAIL).delete()
         emails = [spec["email"] for spec in ATHLETES]
         deleted, _ = User.objects.filter(email__in=emails).delete()
         self.stdout.write(
@@ -486,6 +495,32 @@ class Command(BaseCommand):
             coach=coach,
             email=PENDING_INVITE_EMAIL,
             status=CoachInvite.Status.PENDING,
+        )
+
+    def _ensure_pending_request(self, coach):
+        """A pending athlete→coach request (N4 Phase 2) so the surface shows.
+
+        An existing user (with no prior link to the coach) who has asked to
+        train under them. ``update_or_create`` on the link keeps a reseed
+        idempotent and repairs the row to ``pending_athlete_request`` if a prior
+        run (or a manual accept/decline) left it elsewhere.
+        """
+        requester, created = User.objects.get_or_create(
+            email=PENDING_REQUEST_EMAIL,
+            defaults={"username": PENDING_REQUEST_EMAIL, "name": PENDING_REQUEST_NAME},
+        )
+        if created:
+            requester.set_unusable_password()
+            requester.save(update_fields=["password"])
+        CoachAthlete.objects.update_or_create(
+            coach=coach,
+            athlete=requester,
+            defaults={
+                "status": CoachAthlete.Status.PENDING_ATHLETE_REQUEST,
+                "invited_by": CoachAthlete.InvitedBy.ATHLETE,
+                "responded_at": None,
+                "ended_at": None,
+            },
         )
 
     def _ensure_link(self, coach, athlete):

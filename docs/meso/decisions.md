@@ -136,12 +136,15 @@ Mark via a `CoachProfile`/`AthleteProfile`, Django groups, or boolean flags. **R
 `CoachProfile` (presence = is-a-coach) + the `CoachAthlete` link (presence = is-an-athlete);
 avoids overloading the User model.
 
-### N4 · Athlete onboarding / invites 🟢 (Phase 1 built)
+### N4 · Athlete onboarding / invites 🟢 (Phases 1–2 built)
 How an athlete joins a coach: coach invites by email → athlete signs up (allauth) → link
 created; or coach creates a stub athlete and sends a claim link. **Decision:** email invite +
 claim, reusing allauth — **Phase 1 built** (the `CoachInvite` email artifact → bearer-token
 claim → materialized active `CoachAthlete`; rides allauth's `?next=` with no custom adapter).
-Plan + deferred items in [`invites-plan.md`](./invites-plan.md).
+**Phase 2 built** — the reverse direction: an athlete *requests* a coach by email
+(`CoachAthlete.request`), the coach accepts/declines on the roster, both sides see the pending
+state on their own surface, and any non-coach now lands on their training home (where the
+request form lives). Plan + deferred items in [`invites-plan.md`](./invites-plan.md).
 
 ---
 
@@ -519,3 +522,26 @@ _(Append dated entries here as decisions land.)_
   P2 claim race — `select_for_update` on the invite row in the claim/revoke views). Plan +
   deferred (athlete→coach request UI, resend/expiry, stub-athlete) in
   [`invites-plan.md`](./invites-plan.md).
+- 2026-06-29 — **N4 — athlete onboarding / invites — Phase 2 built** (branch
+  `meso-invites-phase2`, **no migration**). Closes the bidirectional half the relationship spine
+  always supported in the model (`CoachAthlete.request` → `pending_athlete_request`) but never in
+  the UI: an athlete who already has an account asks to train under a coach, the coach
+  accepts/declines on the roster, and either party sees the pending state on their own surface.
+  New `CoachAthlete.initiator()` (mirror of `recipient()` — who may *withdraw* a pending link).
+  **`athlete_request_coach`** (`POST /meso/request/`): resolves the posted email to a *coach* (a
+  `User` with a `CoachProfile`, excluding self), rejecting unknown/non-coach/own; an already-active
+  link is untouched, an already-pending request (or coach-invite already awaiting the athlete) is a
+  friendly no-op, else `request()` opens/reopens; emails the coach best-effort on
+  `transaction.on_commit`. **`request_withdraw`** (`POST /meso/request/<token>/withdraw/`):
+  initiator-only (recipient/stranger → 403), pending-only → declined. The coach's accept/decline
+  rides the **existing** `invite_accept`/`invite_decline` recipient views unchanged (a request's
+  recipient *is* the coach). `notifications.send_coach_request_email` (+ 3 templates), mirror of the
+  invite email. Surfaces: the roster gains a pending-request list (Accept/Decline), the athlete home
+  gains a "Your coaches" card (incoming invites + sent requests + a request-a-coach form).
+  **Routing change:** `RosterView` now sends *any* non-coach to `/meso/me/` (coach = `CoachProfile`
+  **or** a coach-side link **or** a sent invite), so a brand-new athlete (or one merely awaiting an
+  invite) reaches the request form instead of an empty coach roster. Seeded a demo pending request
+  (`hopeful@example.com`) so the surface shows on a fresh DB (idempotent + torn down). Built
+  red→green: **+34 pytest** (`test_requests.py`) + 3 seed assertions; full suite green (867).
+  **Codex review loop CLEAN on iteration 1.** Plan + deferred (resend/expiry, stub-athlete,
+  attribution) in [`invites-plan.md`](./invites-plan.md).
