@@ -310,6 +310,11 @@ MESO_VAPID_SUBJECT = os.environ.get("MESO_VAPID_SUBJECT", "mailto:lance@lancegoy
 # id lets the app boot and CI run without billing creds; Phase 2 (subscription
 # Checkout / Customer Portal / webhook) needs it set to the live/test Price id.
 MESO_SEAT_PRICE_ID = os.environ.get("MESO_SEAT_PRICE_ID", "")
+# The signing secret for the *billing* webhook endpoint (a separate Stripe
+# endpoint from the products webhook, so its own secret). Empty until the
+# endpoint is registered in Stripe; the webhook view rejects unsigned/unverifiable
+# requests, so billing stays dormant (not broken) until this is set.
+MESO_STRIPE_WEBHOOK_SECRET = os.environ.get("MESO_STRIPE_WEBHOOK_SECRET", "")
 
 # Crispy Forms
 CRISPY_ALLOWED_TEMPLATE_PACKS = ("bulma",)

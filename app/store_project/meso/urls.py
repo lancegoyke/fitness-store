@@ -158,4 +158,9 @@ urlpatterns = [
         views.batch_dismiss,
         name="api_batch_dismiss",
     ),
+    # Billing (S6): subscribe via Stripe Checkout, manage via the hosted Portal,
+    # and the clean subscription webhook (separate from the products webhook).
+    path("billing/subscribe/", views.billing_subscribe, name="billing_subscribe"),
+    path("billing/portal/", views.billing_portal, name="billing_portal"),
+    path("billing/webhook/", views.billing_webhook, name="billing_webhook"),
 ]

@@ -5,6 +5,7 @@ import logging
 import uuid
 from urllib.parse import urlparse
 
+import stripe
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -42,10 +43,14 @@ from .agent import apply as agent_apply
 from .agent import client as agent_client
 from .agent import jobs as agent_jobs
 from .agent import service as agent_service
+from .billing import seats as billing_seats
+from .billing import stripe_gateway as billing_gateway
+from .billing import webhooks as billing_webhooks
 from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachProfile
+from .models import CoachSubscription
 from .models import ExercisePrescription
 from .models import GroupMembership
 from .models import InvalidTransition
@@ -75,6 +80,20 @@ from .unsubscribe import set_delivery_email_opt_out
 logger = logging.getLogger(__name__)
 
 User = get_user_model()
+
+
+def _is_coach(user):
+    """Whether ``user`` is acting as a coach (the roster / billing surfaces' gate).
+
+    A user counts as a coach if they have a ``CoachProfile`` *or* any coach-side
+    link (athletes they coach, including a pending request awaiting them) *or* a
+    sent email invite — anyone else is a pure athlete.
+    """
+    return (
+        CoachProfile.objects.filter(user=user).exists()
+        or CoachAthlete.objects.for_coach(user).exists()
+        or CoachInvite.objects.for_coach(user).exists()
+    )
 
 
 def _coach_working_plan(user, *, plans=None):
@@ -192,13 +211,7 @@ class RosterView(LoginRequiredMixin, TemplateView):
     template_name = "meso/roster.html"
 
     def get(self, request, *args, **kwargs):
-        user = request.user
-        is_coach = (
-            CoachProfile.objects.filter(user=user).exists()
-            or CoachAthlete.objects.for_coach(user).exists()
-            or CoachInvite.objects.for_coach(user).exists()
-        )
-        if not is_coach:
+        if not _is_coach(request.user):
             return redirect("meso:athlete_home")
         return super().get(request, *args, **kwargs)
 
@@ -918,6 +931,9 @@ def invite_accept(request, token):
     if not link.is_pending or request.user != link.recipient():
         return HttpResponseForbidden("You cannot respond to this invite.")
     link.accept()
+    # A new active link is a billable seat — best-effort sync the coach's Stripe
+    # quantity (no-op unless they're paid; the daily sweep is the backstop).
+    billing_seats.schedule_seat_sync(link.coach)
     messages.success(request, "Relationship accepted.")
     return redirect("meso:roster")
 
@@ -940,6 +956,8 @@ def relationship_end(request, token):
     if not link.is_active or request.user not in (link.coach, link.athlete):
         return HttpResponseForbidden("You cannot end this relationship.")
     link.end()
+    # The seat is freed — best-effort sync the coach's Stripe quantity down.
+    billing_seats.schedule_seat_sync(link.coach)
     messages.success(request, "Relationship ended.")
     return redirect("meso:roster")
 
@@ -1186,6 +1204,9 @@ def invite_claim(request, token):
                 except InvalidTransition as exc:
                     messages.error(request, str(exc))
                     return redirect("meso:roster")
+                # Claiming materializes an active link — a billable seat for the
+                # coach; best-effort sync their Stripe quantity (daily sweep backstop).
+                billing_seats.schedule_seat_sync(invite.coach)
                 messages.success(
                     request,
                     f"You're now training with {invite.coach.display_name()}.",
@@ -1839,6 +1860,95 @@ def batch_dismiss(request, batch_id):
             ),
         }
     )
+
+
+# -- billing (S6 — multi-coach SaaS) ---------------------------------------
+#
+# A coach subscribes (per-seat, monthly) via a Stripe subscription Checkout
+# Session and manages the subscription (card / cancel / invoices) in Stripe's
+# hosted Customer Portal. State flows back through ``billing_webhook`` →
+# ``billing.webhooks`` into the local ``CoachSubscription`` mirror. The paywall /
+# upgrade UI + enforcement choke points land in Phase 3; these are the plumbing.
+
+
+@login_required
+@require_POST
+def billing_subscribe(request):
+    """Start a subscription Checkout — redirect the coach to Stripe to pay."""
+    if not _is_coach(request.user):
+        return redirect("meso:roster")
+    if not settings.MESO_SEAT_PRICE_ID:
+        messages.error(request, "Subscriptions aren't configured yet.")
+        return redirect("meso:roster")
+    # Don't open a second Checkout for a coach who already has a live Stripe
+    # subscription — completing it would create a duplicate (double-billing).
+    # They manage the existing one in the Portal; a canceled mirror re-subscribes
+    # freely.
+    sub = getattr(request.user, "coach_subscription", None)
+    if (
+        sub
+        and sub.stripe_subscription_id
+        and sub.status
+        in (CoachSubscription.Status.ACTIVE, CoachSubscription.Status.PAST_DUE)
+    ):
+        messages.info(
+            request,
+            "You already have a subscription — manage it in the billing portal.",
+        )
+        return redirect("meso:roster")
+    roster_url = request.build_absolute_uri(reverse("meso:roster"))
+    try:
+        session = billing_gateway.create_subscription_checkout_session(
+            request.user,
+            success_url=f"{roster_url}?billing=success",
+            cancel_url=f"{roster_url}?billing=cancel",
+        )
+    except Exception:  # noqa: BLE001 — surface a friendly error, never a 500
+        logger.exception("Stripe checkout session failed for coach %s", request.user.pk)
+        messages.error(request, "Could not start checkout. Please try again.")
+        return redirect("meso:roster")
+    return redirect(session.url)
+
+
+@login_required
+@require_POST
+def billing_portal(request):
+    """Open Stripe's hosted Customer Portal so the coach can manage billing."""
+    if not _is_coach(request.user):
+        return redirect("meso:roster")
+    if not request.user.stripe_customer_id:
+        messages.error(request, "You don't have a subscription to manage yet.")
+        return redirect("meso:roster")
+    return_url = request.build_absolute_uri(reverse("meso:roster"))
+    try:
+        session = billing_gateway.create_billing_portal_session(
+            request.user, return_url=return_url
+        )
+    except Exception:  # noqa: BLE001 — surface a friendly error, never a 500
+        logger.exception("Stripe portal session failed for coach %s", request.user.pk)
+        messages.error(request, "Could not open the billing portal. Please try again.")
+        return redirect("meso:roster")
+    return redirect(session.url)
+
+
+@csrf_exempt
+@require_POST
+def billing_webhook(request):
+    """Stripe billing webhook — verify, then mirror subscription state locally.
+
+    A separate endpoint (and signing secret) from the products webhook (D9). An
+    unsigned/unverifiable request is a 400; a verified event is applied
+    idempotently and answered 200.
+    """
+    sig_header = request.headers.get("stripe-signature")
+    if sig_header is None:
+        return HttpResponse(status=400)
+    try:
+        event = billing_webhooks.construct_event(request.body, sig_header)
+    except (ValueError, stripe.error.SignatureVerificationError):
+        return HttpResponse(status=400)
+    billing_webhooks.handle_event(event)
+    return HttpResponse(status=200)
 
 
 # -- still on fixtures until their own slices ------------------------------

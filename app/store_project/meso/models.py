@@ -735,6 +735,14 @@ class CoachSubscription(models.Model):
     #: ``is_active``).
     ACTIVE_STATUSES = (Status.TRIALING, Status.ACTIVE, Status.COMPED)
 
+    #: Statuses where a *real, current* Stripe subscription exists — active or
+    #: temporarily past_due (a failed payment, not yet canceled). The local trial /
+    #: free / comped tiers have no Stripe subscription, and ``canceled`` is a dead
+    #: one (its ids are kept only for history). Used to decide whether to touch
+    #: Stripe (seat sync) and to protect the tracked subscription from stale events
+    #: for a different id.
+    LIVE_STRIPE_STATUSES = (Status.ACTIVE, Status.PAST_DUE)
+
     coach = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

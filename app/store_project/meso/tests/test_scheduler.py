@@ -62,6 +62,7 @@ class TestScheduleRegistration:
     EXPECTED = {
         "meso-expire-invites": "store_project.meso.tasks.expire_invites",
         "meso-remind-expiring-invites": "store_project.meso.tasks.remind_expiring_invites",
+        "meso-reconcile-seats": "store_project.meso.tasks.reconcile_seats",
     }
 
     def test_invite_schedules_registered_daily(self):
