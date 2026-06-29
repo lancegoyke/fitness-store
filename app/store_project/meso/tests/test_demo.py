@@ -290,6 +290,13 @@ class TestDemoViews:
         assert resp.url == reverse("meso:roster")
         assert demo.has_demo(coach) is False
 
+    def test_load_endpoint_ensures_a_coach_profile(self, client):
+        """Loading the demo makes the user a real coach (has a CoachProfile)."""
+        user = UserFactory()  # no profile yet
+        client.force_login(user)
+        client.post(reverse("meso:demo_load"))
+        assert CoachProfile.objects.filter(user=user).exists()
+
     def test_load_is_post_only(self, client):
         coach = _coach()
         client.force_login(coach)

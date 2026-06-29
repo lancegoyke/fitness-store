@@ -502,6 +502,10 @@ def demo_load(request):
     billing-neutral, and silent (no demo-athlete email/push). Lands on the roster
     where the data now shows, with a "Remove demo data" affordance.
     """
+    # Loading a demo is an implicit "I'm coaching now": ensure the CoachProfile
+    # exists (mirrors start_coaching's free path) so demo links never make a user a
+    # coach via a side door without one — keeping coach state consistent.
+    CoachProfile.objects.get_or_create(user=request.user)
     meso_demo.load_demo(request.user)
     messages.success(
         request,

@@ -80,7 +80,14 @@ def load_demo(coach):
 
     Re-running never duplicates: every row is upserted by its natural key, the
     plan tree is only built when absent, and the demo week is delivered only once.
+
+    Concurrency: a per-coach row lock serializes two concurrent loads (a
+    double-submit / retry) so the second waits and then reuses what the first
+    created, rather than both seeing "no plan" and each building one. (The
+    decorator's ``atomic`` makes the lock real on Postgres; it's a no-op on the
+    SQLite test DB, where requests don't race anyway.)
     """
+    User.objects.select_for_update().get(pk=coach.pk)
     today = date.today()
     athletes = {}
     for spec in ATHLETES:
