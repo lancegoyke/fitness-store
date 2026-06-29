@@ -304,6 +304,13 @@ MESO_VAPID_PUBLIC_KEY = os.environ.get("MESO_VAPID_PUBLIC_KEY", "")
 MESO_VAPID_PRIVATE_KEY = os.environ.get("MESO_VAPID_PRIVATE_KEY", "")
 MESO_VAPID_SUBJECT = os.environ.get("MESO_VAPID_SUBJECT", "mailto:lance@lancegoyke.com")
 
+# Meso billing (multi-coach SaaS — decision S6). Per-active-athlete (seat)
+# subscription: one recurring Stripe Price (per seat, monthly, USD). Optional in
+# Phase 1 — the model + gating accessor + local trial need no Stripe, so an empty
+# id lets the app boot and CI run without billing creds; Phase 2 (subscription
+# Checkout / Customer Portal / webhook) needs it set to the live/test Price id.
+MESO_SEAT_PRICE_ID = os.environ.get("MESO_SEAT_PRICE_ID", "")
+
 # Crispy Forms
 CRISPY_ALLOWED_TEMPLATE_PACKS = ("bulma",)
 CRISPY_TEMPLATE_PACK = "bulma"

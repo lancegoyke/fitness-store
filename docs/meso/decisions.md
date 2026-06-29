@@ -161,7 +161,7 @@ items in [`invites-plan.md`](./invites-plan.md).
 | S3 | **Delivery & notifications** | ✅ Built — push (PWA, Phase 4b) + email (`django-ses` + `notifications`). **Email opt-out shipped** (2026-06-29): the delivery email now carries a working one-click `List-Unsubscribe` (RFC 8058) honored by a per-athlete flag — see decision log. |
 | S4 | **Results ↔ `challenges`/records** | ✅ Resolved (2026-06-29, YAGNI review): **keep separate, build nothing now.** The "results screen shows a PR" premise was mock-only (the real results screen never showed a PR), and `challenges.Record` is time-based (wrong domain for a strength PR). Meso already owns best-lift data via `AthleteOneRm`. A motivational PR badge stays deferred until there's a concrete need. |
 | S5 | **Real-time transport** | ❌ Deferred (YAGNI, 2026-06-29): the agent result is atomic behind a human review gate and the stack is WSGI — SSE/websockets buy ~1.5s over a cheap bounded poll for disproportionate ASGI/channels/Redis-channel-layer infra. Revisit only if the agent itself becomes genuinely streaming. |
-| S6 | **Billing** | 🟢 **Planned** (2026-06-29): Meso is **not** a single-operator tool — multi-coach SaaS is the intended direction. Billing (Stripe is here) is a forthcoming slice; the schema is already cleanly multi-tenant (B1), so it is an additive retrofit. Needs the pricing/packaging product decisions first (see decision log + suggested sequence). |
+| S6 | **Billing** | 🟢 **Planned, decisions locked** (2026-06-29): **per-active-athlete (seat) pricing** + a **free tier + 14-day no-card trial**; the paywall gates **athlete count + the AI agent** (free tier = capped seats, no agent; groups/notifications free at every tier); first slice = the **subscription spine** for existing coaches (self-serve signup later). Full plan + phasing in [`billing-plan.md`](./billing-plan.md). |
 | S7 | **Offline logging** | ✅ Built — athlete PWA offline log queue (Phase 4b). |
 
 ---
@@ -179,14 +179,14 @@ plain CRUD — it carries the tenancy/roles/relationship spine (N1–N3).
    coach still approves. Safe — the human gate already exists.
 3. **Athlete delivery + logging** — the athlete PWA surface, notifications, then results feeding
    back to the agent. *(Built.)*
-4. **Billing (S6) — the next major slice.** Meso is intended as a multi-coach SaaS, not a
-   single-operator tool, so coaches will eventually pay. The tenancy spine (B1) is already in
-   place; what's missing is (a) the **product/pricing decisions** — what's charged for (per-coach
-   seat? per-athlete? flat?), tiers, trial, free ceiling — and (b) the **subscription
-   infrastructure** (today's Stripe is one-time-payment only: subscription mode + webhooks, a
-   paid/tier/seat marker on `CoachProfile`, a self-serve coach-signup/upgrade flow, dunning). The
-   pricing/packaging calls are the owner's and gate the build; the engineering is then an additive
-   retrofit. A dedicated `billing-plan.md` should capture those decisions before code.
+4. **Billing (S6) — the next major slice (decisions locked, plan written).** Meso is a multi-coach
+   SaaS, not a single-operator tool, so coaches pay. Decided 2026-06-29: **per-active-athlete (seat)
+   pricing**, a **free tier + 14-day no-card trial**, **athlete-count + the AI agent gated**, monthly/USD,
+   and a **spine-first** build (existing coaches; self-serve signup later). The tenancy spine (B1) is
+   already in place; what's missing is the subscription infrastructure (today's Stripe is one-time
+   only). Full plan + 5-phase build in [`billing-plan.md`](./billing-plan.md). Phase 1 = the
+   `CoachSubscription` model + gating accessor + local trial + comped flag (no Stripe yet). Open
+   *values* (not architecture): free seat count (rec 1), per-seat price (TBD), trial 14d.
 
 ---
 
@@ -659,3 +659,24 @@ _(Append dated entries here as decisions land.)_
   email/push); **Q4** = a **logged-out `/meso/` landing** with "I have an invite" +
   "Request coach access" + one main-site link (not instant-signup). Q1 is the most
   consequential and the easiest to revisit.
+- 2026-06-29 — **S6 billing — decisions locked + plan written** (no code yet; planning only).
+  Worked through the billing decision set with the owner. **Locked:** D1 the **coach** pays (B2B);
+  D2 **per-active-athlete (seat) pricing** (a seat = an active `CoachAthlete` link); D3 **free tier
+  + a 14-day no-card trial** (the trial is **local state** — no Stripe until a card is actually
+  collected — and the free tier is the lapse/cancel landing spot); D4 the paywall gates **athlete
+  count + the AI agent** (the Claude agent has real per-call cost → free tier gets no agent;
+  trial/paid/comped get it; groups + notifications stay free; both gates share the `is_active`
+  predicate); D5 **monthly/USD** (annual
+  deferred); D6 Stripe Smart Retries then **downgrade to free at period end**, over-limit blocks
+  new athletes + edits but **never deletes**; D11 first slice = the **subscription spine** for
+  existing coaches (public self-serve coach signup is a later phase). **Recommended architecture
+  (proceed unless overridden):** Stripe Billing + subscription Checkout + the hosted **Customer
+  Portal**; Stripe is source-of-truth with a thin local **`CoachSubscription`** mirror (1:1 → coach
+  `User`) for fast gating; a **separate clean billing webhook** (the messy products webhook is left
+  alone); one `billing/access.py` accessor (`can_add_athlete`); seat-quantity sync best-effort +
+  a daily **`reconcile_seats` qcluster sweep** (reuses the django-q2 cluster); a **`comped`** status
+  so the owner + demo coaches are never paywalled. **5-phase build** in
+  [`billing-plan.md`](./billing-plan.md) — Phase 1 (this slice) = `CoachSubscription` model +
+  migration + the gating accessor + local trial + comped seed/admin, **no Stripe, no enforcement
+  wired** (same state-machine-first order as the invite slice). **Open values** (not architecture):
+  free seat count (rec 1), per-seat price (TBD — owner's number), trial 14d.
