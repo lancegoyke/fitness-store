@@ -519,3 +519,17 @@ _(Append dated entries here as decisions land.)_
   P2 claim race — `select_for_update` on the invite row in the claim/revoke views). Plan +
   deferred (athlete→coach request UI, resend/expiry, stub-athlete) in
   [`invites-plan.md`](./invites-plan.md).
+- 2026-06-29 — **First-time UX / onboarding slice planned** (not built; plan in
+  [`first-time-ux-plan.md`](./first-time-ux-plan.md)). The feature area is broad
+  and deployed but has never had an onboarding pass. The plan covers all three
+  first-timers (cold visitor · new coach · new athlete) and surfaces the
+  **headline blocker**: a coach **cannot create an individual program in the UI** —
+  `Plan.objects.create` lives only in `MesoGroup.create_shared_plan`
+  (`models.py:1289`), there's no individual-plan / add-week / add-session endpoint,
+  and both "+ New program" and "Build a program" CTAs bounce off the bare designer
+  back to the roster; only `seed_meso_demo` builds an individual plan tree. Phased
+  fix (Phase 1 = individual plan creation, the structural fix; 2–5 = front
+  door, empty states, role fork, athlete + designer first-run polish). **Open for
+  decision (Q1–Q4 in the plan):** self-serve vs invite-only coach signup ·
+  plan-creation shape (blank / template / agent-drafted) · one-click demo for new
+  coaches · landing-page location & visibility.
