@@ -141,18 +141,21 @@ def _resolve(model, value, label, errors, **scope):
     return obj
 
 
-_NUMERIC_RE = re.compile(r"-?\d+(?:\.\d+)?")
+def _percent_load(text):
+    """A %1RM progression's value as a float, or ``None`` if it isn't a percent.
 
-
-def _percent_value(text):
-    """The leading number in a load string ('82.5 %' → 82.5), or ``None``."""
-    match = _NUMERIC_RE.search(text or "")
-    if match is None:
+    A %1RM load is a *bare* percentage — a number with an optional ``%`` sign
+    ("82", "82.5 %"). A unit-suffixed or otherwise non-numeric string ("82.5 kg",
+    "100 lb", "heavy") is the model converting the lift to an absolute weight,
+    which is NOT a percent and must be rejected rather than silently reinterpreted
+    (storing "100 lb" as "100%" would corrupt the prescribed intensity).
+    """
+    cleaned = (text or "").strip()
+    if cleaned.endswith("%"):
+        cleaned = cleaned[:-1].strip()
+    if not re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
         return None
-    try:
-        return float(match.group())
-    except ValueError:
-        return None
+    return float(cleaned)
 
 
 def _fmt_percent(value):
@@ -248,17 +251,18 @@ def clean_change(raw, plan, *, forbidden=None):
     cleaned["payload"] = payload
 
     # %1RM bound — a progress on a percent-typed lift moves a PERCENTAGE. The
-    # model treats ``load`` as an opaque string, so this keeps the new value a
-    # number in a sane band (stopping "75%" → an absolute "180") and normalizes
-    # it to a bare percent so the designer's ``%`` suffix isn't doubled. Keyed on
-    # the *target row's* type; an absolute lift is left unbounded as before.
+    # model treats ``load`` as an opaque string, so this requires a clean percent
+    # in a sane band (rejecting both an absolute-looking "180" and a unit-suffixed
+    # "100 lb" the model wrongly converted) and normalizes a valid one to a bare
+    # number so the designer's ``%`` suffix isn't doubled. Keyed on the *target
+    # row's* type; an absolute lift is left unbounded as before.
     load_value = payload.get("load")
     if kind == "progress" and presc is not None and load_value:
         if presc.load_type == LoadType.PERCENT:
-            pct = _percent_value(load_value)
+            pct = _percent_load(load_value)
             if pct is None:
                 errors.append(
-                    f"a %1RM progression must be a number (got {load_value!r})"
+                    f"a %1RM progression must be a bare percent (got {load_value!r})"
                 )
             elif not 0 < pct <= MAX_PERCENT_1RM:
                 errors.append(

@@ -398,9 +398,9 @@ class TestPercentProgressBound:
         assert errors == []
         assert cleaned["payload"] == {"load": "82"}
 
-    def test_strips_a_percent_sign_and_stray_unit(self):
-        # The model may echo the '%' (or wrongly append a unit); the stored load
-        # is normalized to a bare percent so the designer's suffix isn't doubled.
+    def test_strips_a_percent_sign(self):
+        # The model may echo the '%'; the stored load is normalized to a bare
+        # percent so the designer's suffix isn't doubled.
         plan, _, presc = make_percent_plan()
         cleaned, errors = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="82.5 %"),
@@ -408,6 +408,18 @@ class TestPercentProgressBound:
         )
         assert errors == []
         assert cleaned["payload"] == {"load": "82.5"}
+
+    def test_rejects_a_unit_suffixed_load(self):
+        # A unit on a %1RM lift is the model converting it to an absolute weight;
+        # reject it rather than silently storing "100 lb" as "100%" (which would
+        # corrupt the prescribed intensity), even though 100 is within the band.
+        plan, _, presc = make_percent_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="100 lb"),
+            plan,
+        )
+        assert cleaned is None
+        assert any("percent" in e for e in errors)
 
     def test_rejects_an_absolute_looking_load(self):
         # 180 is a plausible kg/lb load but an absurd %1RM — the bound catches a
@@ -427,7 +439,7 @@ class TestPercentProgressBound:
             plan,
         )
         assert cleaned is None
-        assert any("number" in e for e in errors)
+        assert any("percent" in e for e in errors)
 
     def test_allows_legitimate_supramaximal_percent(self):
         # Eccentric/walkout work above 100% is real programming; the ceiling is

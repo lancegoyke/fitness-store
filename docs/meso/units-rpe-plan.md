@@ -133,14 +133,18 @@ through `serialize_prescription`, and `build_context` → `serialize_plan` → `
   and never convert one type into the other — and widened the `new_load` tool-field description
   to give both the `'92.5 kg'` and the `'82'` (%1RM) forms.
 - **Validation bound** (`agent/validation.py`): the deterministic backstop now bounds a
-  `progress` whose **target row** is `LoadType.PERCENT`. The new load must parse as a number in
-  `0 < pct ≤ MAX_PERCENT_1RM` (120 — above legitimate supramaximal eccentric/walkout work, below
-  a plainly-absolute number like "180"); a non-numeric or out-of-band value is **rejected** (the
-  candidate is dropped before it reaches the review screen, exactly like a contraindicated swap),
-  and a valid one is **normalized to a bare percent** (`'82.5 %'` → `'82.5'`) so the designer's
-  `%` suffix isn't doubled. The absolute path is deliberately left unbounded (no sane ceiling on
-  a kg/lb load). Keyed on the *target prescription's* type — the change dict itself carries no
-  type — so it reuses the prescription `clean_change` already resolves.
+  `progress` whose **target row** is `LoadType.PERCENT`. The new load must be a **clean percent**
+  — a bare number with an optional `%` (`'82'`, `'82.5 %'`) — in `0 < pct ≤ MAX_PERCENT_1RM`
+  (120 — above legitimate supramaximal eccentric/walkout work, below a plainly-absolute number
+  like "180"). Three things are **rejected** (the candidate is dropped before it reaches the
+  review screen, exactly like a contraindicated swap): an out-of-band number (`'180'`), a
+  non-numeric value (`'heavy'`), and — importantly — a **unit-suffixed** value (`'100 lb'`),
+  which is the model converting the lift to an absolute weight; silently storing that as `100%`
+  would corrupt the prescribed intensity, so it is *not* coerced. A valid one is **normalized to
+  a bare percent** (`'82.5 %'` → `'82.5'`) so the designer's `%` suffix isn't doubled. The
+  absolute path is deliberately left unbounded (no sane ceiling on a kg/lb load). Keyed on the
+  *target prescription's* type — the change dict itself carries no type — so it reuses the
+  prescription `clean_change` already resolves.
 
 Deliberately **not** in 2a: the agent does not *change* a row's `load_type` (it only progresses
 within the existing type), and nothing here touches the athlete logger (→ Phase 2b).
@@ -150,8 +154,8 @@ within the existing type), and nothing here touches the athlete logger (→ Phas
 `meso/tests/test_agent_validation.py`:
 
 - `TestPercentProgressBound` — a %1RM progress accepts a sane percent (`'82'`), strips a `%`
-  sign / stray unit (`'82.5 %'` → `'82.5'`), rejects an absolute-looking load (`'180'`), rejects
-  a non-numeric value (`'heavy'`), allows legitimate supramaximal (`'105'`), and leaves the
-  **absolute** path unbounded (`'180 kg'` still passes).
+  sign (`'82.5 %'` → `'82.5'`), rejects a unit-suffixed load (`'100 lb'`), an absolute-looking
+  load (`'180'`), and a non-numeric value (`'heavy'`), allows legitimate supramaximal (`'105'`),
+  and leaves the **absolute** path unbounded (`'180 kg'` still passes).
 - `TestPercentAwarePrompt` — the `SYSTEM_PROMPT` mentions `load_type` + `1RM`, and the `new_load`
   tool field mentions the percent form (locks the prompt contract so it can't silently regress).
