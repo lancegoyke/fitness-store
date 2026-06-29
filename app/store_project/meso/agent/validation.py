@@ -18,10 +18,17 @@ screen. Two layers:
 import re
 
 from ..models import ExercisePrescription
+from ..models import LoadType
 from ..models import Session
 from ..serializers import current_week
 
 VALID_KINDS = {"swap", "progress", "volume", "deload"}
+
+# A %1RM progression moves a PERCENT, so its value is bounded to a sane band. The
+# ceiling sits above legitimate supramaximal work (eccentrics / walkouts run a
+# little over 100%) but well below a number that is plainly an absolute load the
+# type-agnostic model mistyped (e.g. "180"). The floor is just above zero.
+MAX_PERCENT_1RM = 120
 
 # What an actionable change of each kind must resolve to within the plan. A swap
 # or progression edits a specific exercise row; a volume change edits a day; a
@@ -134,6 +141,25 @@ def _resolve(model, value, label, errors, **scope):
     return obj
 
 
+_NUMERIC_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _percent_value(text):
+    """The leading number in a load string ('82.5 %' → 82.5), or ``None``."""
+    match = _NUMERIC_RE.search(text or "")
+    if match is None:
+        return None
+    try:
+        return float(match.group())
+    except ValueError:
+        return None
+
+
+def _fmt_percent(value):
+    """A bare percent string ('82' / '82.5'); no '%' so the suffix isn't doubled."""
+    return str(int(value)) if value == int(value) else str(value)
+
+
 def clean_change(raw, plan, *, forbidden=None):
     """Validate and normalize one raw change dict.
 
@@ -220,6 +246,27 @@ def clean_change(raw, plan, *, forbidden=None):
         if value:
             payload[field] = value
     cleaned["payload"] = payload
+
+    # %1RM bound — a progress on a percent-typed lift moves a PERCENTAGE. The
+    # model treats ``load`` as an opaque string, so this keeps the new value a
+    # number in a sane band (stopping "75%" → an absolute "180") and normalizes
+    # it to a bare percent so the designer's ``%`` suffix isn't doubled. Keyed on
+    # the *target row's* type; an absolute lift is left unbounded as before.
+    load_value = payload.get("load")
+    if kind == "progress" and presc is not None and load_value:
+        if presc.load_type == LoadType.PERCENT:
+            pct = _percent_value(load_value)
+            if pct is None:
+                errors.append(
+                    f"a %1RM progression must be a number (got {load_value!r})"
+                )
+            elif not 0 < pct <= MAX_PERCENT_1RM:
+                errors.append(
+                    f"%1RM progression {pct:g}% is out of range "
+                    f"(expected 1–{MAX_PERCENT_1RM}%)"
+                )
+            else:
+                payload["load"] = _fmt_percent(pct)
 
     # Contraindication backstop — only a SWAP introduces a new movement, so only
     # swaps are screened (a volume/progress edit that *mentions* a flagged

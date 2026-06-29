@@ -92,7 +92,10 @@ PROPOSE_TOOL = {
                         "new_load": {
                             "type": "string",
                             "description": (
-                                "progress only: the load to set, e.g. '92.5 kg'."
+                                "progress only: the load to set. For an "
+                                "absolute-load row (load_type 'abs') a weight in "
+                                "the plan's unit, e.g. '92.5 kg'; for a %1RM row "
+                                "(load_type 'pct') a percentage of 1RM, e.g. '82'."
                             ),
                         },
                         "new_sets": {
@@ -121,6 +124,11 @@ SYSTEM_PROMPT = (
     "alternative and name it in introduces_exercise.\n"
     "- Anchor load progressions to the values already in the plan; prefer small, "
     "defensible steps.\n"
+    "- Each exercise row carries a load_type: 'abs' means its load is an absolute "
+    "weight in the plan's unit (kg/lb); 'pct' means the load is a percentage of "
+    "1RM. When you progress a 'pct' lift, new_load is a percentage (keep it in a "
+    "sane range, typically at or below 100%) — never convert it into an absolute "
+    "weight, and never convert an absolute lift into a percentage.\n"
     "- Give the value to apply: new_name for a swap, new_load for a progress, "
     "new_sets for a volume change. A deload needs no value.\n"
     "- Set 'honors' to the specific contraindication or coaching rule each change "

@@ -54,12 +54,15 @@ agent, athlete, and groups slices.
   and autosaves the type; the per-athlete override resolution and the group deliver-to-all
   fan-out carry the type through; the athlete sees a `%` target on a %1RM-prescribed lift;
   the coach results screen labels a %1RM target with `%`. The seed gets a demo %1RM row.
-- **Phase 2 — %1RM ergonomics + agent awareness (future).** The athlete logger surfacing
-  the % target distinctly and capturing the *actual* load lifted against an estimated 1RM;
-  the agent's grounding + validation understanding that a `progress` change on a %1RM lift
-  moves a percentage (and bounding it sanely); optional estimated-1RM math (% ↔ load). Out
-  of scope for Phase 1, which keeps the agent type-agnostic (it already treats `load` as an
-  opaque numeric string, so a %1RM number progresses as a number — nothing breaks).
+- **Phase 2 — %1RM ergonomics + agent awareness.** Split into two PR-sized slices, the same
+  2a/2b cadence as the groups slice:
+  - **Phase 2a — agent %1RM-awareness (this PR, DONE).** The grounding already carries each
+    row's `load_type` (Phase 1 wired `serialize_prescription`), so the two real gaps were: the
+    **prompt** never explained what `load_type` means, and the **validation backstop** never
+    bounded a %1RM progression. Both closed — see below.
+  - **Phase 2b — athlete %1RM logging ergonomics (future).** The athlete logger surfacing the
+    % target distinctly and capturing the *actual* load lifted against an estimated 1RM;
+    optional estimated-1RM math (% ↔ load).
 
 ## Phase 1 — build notes
 
@@ -117,3 +120,38 @@ fan-out:
 - `toggleLoadType(ex)` flips `abs` ⇄ `pct` and (when live) autosaves via `persistRow`.
 - `persistRow` includes `load_type` in the autosave body.
 - A locally added row (offline `addExercise`) defaults `load_type: "abs"`.
+
+## Phase 2a — agent %1RM-awareness (build notes)
+
+The agent context already carried each prescription's `load_type` (Phase 1 threaded it
+through `serialize_prescription`, and `build_context` → `serialize_plan` → `serialize_session`
+→ `serialize_prescription`). So no grounding *data* was missing. The two real gaps:
+
+- **Prompt** (`agent/client.py`): the model was never told what `load_type` means. Added a
+  `SYSTEM_PROMPT` rule — `abs` is an absolute weight in the plan's unit, `pct` is a percentage
+  of 1RM; when progressing a `pct` lift the `new_load` is a percentage (kept sane, ≤ ~100%),
+  and never convert one type into the other — and widened the `new_load` tool-field description
+  to give both the `'92.5 kg'` and the `'82'` (%1RM) forms.
+- **Validation bound** (`agent/validation.py`): the deterministic backstop now bounds a
+  `progress` whose **target row** is `LoadType.PERCENT`. The new load must parse as a number in
+  `0 < pct ≤ MAX_PERCENT_1RM` (120 — above legitimate supramaximal eccentric/walkout work, below
+  a plainly-absolute number like "180"); a non-numeric or out-of-band value is **rejected** (the
+  candidate is dropped before it reaches the review screen, exactly like a contraindicated swap),
+  and a valid one is **normalized to a bare percent** (`'82.5 %'` → `'82.5'`) so the designer's
+  `%` suffix isn't doubled. The absolute path is deliberately left unbounded (no sane ceiling on
+  a kg/lb load). Keyed on the *target prescription's* type — the change dict itself carries no
+  type — so it reuses the prescription `clean_change` already resolves.
+
+Deliberately **not** in 2a: the agent does not *change* a row's `load_type` (it only progresses
+within the existing type), and nothing here touches the athlete logger (→ Phase 2b).
+
+### Tests (Phase 2a)
+
+`meso/tests/test_agent_validation.py`:
+
+- `TestPercentProgressBound` — a %1RM progress accepts a sane percent (`'82'`), strips a `%`
+  sign / stray unit (`'82.5 %'` → `'82.5'`), rejects an absolute-looking load (`'180'`), rejects
+  a non-numeric value (`'heavy'`), allows legitimate supramaximal (`'105'`), and leaves the
+  **absolute** path unbounded (`'180 kg'` still passes).
+- `TestPercentAwarePrompt` — the `SYSTEM_PROMPT` mentions `load_type` + `1RM`, and the `new_load`
+  tool field mentions the percent form (locks the prompt contract so it can't silently regress).
