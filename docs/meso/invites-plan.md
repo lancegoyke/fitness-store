@@ -174,11 +174,48 @@ Built **red→green** with a new `test_invite_lifecycle.py` (the expiry clock,
 querysets, `open_for` re-arm, the sweep command, the claim view's expiry
 handling, the resend view with auth/scoping/no-op, and the roster surface).
 
-## Deferred (Phase 4+)
+## Phase 4 (this PR) — the expiry-reminder email
+
+Phase 3 gave invites a TTL but no nudge: a claim link silently nears expiry and
+the athlete only learns it's dead when they finally click. Phase 4 sends a
+**reminder before the link lapses** so the athlete (and the coach's onboarding)
+don't quietly stall.
+
+1. **`reminder_sent_at`** — a nullable timestamp on `CoachInvite`; stamped once a
+   reminder goes out so the sweep never re-nudges the same arming cycle (schema-
+   only migration, data-safe; legacy rows are null = un-reminded).
+2. **`INVITE_REMINDER_LEAD`** = 3 days — a reminder is due once a pending invite
+   is within the lead of its `expires_at` but not yet past due.
+3. **`needs_reminder`** (single-invite mirror) + **`due_for_reminder()`**
+   queryset — pending, has a clock (a null-clock legacy invite never expires, so
+   never needs a reminder), `now < expires_at <= now + lead`, and not yet
+   reminded. The sweep's input.
+4. **`mark_reminded()`** — stamps `reminder_sent_at` (bookkeeping, not a status
+   transition); a reminded invite drops out of `due_for_reminder`.
+5. **`resend()` clears `reminder_sent_at`** — re-arming resets the clock, so the
+   fresh cycle re-earns a reminder near its new expiry.
+6. **`send_coach_invite_reminder_email`** (notifications) — mirror of the invite
+   email (`coach`, `email`, `accept_url`) with its own three templates; the copy
+   says the link is about to expire and to claim it now.
+7. **`meso_remind_expiring_invites`** management command — cron-friendly sweep of
+   `due_for_reminder()`: builds the absolute claim URL off-request via the current
+   `Site`, sends each reminder best-effort (a mail failure is logged and skips the
+   stamp so the next sweep retries), then `mark_reminded()`. `--dry-run` reports
+   the count and changes nothing. The reminder peer of `meso_expire_invites`.
+8. **Admin** lists `reminder_sent_at`.
+
+Built **red→green** with a new `test_invite_reminders.py` (the reminder window /
+`needs_reminder` / `due_for_reminder`, `mark_reminded`, `resend` clearing the
+flag, the command's send/stamp/dry-run/idempotency/skip/mail-failure paths, and
+the notifications function).
+
+## Deferred (Phase 5+)
 
 - **Configurable TTL** per coach (today a fixed 14-day `INVITE_TTL`).
-- **Expiry reminder** email before a link lapses; **scheduling** the
-  `meso_expire_invites` sweep on a real cron (it's manual / CI-runnable today).
+- **Scheduling** the `meso_expire_invites` + `meso_remind_expiring_invites`
+  sweeps on a real cron (both are manual / cron-ready today — e.g. a daily
+  `docker compose exec` on the box; no in-repo scheduler).
+- **Configurable reminder lead** / multiple reminders (today one, 3 days out).
 - **Stub-athlete** pre-creation (we never create a placeholder `User`).
 - **Coach/athlete attribution beyond `accepted_by`**; richer invite history.
 - **Coach-side roster filtering by relationship state** beyond pending (e.g. a

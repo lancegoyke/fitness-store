@@ -1,0 +1,1 @@
+Reminder: your invite from {{ coach_name }} is expiring soon
