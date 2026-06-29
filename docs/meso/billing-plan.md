@@ -136,7 +136,27 @@ rule to avoid the app arbitrarily choosing which athletes to freeze.)
 
 ## Phasing
 
-1. **Phase 1 — the spine (this slice).** `CoachSubscription` model + migration;
+> **Status:** Phase 1 ✅ (PR #319, migration `0020`). Phase 2 ✅ (this slice) —
+> Stripe Checkout + Customer Portal + the clean webhook + best-effort seat sync +
+> the daily `reconcile_seats` sweep. Enforcement + paywall UI is Phase 3 (next).
+
+### Deploying Phase 2 (Stripe configuration)
+
+The code ships dormant — billing does nothing until these are configured, so a
+deploy succeeds without them (like the VAPID push keys):
+
+1. In Stripe, create one **Product** ("Meso Coaching") with one recurring
+   per-seat **Price** (monthly, USD, `usage_type=licensed`). Set
+   `MESO_SEAT_PRICE_ID` to that Price id.
+2. Register a **billing webhook endpoint** → `https://<host>/meso/billing/webhook/`
+   subscribed to `customer.subscription.created|updated|deleted`, `invoice.paid`,
+   `invoice.payment_failed`. Set `MESO_STRIPE_WEBHOOK_SECRET` to that endpoint's
+   signing secret (a *separate* secret from the products webhook's
+   `STRIPE_ENDPOINT_SECRET`).
+3. The `qcluster` already runs the daily sweeps; the `meso-reconcile-seats`
+   schedule registers itself via migration `0021`.
+
+1. **Phase 1 — the spine (DONE).** `CoachSubscription` model + migration;
    constants (`FREE_SEAT_LIMIT`, `TRIAL_DAYS`, price-id setting); the
    `billing/access.py` accessor (`is_active` / `effective_seat_limit` /
    `can_add_athlete`); local trial start; the `comped` status + seed/admin (so
