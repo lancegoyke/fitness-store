@@ -136,10 +136,12 @@ Mark via a `CoachProfile`/`AthleteProfile`, Django groups, or boolean flags. **R
 `CoachProfile` (presence = is-a-coach) + the `CoachAthlete` link (presence = is-an-athlete);
 avoids overloading the User model.
 
-### N4 · Athlete onboarding / invites 🟡
+### N4 · Athlete onboarding / invites 🟢 (Phase 1 built)
 How an athlete joins a coach: coach invites by email → athlete signs up (allauth) → link
-created; or coach creates a stub athlete and sends a claim link. **Rec:** email invite +
-claim, reusing allauth. Detailed design when we build the relationship.
+created; or coach creates a stub athlete and sends a claim link. **Decision:** email invite +
+claim, reusing allauth — **Phase 1 built** (the `CoachInvite` email artifact → bearer-token
+claim → materialized active `CoachAthlete`; rides allauth's `?next=` with no custom adapter).
+Plan + deferred items in [`invites-plan.md`](./invites-plan.md).
 
 ---
 
@@ -491,3 +493,29 @@ _(Append dated entries here as decisions land.)_
   prettier + `makemigrations --check` clean. Plan in [`one-rm-plan.md`](./one-rm-plan.md). **Deferred
   (Phase 3+):** coach-editable 1RM (the `source` field already supports it), offline persistence of a
   manual edit, smarter derivation / cross-unit conversion.
+- 2026-06-29 — **N4 — athlete onboarding / email invites — Phase 1 built** (branch
+  `meso-invites-phase1`). Closes the still-open foundation decision: how an athlete *joins* a
+  coach. The Phase-1 peer-invite state machine on `CoachAthlete` required the athlete to already
+  be a `User` and nothing in the UI ever *created* an invite, so links were only ever seeded.
+  Phase 1 adds the real email-onboarding loop end to end. New **`CoachInvite(coach, email, token,
+  status)`** (migration `0015_coachinvite`): a coach invites an *email* (the invitee may have no
+  account yet — decoupled from `CoachAthlete`, whose `athlete` FK is non-null, rather than making
+  the load-bearing relationship nullable). State machine `open_for`/`accept`/`decline`/`revoke`;
+  **`accept(user)` materializes — and immediately activates — a `CoachAthlete`** (the claim *is*
+  the acceptance), idempotent against an existing active link, resolves a pending peer link, and
+  rejects a coach claiming their own invite; partial-unique `(coach, email)` while pending so a
+  re-invite reuses the open row. **Bearer-token claim, no email match** — the 122-bit token in the
+  link authorizes (email-only login coexists with social signup, so a new athlete may use a
+  different address); the coach sees who accepted and can `end` it. **Rides allauth with no custom
+  adapter**: the claim view is `@login_required`, so an anon visitor bounces to
+  `/accounts/login/?next=<claim>` and allauth carries `next` through both login and signup
+  (`ACCOUNT_EMAIL_VERIFICATION` unset → `"optional"` → signup logs in immediately). Email via
+  `notifications.send_coach_invite_email` (+ 3 templates), best-effort on `transaction.on_commit`.
+  Roster gains an "Invite an athlete" disclosure + a pending-invite list with Revoke; admin +
+  factory + a seeded demo pending invite. Built red→green: **+38 pytest** (`test_invites.py`) + 3
+  seed assertions; full suite green (the 2 pre-existing `admin_honeypot` failures are unrelated).
+  **Codex review loop CLEAN after iteration 1** (2 fixes: a P1 referrer-leak — moved the
+  `no-referrer` meta into a new `_meso_base` `head_top` block that precedes the font `<link>`s; a
+  P2 claim race — `select_for_update` on the invite row in the claim/revoke views). Plan +
+  deferred (athlete→coach request UI, resend/expiry, stub-athlete) in
+  [`invites-plan.md`](./invites-plan.md).

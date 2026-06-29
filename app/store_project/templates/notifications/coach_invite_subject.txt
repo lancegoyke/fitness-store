@@ -1,0 +1,1 @@
+{{ coach_name }} invited you to train on Mastering Fitness

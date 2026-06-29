@@ -68,6 +68,15 @@ urlpatterns = [
     path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
     path("group/<int:pk>/design/", views.group_design, name="group_design"),
     path("group/<int:pk>/deliver/", views.group_deliver, name="group_deliver"),
+    # Email invites / onboarding (N4): coach sends/revokes, athlete claims.
+    path("invite/", views.coach_invite, name="coach_invite"),
+    path(
+        "invite/<uuid:token>/revoke/",
+        views.coach_invite_revoke,
+        name="coach_invite_revoke",
+    ),
+    path("claim/<uuid:token>/", views.invite_claim, name="invite_claim"),
+    # Peer-invite token actions on an existing CoachAthlete (Phase 1 spine).
     path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),
     path("invite/<uuid:token>/decline/", views.invite_decline, name="invite_decline"),
     path(

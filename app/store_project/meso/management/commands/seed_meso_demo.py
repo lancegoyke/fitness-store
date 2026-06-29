@@ -36,6 +36,7 @@ from django.utils.crypto import get_random_string
 
 from store_project.meso.models import AthleteProfile
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachInvite
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import Contraindication
 from store_project.meso.models import ExercisePrescription
@@ -343,6 +344,10 @@ GROUP = {
     "member_slugs": ["devon", "priya", "marcus"],
 }
 
+# A pending email invite (N4) so the roster's onboarding surface is visible — a
+# person the coach invited who hasn't claimed an account yet.
+PENDING_INVITE_EMAIL = "prospect@example.com"
+
 
 def _months_before(today, months):
     """The date ``months`` whole months before ``today`` (day clamped to ≤28)."""
@@ -388,12 +393,13 @@ class Command(BaseCommand):
                 plan = self._ensure_plan(coach, athlete)
                 self._ensure_log(athlete, plan, today)
         self._ensure_group(coach)
+        self._ensure_pending_invite(coach)
 
         self.stdout.write(
             self.style.SUCCESS(
                 f"✓ Meso demo seeded for {coach.email}: "
                 f"{len(ATHLETES)} athletes, 1 group (+ shared program), "
-                "1 sample plan, 1 logged session."
+                "1 sample plan, 1 logged session, 1 pending invite."
             )
         )
 
@@ -403,6 +409,9 @@ class Command(BaseCommand):
         # The demo group is owned by the (kept) coach, so deleting the demo
         # athletes only cascade-removes its memberships; drop the group too.
         MesoGroup.objects.filter(coach__email=coach_email, name=GROUP["name"]).delete()
+        CoachInvite.objects.filter(
+            coach__email=coach_email, email=PENDING_INVITE_EMAIL
+        ).delete()
         emails = [spec["email"] for spec in ATHLETES]
         deleted, _ = User.objects.filter(email__in=emails).delete()
         self.stdout.write(
@@ -466,6 +475,18 @@ class Command(BaseCommand):
                 athlete=athlete, text=text, defaults={"active": True}
             )
         return athlete
+
+    def _ensure_pending_invite(self, coach):
+        """A pending email invite (N4) so the roster's onboarding surface shows.
+
+        ``get_or_create`` keyed on the open invite so a reseed doesn't pile up
+        duplicate rows (and respects the one-pending-per-(coach,email) constraint).
+        """
+        CoachInvite.objects.get_or_create(
+            coach=coach,
+            email=PENDING_INVITE_EMAIL,
+            status=CoachInvite.Status.PENDING,
+        )
 
     def _ensure_link(self, coach, athlete):
         """An active, coach-invited link (the prototype's roster is all-active).

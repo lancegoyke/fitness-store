@@ -19,6 +19,7 @@ from django.core.management import call_command
 
 from store_project.meso.models import AthleteProfile
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachInvite
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import Contraindication
 from store_project.meso.models import LoggedSet
@@ -76,6 +77,24 @@ class TestSeedCreatesDemo:
         coach = User.objects.get(email=COACH_EMAIL)
         links = CoachAthlete.objects.for_coach(coach).active()
         assert links.count() == 5
+
+    def test_creates_a_pending_invite(self):
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        pending = CoachInvite.objects.for_coach(coach).pending()
+        assert pending.count() == 1
+        assert pending.get().email == "prospect@example.com"
+
+    def test_reseed_does_not_duplicate_pending_invite(self):
+        seed()
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        assert CoachInvite.objects.for_coach(coach).pending().count() == 1
+
+    def test_delete_removes_pending_invite(self):
+        seed()
+        seed(delete=True)
+        assert not CoachInvite.objects.filter(email="prospect@example.com").exists()
 
     def test_creates_one_sample_plan(self):
         seed()

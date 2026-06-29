@@ -57,6 +57,33 @@
               No athletes yet. Invite one to get started.
             </div>
           {% endfor %}
+
+          <!-- Pending email invites (N4): sent but not yet claimed. -->
+          {% for inv in pending_invites %}
+            <div class="meso-row" style="cursor:default;">
+              <div class="meso-avatar" style="background:var(--rail);color:var(--dim);">@</div>
+              <div style="min-width:0;">
+                <div class="meso-row-name">{{ inv.email }}</div>
+                <div class="meso-row-meta">Invited {{ inv.when|date:"M j" }} · awaiting reply</div>
+              </div>
+              <div class="meso-spacer"></div>
+              <span class="meso-badge"><i></i>Pending</span>
+              <form method="post" action="{% url 'meso:coach_invite_revoke' token=inv.token %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Revoke</button>
+              </form>
+            </div>
+          {% endfor %}
+
+          <!-- Invite a new athlete by email (N4). -->
+          <details style="border-top:1px solid var(--line-2);">
+            <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent-ink);">+ Invite an athlete</summary>
+            <form method="post" action="{% url 'meso:coach_invite' %}" style="display:flex;gap:9px;padding:4px 16px 16px;">
+              {% csrf_token %}
+              <input name="email" type="email" required maxlength="254" placeholder="athlete@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
+              <button type="submit" class="meso-btn meso-btn--primary">Send invite</button>
+            </form>
+          </details>
         </div>
 
         <div class="meso-card">

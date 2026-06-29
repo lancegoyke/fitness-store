@@ -10,6 +10,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import transaction
 from django.db.models import Max
 from django.http import Http404
@@ -19,6 +20,7 @@ from django.http import HttpResponseForbidden
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
+from django.shortcuts import render
 from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
@@ -27,6 +29,7 @@ from django.views.decorators.http import require_GET
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 
+from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_week_delivered_email
 
 from . import one_rm as meso_one_rm
@@ -38,6 +41,7 @@ from .agent import jobs as agent_jobs
 from .agent import service as agent_service
 from .models import AgentProposalBatch
 from .models import CoachAthlete
+from .models import CoachInvite
 from .models import CoachProfile
 from .models import ExercisePrescription
 from .models import GroupMembership
@@ -202,6 +206,11 @@ class RosterView(LoginRequiredMixin, TemplateView):
         # auto-adjusts land in groups Phase 2/3. Activity (Phase 3) needs logged
         # sessions; needs-review (Phase 2) needs agent state. Empty until then.
         ctx["groups"] = [presenters.roster_group(g) for g in groups]
+        # Pending email invites the coach has sent but no one has claimed yet (N4).
+        pending_invites = CoachInvite.objects.for_coach(self.request.user).pending()
+        ctx["pending_invites"] = [
+            presenters.pending_invite(inv) for inv in pending_invites
+        ]
         ctx["activity"] = []
         ctx["needs_review"] = 0
         return ctx
@@ -900,6 +909,128 @@ def relationship_end(request, token):
     link.end()
     messages.success(request, "Relationship ended.")
     return redirect("meso:roster")
+
+
+# -- email invites / onboarding (N4) ---------------------------------------
+#
+# The coach-initiated, email-addressed onboarding flow: a coach invites a person
+# by email (who may not have an account yet), we send a tokened claim link, and
+# whoever follows it while authenticated materializes — and immediately activates
+# — a CoachAthlete link. Distinct from the peer-invite token views above, which
+# act on an existing CoachAthlete between two Users. See docs/meso/invites-plan.md.
+
+
+@login_required
+@require_POST
+def coach_invite(request):
+    """Coach invites an athlete by email → a pending ``CoachInvite`` + claim email.
+
+    A plain form POST from the roster's "Invite an athlete" disclosure. The email
+    is validated and normalized; a coach cannot invite their own address; a
+    re-invite reuses the open pending row (``open_for``). The claim email is sent
+    on ``transaction.on_commit`` and is best-effort — a mail backend failure is
+    logged, never a 500 or a lost invite. Always lands back on the roster.
+    """
+    email = CoachInvite.normalize_email(request.POST.get("email"))
+    try:
+        validate_email(email)
+    except ValidationError:
+        messages.error(request, "Enter a valid email address.")
+        return redirect("meso:roster")
+    if email == CoachInvite.normalize_email(request.user.email):
+        messages.error(request, "You can't invite yourself.")
+        return redirect("meso:roster")
+    invite, _ = CoachInvite.open_for(coach=request.user, email=email)
+    accept_url = request.build_absolute_uri(
+        reverse("meso:invite_claim", kwargs={"token": invite.token})
+    )
+    coach = request.user
+
+    def _send():
+        try:
+            send_coach_invite_email(coach=coach, email=email, accept_url=accept_url)
+        except Exception:  # mail is best-effort; never fail the invite on it
+            logger.exception("Failed to send coach invite email to %s", email)
+
+    transaction.on_commit(_send)
+    messages.success(request, f"Invite sent to {email}.")
+    return redirect("meso:roster")
+
+
+@login_required
+@require_POST
+def coach_invite_revoke(request, token):
+    """Coach cancels a pending invite they sent. Coach-scoped (foreign → 404).
+
+    Locks the invite row so a revoke and a concurrent claim can't both win — the
+    first to acquire the row decides the transition; the loser sees a non-pending
+    invite and no-ops.
+    """
+    with transaction.atomic():
+        invite = get_object_or_404(
+            CoachInvite.objects.select_for_update(),
+            token=token,
+            coach=request.user,
+        )
+        if invite.is_pending:
+            invite.revoke()
+            messages.success(request, "Invite revoked.")
+    return redirect("meso:roster")
+
+
+@login_required
+def invite_claim(request, token):
+    """An invited athlete follows the emailed claim link.
+
+    ``@login_required`` bounces an anonymous visitor to ``/accounts/login/`` with
+    ``?next=`` back here; allauth carries ``next`` through both login and signup,
+    so a brand-new athlete returns authenticated. GET renders a confirm page; POST
+    ``action=accept`` materializes an active ``CoachAthlete`` link and lands on the
+    athlete's training home, ``action=decline`` marks the invite declined.
+    Bearer-token authorized — any authenticated user holding the token may claim
+    (no email match; see ``CoachInvite``). An already-answered invite is a friendly
+    no-op, never a crash.
+
+    The POST transition runs under a row lock on the invite so two concurrent
+    claims (or a claim racing a revoke) can't both pass the pending check and each
+    materialize a link — the first to acquire the row wins; the loser sees a
+    non-pending invite and no-ops.
+    """
+    invite = get_object_or_404(CoachInvite, token=token)
+    if request.method == "POST":
+        action = request.POST.get("action")
+        if action not in ("accept", "decline"):
+            return HttpResponseBadRequest("action must be 'accept' or 'decline'.")
+        with transaction.atomic():
+            invite = get_object_or_404(
+                CoachInvite.objects.select_for_update(), pk=invite.pk
+            )
+            if not invite.is_pending:
+                messages.info(request, "This invite has already been answered.")
+                return redirect("meso:athlete_home")
+            if action == "accept":
+                try:
+                    invite.accept(request.user)
+                except InvalidTransition as exc:
+                    messages.error(request, str(exc))
+                    return redirect("meso:roster")
+                messages.success(
+                    request,
+                    f"You're now training with {invite.coach.display_name()}.",
+                )
+                return redirect("meso:athlete_home")
+            invite.decline()
+        messages.success(request, "Invite declined.")
+        return redirect("meso:athlete_home")
+    return render(
+        request,
+        "meso/invite_claim.html",
+        {
+            "invite": invite,
+            "coach_name": invite.coach.display_name(),
+            "is_self": request.user == invite.coach,
+        },
+    )
 
 
 # -- designer autosave API (Phase 3) --------------------------------------
