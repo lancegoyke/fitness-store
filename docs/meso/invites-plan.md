@@ -209,12 +209,16 @@ Built **red→green** with a new `test_invite_reminders.py` (the reminder window
 flag, the command's send/stamp/dry-run/idempotency/skip/mail-failure paths, and
 the notifications function).
 
+## Scheduling (done)
+
+The `meso_expire_invites` + `meso_remind_expiring_invites` sweeps are no longer
+hand-run: they're registered as daily `django_q.Schedule` rows (migration
+`meso/0018`) and executed by an app-managed **django-q2** `qcluster` worker
+(ORM broker). Design + rationale in [`scheduling-plan.md`](./scheduling-plan.md).
+
 ## Deferred (Phase 5+)
 
 - **Configurable TTL** per coach (today a fixed 14-day `INVITE_TTL`).
-- **Scheduling** the `meso_expire_invites` + `meso_remind_expiring_invites`
-  sweeps on a real cron (both are manual / cron-ready today — e.g. a daily
-  `docker compose exec` on the box; no in-repo scheduler).
 - **Configurable reminder lead** / multiple reminders (today one, 3 days out).
 - **Stub-athlete** pre-creation (we never create a placeholder `User`).
 - **Coach/athlete attribution beyond `accepted_by`**; richer invite history.

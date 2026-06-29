@@ -96,6 +96,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "crispy_bulma",
     "crispy_forms",
+    "django_q",
     "embed_video",
     "markdownx",
     # Local
@@ -327,3 +328,26 @@ if REDIS_URL.startswith("rediss://"):
 
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
+
+
+# django-q2 — the app-managed scheduler / task queue.
+#
+# Broker is the Django ORM (the Postgres DB), deliberately NOT Redis: the
+# shared box's Redis is small + `noeviction` (cache + sessions), so a task
+# backlog there could starve logins. Task volume is tiny (a couple of daily
+# invite sweeps today), so a DB-backed broker is more than adequate and keeps
+# Redis pressure off. Periodic work lives in `django_q.Schedule` rows
+# (registered by a data migration; editable in admin) and is executed by the
+# `qcluster` process — one small worker in the production compose stack.
+Q_CLUSTER = {
+    "name": "fitness-store",
+    "orm": "default",  # DB-backed broker (no Redis dependency)
+    "workers": 1,  # low task volume — a single worker is plenty
+    "timeout": 300,  # kill a task that runs longer than 5 min
+    "retry": 600,  # must exceed `timeout` so a live task isn't double-run
+    "max_attempts": 1,  # sweeps are idempotent; the next schedule retries
+    "catch_up": False,  # after downtime, don't fire every missed run at once
+    "poll": 4,  # ORM broker poll interval (s) — easy on the DB
+    "save_limit": 250,  # cap retained successful-task rows
+    "label": "Scheduled tasks",
+}

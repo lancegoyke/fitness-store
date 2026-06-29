@@ -125,6 +125,19 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 # https://docs.djangoproject.com/en/dev/ref/settings/#email-backend
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 
+# DJANGO-Q
+# ------------------------------------------------------------------------------
+# Run any enqueued task inline and never spin up a cluster during tests.
+# (timeout/retry kept consistent — retry > timeout — to avoid django-q's
+# misconfiguration warning leaking into test output.)
+Q_CLUSTER = {
+    "name": "fitness-store-test",
+    "orm": "default",
+    "sync": True,
+    "timeout": 30,
+    "retry": 60,
+}
+
 # Your stuff...
 # ------------------------------------------------------------------------------
 
