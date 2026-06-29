@@ -123,10 +123,16 @@ def refresh_one_rms(athlete, prescriptions, unit):
     derived = derive_one_rm_values(athlete, keys=set(reps_by_key), unit=unit)
     for key, (exercise_id, name) in reps_by_key.items():
         value = derived.get(key)
-        if value is None:
-            continue
-        quantized = _quantize(value)
-        if not (Decimal("0") < quantized <= _MAX_VALUE):
+        quantized = _quantize(value) if value is not None else None
+        if quantized is None or not (Decimal("0") < quantized <= _MAX_VALUE):
+            # No usable same-unit estimate remains (the set was blanked / made
+            # free-text, or the value won't fit the column): clear any stale row in
+            # *this* unit so the logger/designer stop showing an estimate the logs
+            # no longer support. A row in the other unit stays — it's derived from
+            # that unit's own logs, untouched here.
+            models.AthleteOneRm.objects.filter(
+                athlete=athlete, key=key, unit=unit
+            ).delete()
             continue
         models.AthleteOneRm.objects.update_or_create(
             athlete=athlete,

@@ -249,7 +249,7 @@ class TestRefreshOneRms:
         assert row.value == Decimal("143.00")
         assert AthleteOneRm.objects.filter(athlete=athlete).count() == 1
 
-    def test_lift_with_no_usable_set_is_left_untouched(self):
+    def test_lift_with_no_usable_set_creates_nothing(self):
         athlete = UserFactory()
         plan, session, (squat,) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}]
@@ -257,6 +257,39 @@ class TestRefreshOneRms:
         log_session(athlete, session, [(squat, 1, "AMRAP", "BW", "9")])
         meso_one_rm.refresh_one_rms(athlete, [squat], plan.unit)
         assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+
+    def test_clears_a_stale_row_when_derivation_disappears(self):
+        # A lift had a row; the athlete edits the log so no numeric set remains.
+        # The now-unsupported estimate must be cleared, not left showing.
+        athlete = UserFactory()
+        plan, session, (squat,) = make_session(
+            athlete, prescriptions=[{"name": "Back Squat"}]
+        )
+        log = log_session(athlete, session, [(squat, 1, "1", "150", "9")])
+        meso_one_rm.refresh_one_rms(athlete, [squat], plan.unit)
+        assert AthleteOneRm.objects.filter(athlete=athlete).exists()
+        # The athlete edits the log so the set is no longer numeric.
+        log.sets.all().delete()
+        LoggedSetFactory(
+            session_log=log, prescription=squat, set_number=1, reps="AMRAP", load="BW"
+        )
+        meso_one_rm.refresh_one_rms(athlete, [squat], plan.unit)
+        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+
+    def test_stale_clear_leaves_a_row_in_the_other_unit(self):
+        # Clearing on a None kg derivation must not drop a valid lb row.
+        athlete = UserFactory()
+        kg_plan, _, (kg_squat,) = make_session(
+            athlete, unit=Unit.KILOGRAMS, prescriptions=[{"name": "Back Squat"}]
+        )
+        AthleteOneRmFactory(
+            athlete=athlete, name="Back Squat", value=Decimal("300"), unit=Unit.POUNDS
+        )
+        # No kg logs exist, so the kg derivation is empty — but the lb row stays.
+        meso_one_rm.refresh_one_rms(athlete, [kg_squat], kg_plan.unit)
+        row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
+        assert row.unit == Unit.POUNDS
+        assert row.value == Decimal("300")
 
     def test_refresh_pools_only_same_unit_logs(self):
         # A lb log of the same lift must not pollute the kg estimate.
