@@ -698,8 +698,12 @@ class TestCleanManualValue:
         assert ok is True
         assert value == Decimal("140.00")
 
-    @pytest.mark.parametrize("raw", ["0", "-5", "abc", "heavy", "1e9"])
-    def test_a_non_positive_or_non_numeric_value_is_rejected(self, raw):
+    @pytest.mark.parametrize(
+        "raw", ["0", "-5", "abc", "heavy", "1e9", "nan", "inf", "-inf"]
+    )
+    def test_a_non_positive_non_numeric_or_non_finite_value_is_rejected(self, raw):
+        # "nan"/"inf" parse to a float but must be rejected before _quantize,
+        # which would raise on a non-finite Decimal (a 500, not the intended 400).
         value, ok = meso_one_rm.clean_manual_value(raw)
         assert ok is False
         assert value is None
@@ -817,7 +821,7 @@ class TestSetOneRmEndpoint:
         assert row.value == Decimal("200.00")
         assert row.source == AthleteOneRm.Source.MANUAL
 
-    @pytest.mark.parametrize("value", ["abc", "0", "-10"])
+    @pytest.mark.parametrize("value", ["abc", "0", "-10", "nan"])
     def test_rejects_a_bad_value(self, client, value):
         athlete = UserFactory()
         _, session, (squat,) = make_session(

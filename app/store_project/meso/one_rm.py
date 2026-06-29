@@ -18,6 +18,7 @@ catalog-linked lift by FK, a free-text lift by normalized name. See
 ``docs/meso/one-rm-plan.md``.
 """
 
+import math
 from decimal import Decimal
 
 from . import models
@@ -191,14 +192,17 @@ def clean_manual_value(raw):
     """Validate a posted manual 1RM → ``(Decimal | None, ok)``.
 
     Blank/``None`` means *clear* it → ``(None, True)``. Otherwise the value must be
-    a positive number that fits the ``value`` column → the quantized ``Decimal``;
-    anything else (non-numeric, ≤ 0, or overflowing) is a reject → ``(None,
-    False)``. The two ``None`` cases are told apart by the ``ok`` flag.
+    a positive, finite number that fits the ``value`` column → the quantized
+    ``Decimal``; anything else (non-numeric, non-finite, ≤ 0, or overflowing) is a
+    reject → ``(None, False)``. The two ``None`` cases are told apart by the ``ok``
+    flag. ``nan``/``inf`` (``json.loads`` accepts ``NaN``/``Infinity``) are caught
+    by the finiteness check before ``_quantize`` — which would otherwise raise on
+    a non-finite ``Decimal`` and turn a bad request into a 500.
     """
     if raw in (None, ""):
         return None, True
     num = _num(raw)
-    if num is None or num <= 0:
+    if num is None or not math.isfinite(num) or num <= 0:
         return None, False
     value = _quantize(num)
     if not (Decimal("0") < value <= _MAX_VALUE):
