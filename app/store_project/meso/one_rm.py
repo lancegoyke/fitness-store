@@ -18,6 +18,7 @@ catalog-linked lift by FK, a free-text lift by normalized name. See
 ``docs/meso/one-rm-plan.md``.
 """
 
+import math
 from decimal import Decimal
 
 from . import models
@@ -118,10 +119,27 @@ def refresh_one_rms(athlete, prescriptions, unit):
         reps_by_key[key_str(p.exercise_id, p.name)] = (p.exercise_id, p.name)
     if not reps_by_key:
         return
+    # A manually-entered estimate (Phase 2) is the athlete's own number — logs
+    # never touch it (before, logs only ever *raised* the derived value). Skip
+    # those lifts entirely so neither the upsert nor the stale-clear below runs.
+    # Scoped to ``unit``: a manual row records one unit (the single row is
+    # last-unit-wins, cross-unit conversion deferred), so a manual kg value must
+    # not block a lb log from producing its own lb estimate — only a *same-unit*
+    # manual row is protected here.
+    manual_keys = set(
+        models.AthleteOneRm.objects.filter(
+            athlete=athlete,
+            key__in=reps_by_key,
+            unit=unit,
+            source=models.AthleteOneRm.Source.MANUAL,
+        ).values_list("key", flat=True)
+    )
     # Derive from same-unit logs only, so the stored value is unambiguously in
     # ``unit`` (the unit it's written with).
     derived = derive_one_rm_values(athlete, keys=set(reps_by_key), unit=unit)
     for key, (exercise_id, name) in reps_by_key.items():
+        if key in manual_keys:
+            continue
         value = derived.get(key)
         quantized = _quantize(value) if value is not None else None
         if quantized is None or not (Decimal("0") < quantized <= _MAX_VALUE):
@@ -142,6 +160,7 @@ def refresh_one_rms(athlete, prescriptions, unit):
                 "name": name,
                 "value": quantized,
                 "unit": unit,
+                "source": models.AthleteOneRm.Source.LOGGED,
             },
         )
 
@@ -167,3 +186,66 @@ def one_rm_values(athlete, prescriptions, unit):
         )
     }
     return {pk: rows[key] for pk, key in keys.items() if key in rows}
+
+
+# ---------------------------------------------------------------------------
+# Manual, server-persisted 1RM (Phase 2) — set/clear the athlete's own number.
+# ---------------------------------------------------------------------------
+
+
+def clean_manual_value(raw):
+    """Validate a posted manual 1RM → ``(Decimal | None, ok)``.
+
+    Blank/``None`` means *clear* it → ``(None, True)``. Otherwise the value must be
+    a positive, finite number that fits the ``value`` column → the quantized
+    ``Decimal``; anything else (non-numeric, non-finite, ≤ 0, or overflowing) is a
+    reject → ``(None, False)``. The two ``None`` cases are told apart by the ``ok``
+    flag. ``nan``/``inf`` (``json.loads`` accepts ``NaN``/``Infinity``) are caught
+    by the finiteness check before ``_quantize`` — which would otherwise raise on
+    a non-finite ``Decimal`` and turn a bad request into a 500.
+    """
+    if raw in (None, ""):
+        return None, True
+    num = _num(raw)
+    if num is None or not math.isfinite(num) or num <= 0:
+        return None, False
+    value = _quantize(num)
+    if not (Decimal("0") < value <= _MAX_VALUE):
+        return None, False
+    return value, True
+
+
+def set_manual_one_rm(athlete, prescription, value, unit):
+    """Persist (or clear) ``athlete``'s manually-entered 1RM for a lift.
+
+    ``value`` is a validated ``Decimal`` (from :func:`clean_manual_value`) in
+    ``unit`` — stored as a ``source=manual`` row that ``refresh_one_rms`` will
+    never overwrite — or ``None`` to *clear* it. Clearing reverts the lift to its
+    log-derived estimate: the manual row is removed and the value is re-derived
+    from history immediately, so the helper doesn't briefly vanish. Returns the
+    resulting stored row (the manual one, or the freshly re-derived logged one),
+    or ``None`` when neither exists.
+    """
+    key = key_str(prescription.exercise_id, prescription.name)
+    if value is None:
+        models.AthleteOneRm.objects.filter(
+            athlete=athlete, key=key, source=models.AthleteOneRm.Source.MANUAL
+        ).delete()
+        # Re-derive from logs so a cleared lift falls back to its logged estimate
+        # rather than showing nothing until the next log save.
+        refresh_one_rms(athlete, [prescription], unit)
+        return models.AthleteOneRm.objects.filter(
+            athlete=athlete, key=key, unit=unit
+        ).first()
+    row, _ = models.AthleteOneRm.objects.update_or_create(
+        athlete=athlete,
+        key=key,
+        defaults={
+            "exercise_id": prescription.exercise_id,
+            "name": prescription.name,
+            "value": value,
+            "unit": unit,
+            "source": models.AthleteOneRm.Source.MANUAL,
+        },
+    )
+    return row

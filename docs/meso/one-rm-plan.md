@@ -1,6 +1,6 @@
 # Meso — persisted estimated 1RM (S2 follow-up)
 
-**Status:** Phase 1 built · branch `meso-one-rm-phase1`
+**Status:** Phase 1 built · Phase 2 built (branch `meso-one-rm-phase2`)
 **Context:** the deferred follow-up flagged at the end of the **units & RPE/%1RM
 slice (S2)**. Phase 2b gave the athlete a client-side estimated-1RM helper so a
 "75%" target could be turned into a bar load — but the estimate lived only in the
@@ -103,13 +103,52 @@ most-recent logging unit; cross-unit *conversion* is deferred.
   and `one_rm` hydration.
 - `test_seed_demo.py`: the demo's %1RM Box Squat shows Maya's derived 1RM (84).
 
-## Deferred (Phase 2+)
+## Phase 2 — manual, server-persisted 1RM (the `source` field + endpoint)
 
-- **Manual entry persisted server-side** — the typed override is still per-device
-  localStorage. A `source` (`logged`/`manual`) field + an endpoint would sync a
-  typed value across devices and let it lower the estimate explicitly (today logs
-  only ever raise it). Held back to keep Phase 1's precedence rules simple.
-- **Coach-editable 1RM** (a coach setting an athlete's max directly).
+Phase 1 derived the 1RM from logs; the athlete's *typed* override still lived in
+per-device `localStorage` (keyed by prescription id) — lost on a device change,
+invisible to the coach, and able only ever to *raise* the suggestion (a logged
+set could not be told "no, my true max is lower"). Phase 2 promotes that typed
+value to a real row.
+
+- **Model.** `AthleteOneRm.source` (`logged`/`manual`, default `logged` —
+  data-safe; existing rows were all auto-derived). Migration
+  `0014_athleteonerm_source` (schema only, no data migration). A `manual` row is
+  the athlete's own number.
+- **Precedence.** `refresh_one_rms` (run on every log save) now **skips a `manual`
+  row** — neither the upsert nor the stale-clear touches it. So a manual value
+  survives later logs and can sit *below* the heaviest logged set (the thing
+  localStorage couldn't express server-side). A `logged` upsert stamps
+  `source=logged` explicitly.
+- **Set / clear.** `one_rm.set_manual_one_rm(athlete, prescription, value, unit)`
+  upserts the `source=manual` row (a `Decimal` from `clean_manual_value`) or, when
+  `value is None`, **clears** it: deletes the manual row and re-derives from logs
+  immediately (`refresh_one_rms`) so the lift falls back to its log-derived
+  estimate rather than briefly showing nothing. `clean_manual_value` is the
+  reusable validator (blank → clear; positive + column-bounded → quantized;
+  else reject).
+- **Endpoint.** `POST /meso/api/me/session/<pk>/one-rm/` with
+  `{prescription, value}` — scoped exactly like the log endpoint
+  (`_athlete_session_or_404`): the prescription must live in a delivered session
+  the athlete owns, else a flat 404/400, never a write to a foreign lift. Returns
+  the resulting `{one_rm, source}` so the client repaints.
+- **Surfaces.** The logger payload carries `one_rm_source` + a `one_rm_url`. In
+  `meso_athlete.js`: a `manual` value seeds the editable "your 1RM" input; a
+  `logged` value stays the placeholder + suggested-load default (input blank). The
+  input's `@input` is now a **debounced server POST** (`saveOneRm` → `_postOneRm`)
+  instead of a localStorage write — best-effort (an unreachable network keeps the
+  in-session value and retries on the next edit; a half-typed non-numeric value
+  isn't sent). The localStorage `meso-e1rm` store is **retired**.
+- **Admin.** `source` is in `list_display` + a `list_filter`, so manual vs logged
+  is visible at a glance.
+
+## Deferred (Phase 3+)
+
+- **Coach-editable 1RM** (a coach setting an athlete's max directly from the
+  designer — Phase 2 is athlete-set only; the `source` field already supports it).
+- **Offline persistence of a manual edit** — the manual POST is best-effort; an
+  offline edit persists only on the next online edit (the high-stakes set-logging
+  path keeps its full offline outbox). A small outbox would close this.
 - **Smarter derivation** — e.g. an average of recent tops, or unit conversion
   when an athlete trains plans in different units (today the value records its
   own unit but isn't converted across plans).

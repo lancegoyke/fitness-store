@@ -470,3 +470,24 @@ _(Append dated entries here as decisions land.)_
   [`one-rm-plan.md`](./one-rm-plan.md). **Deferred:** manual entry persisted server-side (a `source` field
   + endpoint — today logs only *raise* the estimate), coach-editable 1RM, smarter derivation / unit
   conversion..
+- 2026-06-28 — **S2 follow-up — Phase 2: manual, server-persisted 1RM built** (branch
+  `meso-one-rm-phase2`). Closes the first deferred item: the athlete's *typed* 1RM override (per-device
+  `localStorage` since Phase 2b — lost on a device change, invisible to the coach, and able only ever to
+  *raise* the suggestion) is now a real **`AthleteOneRm.source`** (`logged`/`manual`, default `logged`;
+  migration `0014_athleteonerm_source`, schema-only — existing rows were all auto-derived). A `manual` row
+  is the athlete's own number: **`refresh_one_rms` skips it** (logs never clobber a manual value, so it can
+  sit *below* the heaviest logged set — the thing localStorage couldn't express server-side); a `logged`
+  upsert stamps `source=logged`. `one_rm.set_manual_one_rm` upserts the manual row or, on a blank value,
+  **clears** it — deleting the manual row and re-deriving from logs immediately so the lift falls back to
+  its log-derived estimate (`clean_manual_value` is the reusable validator: blank → clear, positive +
+  column-bounded → quantized, else reject). New endpoint **`POST /meso/api/me/session/<pk>/one-rm/`**
+  (`{prescription, value}`) scoped exactly like the log endpoint (`_athlete_session_or_404` — a foreign /
+  undelivered / unknown session is a flat 404, an out-of-session prescription a 400), returning
+  `{one_rm, source}`. The logger payload carries `one_rm_source` + `one_rm_url`; `meso_athlete.js` seeds a
+  manual value into the editable input, keeps a logged value as the placeholder, and the input's `@input`
+  is now a **debounced best-effort server POST** (`saveOneRm`/`_postOneRm`) — the `meso-e1rm` localStorage
+  store is **retired**. Admin surfaces `source` (`list_display` + `list_filter`). Built red→green: **+28
+  pytest** (`test_one_rm.py`; 664 meso / 776 project-wide) + **+8 Vitest** (70 frontend, net), ruff +
+  prettier + `makemigrations --check` clean. Plan in [`one-rm-plan.md`](./one-rm-plan.md). **Deferred
+  (Phase 3+):** coach-editable 1RM (the `source` field already supports it), offline persistence of a
+  manual edit, smarter derivation / cross-unit conversion.

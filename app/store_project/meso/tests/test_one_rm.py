@@ -369,6 +369,14 @@ def post_log(client, session, payload):
     )
 
 
+def post_one_rm(client, session, payload):
+    return client.post(
+        reverse("meso:athlete_set_one_rm", kwargs={"pk": session.pk}),
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+
+
 class TestLogEndpointRefreshesOneRm:
     def test_done_log_writes_the_estimate(self, client):
         athlete = UserFactory()
@@ -615,3 +623,297 @@ class TestBackfillMigration:
         row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
         assert row.unit == Unit.POUNDS
         assert row.value == Decimal("300.00")
+
+
+# == Phase 2: manual, server-persisted 1RM (the `source` field + endpoint) ===
+#
+# Phase 1 derived the 1RM from logs; the athlete's *typed* override still lived
+# in per-device localStorage. Phase 2 promotes it to a real ``source=manual``
+# row: it syncs across devices, is visible to the coach, and survives later logs
+# (which only ever *raised* the derived estimate before).
+
+
+class TestManualSourceField:
+    def test_default_source_is_logged(self):
+        athlete = UserFactory()
+        row = AthleteOneRmFactory(athlete=athlete, name="Back Squat")
+        assert row.source == AthleteOneRm.Source.LOGGED
+
+    def test_source_can_be_manual(self):
+        athlete = UserFactory()
+        row = AthleteOneRmFactory(
+            athlete=athlete, name="Back Squat", source=AthleteOneRm.Source.MANUAL
+        )
+        row.refresh_from_db()
+        assert row.source == AthleteOneRm.Source.MANUAL
+
+
+class TestRefreshSkipsManual:
+    def test_refresh_does_not_clobber_a_manual_row(self):
+        # A heavier logged set would normally raise the derived estimate; a manual
+        # value is the athlete's own number and must be left untouched.
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete, prescriptions=[{"name": "Back Squat"}]
+        )
+        AthleteOneRmFactory(
+            athlete=athlete,
+            name="Back Squat",
+            value=Decimal("200"),
+            source=AthleteOneRm.Source.MANUAL,
+        )
+        log_session(athlete, session, [(squat, 1, "1", "150", "9")])
+        meso_one_rm.refresh_one_rms(athlete, [squat], Unit.KILOGRAMS)
+        row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
+        assert row.value == Decimal("200")
+        assert row.source == AthleteOneRm.Source.MANUAL
+
+    def test_refresh_does_not_clear_a_manual_row_without_logs(self):
+        # The stale-clear path (no usable logged set) must also spare a manual row.
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete, prescriptions=[{"name": "Back Squat"}]
+        )
+        AthleteOneRmFactory(
+            athlete=athlete,
+            name="Back Squat",
+            value=Decimal("180"),
+            source=AthleteOneRm.Source.MANUAL,
+        )
+        meso_one_rm.refresh_one_rms(athlete, [squat], Unit.KILOGRAMS)
+        assert AthleteOneRm.objects.filter(
+            athlete=athlete, source=AthleteOneRm.Source.MANUAL
+        ).exists()
+
+    def test_manual_in_one_unit_does_not_block_a_logged_estimate_in_another(self):
+        # A manual kg row must not suppress the lb estimate when the athlete trains
+        # + logs the same lift in a lb plan. The skip is same-unit only (the single
+        # row is last-unit-wins; reads are unit-scoped, so the kg row can't surface
+        # on a lb plan anyway).
+        athlete = UserFactory()
+        _, lb_session, (lb_squat,) = make_session(
+            athlete, unit=Unit.POUNDS, prescriptions=[{"name": "Back Squat"}]
+        )
+        AthleteOneRmFactory(
+            athlete=athlete,
+            name="Back Squat",
+            value=Decimal("150"),
+            unit=Unit.KILOGRAMS,
+            source=AthleteOneRm.Source.MANUAL,
+        )
+        log_session(athlete, lb_session, [(lb_squat, 1, "1", "300", "9")])
+        meso_one_rm.refresh_one_rms(athlete, [lb_squat], Unit.POUNDS)
+        values = meso_one_rm.one_rm_values(athlete, [lb_squat], Unit.POUNDS)
+        assert values[lb_squat.pk].value == Decimal("300.00")
+
+
+class TestCleanManualValue:
+    @pytest.mark.parametrize("raw", [None, ""])
+    def test_blank_means_clear(self, raw):
+        value, ok = meso_one_rm.clean_manual_value(raw)
+        assert ok is True
+        assert value is None
+
+    def test_a_number_is_quantized(self):
+        value, ok = meso_one_rm.clean_manual_value("140")
+        assert ok is True
+        assert value == Decimal("140.00")
+
+    @pytest.mark.parametrize(
+        "raw", ["0", "-5", "abc", "heavy", "1e9", "nan", "inf", "-inf"]
+    )
+    def test_a_non_positive_non_numeric_or_non_finite_value_is_rejected(self, raw):
+        # "nan"/"inf" parse to a float but must be rejected before _quantize,
+        # which would raise on a non-finite Decimal (a 500, not the intended 400).
+        value, ok = meso_one_rm.clean_manual_value(raw)
+        assert ok is False
+        assert value is None
+
+    def test_an_overflowing_value_is_rejected(self):
+        value, ok = meso_one_rm.clean_manual_value("1000000")
+        assert ok is False
+        assert value is None
+
+
+class TestSetManualOneRm:
+    def test_creates_a_manual_row(self):
+        athlete = UserFactory()
+        _, _, (squat,) = make_session(athlete, prescriptions=[{"name": "Back Squat"}])
+        row = meso_one_rm.set_manual_one_rm(
+            athlete, squat, Decimal("160"), Unit.KILOGRAMS
+        )
+        assert row.value == Decimal("160")
+        assert row.source == AthleteOneRm.Source.MANUAL
+        assert row.unit == Unit.KILOGRAMS
+        assert row.key == "name:back squat"
+
+    def test_overrides_an_existing_logged_row(self):
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete, prescriptions=[{"name": "Back Squat"}]
+        )
+        log_session(athlete, session, [(squat, 1, "1", "150", "9")])
+        meso_one_rm.refresh_one_rms(athlete, [squat], Unit.KILOGRAMS)
+        meso_one_rm.set_manual_one_rm(athlete, squat, Decimal("200"), Unit.KILOGRAMS)
+        rows = AthleteOneRm.objects.filter(athlete=athlete, key="name:back squat")
+        assert rows.count() == 1
+        row = rows.get()
+        assert row.value == Decimal("200")
+        assert row.source == AthleteOneRm.Source.MANUAL
+
+    def test_clearing_reverts_to_the_log_derived_value(self):
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete, prescriptions=[{"name": "Back Squat"}]
+        )
+        log_session(athlete, session, [(squat, 1, "1", "150", "9")])
+        meso_one_rm.set_manual_one_rm(athlete, squat, Decimal("200"), Unit.KILOGRAMS)
+        row = meso_one_rm.set_manual_one_rm(athlete, squat, None, Unit.KILOGRAMS)
+        assert row is not None
+        assert row.value == Decimal("150.00")
+        assert row.source == AthleteOneRm.Source.LOGGED
+
+    def test_clearing_with_no_logs_leaves_nothing(self):
+        athlete = UserFactory()
+        _, _, (squat,) = make_session(athlete, prescriptions=[{"name": "Back Squat"}])
+        meso_one_rm.set_manual_one_rm(athlete, squat, Decimal("200"), Unit.KILOGRAMS)
+        row = meso_one_rm.set_manual_one_rm(athlete, squat, None, Unit.KILOGRAMS)
+        assert row is None
+        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+
+
+class TestSetOneRmEndpoint:
+    def test_sets_a_manual_estimate(self, client):
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete,
+            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+        )
+        client.force_login(athlete)
+        resp = post_one_rm(client, session, {"prescription": squat.pk, "value": "160"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["one_rm"] == "160"
+        assert body["source"] == "manual"
+        row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
+        assert row.value == Decimal("160.00")
+        assert row.source == AthleteOneRm.Source.MANUAL
+
+    def test_clears_a_manual_estimate(self, client):
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete,
+            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+        )
+        client.force_login(athlete)
+        post_one_rm(client, session, {"prescription": squat.pk, "value": "160"})
+        resp = post_one_rm(client, session, {"prescription": squat.pk, "value": ""})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["one_rm"] == ""
+        assert body["source"] == ""
+        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+
+    def test_manual_value_survives_a_later_log(self, client):
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete,
+            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+        )
+        client.force_login(athlete)
+        post_one_rm(client, session, {"prescription": squat.pk, "value": "200"})
+        post_log(
+            client,
+            session,
+            {
+                "status": "done",
+                "sets": [
+                    {
+                        "prescription": squat.pk,
+                        "set_number": 1,
+                        "reps": "1",
+                        "load": "150",
+                        "rpe": "9",
+                    }
+                ],
+            },
+        )
+        row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
+        assert row.value == Decimal("200.00")
+        assert row.source == AthleteOneRm.Source.MANUAL
+
+    @pytest.mark.parametrize("value", ["abc", "0", "-10", "nan"])
+    def test_rejects_a_bad_value(self, client, value):
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete, prescriptions=[{"name": "Back Squat"}]
+        )
+        client.force_login(athlete)
+        resp = post_one_rm(client, session, {"prescription": squat.pk, "value": value})
+        assert resp.status_code == 400
+        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+
+    def test_unknown_prescription_is_400(self, client):
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete, prescriptions=[{"name": "Back Squat"}]
+        )
+        # A prescription that exists but in another session is not this session's.
+        _, _, (other,) = make_session(athlete, prescriptions=[{"name": "Bench"}])
+        client.force_login(athlete)
+        resp = post_one_rm(client, session, {"prescription": other.pk, "value": "100"})
+        assert resp.status_code == 400
+        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+
+    def test_foreign_session_is_404(self, client):
+        owner = UserFactory()
+        _, session, (squat,) = make_session(
+            owner, prescriptions=[{"name": "Back Squat"}]
+        )
+        intruder = UserFactory()
+        client.force_login(intruder)
+        resp = post_one_rm(client, session, {"prescription": squat.pk, "value": "100"})
+        assert resp.status_code == 404
+        assert not AthleteOneRm.objects.filter(athlete=intruder).exists()
+
+    def test_login_required(self, client):
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete, prescriptions=[{"name": "Back Squat"}]
+        )
+        resp = post_one_rm(client, session, {"prescription": squat.pk, "value": "100"})
+        assert resp.status_code in (301, 302)
+        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+
+
+class TestPresenterCarriesSource:
+    def test_athlete_session_carries_one_rm_source(self):
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete,
+            prescriptions=[
+                {"name": "Back Squat", "load": "75", "load_type": LoadType.PERCENT}
+            ],
+        )
+        AthleteOneRmFactory(
+            athlete=athlete,
+            name="Back Squat",
+            value=Decimal("140"),
+            source=AthleteOneRm.Source.MANUAL,
+        )
+        ctx = presenters.athlete_session(session, athlete)
+        assert ctx["exercises"][0]["one_rm_source"] == "manual"
+        payload = presenters.athlete_log_payload(ctx)
+        assert payload["exercises"][0]["one_rm_source"] == "manual"
+        assert payload["one_rm_url"] == reverse(
+            "meso:athlete_set_one_rm", kwargs={"pk": session.pk}
+        )
+
+    def test_no_row_yields_empty_source(self):
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete,
+            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+        )
+        ctx = presenters.athlete_session(session, athlete)
+        assert ctx["exercises"][0]["one_rm_source"] == ""

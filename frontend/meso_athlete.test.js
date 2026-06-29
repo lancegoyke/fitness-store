@@ -14,6 +14,7 @@ import {
 } from "../app/store_project/static/js/meso_athlete.js";
 
 const LOG_URL = "/meso/api/me/session/42/log/";
+const ONE_RM_URL = "/meso/api/me/session/42/one-rm/";
 
 // A minimal logger with two exercises (one prescription each, two sets each).
 function makeLogger(overrides = {}) {
@@ -59,7 +60,9 @@ describe("rowFilled", () => {
     expect(c.rowFilled({ done: false, rpe: "8" })).toBe(true);
   });
   it("is false for an empty, unchecked row", () => {
-    expect(c.rowFilled({ done: false, reps: "", load: "", rpe: "" })).toBe(false);
+    expect(c.rowFilled({ done: false, reps: "", load: "", rpe: "" })).toBe(
+      false,
+    );
   });
 });
 
@@ -171,7 +174,9 @@ describe("save", () => {
     c.exercises[0].set_rows[0].done = true;
     global.fetch = vi.fn().mockResolvedValue(
       res({
-        body: { log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] } },
+        body: {
+          log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] },
+        },
       }),
     );
     await c.save(true);
@@ -197,7 +202,11 @@ describe("flushQueue", () => {
     c.enqueue({ status: "done", sets: [{ prescription: 1, set_number: 1 }] });
     c.queued = true;
     global.fetch = vi.fn().mockResolvedValue(
-      res({ body: { log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] } } }),
+      res({
+        body: {
+          log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] },
+        },
+      }),
     );
     await c.flushQueue();
     expect(c.readQueue()).toHaveLength(0);
@@ -324,13 +333,23 @@ describe("server-derived 1RM (effectiveOneRm / usingDerivedOneRm)", () => {
   });
 
   it("lets a typed estimate override the derived value", () => {
-    const c = logger({ load: "75", load_type: "pct", one_rm: "120", e1rm: "200" });
+    const c = logger({
+      load: "75",
+      load_type: "pct",
+      one_rm: "120",
+      e1rm: "200",
+    });
     expect(c.effectiveOneRm(c.exercises[0])).toBe("200");
     expect(c.suggestedLoad(c.exercises[0])).toBe("150 kg"); // 75% of 200
   });
 
   it("falls back to derived when the typed value is non-numeric", () => {
-    const c = logger({ load: "75", load_type: "pct", one_rm: "120", e1rm: "abc" });
+    const c = logger({
+      load: "75",
+      load_type: "pct",
+      one_rm: "120",
+      e1rm: "abc",
+    });
     expect(c.effectiveOneRm(c.exercises[0])).toBe("120");
   });
 
@@ -344,59 +363,260 @@ describe("server-derived 1RM (effectiveOneRm / usingDerivedOneRm)", () => {
     expect(c.usingDerivedOneRm(c.exercises[0])).toBe(false);
   });
 
-  it("hydrates one_rm from the payload alongside a typed override", () => {
+  it("hydrates a log-derived 1RM as the placeholder, input blank", () => {
     document.body.innerHTML =
       '<span id="meso-csrf" data-token="tok"></span>' +
       '<script id="meso-log-data" type="application/json">' +
       JSON.stringify({
         log_url: LOG_URL,
+        one_rm_url: ONE_RM_URL,
         status: "pending",
         unit: "kg",
-        exercises: [{ id: 7, load: "75", load_type: "pct", one_rm: "142.5", set_rows: [] }],
+        exercises: [
+          {
+            id: 7,
+            load: "75",
+            load_type: "pct",
+            one_rm: "142.5",
+            one_rm_source: "logged",
+            set_rows: [],
+          },
+        ],
       }) +
       "</script>";
-    localStorage.setItem("meso-e1rm", JSON.stringify({ 7: "150" }));
     const c = createLogger();
     c.init();
-    expect(c.exercises[0].one_rm).toBe("142.5");
-    expect(c.exercises[0].e1rm).toBe("150");
+    expect(c.exercises[0].one_rm).toBe("142.5"); // the suggested-load default
+    expect(c.exercises[0].e1rm).toBe(""); // input empty, derived value is a placeholder
+    expect(c.effectiveOneRm(c.exercises[0])).toBe("142.5");
+  });
+
+  it("hydrates a manual 1RM into the editable input", () => {
+    document.body.innerHTML =
+      '<span id="meso-csrf" data-token="tok"></span>' +
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        one_rm_url: ONE_RM_URL,
+        status: "pending",
+        unit: "kg",
+        exercises: [
+          {
+            id: 7,
+            load: "75",
+            load_type: "pct",
+            one_rm: "150",
+            one_rm_source: "manual",
+            set_rows: [],
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    expect(c.exercises[0].e1rm).toBe("150"); // the athlete's own number
+    expect(c.exercises[0].one_rm).toBe(""); // no separate derived value to show
     expect(c.effectiveOneRm(c.exercises[0])).toBe("150");
   });
 });
 
-describe("estimated-1RM persistence", () => {
-  it("round-trips per-exercise 1RM estimates through localStorage", () => {
+describe("manual 1RM persistence (server-side, Phase 2)", () => {
+  function logger(ex) {
     const c = createLogger();
-    c.exercises = [{ id: 7, e1rm: "" }];
+    c.unit = "kg";
+    c.csrf = "tok";
+    c.oneRmUrl = ONE_RM_URL;
+    c.exercises = [ex];
+    return c;
+  }
+
+  it("POSTs the typed value to the one-rm endpoint", async () => {
+    const c = logger({ id: 7, e1rm: "140", one_rm: "" });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { one_rm: "140", source: "manual" } }));
+    await c._postOneRm(c.exercises[0]);
+    expect(global.fetch).toHaveBeenCalledWith(
+      ONE_RM_URL,
+      expect.objectContaining({ method: "POST" }),
+    );
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body).toEqual({ prescription: 7, value: "140" });
+  });
+
+  it("keeps a saved manual value in the input", async () => {
+    const c = logger({ id: 7, e1rm: "140", one_rm: "120" });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { one_rm: "140", source: "manual" } }));
+    await c._postOneRm(c.exercises[0]);
+    expect(c.exercises[0].e1rm).toBe("140");
+    expect(c.exercises[0].one_rm).toBe(""); // no separate derived value while manual
+  });
+
+  it("reflects the server's normalized manual value in the input", async () => {
+    const c = logger({ id: 7, e1rm: "140.999", one_rm: "" });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { one_rm: "141", source: "manual" } }));
+    await c._postOneRm(c.exercises[0]);
+    expect(c.exercises[0].e1rm).toBe("141"); // server quantized 140.999 -> 141
+  });
+
+  it("reverts to the log-derived estimate when cleared", async () => {
+    const c = logger({ id: 7, e1rm: "", one_rm: "" });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { one_rm: "120", source: "logged" } }));
+    await c._postOneRm(c.exercises[0]);
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.value).toBe(""); // a blank value clears it
+    expect(c.exercises[0].e1rm).toBe("");
+    expect(c.exercises[0].one_rm).toBe("120"); // the server's re-derived value
+  });
+
+  it("does not POST a half-typed non-numeric value", async () => {
+    const c = logger({ id: 7, e1rm: "ab", one_rm: "" });
+    global.fetch = vi.fn();
+    await c._postOneRm(c.exercises[0]);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the typed value in-session when the network is unreachable", async () => {
+    const c = logger({ id: 7, e1rm: "140", one_rm: "" });
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c._postOneRm(c.exercises[0]);
+    expect(c.exercises[0].e1rm).toBe("140"); // not wiped — retries on next edit
+  });
+
+  it("does not reconcile on an HTTP error", async () => {
+    const c = logger({ id: 7, e1rm: "140", one_rm: "120" });
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400 }));
+    await c._postOneRm(c.exercises[0]);
+    expect(c.exercises[0].e1rm).toBe("140");
+    expect(c.exercises[0].one_rm).toBe("120");
+  });
+
+  it("debounces rapid edits into a single POST", async () => {
+    vi.useFakeTimers();
+    const c = logger({ id: 7, e1rm: "1", one_rm: "" });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { one_rm: "140", source: "manual" } }));
+    c.saveOneRm(c.exercises[0]);
+    c.exercises[0].e1rm = "14";
+    c.saveOneRm(c.exercises[0]);
     c.exercises[0].e1rm = "140";
-    c.persistE1rm(c.exercises[0]);
-    expect(c.readE1rms()).toEqual({ 7: "140" });
+    c.saveOneRm(c.exercises[0]);
+    expect(global.fetch).not.toHaveBeenCalled(); // still within the debounce window
+    await vi.runAllTimersAsync();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.value).toBe("140"); // the latest edit wins
   });
 
-  it("drops an estimate cleared back to blank", () => {
-    const c = createLogger();
-    c.exercises = [{ id: 7, e1rm: "140" }];
-    c.persistE1rm(c.exercises[0]);
-    c.exercises[0].e1rm = "";
-    c.persistE1rm(c.exercises[0]);
-    expect(c.readE1rms()).toEqual({});
+  it("drops a stale response that a newer edit superseded", async () => {
+    const c = logger({ id: 7, e1rm: "", one_rm: "120" });
+    // Response A (a lagging clear) then B (the newer manual value).
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ body: { one_rm: "120", source: "logged" } }))
+      .mockResolvedValueOnce(
+        res({ body: { one_rm: "140", source: "manual" } }),
+      );
+    const pA = c._postOneRm(c.exercises[0]); // sends the clear (value "")
+    c.exercises[0].e1rm = "140"; // athlete types again before A lands
+    const pB = c._postOneRm(c.exercises[0]); // sends "140" — supersedes A
+    await Promise.all([pA, pB]);
+    // A's stale clear must not wipe the value B set.
+    expect(c.exercises[0].e1rm).toBe("140");
+    expect(c.exercises[0].one_rm).toBe(""); // B's manual reconcile applied
   });
 
-  it("hydrates each exercise's 1RM from storage on init", () => {
+  it("does not let an in-flight clear wipe a value typed during the debounce", async () => {
+    // The clear's POST is already sent, but the athlete types a new value before
+    // its response lands and before the *next* debounced save fires. The lagging
+    // clear must not wipe the in-progress value — the field no longer matches what
+    // the clear sent.
+    const c = logger({ id: 7, e1rm: "", one_rm: "120" });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { one_rm: "120", source: "logged" } }));
+    const pClear = c._postOneRm(c.exercises[0]); // sends value ""
+    c.exercises[0].e1rm = "140"; // typed during the clear's flight
+    await pClear;
+    expect(c.exercises[0].e1rm).toBe("140"); // not wiped by the stale clear
+  });
+});
+
+describe("pre-Phase-2 override migration", () => {
+  it("promotes a legacy meso-e1rm value to the server, then drops the store", () => {
     document.body.innerHTML =
       '<span id="meso-csrf" data-token="tok"></span>' +
       '<script id="meso-log-data" type="application/json">' +
       JSON.stringify({
         log_url: LOG_URL,
+        one_rm_url: ONE_RM_URL,
         status: "pending",
         unit: "kg",
-        exercises: [{ id: 7, load: "75", load_type: "pct", set_rows: [] }],
+        exercises: [
+          {
+            id: 7,
+            load: "75",
+            load_type: "pct",
+            one_rm: "",
+            one_rm_source: "",
+            set_rows: [],
+          },
+        ],
       }) +
       "</script>";
-    localStorage.setItem("meso-e1rm", JSON.stringify({ 7: "140" }));
+    localStorage.setItem("meso-e1rm", JSON.stringify({ 7: "150" }));
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { one_rm: "150", source: "manual" } }));
     const c = createLogger();
     c.init();
-    expect(c.unit).toBe("kg");
-    expect(c.exercises[0].e1rm).toBe("140");
+    // Seeded into the editable input...
+    expect(c.exercises[0].e1rm).toBe("150");
+    // ...and posted to the server (fire-and-forget within init)...
+    expect(global.fetch).toHaveBeenCalledWith(
+      ONE_RM_URL,
+      expect.objectContaining({ method: "POST" }),
+    );
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body).toEqual({ prescription: 7, value: "150" });
+    // ...with the legacy store dropped so it can't resurrect over a later clear.
+    expect(localStorage.getItem("meso-e1rm")).toBe(null);
+  });
+
+  it("does not override an existing server-side manual value", () => {
+    document.body.innerHTML =
+      '<span id="meso-csrf" data-token="tok"></span>' +
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        one_rm_url: ONE_RM_URL,
+        status: "pending",
+        unit: "kg",
+        exercises: [
+          {
+            id: 7,
+            load: "75",
+            load_type: "pct",
+            one_rm: "200",
+            one_rm_source: "manual",
+            set_rows: [],
+          },
+        ],
+      }) +
+      "</script>";
+    localStorage.setItem("meso-e1rm", JSON.stringify({ 7: "150" }));
+    global.fetch = vi.fn();
+    const c = createLogger();
+    c.init();
+    expect(c.exercises[0].e1rm).toBe("200"); // server value kept, legacy ignored
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(localStorage.getItem("meso-e1rm")).toBe(null); // still cleared
   });
 });

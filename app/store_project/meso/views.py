@@ -554,6 +554,58 @@ def athlete_log_session(request, pk):
     return JsonResponse({"ok": True, "log": serialize_session_log(log)})
 
 
+@login_required
+@require_POST
+def athlete_set_one_rm(request, pk):
+    """Set or clear the athlete's *manual* 1RM for a lift in a session they own.
+
+    The estimated 1RM was per-device localStorage (Phase 2b); this persists the
+    athlete's typed value server-side as a ``source=manual`` ``AthleteOneRm`` so
+    it syncs across devices and is visible to the coach. The body is
+    ``{"prescription": <id>, "value": "140"}`` — a blank/absent ``value`` *clears*
+    it back to the log-derived estimate. Scoped exactly like the log endpoint
+    (``_athlete_session_or_404``): the prescription must live in a delivered
+    session the athlete owns, else a flat 404/400 — never a write to a foreign
+    lift. A manual value overrides the log-derived estimate and survives later
+    logs.
+    """
+    session = _athlete_session_or_404(request.user, pk)
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+
+    presc_id = payload.get("prescription")
+    prescriptions = {p.pk: p for p in session.prescriptions.all()}
+    # ``bool`` is an ``int`` subclass — reject it explicitly so ``true`` isn't an id.
+    if (
+        not isinstance(presc_id, int)
+        or isinstance(presc_id, bool)
+        or presc_id not in prescriptions
+    ):
+        return HttpResponseBadRequest("prescription must be one of this session's.")
+
+    value, ok = meso_one_rm.clean_manual_value(payload.get("value"))
+    if not ok:
+        return HttpResponseBadRequest("value must be a positive number or blank.")
+
+    row = meso_one_rm.set_manual_one_rm(
+        request.user,
+        prescriptions[presc_id],
+        value,
+        session.week.mesocycle.plan.unit,
+    )
+    return JsonResponse(
+        {
+            "ok": True,
+            "one_rm": presenters._one_rm_label(row),
+            "source": row.source if row is not None else "",
+        }
+    )
+
+
 def _clean_logged_sets(raw_sets, session):
     """Validate the posted ``sets`` against this session, or return a 400.
 
