@@ -22,6 +22,7 @@ a one-time product keeps the same customer.
 import stripe
 from django.conf import settings
 
+from store_project.meso.models import CoachSubscription
 from store_project.payments.utils import stripe_customer_get_or_create
 
 from . import access
@@ -76,6 +77,11 @@ def sync_seat_quantity(coach):
     """
     sub = getattr(coach, "coach_subscription", None)
     if not sub or not sub.stripe_subscription_id or not sub.stripe_item_id:
+        return False
+    # A canceled mirror keeps its Stripe ids for history, but the subscription is
+    # dead — modifying it would just error. Only touch a *current* subscription
+    # (active / past_due).
+    if sub.status not in CoachSubscription.LIVE_STRIPE_STATUSES:
         return False
     quantity = _seat_quantity(coach)
     if quantity == sub.quantity:

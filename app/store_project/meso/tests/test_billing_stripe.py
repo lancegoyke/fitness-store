@@ -167,6 +167,25 @@ class TestSeatSync:
         assert changed is False
         modify.assert_not_called()
 
+    def test_noop_for_a_canceled_subscription(self):
+        """A canceled mirror keeps its (dead) Stripe ids — never modify it."""
+        coach, _ = _paid_coach(quantity=1, status=CoachSubscription.Status.CANCELED)
+        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)
+        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)
+        with mock.patch(GATEWAY_SUB_MODIFY) as modify:
+            changed = stripe_gateway.sync_seat_quantity(coach)
+        assert changed is False
+        modify.assert_not_called()
+
+    def test_syncs_a_past_due_subscription(self):
+        coach, sub = _paid_coach(quantity=1, status=CoachSubscription.Status.PAST_DUE)
+        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)
+        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)
+        with mock.patch(GATEWAY_SUB_MODIFY) as modify:
+            changed = stripe_gateway.sync_seat_quantity(coach)
+        assert changed is True
+        modify.assert_called_once()
+
     def test_quantity_floors_at_one(self):
         """A paid coach who drops to zero active athletes still bills one seat."""
         coach, sub = _paid_coach(quantity=2)  # cached 2, now 0 active links
@@ -331,6 +350,24 @@ class TestWebhookHandler:
         sub = CoachSubscription.objects.get(coach=coach)
         assert sub.stripe_subscription_id == "sub_new"
         assert sub.stripe_item_id == "si_new"
+
+    def test_stale_live_update_does_not_replace_a_past_due_current_sub(self):
+        """A retried active event for an old id can't override the current past_due sub."""
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.PAST_DUE,
+            stripe_subscription_id="sub_current",
+            stripe_item_id="si_current",
+        )
+        billing_webhooks.handle_event(
+            _sub_event(
+                "customer.subscription.updated", sub_id="sub_old", status="active"
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.PAST_DUE
+        assert sub.stripe_subscription_id == "sub_current"
 
     def test_invoice_paid_does_not_resurrect_a_canceled_subscription(self):
         coach = _coach_with_customer()

@@ -126,23 +126,28 @@ def _sync_from_subscription(sub_obj, *, deleted):
     # The mirror is keyed by coach (1:1), so an out-of-order / retried event for a
     # *different* subscription than the one we track must not clobber the current
     # one. A different subscription id only takes over when the existing row is
-    # **not already live** (e.g. the coach canceled, then re-subscribed) *and* the
-    # incoming event is itself live — so neither a stale event for an old id (any
-    # status) nor a dead incoming event can replace a live current subscription.
+    # **not already a current Stripe subscription** (e.g. the coach canceled, then
+    # re-subscribed) *and* the incoming event is itself live — so neither a stale
+    # event for an old id (any status, including a retried ``active``) nor a dead
+    # incoming event can replace the current subscription. ``past_due`` counts as
+    # current here: it's the real subscription with a failed payment, not replaced.
     existing = getattr(coach, "coach_subscription", None)
     incoming_live = status in CoachSubscription.ACTIVE_STATUSES
+    existing_current = (
+        existing and existing.status in CoachSubscription.LIVE_STRIPE_STATUSES
+    )
     if (
         existing
         and existing.stripe_subscription_id
         and existing.stripe_subscription_id != incoming_id
-        and (existing.is_active or not incoming_live)
+        and (existing_current or not incoming_live)
     ):
         logger.info(
             "Billing webhook: ignoring event for subscription %s "
-            "(coach tracks %s, live=%s)",
+            "(coach tracks %s, status=%s)",
             incoming_id,
             existing.stripe_subscription_id,
-            existing.is_active,
+            existing.status,
         )
         return
     items = (sub_obj.get("items") or {}).get("data") or [{}]
