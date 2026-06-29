@@ -705,3 +705,26 @@ _(Append dated entries here as decisions land.)_
   signup), so the closed-beta allowlist was **not** built (it would contradict shipped behavior).
   Built red→green: **+23 pytest** (`test_demo.py`); ruff + `makemigrations --check` clean.
   Resume point → first-time-UX **Phase 3** (anon `/meso/` landing + main-site link).
+- 2026-06-29 — **First-time UX — Phase 3 built** (branch `meso-first-time-ux-phase3`,
+  PR #329, **no migration**): **the front door** (anonymous visitor +
+  discoverability). `/meso/` was login-gated (`RosterView(LoginRequiredMixin)`), so a
+  cold visitor met a bare login wall and Meso was linked from **nowhere** on the main
+  site. `RosterView` now **splits on auth**: an anonymous visitor renders the new
+  login-free `meso/landing.html` (what Meso is + two honest entry actions — *log in as
+  an athlete*, carrying `?next=` back to `/meso/me/`, and *become a coach* via the
+  #323 funnel) instead of bouncing to `/accounts/login/`; an authenticated visitor
+  keeps the post-#311 role routing (coach → roster, anyone else → `/meso/me/`)
+  untouched (the authenticated branches read `request.user` only after the anonymous
+  one returns). A discreet **"Coaching"** link in the main-site nav (`_nav.html`)
+  makes Meso discoverable without already knowing the URL. **Q1's closed-beta
+  "Request coach access" was not built** — obsoleted by #323's open self-serve signup
+  (same reconciliation as Phase 2); the coach entry action is the plain *become a
+  coach* path, and the **become-a-coach-from-athlete-home** item already shipped in
+  #323 (`athlete_home.html`'s "Are you a coach?" card), so Phase 3 narrowed to the
+  anon landing + the main-site link. Built red→green: **+11 pytest**
+  (`test_landing.py`) + the stale `test_roster_requires_login` repurposed to
+  `test_anonymous_sees_landing_not_login`; full project suite green, ruff + format +
+  `makemigrations --check` clean. **Codex review loop CLEAN on iteration 1.** Resume
+  point → first-time-UX **Phase 4** (athlete install/first-log polish) **or Phase 5**
+  (designer/agent self-explanation). Plan in
+  [`first-time-ux-plan.md`](./first-time-ux-plan.md).

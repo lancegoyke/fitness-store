@@ -33,10 +33,12 @@ class TestRosterScoping:
         assert "Devon Reyes" not in body  # pending, not on roster
         assert "Priya Nair" not in body  # another coach's athlete
 
-    def test_roster_requires_login(self, client):
+    def test_anonymous_sees_landing_not_login(self, client):
+        # First-time-UX Phase 3: ``/meso/`` no longer bounces an anonymous
+        # visitor to login — it renders the public landing (front door).
         resp = client.get(reverse("meso:roster"))
-        assert resp.status_code == 302
-        assert "/accounts/login/" in resp.url
+        assert resp.status_code == 200
+        assert reverse("meso:become_coach").encode() in resp.content
 
 
 class TestProfileScoping:

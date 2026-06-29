@@ -1,8 +1,9 @@
 # Meso — first-time UX / onboarding slice plan
 
 **Status:** 🟢 Building · Q1–Q4 resolved 2026-06-29 · **Phase 1 (individual plan
-creation) + Phase 2 (coach first-run: one-click demo + empty-state teaching)
-done** · Phases 3–5 remain
+creation) + Phase 2 (coach first-run: one-click demo + empty-state teaching) +
+Phase 3 (the front door: anon landing + main-site link) done** · Phases 4–5
+remain
 **Companion to:** [`decisions.md`](./decisions.md) (B1 multi-coach, B2 athlete
 login, N3 roles, N4 invites) · [`invites-plan.md`](./invites-plan.md) ·
 [`athlete-plan.md`](./athlete-plan.md) · [`groups-plan.md`](./groups-plan.md)
@@ -242,7 +243,7 @@ either start for real or one-click a demo, then clear it.
 > `POST /meso/demo/load/` + `/meso/demo/clear/`; the meso base template now renders
 > flashed messages (previously swallowed). +23 tests (`test_demo.py`).
 
-### Phase 3 — The front door (anonymous visitor + routing)
+### Phase 3 — The front door (anonymous visitor + routing) ✅ Built
 A real logged-out `/meso/` landing (what Meso is · two entry actions — **"I have
 an invite"** and **"Request coach access"**, per Q4/Q1), a single discreet **link
 from the main site** so it's discoverable at all, and a **"become a coach / request
@@ -254,6 +255,23 @@ coach role itself (Q1 beta access).
 *Done when:* someone who's never heard of Meso lands on `/meso/`, understands it in
 one screen, and is routed to the right surface (athlete home, or a path to coach
 access).
+
+> **What shipped (PR #329, no migration).** `RosterView` dropped
+> `LoginRequiredMixin` and now **splits `/meso/` on auth**: an anonymous visitor
+> renders the new login-free `meso/landing.html` (what Meso is + two honest entry
+> actions — *log in as an athlete* with `?next=` back to the training home, and
+> *become a coach* via the existing #323 funnel) instead of bouncing to
+> `/accounts/login/`; an authenticated visitor keeps the post-#311 role routing
+> (coach → roster, anyone else → `/meso/me/`) untouched. A discreet **"Coaching"**
+> link in the main-site nav (`_nav.html`) makes Meso discoverable without already
+> knowing the URL. **Q1's closed-beta "Request coach access"** was **not** built —
+> obsoleted by #323's open self-serve signup (same reconciliation as Phase 2), so
+> the coach entry action is the plain *become a coach* path; and the
+> **become-a-coach-from-athlete-home** item already shipped in #323
+> (`athlete_home.html`'s "Are you a coach?" card), so Phase 3 narrowed to the anon
+> landing + the main-site link. +11 pytest (`test_landing.py`); the stale
+> `test_roster_requires_login` became `test_anonymous_sees_landing_not_login`.
+> Codex review CLEAN on iteration 1.
 
 ### Phase 4 — Athlete first-run polish (athlete)
 An **install (PWA) prompt** and a one-time **first-log coachmark** on `/meso/me/`
