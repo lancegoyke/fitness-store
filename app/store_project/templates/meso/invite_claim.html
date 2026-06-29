@@ -1,0 +1,52 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Coach invite · Meso{% endblock %}
+
+{# The claim URL carries the bearer token — don't leak it to font/CDN hosts. #}
+{% block head_extra %}<meta name="referrer" content="no-referrer" />{% endblock %}
+
+{# A brand-new athlete may have no coach/athlete role yet — strip the coach nav. #}
+{% block navlinks %}{% endblock %}
+{% block topnav_actions %}{% endblock %}
+{% block topnav_avatar %}{% endblock %}
+
+{% block content %}
+  <div class="meso-page" style="max-width:520px;">
+    <div class="meso-card meso-card--pad" style="margin-top:32px;">
+      {% if invite.status == 'pending' %}
+        {% if is_self %}
+          <p class="meso-eyebrow">Coach invite</p>
+          <h1 class="meso-h1">This is your own invite</h1>
+          <p class="meso-sub">
+            You can't accept an invite you sent. Send it to your athlete's email
+            instead.
+          </p>
+        {% else %}
+          <p class="meso-eyebrow">Coach invite</p>
+          <h1 class="meso-h1">{{ coach_name }} invited you to train</h1>
+          <p class="meso-sub">
+            Accept to start training with {{ coach_name }} — they'll build your
+            program and you'll log your training here.
+          </p>
+          <div style="display:flex;gap:10px;margin-top:18px;">
+            <form method="post" action="{% url 'meso:invite_claim' token=invite.token %}">
+              {% csrf_token %}
+              <button type="submit" name="action" value="accept" class="meso-btn meso-btn--primary">Accept invite</button>
+            </form>
+            <form method="post" action="{% url 'meso:invite_claim' token=invite.token %}">
+              {% csrf_token %}
+              <button type="submit" name="action" value="decline" class="meso-btn meso-btn--ghost">Decline</button>
+            </form>
+          </div>
+        {% endif %}
+      {% else %}
+        <p class="meso-eyebrow">Coach invite</p>
+        <h1 class="meso-h1">This invite is no longer active</h1>
+        <p class="meso-sub">
+          It's already been answered. If you think that's a mistake, ask your coach
+          to send a new invite.
+        </p>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

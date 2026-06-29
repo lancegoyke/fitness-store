@@ -333,6 +333,162 @@ class CoachAthlete(models.Model):
         return None
 
 
+class CoachInviteQuerySet(models.QuerySet):
+    def for_coach(self, user):
+        """Invites this coach sent."""
+        return self.filter(coach=user)
+
+    def pending(self):
+        return self.filter(status=CoachInvite.Status.PENDING)
+
+
+class CoachInvite(models.Model):
+    """A coach's email invitation to an athlete who may not have an account yet (N4).
+
+    The pre-relationship onboarding artifact. ``CoachAthlete.athlete`` is a
+    non-null FK, so it can't represent an invite to someone who isn't a ``User``
+    yet — rather than make the load-bearing relationship model nullable, the email
+    invite lives here. The coach invites an *email*; we send a tokened claim link;
+    whoever follows it while authenticated calls ``accept`` to **materialize** —
+    and immediately activate — a ``CoachAthlete`` link.
+
+    Distinct from ``CoachAthlete.invite`` (a peer invite between two existing
+    Users awaiting the recipient's acceptance): this is email-addressed and
+    **bearer-token-claimed**. The claim link is a 122-bit secret delivered to the
+    invited inbox; we do not require the claiming user's email to equal the
+    invited email (email-only login coexists with social providers, so a new
+    athlete may sign up under a different address). The coach sees who accepted on
+    the roster and can ``end`` the link if it's wrong. See
+    ``docs/meso/invites-plan.md``.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", _("Pending")
+        ACCEPTED = "accepted", _("Accepted")
+        DECLINED = "declined", _("Declined")
+        REVOKED = "revoked", _("Revoked")
+
+    coach = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="sent_invites",
+        verbose_name=_("Coach"),
+    )
+    email = models.EmailField(_("Email"))
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    status = models.CharField(
+        _("Status"), max_length=16, choices=Status.choices, default=Status.PENDING
+    )
+    accepted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="claimed_invites",
+        verbose_name=_("Accepted by"),
+    )
+    accepted_link = models.ForeignKey(
+        "CoachAthlete",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name=_("Accepted link"),
+    )
+    created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+    responded_at = models.DateTimeField(_("Time responded"), null=True, blank=True)
+
+    objects = CoachInviteQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Coach invite"
+        verbose_name_plural = "Coach invites"
+        constraints = [
+            # At most one *pending* invite per (coach, email); a re-invite reuses
+            # the open row. Closed invites (accepted/declined/revoked) don't block
+            # a fresh one.
+            models.UniqueConstraint(
+                fields=["coach", "email"],
+                condition=models.Q(status="pending"),
+                name="unique_pending_coach_invite",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.coach.display_name()} → {self.email} ({self.status})"
+
+    @staticmethod
+    def normalize_email(email):
+        """Trim + lowercase so dedup and the partial-unique constraint agree."""
+        return (email or "").strip().lower()
+
+    def save(self, *args, **kwargs):
+        self.email = self.normalize_email(self.email)
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def open_for(cls, *, coach, email):
+        """Open a pending invite for ``email``, reusing the coach's open row if any.
+
+        Returns ``(invite, created)``. The email is normalized so a differently
+        cased re-invite resolves to the same pending row (the partial-unique
+        constraint enforces one). A previously closed invite to the same email
+        does not block a fresh one.
+        """
+        email = cls.normalize_email(email)
+        return cls.objects.get_or_create(
+            coach=coach, email=email, status=cls.Status.PENDING
+        )
+
+    @property
+    def is_pending(self):
+        return self.status == self.Status.PENDING
+
+    def accept(self, user):
+        """A claiming user accepts → an **active** ``CoachAthlete`` link.
+
+        The claim *is* the athlete's acceptance, so the materialized link goes
+        straight to active. Idempotent against an already-active link, and resolves
+        a pre-existing pending peer link to active. Raises ``InvalidTransition`` if
+        the invite is no longer pending, or if the claimer is the coach (a user
+        cannot coach themselves).
+        """
+        if not self.is_pending:
+            raise InvalidTransition(f"Cannot accept an invite that is {self.status}.")
+        if user == self.coach:
+            raise InvalidTransition("A coach cannot accept their own invite.")
+        link = CoachAthlete.invite(coach=self.coach, athlete=user)
+        if link.is_pending:
+            link.accept()
+        self.status = self.Status.ACCEPTED
+        self.accepted_by = user
+        self.accepted_link = link
+        self.responded_at = timezone.now()
+        self.save(
+            update_fields=["status", "accepted_by", "accepted_link", "responded_at"]
+        )
+        return link
+
+    def decline(self):
+        """The recipient declines a pending invite → ``declined``."""
+        if not self.is_pending:
+            raise InvalidTransition(f"Cannot decline an invite that is {self.status}.")
+        self.status = self.Status.DECLINED
+        self.responded_at = timezone.now()
+        self.save(update_fields=["status", "responded_at"])
+        return self
+
+    def revoke(self):
+        """The coach cancels a pending invite → ``revoked``."""
+        if not self.is_pending:
+            raise InvalidTransition(f"Cannot revoke an invite that is {self.status}.")
+        self.status = self.Status.REVOKED
+        self.responded_at = timezone.now()
+        self.save(update_fields=["status", "responded_at"])
+        return self
+
+
 # ---------------------------------------------------------------------------
 # Program schema (Phase 2)
 #

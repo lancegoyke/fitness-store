@@ -45,6 +45,48 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
     email_for_user.send()
 
 
+def send_coach_invite_email(*, coach, email, accept_url) -> bool:
+    """Email an athlete a tokened link to claim a coach's training invite.
+
+    Meso N4 (athlete onboarding): a coach invites a person by email; this sends
+    them the claim link. Whoever follows it while authenticated materializes the
+    coach↔athlete relationship (``CoachInvite.accept``). Email is the channel that
+    exists today — ``django-ses`` in production.
+
+    Args:
+        coach: the inviting ``User`` (for the message's "from" name).
+        email: the invited address (the recipient).
+        accept_url: absolute URL of the claim page (``/meso/claim/<token>/``).
+
+    Returns:
+        ``True`` if a message was sent, ``False`` if skipped because there is no
+        address to send to.
+
+    Raises a mail backend exception (``fail_silently=False``); callers that must
+    not fail the request on a bounced email should treat this as best-effort.
+    """
+    if not email:
+        return False
+    context = {
+        "coach_name": coach.display_name(),
+        "accept_url": accept_url,
+    }
+    subject = render_to_string(
+        "notifications/coach_invite_subject.txt", context
+    ).strip()
+    msg_plain = render_to_string("notifications/coach_invite.md", context)
+    msg_html = render_to_string("notifications/coach_invite.html", context)
+    send_mail(
+        subject=subject,
+        message=msg_plain,
+        html_message=msg_html,
+        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
+        recipient_list=[email],
+        fail_silently=False,
+    )
+    return True
+
+
 def send_week_delivered_email(*, athlete, coach, plan, week, home_url) -> bool:
     """Email an athlete that their coach delivered a new training week.
 

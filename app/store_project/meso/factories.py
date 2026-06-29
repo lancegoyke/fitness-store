@@ -9,6 +9,7 @@ try:
     from .models import AthleteOneRm
     from .models import AthleteProfile
     from .models import CoachAthlete
+    from .models import CoachInvite
     from .models import CoachProfile
     from .models import Contraindication
     from .models import ExercisePrescription
@@ -57,6 +58,14 @@ try:
         athlete = factory.SubFactory(UserFactory)
         status = CoachAthlete.Status.ACTIVE
         invited_by = CoachAthlete.InvitedBy.COACH
+
+    class CoachInviteFactory(DjangoModelFactory):
+        class Meta:
+            model = CoachInvite
+
+        coach = factory.SubFactory(UserFactory)
+        email = factory.Sequence(lambda n: f"invitee{n}@example.com")
+        status = CoachInvite.Status.PENDING
 
     class PlanFactory(DjangoModelFactory):
         class Meta:
@@ -241,6 +250,9 @@ except ImportError:
         pass
 
     class CoachAthleteFactory:
+        pass
+
+    class CoachInviteFactory:
         pass
 
     class PlanFactory:

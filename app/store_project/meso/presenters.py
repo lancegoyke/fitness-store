@@ -124,6 +124,15 @@ def roster_group(group):
     }
 
 
+def pending_invite(invite):
+    """A pending email-invite row in the coach's roster (N4 onboarding)."""
+    return {
+        "email": invite.email,
+        "token": invite.token,
+        "when": invite.created_at,
+    }
+
+
 def group_detail(group):
     """The group detail page: members + their cross-group contraindication flags.
 
