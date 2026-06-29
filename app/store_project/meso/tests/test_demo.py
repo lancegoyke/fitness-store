@@ -149,6 +149,27 @@ class TestClearDemo:
         demo.clear_demo(coach)  # no-op, no error
         assert demo.has_demo(coach) is False
 
+    def test_real_group_with_same_name_is_not_hijacked(self):
+        """A coach's real group sharing the demo group's name is never touched.
+
+        The demo group is keyed by ``is_demo``, not the user-editable name — so a
+        real group of the same name is not flipped to demo, mutated, or deleted by
+        ``clear_demo`` (the P1 the Codex review caught).
+        """
+        coach = _coach()
+        real_group = MesoGroup.objects.create(
+            coach=coach, name=demo.GROUP["name"], focus="Real focus"
+        )
+        demo.load_demo(coach)
+        demo.clear_demo(coach)
+        real_group.refresh_from_db()
+        assert real_group.is_demo is False
+        assert real_group.focus == "Real focus"
+        # And the demo created its *own* separate group while present.
+        assert (
+            MesoGroup.objects.filter(coach=coach, name=demo.GROUP["name"]).count() == 1
+        )
+
 
 # ---------------------------------------------------------------------------
 # Scoping — one coach's demo is invisible to and unaffected by another's

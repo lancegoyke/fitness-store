@@ -286,16 +286,22 @@ def _ensure_demo_log(athlete, plan, today):
 
 
 def _ensure_demo_group(coach, athletes):
-    """A demo group (three members) with a shared program, overrides, delivery."""
-    group, _ = MesoGroup.objects.update_or_create(
-        coach=coach,
-        name=GROUP["name"],
-        defaults={
-            "focus": GROUP["focus"],
-            "status": MesoGroup.Status.ACTIVE,
-            "is_demo": True,
-        },
-    )
+    """A demo group (three members) with a shared program, overrides, delivery.
+
+    Keyed by **demo identity** (``is_demo``), never the user-editable name: a coach
+    may already own a real group named the same, and matching it by name would
+    flip it to demo and let ``clear_demo`` delete it. There is exactly one demo
+    group per coach, so reuse it on reseed or create a fresh one.
+    """
+    group = MesoGroup.objects.filter(coach=coach, is_demo=True).first()
+    if group is None:
+        group = MesoGroup.objects.create(
+            coach=coach,
+            name=GROUP["name"],
+            focus=GROUP["focus"],
+            status=MesoGroup.Status.ACTIVE,
+            is_demo=True,
+        )
     memberships = {}
     for slug in GROUP["member_slugs"]:
         athlete, _link = athletes[slug]
