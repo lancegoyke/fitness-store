@@ -618,11 +618,20 @@ def serialize_plan(plan, week=None):
             # one query over the plan's logged sets, mapped onto the rendered
             # prescriptions. A group plan has no single athlete, so no "last".
             last_map = last_logged_labels(plan, prescriptions, plan.unit)
+            # The athlete's persisted, log-derived 1RM per lift, so the coach sees
+            # what a %1RM target translates to when prescribing one. Local import:
+            # ``one_rm`` imports this module. A group plan has no single athlete.
+            from .one_rm import one_rm_values
+
+            one_rm_map = one_rm_values(plan.athlete, prescriptions)
             for session_data in program:
                 for exercise in session_data["exercises"]:
                     label = last_map.get(exercise["id"])
                     if label:
                         exercise["last"] = label
+                    one_rm = one_rm_map.get(exercise["id"])
+                    if one_rm is not None:
+                        exercise["one_rm"] = _fmt_num(one_rm.value)
         else:
             # A group plan instead carries the per-athlete adjust overlay (groups
             # Phase 3): a per-row ``adj`` badge driven by the members' real

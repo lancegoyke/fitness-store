@@ -16,6 +16,7 @@ from django.utils import timezone
 from .models import LoadType
 from .models import Plan
 from .models import SessionLog
+from .one_rm import one_rm_values
 from .serializers import _fmt_num
 from .serializers import _num
 from .serializers import current_week
@@ -583,6 +584,10 @@ def athlete_session(session, athlete):
     )
     done = log is not None and log.status == SessionLog.Status.DONE
     week = session.week
+    prescriptions = list(session.prescriptions.all())
+    # The athlete's persisted, log-derived 1RM per lift — the %1RM logger seeds its
+    # suggested bar load from it (no manual estimate needed). One query.
+    one_rm_map = one_rm_values(athlete, prescriptions)
     return {
         "id": session.pk,
         "n": session.day_number,
@@ -602,11 +607,19 @@ def athlete_session(session, athlete):
             {
                 **serialize_prescription(p),
                 "target": _target_label(p),
+                # The derived 1RM as a bare number string ("140"), or "" — the
+                # client appends the unit and may layer a typed override on top.
+                "one_rm": _one_rm_label(one_rm_map.get(p.pk)),
                 "set_rows": _set_rows(p, logged),
             }
-            for p in session.prescriptions.all()
+            for p in prescriptions
         ],
     }
+
+
+def _one_rm_label(one_rm):
+    """A stored ``AthleteOneRm`` as the bare number string the client reads, or ""."""
+    return _fmt_num(one_rm.value) if one_rm is not None else ""
 
 
 def athlete_log_payload(session_ctx):
@@ -631,6 +644,9 @@ def athlete_log_payload(session_ctx):
                 # %1RM (and the percent value) to offer the estimated-1RM helper.
                 "load": e["load"],
                 "load_type": e["load_type"],
+                # The persisted, log-derived 1RM ("140"/"") — the suggested-load
+                # default before the athlete types a per-device override.
+                "one_rm": e.get("one_rm", ""),
                 "note": e.get("note", ""),
                 "tag": e.get("tag", ""),
                 "set_rows": e["set_rows"],

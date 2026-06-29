@@ -80,10 +80,13 @@ function createLogger() {
       this.status = data.status;
       this.unit = data.unit || "";
       this.exercises = data.exercises || [];
-      // Restore each exercise's saved 1RM estimate (entered client-side, kept in
-      // localStorage — the maths is local, so no model/migration; S2 Phase 2b).
+      // Each exercise carries `one_rm` — the athlete's persisted, log-derived 1RM
+      // (server) — and `e1rm`, an optional per-device typed override restored from
+      // localStorage. The typed value wins when present; otherwise the derived
+      // value seeds the suggested load with no manual entry needed.
       const e1rms = this.readE1rms();
       for (const ex of this.exercises) {
+        ex.one_rm = ex.one_rm || "";
         ex.e1rm = e1rms[ex.id] || "";
       }
       const csrfEl = document.getElementById("meso-csrf");
@@ -299,12 +302,27 @@ function createLogger() {
       return !!ex && ex.load_type === "pct";
     },
 
+    // The 1RM to size a suggested load from: the athlete's typed per-device
+    // estimate (localStorage) overrides the server's log-derived value when set;
+    // absent a typed value, the derived 1RM is used so the suggestion appears with
+    // no manual entry. Empty when neither is a usable number.
+    effectiveOneRm(ex) {
+      if (!ex) return "";
+      return parseNum(ex.e1rm) != null ? ex.e1rm : ex.one_rm || "";
+    },
+
+    // True when the suggestion is sized off the server's derived 1RM with no typed
+    // override in play — drives the "from your logs" hint.
+    usingDerivedOneRm(ex) {
+      return !!(ex && ex.one_rm && parseNum(ex.e1rm) == null);
+    },
+
     // The suggested bar load for a %1RM lift given the athlete's estimated 1RM,
     // with the plan's unit ("90 kg"). Empty when it isn't a %1RM lift or no usable
-    // 1RM is entered yet.
+    // 1RM is known (neither derived nor typed) yet.
     suggestedLoad(ex) {
       if (!this.isPercentLift(ex)) return "";
-      const load = loadForPercent(ex.e1rm, ex.load);
+      const load = loadForPercent(this.effectiveOneRm(ex), ex.load);
       if (load == null) return "";
       return fmtNum(load) + (this.unit ? " " + this.unit : "");
     },

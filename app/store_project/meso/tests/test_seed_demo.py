@@ -272,6 +272,15 @@ class TestSeedLogsASession:
         box_squat = lower["exercises"][0]
         assert box_squat["last"] == "4×6 · 70kg · RPE8.5"
 
+    def test_log_derives_a_one_rm_for_the_percent_row(self):
+        # Box Squat is a %1RM row; the seed derives Maya's 1RM from her logged
+        # session (Epley of 70 × 6 = 84) so the coach sees it on the designer row.
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        plan = Plan.objects.for_coach(coach).get()
+        lower = next(s for s in serialize_plan(plan)["program"] if s["name"] == "Lower")
+        assert lower["exercises"][0]["one_rm"] == "84"
+
     def test_reseed_does_not_duplicate_the_log(self):
         seed()
         seed()

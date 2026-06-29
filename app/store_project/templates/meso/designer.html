@@ -342,6 +342,7 @@
                         <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:1px 6px;margin-top:1px;min-height:15px;">
                           <template x-if="ex.tag"><span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;color:var(--accent-deep);background:var(--soft);border:1px solid var(--soft-line);padding:0 5px;border-radius:4px;" x-text="ex.tag"></span></template>
                           <template x-if="ex.last"><span style="font-size:10.5px;color:var(--dim);font-family:'IBM Plex Mono',monospace;" x-text="'last: ' + ex.last"></span></template>
+                          <template x-if="ex.one_rm && ex.load_type === 'pct'"><span style="font-size:10.5px;color:var(--accent-deep);font-family:'IBM Plex Mono',monospace;" :title="'Athlete\'s estimated 1RM, from their logged history'" x-text="'1RM: ' + ex.one_rm + (unit ? ' ' + unit : '')"></span></template>
                           <template x-if="isGroup">
                             <button @click="openOverride(ex)" data-hover="brighten" :title="ex.adj ? (ex.adjusts || []).map(a => a.name + ': ' + a.label).join('\n') : 'Set a per-athlete adjust'" style="appearance:none;cursor:pointer;font:inherit;font-size:10px;font-weight:600;line-height:1.6;border:1px solid var(--soft-line);border-radius:4px;padding:0 5px;color:var(--accent-deep);background:var(--soft);">
                               <span x-show="ex.adj" x-text="ex.adj"></span>

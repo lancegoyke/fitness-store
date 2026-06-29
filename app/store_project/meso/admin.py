@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import AgentProposalBatch
+from .models import AthleteOneRm
 from .models import AthleteProfile
 from .models import CoachAthlete
 from .models import CoachProfile
@@ -258,3 +259,14 @@ class PushSubscriptionAdmin(admin.ModelAdmin):
     search_fields = ("athlete__email", "athlete__name", "endpoint")
     raw_id_fields = ("athlete",)
     readonly_fields = ("created_at",)
+
+
+# -- persisted estimated 1RM (S2 follow-up) --------------------------------
+
+
+@admin.register(AthleteOneRm)
+class AthleteOneRmAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "athlete", "name", "value", "unit", "updated_at")
+    search_fields = ("athlete__email", "athlete__name", "name")
+    raw_id_fields = ("athlete", "exercise")
+    readonly_fields = ("key", "created_at", "updated_at")

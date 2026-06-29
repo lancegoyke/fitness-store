@@ -1506,3 +1506,78 @@ class PushSubscription(models.Model):
             "endpoint": self.endpoint,
             "keys": {"p256dh": self.p256dh, "auth": self.auth},
         }
+
+
+# ---------------------------------------------------------------------------
+# Persisted estimated 1RM (units & RPE/%1RM slice, S2 — the deferred follow-up)
+#
+# A %1RM target ("75%") is an *intensity*, not a weight; turning it into a bar
+# load needs the athlete's 1RM. Phase 2b let the athlete enter that estimate, but
+# it lived only in the browser's localStorage — per-device, invisible to the
+# coach. ``AthleteOneRm`` promotes it to a real row, **auto-derived from the
+# athlete's logged history** (the best Epley estimate per lift), so it survives a
+# device change, powers the logger's suggested load on any device, and is visible
+# to the coach in the designer when they prescribe a %1RM. See
+# ``one_rm.py`` (derive/refresh/read) and ``docs/meso/one-rm-plan.md``.
+# ---------------------------------------------------------------------------
+
+
+class AthleteOneRm(models.Model):
+    """An athlete's estimated one-rep max for a lift, derived from their logs.
+
+    Keyed by lift *identity*, the hybrid B4 rule mirroring
+    ``serializers._exercise_key``: a catalog-linked lift by its ``Exercise`` FK, a
+    free-text lift by its normalized name. The denormalized ``key`` carries that
+    identity (``"id:<pk>"`` / ``"name:<lower>"``) so a single ``unique(athlete,
+    key)`` constraint holds whether or not the lift is catalog-backed. ``value``
+    is the estimate in ``unit`` (the unit the logged work was recorded in); a
+    %1RM target scaled against it is plate-rounded client-side.
+    """
+
+    athlete = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="meso_one_rms",
+        verbose_name=_("Athlete"),
+    )
+    # Catalog link when the lift is catalog-backed (B4 hybrid); the same lift's
+    # ``key`` then matches by FK across prescriptions. Free-text lifts match by
+    # name and leave this null.
+    exercise = models.ForeignKey(
+        "exercises.Exercise",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="meso_one_rms",
+        verbose_name=_("Catalog exercise"),
+    )
+    name = models.CharField(_("Lift name"), max_length=255)
+    key = models.CharField(_("Lift key"), max_length=300, editable=False)
+    value = models.DecimalField(_("Estimated 1RM"), max_digits=7, decimal_places=2)
+    unit = models.CharField(
+        _("Unit"), max_length=2, choices=Unit, default=Unit.KILOGRAMS
+    )
+    created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("Time last modified"), auto_now=True)
+
+    class Meta:
+        ordering = ["athlete_id", "name"]
+        verbose_name = "Athlete 1RM"
+        verbose_name_plural = "Athlete 1RMs"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["athlete", "key"], name="unique_athlete_one_rm"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.athlete.display_name()} · {self.name}: {self.value}"
+
+    def save(self, *args, **kwargs):
+        # ``key`` is derived, never hand-set: keep it authoritative on every write
+        # (admin/factory/tests included) so the ``unique(athlete, key)`` constraint
+        # holds and a blank key can never collide every lift for an athlete.
+        from .one_rm import key_str
+
+        self.key = key_str(self.exercise_id, self.name)
+        super().save(*args, **kwargs)
