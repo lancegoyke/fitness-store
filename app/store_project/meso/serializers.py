@@ -41,6 +41,7 @@ def serialize_prescription(prescription):
         "sets": prescription.sets,
         "reps": prescription.reps,
         "load": prescription.load,
+        "load_type": prescription.load_type,
         "rpe": prescription.rpe,
         "note": prescription.note,
     }
@@ -461,6 +462,8 @@ def resolve_prescription(prescription, override):
         "sets": prescription.sets,
         "reps": prescription.reps,
         "load": prescription.load,
+        # A load % scales the *number*; the load's meaning (abs/%1RM) is unchanged.
+        "load_type": prescription.load_type,
         "rpe": prescription.rpe,
         "note": prescription.note,
     }
@@ -471,6 +474,7 @@ def resolve_prescription(prescription, override):
         "sets": override.sets or prescription.sets,
         "reps": override.reps or prescription.reps,
         "load": resolve_load(prescription.load, override.load_pct),
+        "load_type": prescription.load_type,
         "rpe": prescription.rpe,
         "note": override.note or prescription.note,
     }

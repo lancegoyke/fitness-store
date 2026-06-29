@@ -332,3 +332,57 @@ describe("override editor", () => {
     expect(ex.adj).toBe("MO -10%"); // unchanged
   });
 });
+
+// %1RM load typing (units & RPE/%1RM slice, S2 Phase 1): the Load cell's suffix
+// reflects whether the row's number is an absolute load (the plan's unit) or a
+// % of 1RM, and a coach toggles + autosaves that per row.
+describe("load type (%1RM)", () => {
+  it("loadSuffix shows the unit for an absolute (or typeless) numeric load", () => {
+    const c = makeMeso({ unit: "kg" });
+    expect(c.loadSuffix({ load: "100", load_type: "abs" })).toBe("kg");
+    expect(c.loadSuffix({ load: "100" })).toBe("kg"); // typeless → absolute
+  });
+
+  it("loadSuffix shows % for a percent load and nothing for non-numeric", () => {
+    const c = makeMeso({ unit: "lb" });
+    expect(c.loadSuffix({ load: "75", load_type: "pct" })).toBe("%");
+    expect(c.loadSuffix({ load: "BW", load_type: "abs" })).toBe("");
+    expect(c.loadSuffix({ load: "", load_type: "pct" })).toBe("");
+  });
+
+  it("toggleLoadType flips abs ⇄ pct and autosaves when live", async () => {
+    const c = makeMeso();
+    global.fetch = vi.fn().mockResolvedValue(res({ body: { ok: true } }));
+    const ex = { id: 11, load: "100", load_type: "abs" };
+    await c.toggleLoadType(ex);
+    expect(ex.load_type).toBe("pct");
+    expect(sentBody().load_type).toBe("pct");
+    await c.toggleLoadType(ex);
+    expect(ex.load_type).toBe("abs");
+  });
+
+  it("toggleLoadType treats a typeless row as absolute (→ pct)", async () => {
+    const c = makeMeso();
+    global.fetch = vi.fn().mockResolvedValue(res({ body: { ok: true } }));
+    const ex = { id: 12, load: "60" };
+    await c.toggleLoadType(ex);
+    expect(ex.load_type).toBe("pct");
+  });
+
+  it("persistRow includes load_type (defaulting a typeless row to abs)", () => {
+    const c = makeMeso();
+    global.fetch = vi.fn().mockResolvedValue(res({ body: { ok: true } }));
+    c.persistRow({ id: 5, load: "75", load_type: "pct" });
+    expect(sentBody().load_type).toBe("pct");
+
+    global.fetch.mockClear();
+    c.persistRow({ id: 6, load: "60" });
+    expect(sentBody().load_type).toBe("abs");
+  });
+
+  it("a locally added row defaults to an absolute load type", async () => {
+    const c = makeMeso({ live: false, program: [{ exercises: [] }] });
+    await c.addExercise(0);
+    expect(c.program[0].exercises[0].load_type).toBe("abs");
+  });
+});

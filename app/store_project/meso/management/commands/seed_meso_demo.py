@@ -39,6 +39,7 @@ from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import Contraindication
 from store_project.meso.models import ExercisePrescription
+from store_project.meso.models import LoadType
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import MesoGroup
@@ -151,10 +152,13 @@ SAMPLE_PLAN = {
                             "bias": "Quad bias · knee-safe",
                             "exercises": [
                                 {
+                                    # Prescribed as a % of 1RM (S2) — the demo row
+                                    # that shows the %-vs-unit Load typing.
                                     "name": "Box Squat (to parallel)",
                                     "sets": "4",
                                     "reps": "6",
-                                    "load": "70",
+                                    "load": "72",
+                                    "load_type": LoadType.PERCENT,
                                     "rpe": "7",
                                     "tags": ["knee-safe"],
                                 },
@@ -617,6 +621,7 @@ class Command(BaseCommand):
                             sets=ex.get("sets", ""),
                             reps=ex.get("reps", ""),
                             load=ex.get("load", ""),
+                            load_type=ex.get("load_type", LoadType.ABSOLUTE),
                             rpe=ex.get("rpe", ""),
                             note=ex.get("note", ""),
                             tags=ex.get("tags", []),

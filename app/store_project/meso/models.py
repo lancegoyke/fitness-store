@@ -25,6 +25,19 @@ class Unit(models.TextChoices):
     POUNDS = "lb", _("Pounds")
 
 
+class LoadType(models.TextChoices):
+    """What a prescription's Load *number* means (units & RPE/%1RM slice, S2).
+
+    ``ABSOLUTE`` — a weight in the plan's ``Unit`` (kg/lb); the default, so every
+    existing row keeps reading exactly as before. ``PERCENT`` — a percentage of
+    1RM, rendered with a ``%`` suffix instead of the unit. RPE is orthogonal (its
+    own column, and coexists with either load type).
+    """
+
+    ABSOLUTE = "abs", _("Absolute load")
+    PERCENT = "pct", _("% of 1RM")
+
+
 class InvalidTransition(Exception):
     """Raised when a CoachAthlete state-machine transition is not allowed."""
 
@@ -627,6 +640,10 @@ class ExercisePrescription(models.Model):
     sets = models.CharField(_("Sets"), max_length=32, blank=True)
     reps = models.CharField(_("Reps"), max_length=32, blank=True)
     load = models.CharField(_("Load"), max_length=32, blank=True)
+    # What ``load`` means: an absolute weight (the plan's unit) or a % of 1RM (S2).
+    load_type = models.CharField(
+        _("Load type"), max_length=3, choices=LoadType, default=LoadType.ABSOLUTE
+    )
     rpe = models.CharField(_("RPE"), max_length=32, blank=True)
     note = models.CharField(_("Note"), max_length=255, blank=True)
     tags = models.JSONField(_("Tags"), default=list, blank=True)
@@ -1298,6 +1315,7 @@ class GroupMembership(models.Model):
                         "sets": resolved["sets"],
                         "reps": resolved["reps"],
                         "load": resolved["load"],
+                        "load_type": resolved["load_type"],
                         "rpe": resolved["rpe"],
                         "note": resolved["note"],
                         "exercise": None if swapped else src_p.exercise,

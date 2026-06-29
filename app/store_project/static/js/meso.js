@@ -186,11 +186,12 @@ function createMeso() {
     // Autosave one edited row to its prescription. No-op until a plan is loaded.
     persistRow(ex) {
       if (!this.live || !ex || ex.id == null) return;
-      this.apiPost(`/meso/api/plan/${this.planId}/prescription/${ex.id}/`, {
+      return this.apiPost(`/meso/api/plan/${this.planId}/prescription/${ex.id}/`, {
         name: ex.name ?? "",
         sets: ex.sets ?? "",
         reps: ex.reps ?? "",
         load: ex.load ?? "",
+        load_type: ex.load_type ?? "abs",
         rpe: ex.rpe ?? "",
         note: ex.note ?? "",
       }).catch((err) => console.error("Autosave failed", err));
@@ -334,8 +335,16 @@ function createMeso() {
     barH(pct, track) {
       return Math.max(6, (pct / 100) * track) + "px";
     },
-    loadSuffix(load) {
-      return this.numeric(load) ? this.unit : "";
+    // The Load cell's suffix: "%" for a %1RM row, the plan's unit for an
+    // absolute (or typeless) one, nothing for a non-numeric load ("BW").
+    loadSuffix(ex) {
+      if (!this.numeric(ex && ex.load)) return "";
+      return ex.load_type === "pct" ? "%" : this.unit;
+    },
+    // Flip a row between an absolute load and a % of 1RM, then autosave it.
+    toggleLoadType(ex) {
+      ex.load_type = ex.load_type === "pct" ? "abs" : "pct";
+      return this.persistRow(ex);
     },
 
     // ---- periodization "calendar" chart cell helpers ----
@@ -371,7 +380,9 @@ function createMeso() {
           const target =
             x.reps +
             " × " +
-            (this.numeric(x.load) ? x.load + " " + this.unit : x.load);
+            (this.numeric(x.load)
+              ? x.load + (x.load_type === "pct" ? "%" : " " + this.unit)
+              : x.load);
           rows.push({ k, n: i + 1, target, done: !!this.checks[k] });
         }
         return { id: x.id, name: x.name, target: x.sets + "×" + x.reps, rows };
@@ -426,6 +437,7 @@ function createMeso() {
         sets: "3",
         reps: "10",
         load: "",
+        load_type: "abs",
         rpe: "7",
         note: "",
       });

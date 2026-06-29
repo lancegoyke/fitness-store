@@ -41,6 +41,7 @@ from .models import CoachProfile
 from .models import ExercisePrescription
 from .models import GroupMembership
 from .models import InvalidTransition
+from .models import LoadType
 from .models import LoggedSet
 from .models import MesoGroup
 from .models import Plan
@@ -907,6 +908,14 @@ def prescription_patch(request, plan_id, pk):
         if len(value) > max_length:
             return HttpResponseBadRequest(f"{field} is too long.")
         updates[field] = value
+
+    # ``load_type`` is an enum, not free text: validate against the whitelist so a
+    # bad value is a 400 (and nothing is persisted), not a stored garbage choice.
+    if "load_type" in payload:
+        load_type = payload["load_type"]
+        if load_type not in LoadType.values:
+            return HttpResponseBadRequest("Invalid load_type.")
+        updates["load_type"] = load_type
 
     if updates:
         for field, value in updates.items():
