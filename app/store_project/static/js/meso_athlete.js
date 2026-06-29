@@ -7,11 +7,59 @@
  * — re-saving updates the one log — so "Save progress" and "Log session" hit the
  * same endpoint, differing only in the status they stamp (pending vs done).
  */
+// ---- %1RM ergonomics helpers (S2 Phase 2b) ----
+// Pure maths shared by the logger and its tests. A %1RM target ("75%") is an
+// intensity, not a weight; given the athlete's estimated 1RM these turn it into a
+// bar load and back, so the athlete knows what to put on the bar.
+
+// Parse a strictly-numeric cell to a Number, or null. Rejects the program grid's
+// free-text loads/reps ("BW", "AMRAP", "8-10", "") that can't enter the maths.
+function parseNum(text) {
+  const s = String(text == null ? "" : text).trim();
+  if (s === "" || !/^[0-9]*\.?[0-9]+$/.test(s)) return null;
+  const n = parseFloat(s);
+  return Number.isNaN(n) ? null : n;
+}
+
+// Format a computed number for display: a whole number stays integral, otherwise
+// it's trimmed to 2 decimals (116.6666… → 116.67).
+function fmtNum(n) {
+  if (n == null || Number.isNaN(n)) return "";
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+}
+
+// Round to the nearest loadable step (2.5 for plates), matching the designer's
+// round25 so a suggested load lands on a real plate.
+function roundToStep(value, step) {
+  return Math.round(value / step) * step;
+}
+
+// Estimated 1RM from a logged set via Epley: w × (1 + reps/30). A single rep IS a
+// 1RM, so it returns the load unchanged (not the formula's slight overshoot).
+// Null when either cell isn't a usable number (load > 0, reps ≥ 1).
+function epleyOneRm(load, reps) {
+  const w = parseNum(load);
+  const r = parseNum(reps);
+  if (w == null || r == null || w <= 0 || r < 1) return null;
+  if (r === 1) return w;
+  return w * (1 + r / 30);
+}
+
+// The bar load for a percent of an estimated 1RM, plate-rounded. Null without a
+// usable 1RM and percent.
+function loadForPercent(oneRm, percent) {
+  const one = parseNum(oneRm);
+  const pct = parseNum(percent);
+  if (one == null || pct == null || one <= 0 || pct <= 0) return null;
+  return roundToStep((one * pct) / 100, 2.5);
+}
+
 function createLogger() {
   return {
     logUrl: "",
     csrf: "",
     status: "pending",
+    unit: "", // the plan's load unit (kg/lb), for the %1RM helper
     exercises: [],
     saving: false,
     saved: false,
@@ -30,7 +78,14 @@ function createLogger() {
       }
       this.logUrl = data.log_url;
       this.status = data.status;
+      this.unit = data.unit || "";
       this.exercises = data.exercises || [];
+      // Restore each exercise's saved 1RM estimate (entered client-side, kept in
+      // localStorage — the maths is local, so no model/migration; S2 Phase 2b).
+      const e1rms = this.readE1rms();
+      for (const ex of this.exercises) {
+        ex.e1rm = e1rms[ex.id] || "";
+      }
       const csrfEl = document.getElementById("meso-csrf");
       this.csrf = csrfEl ? csrfEl.dataset.token : "";
       // Flush anything logged while offline (S7), now and whenever wifi returns.
@@ -237,6 +292,62 @@ function createLogger() {
         }
       }
     },
+
+    // ---- %1RM ergonomics (S2 Phase 2b) ----
+    // A %1RM-prescribed lift: the target Load is a percent of 1RM, not a weight.
+    isPercentLift(ex) {
+      return !!ex && ex.load_type === "pct";
+    },
+
+    // The suggested bar load for a %1RM lift given the athlete's estimated 1RM,
+    // with the plan's unit ("90 kg"). Empty when it isn't a %1RM lift or no usable
+    // 1RM is entered yet.
+    suggestedLoad(ex) {
+      if (!this.isPercentLift(ex)) return "";
+      const load = loadForPercent(ex.e1rm, ex.load);
+      if (load == null) return "";
+      return fmtNum(load) + (this.unit ? " " + this.unit : "");
+    },
+
+    // The 1RM a logged set implies (Epley), with the unit — shown on a %1RM lift so
+    // the athlete can refine their estimate from what they actually lifted. Empty
+    // until the set carries a numeric load + reps.
+    setImpliedOneRm(row) {
+      const one = epleyOneRm(row.load, row.reps);
+      if (one == null) return "";
+      return fmtNum(one) + (this.unit ? " " + this.unit : "");
+    },
+
+    // ---- estimated-1RM store (localStorage, keyed by exercise id) ----
+    // The estimate is per-device convenience, not coach-owned program data, so it
+    // lives client-side — same "reuse what exists, defer new tables" taste as the
+    // offline log queue.
+    e1rmKey: "meso-e1rm",
+
+    readE1rms() {
+      try {
+        return JSON.parse(localStorage.getItem(this.e1rmKey) || "{}") || {};
+      } catch (e) {
+        return {};
+      }
+    },
+
+    writeE1rms(map) {
+      try {
+        localStorage.setItem(this.e1rmKey, JSON.stringify(map));
+      } catch (e) {
+        console.error("Could not persist 1RM estimates", e);
+      }
+    },
+
+    // Persist (or clear) one exercise's 1RM estimate as the athlete edits it.
+    persistE1rm(ex) {
+      const map = this.readE1rms();
+      const value = (ex.e1rm || "").toString().trim();
+      if (value === "") delete map[ex.id];
+      else map[ex.id] = value;
+      this.writeE1rms(map);
+    },
   };
 }
 
@@ -254,5 +365,5 @@ if (
 // Test hook: expose the factory to Node-based runners (vitest). Skipped in the
 // browser, where `module` is undefined.
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { createLogger };
+  module.exports = { createLogger, epleyOneRm, roundToStep, loadForPercent };
 }

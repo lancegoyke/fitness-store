@@ -148,7 +148,7 @@ claim, reusing allauth. Detailed design when we build the relationship.
 | # | Decision | Note |
 |---|----------|------|
 | S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) + Phase 2a (shared group program + Group-mode designer) + Phase 3 (per-athlete overrides — the `adj` overlay) built; plan in [`groups-plan.md`](./groups-plan.md) |
-| S2 | **Units & RPE vs %1RM** | 🟡 In progress — units (kg/lb) shipped with earlier slices; Phase 1 (first-class `load_type` `abs`/`pct`) + Phase 2a (agent %1RM-awareness — prompt + a deterministic %1RM progression bound) deployed. Only Phase 2b (athlete %1RM logging ergonomics) remains. Plan in [`units-rpe-plan.md`](./units-rpe-plan.md) |
+| S2 | **Units & RPE vs %1RM** | ✅ Complete — units (kg/lb) shipped with earlier slices; Phase 1 (first-class `load_type` `abs`/`pct`) + Phase 2a (agent %1RM-awareness — prompt + a deterministic %1RM progression bound) + Phase 2b (athlete %1RM logging ergonomics — the estimated-1RM helper) all built & deployed. Plan in [`units-rpe-plan.md`](./units-rpe-plan.md) |
 | S3 | **Delivery & notifications** | Push needs PWA + push infra; email via existing `django-ses` + `notifications` app |
 | S4 | **Results ↔ `challenges`/records** | Results screen shows a PR — reuse the records model or keep separate? |
 | S5 | **Real-time transport** | HTMX polling vs SSE/websockets for chat/drafting |
@@ -436,3 +436,20 @@ _(Append dated entries here as decisions land.)_
   non-numeric value, normalizes `'82.5 %'` → `'82.5'`), leaving the absolute path unbounded. The agent still
   does **not** change a row's type. Athlete %1RM logging ergonomics remain → **Phase 2b**. Plan in
   [`units-rpe-plan.md`](./units-rpe-plan.md).
+- 2026-06-28 — **S2 Phase 2b — athlete %1RM logging ergonomics → S2 COMPLETE** (branch
+  `meso-units-rpe-phase2b`, **no migration**). A %1RM target is an *intensity, not a weight*: Phase 1 let
+  the athlete *see* the `%`, but converting "75%" to a bar load was still manual. Phase 2b adds an
+  **estimated-1RM helper** (% ⇄ load). The data contract is the only backend change — `athlete_session`
+  carries the plan's `unit`, and `athlete_log_payload` threads `unit` + each row's structured
+  `load`/`load_type` — so the client knows which rows are %1RM. The maths is **client-side** (the athlete's
+  1RM estimate is per-device convenience, not coach-owned program data): `meso_athlete.js` gains pure
+  helpers (`epleyOneRm` — Epley, single-rep = the load itself; `loadForPercent` — plate-rounded à la the
+  designer's `round25`) + component methods (`isPercentLift`/`suggestedLoad`/`setImpliedOneRm`), with the
+  estimate persisted in **localStorage** keyed by exercise id (same "defer new tables" taste as the offline
+  log queue). The logger renders a `%1RM` badge, a "your 1RM" input, the suggested load (`75% ≈ 90 kg`), and
+  a per-set implied-1RM hint — all gated on a %1RM lift (absolute lifts untouched). A `LoggedSet` still
+  records the *actual* (absolute) weight. Built red→green: **+3 pytest** (566 meso) + **+14 Vitest** (60
+  frontend), ruff + prettier clean, `makemigrations --check` clean. **Local Codex review: CLEAN on
+  iteration 1.** **Deferred:** a persisted/coach-visible estimated 1RM (model + migration) and
+  auto-deriving it from logged history. **The whole Meso feature area is now real & deployed; S2 is
+  complete — no obvious next big slice, ask the user.** Plan in [`units-rpe-plan.md`](./units-rpe-plan.md).

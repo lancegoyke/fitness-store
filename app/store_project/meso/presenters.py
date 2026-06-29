@@ -593,6 +593,9 @@ def athlete_session(session, athlete):
         "block": week.mesocycle.name,
         "week": f"Wk {week.index}",
         "plan_title": week.mesocycle.plan.title,
+        # The plan's load unit (kg/lb) — the %1RM logger turns a "75%" target into
+        # a bar load in this unit (S2 Phase 2b).
+        "unit": week.mesocycle.plan.unit,
         "notes": log.notes if log else "",
         "log_url": reverse("meso:athlete_log_session", kwargs={"pk": session.pk}),
         "exercises": [
@@ -617,11 +620,17 @@ def athlete_log_payload(session_ctx):
     return {
         "log_url": session_ctx["log_url"],
         "status": session_ctx["status"],
+        # The unit lets the %1RM helper render a suggested bar load (S2 Phase 2b).
+        "unit": session_ctx["unit"],
         "exercises": [
             {
                 "id": e["id"],
                 "name": e["name"],
                 "target": e["target"],
+                # The structured load + its type so the client knows which rows are
+                # %1RM (and the percent value) to offer the estimated-1RM helper.
+                "load": e["load"],
+                "load_type": e["load_type"],
                 "note": e.get("note", ""),
                 "tag": e.get("tag", ""),
                 "set_rows": e["set_rows"],

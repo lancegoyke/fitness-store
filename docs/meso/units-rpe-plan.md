@@ -60,9 +60,9 @@ agent, athlete, and groups slices.
     row's `load_type` (Phase 1 wired `serialize_prescription`), so the two real gaps were: the
     **prompt** never explained what `load_type` means, and the **validation backstop** never
     bounded a %1RM progression. Both closed — see below.
-  - **Phase 2b — athlete %1RM logging ergonomics (future).** The athlete logger surfacing the
-    % target distinctly and capturing the *actual* load lifted against an estimated 1RM;
-    optional estimated-1RM math (% ↔ load).
+  - **Phase 2b — athlete %1RM logging ergonomics (this PR, DONE).** The athlete logger surfaces
+    the % target distinctly and offers an **estimated-1RM helper** (% ⇄ load) so a "75%" target
+    becomes a bar load. See below.
 
 ## Phase 1 — build notes
 
@@ -159,3 +159,49 @@ within the existing type), and nothing here touches the athlete logger (→ Phas
   and leaves the **absolute** path unbounded (`'180 kg'` still passes).
 - `TestPercentAwarePrompt` — the `SYSTEM_PROMPT` mentions `load_type` + `1RM`, and the `new_load`
   tool field mentions the percent form (locks the prompt contract so it can't silently regress).
+
+## Phase 2b — athlete %1RM logging ergonomics (build notes)
+
+A %1RM target ("75%") is an **intensity, not a weight**: Phase 1 made the athlete *see* the
+`%` (`_target_label`), but they still had to convert it to a bar load by hand. Phase 2b closes
+that with an **estimated-1RM helper** in the logger — %1RM ⇄ load, both directions — without a
+model change (a `LoggedSet` still records the *actual*, absolute weight lifted, per Phase 1).
+
+- **Presenter** (`meso/presenters.py`): the data contract the client needs to offer the helper.
+  `athlete_session` carries the plan's **`unit`** (kg/lb) into its context, and
+  `athlete_log_payload` threads that `unit` (top-level) plus each row's structured **`load`** and
+  **`load_type`** into the trimmed payload — so the client knows which rows are %1RM (and the
+  percent value) rather than only the pre-rendered `target` string. No new query (`plan.unit` is
+  on the already-`select_related`'d plan).
+- **Client** (`static/js/meso_athlete.js`): the maths is client-side (the athlete's 1RM estimate
+  is per-device convenience, not coach-owned program data). Pure, Vitest-exported helpers —
+  `epleyOneRm(load, reps)` (Epley `w × (1 + reps/30)`; a single rep returns the load itself, not
+  the formula's slight overshoot; null for any non-numeric cell), `loadForPercent(oneRm, percent)`
+  (plate-rounded via `roundToStep`, mirroring the designer's `round25`), and `fmtNum`/`parseNum`.
+  Component methods `isPercentLift(ex)`, `suggestedLoad(ex)` (% → "90 kg"), and
+  `setImpliedOneRm(row)` (a logged set's implied 1RM, so the athlete can refine the estimate from
+  what they actually lifted). The estimate lives in **localStorage** keyed by exercise id
+  (`meso-e1rm`), hydrated on `init()` — the same "reuse what exists, defer new tables" taste as the
+  offline log queue (S7); a persisted, coach-visible 1RM is a deferred follow-up.
+- **Template** (`templates/meso/athlete_session.html`): for a %1RM lift only — a `%1RM` badge, a
+  "your 1RM" input (`@input` persists), the suggested bar load (`75% ≈ 90 kg`), and a per-set
+  `1RM ≈ …` hint. Absolute lifts are untouched (all gated on `isPercentLift`).
+
+### Tests (Phase 2b)
+
+`meso/tests/test_percent_logging.py` (pytest, the data contract):
+
+- `athlete_session` context carries the plan's `unit`.
+- `athlete_log_payload` carries a top-level `unit` and, per exercise, the structured `load` +
+  `load_type` (a %1RM row → `pct`/"75", an absolute row → `abs`/"70").
+
+`frontend/meso_athlete.test.js` (Vitest, the maths + persistence):
+
+- `epleyOneRm` — single-rep returns the load, multi-rep uses Epley, null for BW/AMRAP/ranges/0.
+- `roundToStep` / `loadForPercent` — plate-rounded suggested load (120 @ 75% → 90).
+- `isPercentLift` / `suggestedLoad` (with unit) / `setImpliedOneRm` — only %1RM lifts get a
+  suggestion; an absolute lift or a missing 1RM yields "".
+- estimated-1RM persistence — round-trips per exercise, drops a cleared estimate, hydrates on init.
+
+Deliberately **not** in 2b: a persisted/coach-visible estimated 1RM (a model + migration), and
+auto-deriving the estimate from logged history — both deferred.
