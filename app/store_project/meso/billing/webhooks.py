@@ -51,13 +51,19 @@ _STATUS_MAP = {
 def construct_event(payload, sig_header):
     """Verify a raw webhook against the billing endpoint secret → a Stripe event.
 
-    Raises ``ValueError`` (bad payload) or
+    **Fails closed** when the secret is unset: Stripe's verifier would otherwise
+    check the signature against ``""``, which an attacker can HMAC-sign trivially —
+    so in the dormant pre-configuration deploy state a forged event could drive
+    subscription state. With no secret we reject before verifying.
+
+    Raises ``ValueError`` (no secret / bad payload) or
     ``stripe.error.SignatureVerificationError`` (bad signature); the view turns
-    either into a 400.
+    any of these into a 400.
     """
-    return stripe.Webhook.construct_event(
-        payload, sig_header, settings.MESO_STRIPE_WEBHOOK_SECRET
-    )
+    secret = settings.MESO_STRIPE_WEBHOOK_SECRET
+    if not secret:
+        raise ValueError("Billing webhook secret is not configured.")
+    return stripe.Webhook.construct_event(payload, sig_header, secret)
 
 
 def handle_event(event):

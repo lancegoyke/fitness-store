@@ -357,6 +357,24 @@ class TestWebhookView:
         resp = Client().post(self.URL, data=b"{}", content_type="application/json")
         assert resp.status_code == 400
 
+    def test_unset_secret_fails_closed(self, settings):
+        """With no signing secret configured, a signed request is rejected (not verified vs "")."""
+        settings.MESO_STRIPE_WEBHOOK_SECRET = ""
+        coach = _coach_with_customer("cus_closed")
+        with mock.patch(
+            "store_project.meso.billing.webhooks.stripe.Webhook.construct_event"
+        ) as construct:
+            resp = Client().post(
+                self.URL,
+                data=b"{}",
+                content_type="application/json",
+                HTTP_STRIPE_SIGNATURE="t=1,v1=forged",
+            )
+        assert resp.status_code == 400
+        # Stripe's verifier is never even reached, and nothing is mutated.
+        construct.assert_not_called()
+        assert not CoachSubscription.objects.filter(coach=coach).exists()
+
     def test_bad_signature_is_400(self):
         with mock.patch(
             "store_project.meso.billing.webhooks.stripe.Webhook.construct_event",
