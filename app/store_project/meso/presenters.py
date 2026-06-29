@@ -159,6 +159,35 @@ def pending_request(link):
     }
 
 
+def agent_allowance(coach):
+    """The free-tier AI-agent meter for the designer + roster card (S6 Phase 5).
+
+    A free coach gets ``FREE_AGENT_ALLOWANCE`` agent runs per month (the metered
+    refinement of the old binary gate); ``metered`` is True only then, so the UI
+    shows "N of M free agent runs left" for a free coach and nothing for an
+    unlimited (trial/active/comped) coach. ``can_use`` mirrors
+    ``access.can_use_agent`` so a template can drive the composer/CTA off this one
+    read without a second query.
+    """
+    if billing_access.is_active(coach):
+        return {
+            "metered": False,
+            "allowance": 0,
+            "used": 0,
+            "remaining": None,
+            "can_use": True,
+        }
+    allowance = CoachSubscription.FREE_AGENT_ALLOWANCE
+    remaining = billing_access.free_agent_runs_remaining(coach)
+    return {
+        "metered": True,
+        "allowance": allowance,
+        "used": allowance - remaining,
+        "remaining": remaining,
+        "can_use": remaining > 0,
+    }
+
+
 def billing_state(coach):
     """The coach's billing/paywall state for the roster (S6 Phase 3).
 
@@ -190,6 +219,7 @@ def billing_state(coach):
         "seat_limit": None if seat_limit == math.inf else int(seat_limit),
         "can_add_athlete": billing_access.can_add_athlete(coach),
         "can_use_agent": billing_access.can_use_agent(coach),
+        "agent": agent_allowance(coach),
         "over_limit": billing_access.is_over_limit(coach),
         "can_start_trial": can_start_trial,
         "has_stripe_subscription": bool(sub and sub.stripe_subscription_id),

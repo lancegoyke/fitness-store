@@ -20,7 +20,7 @@ pricing assumptions into the schema.
 | D1 | **Who pays** | **The coach** (B2B SaaS). Athletes log in as the coach's clients; they never pay the platform. |
 | D2 | **Pricing model** | **Per-active-athlete (seats).** A coach pays per active `CoachAthlete` link, beyond a small free allotment. |
 | D3 | **Free access** | **Free tier + 14-day no-card trial.** A forever-free tier (a few free seats), plus a frictionless trial that needs no card; the free tier is also the lapse/cancel landing spot. |
-| D4 | **What the paywall gates** | **Active-athlete count + the AI agent.** The Claude-powered program agent (B6) has real per-call API cost, so it's paid-only — free tier gets **no** agent; trial/paid/comped get the full agent. Groups (S1) and notifications stay free at every tier. Both gates share one predicate (`is_active`), so the free tier is exactly "capped seats, no agent." |
+| D4 | **What the paywall gates** | **Active-athlete count + the AI agent.** The Claude-powered program agent (B6) has real per-call API cost, so it's paid-only — trial/paid/comped get the full agent. Groups (S1) and notifications stay free at every tier. (v1 gave the free tier **no** agent; **Phase 5 meters it** — a free coach gets a small monthly `FREE_AGENT_ALLOWANCE` of runs, then 402s. The seat gate still shares the `is_active` predicate.) |
 | D5 | **Cadence + currency** | **Monthly, USD** for v1 (annual deferred — annualizing a fluctuating seat count adds proration complexity for little v1 value). |
 | D6 | **Lapse / cancel** | Stripe Smart Retries → on final failure / cancel, **downgrade to free at period end**. Over the free limit ⇒ block *new* athletes + block edits/deliver until back within the limit or re-subscribed; **never delete data** (matches how an ended relationship archives, not deletes). |
 | D11 | **First slice** | **The subscription spine** for existing logged-in coaches. The public self-serve coach-signup funnel is a later phase. |
@@ -147,8 +147,13 @@ rule to avoid the app arbitrarily choosing which athletes to freeze.)
 > `become_coach` landing page (plan tiers + adaptive CTAs) and a `start_coaching`
 > action that creates the `CoachProfile` (idempotent; `plan=trial` also starts
 > the no-card trial), plus an entry-point link from the athlete home. A
-> `CoachProfile` is no longer admin/seed-only. Next: Phase 5 (annual prices,
-> per-athlete suspension, free-tier agent allowance).
+> `CoachProfile` is no longer admin/seed-only. Phase 5 ✅ (this slice, no
+> migration) — the **free-tier agent allowance**, the metered refinement of the
+> binary agent gate: a free coach gets `FREE_AGENT_ALLOWANCE` (5) agent runs per
+> calendar month (counted from the `AgentProposalBatch` ledger — no new model),
+> then the endpoint 402s; the designer shows a "N of M runs left" meter / upgrade
+> CTA and the roster card reflects it. Remaining Phase-5 items: annual prices,
+> per-athlete suspension granularity on downgrade.
 
 ### Deploying Phase 2 (Stripe configuration)
 
@@ -193,9 +198,16 @@ deploy succeeds without them (like the VAPID push keys):
    trial in the same step, then lands on the roster where the Phase 3 billing
    card owns plan choice (free / trial / subscribe). An entry-point link sits on
    the athlete home. No new model/migration. Tested in `test_coach_signup.py`.
-5. **Phase 5 — later.** Annual prices; per-athlete suspension granularity on
-   downgrade; a small free-tier agent *allowance* / metering (Phase 3 ships the
-   binary free=no-agent gate; an allowance is the refinement).
+5. **Phase 5 — partly DONE.** The **free-tier agent allowance** is done (this
+   slice, no migration): `CoachSubscription.FREE_AGENT_ALLOWANCE` (5) +
+   `billing/access.py` (`agent_runs_this_month` / `free_agent_runs_remaining` +
+   the metered `can_use_agent`, counting `AgentProposalBatch` rows in the current
+   calendar month — the batch table is the ledger, no new model) + the
+   `presenters.agent_allowance` meter wired into the designer (composer + "N of M
+   runs left" / upgrade CTA) and the roster card + the allowance-aware 402 copy at
+   `agent_propose`. Tested in `test_billing.py::TestAgentAllowance` and
+   `test_billing_enforcement.py`. **Still later:** annual prices; per-athlete
+   suspension granularity on downgrade.
 
 ## Open values (numbers, not architecture — confirm before/with Phase 1)
 
@@ -203,6 +215,8 @@ deploy succeeds without them (like the VAPID push keys):
 - **Trial length** — rec **14 days** (matches the invite TTL cadence).
 - **Per-seat price** — **needs a number** (e.g. $X / active athlete / month, USD).
 - **Monthly only** for v1 (annual deferred).
+- **Free agent allowance** — set to **5** runs / calendar month (Phase 5; tunable
+  via `CoachSubscription.FREE_AGENT_ALLOWANCE`).
 
 ## Test / dev story
 
@@ -216,7 +230,5 @@ deploy succeeds without them (like the VAPID push keys):
 
 - Annual billing; promo codes / coupons (Stripe supports both when wanted).
 - Per-athlete soft-suspension on downgrade (v1: coarse over-limit rule).
-- A small free-tier agent *allowance* / usage metering (v1 ships a binary gate:
-  free = no agent, paid = full agent).
 - Tax / VAT handling (Stripe Tax) if selling internationally.
 - Email receipts beyond Stripe's own invoice emails.

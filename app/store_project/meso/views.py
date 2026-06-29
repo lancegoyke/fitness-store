@@ -231,10 +231,14 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         # batches so the chat survives a reload (the JS hydrates ``messages``
         # from it, falling back to the greeting when empty).
         ctx["chat_thread"] = serialize_chat_thread(plan)
-        # Agent gate (S6 Phase 3, D4): the AI agent is paid-only. When the coach
-        # can't use it, the composer is replaced by an upgrade CTA (the endpoint
-        # also 402s, so the gate is defended server-side, not just hidden).
-        ctx["can_use_agent"] = billing_access.can_use_agent(self.request.user)
+        # Agent gate (S6 Phase 3, D4; Phase 5 metering): an active coach is
+        # unlimited; a free coach gets a monthly allowance. The meter drives the
+        # composer-vs-upgrade-CTA and the "N of M runs left" note; ``can_use_agent``
+        # is derived from it so the page does one read (the endpoint also 402s, so
+        # the gate is defended server-side, not just hidden).
+        agent_meter = presenters.agent_allowance(self.request.user)
+        ctx["agent_allowance"] = agent_meter
+        ctx["can_use_agent"] = agent_meter["can_use"]
         return ctx
 
 
@@ -1797,48 +1801,70 @@ def agent_propose(request, plan_id):
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
-    # Agent gate (D4): the Claude agent has real per-call cost, so it's paid-only —
-    # a free-tier coach gets a 402 (the designer shows an upgrade CTA in place of
-    # the composer). Trial/active/comped coaches pass. Defended here, not just in
-    # the UI, because the API cost is real.
-    if not billing_access.can_use_agent(request.user):
-        return JsonResponse(
-            {
-                "ok": False,
-                "error": (
-                    "The AI agent is available on a paid plan. Start your free "
-                    "trial or subscribe to use it."
-                ),
-                "upgrade": True,
-            },
-            status=402,
-        )
-    if plan.is_group:
-        # The agent grounds on a single athlete's profile + logs; a group agent
-        # (per-athlete auto-adjusts) is groups Phase 3. Reject before any work so
-        # it never dereferences ``plan.athlete``.
-        return HttpResponseBadRequest("The agent isn't available for groups yet.")
-    try:
-        payload = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return HttpResponseBadRequest("Malformed JSON.")
-    if not isinstance(payload, dict):
-        return HttpResponseBadRequest("Expected a JSON object.")
-    instruction = payload.get("instruction")
-    if not isinstance(instruction, str) or not instruction.strip():
-        return HttpResponseBadRequest("An instruction is required.")
-    instruction = instruction.strip()
-    if len(instruction) > MAX_INSTRUCTION_LENGTH:
-        return HttpResponseBadRequest("Instruction is too long.")
+    # Reserve the run atomically (S6 Phase 5 metering): lock the coach row, check
+    # the allowance, and create the batch in one transaction so concurrent
+    # agent_propose calls serialize — the lock is held until the batch row commits,
+    # so a second request blocks and then re-counts against the cap. The
+    # transaction must be *explicit*: the project's module-level ``ATOMIC_REQUESTS``
+    # is inert (Django reads it per-entry from ``DATABASES``, which ``dj_database_url``
+    # doesn't set), so without this ``select_for_update`` would raise in autocommit
+    # on Postgres and the count-then-create gate would be racy. (On SQLite/tests the
+    # lock is a no-op; the real serialization is on Postgres in prod.) Early returns
+    # below just commit an empty transaction — nothing is written on those paths.
+    with transaction.atomic():
+        User.objects.select_for_update().filter(pk=request.user.pk).first()
+        # Agent gate (D4): the Claude agent has real per-call cost. An
+        # active/trial/comped coach is unlimited; a free coach gets
+        # ``FREE_AGENT_ALLOWANCE`` runs/month and then 402s (the designer shows the
+        # upgrade CTA in place of the composer once exhausted). Only a free coach
+        # reaches this branch, so the copy is the allowance-used-up message.
+        # Defended here, not just in the UI, because the API cost is real.
+        if not billing_access.can_use_agent(request.user):
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": (
+                        f"You've used all {CoachSubscription.FREE_AGENT_ALLOWANCE} "
+                        "free agent runs this month. Start your free trial or "
+                        "subscribe for unlimited agent runs."
+                    ),
+                    "upgrade": True,
+                },
+                status=402,
+            )
+        if plan.is_group:
+            # The agent grounds on a single athlete's profile + logs; a group agent
+            # (per-athlete auto-adjusts) is groups Phase 3. Reject before any work
+            # so it never dereferences ``plan.athlete``.
+            return HttpResponseBadRequest("The agent isn't available for groups yet.")
+        try:
+            payload = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return HttpResponseBadRequest("Malformed JSON.")
+        if not isinstance(payload, dict):
+            return HttpResponseBadRequest("Expected a JSON object.")
+        instruction = payload.get("instruction")
+        if not isinstance(instruction, str) or not instruction.strip():
+            return HttpResponseBadRequest("An instruction is required.")
+        instruction = instruction.strip()
+        if len(instruction) > MAX_INSTRUCTION_LENGTH:
+            return HttpResponseBadRequest("Instruction is too long.")
 
-    # Guard on the key here so we answer 503 without persisting a dead batch.
-    if agent_client.get_default_client() is None:
-        return JsonResponse(
-            {"ok": False, "error": "The Meso agent is not configured (no API key)."},
-            status=503,
-        )
+        # Guard on the key here so we answer 503 without persisting a dead batch.
+        if agent_client.get_default_client() is None:
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "The Meso agent is not configured (no API key).",
+                },
+                status=503,
+            )
 
-    batch = agent_service.create_drafting_batch(plan, instruction, coach=request.user)
+        batch = agent_service.create_drafting_batch(
+            plan, instruction, coach=request.user
+        )
+    # The batch is committed; enqueue the worker run and bump the plan outside the
+    # lock so neither holds the coach row.
     agent_jobs.dispatch_proposal(batch.pk)
     _touch_plan(plan)
     return JsonResponse(
