@@ -506,6 +506,33 @@ function createMeso() {
       });
     },
 
+    // Add a training day to the current week (first-time-UX Phase 1). The server
+    // appends the Session to the plan's current week and returns it in the grid's
+    // day shape; we push it so the new (empty-but-for-a-starter-row) day appears
+    // without a reload.
+    async addDay() {
+      if (this.live) {
+        try {
+          const data = await this.apiPost(
+            `/meso/api/plan/${this.planId}/session/`,
+            null,
+          );
+          this.program.push(data.session);
+        } catch (err) {
+          console.error("Add day failed", err);
+        }
+        return;
+      }
+      const n = this.program.length + 1;
+      this.program.push({
+        id: "d" + this.exSeq++,
+        n,
+        name: "Day " + n,
+        bias: "",
+        exercises: [],
+      });
+    },
+
     // ---- agent chat ----
     //
     // Each coach turn POSTs to the real proposal endpoint and renders the

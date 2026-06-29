@@ -71,6 +71,7 @@ from .serializers import serialize_chat_thread
 from .serializers import serialize_plan
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
+from .serializers import serialize_session
 from .serializers import serialize_session_log
 from .serializers import serialize_week_snapshot
 from .unsubscribe import athlete_opted_out
@@ -334,6 +335,9 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         ctx["active"] = "roster"
         ctx["athlete"] = presenters.profile_athlete(link.athlete)
         ctx["coach_style"] = presenters.coach_style(self.request.user)
+        # The relationship's working program (first-time-UX Phase 1): when one
+        # exists the CTAs open it in the designer; when not, they create one.
+        ctx["working_plan"] = link.working_plan()
         # Current block / macrocycle / latest results arrive with the program
         # schema (Phase 2) and logging (Phase 3).
         ctx["macrocycle"] = []
@@ -440,6 +444,40 @@ def group_design(request, pk):
             messages.error(request, OVER_LIMIT_MESSAGE)
             return redirect("meso:group", pk=group.pk)
         plan = group.shared_plan() or group.create_shared_plan()
+    return redirect("meso:designer_plan", plan_id=plan.pk)
+
+
+@login_required
+@require_POST
+def plan_create(request, pk):
+    """Create (or open) an individual program for one of the coach's athletes.
+
+    The individual analogue of ``group_design`` — the action behind the
+    "+ New program" / "Build a program" CTAs (first-time-UX Phase 1). Coach-scoped
+    to an *active* link (a foreign, pending, or unknown athlete is a flat 404).
+    Idempotent: reuses the relationship's existing non-archived plan, only
+    creating (with a starter scaffold) when there is none, under a row lock so two
+    concurrent submits can't each create one. Billing (D6): a soft-suspended
+    athlete (an over-limit coach's newer relationships) is frozen — a flashed
+    redirect, no plan created — consistent with the edit gate the designer would
+    hit immediately. Lands in the designer.
+    """
+    with transaction.atomic():
+        relationship = (
+            CoachAthlete.objects.select_for_update()
+            .for_coach(request.user)
+            .active()
+            .filter(athlete_id=pk)
+            .first()
+        )
+        if relationship is None:
+            raise Http404("Unknown athlete")
+        # Per-athlete freeze (D6): a suspended relationship can't be edited, so
+        # don't let one spawn a plan the autosave/deliver endpoints would 402 on.
+        if relationship.pk in billing_access.suspended_athlete_ids(request.user):
+            messages.error(request, OVER_LIMIT_MESSAGE)
+            return redirect("meso:athlete", pk=pk)
+        plan = relationship.working_plan() or relationship.create_plan()
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
@@ -1461,6 +1499,35 @@ def session_add_exercise(request, plan_id, pk):
     return JsonResponse(
         {"ok": True, "prescription": serialize_prescription(prescription)}, status=201
     )
+
+
+@login_required
+@require_POST
+def session_add(request, plan_id):
+    """Append a blank training day (with a starter row) to the plan's current week.
+
+    The designer edits the current week, so "add a day" means add a ``Session`` to
+    that week — letting a scaffolded plan grow past its two starter days
+    (first-time-UX Phase 1). Scoped + edit-gated like the other designer writes via
+    ``_editable_plan_or_response`` (403 foreign, 402 over-limit). Returns the new
+    day in the grid's day shape so the client can append it without a reload.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    week = current_week(plan)
+    if week is None:
+        return HttpResponseBadRequest("This plan has no week to add a day to.")
+    next_order = (week.sessions.aggregate(m=Max("order"))["m"] or 0) + 1
+    next_day = (week.sessions.aggregate(m=Max("day_number"))["m"] or 0) + 1
+    session = Session.objects.create(
+        week=week, day_number=next_day, name=f"Day {next_day}", order=next_order
+    )
+    ExercisePrescription.objects.create(
+        session=session, name="New exercise", order=0, sets="3", reps="10", rpe="7"
+    )
+    _touch_plan(plan)
+    return JsonResponse({"ok": True, "session": serialize_session(session)}, status=201)
 
 
 # Free-form per-athlete override cells, mapped to their model ``max_length``.

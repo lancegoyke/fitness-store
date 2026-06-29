@@ -2,10 +2,6 @@
 
 {% block title %}Roster · Meso{% endblock %}
 
-{% block topnav_actions %}
-  <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer' %}">+ New program</a>
-{% endblock %}
-
 {% block content %}
   <div class="meso-page">
     <div class="meso-pagehead">
@@ -118,6 +114,28 @@
               <input name="email" type="email" required maxlength="254" placeholder="athlete@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
               <button type="submit" class="meso-btn meso-btn--primary">Send invite</button>
             </form>
+          </details>
+
+          <!-- Build an individual program for an athlete (first-time-UX Phase 1).
+               A program is rooted at one athlete, so this picks the athlete then
+               creates (or reopens) their plan and lands in the designer. -->
+          <details style="border-top:1px solid var(--line-2);">
+            <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent-ink);">+ New program</summary>
+            <div style="display:flex;flex-direction:column;gap:8px;padding:4px 16px 16px;">
+              {% if athletes %}
+                <p class="meso-sub" style="margin:0 0 2px;">Pick an athlete to start a program for.</p>
+                {% for a in athletes %}
+                  <form method="post" action="{% url 'meso:plan_create' a.id %}" style="display:flex;align-items:center;gap:9px;margin:0;">
+                    {% csrf_token %}
+                    <span class="meso-avatar meso-avatar--sm {% if a.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ a.initials }}</span>
+                    <span style="flex:1;min-width:0;font-size:13px;color:var(--ink);">{{ a.name }}</span>
+                    <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">New program</button>
+                  </form>
+                {% endfor %}
+              {% else %}
+                <p class="meso-sub" style="margin:0;">Invite an athlete first to build them a program.</p>
+              {% endif %}
+            </div>
           </details>
         </div>
 

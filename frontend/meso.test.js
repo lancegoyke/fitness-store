@@ -498,3 +498,49 @@ describe("coach 1RM editor", () => {
     expect(c.oneRm).not.toBe(null);
   });
 });
+
+// addDay — append a training day to the current week (first-time-UX Phase 1).
+// Mirrors addExercise: live → POST and push the server's day; offline → a local
+// placeholder; a failed add leaves the grid untouched.
+describe("addDay", () => {
+  it("appends the server's new day to the grid when live", async () => {
+    const c = makeMeso();
+    c.program = [{ id: 1, n: 1, name: "Day 1", exercises: [] }];
+    const newDay = {
+      id: 2,
+      n: 2,
+      name: "Day 2",
+      bias: "",
+      exercises: [{ id: 9, name: "New exercise" }],
+    };
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ status: 201, body: { ok: true, session: newDay } }));
+    await c.addDay();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toBe("/meso/api/plan/7/session/");
+    expect(c.program).toHaveLength(2);
+    expect(c.program[1]).toEqual(newDay);
+  });
+
+  it("adds a local placeholder day without a network call when not live", async () => {
+    const c = makeMeso();
+    c.live = false;
+    c.program = [];
+    global.fetch = vi.fn();
+    await c.addDay();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(c.program).toHaveLength(1);
+    expect(c.program[0].name).toBe("Day 1");
+    expect(c.program[0].exercises).toEqual([]);
+  });
+
+  it("leaves the grid unchanged when the add fails", async () => {
+    const c = makeMeso();
+    c.program = [{ id: 1, n: 1, name: "Day 1", exercises: [] }];
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 402 }));
+    await c.addDay();
+    expect(c.program).toHaveLength(1);
+  });
+});
