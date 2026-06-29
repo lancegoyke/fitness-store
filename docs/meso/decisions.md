@@ -148,7 +148,7 @@ claim, reusing allauth. Detailed design when we build the relationship.
 | # | Decision | Note |
 |---|----------|------|
 | S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) + Phase 2a (shared group program + Group-mode designer) + Phase 3 (per-athlete overrides — the `adj` overlay) built; plan in [`groups-plan.md`](./groups-plan.md) |
-| S2 | **Units & RPE vs %1RM** | ✅ Complete — units (kg/lb) shipped with earlier slices; Phase 1 (first-class `load_type` `abs`/`pct`) + Phase 2a (agent %1RM-awareness — prompt + a deterministic %1RM progression bound) + Phase 2b (athlete %1RM logging ergonomics — the estimated-1RM helper) all built & deployed. Plan in [`units-rpe-plan.md`](./units-rpe-plan.md) |
+| S2 | **Units & RPE vs %1RM** | ✅ Complete — units (kg/lb) shipped with earlier slices; Phase 1 (first-class `load_type` `abs`/`pct`) + Phase 2a (agent %1RM-awareness — prompt + a deterministic %1RM progression bound) + Phase 2b (athlete %1RM logging ergonomics — the estimated-1RM helper) all built & deployed. **Follow-up: persisted, coach-visible 1RM** (Phase 1 — `AthleteOneRm`, auto-derived from logged history) built. Plans in [`units-rpe-plan.md`](./units-rpe-plan.md) / [`one-rm-plan.md`](./one-rm-plan.md) |
 | S3 | **Delivery & notifications** | Push needs PWA + push infra; email via existing `django-ses` + `notifications` app |
 | S4 | **Results ↔ `challenges`/records** | Results screen shows a PR — reuse the records model or keep separate? |
 | S5 | **Real-time transport** | HTMX polling vs SSE/websockets for chat/drafting |
@@ -452,4 +452,21 @@ _(Append dated entries here as decisions land.)_
   frontend), ruff + prettier clean, `makemigrations --check` clean. **Local Codex review: CLEAN on
   iteration 1.** **Deferred:** a persisted/coach-visible estimated 1RM (model + migration) and
   auto-deriving it from logged history. **The whole Meso feature area is now real & deployed; S2 is
-  complete — no obvious next big slice, ask the user.** Plan in [`units-rpe-plan.md`](./units-rpe-plan.md).
+  complete — no obvious next big slice, ask the user.** Plan in [`units-rpe-plan.md`](./units-rpe-plan.md)
+- 2026-06-28 — **S2 follow-up: persisted, auto-derived, coach-visible 1RM — Phase 1 built** (branch
+  `meso-one-rm-phase1`). The deferred Phase-2b follow-up: the athlete's estimated 1RM lived only in
+  per-device `localStorage`. Phase 1 promotes it to a real **`AthleteOneRm`** row (one per
+  `(athlete, lift)`; lift identity = the B4 hybrid `_exercise_key`, denormalized into a `key` with
+  `unique(athlete, key)`), **auto-derived from the athlete's completed logged sets** — the best Epley
+  estimate per lift (`one_rm.py`: `epley_one_rm` mirrors `meso_athlete.js` exactly, `derive_one_rm_values`
+  / `refresh_one_rms` / `one_rm_values`). The log endpoint refreshes the rows on every *done* save;
+  migration `0012_athleteonerm` (schema) + `0013_backfill_one_rms` (derives from existing history,
+  idempotent). **Two surfaces:** the athlete logger seeds its suggested bar load from the derived value
+  (a typed per-device override still layers on top — `effectiveOneRm`), and the coach designer shows a
+  `1RM: 140 kg` badge on an individual plan's `%1RM` row (`serialize_plan` threads it; a group plan has
+  no single athlete, so none). The seed derives Maya's Box Squat 1RM (84) so the demo shows it. Built
+  red→green: **+33 pytest** (`test_one_rm.py`; 600 meso / 740 project-wide) + **+5 Vitest** (65 frontend)
+  + a seed assertion, ruff + format clean, `makemigrations --check` clean. Plan in
+  [`one-rm-plan.md`](./one-rm-plan.md). **Deferred:** manual entry persisted server-side (a `source` field
+  + endpoint — today logs only *raise* the estimate), coach-editable 1RM, smarter derivation / unit
+  conversion..

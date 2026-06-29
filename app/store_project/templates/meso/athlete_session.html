@@ -51,10 +51,11 @@
             <div style="display:flex;align-items:center;gap:8px;margin-top:7px;flex-wrap:wrap;">
               <span class="meso-badge meso-badge--accent">%1RM</span>
               <label class="meso-row-meta" style="display:flex;align-items:center;gap:5px;margin:0;">your 1RM
-                <input class="meso-phone-input" x-model="ex.e1rm" @input="persistE1rm(ex)" placeholder="1RM" inputmode="decimal"
+                <input class="meso-phone-input" x-model="ex.e1rm" @input="persistE1rm(ex)" :placeholder="ex.one_rm || '1RM'" inputmode="decimal"
                        style="width:58px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:5px 4px;outline:none;color:var(--ink);" />
                 <span x-text="unit"></span>
               </label>
+              <span class="meso-row-meta meso-mono" x-show="usingDerivedOneRm(ex)" x-cloak x-text="'from your logs'" style="color:var(--dim);"></span>
               <span class="meso-row-meta meso-mono" style="color:var(--accent);font-weight:700;" x-show="suggestedLoad(ex)" x-cloak x-text="ex.load + '% ≈ ' + suggestedLoad(ex)"></span>
             </div>
           </template>

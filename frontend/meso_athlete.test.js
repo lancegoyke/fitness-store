@@ -309,6 +309,61 @@ describe("isPercentLift / suggestedLoad / setImpliedOneRm", () => {
   });
 });
 
+describe("server-derived 1RM (effectiveOneRm / usingDerivedOneRm)", () => {
+  function logger(ex) {
+    const c = createLogger();
+    c.unit = "kg";
+    c.exercises = [ex];
+    return c;
+  }
+
+  it("uses the server's derived 1RM when no value is typed", () => {
+    const c = logger({ load: "75", load_type: "pct", one_rm: "120", e1rm: "" });
+    expect(c.effectiveOneRm(c.exercises[0])).toBe("120");
+    expect(c.suggestedLoad(c.exercises[0])).toBe("90 kg"); // 75% of 120
+  });
+
+  it("lets a typed estimate override the derived value", () => {
+    const c = logger({ load: "75", load_type: "pct", one_rm: "120", e1rm: "200" });
+    expect(c.effectiveOneRm(c.exercises[0])).toBe("200");
+    expect(c.suggestedLoad(c.exercises[0])).toBe("150 kg"); // 75% of 200
+  });
+
+  it("falls back to derived when the typed value is non-numeric", () => {
+    const c = logger({ load: "75", load_type: "pct", one_rm: "120", e1rm: "abc" });
+    expect(c.effectiveOneRm(c.exercises[0])).toBe("120");
+  });
+
+  it("flags when the suggestion is sized off the derived 1RM", () => {
+    const c = logger({ load: "75", load_type: "pct", one_rm: "120", e1rm: "" });
+    expect(c.usingDerivedOneRm(c.exercises[0])).toBe(true);
+    c.exercises[0].e1rm = "200";
+    expect(c.usingDerivedOneRm(c.exercises[0])).toBe(false);
+    c.exercises[0].e1rm = "";
+    c.exercises[0].one_rm = "";
+    expect(c.usingDerivedOneRm(c.exercises[0])).toBe(false);
+  });
+
+  it("hydrates one_rm from the payload alongside a typed override", () => {
+    document.body.innerHTML =
+      '<span id="meso-csrf" data-token="tok"></span>' +
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        status: "pending",
+        unit: "kg",
+        exercises: [{ id: 7, load: "75", load_type: "pct", one_rm: "142.5", set_rows: [] }],
+      }) +
+      "</script>";
+    localStorage.setItem("meso-e1rm", JSON.stringify({ 7: "150" }));
+    const c = createLogger();
+    c.init();
+    expect(c.exercises[0].one_rm).toBe("142.5");
+    expect(c.exercises[0].e1rm).toBe("150");
+    expect(c.effectiveOneRm(c.exercises[0])).toBe("150");
+  });
+});
+
 describe("estimated-1RM persistence", () => {
   it("round-trips per-exercise 1RM estimates through localStorage", () => {
     const c = createLogger();

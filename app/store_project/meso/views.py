@@ -29,6 +29,7 @@ from django.views.generic import TemplateView
 
 from store_project.notifications.emails import send_week_delivered_email
 
+from . import one_rm as meso_one_rm
 from . import presenters
 from . import push as meso_push
 from .agent import apply as agent_apply
@@ -538,6 +539,17 @@ def athlete_log_session(request, pk):
                 )
                 for cs in cleaned_sets
             ]
+        )
+        # Refresh the athlete's persisted 1RM for this session's lifts from their
+        # *completed* logs. Run on every save, not only a done one: derivation
+        # counts done logs only, so refreshing after a done→pending downgrade (this
+        # session is no longer a finished performance) clears an estimate that's
+        # now unsupported. Recomputes from scratch — a heavier set raises it, an
+        # edit that drops the PR lowers it, a removed basis clears it.
+        meso_one_rm.refresh_one_rms(
+            request.user,
+            list(session.prescriptions.all()),
+            session.week.mesocycle.plan.unit,
         )
     return JsonResponse({"ok": True, "log": serialize_session_log(log)})
 

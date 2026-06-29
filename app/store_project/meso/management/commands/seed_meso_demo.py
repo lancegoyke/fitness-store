@@ -48,6 +48,7 @@ from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
 from store_project.meso.models import Week
+from store_project.meso.one_rm import refresh_one_rms
 from store_project.users.models import User
 
 DEFAULT_COACH_EMAIL = "lancegoyke@gmail.com"
@@ -665,32 +666,36 @@ class Command(BaseCommand):
                 "date": today - timedelta(days=SAMPLE_LOG["logged_days_ago"]),
             },
         )
-        if not created and log.sets.exists():
-            self.stdout.write("  - sample logged session present; left intact")
-            return log
-
-        log.sets.all().delete()
         prescriptions = {
             p.name: p for p in ExercisePrescription.objects.filter(session=session)
         }
-        rows = []
-        for name, sets in SAMPLE_LOG["sets"].items():
-            prescription = prescriptions.get(name)
-            if prescription is None:
-                continue
-            for set_number, (reps, load, rpe) in enumerate(sets, start=1):
-                rows.append(
-                    LoggedSet(
-                        session_log=log,
-                        prescription=prescription,
-                        set_number=set_number,
-                        reps=reps,
-                        load=load,
-                        rpe=rpe,
+        if not created and log.sets.exists():
+            self.stdout.write("  - sample logged session present; left intact")
+        else:
+            log.sets.all().delete()
+            rows = []
+            for name, sets in SAMPLE_LOG["sets"].items():
+                prescription = prescriptions.get(name)
+                if prescription is None:
+                    continue
+                for set_number, (reps, load, rpe) in enumerate(sets, start=1):
+                    rows.append(
+                        LoggedSet(
+                            session_log=log,
+                            prescription=prescription,
+                            set_number=set_number,
+                            reps=reps,
+                            load=load,
+                            rpe=rpe,
+                        )
                     )
-                )
-        LoggedSet.objects.bulk_create(rows)
-        self.stdout.write(
-            f"  - logged sample session '{session.name}' for {athlete.name}"
-        )
+            LoggedSet.objects.bulk_create(rows)
+            self.stdout.write(
+                f"  - logged sample session '{session.name}' for {athlete.name}"
+            )
+
+        # Derive Maya's estimated 1RM from the logged session (the seed writes the
+        # log directly, so the log endpoint's refresh hasn't run) — so the demo's
+        # %1RM Box Squat shows a real 1RM in the designer + her logger. Idempotent.
+        refresh_one_rms(athlete, list(prescriptions.values()), plan.unit)
         return log

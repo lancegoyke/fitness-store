@@ -6,6 +6,7 @@ try:
     from store_project.users.factories import UserFactory
 
     from .models import AgentProposalBatch
+    from .models import AthleteOneRm
     from .models import AthleteProfile
     from .models import CoachAthlete
     from .models import CoachProfile
@@ -212,6 +213,22 @@ try:
         prescription = factory.SubFactory(ExercisePrescriptionFactory)
         load_pct = 90
 
+    class AthleteOneRmFactory(DjangoModelFactory):
+        """An athlete's persisted, log-derived 1RM for a lift (S2 follow-up).
+
+        ``key`` is derived in ``AthleteOneRm.save`` from ``exercise``/``name``, so
+        the factory only sets the identity inputs + the value.
+        """
+
+        class Meta:
+            model = AthleteOneRm
+
+        athlete = factory.SubFactory(UserFactory)
+        exercise = None
+        name = factory.Sequence(lambda n: f"Exercise {n}")
+        value = 100
+        unit = Unit.KILOGRAMS
+
 except ImportError:
     # Factory Boy is not available (likely in production).
     class CoachProfileFactory:
@@ -266,4 +283,7 @@ except ImportError:
         pass
 
     class ProposedChangeFactory:
+        pass
+
+    class AthleteOneRmFactory:
         pass
