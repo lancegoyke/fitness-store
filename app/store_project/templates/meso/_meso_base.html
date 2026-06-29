@@ -4,8 +4,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    {# Filled before any external resource (fonts) loads — e.g. a no-referrer
-       policy on token-bearing pages. Must precede the font <link>s below. #}
+    {% comment %}
+      Filled before any external resource (fonts) loads — e.g. a no-referrer
+      policy on token-bearing pages. Must precede the font <link>s below.
+    {% endcomment %}
     {% block head_top %}{% endblock %}
     <title>{% block title %}Meso{% endblock %} · Mastering Fitness</title>
     <link rel="shortcut icon" href="{% static 'png/favicon-black.png' %}" />
