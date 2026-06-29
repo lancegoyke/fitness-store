@@ -529,7 +529,13 @@ _(Append dated entries here as decisions land.)_
   and both "+ New program" and "Build a program" CTAs bounce off the bare designer
   back to the roster; only `seed_meso_demo` builds an individual plan tree. Phased
   fix (Phase 1 = individual plan creation, the structural fix; 2–5 = front
-  door, empty states, role fork, athlete + designer first-run polish). **Open for
-  decision (Q1–Q4 in the plan):** self-serve vs invite-only coach signup ·
-  plan-creation shape (blank / template / agent-drafted) · one-click demo for new
-  coaches · landing-page location & visibility.
+  door, empty states, role fork, athlete + designer first-run polish).
+  **Decisions Q1–Q4 resolved (2026-06-29):** **Q1** coaches = **closed beta /
+  allowlisted** (`CoachProfile` auto-creates on first coach action for an
+  allowlisted user; open self-serve deferred to billing S6 — no billing yet + a
+  per-coach Claude cost + a single box make open signup premature); **Q2** plan
+  creation = **blank editable scaffold first**, optional agent draft as a fast
+  follow (template library deferred); **Q3** = **yes** to a removable one-click
+  demo (no demo-athlete email/push); **Q4** = a **logged-out `/meso/` landing**
+  with "I have an invite" + "Request coach access" + one main-site link (not
+  instant-signup). Q1 is the most consequential and the easiest to revisit.

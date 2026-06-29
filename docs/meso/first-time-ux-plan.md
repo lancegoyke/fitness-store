@@ -1,6 +1,6 @@
 # Meso — first-time UX / onboarding slice plan
 
-**Status:** 🟡 Proposed (not started) · created 2026-06-29
+**Status:** 🟡 Proposed · decisions Q1–Q4 resolved 2026-06-29 · build not started
 **Companion to:** [`decisions.md`](./decisions.md) (B1 multi-coach, B2 athlete
 login, N3 roles, N4 invites) · [`invites-plan.md`](./invites-plan.md) ·
 [`athlete-plan.md`](./athlete-plan.md) · [`groups-plan.md`](./groups-plan.md)
@@ -94,32 +94,42 @@ are `User`s who log in; coach edits their plan), **N3** (roles: `CoachProfile`
 presence = is-a-coach — today effectively *vestigial for access*, since no view
 gates on it), **N4** (email invites built — the athlete's join path exists).
 
-### Open product questions (settle before/within build)
+### Product decisions (resolved 2026-06-29)
 
-These are genuinely product calls; recorded here with a recommendation each so the
-build isn't blocked, mirroring `decisions.md`'s convention.
+These are genuine product calls; the owner delegated them. Resolved as below
+(mirroring `decisions.md`'s ✅-Decided convention). **Q1 is the most consequential
+— a real go-to-market stance — and the easiest to revisit.**
 
 - **Q1 · Coach acquisition — self-serve signup, or invite/closed-beta only?**
-  Decides whether Phase 2 builds a coach signup + `CoachProfile` creation flow, or
-  keeps coaches admin-seeded with only a thin "become a coach" toggle.
-  **Rec:** self-serve, but minimal — first coach action (`get_or_create` a
-  `CoachProfile`) makes you a coach; no separate signup funnel yet.
+  **✅ Decided: closed beta — coaches are allowlisted.** Not open self-serve.
+  Forced by three facts: **no billing yet** (S6 deferred), each coach's agent runs
+  call Claude Opus — a **real per-coach cost** — and it's a **single shared box**.
+  Open signup is an unbounded cost/abuse vector. Mechanism: a lightweight
+  allowlist (a setting/flag); `CoachProfile` **auto-creates on the first coach
+  action for an allowlisted user** (so the owner + approved beta coaches are never
+  blocked on admin surgery). Athletes stay self-serve via the existing invite
+  claim. B1's multi-coach architecture is unchanged; flipping to open self-serve
+  later is a one-flag retrofit, gated on the billing slice (S6).
 - **Q2 · Individual plan creation shape — blank scaffold, template library, or
-  agent-drafted-from-a-brief?** Affects the Phase 1 create flow.
-  **Rec:** ship a **blank-but-editable scaffold** first (one mesocycle, one
-  delivered-able week, a couple of empty sessions), then layer an **optional agent
-  draft** ("draft a starting block from this goal") reusing the existing proposal
-  engine behind the review gate.
-- **Q3 · One-click demo for a new coach?** A "Load a demo athlete & program"
-  button so a coach can *see* a populated roster/designer/results before committing
-  real clients.
-  **Rec:** yes — a coach-scoped UI wrapper over the existing idempotent
-  `seed_meso_demo` logic; tear-down ("remove demo data") included.
-- **Q4 · Where does the landing page live + how visible is it?** At `/meso/` for
-  logged-out visitors, or a marketing page elsewhere; public or beta-gated.
-  **Rec:** a logged-out `/meso/` landing (split anon vs authenticated in the front
-  door) + a single discreet link from the main site nav; keep copy honest about
-  beta status.
+  agent-drafted-from-a-brief?**
+  **✅ Decided: blank scaffold first, agent-draft as a fast follow.** Phase 1 ships
+  a **blank-but-editable scaffold** (one mesocycle, one deliverable week, a couple
+  of empty sessions) — the smallest change that kills the dead end. Then layer an
+  **optional agent draft** ("draft a starting block from this goal") reusing the
+  existing proposal engine behind the review gate. **Template library deferred** —
+  it needs a corpus of templates we don't have yet.
+- **Q3 · One-click demo for a new coach?**
+  **✅ Decided: yes.** A coach-scoped UI wrapper over the existing idempotent
+  `seed_meso_demo` logic, with **tear-down** ("remove demo data"). Two guardrails:
+  demo data is **clearly labeled** and **fully removable**, and demo athletes
+  receive **no outbound email/push** (they aren't real people — the deliver
+  notification hooks must skip them).
+- **Q4 · Where does the landing page live + how visible is it?**
+  **✅ Decided: a logged-out `/meso/` landing, request-access for coaches.** A
+  public page explaining Meso with two honest entry actions — **"I have an invite"**
+  (athlete) and **"Request coach access"** (beta, per Q1) — plus a single discreet
+  link from the main site nav. **Not** an instant-signup funnel; the front door
+  splits anon (landing) vs authenticated (role routing).
 
 ---
 
@@ -182,20 +192,24 @@ program"** CTAs to actually create (and rename their dead-end copy).
 in a working, editable, deliverable designer — **with no seed required**.
 
 ### Phase 2 — Coach first-run & active empty states (coach)
-Self-serve `CoachProfile` (Q1), empty states that **teach the Invite → Build →
-Deliver model** with inline CTAs promoted out of the `<details>` disclosures, and
-an optional **"Load a demo athlete & program"** button (Q3) so a coach can explore
-a populated app before committing real clients.
-*Done when:* a brand-new coach immediately understands the 3-step model and can
-either start for real or one-click a demo, then clear it.
+Allowlisted-coach access (Q1): `CoachProfile` **auto-creates on the first coach
+action for an allowlisted user** (non-allowlisted users see "request access", not
+the roster). Empty states that **teach the Invite → Build → Deliver model** with
+inline CTAs promoted out of the `<details>` disclosures, and a **"Load a demo
+athlete & program"** button (Q3, removable, no demo-athlete email/push) so a coach
+can explore a populated app before committing real clients.
+*Done when:* an allowlisted brand-new coach immediately understands the 3-step
+model and can either start for real or one-click a demo, then clear it.
 
 ### Phase 3 — The front door (anonymous visitor + routing)
-A real logged-out `/meso/` landing (what Meso is · coach vs athlete CTAs ·
-honest beta framing, Q4), a single discreet **link from the main site** so it's
-discoverable at all, and an **explicit role fork** for the ambiguous "logged in,
-no role yet" state (replacing the silent non-athlete-=-coach assumption).
+A real logged-out `/meso/` landing (what Meso is · two entry actions — **"I have
+an invite"** and **"Request coach access"**, per Q4/Q1), a single discreet **link
+from the main site** so it's discoverable at all, and an **explicit role fork** for
+the ambiguous "logged in, no role yet" state (replacing the silent
+non-athlete-=-coach assumption; a non-allowlisted user lands on request-access, not
+a coach roster).
 *Done when:* someone who's never heard of Meso lands on `/meso/`, understands it in
-one screen, and is routed to the right surface.
+one screen, and is routed to the right surface (or to request-access).
 
 ### Phase 4 — Athlete first-run polish (athlete)
 An **install (PWA) prompt** and a one-time **first-log coachmark** on `/meso/me/`
@@ -248,11 +262,11 @@ precedent), and cover the rest with Vitest where helpers are pure.
 
 ---
 
-## Open decisions (for the owner)
+## Decisions (resolved 2026-06-29)
 
-| # | Question | Rec |
-|---|----------|-----|
-| Q1 | Coach acquisition — self-serve or invite-only? | Self-serve, minimal (`get_or_create` `CoachProfile` on first coach action) |
-| Q2 | Plan-creation shape — blank / template / agent-drafted? | Blank scaffold first, optional agent draft behind the review gate |
-| Q3 | One-click demo for new coaches? | Yes — coach-scoped wrapper over `seed_meso_demo`, with clear-down |
-| Q4 | Landing page location + visibility? | Logged-out `/meso/` + one main-site link; honest beta framing |
+| # | Question | ✅ Decision |
+|---|----------|------------|
+| Q1 | Coach acquisition — self-serve or invite-only? | **Closed beta** — allowlisted coaches; `CoachProfile` auto-creates on first coach action for an allowlisted user; open self-serve deferred to billing (S6). *(Most consequential — easiest to revisit.)* |
+| Q2 | Plan-creation shape — blank / template / agent-drafted? | **Blank scaffold first** (Phase 1), **optional agent draft** as a fast follow (reuses the review gate); template library deferred |
+| Q3 | One-click demo for new coaches? | **Yes** — coach-scoped wrapper over `seed_meso_demo`, removable, no demo-athlete email/push |
+| Q4 | Landing page location + visibility? | **Logged-out `/meso/` landing** with "I have an invite" + "Request coach access" + one main-site link; not instant-signup |
