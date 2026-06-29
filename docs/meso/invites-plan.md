@@ -81,11 +81,55 @@ Built **red→green** with a new `test_invites.py` (model state machine, the fou
 views with auth/scoping/validation, the email send/skip + on-commit best-effort,
 the roster surface) plus an email-helper test.
 
-## Deferred (Phase 2+)
+## Phase 2 (built) — close the bidirectional invite loop
 
-- **Athlete → coach request** UI (the `CoachAthlete.request` half) and a pending
-  surface on the athlete home.
+The reverse direction the relationship spine always supported in the model
+(`CoachAthlete.request` → `pending_athlete_request`) but never in the UI: an
+athlete who already has an account asks to train under a coach, the coach
+accepts/declines on their roster, and either party sees the pending state on
+their own surface. **No migration** — the state machine + the recipient token
+views (`invite_accept`/`invite_decline`) already existed; Phase 2 adds the
+*initiator* side and the surfaces.
+
+1. **`CoachAthlete.initiator()`** — the mirror of `recipient()`: who opened a
+   pending link (coach for an invite, athlete for a request). The initiator is
+   who may *withdraw* a pending link, as the recipient is who accepts/declines.
+2. **Athlete request view** — `POST /meso/request/` (`athlete_request_coach`):
+   resolves the posted email to a *coach* (a `User` with a `CoachProfile`,
+   excluding self), rejecting an unknown/non-coach/own address. An already-active
+   link is left untouched; an already-pending request (or a coach-invite already
+   awaiting the athlete) is a friendly no-op; otherwise `request()` opens (or
+   reopens a closed) pending link. The coach is emailed on
+   `transaction.on_commit`, best-effort.
+3. **Withdraw view** — `POST /meso/request/<token>/withdraw/`
+   (`request_withdraw`): initiator-only (the recipient/stranger get 403),
+   pending-only; marks the link declined.
+4. **Coach response** rides the existing `invite_accept`/`invite_decline`
+   recipient views unchanged — a request's recipient *is* the coach.
+5. **Request email** — `notifications.send_coach_request_email(athlete, coach,
+   roster_url)` + subject/`.md`/`.html` templates, mirroring the invite email;
+   skips a coach with no address.
+6. **Surfaces** — the coach roster gains a pending-request list (Accept/Decline
+   per row); the athlete home gains a "Your coaches" card: incoming invites
+   (Accept/Decline), sent requests (Pending + Withdraw), and a request-a-coach
+   form.
+7. **Routing** — `RosterView` now sends *any* non-coach to `/meso/me/` (a coach =
+   has a `CoachProfile`, a coach-side link, or a sent invite), so a brand-new
+   athlete or one merely awaiting an invite reaches the request form / pending
+   surface instead of an empty coach roster.
+8. **Seed** — a seeded pending athlete→coach request (`hopeful@example.com`) so
+   the roster's request surface shows on a fresh DB; idempotent + torn down.
+
+Built **red→green** with a new `test_requests.py` (the `initiator()` mirror, the
+email helper, the request + withdraw views with auth/scoping/validation, the
+coach-response recipient path, both pending surfaces, and the routing) + seed
+coverage. **Codex review loop: CLEAN on iteration 1.**
+
+## Deferred (Phase 3+)
+
 - **Resend / expiry** of an invite (today re-inviting reuses the pending row and
   re-sends; no TTL).
 - **Stub-athlete** pre-creation (we never create a placeholder `User`).
 - **Coach/athlete attribution beyond `accepted_by`**; richer invite history.
+- **Coach-side roster filtering by relationship state** beyond pending (e.g. a
+  declined/ended history view).
