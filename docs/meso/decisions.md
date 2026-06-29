@@ -633,3 +633,29 @@ _(Append dated entries here as decisions land.)_
   succeeds. Intentionally *not* a notification-preferences system — one flag for the one email that
   needed an off switch. Admin surfaces + filters the flag. Built red→green: **+16 pytest**
   (`test_unsubscribe.py`); ruff + format + `makemigrations --check` clean.
+- 2026-06-29 — **First-time UX / onboarding slice planned** (not built; plan in
+  [`first-time-ux-plan.md`](./first-time-ux-plan.md)). The feature area is broad
+  and deployed but has never had an onboarding pass. The plan covers all three
+  first-timers (cold visitor · new coach · new athlete) and surfaces the
+  **headline blocker**: a coach **cannot create an individual program in the UI** —
+  `Plan.objects.create` lives only in `MesoGroup.create_shared_plan`
+  (`models.py:1488`), there's no individual-plan / add-week / add-session endpoint,
+  and both "+ New program" and "Build a program" CTAs bounce off the bare designer
+  back to the roster; only `seed_meso_demo` builds an individual plan tree. Phased
+  fix (Phase 1 = individual plan creation, the structural fix; 2–5 = front
+  door, empty states, role fork, athlete + designer first-run polish). Reconciled
+  with the post-#311 routing (`RosterView` now sends any non-coach to `/meso/me/`,
+  so the new-coach gap is now *reaching the coach surface at all*; #311's
+  athlete→coach **request** loop already covers most of Phase 4's athlete-initiated
+  item — distinct from Q4's "become a coach / beta access").
+  **Decisions Q1–Q4 resolved (2026-06-29):** **Q1** coaches = **closed beta /
+  allowlisted** (`CoachProfile` auto-creates on first coach action for an
+  allowlisted user; open self-serve deferred to billing S6 — no billing yet + a
+  per-coach Claude cost + a single box make open signup premature; the YAGNI-review
+  entry above promotes **billing/S6 to the next major slice**, which is exactly when
+  open coach self-serve becomes viable); **Q2** plan creation = **blank editable
+  scaffold first**, optional agent draft as a fast follow (template library
+  deferred); **Q3** = **yes** to a removable one-click demo (no demo-athlete
+  email/push); **Q4** = a **logged-out `/meso/` landing** with "I have an invite" +
+  "Request coach access" + one main-site link (not instant-signup). Q1 is the most
+  consequential and the easiest to revisit.
