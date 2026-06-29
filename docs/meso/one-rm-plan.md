@@ -1,6 +1,6 @@
 # Meso — persisted estimated 1RM (S2 follow-up)
 
-**Status:** Phase 1 built · Phase 2 built (branch `meso-one-rm-phase2`)
+**Status:** Phase 1 built · Phase 2 built · Phase 3 built (branch `meso-one-rm-phase3`)
 **Context:** the deferred follow-up flagged at the end of the **units & RPE/%1RM
 slice (S2)**. Phase 2b gave the athlete a client-side estimated-1RM helper so a
 "75%" target could be turned into a bar load — but the estimate lived only in the
@@ -142,13 +142,48 @@ value to a real row.
 - **Admin.** `source` is in `list_display` + a `list_filter`, so manual vs logged
   is visible at a glance.
 
-## Deferred (Phase 3+)
+## Phase 3 — coach-editable 1RM (the designer's editable %1RM badge)
 
-- **Coach-editable 1RM** (a coach setting an athlete's max directly from the
-  designer — Phase 2 is athlete-set only; the `source` field already supports it).
+Phases 1–2 are athlete-driven: the 1RM is derived from the athlete's logs or
+typed by the athlete. But a coach prescribing a `75%` target needs the athlete's
+max for it to resolve to a real load — and the most useful moment is *before*
+the athlete has ever logged that lift (no derived value exists yet). Phase 3
+gives the coach the same write path from the designer, reusing the Phase 2
+domain functions wholesale.
+
+- **Endpoint.** `POST /meso/api/plan/<plan_id>/prescription/<pk>/one-rm/` —
+  the coach companion to the athlete's `one-rm` endpoint. Coach-scoped via
+  `_coach_plan_or_forbidden` (404 unknown plan / 403 not the coach over an
+  active link), individual plans only (a group plan has no single athlete →
+  400), and the prescription must belong to the plan (404). Body `{"value":
+  "140"}` — a blank/absent value *clears* it back to the log-derived estimate.
+  The athlete is `plan.athlete`, the unit `plan.unit`; the write goes through
+  the **same** `clean_manual_value` + `set_manual_one_rm` the athlete logger
+  uses, so a coach-set value is `source=manual` (the athlete's own number,
+  global across their coaches) and survives later logs exactly like an
+  athlete-set one. Returns `{one_rm, source}`.
+- **Serializer.** `serialize_plan` now threads `one_rm_source` alongside the
+  existing `one_rm` on an individual plan's grid rows (a group plan still
+  carries neither), so the designer can distinguish a log-derived estimate from
+  a set value and repaint after an edit.
+- **Designer UI** (`meso.js` + `designer.html`): on an individual `%1RM` row the
+  read-only `1RM: …` badge becomes an editable control — a closed state showing
+  the value (`1RM: 140 kg` for a set value, `1RM ≈ 140 kg` for a log-derived
+  estimate, or `+ set 1RM` when there's none yet) that opens a small inline
+  input (`openOneRm`/`saveOneRm`/`closeOneRm`/`parseOneRm`); Enter saves, Escape
+  cancels, blank clears. A failed save keeps the editor open with a retry
+  (mirrors the override editor's guarded close). Group rows are untouched (they
+  use the per-athlete override editor instead).
+- **No model / no migration.** `AthleteOneRm.source` already supported a manual
+  value (Phase 2); Phase 3 is purely a second writer of it.
+
+## Deferred (Phase 4+)
+
 - **Offline persistence of a manual edit** — the manual POST is best-effort; an
   offline edit persists only on the next online edit (the high-stakes set-logging
   path keeps its full offline outbox). A small outbox would close this.
 - **Smarter derivation** — e.g. an average of recent tops, or unit conversion
   when an athlete trains plans in different units (today the value records its
   own unit but isn't converted across plans).
+- **Attribution** — a coach-set and an athlete-set value are both `source=manual`
+  with no record of *who* set it; a `set_by` field would let the UI say so.

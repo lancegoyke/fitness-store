@@ -632,6 +632,10 @@ def serialize_plan(plan, week=None):
                     one_rm = one_rm_map.get(exercise["id"])
                     if one_rm is not None:
                         exercise["one_rm"] = _fmt_num(one_rm.value)
+                        # The coach designer distinguishes a log-derived estimate
+                        # from a value the coach/athlete set, and repaints it after
+                        # an edit (1RM Phase 3 — the editable %1RM badge).
+                        exercise["one_rm_source"] = one_rm.source
         else:
             # A group plan instead carries the per-athlete adjust overlay (groups
             # Phase 3): a per-row ``adj`` badge driven by the members' real

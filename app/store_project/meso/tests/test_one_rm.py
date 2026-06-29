@@ -917,3 +917,160 @@ class TestPresenterCarriesSource:
         )
         ctx = presenters.athlete_session(session, athlete)
         assert ctx["exercises"][0]["one_rm_source"] == ""
+
+
+# -- coach-editable 1RM (1RM Phase 3) ---------------------------------------
+
+
+def post_coach_one_rm(client, plan, prescription, payload):
+    return client.post(
+        reverse(
+            "meso:api_coach_set_one_rm",
+            kwargs={"plan_id": plan.pk, "pk": prescription.pk},
+        ),
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+
+
+class TestCoachSetOneRmEndpoint:
+    """The coach sets/clears the athlete's 1RM from the designer's %1RM badge.
+
+    The athlete logger already persists a manual 1RM (Phase 2); Phase 3 gives the
+    coach the same write path, scoped to a plan they own, so a %1RM target they
+    prescribe resolves to a real bar load even before the athlete logs the lift.
+    """
+
+    def test_coach_sets_an_athletes_manual_1rm(self, client):
+        coach = UserFactory()
+        athlete = UserFactory()
+        plan, _, (squat,) = make_session(
+            athlete,
+            coach=coach,
+            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+        )
+        client.force_login(coach)
+        resp = post_coach_one_rm(client, plan, squat, {"value": "150"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["one_rm"] == "150"
+        assert body["source"] == "manual"
+        row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
+        assert row.value == Decimal("150.00")
+        assert row.source == AthleteOneRm.Source.MANUAL
+        assert row.unit == Unit.KILOGRAMS
+
+    def test_coach_value_is_in_the_plans_unit(self, client):
+        coach = UserFactory()
+        athlete = UserFactory()
+        plan, _, (squat,) = make_session(
+            athlete,
+            coach=coach,
+            unit=Unit.POUNDS,
+            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+        )
+        client.force_login(coach)
+        post_coach_one_rm(client, plan, squat, {"value": "315"})
+        row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
+        assert row.unit == Unit.POUNDS
+
+    def test_coach_clears_back_to_log_derived(self, client):
+        coach = UserFactory()
+        athlete = UserFactory()
+        plan, session, (squat,) = make_session(
+            athlete,
+            coach=coach,
+            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+        )
+        # A logged set means clearing the manual value reverts to the estimate.
+        log_session(athlete, session, [(squat, 1, "1", "120", "9")])
+        client.force_login(coach)
+        post_coach_one_rm(client, plan, squat, {"value": "200"})
+        resp = post_coach_one_rm(client, plan, squat, {"value": ""})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["one_rm"] == "120"
+        assert body["source"] == "logged"
+        row = AthleteOneRm.objects.get(athlete=athlete, key="name:back squat")
+        assert row.source == AthleteOneRm.Source.LOGGED
+
+    @pytest.mark.parametrize("value", ["abc", "0", "-5", "nan"])
+    def test_rejects_a_bad_value(self, client, value):
+        coach = UserFactory()
+        athlete = UserFactory()
+        plan, _, (squat,) = make_session(
+            athlete, coach=coach, prescriptions=[{"name": "Back Squat"}]
+        )
+        client.force_login(coach)
+        resp = post_coach_one_rm(client, plan, squat, {"value": value})
+        assert resp.status_code == 400
+        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+
+    def test_group_plan_is_400(self, client):
+        # A group plan has no single athlete, so a 1RM does not apply.
+        coach = UserFactory()
+        group_plan = GroupPlanFactory(status=Plan.Status.ACTIVE, group__coach=coach)
+        meso = MesocycleFactory(plan=group_plan, order=0)
+        week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+        session = SessionFactory(week=week, day_number=1)
+        squat = ExercisePrescriptionFactory(
+            session=session, order=0, name="Back Squat", load_type=LoadType.PERCENT
+        )
+        client.force_login(coach)
+        resp = post_coach_one_rm(client, group_plan, squat, {"value": "150"})
+        assert resp.status_code == 400
+        assert not AthleteOneRm.objects.exists()
+
+    def test_foreign_coach_is_403(self, client):
+        plan, _, (squat,) = make_session(
+            UserFactory(), prescriptions=[{"name": "Back Squat"}]
+        )
+        intruder = UserFactory()
+        client.force_login(intruder)
+        resp = post_coach_one_rm(client, plan, squat, {"value": "150"})
+        assert resp.status_code == 403
+        assert not AthleteOneRm.objects.exists()
+
+    def test_prescription_outside_the_plan_is_404(self, client):
+        coach = UserFactory()
+        athlete = UserFactory()
+        plan, _, (squat,) = make_session(
+            athlete, coach=coach, prescriptions=[{"name": "Back Squat"}]
+        )
+        # A prescription that exists but in another plan (a different athlete the
+        # same coach trains) is not this plan's.
+        _, _, (other,) = make_session(
+            UserFactory(), coach=coach, prescriptions=[{"name": "Bench"}]
+        )
+        client.force_login(coach)
+        resp = post_coach_one_rm(client, plan, other, {"value": "150"})
+        assert resp.status_code == 404
+
+    def test_login_required(self, client):
+        plan, _, (squat,) = make_session(
+            UserFactory(), prescriptions=[{"name": "Back Squat"}]
+        )
+        resp = post_coach_one_rm(client, plan, squat, {"value": "150"})
+        assert resp.status_code in (301, 302)
+        assert not AthleteOneRm.objects.exists()
+
+
+class TestSerializerCarriesSource:
+    def test_individual_plan_row_carries_one_rm_source(self):
+        athlete = UserFactory()
+        plan, _, (squat,) = make_session(
+            athlete,
+            prescriptions=[
+                {"name": "Back Squat", "load": "75", "load_type": LoadType.PERCENT}
+            ],
+        )
+        AthleteOneRmFactory(
+            athlete=athlete,
+            name="Back Squat",
+            value=Decimal("140"),
+            source=AthleteOneRm.Source.MANUAL,
+        )
+        data = serialize_plan(plan)
+        row = data["program"][0]["exercises"][0]
+        assert row["one_rm"] == "140"
+        assert row["one_rm_source"] == "manual"

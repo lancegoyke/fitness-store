@@ -386,3 +386,115 @@ describe("load type (%1RM)", () => {
     expect(c.program[0].exercises[0].load_type).toBe("abs");
   });
 });
+
+// Coach-editable 1RM (1RM follow-up Phase 3): on an individual %1RM row the
+// coach can set or clear the athlete's estimated 1RM straight from the designer.
+// It posts to the coach endpoint and repaints the row's badge from the reply.
+describe("coach 1RM editor", () => {
+  function pctRow(overrides = {}) {
+    return Object.assign(
+      {
+        id: 21,
+        name: "Back Squat",
+        load: "75",
+        load_type: "pct",
+        one_rm: "140",
+        one_rm_source: "logged",
+      },
+      overrides,
+    );
+  }
+
+  it("opens on an individual %1RM row, seeding the current value", () => {
+    const c = makeMeso();
+    const ex = pctRow();
+    c.openOneRm(ex);
+    expect(c.oneRm).not.toBe(null);
+    expect(c.oneRm.ex).toBe(ex);
+    expect(c.oneRm.value).toBe("140");
+  });
+
+  it("seeds a blank value when the row has no stored 1RM", () => {
+    const c = makeMeso();
+    c.openOneRm(pctRow({ one_rm: "" }));
+    expect(c.oneRm.value).toBe("");
+  });
+
+  it("is a no-op in group mode or on a non-percent row", () => {
+    const grp = makeGroupMeso();
+    grp.openOneRm(pctRow());
+    expect(grp.oneRm == null).toBe(true);
+
+    const c = makeMeso();
+    c.openOneRm(pctRow({ load_type: "abs" }));
+    expect(c.oneRm == null).toBe(true);
+  });
+
+  it("saves a value, posts it to the coach endpoint, and repaints the badge", async () => {
+    const c = makeMeso();
+    const ex = pctRow({ one_rm: "", one_rm_source: "" });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { ok: true, one_rm: "150", source: "manual" } }));
+    c.openOneRm(ex);
+    c.oneRm.value = "150";
+    await c.saveOneRm();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toBe(
+      "/meso/api/plan/7/prescription/21/one-rm/",
+    );
+    expect(sentBody()).toEqual({ value: "150" });
+    expect(ex.one_rm).toBe("150");
+    expect(ex.one_rm_source).toBe("manual");
+    expect(c.oneRm).toBe(null);
+  });
+
+  it("clears by saving a blank value, reverting to the log-derived estimate", async () => {
+    const c = makeMeso();
+    const ex = pctRow();
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { ok: true, one_rm: "130", source: "logged" } }));
+    c.openOneRm(ex);
+    c.oneRm.value = "";
+    await c.saveOneRm();
+    expect(sentBody()).toEqual({ value: "" });
+    expect(ex.one_rm).toBe("130");
+    expect(ex.one_rm_source).toBe("logged");
+  });
+
+  it("rejects a non-numeric or non-positive value without posting", async () => {
+    const c = makeMeso();
+    global.fetch = vi.fn();
+    c.openOneRm(pctRow());
+    c.oneRm.value = "heavy";
+    await c.saveOneRm();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(c.oneRm.error).toMatch(/positive number/);
+
+    c.oneRm.value = "0";
+    await c.saveOneRm();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the editor open and surfaces an error when the save fails", async () => {
+    const c = makeMeso();
+    const ex = pctRow();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 500 }));
+    c.openOneRm(ex);
+    c.oneRm.value = "160";
+    await c.saveOneRm();
+    expect(c.oneRm).not.toBe(null);
+    expect(c.oneRm.error).toMatch(/Couldn't save/);
+    expect(ex.one_rm).toBe("140"); // unchanged
+  });
+
+  it("ignores a dismiss while a save is in flight", () => {
+    const c = makeMeso();
+    c.openOneRm(pctRow());
+    c.oneRm.saving = true;
+    c.closeOneRm();
+    expect(c.oneRm).not.toBe(null);
+  });
+});

@@ -1163,6 +1163,51 @@ def prescription_override(request, plan_id, pk):
     return _override_response(plan, prescription)
 
 
+@login_required
+@require_POST
+def coach_set_one_rm(request, plan_id, pk):
+    """Set or clear an athlete's 1RM from the designer's %1RM badge (1RM Phase 3).
+
+    The coach-side companion to ``athlete_set_one_rm``: a coach prescribing a
+    %1RM target needs the athlete's max for it to mean anything, so they can set
+    it here directly — useful before the athlete has ever logged the lift.
+    Individual plans only (a group plan has no single athlete → 400). Coach-scoped
+    via ``_coach_plan_or_forbidden`` (403); the prescription must belong to the
+    plan (404). Body ``{"value": "140"}`` — a blank/absent ``value`` *clears* it
+    back to the log-derived estimate. The 1RM is the athlete's own
+    (``source=manual``, global across their coaches), persisted through the same
+    ``set_manual_one_rm`` the athlete logger uses. Returns ``{one_rm, source}`` so
+    the badge repaints.
+    """
+    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    if plan.is_group:
+        return HttpResponseBadRequest("A 1RM belongs to a single athlete, not a group.")
+    prescription = get_object_or_404(
+        ExercisePrescription, pk=pk, session__week__mesocycle__plan=plan
+    )
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+
+    value, ok = meso_one_rm.clean_manual_value(payload.get("value"))
+    if not ok:
+        return HttpResponseBadRequest("value must be a positive number or blank.")
+
+    row = meso_one_rm.set_manual_one_rm(plan.athlete, prescription, value, plan.unit)
+    return JsonResponse(
+        {
+            "ok": True,
+            "one_rm": presenters._one_rm_label(row),
+            "source": row.source if row is not None else "",
+        }
+    )
+
+
 def _fan_out_group_delivery(request, plan):
     """Deliver a group plan's current week to every active member (groups Phase 4).
 
