@@ -633,7 +633,6 @@ _(Append dated entries here as decisions land.)_
   succeeds. Intentionally *not* a notification-preferences system — one flag for the one email that
   needed an off switch. Admin surfaces + filters the flag. Built red→green: **+16 pytest**
   (`test_unsubscribe.py`); ruff + format + `makemigrations --check` clean.
-<<<<<<< HEAD
 - 2026-06-29 — **First-time UX / onboarding slice planned** (not built; plan in
   [`first-time-ux-plan.md`](./first-time-ux-plan.md)). The feature area is broad
   and deployed but has never had an onboarding pass. The plan covers all three
