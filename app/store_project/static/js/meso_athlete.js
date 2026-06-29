@@ -67,7 +67,6 @@ function createLogger() {
     error: false,
     queued: false, // a save is stashed locally, waiting for the network
     _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
-    _oneRmGen: {}, // per-exercise request generation, to drop a stale POST response
 
     init() {
       const el = document.getElementById("meso-log-data");
@@ -397,10 +396,6 @@ function createLogger() {
       if (!this.oneRmUrl || !ex) return;
       const value = (ex.e1rm || "").toString().trim();
       if (value !== "" && parseNum(value) == null) return;
-      // Stamp this request so a slow response can't reconcile over a newer edit:
-      // a lagging clear/save that lands after the athlete typed again would
-      // otherwise wipe the in-progress value.
-      const gen = (this._oneRmGen[ex.id] = (this._oneRmGen[ex.id] || 0) + 1);
       let res;
       try {
         res = await fetch(this.oneRmUrl, {
@@ -421,9 +416,10 @@ function createLogger() {
       } catch (e) {
         return; // stored server-side regardless; the UI reconciles on next load
       }
-      // A newer POST for this lift superseded us while in flight — drop this
-      // (now stale) response rather than overwrite the fresher state.
-      if (this._oneRmGen[ex.id] !== gen) return;
+      // Drop a stale response: if the field changed since we sent this value, a
+      // newer edit (already sent, or still debouncing) owns it — reconciling now
+      // would wipe the in-progress value (e.g. a lagging clear over a fresh type).
+      if ((ex.e1rm || "").toString().trim() !== value) return;
       // Reconcile with what the server stored: a manual value stays in the input;
       // a cleared one reverts to the server's log-derived estimate.
       if (data.source === "manual") {

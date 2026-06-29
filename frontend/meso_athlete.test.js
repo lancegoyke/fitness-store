@@ -515,13 +515,28 @@ describe("manual 1RM persistence (server-side, Phase 2)", () => {
       .mockResolvedValueOnce(
         res({ body: { one_rm: "140", source: "manual" } }),
       );
-    const pA = c._postOneRm(c.exercises[0]); // gen 1: a clear
+    const pA = c._postOneRm(c.exercises[0]); // sends the clear (value "")
     c.exercises[0].e1rm = "140"; // athlete types again before A lands
-    const pB = c._postOneRm(c.exercises[0]); // gen 2: supersedes A
+    const pB = c._postOneRm(c.exercises[0]); // sends "140" — supersedes A
     await Promise.all([pA, pB]);
     // A's stale clear must not wipe the value B set.
     expect(c.exercises[0].e1rm).toBe("140");
     expect(c.exercises[0].one_rm).toBe(""); // B's manual reconcile applied
+  });
+
+  it("does not let an in-flight clear wipe a value typed during the debounce", async () => {
+    // The clear's POST is already sent, but the athlete types a new value before
+    // its response lands and before the *next* debounced save fires. The lagging
+    // clear must not wipe the in-progress value — the field no longer matches what
+    // the clear sent.
+    const c = logger({ id: 7, e1rm: "", one_rm: "120" });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ body: { one_rm: "120", source: "logged" } }));
+    const pClear = c._postOneRm(c.exercises[0]); // sends value ""
+    c.exercises[0].e1rm = "140"; // typed during the clear's flight
+    await pClear;
+    expect(c.exercises[0].e1rm).toBe("140"); // not wiped by the stale clear
   });
 });
 
