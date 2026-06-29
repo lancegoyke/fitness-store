@@ -1807,6 +1807,14 @@ def agent_propose(request, plan_id):
     # upgrade CTA in place of the composer once exhausted). Only a free coach can
     # reach this branch, so the message is the allowance-used-up copy. Defended
     # here, not just in the UI, because the API cost is real.
+    #
+    # Lock the coach row before counting so concurrent runs serialize: the request
+    # is in a transaction (ATOMIC_REQUESTS), so the lock is held until this run's
+    # batch row commits — a second concurrent request blocks here and then re-counts
+    # against the allowance. Without it the count-then-create gate is racy and a
+    # free coach could slip past the cap. (On SQLite/tests the lock is a no-op; the
+    # real serialization is on Postgres in prod.)
+    User.objects.select_for_update().filter(pk=request.user.pk).first()
     if not billing_access.can_use_agent(request.user):
         return JsonResponse(
             {
