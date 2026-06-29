@@ -1158,8 +1158,12 @@ def invite_claim(request, token):
         if action not in ("accept", "decline"):
             return HttpResponseBadRequest("action must be 'accept' or 'decline'.")
         with transaction.atomic():
+            # Lock by the *submitted token*, not the pk: a resend that rotated the
+            # token out from under this in-flight claim must invalidate the old
+            # link (Phase-3 "resend kills the previous token"), so a superseded
+            # token finds no row → 404 rather than accepting on stale authority.
             invite = get_object_or_404(
-                CoachInvite.objects.select_for_update(), pk=invite.pk
+                CoachInvite.objects.select_for_update(), token=token
             )
             if not invite.is_pending:
                 messages.info(request, "This invite has already been answered.")

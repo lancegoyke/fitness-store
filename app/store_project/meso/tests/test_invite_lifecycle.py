@@ -320,6 +320,22 @@ class TestClaimViewExpiry:
         invite.refresh_from_db()
         assert invite.status == CoachInvite.Status.EXPIRED
 
+    def test_old_token_cannot_claim_after_resend(self, client):
+        """Resend rotates the token, so a claim via the old link can't accept."""
+        coach = UserFactory()
+        athlete = UserFactory()
+        invite, _ = CoachInvite.open_for(coach=coach, email=athlete.email)
+        old_token = invite.token
+        invite.resend()  # rotates the token; the old link must die
+        client.force_login(athlete)
+        stale = client.post(self._url(old_token), {"action": "accept"})
+        assert stale.status_code == 404
+        assert not CoachAthlete.objects.filter(coach=coach, athlete=athlete).exists()
+        # the freshly rotated token still works
+        fresh = client.post(self._url(invite.token), {"action": "accept"})
+        assert fresh.status_code == 302
+        assert CoachAthlete.objects.filter(coach=coach, athlete=athlete).exists()
+
 
 # -- coach resend view -----------------------------------------------------
 
