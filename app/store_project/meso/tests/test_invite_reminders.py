@@ -224,6 +224,29 @@ class TestRemindCommand:
         call_command("meso_remind_expiring_invites")
         assert mail.outbox == []
 
+    def test_skips_invite_claimed_concurrently(self):
+        """The re-check under the row lock drops a row another worker just stamped.
+
+        Simulates an overlapping sweep: a row is in this run's due-list, but a
+        concurrent worker stamps ``reminder_sent_at`` before this run acquires the
+        lock — so no duplicate reminder goes out.
+        """
+        from django.contrib.sites.models import Site
+
+        from store_project.meso.management.commands.meso_remind_expiring_invites import (  # noqa: E501
+            Command,
+        )
+
+        coach = UserFactory()
+        invite, _ = CoachInvite.open_for(coach=coach, email="due@example.com")
+        _expires_in(invite, days=1)
+        stale = CoachInvite.objects.get(pk=invite.pk)  # the row the loop holds
+        # a concurrent worker claims + stamps it first
+        CoachInvite.objects.get(pk=invite.pk).mark_reminded()
+        sent = Command()._remind(stale, site=Site.objects.get_current(), scheme="https")
+        assert sent is False
+        assert mail.outbox == []
+
     def test_mail_failure_does_not_stamp(self):
         """A bounced reminder is logged and left un-stamped so the next sweep retries."""
         coach = UserFactory()

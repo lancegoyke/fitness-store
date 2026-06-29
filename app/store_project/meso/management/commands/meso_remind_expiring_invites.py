@@ -20,6 +20,7 @@ import logging
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.management.base import BaseCommand
+from django.db import transaction
 from django.urls import reverse
 
 from store_project.meso.models import CoachInvite
@@ -50,18 +51,40 @@ class Command(BaseCommand):
         scheme = "https" if getattr(settings, "SECURE_SSL_REDIRECT", False) else "http"
         sent = 0
         for invite in due:
-            accept_url = "{scheme}://{domain}{path}".format(
-                scheme=scheme,
-                domain=site.domain,
-                path=reverse("meso:invite_claim", kwargs={"token": invite.token}),
-            )
-            try:
-                send_coach_invite_reminder_email(
-                    coach=invite.coach, email=invite.email, accept_url=accept_url
-                )
-            except Exception:  # best-effort; leave un-stamped so the next sweep retries
-                logger.exception("Failed to send invite reminder to %s", invite.email)
-                continue
-            invite.mark_reminded()
-            sent += 1
+            if self._remind(invite, site=site, scheme=scheme):
+                sent += 1
         self.stdout.write(self.style.SUCCESS(f"Sent {sent} invite reminder(s)."))
+
+    def _remind(self, invite, *, site, scheme):
+        """Claim one invite under a row lock and send its reminder; return sent?
+
+        Re-fetching the row with ``select_for_update(skip_locked=True)`` and
+        re-checking ``due_for_reminder`` under the lock makes the sweep safe to
+        overlap: a concurrent run (or an operator rerun while a slow backend is
+        still sending) skips a row another worker has claimed, so no athlete gets
+        a duplicate. Send and ``mark_reminded`` share the transaction, so a mail
+        failure rolls the stamp back and the next sweep retries the invite.
+        """
+        try:
+            with transaction.atomic():
+                locked = (
+                    CoachInvite.objects.select_for_update(skip_locked=True)
+                    .due_for_reminder()
+                    .filter(pk=invite.pk)
+                    .first()
+                )
+                if locked is None:
+                    return False  # claimed by another worker, or no longer due
+                accept_url = "{scheme}://{domain}{path}".format(
+                    scheme=scheme,
+                    domain=site.domain,
+                    path=reverse("meso:invite_claim", kwargs={"token": locked.token}),
+                )
+                send_coach_invite_reminder_email(
+                    coach=locked.coach, email=locked.email, accept_url=accept_url
+                )
+                locked.mark_reminded()
+                return True
+        except Exception:  # best-effort; rollback leaves it un-stamped to retry
+            logger.exception("Failed to send invite reminder to %s", invite.email)
+            return False
