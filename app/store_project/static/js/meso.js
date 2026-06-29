@@ -37,6 +37,10 @@ function createMeso() {
     // the selected member id, and an editable `draft` of their adjust.
     override: null,
 
+    // Individual mode only: the open coach 1RM editor (one %1RM row), or null
+    // when closed. Holds the targeted row (`ex`) and an editable `value`.
+    oneRm: null,
+
     // The agent runs as a background job (Phase 4): POST kicks it off, then we
     // poll the batch's status until it lands. `agentTyping` stays true (the
     // "drafting…" indicator) for the whole poll.
@@ -321,6 +325,65 @@ function createMeso() {
         console.error("Override save failed", err);
         this.override.error = "Couldn't save that adjust. Please try again.";
         this.override.saving = false;
+      }
+    },
+
+    // ---- coach 1RM editor (individual mode) ----
+    //
+    // On an individual plan a %1RM target ("75%") needs the athlete's max to
+    // resolve to a bar load. The designer shows the athlete's stored 1RM (their
+    // log-derived estimate or their own manual value) on a %1RM row; the coach
+    // can set or override it here, persisted server-side as the athlete's own
+    // (source=manual) number — the 1RM Phase 3 companion to the athlete logger's
+    // input. Group rows have no single athlete, so the editor is individual-only.
+
+    openOneRm(ex) {
+      // Only an individual plan's %1RM row is editable here; a group plan's rows
+      // belong to many athletes (use the per-athlete override editor instead).
+      if (this.isGroup || !this.live || !ex || ex.load_type !== "pct") return;
+      this.oneRm = { ex, value: ex.one_rm || "", saving: false, error: "" };
+    },
+
+    closeOneRm() {
+      // Don't dismiss mid-save (mirrors closeOverride): a failed save keeps the
+      // editor open to surface a retry, which needs this.oneRm to stay non-null.
+      if (this.oneRm && this.oneRm.saving) return;
+      this.oneRm = null;
+    },
+
+    // Parse the input to the value the endpoint expects: "" clears (back to the
+    // log-derived estimate), a positive number sets, anything else is rejected
+    // here so the badge never repaints off a server 400.
+    parseOneRm() {
+      const raw = (this.oneRm.value || "").trim();
+      if (raw === "") return { ok: true, value: "" };
+      if (!this.numeric(raw) || parseFloat(raw) <= 0) return { ok: false };
+      return { ok: true, value: raw };
+    },
+
+    async saveOneRm() {
+      if (!this.oneRm || this.oneRm.saving) return;
+      const parsed = this.parseOneRm();
+      if (!parsed.ok) {
+        this.oneRm.error = "Enter a positive number, or leave blank to clear.";
+        return;
+      }
+      const { ex } = this.oneRm;
+      this.oneRm.saving = true;
+      this.oneRm.error = "";
+      try {
+        const data = await this.apiPost(
+          `/meso/api/plan/${this.planId}/prescription/${ex.id}/one-rm/`,
+          { value: parsed.value },
+        );
+        ex.one_rm = data.one_rm || "";
+        ex.one_rm_source = data.source || "";
+        this.oneRm.saving = false; // clear before the guarded close
+        this.closeOneRm();
+      } catch (err) {
+        console.error("1RM save failed", err);
+        this.oneRm.error = "Couldn't save that 1RM. Please try again.";
+        this.oneRm.saving = false;
       }
     },
 

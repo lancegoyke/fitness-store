@@ -342,7 +342,21 @@
                         <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:1px 6px;margin-top:1px;min-height:15px;">
                           <template x-if="ex.tag"><span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;color:var(--accent-deep);background:var(--soft);border:1px solid var(--soft-line);padding:0 5px;border-radius:4px;" x-text="ex.tag"></span></template>
                           <template x-if="ex.last"><span style="font-size:10.5px;color:var(--dim);font-family:'IBM Plex Mono',monospace;" x-text="'last: ' + ex.last"></span></template>
-                          <template x-if="ex.one_rm && ex.load_type === 'pct'"><span style="font-size:10.5px;color:var(--accent-deep);font-family:'IBM Plex Mono',monospace;" :title="'Athlete\'s estimated 1RM, from their logged history'" x-text="'1RM: ' + ex.one_rm + (unit ? ' ' + unit : '')"></span></template>
+                          <!-- Individual %1RM row: the athlete's 1RM, editable by the coach (1RM Phase 3). Closed = the value (or a prompt); open = a small inline input. -->
+                          <template x-if="!isGroup && ex.load_type === 'pct' && !(oneRm && oneRm.ex.id === ex.id)">
+                            <button type="button" @click="openOneRm(ex)" data-hover="brighten" :title="ex.one_rm ? (ex.one_rm_source === 'manual' ? 'Athlete\'s 1RM (manually set) — tap to edit' : 'Athlete\'s estimated 1RM, from their logged history — tap to edit') : 'Set this athlete\'s 1RM so the % target resolves to a load'" :style="`appearance:none;cursor:pointer;font:inherit;font-size:10.5px;font-family:'IBM Plex Mono',monospace;border:0;background:transparent;padding:0;border-radius:4px;color:${ex.one_rm ? 'var(--accent-deep)' : 'var(--dim)'}`">
+                              <span x-show="ex.one_rm" x-text="(ex.one_rm_source === 'manual' ? '1RM: ' : '1RM ≈ ') + ex.one_rm + (unit ? ' ' + unit : '')"></span>
+                              <span x-show="!ex.one_rm">+ set 1RM</span>
+                            </button>
+                          </template>
+                          <template x-if="!isGroup && ex.load_type === 'pct' && oneRm && oneRm.ex.id === ex.id">
+                            <span style="display:inline-flex;align-items:center;gap:3px;">
+                              <input x-model="oneRm.value" type="text" inputmode="decimal" :placeholder="unit" @keydown.enter.prevent="saveOneRm()" @keydown.escape.prevent="closeOneRm()" x-init="$nextTick(() => $el.focus())" style="width:46px;text-align:right;appearance:none;border:1px solid var(--line);background:var(--surface);font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--ink);padding:2px 4px;border-radius:4px;outline:none;" />
+                              <button type="button" @click="saveOneRm()" :disabled="oneRm.saving" data-hover="brighten" style="appearance:none;cursor:pointer;font:inherit;font-size:10px;font-weight:600;border:0;background:transparent;color:var(--accent-deep);padding:0 2px;">save</button>
+                              <button type="button" @click="closeOneRm()" :disabled="oneRm.saving" data-hover="brighten" title="Cancel" style="appearance:none;cursor:pointer;font:inherit;font-size:11px;border:0;background:transparent;color:var(--dim);padding:0 2px;">&#215;</button>
+                              <template x-if="oneRm.error"><span style="font-size:10px;color:var(--warn);" x-text="oneRm.error"></span></template>
+                            </span>
+                          </template>
                           <template x-if="isGroup">
                             <button @click="openOverride(ex)" data-hover="brighten" :title="ex.adj ? (ex.adjusts || []).map(a => a.name + ': ' + a.label).join('\n') : 'Set a per-athlete adjust'" style="appearance:none;cursor:pointer;font:inherit;font-size:10px;font-weight:600;line-height:1.6;border:1px solid var(--soft-line);border-radius:4px;padding:0 5px;color:var(--accent-deep);background:var(--soft);">
                               <span x-show="ex.adj" x-text="ex.adj"></span>

@@ -92,6 +92,12 @@ urlpatterns = [
         views.prescription_override,
         name="api_prescription_override",
     ),
+    # Coach sets/clears an athlete's 1RM from the designer (1RM follow-up Phase 3).
+    path(
+        "api/plan/<int:plan_id>/prescription/<int:pk>/one-rm/",
+        views.coach_set_one_rm,
+        name="api_coach_set_one_rm",
+    ),
     path(
         "api/plan/<int:plan_id>/deliver/",
         views.plan_deliver,
