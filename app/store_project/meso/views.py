@@ -1938,6 +1938,11 @@ def change_set_status(request, pk):
 def batch_apply(request, batch_id):
     """Apply the batch's approved changes back into the program."""
     batch = _coach_batch_or_404(request, batch_id)
+    # Applying a batch writes the approved edits into the program — an edit, so it
+    # respects the D6 over-limit freeze (a batch drafted before a downgrade can't
+    # be applied while the coach is over their seat limit).
+    if not billing_access.can_edit(batch.plan.coach):
+        return _over_limit_json()
     if batch.status != AgentProposalBatch.Status.PENDING:
         return JsonResponse(
             {"ok": False, "error": "This batch has already been resolved."}, status=409

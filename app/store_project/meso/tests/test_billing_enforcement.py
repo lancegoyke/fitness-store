@@ -33,6 +33,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso.billing import access
+from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachSubscriptionFactory
 from store_project.meso.factories import ExercisePrescriptionFactory
@@ -42,6 +43,7 @@ from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
+from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachInvite
 from store_project.meso.models import CoachProfile
@@ -289,6 +291,22 @@ class TestEditGateIndividual:
             reverse("meso:api_plan_deliver", kwargs={"plan_id": plan.pk})
         )
         assert resp.status_code == 402
+
+    def test_over_limit_coach_cannot_apply_pending_batch(self, client):
+        # A batch drafted while paid, then a downgrade: applying it would mutate
+        # the program, so the D6 freeze must block it (the agent gate alone only
+        # stops *new* runs).
+        coach = UserFactory()
+        plan, _, _ = _plan_with_prescription(coach)
+        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)  # → over
+        batch = AgentProposalBatchFactory(plan=plan, coach=coach)
+        client.force_login(coach)
+        resp = client.post(
+            reverse("meso:api_batch_apply", kwargs={"batch_id": batch.pk})
+        )
+        assert resp.status_code == 402
+        batch.refresh_from_db()
+        assert batch.status == AgentProposalBatch.Status.PENDING  # not applied
 
 
 class TestEditGateGroup:
