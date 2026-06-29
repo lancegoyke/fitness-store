@@ -75,6 +75,11 @@ urlpatterns = [
         views.coach_invite_revoke,
         name="coach_invite_revoke",
     ),
+    path(
+        "invite/<uuid:token>/resend/",
+        views.coach_invite_resend,
+        name="coach_invite_resend",
+    ),
     path("claim/<uuid:token>/", views.invite_claim, name="invite_claim"),
     # Peer-invite token actions on an existing CoachAthlete (Phase 1 spine).
     path("invite/<uuid:token>/accept/", views.invite_accept, name="invite_accept"),
@@ -83,6 +88,13 @@ urlpatterns = [
         "relationship/<uuid:token>/end/",
         views.relationship_end,
         name="relationship_end",
+    ),
+    # Athlete → coach requests (N4 Phase 2): the athlete asks, then may withdraw.
+    path("request/", views.athlete_request_coach, name="athlete_request_coach"),
+    path(
+        "request/<uuid:token>/withdraw/",
+        views.request_withdraw,
+        name="request_withdraw",
     ),
     # Designer autosave API (Phase 3).
     path(

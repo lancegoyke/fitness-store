@@ -135,7 +135,11 @@ class TestScreensRender:
     """
 
     def test_roster_renders(self, client):
-        client.force_login(UserFactory())
+        # The roster is a coach surface: a non-coach is now routed to their
+        # training home (N4 Phase 2), so log in an actual coach.
+        coach = UserFactory()
+        CoachAthleteFactory(coach=coach, athlete=UserFactory())
+        client.force_login(coach)
         resp = client.get(reverse("meso:roster"))
         assert resp.status_code == 200
 

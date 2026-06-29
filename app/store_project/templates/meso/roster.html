@@ -58,19 +58,52 @@
             </div>
           {% endfor %}
 
-          <!-- Pending email invites (N4): sent but not yet claimed. -->
+          <!-- Outstanding email invites (N4): sent but not yet claimed; an expired
+               one shows so the coach can Resend it (Phase 3 TTL). -->
           {% for inv in pending_invites %}
             <div class="meso-row" style="cursor:default;">
               <div class="meso-avatar" style="background:var(--rail);color:var(--dim);">@</div>
               <div style="min-width:0;">
                 <div class="meso-row-name">{{ inv.email }}</div>
-                <div class="meso-row-meta">Invited {{ inv.when|date:"M j" }} · awaiting reply</div>
+                {% if inv.is_expired %}
+                  <div class="meso-row-meta">Invited {{ inv.when|date:"M j" }} · invite expired</div>
+                {% else %}
+                  <div class="meso-row-meta">Invited {{ inv.when|date:"M j" }} · awaiting reply</div>
+                {% endif %}
               </div>
               <div class="meso-spacer"></div>
-              <span class="meso-badge"><i></i>Pending</span>
+              {% if inv.is_expired %}
+                <span class="meso-badge meso-badge--muted"><i></i>Expired</span>
+              {% else %}
+                <span class="meso-badge"><i></i>Pending</span>
+              {% endif %}
+              <form method="post" action="{% url 'meso:coach_invite_resend' token=inv.token %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Resend</button>
+              </form>
               <form method="post" action="{% url 'meso:coach_invite_revoke' token=inv.token %}" style="margin:0;">
                 {% csrf_token %}
                 <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Revoke</button>
+              </form>
+            </div>
+          {% endfor %}
+
+          <!-- Pending athlete→coach requests (N4 Phase 2): accept or decline. -->
+          {% for req in pending_requests %}
+            <div class="meso-row" style="cursor:default;">
+              <div class="meso-avatar">{{ req.initials }}</div>
+              <div style="min-width:0;">
+                <div class="meso-row-name">{{ req.name }}</div>
+                <div class="meso-row-meta">Requested {{ req.when|date:"M j" }} · wants to train with you</div>
+              </div>
+              <div class="meso-spacer"></div>
+              <form method="post" action="{% url 'meso:invite_accept' token=req.token %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--primary" style="padding:5px 10px;font-size:12px;">Accept</button>
+              </form>
+              <form method="post" action="{% url 'meso:invite_decline' token=req.token %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Decline</button>
               </form>
             </div>
           {% endfor %}

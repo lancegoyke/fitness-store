@@ -8,6 +8,10 @@ dev:
 docker-dev:
     docker compose up -d --build
 
+# Run the django-q2 cluster (executes scheduled tasks, e.g. the invite sweeps)
+qcluster:
+    uv run python app/manage.py qcluster
+
 # Django management commands
 manage *args:
     uv run python app/manage.py {{ args }}

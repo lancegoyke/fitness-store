@@ -22,12 +22,22 @@ program. This slice is that pass.
 Three first-timers arrive at Meso, and the app serves them very unevenly. All
 findings below are from the deployed code, with references.
 
+> **Reconciled with `main` (2026-06-29, after #311–#316).** N4 Phase 2 (#311)
+> changed the front-door routing: `RosterView` now sends **any non-coach** to
+> `/meso/me/` (a user counts as a coach via a `CoachProfile` *or* a coach-side link
+> *or* a sent invite), and the athlete home gained a "Your coaches" card with a
+> **request-a-coach** form. That flips Persona 2's old "silently treated as a coach"
+> gap into its inverse — a genuine new coach now has **no path *onto* the coach
+> surface** — and means #311 already covers most of Phase 4's athlete-initiated
+> item. Sections below reflect post-#311 behavior; the **headline blocker is
+> unchanged**.
+
 ### 🚧 Headline blocker — a coach cannot create an individual program in the UI
 
 This is the load-bearing problem; the rest is refinement on top of it.
 
 - `Plan.objects.create` appears in exactly one place in app code —
-  `MesoGroup.create_shared_plan` (`models.py:1289`), i.e. **groups only**. There
+  `MesoGroup.create_shared_plan` (`models.py:1480`), i.e. **groups only**. There
   is **no individual-plan create**, and **no add-mesocycle / add-week /
   add-session endpoint** in `meso/urls.py` (only `session_add_exercise` adds an
   exercise to an *existing* session). The designer is an **editor for
@@ -35,12 +45,12 @@ This is the load-bearing problem; the rest is refinement on top of it.
 - Both individual-plan CTAs are dead ends:
   - **"+ New program"** (roster top nav, `roster.html:6`) → bare `/meso/designer/`
     → `_coach_working_plan` returns `None` for a fresh coach → redirect back to the
-    roster with *"Pick an athlete to start a program."* (`views.py:147`).
+    roster with *"Pick an athlete to start a program."* (`views.py:151`).
   - **"Build a program"** (athlete profile empty state, `athlete_profile.html:131`)
     → same bare designer → same bounce.
 - The only thing that builds an individual `Plan → Mesocycle → Week → Session →
   ExercisePrescription` tree is the `seed_meso_demo` management command
-  (`seed_meso_demo.py:598`), which is admin-only.
+  (`seed_meso_demo.py:630`), which is admin-only.
 
 **Net:** the group path (create group → design shared program → deliver) is wired
 end-to-end, but a real (non-seeded) coach **cannot build an individual program at
@@ -57,17 +67,19 @@ all.** "Obvious to use" presupposes "usable," so this is Phase 1.
 
 ### Persona 2 — the brand-new coach
 
-- Lands on `/meso/` and — because they have **no `CoachProfile`** *and* no athlete
-  link — falls through to the **empty coach roster** (`RosterView.get`,
-  `views.py:181`). Note the implicit role assumption: the redirect to `/me/` only
-  fires when `not is_coach and is_athlete` (`views.py:184`), so **any logged-in
-  non-athlete is silently treated as a coach.** There is no explicit "coach or
-  athlete?" fork and **no self-serve `CoachProfile` creation** (only
-  `seed_meso_demo.py:442` and the test factory create one).
-- The empty states are passive — *"No athletes yet. Invite one to get started."*
-  / *"No groups yet."* — and the actual actions (**"+ Invite an athlete"**,
-  **"+ New group"**) are buried inside `<details>` disclosures (`roster.html:79`,
-  `roster.html:120`).
+- Lands on `/meso/` and — post-#311 — is **redirected to `/meso/me/`** (the
+  athlete home), because `RosterView.get` now treats only a user with a
+  `CoachProfile` *or* a coach-side link *or* a sent invite as a coach
+  (`views.py:196`). So a genuine new coach is shown the **athlete** surface and has
+  **no path *onto* the coach surface**: there's **no self-serve `CoachProfile`
+  creation** (only `seed_meso_demo.py:451` and the test factory create one), and
+  the only "become a coach" action that exists — sending an invite — lives on the
+  roster they can't reach (chicken-and-egg). This is the updated Persona 2 gap, and
+  it sharpens the case for Q1 (allowlist + an explicit "become a coach" path).
+- Once a coach *does* reach the roster, the empty states are passive — *"No
+  athletes yet. Invite one to get started."* / *"No groups yet."* — and the actual
+  actions (**"+ Invite an athlete"**, **"+ New group"**) are buried inside
+  `<details>` disclosures (`roster.html:113`, `roster.html:154`).
 - The one workflow that *should* be the core verb (build a program for an athlete)
   is the dead end described above.
 
@@ -75,13 +87,14 @@ all.** "Obvious to use" presupposes "usable," so this is Phase 1.
 
 - The best-supported journey. Invite email → claim link → `@login_required`
   bounces through allauth signup carrying `?next=` → returns to a clear confirm
-  page (*"{coach} invited you to train"*, `invite_claim.html:28`) → **Accept** →
+  page (*"{coach} invited you to train"*, `invite_claim.html:30`) → **Accept** →
   lands on `/meso/me/` with a sensible empty state (*"No active programs yet. Once
-  a coach delivers a week, it shows up here."*, `athlete_home.html:69`).
-- Gaps: the PWA is built but **install guidance is minimal** (only the gated
-  notifications CTA, `athlete_home.html:25`); there's **no first-log nudge** on the
-  session logger; and there's **no athlete-initiated path** ("I have a coach — ask
-  them to invite me / enter a code"), an N4 follow-up.
+  a coach delivers a week, it shows up here."*, `athlete_home.html:120`).
+- Remaining gaps: the PWA is built but **install guidance is minimal** (only the
+  gated notifications CTA); there's **no first-log nudge** on the session logger.
+  The athlete-initiated path is now **mostly built** — #311 added a "Your coaches"
+  card with incoming invites, sent requests, and a **request-a-coach** form
+  (`athlete_home.html:41`) — so Phase 4 narrows to install + first-log polish.
 - The athlete journey also silently depends on the coach being able to build +
   deliver — which, per the headline blocker, a fresh coach can't.
 
@@ -90,9 +103,12 @@ all.** "Obvious to use" presupposes "usable," so this is Phase 1.
 ## Decisions this slice rests on
 
 From [`decisions.md`](./decisions.md): **B1** (multi-coach SaaS), **B2** (athletes
-are `User`s who log in; coach edits their plan), **N3** (roles: `CoachProfile`
-presence = is-a-coach — today effectively *vestigial for access*, since no view
-gates on it), **N4** (email invites built — the athlete's join path exists).
+are `User`s who log in; coach edits their plan), **N3** (roles: a user is a coach
+via a `CoachProfile` *or* a coach-side link *or* a sent invite — post-#311
+`RosterView` routes on exactly this, so the role is **load-bearing now, not
+vestigial**; what's missing is a self-serve way to *acquire* it), **N4** (invites
+built and now **bidirectional** — coach→athlete invite + athlete→coach request,
+#311).
 
 ### Product decisions (resolved 2026-06-29)
 
@@ -143,7 +159,7 @@ infrastructure.
 refactoring existing logic to adding models.
 
 - **Plan creation (Phase 1).** Extract the seed's individual-plan tree-building
-  (`seed_meso_demo.py:598` onward) into a reusable
+  (`seed_meso_demo.py:630` onward) into a reusable
   `Plan.create_individual(relationship, *, title, goal, unit, …)` + a
   `scaffold_plan(plan)` helper (one mesocycle, a current week, N empty sessions),
   so **both** the seed and the new endpoint share one code path. The decisions log
@@ -152,11 +168,13 @@ refactoring existing logic to adding models.
   Phase 2a). This slice pays that down with real **add-week / add-session**
   endpoints so a scaffold can grow.
 - **Front door (Phase 3).** Split `/meso/` on auth: anonymous → a landing template
-  (login-free, like `offline.html`); authenticated → today's role routing, made
-  explicit. No new model.
+  (login-free, like `offline.html`); authenticated → the post-#311 role routing
+  (non-coach → `/meso/me/`), plus a **"request coach access / become a coach"** path
+  so a genuine new coach isn't stranded on the athlete surface. No new model.
 - **Roles (Phase 2).** Self-serve `CoachProfile` via `get_or_create` on the first
-  coach action (or an explicit "I'm a coach" choice from the front door). The
-  `CoachProfile` stops being vestigial.
+  coach action (or an explicit "I'm a coach" choice from the front door), gated by
+  the Q1 allowlist. The role already gates routing post-#311; this makes
+  **acquiring** it self-serve.
 - **Demo data (Phase 2).** A thin, coach-scoped wrapper over the existing
   `seed_meso_demo` building blocks (already idempotent, with `--delete`).
 - **First-run guidance (Phases 4/5).** Empty-state CTAs, an install prompt, and
@@ -204,18 +222,21 @@ model and can either start for real or one-click a demo, then clear it.
 ### Phase 3 — The front door (anonymous visitor + routing)
 A real logged-out `/meso/` landing (what Meso is · two entry actions — **"I have
 an invite"** and **"Request coach access"**, per Q4/Q1), a single discreet **link
-from the main site** so it's discoverable at all, and an **explicit role fork** for
-the ambiguous "logged in, no role yet" state (replacing the silent
-non-athlete-=-coach assumption; a non-allowlisted user lands on request-access, not
-a coach roster).
+from the main site** so it's discoverable at all, and a **"become a coach / request
+coach access"** path from the athlete home (where a brand-new user now lands
+post-#311) so a genuine new coach isn't stranded on the athlete surface with no way
+up. Note this is **distinct** from #311's *request-a-coach-to-train-under* form —
+that's an athlete asking a coach to program for them; this is a user asking for the
+coach role itself (Q1 beta access).
 *Done when:* someone who's never heard of Meso lands on `/meso/`, understands it in
-one screen, and is routed to the right surface (or to request-access).
+one screen, and is routed to the right surface (athlete home, or a path to coach
+access).
 
 ### Phase 4 — Athlete first-run polish (athlete)
 An **install (PWA) prompt** and a one-time **first-log coachmark** on `/meso/me/`
-and the session logger, plus (optionally) an **athlete-initiated** affordance
-("Have a coach? Ask them to invite you / enter an invite code") — an N4 follow-up
-that closes the loop for an athlete who arrives first.
+and the session logger. The athlete-initiated join path that was the bulk of this
+phase is **already built** (#311's "Your coaches" card + request-a-coach form), so
+Phase 4 narrows to install + first-log polish.
 *Done when:* a newly-invited athlete installs Meso and logs their first session
 without confusion.
 

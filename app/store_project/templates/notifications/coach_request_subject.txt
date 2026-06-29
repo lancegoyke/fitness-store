@@ -1,0 +1,1 @@
+{{ athlete_name }} asked to train with you on Mastering Fitness

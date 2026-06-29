@@ -136,12 +136,19 @@ Mark via a `CoachProfile`/`AthleteProfile`, Django groups, or boolean flags. **R
 `CoachProfile` (presence = is-a-coach) + the `CoachAthlete` link (presence = is-an-athlete);
 avoids overloading the User model.
 
-### N4 · Athlete onboarding / invites 🟢 (Phase 1 built)
+### N4 · Athlete onboarding / invites 🟢 (Phases 1–3 built)
 How an athlete joins a coach: coach invites by email → athlete signs up (allauth) → link
 created; or coach creates a stub athlete and sends a claim link. **Decision:** email invite +
 claim, reusing allauth — **Phase 1 built** (the `CoachInvite` email artifact → bearer-token
 claim → materialized active `CoachAthlete`; rides allauth's `?next=` with no custom adapter).
-Plan + deferred items in [`invites-plan.md`](./invites-plan.md).
+**Phase 2 built** — the reverse direction: an athlete *requests* a coach by email
+(`CoachAthlete.request`), the coach accepts/declines on the roster, both sides see the pending
+state on their own surface, and any non-coach now lands on their training home (where the
+request form lives). **Phase 3 built** — invite *lifecycle*: a 14-day TTL (`expires_at`) + a
+new `EXPIRED` status, lazy + swept expiry (the claim path refuses a stale token;
+`meso_expire_invites` bulk-sweeps overdue invites), and an explicit **resend** (rotates the
+token + resets the clock, re-arms an expired invite) surfaced on the roster. Plan + deferred
+items in [`invites-plan.md`](./invites-plan.md).
 
 ---
 
@@ -519,17 +526,80 @@ _(Append dated entries here as decisions land.)_
   P2 claim race — `select_for_update` on the invite row in the claim/revoke views). Plan +
   deferred (athlete→coach request UI, resend/expiry, stub-athlete) in
   [`invites-plan.md`](./invites-plan.md).
+- 2026-06-29 — **N4 — athlete onboarding / invites — Phase 2 built** (branch
+  `meso-invites-phase2`, **no migration**). Closes the bidirectional half the relationship spine
+  always supported in the model (`CoachAthlete.request` → `pending_athlete_request`) but never in
+  the UI: an athlete who already has an account asks to train under a coach, the coach
+  accepts/declines on the roster, and either party sees the pending state on their own surface.
+  New `CoachAthlete.initiator()` (mirror of `recipient()` — who may *withdraw* a pending link).
+  **`athlete_request_coach`** (`POST /meso/request/`): resolves the posted email to a *coach* (a
+  `User` with a `CoachProfile`, excluding self), rejecting unknown/non-coach/own; an already-active
+  link is untouched, an already-pending request (or coach-invite already awaiting the athlete) is a
+  friendly no-op, else `request()` opens/reopens; emails the coach best-effort on
+  `transaction.on_commit`. **`request_withdraw`** (`POST /meso/request/<token>/withdraw/`):
+  initiator-only (recipient/stranger → 403), pending-only → declined. The coach's accept/decline
+  rides the **existing** `invite_accept`/`invite_decline` recipient views unchanged (a request's
+  recipient *is* the coach). `notifications.send_coach_request_email` (+ 3 templates), mirror of the
+  invite email. Surfaces: the roster gains a pending-request list (Accept/Decline), the athlete home
+  gains a "Your coaches" card (incoming invites + sent requests + a request-a-coach form).
+  **Routing change:** `RosterView` now sends *any* non-coach to `/meso/me/` (coach = `CoachProfile`
+  **or** a coach-side link **or** a sent invite), so a brand-new athlete (or one merely awaiting an
+  invite) reaches the request form instead of an empty coach roster. Seeded a demo pending request
+  (`hopeful@example.com`) so the surface shows on a fresh DB (idempotent + torn down). Built
+  red→green: **+34 pytest** (`test_requests.py`) + 3 seed assertions; full suite green (867).
+  **Codex review loop CLEAN on iteration 1.** Plan + deferred (resend/expiry, stub-athlete,
+  attribution) in [`invites-plan.md`](./invites-plan.md).
+- 2026-06-29 — **N4 — invites — Phase 3 built** (branch `meso-invites-phase3`). Invite
+  *lifecycle*: a TTL + an explicit resend, closing the top deferred item. **One migration**
+  (`0016_coachinvite_expiry`): `CoachInvite.expires_at` + a new `Status.EXPIRED`. A fresh invite
+  is stamped `now + INVITE_TTL` (14 days) by `open_for`; a **null** clock = never expires (legacy
+  rows stay claimable — data-safe, no backfill). `is_claimable = is_pending and not is_expired` is
+  the single gate the claim path enforces. `expire()` (`pending → expired`, past-due only) fires
+  **lazily** (the claim view ages out an overdue link on view; `accept()` flips + refuses one as a
+  backstop, so a stale token can never materialize a link) and in **bulk** via a new
+  `meso_expire_invites` management command (cron-friendly sweep of `overdue()`, `--dry-run`).
+  `resend()` re-arms an outstanding invite — **new token** (old emailed link dies — the Phase-3
+  decision), reset clock, `expired → pending`; `open_for` reuses an outstanding (pending/expired)
+  row and re-arms a stale one (no duplicate pending+expired pair); `revoke()` broadened so a coach
+  can dismiss an *expired* invite too. New `POST /meso/invite/<token>/resend/`
+  (`coach_invite_resend`): coach-scoped (404), row-locked, best-effort email on `on_commit`,
+  answered-invite no-op (no 500). Querysets `claimable`/`overdue`/`outstanding`; the roster lists
+  `outstanding()` (an expired one reads "Expired" + offers Resend); the claim page gains an
+  "expired" state; admin lists `expires_at`; the demo invite seeds via `open_for` (real TTL).
+  Built red→green: **+38 pytest** (`test_invite_lifecycle.py`); full project suite 904 + 83 Vitest
+  green. Plan + deferred (configurable TTL, expiry reminder, cron scheduling, stub-athlete) in
+  [`invites-plan.md`](./invites-plan.md).
+- 2026-06-29 — **Agent job → django-q `async_task` built** (branch `meso-agent-django-q`,
+  **no migration**). Closes the top deferred item of the scheduling plan: `meso/agent/jobs.py` ran
+  the proposal job on a bare daemon thread because there was no queue; now that django-q2 + the
+  `qcluster` exist (the invite sweeps' scheduler), the agent job rides that same cluster.
+  `dispatch_proposal` enqueues `run_proposal_job` (the unchanged unit of work) via `async_task`
+  **on commit** — so a worker in another process never races the not-yet-committed drafting batch,
+  and a rolled-back request enqueues nothing. **Only the batch id is enqueued**: the worker is a
+  separate process that rebuilds its own Claude client (`get_default_client` off the shared `.env`
+  `ANTHROPIC_API_KEY`), and a client isn't picklable. The dotted path lives in one constant
+  (`RUN_PROPOSAL_TASK`) covered by an end-to-end test that runs the enqueued job under django-q's
+  `sync` mode (catches a rename that would break dispatch silently). `MESO_AGENT_RUN_SYNC` still runs
+  the job inline (tests + any queue-free env); a broker-write failure resolves the batch to `failed`
+  rather than stranding it `drafting` (mirrors the service's "never leave a batch stuck drafting"
+  invariant). No compose change — the `qcluster` already runs and shares web's image + `.env`. Built
+  red→green: **+3 pytest** (`test_agent_jobs.py` `TestDispatch`, net; the daemon-thread test
+  retired). Plan + remaining deferred in [`scheduling-plan.md`](./scheduling-plan.md).
 - 2026-06-29 — **First-time UX / onboarding slice planned** (not built; plan in
   [`first-time-ux-plan.md`](./first-time-ux-plan.md)). The feature area is broad
   and deployed but has never had an onboarding pass. The plan covers all three
   first-timers (cold visitor · new coach · new athlete) and surfaces the
   **headline blocker**: a coach **cannot create an individual program in the UI** —
   `Plan.objects.create` lives only in `MesoGroup.create_shared_plan`
-  (`models.py:1289`), there's no individual-plan / add-week / add-session endpoint,
+  (`models.py:1480`), there's no individual-plan / add-week / add-session endpoint,
   and both "+ New program" and "Build a program" CTAs bounce off the bare designer
   back to the roster; only `seed_meso_demo` builds an individual plan tree. Phased
   fix (Phase 1 = individual plan creation, the structural fix; 2–5 = front
-  door, empty states, role fork, athlete + designer first-run polish).
+  door, empty states, role fork, athlete + designer first-run polish). Reconciled
+  with the post-#311 routing (`RosterView` now sends any non-coach to `/meso/me/`,
+  so the new-coach gap is now *reaching the coach surface at all*; #311's
+  athlete→coach **request** loop already covers most of Phase 4's athlete-initiated
+  item — distinct from Q4's "become a coach / beta access").
   **Decisions Q1–Q4 resolved (2026-06-29):** **Q1** coaches = **closed beta /
   allowlisted** (`CoachProfile` auto-creates on first coach action for an
   allowlisted user; open self-serve deferred to billing S6 — no billing yet + a

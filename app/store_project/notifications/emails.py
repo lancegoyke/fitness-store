@@ -87,6 +87,91 @@ def send_coach_invite_email(*, coach, email, accept_url) -> bool:
     return True
 
 
+def send_coach_invite_reminder_email(*, coach, email, accept_url) -> bool:
+    """Remind an athlete that a coach's claim link is about to expire.
+
+    Meso N4 Phase 4 (invite lifecycle): a pending ``CoachInvite`` nears its TTL
+    without being claimed. The ``meso_remind_expiring_invites`` sweep sends this
+    nudge so the link doesn't quietly lapse. The reminder peer of
+    ``send_coach_invite_email`` — same claim link, "expiring soon" framing.
+
+    Args:
+        coach: the inviting ``User`` (for the message's "from" name).
+        email: the invited address (the recipient).
+        accept_url: absolute URL of the claim page (``/meso/claim/<token>/``).
+
+    Returns:
+        ``True`` if a message was sent, ``False`` if skipped because there is no
+        address to send to.
+
+    Raises a mail backend exception (``fail_silently=False``); callers that must
+    not fail the sweep on a bounced email should treat this as best-effort.
+    """
+    if not email:
+        return False
+    context = {
+        "coach_name": coach.display_name(),
+        "accept_url": accept_url,
+    }
+    subject = render_to_string(
+        "notifications/coach_invite_reminder_subject.txt", context
+    ).strip()
+    msg_plain = render_to_string("notifications/coach_invite_reminder.md", context)
+    msg_html = render_to_string("notifications/coach_invite_reminder.html", context)
+    send_mail(
+        subject=subject,
+        message=msg_plain,
+        html_message=msg_html,
+        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
+        recipient_list=[email],
+        fail_silently=False,
+    )
+    return True
+
+
+def send_coach_request_email(*, athlete, coach, roster_url) -> bool:
+    """Email a coach that an athlete has asked to train under them.
+
+    Meso N4 Phase 2 (athlete onboarding, the reverse direction): an athlete who
+    already has an account asks to be coached. This notifies the coach so they
+    can accept or decline on their roster — the symmetric counterpart to
+    ``send_coach_invite_email``.
+
+    Args:
+        athlete: the requesting ``User`` (named in the message).
+        coach: the ``User`` being asked to coach (the recipient).
+        roster_url: absolute URL of the coach's roster (``/meso/``), where the
+            pending request is accepted or declined.
+
+    Returns:
+        ``True`` if a message was sent, ``False`` if skipped because the coach
+        has no email address on file.
+
+    Raises a mail backend exception (``fail_silently=False``); callers that must
+    not fail the request on a bounced email should treat this as best-effort.
+    """
+    if not coach.email:
+        return False
+    context = {
+        "athlete_name": athlete.display_name(),
+        "roster_url": roster_url,
+    }
+    subject = render_to_string(
+        "notifications/coach_request_subject.txt", context
+    ).strip()
+    msg_plain = render_to_string("notifications/coach_request.md", context)
+    msg_html = render_to_string("notifications/coach_request.html", context)
+    send_mail(
+        subject=subject,
+        message=msg_plain,
+        html_message=msg_html,
+        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
+        recipient_list=[coach.email],
+        fail_silently=False,
+    )
+    return True
+
+
 def send_week_delivered_email(*, athlete, coach, plan, week, home_url) -> bool:
     """Email an athlete that their coach delivered a new training week.
 

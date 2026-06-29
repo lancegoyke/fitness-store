@@ -5,7 +5,13 @@ creates a ``drafting`` batch and dispatches ``run_proposal_job``, which grounds 
 calls Claude → validates → persists, flipping the batch to ``pending`` (ready for
 review) or ``failed`` (with the reason recorded). ``dispatch_proposal`` runs the
 job inline under the test setting ``MESO_AGENT_RUN_SYNC`` so these never spawn a
-thread or touch the network — the client is a fake.
+worker or touch the network — the client is a fake.
+
+The non-sync path enqueues the job on the django-q cluster (``async_task``). The
+test settings run django-q in ``sync`` mode, so an enqueued task executes
+in-process; the queue tests below assert the enqueue is deferred to commit, that
+the dotted path resolves and runs end to end, and that a broker failure resolves
+the batch instead of stranding it ``drafting``.
 """
 
 import pytest
@@ -142,23 +148,66 @@ class TestDispatch:
         assert batch.status == AgentProposalBatch.Status.PENDING
         assert batch.changes.count() == 1
 
-    def test_threaded_dispatch_defers_the_thread_to_on_commit(
+    def test_queued_dispatch_defers_enqueue_to_on_commit(
         self, settings, monkeypatch, django_capture_on_commit_callbacks
     ):
-        # ATOMIC_REQUESTS: the thread must not start until the request commits,
-        # or it would query the drafting batch before it is visible. Stub the
-        # thread launch so no real thread runs here.
+        # ATOMIC_REQUESTS: the task must not be enqueued until the request
+        # commits, or a worker in another process could pick it up before the
+        # drafting batch is visible. Capture the enqueue so nothing real runs.
         settings.MESO_AGENT_RUN_SYNC = False
-        started = []
+        enqueued = []
         monkeypatch.setattr(
-            jobs, "_start_thread", lambda batch_id, client: started.append(batch_id)
+            jobs, "async_task", lambda func, *args: enqueued.append((func, args))
         )
         plan, _, _ = make_plan()
         batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
 
         with django_capture_on_commit_callbacks(execute=True):
             jobs.dispatch_proposal(batch.pk)
-            # Deferred — nothing launched until the surrounding block commits.
-            assert started == []
+            # Deferred — nothing enqueued until the surrounding block commits.
+            assert enqueued == []
 
-        assert started == [batch.pk]
+        assert enqueued == [(jobs.RUN_PROPOSAL_TASK, (batch.pk,))]
+
+    def test_queued_dispatch_runs_the_job_via_django_q_sync(
+        self, settings, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        # End to end through the queue: with the agent's inline path off, the job
+        # is enqueued and django-q's sync mode runs it in-process. This proves the
+        # dotted path resolves, the batch id pickles, and the unit of work runs —
+        # the worker builds its own client (no client is enqueued).
+        settings.MESO_AGENT_RUN_SYNC = False
+        from store_project.meso.agent import client as client_module
+
+        plan, _, presc = make_plan()
+        fake = FakeClient(one_swap(presc))
+        monkeypatch.setattr(client_module, "get_default_client", lambda: fake)
+        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            jobs.dispatch_proposal(batch.pk)
+
+        batch.refresh_from_db()
+        assert batch.status == AgentProposalBatch.Status.PENDING
+        assert batch.changes.count() == 1
+
+    def test_enqueue_failure_marks_batch_failed(
+        self, settings, monkeypatch, django_capture_on_commit_callbacks
+    ):
+        # A broker write that fails must not strand the batch in ``drafting``
+        # (the frontend would poll it forever). Resolve it to ``failed`` instead.
+        settings.MESO_AGENT_RUN_SYNC = False
+
+        def boom(func, *args):
+            raise RuntimeError("broker is down")
+
+        monkeypatch.setattr(jobs, "async_task", boom)
+        plan, _, _ = make_plan()
+        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            jobs.dispatch_proposal(batch.pk)
+
+        batch.refresh_from_db()
+        assert batch.status == AgentProposalBatch.Status.FAILED
+        assert batch.error

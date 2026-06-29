@@ -2,9 +2,11 @@
 
 {% block title %}Coach invite · Meso{% endblock %}
 
-{# The claim URL carries the bearer token — don't leak it to font/CDN hosts.
-   head_top renders before the base template's font <link>s, so the policy is in
-   effect before those external requests fire. #}
+{% comment %}
+  The claim URL carries the bearer token — don't leak it to font/CDN hosts.
+  head_top renders before the base template's font <link>s, so the policy is in
+  effect before those external requests fire.
+{% endcomment %}
 {% block head_top %}<meta name="referrer" content="no-referrer" />{% endblock %}
 
 {# A brand-new athlete may have no coach/athlete role yet — strip the coach nav. #}
@@ -41,6 +43,13 @@
             </form>
           </div>
         {% endif %}
+      {% elif invite.status == 'expired' %}
+        <p class="meso-eyebrow">Coach invite</p>
+        <h1 class="meso-h1">This invite has expired</h1>
+        <p class="meso-sub">
+          The link timed out. Ask {{ coach_name }} to resend your invite and you'll
+          get a fresh link.
+        </p>
       {% else %}
         <p class="meso-eyebrow">Coach invite</p>
         <h1 class="meso-h1">This invite is no longer active</h1>

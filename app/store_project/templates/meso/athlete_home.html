@@ -35,6 +35,57 @@
       </button>
     {% endif %}
 
+    <!-- Your coaches (N4 Phase 2): invites awaiting you, requests you've sent,
+         and the request-a-coach form. -->
+    <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
+      <p class="meso-eyebrow">Your coaches</p>
+
+      {% for inv in pending.invites %}
+        <div class="meso-row" style="cursor:default;padding-left:0;padding-right:0;">
+          <div class="meso-avatar meso-avatar--sm">{{ inv.initials }}</div>
+          <div style="min-width:0;">
+            <div class="meso-row-name">{{ inv.coach }}</div>
+            <div class="meso-row-meta">Invited you to train · {{ inv.when|date:"M j" }}</div>
+          </div>
+          <div class="meso-spacer"></div>
+          <form method="post" action="{% url 'meso:invite_accept' token=inv.token %}" style="margin:0;">
+            {% csrf_token %}
+            <button type="submit" class="meso-btn meso-btn--primary" style="padding:5px 10px;font-size:12px;">Accept</button>
+          </form>
+          <form method="post" action="{% url 'meso:invite_decline' token=inv.token %}" style="margin:0;">
+            {% csrf_token %}
+            <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Decline</button>
+          </form>
+        </div>
+      {% endfor %}
+
+      {% for req in pending.requests %}
+        <div class="meso-row" style="cursor:default;padding-left:0;padding-right:0;">
+          <div class="meso-avatar meso-avatar--sm">{{ req.initials }}</div>
+          <div style="min-width:0;">
+            <div class="meso-row-name">{{ req.coach }}</div>
+            <div class="meso-row-meta">Requested {{ req.when|date:"M j" }} · awaiting reply</div>
+          </div>
+          <div class="meso-spacer"></div>
+          <span class="meso-badge"><i></i>Pending</span>
+          <form method="post" action="{% url 'meso:request_withdraw' token=req.token %}" style="margin:0;">
+            {% csrf_token %}
+            <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Withdraw</button>
+          </form>
+        </div>
+      {% endfor %}
+
+      <details {% if not pending.invites and not pending.requests %}open{% endif %} style="margin-top:6px;">
+        <summary style="list-style:none;cursor:pointer;font-size:12.5px;font-weight:650;color:var(--accent-ink);">+ Request a coach</summary>
+        <form method="post" action="{% url 'meso:athlete_request_coach' %}" style="display:flex;gap:9px;margin-top:10px;">
+          {% csrf_token %}
+          <input name="email" type="email" required maxlength="254" placeholder="coach@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
+          <button type="submit" class="meso-btn meso-btn--primary">Send request</button>
+        </form>
+        <p class="meso-row-meta" style="margin-top:8px;">Enter your coach's email to ask to train with them.</p>
+      </details>
+    </div>
+
     {% for plan in plans %}
       <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
         <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px;flex-wrap:wrap;">
