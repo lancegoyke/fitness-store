@@ -283,9 +283,10 @@ STRIPE_SECRET_KEY = get_env_var("STRIPE_SECRET_KEY")
 # agent endpoint (it returns 503) so the app boots and CI runs without creds.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MESO_AGENT_MODEL = os.environ.get("MESO_AGENT_MODEL", "claude-opus-4-8")
-# Run the proposal job inline instead of in a background thread (Phase 4). Off
-# in real environments (the endpoint returns 202 and the frontend polls); tests
-# set it on for deterministic, thread-free runs.
+# Run the proposal job inline instead of enqueuing it on the django-q cluster
+# (Phase 4). Off in real environments (the endpoint returns 202, the cluster runs
+# the job, and the frontend polls); tests set it on for deterministic, worker-free
+# runs.
 MESO_AGENT_RUN_SYNC = os.environ.get("MESO_AGENT_RUN_SYNC", "false").lower() in (
     "1",
     "true",

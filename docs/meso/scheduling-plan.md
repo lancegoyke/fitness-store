@@ -54,11 +54,18 @@ un-versioned approach we're moving away from).
 - The entrypoint only migrates/collectstatic for the `gunicorn` command, so the
   `qcluster` command passes straight through without re-running them.
 
+## Done after this plan
+
+- **Migrated `meso/agent/jobs.py`** off its daemon thread onto `async_task`
+  (PR #316). `dispatch_proposal` enqueues `run_proposal_job` on the existing
+  `qcluster` (on commit, so the drafting batch has landed; the worker rebuilds its
+  own client so only the batch id is enqueued); `MESO_AGENT_RUN_SYNC` still runs it
+  inline, and a broker-write failure resolves the batch to `failed` instead of
+  stranding it `drafting`. No migration — the agent job rides the same cluster +
+  ORM broker the sweeps already use.
+
 ## Deferred
 
-- **Migrate `meso/agent/jobs.py`** off its daemon thread onto `async_task` (the
-  unit of work, `run_proposal_job`, already exists — it's a drop-in dispatch
-  swap). Bigger + changes the agent endpoint's async behavior; its own PR.
 - **Configurable schedule times / per-coach cadence**; an admin surface beyond
   the raw `Schedule` rows.
 - **Result monitoring / alerting** on a failed sweep (today: cluster logs + the

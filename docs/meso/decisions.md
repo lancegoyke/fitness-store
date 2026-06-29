@@ -569,3 +569,19 @@ _(Append dated entries here as decisions land.)_
   Built red→green: **+38 pytest** (`test_invite_lifecycle.py`); full project suite 904 + 83 Vitest
   green. Plan + deferred (configurable TTL, expiry reminder, cron scheduling, stub-athlete) in
   [`invites-plan.md`](./invites-plan.md).
+- 2026-06-29 — **Agent job → django-q `async_task` built** (branch `meso-agent-django-q`,
+  **no migration**). Closes the top deferred item of the scheduling plan: `meso/agent/jobs.py` ran
+  the proposal job on a bare daemon thread because there was no queue; now that django-q2 + the
+  `qcluster` exist (the invite sweeps' scheduler), the agent job rides that same cluster.
+  `dispatch_proposal` enqueues `run_proposal_job` (the unchanged unit of work) via `async_task`
+  **on commit** — so a worker in another process never races the not-yet-committed drafting batch,
+  and a rolled-back request enqueues nothing. **Only the batch id is enqueued**: the worker is a
+  separate process that rebuilds its own Claude client (`get_default_client` off the shared `.env`
+  `ANTHROPIC_API_KEY`), and a client isn't picklable. The dotted path lives in one constant
+  (`RUN_PROPOSAL_TASK`) covered by an end-to-end test that runs the enqueued job under django-q's
+  `sync` mode (catches a rename that would break dispatch silently). `MESO_AGENT_RUN_SYNC` still runs
+  the job inline (tests + any queue-free env); a broker-write failure resolves the batch to `failed`
+  rather than stranding it `drafting` (mirrors the service's "never leave a batch stuck drafting"
+  invariant). No compose change — the `qcluster` already runs and shares web's image + `.env`. Built
+  red→green: **+3 pytest** (`test_agent_jobs.py` `TestDispatch`, net; the daemon-thread test
+  retired). Plan + remaining deferred in [`scheduling-plan.md`](./scheduling-plan.md).
