@@ -136,9 +136,14 @@ rule to avoid the app arbitrarily choosing which athletes to freeze.)
 
 ## Phasing
 
-> **Status:** Phase 1 ✅ (PR #319, migration `0020`). Phase 2 ✅ (this slice) —
-> Stripe Checkout + Customer Portal + the clean webhook + best-effort seat sync +
-> the daily `reconcile_seats` sweep. Enforcement + paywall UI is Phase 3 (next).
+> **Status:** Phase 1 ✅ (PR #319, migration `0020`). Phase 2 ✅ (PR #320,
+> migration `0021`) — Stripe Checkout + Customer Portal + the clean webhook +
+> best-effort seat sync + the daily `reconcile_seats` sweep. Phase 3 ✅ (this
+> slice) — the gates have teeth: `can_add_athlete` at the invite/request choke
+> points, `can_use_agent` at the agent endpoint (402), `can_edit` (the D6
+> over-limit freeze) at the edit/deliver endpoints, the local trial-start
+> endpoint, and the paywall UI (roster billing card + designer agent CTA). Next:
+> Phase 4 (self-serve coach signup).
 
 ### Deploying Phase 2 (Stripe configuration)
 
@@ -166,10 +171,13 @@ deploy succeeds without them (like the VAPID push keys):
 2. **Phase 2 — Stripe.** Subscription Checkout + Customer Portal + the clean
    webhook handler + seat-quantity sync + the `reconcile_seats` qcluster sweep.
    Now a coach can actually pay.
-3. **Phase 3 — enforcement + UI.** Wire `can_add_athlete` into the invite/request
-   choke points **and `can_use_agent` into the agent endpoint**; the paywall /
-   upgrade CTA + a billing settings page (trial banner, "manage subscription" →
-   Portal); the D6 downgrade behavior. Now billing has teeth.
+3. **Phase 3 — enforcement + UI (DONE).** `can_add_athlete` wired into the
+   invite/request choke points (open invite, accept request, claim invite),
+   `can_use_agent` into the agent endpoint (402 + designer upgrade CTA),
+   `can_edit` (the D6 over-limit freeze) into the autosave/deliver/group edit
+   endpoints, the local trial-start endpoint (`billing/trial/`), and the roster
+   billing card (tier + seat usage + start-trial / subscribe / manage-billing
+   CTAs). Billing now has teeth. Fully tested in `test_billing_enforcement.py`.
 4. **Phase 4 — self-serve coach signup.** The public become-a-coach → choose
    plan → subscribe → `CoachProfile` created funnel (today coach creation is
    admin/seed-only).

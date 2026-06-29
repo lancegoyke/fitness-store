@@ -21,6 +21,7 @@ import pytest
 from django.contrib.staticfiles import finders
 from django.urls import reverse
 
+from store_project.meso.models import CoachSubscription
 from store_project.meso.tests.test_designer_save import seed_plan
 
 pytestmark = pytest.mark.django_db
@@ -96,6 +97,9 @@ class TestPhase4BackgroundJobWiring:
 class TestDesignerStillRendersChatColumn:
     def test_designer_page_renders_the_agent_column(self, client):
         plan, _, _ = seed_plan()
+        # The AI agent is paid-only (S6 Phase 3, D4), so a coach iterating a plan
+        # with the agent in these tests has full access — comp keeps the gate open.
+        CoachSubscription.comp(plan.relationship.coach)
         client.force_login(plan.relationship.coach)
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 200

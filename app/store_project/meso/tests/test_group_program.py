@@ -30,6 +30,7 @@ from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachSubscription
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import Plan
 from store_project.meso.models import Session
@@ -346,6 +347,9 @@ class TestGroupPlanEndpoints:
     def test_agent_rejects_group_plan(self, client):
         # The group agent is a later phase; grounding assumes an athlete.
         coach = UserFactory()
+        # The AI agent is paid-only (S6 Phase 3, D4), so a coach iterating a plan
+        # with the agent in these tests has full access — comp keeps the gate open.
+        CoachSubscription.comp(coach)
         group = MesoGroupFactory(coach=coach)
         plan = group.create_shared_plan()
         client.force_login(coach)

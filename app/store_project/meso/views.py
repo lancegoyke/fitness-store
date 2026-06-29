@@ -43,6 +43,7 @@ from .agent import apply as agent_apply
 from .agent import client as agent_client
 from .agent import jobs as agent_jobs
 from .agent import service as agent_service
+from .billing import access as billing_access
 from .billing import seats as billing_seats
 from .billing import stripe_gateway as billing_gateway
 from .billing import webhooks as billing_webhooks
@@ -93,6 +94,43 @@ def _is_coach(user):
         CoachProfile.objects.filter(user=user).exists()
         or CoachAthlete.objects.for_coach(user).exists()
         or CoachInvite.objects.for_coach(user).exists()
+    )
+
+
+# -- billing gates (S6 Phase 3) -------------------------------------------
+#
+# The paywall gets teeth here. ``billing/access.py`` owns the predicates; these
+# shape the rejection per surface — a flashed redirect for the form views, a 402
+# JSON body for the autosave/deliver API. Three gates: the seat cap blocks a free
+# coach past the limit at the relationship choke points (``can_add_athlete``); the
+# AI agent is paid-only (``can_use_agent``); and an over-limit coach (post-downgrade,
+# D6) is frozen out of edits/deliver (``can_edit``).
+
+#: Flashed when a free coach hits the seat cap — the upgrade CTA the roster shows.
+SEAT_LIMIT_MESSAGE = (
+    "You've reached your free athlete limit. Start your free trial or subscribe "
+    "to add more athletes."
+)
+
+#: Flashed on a form view when an over-limit coach (D6) tries to edit/deliver.
+OVER_LIMIT_MESSAGE = (
+    "You're over your plan's athlete limit. Re-subscribe or end a relationship "
+    "to edit or deliver programs."
+)
+
+
+def _over_limit_json():
+    """402 JSON for an API edit/deliver blocked by the D6 over-limit freeze."""
+    return JsonResponse(
+        {
+            "ok": False,
+            "error": (
+                "You're over your plan's athlete limit. Re-subscribe or end a "
+                "relationship to keep editing."
+            ),
+            "over_limit": True,
+        },
+        status=402,
     )
 
 
@@ -193,6 +231,10 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         # batches so the chat survives a reload (the JS hydrates ``messages``
         # from it, falling back to the greeting when empty).
         ctx["chat_thread"] = serialize_chat_thread(plan)
+        # Agent gate (S6 Phase 3, D4): the AI agent is paid-only. When the coach
+        # can't use it, the composer is replaced by an upgrade CTA (the endpoint
+        # also 402s, so the gate is defended server-side, not just hidden).
+        ctx["can_use_agent"] = billing_access.can_use_agent(self.request.user)
         return ctx
 
 
@@ -254,6 +296,9 @@ class RosterView(LoginRequiredMixin, TemplateView):
         ctx["pending_requests"] = [
             presenters.pending_request(link) for link in pending_requests
         ]
+        # Billing/paywall state (S6 Phase 3): tier, seat usage, and the upgrade
+        # CTAs (start trial / subscribe / manage billing).
+        ctx["billing"] = presenters.billing_state(self.request.user)
         ctx["activity"] = []
         ctx["needs_review"] = 0
         return ctx
@@ -380,6 +425,10 @@ def group_design(request, pk):
         )
         if group is None:
             raise Http404("Unknown group")
+        # Edit gate (D6): an over-limit coach is frozen out of designing programs.
+        if not billing_access.can_edit(request.user):
+            messages.error(request, OVER_LIMIT_MESSAGE)
+            return redirect("meso:group", pk=group.pk)
         plan = group.shared_plan() or group.create_shared_plan()
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
@@ -399,6 +448,10 @@ def group_deliver(request, pk):
     group = MesoGroup.objects.for_coach(request.user).filter(pk=pk).first()
     if group is None:
         raise Http404("Unknown group")
+    # Deliver gate (D6): an over-limit coach can't deliver until back within the cap.
+    if not billing_access.can_edit(request.user):
+        messages.error(request, OVER_LIMIT_MESSAGE)
+        return redirect("meso:group", pk=group.pk)
     plan = group.shared_plan()
     if plan is None:
         messages.error(request, "Design a shared program before delivering.")
@@ -930,6 +983,19 @@ def invite_accept(request, token):
     link = get_object_or_404(CoachAthlete, token=token)
     if not link.is_pending or request.user != link.recipient():
         return HttpResponseForbidden("You cannot respond to this invite.")
+    # Seat gate (D4): activating this link consumes one of the coach's seats. A
+    # free coach at the cap can't accept an athlete's request (and can't have a
+    # coach-invite they sent accepted) until they upgrade. Worded for whichever
+    # side is acting — the coach themselves vs. the athlete accepting the coach.
+    if not billing_access.can_add_athlete(link.coach):
+        if request.user == link.coach:
+            messages.error(request, SEAT_LIMIT_MESSAGE)
+        else:
+            messages.error(
+                request,
+                f"{link.coach.display_name()} can't take on new athletes right now.",
+            )
+        return redirect("meso:roster")
     link.accept()
     # A new active link is a billable seat — best-effort sync the coach's Stripe
     # quantity (no-op unless they're paid; the daily sweep is the backstop).
@@ -1078,6 +1144,11 @@ def coach_invite(request):
     if email == CoachInvite.normalize_email(request.user.email):
         messages.error(request, "You can't invite yourself.")
         return redirect("meso:roster")
+    # Seat gate (D4): a free coach at the cap can't open a new invite — accepting
+    # it would create a billable seat they aren't paying for.
+    if not billing_access.can_add_athlete(request.user):
+        messages.error(request, SEAT_LIMIT_MESSAGE)
+        return redirect("meso:roster")
     invite, _ = CoachInvite.open_for(coach=request.user, email=email)
     accept_url = request.build_absolute_uri(
         reverse("meso:invite_claim", kwargs={"token": invite.token})
@@ -1199,6 +1270,16 @@ def invite_claim(request, token):
                 )
                 return redirect("meso:athlete_home")
             if action == "accept":
+                # Seat gate (D4): claiming materializes an active link — a billable
+                # seat for the coach. A coach who has since hit their cap can't take
+                # on the athlete until they upgrade; the athlete sees why.
+                if not billing_access.can_add_athlete(invite.coach):
+                    messages.error(
+                        request,
+                        f"{invite.coach.display_name()} has reached their athlete "
+                        "limit and can't add you right now.",
+                    )
+                    return redirect("meso:athlete_home")
                 try:
                     invite.accept(request.user)
                 except InvalidTransition as exc:
@@ -1272,6 +1353,22 @@ def _coach_plan_or_forbidden(request, plan_id):
     return plan, None
 
 
+def _editable_plan_or_response(request, plan_id):
+    """The plan the requester may *edit*, or an error response (S6 Phase 3, D6).
+
+    Ownership first (``_coach_plan_or_forbidden`` → 404/403), then the billing
+    gate: a coach over their seat limit after a downgrade (``can_edit`` False) gets
+    a 402 instead of mutating — they keep read access but can't change or deliver a
+    program until back within the cap or re-subscribed.
+    """
+    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    if forbidden is not None:
+        return None, forbidden
+    if not billing_access.can_edit(plan.coach):
+        return None, _over_limit_json()
+    return plan, None
+
+
 def _touch_plan(plan):
     """Bump the plan's ``modified`` so it reads as the coach's working plan.
 
@@ -1287,7 +1384,7 @@ def _touch_plan(plan):
 @require_POST
 def prescription_patch(request, plan_id, pk):
     """Patch one prescription cell (or a small batch of cells)."""
-    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
     prescription = get_object_or_404(
@@ -1333,7 +1430,7 @@ def prescription_patch(request, plan_id, pk):
 @require_POST
 def session_add_exercise(request, plan_id, pk):
     """Append a blank prescription row to a session."""
-    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
     session = get_object_or_404(Session, pk=pk, week__mesocycle__plan=plan)
@@ -1463,7 +1560,7 @@ def prescription_override(request, plan_id, pk):
     ``prescription_patch``); send a field empty to clear just that part, and an
     adjust left with no parts is removed. Fully validated before any write.
     """
-    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
     if not plan.is_group:
@@ -1517,7 +1614,7 @@ def coach_set_one_rm(request, plan_id, pk):
     ``set_manual_one_rm`` the athlete logger uses. Returns ``{one_rm, source}`` so
     the badge repaints.
     """
-    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
     if plan.is_group:
@@ -1572,7 +1669,7 @@ def _fan_out_group_delivery(request, plan):
 @require_POST
 def plan_deliver(request, plan_id):
     """Deliver the plan's current week: stamp ``delivered_at`` + snapshot it (Phase 4)."""
-    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
     if plan.is_group:
@@ -1700,6 +1797,22 @@ def agent_propose(request, plan_id):
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
+    # Agent gate (D4): the Claude agent has real per-call cost, so it's paid-only —
+    # a free-tier coach gets a 402 (the designer shows an upgrade CTA in place of
+    # the composer). Trial/active/comped coaches pass. Defended here, not just in
+    # the UI, because the API cost is real.
+    if not billing_access.can_use_agent(request.user):
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": (
+                    "The AI agent is available on a paid plan. Start your free "
+                    "trial or subscribe to use it."
+                ),
+                "upgrade": True,
+            },
+            status=402,
+        )
     if plan.is_group:
         # The agent grounds on a single athlete's profile + logs; a group agent
         # (per-athlete auto-adjusts) is groups Phase 3. Reject before any work so
@@ -1929,6 +2042,32 @@ def billing_portal(request):
         messages.error(request, "Could not open the billing portal. Please try again.")
         return redirect("meso:roster")
     return redirect(session.url)
+
+
+@login_required
+@require_POST
+def billing_start_trial(request):
+    """Start the no-card 14-day local trial for a coach (S6 Phase 3, D3).
+
+    The free path to the full toolkit — no Stripe, no card. Get-or-creates the
+    coach's ``CoachSubscription`` row and flips it ``trialing`` for
+    ``TRIAL_DAYS``. Single-use: a coach who has already trialed (even if it
+    lapsed) gets a friendly "already used" notice, never a 500. Coach-surface
+    only; a non-coach is bounced to the roster (which redirects them home).
+    """
+    if not _is_coach(request.user):
+        return redirect("meso:roster")
+    try:
+        CoachSubscription.start_trial_for(request.user)
+    except InvalidTransition:
+        messages.info(request, "You've already used your free trial.")
+    else:
+        messages.success(
+            request,
+            f"Your {CoachSubscription.TRIAL_DAYS}-day free trial has started — "
+            "the full Meso toolkit is unlocked.",
+        )
+    return redirect("meso:roster")
 
 
 @csrf_exempt

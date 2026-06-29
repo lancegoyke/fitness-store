@@ -8,13 +8,16 @@ neutral values (``compliance=None``, ``status=""``, ``has_program=False``) so
 the layout holds without inventing numbers.
 """
 
+import math
 from collections import defaultdict
 
 from django.urls import reverse
 from django.utils import timezone
 
+from .billing import access as billing_access
 from .models import CoachAthlete
 from .models import CoachInvite
+from .models import CoachSubscription
 from .models import LoadType
 from .models import Plan
 from .models import SessionLog
@@ -153,6 +156,43 @@ def pending_request(link):
         "initials": initials(name),
         "token": link.token,
         "when": link.created_at,
+    }
+
+
+def billing_state(coach):
+    """The coach's billing/paywall state for the roster (S6 Phase 3).
+
+    A template-friendly read over ``billing/access.py`` + the subscription row:
+    the tier, seat usage, and which upgrade CTAs to offer. The free tier sees
+    "start your no-card trial" (single-use) and "subscribe"; a coach with a real
+    Stripe subscription sees "manage billing" (the hosted Portal); an over-limit
+    coach (post-downgrade, D6) sees the freeze warning. ``seat_limit`` is ``None``
+    for an unlimited (active/trial/comped) coach so the template hides the cap.
+    """
+    sub = getattr(coach, "coach_subscription", None)
+    status = sub.status if sub else CoachSubscription.Status.FREE
+    seat_limit = billing_access.effective_seat_limit(coach)
+    active = billing_access.is_active(coach)
+    # The no-card trial is single-use: offer it only to a free coach who has never
+    # trialed (no row, or a row whose ``trial_end`` was never set).
+    can_start_trial = (
+        not active
+        and status == CoachSubscription.Status.FREE
+        and (sub is None or sub.trial_end is None)
+    )
+    return {
+        "status": status,
+        "status_label": CoachSubscription.Status(status).label,
+        "is_active": active,
+        "on_trial": active and status == CoachSubscription.Status.TRIALING,
+        "trial_end": sub.trial_end if sub else None,
+        "seat_count": billing_access.active_seat_count(coach),
+        "seat_limit": None if seat_limit == math.inf else int(seat_limit),
+        "can_add_athlete": billing_access.can_add_athlete(coach),
+        "can_use_agent": billing_access.can_use_agent(coach),
+        "over_limit": billing_access.is_over_limit(coach),
+        "can_start_trial": can_start_trial,
+        "has_stripe_subscription": bool(sub and sub.stripe_subscription_id),
     }
 
 

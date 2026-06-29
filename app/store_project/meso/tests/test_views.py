@@ -11,6 +11,7 @@ from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachSubscription
 from store_project.meso.models import Plan
 from store_project.users.factories import UserFactory
 
@@ -199,6 +200,9 @@ class TestBareDesignerDeliver:
         coach = UserFactory()
         plan_a, presc_a = self._plan_with_prescription(coach)
         plan_b, presc_b = self._plan_with_prescription(coach)
+        # Two athletes puts a free coach over the cap; comp so the autosaves
+        # land (D6) and the test measures last-edited ordering, not the gate.
+        CoachSubscription.comp(coach)
         client.force_login(coach)
 
         def patch(plan, presc):
