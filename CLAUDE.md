@@ -130,6 +130,8 @@ Uses django-allauth with email-only login, social authentication (Facebook, Goog
 ## Key Technologies
 - Django 5.2+ with PostgreSQL database
 - Redis for caching and sessions
+- django-q2 for scheduled/background tasks (ORM broker; `qcluster` worker runs
+  the `django_q.Schedule` rows — see `docs/meso/scheduling-plan.md`)
 - Stripe for payments
 - AWS S3 for media storage
 - WhiteNoise for static files

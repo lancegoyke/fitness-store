@@ -43,6 +43,7 @@ services:
   web:
     build:
       context: .
+    image: fitness-store-app # shared by the qcluster worker (same code, diff command)
     restart: unless-stopped
     env_file:
       - .env
@@ -87,6 +88,38 @@ services:
       proxy:
         aliases:
           - fitness-store-web
+
+  # django-q2 cluster: runs the DB-backed scheduled tasks (the N4 invite sweeps;
+  # see Q_CLUSTER in settings + meso migration 0018). Same image as web, run with
+  # a different command. The entrypoint only migrates/collectstatic for the
+  # `gunicorn` command, so `python manage.py qcluster` falls straight through.
+  # Waits on web being healthy so the schema/migrations are in place first.
+  qcluster:
+    image: fitness-store-app
+    restart: unless-stopped
+    command: ["python", "manage.py", "qcluster"]
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - ENVIRONMENT=PRODUCTION
+      - DEBUG=0
+      - DJANGO_ALLOWED_HOSTS=${ALLOWED_HOSTS} www.${ALLOWED_HOSTS}
+      - SQL_DATABASE=${DB_NAME}
+      - SQL_USER=${DB_USER}
+      - SQL_PASSWORD=${DB_PASSWORD}
+      - SQL_HOST=postgres
+      - SQL_PORT=5432
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
 volumes:
   postgres_data:
