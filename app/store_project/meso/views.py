@@ -64,6 +64,7 @@ from .models import ProposedChange
 from .models import PushSubscription
 from .models import Session
 from .models import SessionLog
+from .models import Week
 from .models import WeekDelivery
 from .serializers import current_week
 from .serializers import group_adjustments
@@ -1518,15 +1519,22 @@ def session_add(request, plan_id):
     week = current_week(plan)
     if week is None:
         return HttpResponseBadRequest("This plan has no week to add a day to.")
-    next_order = (week.sessions.aggregate(m=Max("order"))["m"] or 0) + 1
-    next_day = (week.sessions.aggregate(m=Max("day_number"))["m"] or 0) + 1
-    session = Session.objects.create(
-        week=week, day_number=next_day, name=f"Day {next_day}", order=next_order
-    )
-    ExercisePrescription.objects.create(
-        session=session, name="New exercise", order=0, sets="3", reps="10", rpe="7"
-    )
-    _touch_plan(plan)
+    # Allocate the next day_number/order under a row lock on the week so a
+    # double-click or two concurrent submits can't read the same max and create
+    # duplicate "Day N" rows (Session has no uniqueness on these). The explicit
+    # transaction is required: prod views run in autocommit (ATOMIC_REQUESTS is
+    # inert here), so the lock must own its own transaction to be held.
+    with transaction.atomic():
+        Week.objects.select_for_update().filter(pk=week.pk).first()
+        next_order = (week.sessions.aggregate(m=Max("order"))["m"] or 0) + 1
+        next_day = (week.sessions.aggregate(m=Max("day_number"))["m"] or 0) + 1
+        session = Session.objects.create(
+            week=week, day_number=next_day, name=f"Day {next_day}", order=next_order
+        )
+        ExercisePrescription.objects.create(
+            session=session, name="New exercise", order=0, sets="3", reps="10", rpe="7"
+        )
+        _touch_plan(plan)
     return JsonResponse({"ok": True, "session": serialize_session(session)}, status=201)
 
 
