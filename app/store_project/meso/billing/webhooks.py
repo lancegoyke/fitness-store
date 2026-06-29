@@ -77,9 +77,20 @@ def handle_event(event):
     ):
         _sync_from_subscription(obj, deleted=event_type.endswith("deleted"))
     elif event_type == "invoice.payment_failed":
-        _nudge_status(obj, CoachSubscription.Status.PAST_DUE)
+        # A live subscription's payment just failed → past_due (never a dead one).
+        _nudge_status(
+            obj,
+            from_status=CoachSubscription.Status.ACTIVE,
+            to_status=CoachSubscription.Status.PAST_DUE,
+        )
     elif event_type == "invoice.paid":
-        _nudge_status(obj, CoachSubscription.Status.ACTIVE)
+        # A past_due subscription recovered → active. Constrained to past_due so a
+        # retried/late invoice.paid can't resurrect a canceled subscription.
+        _nudge_status(
+            obj,
+            from_status=CoachSubscription.Status.PAST_DUE,
+            to_status=CoachSubscription.Status.ACTIVE,
+        )
     # Anything else is intentionally ignored.
 
 
@@ -112,23 +123,26 @@ def _sync_from_subscription(sub_obj, *, deleted):
         status = _STATUS_MAP.get(
             sub_obj.get("status"), CoachSubscription.Status.PAST_DUE
         )
-    # The mirror is keyed by coach (1:1), so an out-of-order event for an *older*
-    # subscription the coach already replaced could otherwise clobber the newer
-    # one. If we already track a different subscription, only a *live*
-    # (active/trialing) event takes over — a stale delete/past_due/cancel for the
-    # old id is ignored so it can't regress the current active subscription.
+    # The mirror is keyed by coach (1:1), so an out-of-order / retried event for a
+    # *different* subscription than the one we track must not clobber the current
+    # one. A different subscription id only takes over when the existing row is
+    # **not already live** (e.g. the coach canceled, then re-subscribed) *and* the
+    # incoming event is itself live — so neither a stale event for an old id (any
+    # status) nor a dead incoming event can replace a live current subscription.
     existing = getattr(coach, "coach_subscription", None)
+    incoming_live = status in CoachSubscription.ACTIVE_STATUSES
     if (
         existing
         and existing.stripe_subscription_id
         and existing.stripe_subscription_id != incoming_id
-        and status not in CoachSubscription.ACTIVE_STATUSES
+        and (existing.is_active or not incoming_live)
     ):
         logger.info(
-            "Billing webhook: ignoring stale event for subscription %s "
-            "(coach already on %s)",
+            "Billing webhook: ignoring event for subscription %s "
+            "(coach tracks %s, live=%s)",
             incoming_id,
             existing.stripe_subscription_id,
+            existing.is_active,
         )
         return
     items = (sub_obj.get("items") or {}).get("data") or [{}]
@@ -145,20 +159,25 @@ def _sync_from_subscription(sub_obj, *, deleted):
     )
 
 
-def _nudge_status(invoice_obj, status):
-    """A thin status nudge from an invoice event, keyed by the subscription id.
+def _nudge_status(invoice_obj, *, from_status, to_status):
+    """A constrained status nudge from an invoice event, keyed by the subscription id.
 
-    The authoritative state comes from the subscription events; this just keeps
-    the mirror fresh between them (a failed/paid invoice flips past_due/active).
-    Ignored if the subscription isn't mirrored locally yet.
+    The authoritative state comes from the subscription events; this just keeps the
+    mirror fresh between them. It is deliberately a **single guarded transition**
+    (``from_status`` → ``to_status``): an invoice event only flips a row already in
+    the expected source state, so a retried/out-of-order invoice can never resurrect
+    a ``canceled`` subscription or otherwise jump the state machine. A no-match
+    (wrong state, or no mirror yet) is a harmless no-op.
     """
     sub_id = invoice_obj.get("subscription")
     if not sub_id:
         return
-    updated = (
-        CoachSubscription.objects.filter(stripe_subscription_id=sub_id)
-        .exclude(status=status)
-        .update(status=status)
-    )
+    updated = CoachSubscription.objects.filter(
+        stripe_subscription_id=sub_id, status=from_status
+    ).update(status=to_status)
     if not updated:
-        logger.info("Billing webhook: no mirror for subscription %s (invoice)", sub_id)
+        logger.info(
+            "Billing webhook: no %s mirror for subscription %s (invoice)",
+            from_status,
+            sub_id,
+        )

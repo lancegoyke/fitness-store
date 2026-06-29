@@ -314,6 +314,46 @@ class TestWebhookHandler:
         assert sub.status == CoachSubscription.Status.ACTIVE
         assert sub.stripe_subscription_id == "sub_new"
 
+    def test_stale_live_update_for_an_old_subscription_is_ignored(self):
+        """A retried active update for the *old* id can't clobber a live newer sub."""
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_new",
+            stripe_item_id="si_new",
+        )
+        billing_webhooks.handle_event(
+            _sub_event(
+                "customer.subscription.updated", sub_id="sub_old", status="active"
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.stripe_subscription_id == "sub_new"
+        assert sub.stripe_item_id == "si_new"
+
+    def test_invoice_paid_does_not_resurrect_a_canceled_subscription(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_1",
+        )
+        billing_webhooks.handle_event(_invoice_event("invoice.paid"))
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.CANCELED
+
+    def test_invoice_payment_failed_does_not_touch_a_canceled_subscription(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_1",
+        )
+        billing_webhooks.handle_event(_invoice_event("invoice.payment_failed"))
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.CANCELED
+
     def test_a_new_live_subscription_takes_over_from_a_canceled_one(self):
         coach = _coach_with_customer()
         CoachSubscriptionFactory(
