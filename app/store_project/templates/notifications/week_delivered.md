@@ -8,3 +8,8 @@ Open it to see your sessions and log your training:
 
 Train hard,
 Mastering Fitness
+{% if unsubscribe_url %}
+--
+You're getting this because {{ coach_name }} coaches you on Mastering Fitness.
+Unsubscribe from training-delivery emails: {{ unsubscribe_url }}
+{% endif %}

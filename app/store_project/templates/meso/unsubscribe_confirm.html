@@ -1,0 +1,33 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Unsubscribe · Meso{% endblock %}
+
+{% comment %}
+The visible-footer-link landing page (a human clicked "Unsubscribe" in the
+email). Login-free — the signed token in the URL authorizes. We never opt out on
+GET (mail scanners/prefetchers issue GETs); the POST below does the actual
+opt-out, which also serves RFC 8058 one-click from the mail client.
+{% endcomment %}
+
+{% block navlinks %}{% endblock %}
+{% block topnav_avatar %}{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-card meso-card--pad" style="max-width:460px;margin:48px auto;">
+      <p class="meso-eyebrow">Email preferences</p>
+      <h1 class="meso-h1" style="margin-bottom:8px;">Unsubscribe?</h1>
+      <p class="meso-sub" style="margin-bottom:18px;">
+        Stop sending <strong>{{ email }}</strong> an email each time a coach
+        delivers a new training week. You'll still see deliveries in your
+        training app, and this won't affect push notifications.
+      </p>
+      <form method="post">
+        {% csrf_token %}
+        <button class="meso-btn meso-btn--primary" type="submit">
+          Unsubscribe from delivery emails
+        </button>
+      </form>
+    </div>
+  </div>
+{% endblock %}
