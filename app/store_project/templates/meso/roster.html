@@ -180,29 +180,71 @@
         </div>
       </div>
 
-      <!-- activity column -->
-      <div class="meso-card meso-card--pad">
-        <p class="meso-eyebrow">Recent activity</p>
-        <div style="display:flex;flex-direction:column;gap:14px;margin-top:4px;">
-          {% for ev in activity %}
-            <div style="display:flex;gap:10px;align-items:flex-start;">
-              <div class="meso-avatar meso-avatar--sm {% if ev.athlete.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ ev.athlete.initials }}</div>
-              <div style="min-width:0;line-height:1.35;">
-                <div style="font-size:12.5px;">
-                  <a href="{% url 'meso:athlete' ev.athlete.id %}" style="font-weight:700;color:var(--ink);text-decoration:none;">{{ ev.athlete.name }}</a>
-                  {% if ev.kind == 'flag' %}
-                    <span style="color:var(--warn);"> {{ ev.text }}</span>
-                  {% else %}
-                    <span class="meso-muted"> {{ ev.text }}</span>
-                  {% endif %}
-                </div>
-                <div class="meso-row-meta" style="margin-top:2px;">{{ ev.when }}</div>
-              </div>
-            </div>
-          {% endfor %}
+      <!-- right column: billing + recent activity -->
+      <div style="display:flex;flex-direction:column;gap:18px;">
+
+      <!-- Billing / plan (S6 Phase 3): tier, seat usage, and upgrade CTAs. -->
+        <div class="meso-card meso-card--pad" style="display:flex;flex-direction:column;gap:11px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <p class="meso-eyebrow" style="margin:0;">Plan</p>
+            <div class="meso-spacer"></div>
+            <span class="meso-badge {% if billing.is_active %}meso-badge--ok{% else %}meso-badge--muted{% endif %}"><i></i>{{ billing.status_label }}</span>
+          </div>
+          {% if billing.over_limit %}
+            <p class="meso-sub" style="margin:0;color:var(--warn);">Over your plan limit &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }}. Re-subscribe or end a relationship to edit or deliver programs.</p>
+          {% elif billing.on_trial %}
+            <p class="meso-sub" style="margin:0;">Free trial &#8212; ends {{ billing.trial_end|date:"M j" }}. Subscribe to keep full access when it ends.</p>
+          {% elif billing.is_active %}
+            <p class="meso-sub" style="margin:0;">{{ billing.seat_count }} active athlete{{ billing.seat_count|pluralize }} &#183; full access.</p>
+          {% else %}
+            <p class="meso-sub" style="margin:0;">Free plan &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }}. The AI agent and more athletes need a paid plan.</p>
+          {% endif %}
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            {% if billing.can_start_trial %}
+              <form method="post" action="{% url 'meso:billing_start_trial' %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--primary">Start free trial</button>
+              </form>
+            {% endif %}
+            {% if not billing.is_active or billing.on_trial or billing.over_limit %}
+              <form method="post" action="{% url 'meso:billing_subscribe' %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn {% if billing.can_start_trial %}meso-btn--ghost{% else %}meso-btn--primary{% endif %}">Subscribe</button>
+              </form>
+            {% endif %}
+            {% if billing.has_stripe_subscription %}
+              <form method="post" action="{% url 'meso:billing_portal' %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--ghost">Manage billing</button>
+              </form>
+            {% endif %}
+          </div>
         </div>
-        <hr class="meso-hr" />
-        <a class="meso-btn meso-btn--ghost" href="{% url 'meso:results' %}">View latest session results →</a>
+
+      <!-- activity column -->
+        <div class="meso-card meso-card--pad">
+          <p class="meso-eyebrow">Recent activity</p>
+          <div style="display:flex;flex-direction:column;gap:14px;margin-top:4px;">
+            {% for ev in activity %}
+              <div style="display:flex;gap:10px;align-items:flex-start;">
+                <div class="meso-avatar meso-avatar--sm {% if ev.athlete.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ ev.athlete.initials }}</div>
+                <div style="min-width:0;line-height:1.35;">
+                  <div style="font-size:12.5px;">
+                    <a href="{% url 'meso:athlete' ev.athlete.id %}" style="font-weight:700;color:var(--ink);text-decoration:none;">{{ ev.athlete.name }}</a>
+                    {% if ev.kind == 'flag' %}
+                      <span style="color:var(--warn);"> {{ ev.text }}</span>
+                    {% else %}
+                      <span class="meso-muted"> {{ ev.text }}</span>
+                    {% endif %}
+                  </div>
+                  <div class="meso-row-meta" style="margin-top:2px;">{{ ev.when }}</div>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+          <hr class="meso-hr" />
+          <a class="meso-btn meso-btn--ghost" href="{% url 'meso:results' %}">View latest session results →</a>
+        </div>
       </div>
     </div>
   </div>

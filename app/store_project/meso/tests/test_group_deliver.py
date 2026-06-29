@@ -29,6 +29,7 @@ from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachSubscription
 from store_project.meso.models import ExercisePrescription
 from store_project.meso.models import InvalidTransition
 from store_project.meso.models import Plan
@@ -48,6 +49,9 @@ def seed_group(coach=None, *, member_count=2, focus="Strength"):
     ``(group, shared_plan, [membership, ...])``.
     """
     coach = coach or UserFactory()
+    # A coach with a multi-member group is a paying coach (S6 Phase 3) —
+    # comp so the D6 over-limit edit/deliver freeze doesn't fire here.
+    CoachSubscription.comp(coach)
     group = MesoGroupFactory(coach=coach, focus=focus)
     memberships = []
     for _ in range(member_count):

@@ -38,6 +38,7 @@ from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AthleteOneRm
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachSubscription
 from store_project.meso.models import LoadType
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
@@ -1033,6 +1034,9 @@ class TestCoachSetOneRmEndpoint:
 
     def test_prescription_outside_the_plan_is_404(self, client):
         coach = UserFactory()
+        # The same coach training two athletes is over the free seat cap; comp
+        # so this exercises the cross-plan 404, not the D6 over-limit 402.
+        CoachSubscription.comp(coach)
         athlete = UserFactory()
         plan, _, (squat,) = make_session(
             athlete, coach=coach, prescriptions=[{"name": "Back Squat"}]

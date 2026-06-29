@@ -275,17 +275,27 @@
               The agent works per athlete &#8212; a group agent that auto-adjusts each member arrives in the next phase. Edit the shared program directly for now.
             </div>
           </template>
-          <div x-show="isIndividual" style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:11px 14px 13px;">
-            <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:9px;">
-              <template x-for="c in chips" :key="c.label">
-                <button data-hover="chip" @click="onChip(c.label)" :disabled="agentTyping" x-text="c.label" style="appearance:none;cursor:pointer;font:inherit;white-space:nowrap;font-size:11.5px;font-weight:550;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 11px;flex:0 0 auto;"></button>
-              </template>
+          {% if can_use_agent %}
+            <div x-show="isIndividual" style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:11px 14px 13px;">
+              <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:9px;">
+                <template x-for="c in chips" :key="c.label">
+                  <button data-hover="chip" @click="onChip(c.label)" :disabled="agentTyping" x-text="c.label" style="appearance:none;cursor:pointer;font:inherit;white-space:nowrap;font-size:11.5px;font-weight:550;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 11px;flex:0 0 auto;"></button>
+                </template>
+              </div>
+              <div class="meso-composer" style="display:flex;align-items:flex-end;gap:8px;background:var(--rail);border:1px solid var(--line);border-radius:11px;padding:7px 7px 7px 12px;">
+                <input x-model="inputText" @keydown="onInputKey($event)" placeholder="Ask the agent to adjust the program&#8230;" style="flex:1;appearance:none;border:0;background:transparent;outline:none;font:inherit;font-size:13px;color:var(--ink);padding:5px 0;" />
+                <button data-hover="brighten" @click="onSend()" :disabled="agentTyping" :style="agentTyping ? 'opacity:0.55;cursor:default;' : ''" style="appearance:none;cursor:pointer;border:0;width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;flex:0 0 auto;font-size:15px;">&#8593;</button>
+              </div>
             </div>
-            <div class="meso-composer" style="display:flex;align-items:flex-end;gap:8px;background:var(--rail);border:1px solid var(--line);border-radius:11px;padding:7px 7px 7px 12px;">
-              <input x-model="inputText" @keydown="onInputKey($event)" placeholder="Ask the agent to adjust the program&#8230;" style="flex:1;appearance:none;border:0;background:transparent;outline:none;font:inherit;font-size:13px;color:var(--ink);padding:5px 0;" />
-              <button data-hover="brighten" @click="onSend()" :disabled="agentTyping" :style="agentTyping ? 'opacity:0.55;cursor:default;' : ''" style="appearance:none;cursor:pointer;border:0;width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;flex:0 0 auto;font-size:15px;">&#8593;</button>
+          {% else %}
+          <!-- Agent gate (S6 Phase 3): the AI agent is paid-only, so the free tier
+               sees an upgrade CTA where the composer would be. Billing actions live
+               on the roster (the endpoint also 402s, so this isn't the only guard). -->
+            <div x-show="isIndividual" style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:13px 14px 15px;">
+              <p style="margin:0 0 9px;font-size:12px;color:var(--dim);line-height:1.4;">The AI program agent is on paid plans. Start your free trial or subscribe to let it draft and adjust programs for you.</p>
+              <a href="{% url 'meso:roster' %}" data-hover="brighten" style="display:inline-block;text-decoration:none;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:8px 14px;">Upgrade to use the agent</a>
             </div>
-          </div>
+          {% endif %}
         </div>
 
         <!-- ---------- CANVAS ---------- -->

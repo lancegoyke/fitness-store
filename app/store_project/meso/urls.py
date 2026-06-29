@@ -162,5 +162,7 @@ urlpatterns = [
     # and the clean subscription webhook (separate from the products webhook).
     path("billing/subscribe/", views.billing_subscribe, name="billing_subscribe"),
     path("billing/portal/", views.billing_portal, name="billing_portal"),
+    # Start the no-card local trial (S6 Phase 3) — the free path to full access.
+    path("billing/trial/", views.billing_start_trial, name="billing_start_trial"),
     path("billing/webhook/", views.billing_webhook, name="billing_webhook"),
 ]

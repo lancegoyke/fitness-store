@@ -18,6 +18,7 @@ from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
+from store_project.meso.models import CoachSubscription
 from store_project.meso.models import LoadType
 from store_project.users.factories import UserFactory
 
@@ -26,6 +27,9 @@ pytestmark = pytest.mark.django_db
 
 def make_plan(athlete=None):
     rel = CoachAthleteFactory(athlete=athlete or UserFactory())
+    # The AI agent is paid-only (S6 Phase 3, D4), so a coach iterating a plan
+    # with the agent in these tests has full access — comp keeps the gate open.
+    CoachSubscription.comp(rel.coach)
     plan = PlanFactory(relationship=rel)
     meso = MesocycleFactory(plan=plan, order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
