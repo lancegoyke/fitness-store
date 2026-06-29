@@ -50,6 +50,7 @@ from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachProfile
+from .models import CoachSubscription
 from .models import ExercisePrescription
 from .models import GroupMembership
 from .models import InvalidTransition
@@ -1878,6 +1879,22 @@ def billing_subscribe(request):
         return redirect("meso:roster")
     if not settings.MESO_SEAT_PRICE_ID:
         messages.error(request, "Subscriptions aren't configured yet.")
+        return redirect("meso:roster")
+    # Don't open a second Checkout for a coach who already has a live Stripe
+    # subscription — completing it would create a duplicate (double-billing).
+    # They manage the existing one in the Portal; a canceled mirror re-subscribes
+    # freely.
+    sub = getattr(request.user, "coach_subscription", None)
+    if (
+        sub
+        and sub.stripe_subscription_id
+        and sub.status
+        in (CoachSubscription.Status.ACTIVE, CoachSubscription.Status.PAST_DUE)
+    ):
+        messages.info(
+            request,
+            "You already have a subscription — manage it in the billing portal.",
+        )
         return redirect("meso:roster")
     roster_url = request.build_absolute_uri(reverse("meso:roster"))
     try:

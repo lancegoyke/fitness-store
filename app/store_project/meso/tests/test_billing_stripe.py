@@ -294,6 +294,43 @@ class TestWebhookHandler:
         sub = CoachSubscription.objects.get(coach=coach)
         assert sub.quantity == 4
 
+    def test_stale_delete_for_an_old_subscription_does_not_regress(self):
+        """A late delete/cancel for a subscription the coach already replaced is ignored."""
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_new",
+            stripe_item_id="si_new",
+        )
+        # A stale delete arrives for the *old* subscription id.
+        billing_webhooks.handle_event(
+            _sub_event(
+                "customer.subscription.deleted", sub_id="sub_old", status="canceled"
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        # The active, current subscription is untouched.
+        assert sub.status == CoachSubscription.Status.ACTIVE
+        assert sub.stripe_subscription_id == "sub_new"
+
+    def test_a_new_live_subscription_takes_over_from_a_canceled_one(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_old",
+        )
+        # Re-subscribe: a live event for a *new* subscription id takes over.
+        billing_webhooks.handle_event(
+            _sub_event(
+                "customer.subscription.created", sub_id="sub_new2", status="active"
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.ACTIVE
+        assert sub.stripe_subscription_id == "sub_new2"
+
     def test_unresolvable_customer_is_ignored(self):
         # No User has this customer id → no crash, nothing created.
         billing_webhooks.handle_event(
@@ -394,6 +431,40 @@ class TestSubscribeView:
         coach, c = self._coach_client()
         resp = c.get(self.URL)
         assert resp.status_code == 405
+
+    def test_already_subscribed_coach_is_not_double_charged(self, settings):
+        """A coach with a live Stripe subscription is bounced, not sent to a new Checkout."""
+        settings.MESO_SEAT_PRICE_ID = "price_seat_test"
+        coach, c = self._coach_client()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_live",
+            stripe_item_id="si_live",
+        )
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session"
+        ) as create:
+            resp = c.post(self.URL)
+        assert resp.status_code == 302
+        assert resp.url == "/meso/"
+        create.assert_not_called()
+
+    def test_canceled_coach_can_resubscribe(self, settings):
+        settings.MESO_SEAT_PRICE_ID = "price_seat_test"
+        coach, c = self._coach_client()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_dead",
+        )
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
+            return_value=mock.Mock(url="https://stripe/checkout"),
+        ) as create:
+            resp = c.post(self.URL)
+        assert resp.url == "https://stripe/checkout"
+        create.assert_called_once()
 
 
 class TestPortalView:

@@ -99,12 +99,32 @@ def _sync_from_subscription(sub_obj, *, deleted):
     coach = _coach_for_customer(sub_obj.get("customer"))
     if coach is None:
         return
+    incoming_id = sub_obj.get("id", "")
     if deleted:
         status = CoachSubscription.Status.CANCELED
     else:
         status = _STATUS_MAP.get(
             sub_obj.get("status"), CoachSubscription.Status.PAST_DUE
         )
+    # The mirror is keyed by coach (1:1), so an out-of-order event for an *older*
+    # subscription the coach already replaced could otherwise clobber the newer
+    # one. If we already track a different subscription, only a *live*
+    # (active/trialing) event takes over — a stale delete/past_due/cancel for the
+    # old id is ignored so it can't regress the current active subscription.
+    existing = getattr(coach, "coach_subscription", None)
+    if (
+        existing
+        and existing.stripe_subscription_id
+        and existing.stripe_subscription_id != incoming_id
+        and status not in CoachSubscription.ACTIVE_STATUSES
+    ):
+        logger.info(
+            "Billing webhook: ignoring stale event for subscription %s "
+            "(coach already on %s)",
+            incoming_id,
+            existing.stripe_subscription_id,
+        )
+        return
     items = (sub_obj.get("items") or {}).get("data") or [{}]
     item = items[0]
     CoachSubscription.objects.update_or_create(
