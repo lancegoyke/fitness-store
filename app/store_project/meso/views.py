@@ -540,17 +540,17 @@ def athlete_log_session(request, pk):
                 for cs in cleaned_sets
             ]
         )
-        # Refresh the athlete's persisted 1RM for the lifts in this session from
-        # their completed logs — only on a *done* save, since a pending draft
-        # isn't a finished performance. Recomputes from scratch (a heavier set
-        # raises it; an edit that removed the PR lowers it), so it stays in step
-        # with what they've actually logged.
-        if log.status == SessionLog.Status.DONE:
-            meso_one_rm.refresh_one_rms(
-                request.user,
-                list(session.prescriptions.all()),
-                session.week.mesocycle.plan.unit,
-            )
+        # Refresh the athlete's persisted 1RM for this session's lifts from their
+        # *completed* logs. Run on every save, not only a done one: derivation
+        # counts done logs only, so refreshing after a done→pending downgrade (this
+        # session is no longer a finished performance) clears an estimate that's
+        # now unsupported. Recomputes from scratch — a heavier set raises it, an
+        # edit that drops the PR lowers it, a removed basis clears it.
+        meso_one_rm.refresh_one_rms(
+            request.user,
+            list(session.prescriptions.all()),
+            session.week.mesocycle.plan.unit,
+        )
     return JsonResponse({"ok": True, "log": serialize_session_log(log)})
 
 

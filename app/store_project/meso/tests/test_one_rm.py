@@ -422,6 +422,28 @@ class TestLogEndpointRefreshesOneRm:
         assert resp.status_code == 200
         assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
 
+    def test_downgrade_to_pending_clears_the_estimate(self, client):
+        # A done log creates the row; downgrading the same session back to pending
+        # (no completed performance remains) must clear it, not leave it stale.
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete, prescriptions=[{"name": "Back Squat"}]
+        )
+        client.force_login(athlete)
+        sets = [
+            {
+                "prescription": squat.pk,
+                "set_number": 1,
+                "reps": "1",
+                "load": "150",
+                "rpe": "9",
+            }
+        ]
+        post_log(client, session, {"status": "done", "sets": sets})
+        assert AthleteOneRm.objects.filter(athlete=athlete).exists()
+        post_log(client, session, {"status": "pending", "sets": sets})
+        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+
     def test_relogging_lower_recomputes_downward(self, client):
         athlete = UserFactory()
         _, session, (squat,) = make_session(
