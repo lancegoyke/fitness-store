@@ -11,6 +11,7 @@ try:
     from .models import CoachAthlete
     from .models import CoachInvite
     from .models import CoachProfile
+    from .models import CoachSubscription
     from .models import Contraindication
     from .models import ExercisePrescription
     from .models import GroupMembership
@@ -66,6 +67,13 @@ try:
         coach = factory.SubFactory(UserFactory)
         email = factory.Sequence(lambda n: f"invitee{n}@example.com")
         status = CoachInvite.Status.PENDING
+
+    class CoachSubscriptionFactory(DjangoModelFactory):
+        class Meta:
+            model = CoachSubscription
+
+        coach = factory.SubFactory(UserFactory)
+        status = CoachSubscription.Status.FREE
 
     class PlanFactory(DjangoModelFactory):
         class Meta:
@@ -253,6 +261,9 @@ except ImportError:
         pass
 
     class CoachInviteFactory:
+        pass
+
+    class CoachSubscriptionFactory:
         pass
 
     class PlanFactory:

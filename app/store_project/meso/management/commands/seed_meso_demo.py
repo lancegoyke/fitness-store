@@ -38,6 +38,7 @@ from store_project.meso.models import AthleteProfile
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachInvite
 from store_project.meso.models import CoachProfile
+from store_project.meso.models import CoachSubscription
 from store_project.meso.models import Contraindication
 from store_project.meso.models import ExercisePrescription
 from store_project.meso.models import LoadType
@@ -456,6 +457,9 @@ class Command(BaseCommand):
                 "default_unit": Unit.KILOGRAMS,
             },
         )
+        # The demo coach is the owner — comped, so billing (S6) never paywalls the
+        # demo (D12). Idempotent upsert, so a reseed keeps them comped.
+        CoachSubscription.comp(coach)
         return coach
 
     # -- athletes ---------------------------------------------------------

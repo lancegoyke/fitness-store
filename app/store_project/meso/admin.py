@@ -6,6 +6,7 @@ from .models import AthleteProfile
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachProfile
+from .models import CoachSubscription
 from .models import Contraindication
 from .models import ExercisePrescription
 from .models import GroupMembership
@@ -92,6 +93,26 @@ class CoachInviteAdmin(admin.ModelAdmin):
     search_fields = ("email", "coach__email", "coach__name")
     raw_id_fields = ("coach", "accepted_by", "accepted_link")
     readonly_fields = ("token", "created_at", "responded_at")
+
+
+@admin.register(CoachSubscription)
+class CoachSubscriptionAdmin(admin.ModelAdmin):
+    list_display = (
+        "coach",
+        "status",
+        "quantity",
+        "trial_end",
+        "current_period_end",
+        "modified",
+    )
+    list_filter = ("status",)
+    search_fields = (
+        "coach__email",
+        "coach__name",
+        "stripe_subscription_id",
+    )
+    raw_id_fields = ("coach",)
+    readonly_fields = ("created", "modified")
 
 
 # -- program schema --------------------------------------------------------

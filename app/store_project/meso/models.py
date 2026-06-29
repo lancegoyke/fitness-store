@@ -688,6 +688,179 @@ class CoachInvite(models.Model):
         return self
 
 
+class CoachSubscription(models.Model):
+    """A coach's billing state — a thin local mirror of Stripe (S6 billing, Phase 1).
+
+    Meso is a multi-coach SaaS (B1); the coach pays (D1). This 1:1-with-the-coach
+    row holds just enough to **gate a request without calling Stripe** (D8): the
+    status, the Stripe ids (null until a card is actually collected), the mirrored
+    period/trial clocks, and the last seat ``quantity`` synced to Stripe (a cache,
+    not the truth). Stripe is the source of truth; this is the fast local read.
+
+    Two product knobs gate off one predicate, ``is_active`` (D10): the **seat
+    cap** (∞ active athletes when active, else ``FREE_SEAT_LIMIT``) and the **AI
+    agent** (paid-only — the Claude agent has real per-call cost, so the free tier
+    gets none). A ``comped`` status (D12) means the owner and the seeded demo
+    coaches are never paywalled.
+
+    The **trial is local** (D3): a no-card 14-day trial is just ``status=trialing``
+    + a ``trial_end`` clock — Stripe is untouched until the coach actually
+    subscribes. A lapsed trial reads inactive immediately (``is_active`` checks the
+    clock); a Phase-2 qcluster sweep flips the persisted status back to ``free``.
+
+    Phase 1 is this model + the ``billing/access.py`` accessor + the local trial +
+    the comped seed/admin — **no Stripe and nothing enforced** (the Stripe
+    Checkout/Portal/webhook land in Phase 2; the invite/agent choke points wire
+    the gates in at Phase 3). See ``docs/meso/billing-plan.md``.
+    """
+
+    #: Free-tier seat cap — active athletes a non-paying coach may hold (open
+    #: value, rec 1). Beyond this a free coach must start a trial or subscribe.
+    FREE_SEAT_LIMIT = 1
+
+    #: No-card local trial length, in days (open value, rec 14 — matches the
+    #: invite TTL cadence).
+    TRIAL_DAYS = 14
+
+    class Status(models.TextChoices):
+        FREE = "free", _("Free")
+        TRIALING = "trialing", _("Trialing")
+        ACTIVE = "active", _("Active")
+        PAST_DUE = "past_due", _("Past due")
+        CANCELED = "canceled", _("Canceled")
+        COMPED = "comped", _("Comped")
+
+    #: Statuses that grant full (unlimited) access — the single gating predicate
+    #: (a trialing row is only *really* active while its clock holds; see
+    #: ``is_active``).
+    ACTIVE_STATUSES = (Status.TRIALING, Status.ACTIVE, Status.COMPED)
+
+    coach = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="coach_subscription",
+        verbose_name=_("Coach"),
+    )
+    status = models.CharField(
+        _("Status"), max_length=16, choices=Status.choices, default=Status.FREE
+    )
+    stripe_subscription_id = models.CharField(
+        _("Stripe subscription id"),
+        max_length=255,
+        blank=True,
+        default="",
+        help_text=_("Null until the coach actually subscribes (enters a card)."),
+    )
+    stripe_item_id = models.CharField(
+        _("Stripe subscription item id"),
+        max_length=255,
+        blank=True,
+        default="",
+        help_text=_("The subscription line item — for seat-quantity updates."),
+    )
+    trial_end = models.DateTimeField(
+        _("Trial ends at"),
+        null=True,
+        blank=True,
+        help_text=_("Set locally when the no-card trial starts; null = never trialed."),
+    )
+    current_period_end = models.DateTimeField(
+        _("Current period ends at"),
+        null=True,
+        blank=True,
+        help_text=_("Mirrored from Stripe for paid coaches."),
+    )
+    quantity = models.PositiveIntegerField(
+        _("Synced seat quantity"),
+        default=0,
+        help_text=_("Last seat count synced to Stripe — a cache, not the truth."),
+    )
+    created = models.DateTimeField(_("Time created"), auto_now_add=True)
+    modified = models.DateTimeField(_("Time last modified"), auto_now=True)
+
+    class Meta:
+        verbose_name = "Coach subscription"
+        verbose_name_plural = "Coach subscriptions"
+
+    def __str__(self):
+        return f"{self.coach.display_name()} ({self.status})"
+
+    # -- derived gating predicate ----------------------------------------
+
+    @property
+    def is_trial_expired(self):
+        """True once a local trial's clock has run out (never fires off-trial).
+
+        A null clock never expires (defensive — ``start_trial`` always sets one),
+        mirroring the invite slice's "null clock never expires" semantics.
+        """
+        return (
+            self.status == self.Status.TRIALING
+            and self.trial_end is not None
+            and self.trial_end <= timezone.now()
+        )
+
+    @property
+    def is_active(self):
+        """The single access predicate — full (unlimited) access right now.
+
+        Trialing/active/comped grant access, **except** a trialing row whose clock
+        has lapsed (the status flip to ``free`` is the Phase-2 sweep's job, but the
+        gate is correct the instant the trial ends — lazy expiry).
+        """
+        return self.status in self.ACTIVE_STATUSES and not self.is_trial_expired
+
+    # -- state machine ----------------------------------------------------
+
+    def start_trial(self):
+        """Begin the no-card local trial → ``trialing`` (free → trialing only).
+
+        Single-use: a row that has ever trialed (``trial_end`` set, even after it
+        lapsed back to ``free``) can't re-arm a second free trial. No Stripe is
+        touched — the trial is pure local state until a card is collected.
+        """
+        if self.status != self.Status.FREE:
+            raise InvalidTransition(f"Cannot start a trial from {self.status}.")
+        if self.trial_end is not None:
+            raise InvalidTransition("This coach has already used their free trial.")
+        self.status = self.Status.TRIALING
+        self.trial_end = timezone.now() + timedelta(days=self.TRIAL_DAYS)
+        self.save(update_fields=["status", "trial_end", "modified"])
+        return self
+
+    def expire_trial(self):
+        """A past-due local trial lapses → ``free`` (the Phase-2 sweep / lazy aging).
+
+        Only a trialing row that is actually past due can expire; ``trial_end`` is
+        preserved so the trial stays single-use (a lapsed coach can't re-trial).
+        """
+        if self.status != self.Status.TRIALING:
+            raise InvalidTransition(f"Cannot expire a trial that is {self.status}.")
+        if not self.is_trial_expired:
+            raise InvalidTransition("Cannot expire a trial that is not past due.")
+        self.status = self.Status.FREE
+        self.save(update_fields=["status", "modified"])
+        return self
+
+    @classmethod
+    def comp(cls, coach):
+        """Mark a coach ``comped`` — unlimited, no Stripe (D12). Idempotent upsert.
+
+        For the owner and seeded demo coaches, who are never paywalled.
+        """
+        sub, _ = cls.objects.update_or_create(
+            coach=coach, defaults={"status": cls.Status.COMPED}
+        )
+        return sub
+
+    @classmethod
+    def start_trial_for(cls, coach):
+        """Get-or-create the coach's row and start their trial (the view entry point)."""
+        sub, _ = cls.objects.get_or_create(coach=coach)
+        sub.start_trial()
+        return sub
+
+
 # ---------------------------------------------------------------------------
 # Program schema (Phase 2)
 #
