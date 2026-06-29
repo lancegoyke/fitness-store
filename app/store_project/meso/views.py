@@ -231,10 +231,14 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         # batches so the chat survives a reload (the JS hydrates ``messages``
         # from it, falling back to the greeting when empty).
         ctx["chat_thread"] = serialize_chat_thread(plan)
-        # Agent gate (S6 Phase 3, D4): the AI agent is paid-only. When the coach
-        # can't use it, the composer is replaced by an upgrade CTA (the endpoint
-        # also 402s, so the gate is defended server-side, not just hidden).
-        ctx["can_use_agent"] = billing_access.can_use_agent(self.request.user)
+        # Agent gate (S6 Phase 3, D4; Phase 5 metering): an active coach is
+        # unlimited; a free coach gets a monthly allowance. The meter drives the
+        # composer-vs-upgrade-CTA and the "N of M runs left" note; ``can_use_agent``
+        # is derived from it so the page does one read (the endpoint also 402s, so
+        # the gate is defended server-side, not just hidden).
+        agent_meter = presenters.agent_allowance(self.request.user)
+        ctx["agent_allowance"] = agent_meter
+        ctx["can_use_agent"] = agent_meter["can_use"]
         return ctx
 
 
@@ -1797,17 +1801,20 @@ def agent_propose(request, plan_id):
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
-    # Agent gate (D4): the Claude agent has real per-call cost, so it's paid-only —
-    # a free-tier coach gets a 402 (the designer shows an upgrade CTA in place of
-    # the composer). Trial/active/comped coaches pass. Defended here, not just in
-    # the UI, because the API cost is real.
+    # Agent gate (D4; Phase 5 metering): the Claude agent has real per-call cost.
+    # An active/trial/comped coach is unlimited; a free coach gets
+    # ``FREE_AGENT_ALLOWANCE`` runs/month and then 402s (the designer shows the
+    # upgrade CTA in place of the composer once exhausted). Only a free coach can
+    # reach this branch, so the message is the allowance-used-up copy. Defended
+    # here, not just in the UI, because the API cost is real.
     if not billing_access.can_use_agent(request.user):
         return JsonResponse(
             {
                 "ok": False,
                 "error": (
-                    "The AI agent is available on a paid plan. Start your free "
-                    "trial or subscribe to use it."
+                    f"You've used all {CoachSubscription.FREE_AGENT_ALLOWANCE} free "
+                    "agent runs this month. Start your free trial or subscribe for "
+                    "unlimited agent runs."
                 ),
                 "upgrade": True,
             },

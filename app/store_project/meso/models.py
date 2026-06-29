@@ -722,6 +722,14 @@ class CoachSubscription(models.Model):
     #: invite TTL cadence).
     TRIAL_DAYS = 14
 
+    #: Free-tier AI-agent allowance — agent runs a non-paying coach may make per
+    #: calendar month (open value, set to 5). The Phase-5 metered refinement of the
+    #: old binary free=no-agent gate (D4): a free coach gets a taste of the Claude
+    #: agent before paying; beyond this the agent endpoint 402s. Active/trial/comped
+    #: coaches are unlimited. A run = an ``AgentProposalBatch`` (the batch table is
+    #: the ledger — see ``billing/access.py``).
+    FREE_AGENT_ALLOWANCE = 5
+
     class Status(models.TextChoices):
         FREE = "free", _("Free")
         TRIALING = "trialing", _("Trialing")

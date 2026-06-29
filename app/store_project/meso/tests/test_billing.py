@@ -20,6 +20,9 @@ These tests cover:
   with **no subscription row** gates exactly as free (existing coaches predate
   billing), a seat is an *active* ``CoachAthlete`` link, the free cap blocks the
   next athlete, and an active/trial/comped coach is unlimited;
+- the **free-tier agent allowance** (S6 Phase 5 — added later): a free coach gets
+  ``FREE_AGENT_ALLOWANCE`` agent runs / calendar month (counted from the
+  ``AgentProposalBatch`` ledger), an active coach is unlimited;
 - the seed: the demo coach is ``comped`` so the owner is never paywalled (D12).
 """
 
@@ -31,8 +34,11 @@ from django.core.management import call_command
 from django.utils import timezone
 
 from store_project.meso.billing import access
+from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachSubscriptionFactory
+from store_project.meso.factories import PlanFactory
+from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachSubscription
 from store_project.meso.models import InvalidTransition
@@ -214,11 +220,88 @@ class TestBillingAccessIsActive:
         )
         assert access.is_active(sub.coach) is False
 
-    def test_can_use_agent_tracks_is_active(self):
-        free = CoachSubscriptionFactory(status=CoachSubscription.Status.FREE)
+    def test_can_use_agent_active_coach_is_unlimited(self):
+        # The agent gate no longer keys purely off ``is_active``: an active/comped
+        # coach is unlimited (no meter), but a fresh free coach has a monthly
+        # allowance (see ``TestAgentAllowance``), so a free row with no runs yet
+        # still passes the gate.
         comped = CoachSubscriptionFactory(status=CoachSubscription.Status.COMPED)
-        assert access.can_use_agent(free.coach) is False
+        fresh_free = CoachSubscriptionFactory(status=CoachSubscription.Status.FREE)
         assert access.can_use_agent(comped.coach) is True
+        assert access.can_use_agent(fresh_free.coach) is True
+
+
+class TestAgentAllowance:
+    """The free-tier agent allowance (S6 Phase 5).
+
+    The metered refinement of the old binary free=no-agent gate (D4): a free coach
+    gets ``FREE_AGENT_ALLOWANCE`` agent runs per calendar month; an active/comped
+    coach is unlimited. A run is an ``AgentProposalBatch`` (the batch table is the
+    ledger — no separate counter), so the count is "batches this coach started this
+    month."
+    """
+
+    def _backdate(self, batch, when):
+        # ``created_at`` is ``auto_now_add``; ``update`` bypasses it to plant a row
+        # in a chosen month for the boundary tests.
+        AgentProposalBatch.objects.filter(pk=batch.pk).update(created_at=when)
+
+    def test_fresh_free_coach_has_full_allowance(self):
+        coach = UserFactory()  # no row → free
+        assert access.agent_runs_this_month(coach) == 0
+        assert (
+            access.free_agent_runs_remaining(coach)
+            == CoachSubscription.FREE_AGENT_ALLOWANCE
+        )
+        assert access.can_use_agent(coach) is True
+
+    def test_runs_this_month_count_against_the_allowance(self):
+        coach = UserFactory()
+        AgentProposalBatchFactory(coach=coach, plan=PlanFactory())
+        AgentProposalBatchFactory(coach=coach, plan=PlanFactory())
+        assert access.agent_runs_this_month(coach) == 2
+        assert (
+            access.free_agent_runs_remaining(coach)
+            == CoachSubscription.FREE_AGENT_ALLOWANCE - 2
+        )
+
+    def test_can_use_agent_false_once_allowance_is_exhausted(self):
+        coach = UserFactory()
+        for _ in range(CoachSubscription.FREE_AGENT_ALLOWANCE):
+            AgentProposalBatchFactory(coach=coach, plan=PlanFactory())
+        assert access.free_agent_runs_remaining(coach) == 0
+        assert access.can_use_agent(coach) is False
+
+    def test_remaining_never_goes_negative(self):
+        coach = UserFactory()
+        for _ in range(CoachSubscription.FREE_AGENT_ALLOWANCE + 3):
+            AgentProposalBatchFactory(coach=coach, plan=PlanFactory())
+        assert access.free_agent_runs_remaining(coach) == 0
+
+    def test_last_months_runs_do_not_count(self):
+        coach = UserFactory()
+        old = AgentProposalBatchFactory(coach=coach, plan=PlanFactory())
+        last_month = timezone.now().replace(day=1) - timedelta(days=1)
+        self._backdate(old, last_month)
+        assert access.agent_runs_this_month(coach) == 0
+        assert (
+            access.free_agent_runs_remaining(coach)
+            == CoachSubscription.FREE_AGENT_ALLOWANCE
+        )
+
+    def test_another_coachs_runs_do_not_count(self):
+        coach = UserFactory()
+        other = UserFactory()
+        AgentProposalBatchFactory(coach=other, plan=PlanFactory())
+        assert access.agent_runs_this_month(coach) == 0
+
+    def test_active_coach_is_unlimited_regardless_of_usage(self):
+        sub = CoachSubscriptionFactory(status=CoachSubscription.Status.COMPED)
+        # Even with runs on the books, an active coach has no meter.
+        for _ in range(CoachSubscription.FREE_AGENT_ALLOWANCE + 1):
+            AgentProposalBatchFactory(coach=sub.coach, plan=PlanFactory())
+        assert access.free_agent_runs_remaining(sub.coach) == math.inf
+        assert access.can_use_agent(sub.coach) is True
 
 
 class TestBillingAccessSeats:

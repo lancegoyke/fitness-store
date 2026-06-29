@@ -197,7 +197,7 @@
           {% elif billing.is_active %}
             <p class="meso-sub" style="margin:0;">{{ billing.seat_count }} active athlete{{ billing.seat_count|pluralize }} &#183; full access.</p>
           {% else %}
-            <p class="meso-sub" style="margin:0;">Free plan &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }}. The AI agent and more athletes need a paid plan.</p>
+            <p class="meso-sub" style="margin:0;">Free plan &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }} &#183; {{ billing.agent.remaining }} of {{ billing.agent.allowance }} free agent run{{ billing.agent.allowance|pluralize }} left this month. Subscribe for more athletes and unlimited agent runs.</p>
           {% endif %}
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             {% if billing.can_start_trial %}

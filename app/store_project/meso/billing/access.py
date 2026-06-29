@@ -2,22 +2,30 @@
 
 A thin read over ``CoachSubscription`` so a request gates **without calling
 Stripe** (D8) — Stripe is the source of truth, this is the fast local mirror.
-Two gates share one predicate (``is_active``): the **seat cap** (∞ active
-athletes when active, else ``FREE_SEAT_LIMIT``) and the **AI agent** (paid-only
-— the Claude agent has real per-call cost). A billable seat is an *active*
-``CoachAthlete`` link (pending invites/requests don't count).
+The **seat cap** (∞ active athletes when active, else ``FREE_SEAT_LIMIT``) keys
+off one predicate (``is_active``). The **AI agent** gate is the metered refinement
+(S6 Phase 5): an active/comped coach is unlimited, while a free coach gets
+``FREE_AGENT_ALLOWANCE`` runs per calendar month (the Claude agent has real
+per-call cost, so the free tier is a taste, not a binary no). A billable seat is
+an *active* ``CoachAthlete`` link (pending invites/requests don't count); an agent
+run is an ``AgentProposalBatch`` (the batch table is the ledger — no separate
+counter).
 
 A coach with **no subscription row** gates exactly as ``free`` — existing
 coaches predate billing, and a missing row should never crash or over-grant.
 
-Phase 3 wires these gates into the choke points: ``can_add_athlete`` at the
+Phase 3 wired these gates into the choke points: ``can_add_athlete`` at the
 invite/request endpoints (block a free coach past the cap), ``can_use_agent`` at
 the agent endpoint (402 for the free tier), and ``can_edit`` at the edit/deliver
-endpoints (the D6 over-limit freeze). See ``docs/meso/billing-plan.md``.
+endpoints (the D6 over-limit freeze). Phase 5 meters ``can_use_agent`` (free-tier
+allowance). See ``docs/meso/billing-plan.md``.
 """
 
 import math
 
+from django.utils import timezone
+
+from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachSubscription
 
@@ -42,9 +50,51 @@ def is_active(coach):
     return bool(sub and sub.is_active)
 
 
+def _current_period_start():
+    """Midnight on the first of the current month — the free agent meter resets here.
+
+    A calendar-month window (cheap to compute, obvious to a coach reading "this
+    month") rather than a rolling 30-day window, which would need a per-coach
+    anchor. ``timezone.now()`` is tz-aware, so the truncated value is too.
+    """
+    return timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def agent_runs_this_month(coach):
+    """Agent runs this coach has started in the current calendar month.
+
+    A run is an ``AgentProposalBatch`` — the endpoint creates exactly one per
+    dispatched run (after the gate and the API-key check), so the batch table *is*
+    the ledger; there's no separate counter to drift. Group runs are rejected
+    before a batch exists, so they never count against the allowance.
+    """
+    return AgentProposalBatch.objects.filter(
+        coach=coach, created_at__gte=_current_period_start()
+    ).count()
+
+
+def free_agent_runs_remaining(coach):
+    """Agent runs left this month — ``math.inf`` when unlimited, else the remainder.
+
+    An active/trial/comped coach is unlimited (``math.inf``); a free coach gets
+    ``FREE_AGENT_ALLOWANCE`` minus what they've used this month, floored at 0. The
+    active short-circuit means a paying coach never runs the count query.
+    """
+    if is_active(coach):
+        return math.inf
+    used = agent_runs_this_month(coach)
+    return max(0, CoachSubscription.FREE_AGENT_ALLOWANCE - used)
+
+
 def can_use_agent(coach):
-    """Agent gate — only an active coach may run the paid AI program agent (D4)."""
-    return is_active(coach)
+    """Agent gate — may this coach run the AI program agent right now (D4)?
+
+    An active/trial/comped coach always; a free coach while they still have runs
+    left in their monthly allowance (S6 Phase 5 — the metered refinement of the old
+    binary free=no-agent gate). Defended at the endpoint, not just the UI, because
+    the per-call API cost is real.
+    """
+    return free_agent_runs_remaining(coach) > 0
 
 
 def active_seat_count(coach):

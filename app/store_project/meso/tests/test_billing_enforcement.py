@@ -14,8 +14,9 @@ These tests cover:
   is created — opening a coach email invite, accepting an athlete's request, and
   claiming an email invite — each blocked for a free coach at the cap, allowed
   for a coach with room;
-- the **agent gate** (``can_use_agent``) at ``agent_propose`` — a free coach gets
-  a 402 (no drafting batch), a paid/comped coach passes;
+- the **agent gate** (``can_use_agent``) at ``agent_propose`` — a free coach
+  passes while within their monthly allowance and gets a 402 (no drafting batch)
+  once it's exhausted (S6 Phase 5 metering); a paid/comped coach is unlimited;
 - the **D6 edit/deliver block** (``can_edit``) at the autosave / deliver / group
   endpoints — an over-limit coach gets a 402 (API) or a flashed redirect (group
   forms) and nothing is mutated; a within-cap free coach is unaffected;
@@ -210,9 +211,25 @@ def _agent_url(plan):
 
 
 class TestAgentGate:
-    def test_free_coach_gets_402(self, client):
+    def test_free_coach_within_allowance_passes(self, client):
+        # Phase 5: a fresh free coach gets a monthly agent allowance, so the gate
+        # no longer 402s on the first run — it falls through to the no-API-key 503
+        # (the point is the paywall let it through).
+        coach = UserFactory()
+        plan, _, _ = _plan_with_prescription(coach)  # no sub → free, 0 runs
+        client.force_login(coach)
+        resp = client.post(
+            _agent_url(plan),
+            data=json.dumps({"instruction": "Make it knee-safe."}),
+            content_type="application/json",
+        )
+        assert resp.status_code != 402
+
+    def test_free_coach_gets_402_once_allowance_exhausted(self, client):
         coach = UserFactory()
         plan, _, _ = _plan_with_prescription(coach)  # no sub → free
+        for _ in range(CoachSubscription.FREE_AGENT_ALLOWANCE):
+            AgentProposalBatchFactory(plan=plan, coach=coach)
         client.force_login(coach)
         resp = client.post(
             _agent_url(plan),
@@ -405,9 +422,28 @@ class TestRosterBillingCard:
 
 
 class TestDesignerAgentCta:
-    def test_free_coach_sees_upgrade_cta(self, client):
+    def test_free_coach_within_allowance_sees_composer_and_meter(self, client):
+        # Phase 5: a free coach with allowance left sees the live composer plus a
+        # "runs left" meter — not the upgrade CTA.
+        coach = UserFactory()
+        plan, _, _ = _plan_with_prescription(coach)  # 0 runs
+        client.force_login(coach)
+        resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
+        assert resp.status_code == 200
+        assert resp.context["can_use_agent"] is True
+        assert resp.context["agent_allowance"]["metered"] is True
+        assert (
+            resp.context["agent_allowance"]["remaining"]
+            == CoachSubscription.FREE_AGENT_ALLOWANCE
+        )
+        assert b"Upgrade to use the agent" not in resp.content
+        assert b"free agent run" in resp.content
+
+    def test_free_coach_sees_upgrade_cta_once_allowance_exhausted(self, client):
         coach = UserFactory()
         plan, _, _ = _plan_with_prescription(coach)
+        for _ in range(CoachSubscription.FREE_AGENT_ALLOWANCE):
+            AgentProposalBatchFactory(plan=plan, coach=coach)
         client.force_login(coach)
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 200
