@@ -245,21 +245,35 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         return ctx
 
 
-class RosterView(LoginRequiredMixin, TemplateView):
-    """Front door: the coach's athletes (scoped to active relationships).
+class RosterView(TemplateView):
+    """The front door (``/meso/``) — splits on auth (first-time-UX Phase 3).
 
-    The roster is a *coach* surface, so anyone who isn't acting as a coach is
-    sent to their training home instead — where they see their delivered
-    programs, respond to a coach's invite, and request a coach (N4 Phase 2). A
-    user counts as a coach if they have a ``CoachProfile`` *or* any coach-side
-    link (athletes they coach, including a pending request awaiting them) *or* a
-    sent email invite. Everyone else — a pure athlete, an athlete awaiting an
-    invite, or a brand-new user — lands on ``/meso/me/``.
+    - An **anonymous** visitor sees the public landing (what Meso is + two honest
+      entry actions: log in as an athlete, or become a coach) rather than a bare
+      login wall — Meso has to be legible before you have an account.
+    - An **authenticated** visitor keeps the post-#311 role routing. The roster
+      is a *coach* surface, so anyone not acting as a coach is sent to their
+      training home — where they see delivered programs, respond to a coach's
+      invite, and request a coach (N4 Phase 2). A user counts as a coach if they
+      have a ``CoachProfile`` *or* any coach-side link (athletes they coach,
+      including a pending request awaiting them) *or* a sent email invite.
+      Everyone else — a pure athlete, an athlete awaiting an invite, or a
+      brand-new user — lands on ``/meso/me/``.
+
+    Not ``LoginRequiredMixin`` (which would bounce the anonymous visitor straight
+    to login, the thing Phase 3 removes); the authenticated branches read
+    ``request.user`` only after the anonymous one returns.
     """
 
     template_name = "meso/roster.html"
 
     def get(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return render(
+                request,
+                "meso/landing.html",
+                {"athlete_next": reverse("meso:athlete_home")},
+            )
         if not _is_coach(request.user):
             return redirect("meso:athlete_home")
         return super().get(request, *args, **kwargs)

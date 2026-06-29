@@ -1,0 +1,72 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Meso — coaching, periodized{% endblock %}
+
+{% comment %}
+First-time-UX Phase 3: the public front door. ``/meso/`` renders this for an
+anonymous visitor (RosterView splits on auth) instead of bouncing to login.
+Login-free and coach-nav-free — it explains Meso in one screen and offers two
+honest entry actions: log in as an athlete, or become a coach.
+{% endcomment %}
+
+{# Public page — keep the logged-in coach nav (Roster/Designer) out of it. #}
+{% block navlinks %}{% endblock %}
+
+{% block topnav_avatar %}
+  <a class="meso-btn meso-btn--ghost" href="{% url 'account_login' %}?next={{ athlete_next|urlencode }}" style="padding:5px 12px;font-size:12px;">Log in</a>
+{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Coaching, periodized</p>
+        <h1 class="meso-h1">Programs that adapt — delivered to the phone.</h1>
+        <p class="meso-sub">Meso is where coaches design periodized training and deliver it straight to their athletes' phones. An AI agent drafts the week-to-week adjustments; the coach approves them. Athletes log their sessions and watch their lifts climb.</p>
+      </div>
+    </div>
+
+    <!-- Two entry actions: athlete (log in) and coach (become a coach). -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:18px;">
+      <div class="meso-card meso-card--pad">
+        <span class="meso-badge meso-badge--ok"><i></i>Athletes</span>
+        <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:10px 0 4px;">Already training with a coach?</p>
+        <p class="meso-row-meta" style="margin-bottom:14px;">Your coach builds your week and sends it to your phone. Log in to see your training, log every set, and track your 1RMs.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <a class="meso-btn meso-btn--primary" href="{% url 'account_login' %}?next={{ athlete_next|urlencode }}">Log in to your training</a>
+          <a class="meso-btn meso-btn--ghost" href="{% url 'account_signup' %}?next={{ athlete_next|urlencode }}">Create an account</a>
+        </div>
+        <p class="meso-row-meta" style="margin-top:12px;">Invited by email? Tap the link in your invite to get started.</p>
+      </div>
+
+      <div class="meso-card meso-card--pad">
+        <span class="meso-badge"><i></i>Coaches</span>
+        <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:10px 0 4px;">Coach with Meso</p>
+        <p class="meso-row-meta" style="margin-bottom:14px;">Design programs, run groups, and let the AI agent draft adjustments you approve. Start free — no card required.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <a class="meso-btn meso-btn--primary" href="{% url 'meso:become_coach' %}">Get started as a coach</a>
+        </div>
+        <p class="meso-row-meta" style="margin-top:12px;">See what Meso does for coaches and pick a plan.</p>
+      </div>
+    </div>
+
+    <!-- How it works, one line each. -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
+      <div class="meso-card meso-card--pad">
+        <p class="meso-eyebrow">Design</p>
+        <p style="font-size:14px;font-weight:700;letter-spacing:-0.01em;margin:6px 0 4px;">Periodized, by the week</p>
+        <p class="meso-row-meta">Build mesocycles, weeks, and sessions in a spreadsheet-fast designer — by load or %1RM.</p>
+      </div>
+      <div class="meso-card meso-card--pad">
+        <p class="meso-eyebrow">Deliver</p>
+        <p style="font-size:14px;font-weight:700;letter-spacing:-0.01em;margin:6px 0 4px;">Straight to the phone</p>
+        <p class="meso-row-meta">Send a week to an athlete or a whole group; they get it as an installable app with offline logging.</p>
+      </div>
+      <div class="meso-card meso-card--pad">
+        <p class="meso-eyebrow">Adapt</p>
+        <p style="font-size:14px;font-weight:700;letter-spacing:-0.01em;margin:6px 0 4px;">An agent that proposes</p>
+        <p class="meso-row-meta">The AI agent reads the logs and drafts adjustments — you review and approve before anything changes.</p>
+      </div>
+    </div>
+  </div>
+{% endblock %}
