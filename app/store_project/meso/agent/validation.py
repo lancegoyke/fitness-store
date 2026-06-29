@@ -18,10 +18,17 @@ screen. Two layers:
 import re
 
 from ..models import ExercisePrescription
+from ..models import LoadType
 from ..models import Session
 from ..serializers import current_week
 
 VALID_KINDS = {"swap", "progress", "volume", "deload"}
+
+# A %1RM progression moves a PERCENT, so its value is bounded to a sane band. The
+# ceiling sits above legitimate supramaximal work (eccentrics / walkouts run a
+# little over 100%) but well below a number that is plainly an absolute load the
+# type-agnostic model mistyped (e.g. "180"). The floor is just above zero.
+MAX_PERCENT_1RM = 120
 
 # What an actionable change of each kind must resolve to within the plan. A swap
 # or progression edits a specific exercise row; a volume change edits a day; a
@@ -134,6 +141,28 @@ def _resolve(model, value, label, errors, **scope):
     return obj
 
 
+def _percent_load(text):
+    """A %1RM progression's value as a float, or ``None`` if it isn't a percent.
+
+    A %1RM load is a *bare* percentage — a number with an optional ``%`` sign
+    ("82", "82.5 %"). A unit-suffixed or otherwise non-numeric string ("82.5 kg",
+    "100 lb", "heavy") is the model converting the lift to an absolute weight,
+    which is NOT a percent and must be rejected rather than silently reinterpreted
+    (storing "100 lb" as "100%" would corrupt the prescribed intensity).
+    """
+    cleaned = (text or "").strip()
+    if cleaned.endswith("%"):
+        cleaned = cleaned[:-1].strip()
+    if not re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
+        return None
+    return float(cleaned)
+
+
+def _fmt_percent(value):
+    """A bare percent string ('82' / '82.5'); no '%' so the suffix isn't doubled."""
+    return str(int(value)) if value == int(value) else str(value)
+
+
 def clean_change(raw, plan, *, forbidden=None):
     """Validate and normalize one raw change dict.
 
@@ -220,6 +249,28 @@ def clean_change(raw, plan, *, forbidden=None):
         if value:
             payload[field] = value
     cleaned["payload"] = payload
+
+    # %1RM bound — a progress on a percent-typed lift moves a PERCENTAGE. The
+    # model treats ``load`` as an opaque string, so this requires a clean percent
+    # in a sane band (rejecting both an absolute-looking "180" and a unit-suffixed
+    # "100 lb" the model wrongly converted) and normalizes a valid one to a bare
+    # number so the designer's ``%`` suffix isn't doubled. Keyed on the *target
+    # row's* type; an absolute lift is left unbounded as before.
+    load_value = payload.get("load")
+    if kind == "progress" and presc is not None and load_value:
+        if presc.load_type == LoadType.PERCENT:
+            pct = _percent_load(load_value)
+            if pct is None:
+                errors.append(
+                    f"a %1RM progression must be a bare percent (got {load_value!r})"
+                )
+            elif not 0 < pct <= MAX_PERCENT_1RM:
+                errors.append(
+                    f"%1RM progression {pct:g}% is out of range "
+                    f"(expected 1–{MAX_PERCENT_1RM}%)"
+                )
+            else:
+                payload["load"] = _fmt_percent(pct)
 
     # Contraindication backstop — only a SWAP introduces a new movement, so only
     # swaps are screened (a volume/progress edit that *mentions* a flagged

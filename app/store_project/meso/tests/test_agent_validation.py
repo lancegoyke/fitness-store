@@ -9,6 +9,7 @@ the model returns through this before persisting anything.
 
 import pytest
 
+from store_project.meso.agent import client
 from store_project.meso.agent import validation
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import ContraindicationFactory
@@ -17,6 +18,7 @@ from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
+from store_project.meso.models import LoadType
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -366,3 +368,114 @@ class TestApplyPayload:
         )
         assert cleaned is None
         assert any("value to apply" in e for e in errors)
+
+
+def make_percent_plan():
+    """A plan whose single prescription is prescribed as a %1RM (S2 Phase 2a)."""
+    plan, session, presc = make_plan()
+    presc.load = "75"
+    presc.load_type = LoadType.PERCENT
+    presc.save(update_fields=["load", "load_type"])
+    return plan, session, presc
+
+
+class TestPercentProgressBound:
+    """A ``progress`` on a %1RM-typed lift moves a PERCENTAGE (S2 Phase 2a).
+
+    The agent is type-agnostic (it treats ``load`` as an opaque string), so this
+    deterministic backstop keeps a %1RM progression in a sane percent band —
+    stopping the model from turning "75%" into an absolute "180" — and normalizes
+    the stored value to a bare number so the ``%`` suffix isn't doubled. The
+    absolute path is deliberately left unbounded.
+    """
+
+    def test_accepts_a_sane_percent(self):
+        plan, _, presc = make_percent_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="82"),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"load": "82"}
+
+    def test_strips_a_percent_sign(self):
+        # The model may echo the '%'; the stored load is normalized to a bare
+        # percent so the designer's suffix isn't doubled.
+        plan, _, presc = make_percent_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="82.5 %"),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"load": "82.5"}
+
+    def test_rejects_a_unit_suffixed_load(self):
+        # A unit on a %1RM lift is the model converting it to an absolute weight;
+        # reject it rather than silently storing "100 lb" as "100%" (which would
+        # corrupt the prescribed intensity), even though 100 is within the band.
+        plan, _, presc = make_percent_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="100 lb"),
+            plan,
+        )
+        assert cleaned is None
+        assert any("percent" in e for e in errors)
+
+    def test_rejects_an_absolute_looking_load(self):
+        # 180 is a plausible kg/lb load but an absurd %1RM — the bound catches a
+        # model that ignored the type and progressed it like an absolute weight.
+        plan, _, presc = make_percent_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="180"),
+            plan,
+        )
+        assert cleaned is None
+        assert any("out of range" in e for e in errors)
+
+    def test_rejects_a_non_numeric_percent(self):
+        plan, _, presc = make_percent_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="heavy"),
+            plan,
+        )
+        assert cleaned is None
+        assert any("percent" in e for e in errors)
+
+    def test_allows_legitimate_supramaximal_percent(self):
+        # Eccentric/walkout work above 100% is real programming; the ceiling is
+        # set so it passes while a clearly-absolute number does not.
+        plan, _, presc = make_percent_plan()
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="105"),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"load": "105"}
+
+    def test_absolute_progress_is_not_bounded(self):
+        # Regression guard: the bound is %1RM-only. An absolute lift can carry a
+        # large numeric load (and its unit text) exactly as before Phase 2a.
+        plan, _, presc = make_plan()  # default ABSOLUTE
+        cleaned, errors = validation.clean_change(
+            base_change(kind="progress", prescription_id=presc.pk, new_load="180 kg"),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"load": "180 kg"}
+
+
+class TestPercentAwarePrompt:
+    """The prompt is what teaches the type-agnostic model about %1RM (S2 Phase 2a).
+
+    A ``load_type`` of ``pct`` means the load is a percent of 1RM; the system
+    prompt and the ``new_load`` tool field must say so.
+    """
+
+    def test_system_prompt_explains_load_type(self):
+        assert "load_type" in client.SYSTEM_PROMPT
+        assert "1RM" in client.SYSTEM_PROMPT
+
+    def test_new_load_tool_field_mentions_percent(self):
+        props = client.PROPOSE_TOOL["input_schema"]["properties"]
+        new_load = props["changes"]["items"]["properties"]["new_load"]
+        assert "%" in new_load["description"] or "1RM" in new_load["description"]

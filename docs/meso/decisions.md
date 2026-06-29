@@ -148,7 +148,7 @@ claim, reusing allauth. Detailed design when we build the relationship.
 | # | Decision | Note |
 |---|----------|------|
 | S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) + Phase 2a (shared group program + Group-mode designer) + Phase 3 (per-athlete overrides — the `adj` overlay) built; plan in [`groups-plan.md`](./groups-plan.md) |
-| S2 | **Units & RPE vs %1RM** | 🟡 In progress — units (kg/lb) shipped with earlier slices (`Unit`/`CoachProfile.default_unit`/`Plan.unit`); the **%1RM** half (a `load_type` on the prescription) is now building. Plan in [`units-rpe-plan.md`](./units-rpe-plan.md) |
+| S2 | **Units & RPE vs %1RM** | 🟡 In progress — units (kg/lb) shipped with earlier slices; Phase 1 (first-class `load_type` `abs`/`pct`) + Phase 2a (agent %1RM-awareness — prompt + a deterministic %1RM progression bound) deployed. Only Phase 2b (athlete %1RM logging ergonomics) remains. Plan in [`units-rpe-plan.md`](./units-rpe-plan.md) |
 | S3 | **Delivery & notifications** | Push needs PWA + push infra; email via existing `django-ses` + `notifications` app |
 | S4 | **Results ↔ `challenges`/records** | Results screen shows a PR — reuse the records model or keep separate? |
 | S5 | **Real-time transport** | HTMX polling vs SSE/websockets for chat/drafting |
@@ -426,4 +426,13 @@ _(Append dated entries here as decisions land.)_
   toggles `%` ⇄ the unit and autosaves the type; the athlete sees a `%` target and the coach results screen
   labels a %1RM target with `%`. Migration `meso.0011`. Agent %1RM-awareness deferred to Phase 2 (the agent
   is type-agnostic — a %1RM number progresses as a number). Plan + phasing in
+  [`units-rpe-plan.md`](./units-rpe-plan.md).
+- 2026-06-28 — **S2 Phase 2a — agent %1RM-awareness** (branch `meso-units-rpe-phase2a-agent`, **no
+  migration**). Phase 2 split 2a/2b (groups-slice cadence). The agent grounding already carried each row's
+  `load_type` (Phase 1 wired `serialize_prescription`), so the two real gaps were the **prompt** (never
+  explained `load_type`) and the **validation backstop** (never bounded a %1RM progression). Closed both:
+  `SYSTEM_PROMPT` + the `new_load` tool field now explain `abs` vs `pct` (%1RM); `clean_change` bounds a
+  `progress` on a `PERCENT`-typed target to `0 < pct ≤ 120` (rejects an absolute-looking "180" or a
+  non-numeric value, normalizes `'82.5 %'` → `'82.5'`), leaving the absolute path unbounded. The agent still
+  does **not** change a row's type. Athlete %1RM logging ergonomics remain → **Phase 2b**. Plan in
   [`units-rpe-plan.md`](./units-rpe-plan.md).
