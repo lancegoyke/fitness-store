@@ -601,6 +601,17 @@ def _athlete_plans(user):
     return Plan.objects.for_athlete(user).exclude(status=Plan.Status.ARCHIVED)
 
 
+def _athlete_has_logged(user):
+    """Whether the athlete has ever logged any session (first-time UX Phase 4).
+
+    Drives the one-time first-log coachmark: it's a *first*-log nudge, so any
+    prior log (in any plan) means they already know how — the hint must hide.
+    Server-driven, so the nudge is naturally one-time + cross-device with no
+    per-device flag or migration; it vanishes the moment the first log lands.
+    """
+    return SessionLog.objects.filter(athlete=user).exists()
+
+
 def _athlete_session_or_404(user, pk):
     """A delivered session the athlete owns, or ``Http404``.
 
@@ -637,6 +648,13 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         ctx["pending"] = presenters.athlete_pending(self.request.user)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
+        # First-log coachmark (Phase 4): only when there's a delivered session to
+        # tap *and* the athlete has never logged — pointing "tap a session below"
+        # at an empty week would be noise.
+        has_delivered = any(card["sessions"] for card in ctx["plans"])
+        ctx["show_first_log_hint"] = has_delivered and not _athlete_has_logged(
+            self.request.user
+        )
         ctx.update(_pwa_context())
         return ctx
 
@@ -660,6 +678,9 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
         ctx["log_data"] = presenters.athlete_log_payload(sess)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
+        # First-log coachmark (Phase 4): teach the logger only to a first-ever
+        # logger — any prior log means they already know how.
+        ctx["show_first_log_hint"] = not _athlete_has_logged(self.request.user)
         ctx.update(_pwa_context())
         return ctx
 

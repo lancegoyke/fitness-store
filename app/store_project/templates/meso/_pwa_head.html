@@ -32,5 +32,15 @@ theme/apple meta, the service-worker registration, and the push config the
         });
     });
   }
+  // Capture the install prompt as early as possible — Chromium can fire it
+  // before the deferred onboarding script runs. Stash it for the install card
+  // and announce it so a late arrival still reveals the card (Phase 4).
+  window.__mesoInstallEvent = null;
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    window.__mesoInstallEvent = e;
+    window.dispatchEvent(new Event("meso:installable"));
+  });
 </script>
 <script defer src="{% static 'js/meso_push.js' %}"></script>
+<script defer src="{% static 'js/meso_onboarding.js' %}"></script>
