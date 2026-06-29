@@ -1,0 +1,20 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Unsubscribed · Meso{% endblock %}
+
+{% block navlinks %}{% endblock %}
+{% block topnav_avatar %}{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-card meso-card--pad" style="max-width:460px;margin:48px auto;">
+      <p class="meso-eyebrow">Email preferences</p>
+      <h1 class="meso-h1" style="margin-bottom:8px;">You're unsubscribed</h1>
+      <p class="meso-sub" style="margin-bottom:18px;">
+        {% if email %}<strong>{{ email }}</strong> won't{% else %}You won't{% endif %}
+        get training-delivery emails anymore. New weeks still show up in your
+        training app whenever your coach delivers them.
+      </p>
+    </div>
+  </div>
+{% endblock %}

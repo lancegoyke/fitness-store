@@ -95,6 +95,14 @@ class AthleteProfile(models.Model):
     )
     training_started = models.DateField(_("Training started"), null=True, blank=True)
     notes = models.TextField(_("Notes"), blank=True)
+    delivery_email_opt_out = models.BooleanField(
+        _("Opted out of delivery emails"),
+        default=False,
+        help_text=_(
+            "Set when the athlete unsubscribes from training-delivery emails "
+            "(the email's List-Unsubscribe link). Web push is unaffected."
+        ),
+    )
     created = models.DateTimeField(_("Time created"), auto_now_add=True)
     modified = models.DateTimeField(_("Time last modified"), auto_now=True)
 

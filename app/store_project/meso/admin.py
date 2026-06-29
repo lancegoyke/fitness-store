@@ -37,7 +37,14 @@ class ContraindicationInline(admin.TabularInline):
 
 @admin.register(AthleteProfile)
 class AthleteProfileAdmin(admin.ModelAdmin):
-    list_display = ("__str__", "user", "training_started", "modified")
+    list_display = (
+        "__str__",
+        "user",
+        "training_started",
+        "delivery_email_opt_out",
+        "modified",
+    )
+    list_filter = ("delivery_email_opt_out",)
     search_fields = ("user__email", "user__name")
     raw_id_fields = ("user",)
 
