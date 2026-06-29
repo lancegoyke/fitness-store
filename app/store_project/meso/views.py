@@ -960,11 +960,21 @@ def coach_invite(request):
 @login_required
 @require_POST
 def coach_invite_revoke(request, token):
-    """Coach cancels a pending invite they sent. Coach-scoped (foreign → 404)."""
-    invite = get_object_or_404(CoachInvite, token=token, coach=request.user)
-    if invite.is_pending:
-        invite.revoke()
-        messages.success(request, "Invite revoked.")
+    """Coach cancels a pending invite they sent. Coach-scoped (foreign → 404).
+
+    Locks the invite row so a revoke and a concurrent claim can't both win — the
+    first to acquire the row decides the transition; the loser sees a non-pending
+    invite and no-ops.
+    """
+    with transaction.atomic():
+        invite = get_object_or_404(
+            CoachInvite.objects.select_for_update(),
+            token=token,
+            coach=request.user,
+        )
+        if invite.is_pending:
+            invite.revoke()
+            messages.success(request, "Invite revoked.")
     return redirect("meso:roster")
 
 
@@ -980,29 +990,38 @@ def invite_claim(request, token):
     Bearer-token authorized — any authenticated user holding the token may claim
     (no email match; see ``CoachInvite``). An already-answered invite is a friendly
     no-op, never a crash.
+
+    The POST transition runs under a row lock on the invite so two concurrent
+    claims (or a claim racing a revoke) can't both pass the pending check and each
+    materialize a link — the first to acquire the row wins; the loser sees a
+    non-pending invite and no-ops.
     """
     invite = get_object_or_404(CoachInvite, token=token)
     if request.method == "POST":
-        if not invite.is_pending:
-            messages.info(request, "This invite has already been answered.")
-            return redirect("meso:athlete_home")
         action = request.POST.get("action")
-        if action == "accept":
-            try:
-                invite.accept(request.user)
-            except InvalidTransition as exc:
-                messages.error(request, str(exc))
-                return redirect("meso:roster")
-            messages.success(
-                request,
-                f"You're now training with {invite.coach.display_name()}.",
+        if action not in ("accept", "decline"):
+            return HttpResponseBadRequest("action must be 'accept' or 'decline'.")
+        with transaction.atomic():
+            invite = get_object_or_404(
+                CoachInvite.objects.select_for_update(), pk=invite.pk
             )
-            return redirect("meso:athlete_home")
-        if action == "decline":
+            if not invite.is_pending:
+                messages.info(request, "This invite has already been answered.")
+                return redirect("meso:athlete_home")
+            if action == "accept":
+                try:
+                    invite.accept(request.user)
+                except InvalidTransition as exc:
+                    messages.error(request, str(exc))
+                    return redirect("meso:roster")
+                messages.success(
+                    request,
+                    f"You're now training with {invite.coach.display_name()}.",
+                )
+                return redirect("meso:athlete_home")
             invite.decline()
-            messages.success(request, "Invite declined.")
-            return redirect("meso:athlete_home")
-        return HttpResponseBadRequest("action must be 'accept' or 'decline'.")
+        messages.success(request, "Invite declined.")
+        return redirect("meso:athlete_home")
     return render(
         request,
         "meso/invite_claim.html",

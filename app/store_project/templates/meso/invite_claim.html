@@ -2,8 +2,10 @@
 
 {% block title %}Coach invite · Meso{% endblock %}
 
-{# The claim URL carries the bearer token — don't leak it to font/CDN hosts. #}
-{% block head_extra %}<meta name="referrer" content="no-referrer" />{% endblock %}
+{# The claim URL carries the bearer token — don't leak it to font/CDN hosts.
+   head_top renders before the base template's font <link>s, so the policy is in
+   effect before those external requests fire. #}
+{% block head_top %}<meta name="referrer" content="no-referrer" />{% endblock %}
 
 {# A brand-new athlete may have no coach/athlete role yet — strip the coach nav. #}
 {% block navlinks %}{% endblock %}
