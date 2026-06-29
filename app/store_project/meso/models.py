@@ -354,6 +354,45 @@ class CoachAthlete(models.Model):
             return self.athlete
         return None
 
+    def working_plan(self):
+        """This relationship's current individual program (most-recent non-archived).
+
+        The individual-side analogue of ``MesoGroup.shared_plan`` — the plan the
+        designer reopens, or ``None`` when the coach hasn't built one yet. A
+        *materialized* group-delivery plan (``source_group`` set — a member's
+        resolved snapshot, groups Phase 4) is excluded, matching
+        ``PlanQuerySet.for_coach``/``editable_by``: it's athlete-facing only and
+        the designer 404s on it, so it must never be returned as the editable
+        working plan.
+        """
+        return (
+            self.plans.exclude(status=Plan.Status.ARCHIVED)
+            .filter(source_group__isnull=True)
+            .order_by("-modified")
+            .first()
+        )
+
+    def create_plan(self, *, title="New program", goal="", unit=None, status=None):
+        """Create an individual program rooted at this relationship, with a scaffold.
+
+        The individual-side mirror of ``MesoGroup.create_shared_plan``: a starter
+        ``Plan`` plus ``Plan.scaffold``'s minimal-but-usable tree, so the designer
+        opens onto an editable, deliverable grid. ``unit`` defaults to the coach's
+        preferred unit; ``status`` to a draft.
+        """
+        if unit is None:
+            profile = getattr(self.coach, "coach_profile", None)
+            unit = profile.default_unit if profile else Unit.KILOGRAMS
+        plan = Plan.objects.create(
+            relationship=self,
+            title=title,
+            goal=goal,
+            status=status or Plan.Status.DRAFT,
+            unit=unit,
+        )
+        plan.scaffold()
+        return plan
+
 
 class CoachInviteQuerySet(models.QuerySet):
     def for_coach(self, user):
@@ -1074,6 +1113,41 @@ class Plan(models.Model):
             return self.group.coach_id == user.id
         return False
 
+    def scaffold(self, *, days=2):
+        """Seed a minimal-but-usable starter tree onto this (bare) plan.
+
+        One block, the current week, and ``days`` empty training days each with a
+        starter row — so the designer opens onto an editable, deliverable grid
+        rather than an empty shell (there is no add-mesocycle / add-week UI yet,
+        and a day needs a row to edit). Shared by individual plan creation
+        (``CoachAthlete.create_plan``) and the group's shared program
+        (``MesoGroup.create_shared_plan``). Returns ``self``.
+        """
+        mesocycle = Mesocycle.objects.create(
+            plan=self, name="Block 1", order=0, week_count=4
+        )
+        week = Week.objects.create(
+            mesocycle=mesocycle,
+            index=1,
+            phase="Accum",
+            volume=70,
+            intensity=65,
+            is_current=True,
+        )
+        for day in range(1, days + 1):
+            session = Session.objects.create(
+                week=week, day_number=day, name=f"Day {day}", order=day - 1
+            )
+            ExercisePrescription.objects.create(
+                session=session,
+                name="New exercise",
+                order=0,
+                sets="3",
+                reps="10",
+                rpe="7",
+            )
+        return self
+
 
 class Mesocycle(models.Model):
     """A training block within a plan — one bar in the macrocycle rail."""
@@ -1666,11 +1740,10 @@ class MesoGroup(models.Model):
     def create_shared_plan(self):
         """Create the group's shared program rooted at the group, with a scaffold.
 
-        Seeds a minimal-but-usable structure (one block, the current week, two
-        training days each with a starter row) so the designer opens onto an
-        editable grid — there is no add-session / add-week endpoint yet, so a
-        bare plan would be uneditable. The coach then shapes it (and, Phase 3,
-        layers per-athlete auto-adjusts).
+        ``Plan.scaffold`` seeds the minimal-but-usable starter tree (one block,
+        the current week, two training days each with a starter row) so the
+        designer opens onto an editable grid. The coach then shapes it (and,
+        Phase 3, layers per-athlete auto-adjusts).
         """
         profile = getattr(self.coach, "coach_profile", None)
         unit = profile.default_unit if profile else Unit.KILOGRAMS
@@ -1681,29 +1754,7 @@ class MesoGroup(models.Model):
             status=Plan.Status.DRAFT,
             unit=unit,
         )
-        mesocycle = Mesocycle.objects.create(
-            plan=plan, name="Block 1", order=0, week_count=4
-        )
-        week = Week.objects.create(
-            mesocycle=mesocycle,
-            index=1,
-            phase="Accum",
-            volume=70,
-            intensity=65,
-            is_current=True,
-        )
-        for day in (1, 2):
-            session = Session.objects.create(
-                week=week, day_number=day, name=f"Day {day}", order=day - 1
-            )
-            ExercisePrescription.objects.create(
-                session=session,
-                name="New exercise",
-                order=0,
-                sets="3",
-                reps="10",
-                rpe="7",
-            )
+        plan.scaffold()
         return plan
 
 

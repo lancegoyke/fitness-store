@@ -72,6 +72,9 @@ urlpatterns = [
         name="unsubscribe_delivery_email",
     ),
     path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
+    # Create (or open) an individual program for an athlete (first-time-UX
+    # Phase 1) — the "+ New program" / "Build a program" CTAs.
+    path("athlete/<uuid:pk>/plan/new/", views.plan_create, name="plan_create"),
     path("group/new/", views.group_create, name="group_create"),
     path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
     path("group/<int:pk>/design/", views.group_design, name="group_design"),
@@ -114,6 +117,12 @@ urlpatterns = [
         "api/plan/<int:plan_id>/session/<int:pk>/exercise/",
         views.session_add_exercise,
         name="api_session_add_exercise",
+    ),
+    # Add a training day to the plan's current week (first-time-UX Phase 1).
+    path(
+        "api/plan/<int:plan_id>/session/",
+        views.session_add,
+        name="api_session_add",
     ),
     # Per-athlete override on a group's shared program (groups Phase 3).
     path(

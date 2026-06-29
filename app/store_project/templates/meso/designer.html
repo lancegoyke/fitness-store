@@ -402,6 +402,9 @@
                   <button data-hover="add" @click="addExercise(di)" style="appearance:none;border:0;cursor:pointer;width:100%;text-align:left;padding:9px 15px;background:transparent;font:inherit;font-size:12px;font-weight:600;color:var(--dim);">+ Add exercise</button>
                 </div>
               </template>
+
+              <!-- Add a training day to the current week (first-time-UX Phase 1). -->
+              <button data-hover="add" @click="addDay()" style="appearance:none;cursor:pointer;width:100%;text-align:center;padding:11px 15px;background:var(--surface);border:1px dashed var(--line);border-radius:var(--radius);font:inherit;font-size:12.5px;font-weight:650;color:var(--dim);">+ Add day</button>
             </div>
 
             <!-- ===== BLOCK / PERIODIZATION VIEW ===== -->

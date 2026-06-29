@@ -4,7 +4,14 @@
 
 {% block topnav_actions %}
   <a class="meso-btn" href="{% url 'meso:results' %}">Latest results</a>
-  <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer' %}">Open in designer</a>
+  {% if working_plan %}
+    <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer_plan' working_plan.id %}">Open in designer</a>
+  {% else %}
+    <form method="post" action="{% url 'meso:plan_create' athlete.id %}" style="margin:0;">
+      {% csrf_token %}
+      <button type="submit" class="meso-btn meso-btn--primary">Build a program</button>
+    </form>
+  {% endif %}
 {% endblock %}
 
 {% block content %}
@@ -127,8 +134,16 @@
         {% else %}
           <div class="meso-card meso-card--pad" style="text-align:center;color:var(--dim);">
             <p class="meso-eyebrow">Current block</p>
-            <p class="meso-sub" style="margin:8px 0 14px;">No active program yet.</p>
-            <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer' %}">Build a program</a>
+            {% if working_plan %}
+              <p class="meso-sub" style="margin:8px 0 14px;">Program in progress &#8212; not yet delivered.</p>
+              <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer_plan' working_plan.id %}">Open in designer</a>
+            {% else %}
+              <p class="meso-sub" style="margin:8px 0 14px;">No active program yet.</p>
+              <form method="post" action="{% url 'meso:plan_create' athlete.id %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--primary">Build a program</button>
+              </form>
+            {% endif %}
           </div>
         {% endif %}
       </div>
