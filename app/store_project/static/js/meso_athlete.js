@@ -67,6 +67,7 @@ function createLogger() {
     error: false,
     queued: false, // a save is stashed locally, waiting for the network
     _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
+    _oneRmGen: {}, // per-exercise request generation, to drop a stale POST response
 
     init() {
       const el = document.getElementById("meso-log-data");
@@ -100,9 +101,41 @@ function createLogger() {
       }
       const csrfEl = document.getElementById("meso-csrf");
       this.csrf = csrfEl ? csrfEl.dataset.token : "";
+      // One-time: promote any 1RM override typed before Phase 2 (per-device
+      // `meso-e1rm` localStorage) to the server, so the upgrade doesn't silently
+      // drop it.
+      this.migrateLocalOverrides();
       // Flush anything logged while offline (S7), now and whenever wifi returns.
       this.flushQueue();
       window.addEventListener("online", () => this.flushQueue());
+    },
+
+    // Promote a pre-Phase-2 override (the retired `meso-e1rm` localStorage store,
+    // keyed by exercise id) into the editable input and persist it server-side,
+    // for any lift that doesn't already have a server-side manual value. Best-
+    // effort, then the local store is dropped so a stale value can't later
+    // resurrect over a cleared one. A no-op (and harmless) once the store is gone.
+    migrateLocalOverrides() {
+      let legacy;
+      try {
+        legacy = JSON.parse(localStorage.getItem("meso-e1rm") || "{}") || {};
+      } catch (e) {
+        legacy = {};
+      }
+      if (!legacy || !Object.keys(legacy).length) return;
+      for (const ex of this.exercises) {
+        const v = (legacy[ex.id] || "").toString().trim();
+        if (v && parseNum(v) != null && ex.one_rm_source !== "manual") {
+          ex.e1rm = v;
+          ex.one_rm = "";
+          this._postOneRm(ex); // fire-and-forget; the value also stays in-session
+        }
+      }
+      try {
+        localStorage.removeItem("meso-e1rm");
+      } catch (e) {
+        /* the store is best-effort; the values are already seeded in-session */
+      }
     },
 
     // ---- derived progress ----
@@ -364,6 +397,10 @@ function createLogger() {
       if (!this.oneRmUrl || !ex) return;
       const value = (ex.e1rm || "").toString().trim();
       if (value !== "" && parseNum(value) == null) return;
+      // Stamp this request so a slow response can't reconcile over a newer edit:
+      // a lagging clear/save that lands after the athlete typed again would
+      // otherwise wipe the in-progress value.
+      const gen = (this._oneRmGen[ex.id] = (this._oneRmGen[ex.id] || 0) + 1);
       let res;
       try {
         res = await fetch(this.oneRmUrl, {
@@ -378,18 +415,22 @@ function createLogger() {
         return; // offline — keep the in-session value; next edit re-attempts
       }
       if (res.redirected || !res.ok) return;
+      let data;
       try {
-        const data = await res.json();
-        // Reconcile with what the server stored: a manual value stays in the
-        // input; a cleared one reverts to the server's log-derived estimate.
-        if (data.source === "manual") {
-          ex.one_rm = "";
-        } else {
-          ex.e1rm = "";
-          ex.one_rm = data.one_rm || "";
-        }
+        data = await res.json();
       } catch (e) {
-        /* stored server-side regardless; the UI reconciles on next load */
+        return; // stored server-side regardless; the UI reconciles on next load
+      }
+      // A newer POST for this lift superseded us while in flight — drop this
+      // (now stale) response rather than overwrite the fresher state.
+      if (this._oneRmGen[ex.id] !== gen) return;
+      // Reconcile with what the server stored: a manual value stays in the input;
+      // a cleared one reverts to the server's log-derived estimate.
+      if (data.source === "manual") {
+        ex.one_rm = "";
+      } else {
+        ex.e1rm = "";
+        ex.one_rm = data.one_rm || "";
       }
     },
   };
