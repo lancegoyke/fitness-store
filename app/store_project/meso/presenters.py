@@ -14,6 +14,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import CoachAthlete
+from .models import CoachInvite
 from .models import LoadType
 from .models import Plan
 from .models import SessionLog
@@ -126,11 +127,17 @@ def roster_group(group):
 
 
 def pending_invite(invite):
-    """A pending email-invite row in the coach's roster (N4 onboarding)."""
+    """An outstanding email-invite row in the coach's roster (N4 onboarding).
+
+    Carries ``is_expired`` (Phase 3) so the row reads "Expired" instead of
+    "Pending" once the TTL runs out — either swept to ``expired`` status or merely
+    past due. Both states offer Resend.
+    """
     return {
         "email": invite.email,
         "token": invite.token,
         "when": invite.created_at,
+        "is_expired": invite.status == CoachInvite.Status.EXPIRED or invite.is_expired,
     }
 
 

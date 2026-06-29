@@ -125,10 +125,60 @@ email helper, the request + withdraw views with auth/scoping/validation, the
 coach-response recipient path, both pending surfaces, and the routing) + seed
 coverage. **Codex review loop: CLEAN on iteration 1.**
 
-## Deferred (Phase 3+)
+## Phase 3 (built) — invite lifecycle: expiry / TTL + explicit resend
 
-- **Resend / expiry** of an invite (today re-inviting reuses the pending row and
-  re-sends; no TTL).
+The Phase-1 claim link worked forever and there was no first-class *resend* — a
+re-invite reused the pending row but never re-armed a stale one. Phase 3 gives
+an invite a time-to-live and a deliberate resend. **One migration**
+(`0016_coachinvite_expiry`): an `expires_at` column + the new `EXPIRED` status
+choice.
+
+1. **`CoachInvite.expires_at` + `INVITE_TTL` (14 days)** — `open_for` stamps a
+   fresh invite `now + TTL`. A **null** clock means *never expires* (legacy
+   invites predating the TTL stay claimable — data-safe, no backfill).
+2. **`is_expired` / `is_claimable`** — derive claimability from the clock;
+   `is_claimable = is_pending and not is_expired` is the single gate the claim
+   path checks.
+3. **`Status.EXPIRED` + `expire()`** — the `pending → expired` transition (only a
+   past-due pending invite can expire). Reached two ways: **lazily** (the claim
+   view ages out an overdue link on view, and `accept()` flips + refuses one as a
+   backstop — a stale token can *never* materialize a link) and in **bulk** via
+   the `meso_expire_invites` management command (cron-friendly sweep of
+   `overdue()`; `--dry-run` reports only).
+4. **`resend()`** — re-arms an outstanding invite: a **new token** (the old
+   emailed link dies — the Phase-3 decision), a reset TTL, and `expired → pending`
+   so it's claimable again. Only an outstanding (pending/expired) invite can be
+   resent; an answered one is terminal.
+5. **`open_for` re-arm** — reuses an *outstanding* row (pending **or** expired)
+   for the address rather than orphaning it: a live link is returned untouched, a
+   stale one is re-armed (`resend`). So a re-invite via the roster form still
+   resolves to one outstanding row (no duplicate pending+expired pair).
+6. **`revoke()` broadened** — a coach can now dismiss an *expired* invite off
+   their roster, not just cancel a live one (same gesture).
+7. **Resend view + URL** — `POST /meso/invite/<token>/resend/`
+   (`coach_invite_resend`): coach-scoped (foreign → 404), row-locked against a
+   racing claim/revoke, best-effort claim email on `on_commit`; an answered
+   invite is a friendly no-op, not a 500.
+8. **Querysets** — `claimable()` (pending within TTL, null clock included),
+   `overdue()` (past-due pending — the sweep's input), `outstanding()`
+   (pending **or** expired — the roster's input).
+9. **Surfaces** — the roster lists `outstanding()` invites: an expired one reads
+   "Expired" (muted badge) instead of "Pending", and every row offers **Resend**
+   (plus Revoke). The claim confirm page gains an "expired — ask your coach to
+   resend" state. Admin lists `expires_at`.
+10. **Seed** — the demo pending invite is created via `open_for` so it carries a
+    real TTL.
+
+Built **red→green** with a new `test_invite_lifecycle.py` (the expiry clock,
+`expire`/`resend` transitions, `accept` rejecting an expired token, the
+querysets, `open_for` re-arm, the sweep command, the claim view's expiry
+handling, the resend view with auth/scoping/no-op, and the roster surface).
+
+## Deferred (Phase 4+)
+
+- **Configurable TTL** per coach (today a fixed 14-day `INVITE_TTL`).
+- **Expiry reminder** email before a link lapses; **scheduling** the
+  `meso_expire_invites` sweep on a real cron (it's manual / CI-runnable today).
 - **Stub-athlete** pre-creation (we never create a placeholder `User`).
 - **Coach/athlete attribution beyond `accepted_by`**; richer invite history.
 - **Coach-side roster filtering by relationship state** beyond pending (e.g. a

@@ -41,6 +41,13 @@
             </form>
           </div>
         {% endif %}
+      {% elif invite.status == 'expired' %}
+        <p class="meso-eyebrow">Coach invite</p>
+        <h1 class="meso-h1">This invite has expired</h1>
+        <p class="meso-sub">
+          The link timed out. Ask {{ coach_name }} to resend your invite and you'll
+          get a fresh link.
+        </p>
       {% else %}
         <p class="meso-eyebrow">Coach invite</p>
         <h1 class="meso-h1">This invite is no longer active</h1>

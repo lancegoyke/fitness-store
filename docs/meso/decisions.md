@@ -136,7 +136,7 @@ Mark via a `CoachProfile`/`AthleteProfile`, Django groups, or boolean flags. **R
 `CoachProfile` (presence = is-a-coach) + the `CoachAthlete` link (presence = is-an-athlete);
 avoids overloading the User model.
 
-### N4 · Athlete onboarding / invites 🟢 (Phases 1–2 built)
+### N4 · Athlete onboarding / invites 🟢 (Phases 1–3 built)
 How an athlete joins a coach: coach invites by email → athlete signs up (allauth) → link
 created; or coach creates a stub athlete and sends a claim link. **Decision:** email invite +
 claim, reusing allauth — **Phase 1 built** (the `CoachInvite` email artifact → bearer-token
@@ -144,7 +144,11 @@ claim → materialized active `CoachAthlete`; rides allauth's `?next=` with no c
 **Phase 2 built** — the reverse direction: an athlete *requests* a coach by email
 (`CoachAthlete.request`), the coach accepts/declines on the roster, both sides see the pending
 state on their own surface, and any non-coach now lands on their training home (where the
-request form lives). Plan + deferred items in [`invites-plan.md`](./invites-plan.md).
+request form lives). **Phase 3 built** — invite *lifecycle*: a 14-day TTL (`expires_at`) + a
+new `EXPIRED` status, lazy + swept expiry (the claim path refuses a stale token;
+`meso_expire_invites` bulk-sweeps overdue invites), and an explicit **resend** (rotates the
+token + resets the clock, re-arms an expired invite) surfaced on the roster. Plan + deferred
+items in [`invites-plan.md`](./invites-plan.md).
 
 ---
 
@@ -545,3 +549,23 @@ _(Append dated entries here as decisions land.)_
   red→green: **+34 pytest** (`test_requests.py`) + 3 seed assertions; full suite green (867).
   **Codex review loop CLEAN on iteration 1.** Plan + deferred (resend/expiry, stub-athlete,
   attribution) in [`invites-plan.md`](./invites-plan.md).
+- 2026-06-29 — **N4 — invites — Phase 3 built** (branch `meso-invites-phase3`). Invite
+  *lifecycle*: a TTL + an explicit resend, closing the top deferred item. **One migration**
+  (`0016_coachinvite_expiry`): `CoachInvite.expires_at` + a new `Status.EXPIRED`. A fresh invite
+  is stamped `now + INVITE_TTL` (14 days) by `open_for`; a **null** clock = never expires (legacy
+  rows stay claimable — data-safe, no backfill). `is_claimable = is_pending and not is_expired` is
+  the single gate the claim path enforces. `expire()` (`pending → expired`, past-due only) fires
+  **lazily** (the claim view ages out an overdue link on view; `accept()` flips + refuses one as a
+  backstop, so a stale token can never materialize a link) and in **bulk** via a new
+  `meso_expire_invites` management command (cron-friendly sweep of `overdue()`, `--dry-run`).
+  `resend()` re-arms an outstanding invite — **new token** (old emailed link dies — the Phase-3
+  decision), reset clock, `expired → pending`; `open_for` reuses an outstanding (pending/expired)
+  row and re-arms a stale one (no duplicate pending+expired pair); `revoke()` broadened so a coach
+  can dismiss an *expired* invite too. New `POST /meso/invite/<token>/resend/`
+  (`coach_invite_resend`): coach-scoped (404), row-locked, best-effort email on `on_commit`,
+  answered-invite no-op (no 500). Querysets `claimable`/`overdue`/`outstanding`; the roster lists
+  `outstanding()` (an expired one reads "Expired" + offers Resend); the claim page gains an
+  "expired" state; admin lists `expires_at`; the demo invite seeds via `open_for` (real TTL).
+  Built red→green: **+38 pytest** (`test_invite_lifecycle.py`); full project suite 904 + 83 Vitest
+  green. Plan + deferred (configurable TTL, expiry reminder, cron scheduling, stub-athlete) in
+  [`invites-plan.md`](./invites-plan.md).
