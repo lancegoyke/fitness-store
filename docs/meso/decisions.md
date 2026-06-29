@@ -148,7 +148,7 @@ claim, reusing allauth. Detailed design when we build the relationship.
 | # | Decision | Note |
 |---|----------|------|
 | S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) + Phase 2a (shared group program + Group-mode designer) + Phase 3 (per-athlete overrides — the `adj` overlay) built; plan in [`groups-plan.md`](./groups-plan.md) |
-| S2 | **Units & RPE vs %1RM** | Per-athlete/coach setting; needs a home |
+| S2 | **Units & RPE vs %1RM** | 🟡 In progress — units (kg/lb) shipped with earlier slices (`Unit`/`CoachProfile.default_unit`/`Plan.unit`); the **%1RM** half (a `load_type` on the prescription) is now building. Plan in [`units-rpe-plan.md`](./units-rpe-plan.md) |
 | S3 | **Delivery & notifications** | Push needs PWA + push infra; email via existing `django-ses` + `notifications` app |
 | S4 | **Results ↔ `challenges`/records** | Results screen shows a PR — reuse the records model or keep separate? |
 | S5 | **Real-time transport** | HTMX polling vs SSE/websockets for chat/drafting |
@@ -414,3 +414,16 @@ _(Append dated entries here as decisions land.)_
   build notes in [`groups-plan.md`](./groups-plan.md). Resume point → the **override editor UI** (click a row
   to set a member's adjust), then **Phase 2b** (create-group UI) and **Phase 4** (deliver-to-all — fan a
   per-athlete *resolved* snapshot out to each member, reusing `resolve_prescription`).
+- 2026-06-28 — **Groups slice (S1) COMPLETE** (Phases 2b + 3-editor + 4 all built, merged & deployed — PRs
+  #301/#302/#303). The whole Meso feature area (individual coach + agent + athlete PWA + groups) is now real
+  & deployed; `mockdata.py` is gone. **Next slice chosen by the user: S2 (units & RPE/%1RM).** Units (kg/lb)
+  turned out already shipped with earlier slices (`Unit`/`CoachProfile.default_unit`/`Plan.unit`, threaded
+  through serializers/presenters/designer/seed); the remaining gap is **first-class %1RM** — the designer's
+  Load number always meant an absolute load, with no way to prescribe "75% of 1RM" (RPE already has its own
+  orthogonal column). **S2 Phase 1 building** (branch `meso-units-rpe-phase1`): a `LoadType`
+  (`ABSOLUTE`/`PERCENT`) + `ExercisePrescription.load_type` (default ABSOLUTE — data-safe) carried through
+  the serializer, the per-athlete override resolver, and the group deliver fan-out; the designer Load cell
+  toggles `%` ⇄ the unit and autosaves the type; the athlete sees a `%` target and the coach results screen
+  labels a %1RM target with `%`. Migration `meso.0011`. Agent %1RM-awareness deferred to Phase 2 (the agent
+  is type-agnostic — a %1RM number progresses as a number). Plan + phasing in
+  [`units-rpe-plan.md`](./units-rpe-plan.md).

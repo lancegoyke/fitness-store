@@ -13,6 +13,7 @@ from collections import defaultdict
 from django.urls import reverse
 from django.utils import timezone
 
+from .models import LoadType
 from .models import Plan
 from .models import SessionLog
 from .serializers import _fmt_num
@@ -218,12 +219,26 @@ def coach_style(coach):
 RPE_FLAG_THRESHOLD = 1.0
 
 
+def _load_label(prescription, unit=None):
+    """The prescribed load with its suffix — "70 kg", "75%", or "BW".
+
+    A %1RM load (``LoadType.PERCENT``) gets a ``%`` suffix; an absolute numeric
+    load gets ``unit`` when one is given; a non-numeric load ("BW") carries no
+    suffix (a percentage can't apply to "BW").
+    """
+    load = prescription.load
+    if not load or _num(load) is None:
+        return load
+    if prescription.load_type == LoadType.PERCENT:
+        return f"{load}%"
+    return f"{load} {unit}" if unit else load
+
+
 def _results_target_label(prescription, unit):
     """The prescribed target, e.g. "3×6 @ 70 kg · RPE 7" (no unit for "BW")."""
     label = f"{prescription.sets or '—'}×{prescription.reps or '—'}"
     if prescription.load:
-        suffix = f" {unit}" if _num(prescription.load) is not None else ""
-        label += f" @ {prescription.load}{suffix}"
+        label += f" @ {_load_label(prescription, unit)}"
     if prescription.rpe and prescription.rpe != "—":
         label += f" · RPE {prescription.rpe}"
     return label
@@ -543,7 +558,7 @@ def _target_label(prescription):
     """
     parts = [f"{prescription.sets or '—'} × {prescription.reps or '—'}"]
     if prescription.load:
-        parts.append(prescription.load)
+        parts.append(_load_label(prescription))
     if prescription.rpe:
         parts.append(f"RPE {prescription.rpe}")
     return " · ".join(parts)

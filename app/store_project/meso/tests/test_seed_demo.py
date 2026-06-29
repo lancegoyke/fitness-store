@@ -207,6 +207,24 @@ class TestSamplePlanRoundTrips:
         assert box_squat["name"] == "Box Squat (to parallel)"
         assert box_squat["tag"] == "knee-safe"
 
+    def test_percent_1rm_prescription_round_trips(self):
+        # The demo squat is prescribed as a % of 1RM (S2), shown once on a fresh
+        # DB and not duplicated on reseed.
+        seed()
+        seed()  # reseed must not spawn a second %1RM row
+        plan = Plan.objects.for_coach(User.objects.get(email=COACH_EMAIL)).get()
+        data = serialize_plan(plan)
+        lower = next(s for s in data["program"] if s["name"] == "Lower")
+        box_squat = lower["exercises"][0]
+        assert box_squat["load_type"] == "pct"
+        percent_rows = [
+            ex
+            for session in data["program"]
+            for ex in session["exercises"]
+            if ex["load_type"] == "pct"
+        ]
+        assert len(percent_rows) == 1
+
 
 class TestSeedLogsASession:
     """Maya's current-week "Lower" session is delivered + logged (Phase 3).

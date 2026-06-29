@@ -235,7 +235,16 @@ class TestSerializePlan:
                 session["exercises"], ex_specs
             ):
                 # Exactly the designer's keys — no leakage of Phase 3/agent fields.
-                expected_keys = {"id", "name", "sets", "reps", "load", "rpe", "note"}
+                expected_keys = {
+                    "id",
+                    "name",
+                    "sets",
+                    "reps",
+                    "load",
+                    "load_type",
+                    "rpe",
+                    "note",
+                }
                 if tags:
                     expected_keys.add("tag")
                 assert set(ex.keys()) == expected_keys

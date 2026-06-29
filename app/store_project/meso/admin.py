@@ -159,9 +159,11 @@ class ExercisePrescriptionAdmin(admin.ModelAdmin):
         "sets",
         "reps",
         "load",
+        "load_type",
         "rpe",
         "is_catalog_linked",
     )
+    list_filter = ("load_type",)
     search_fields = ("name",)
     raw_id_fields = ("session", "exercise")
 
