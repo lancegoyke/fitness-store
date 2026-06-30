@@ -1,0 +1,126 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Agent usage · Meso{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-crumbs">
+      <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span> <span>Agent usage</span>
+    </div>
+
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Owner · agent usage &amp; margin</p>
+        <h1 class="meso-h1">{{ month_label }}</h1>
+        <p class="meso-sub">
+          Estimated cost is internal; the Anthropic invoice is authoritative.
+        </p>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <a class="meso-btn meso-btn--ghost" href="?month={{ prev_month }}">‹ {{ prev_month }}</a>
+        <a class="meso-btn meso-btn--ghost" href="{% url 'meso:usage_dashboard' %}">This month</a>
+        <a class="meso-btn meso-btn--ghost" href="?month={{ next_month }}">{{ next_month }} ›</a>
+      </div>
+    </div>
+
+    {% with t=report.totals %}
+      <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
+        <p class="meso-eyebrow">Totals</p>
+        <p class="meso-sub" style="margin:6px 0 0;font-size:15px;color:var(--ink);">
+          {{ t.runs }} run{{ t.runs|pluralize }}
+          · {{ t.total_tokens }} tokens
+          · est. <b>${{ t.cost|floatformat:4 }}</b>
+          {% if t.unknown_cost_runs %}
+            · <span style="color:var(--warn);">{{ t.unknown_cost_runs }} unpriced</span>
+          {% endif %}
+        </p>
+        {% if report.eval_runs_excluded %}
+          <p class="meso-muted" style="margin:6px 0 0;font-size:12px;">
+            {{ report.eval_runs_excluded }} eval run{{ report.eval_runs_excluded|pluralize }} excluded.
+          </p>
+        {% endif %}
+      </div>
+    {% endwith %}
+
+    {% if alerts %}
+      <div class="meso-card meso-card--pad" style="margin-bottom:14px;border-left:3px solid var(--warn);">
+        <p class="meso-eyebrow" style="color:var(--warn);">
+          Margin alerts — paying coaches over {{ threshold_pct }}% of revenue
+        </p>
+        {% for coach in alerts %}
+          <div style="display:flex;align-items:baseline;gap:10px;padding:6px 0;border-bottom:1px solid var(--line-2);">
+            <b style="min-width:0;">{{ coach.label }}</b>
+            <span class="meso-row-meta">
+              cost ${{ coach.totals.cost|floatformat:4 }}
+              of ${{ coach.revenue|floatformat:2 }} revenue
+              · {% widthratio coach.cost_to_revenue_ratio 1 100 %}%
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <div class="meso-grid meso-grid--profile">
+      <!-- left rail: roll-ups -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        {% include "meso/_usage_rollup.html" with title="By billing tier" rows=by_tier %}
+        {% include "meso/_usage_rollup.html" with title="By model" rows=by_model %}
+        {% include "meso/_usage_rollup.html" with title="By trigger" rows=by_trigger %}
+      </div>
+
+      <!-- main: per coach, highest cost first -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="meso-card">
+          <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
+            <p class="meso-eyebrow" style="margin:0;">Per coach (highest cost first)</p>
+          </div>
+          {% for coach in report.coaches %}
+            <div style="padding:13px 16px;border-bottom:1px solid var(--line-2);">
+              <div style="display:flex;align-items:center;gap:10px;">
+                <div style="min-width:0;">
+                  <div class="meso-row-name">
+                    {{ coach.label }}
+                    {% if coach.flagged %}<span class="meso-badge meso-badge--warn"><i></i>over revenue</span>{% endif %}
+                  </div>
+                  <div class="meso-row-meta">
+                    {{ coach.billing_status }} · {{ coach.billable_seats }} seat{{ coach.billable_seats|pluralize }}
+                  </div>
+                </div>
+                <div class="meso-spacer"></div>
+                <span class="meso-row-meta" style="text-align:right;">
+                  {{ coach.totals.runs }} run{{ coach.totals.runs|pluralize }}
+                  · {{ coach.totals.total_tokens }} tok
+                </span>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:6px;">
+                <span class="meso-row-meta">cost <b style="color:var(--ink);">${{ coach.totals.cost|floatformat:4 }}</b></span>
+                <span class="meso-row-meta">revenue ${{ coach.revenue|floatformat:2 }}</span>
+                <span class="meso-row-meta">
+                  margin
+                  <b style="color:{% if coach.margin < 0 %}var(--warn){% else %}var(--ok){% endif %};">${{ coach.margin|floatformat:2 }}</b>
+                </span>
+                {% if coach.totals.unknown_cost_runs %}
+                  <span class="meso-row-meta" style="color:var(--warn);">{{ coach.totals.unknown_cost_runs }} unpriced</span>
+                {% endif %}
+              </div>
+              {% if coach.clients %}
+                <div style="margin-top:8px;padding-left:10px;border-left:2px solid var(--line-2);display:flex;flex-direction:column;gap:3px;">
+                  {% for client in coach.clients %}
+                    <div class="meso-row-meta">
+                      {% if client.is_group %}<span class="meso-badge meso-badge--muted"><i></i>group</span> {% endif %}
+                      {{ client.label }}: {{ client.totals.runs }} run{{ client.totals.runs|pluralize }}, ${{ client.totals.cost|floatformat:4 }}
+                    </div>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </div>
+          {% empty %}
+            <div class="meso-row" style="color:var(--dim);padding:16px;">
+              No agent runs in this month.
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

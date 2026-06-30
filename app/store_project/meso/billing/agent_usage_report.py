@@ -23,7 +23,9 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 from decimal import Decimal
+from decimal import InvalidOperation
 
+from django.conf import settings
 from django.db.models import Count
 from django.utils import timezone
 
@@ -38,6 +40,12 @@ BASE_PRICE_USD = Decimal("9.99")
 SEAT_PRICE_USD = Decimal("1.00")
 
 _ZERO = Decimal("0")
+
+# The margin-alert threshold the dashboard/sweep fall back to when neither a
+# per-run override nor ``MESO_MARGIN_ALERT_THRESHOLD`` supplies one — mirroring the
+# settings default (and the command's ``DEFAULT_THRESHOLD``). A paying coach whose
+# agent cost crosses this fraction of revenue is "at risk" (see ``margin_alerts``).
+DEFAULT_ALERT_THRESHOLD = Decimal("0.5")
 
 # Billing-tier buckets for the COGS-vs-CAC split (off each run's snapshot status).
 PAID = "paid"  # a real Stripe subscription — agent cost is COGS against revenue
@@ -75,6 +83,41 @@ def month_bounds(year, month):
         end_naive = datetime(year, month + 1, 1)
     tz = timezone.get_current_timezone()
     return timezone.make_aware(start_naive, tz), timezone.make_aware(end_naive, tz)
+
+
+def shift_month(year, month, step):
+    """``(year, month)`` shifted by ``step`` whole months (negative steps back).
+
+    Pure month arithmetic for the dashboard's prev/next navigation — rolls over a
+    year boundary in either direction (``shift_month(2026, 12, 1) == (2027, 1)``).
+    """
+    index = year * 12 + (month - 1) + step
+    return index // 12, index % 12 + 1
+
+
+def resolve_alert_threshold(raw=None):
+    """The margin-alert fraction from ``raw`` or the setting; never raises.
+
+    The dashboard variant of the command's ``_threshold`` validation: ``raw`` (or,
+    when ``None``, ``settings.MESO_MARGIN_ALERT_THRESHOLD``) is parsed to a positive,
+    finite ``Decimal``; anything blank/malformed/non-positive degrades to
+    :data:`DEFAULT_ALERT_THRESHOLD`. Unlike the command it returns the default
+    rather than erroring, so a misconfigured env value can never 500 the page.
+    """
+    if raw is None:
+        raw = getattr(settings, "MESO_MARGIN_ALERT_THRESHOLD", "")
+    raw = str(raw).strip()
+    if not raw:
+        return DEFAULT_ALERT_THRESHOLD
+    try:
+        value = Decimal(raw)
+    except InvalidOperation:
+        return DEFAULT_ALERT_THRESHOLD
+    # is_finite() first: it rejects Infinity/NaN and guards the comparison (a NaN
+    # comparison itself raises InvalidOperation).
+    if not value.is_finite() or value <= _ZERO:
+        return DEFAULT_ALERT_THRESHOLD
+    return value
 
 
 def current_month_bounds():
@@ -378,6 +421,18 @@ def _bucket(mapping, key):
         totals = Totals()
         mapping[key] = totals
     return totals
+
+
+def sorted_totals(mapping):
+    """A roll-up dict (``by_model``/``by_trigger``/``by_tier``) as cost-sorted pairs.
+
+    Returns ``(key, Totals)`` tuples ordered by estimated cost then run count,
+    descending — the heaviest bucket first — for the dashboard and the command's
+    roll-up tables to render without re-sorting.
+    """
+    return sorted(
+        mapping.items(), key=lambda kv: (kv[1].cost, kv[1].runs), reverse=True
+    )
 
 
 def margin_alerts(report, threshold):
