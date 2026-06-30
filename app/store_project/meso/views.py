@@ -1041,7 +1041,7 @@ def _clean_logged_sets(raw_sets, session):
 # The worker is rendered from a template that resolves the *hashed* asset URLs via
 # ``{% static %}`` at render time, so its precache list stays valid every deploy.
 
-PWA_THEME_COLOR = "#3c73c5"  # meso accent (oklch(0.56 0.14 258))
+PWA_THEME_COLOR = "#31759d"  # shared site accent (base.css --accent, steel-blue)
 PWA_BACKGROUND_COLOR = "#f5f6f7"  # meso app background (--bg)
 
 
@@ -1091,7 +1091,8 @@ def manifest_webmanifest(request):
 # Bumped when the cached shell changes so the worker drops stale caches on
 # activate. Keep in sync with the cache name baked into the worker template.
 # v2: added meso_onboarding.js to the precached shell (first-time UX Phase 4).
-PWA_CACHE_VERSION = "meso-pwa-v2"
+# v3: re-skinned meso.css to the shared steel-blue accent (design-system PR 3).
+PWA_CACHE_VERSION = "meso-pwa-v3"
 
 
 @require_GET

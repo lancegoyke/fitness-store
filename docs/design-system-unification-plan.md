@@ -1,7 +1,9 @@
 # Design-system unification — plan
 
-Status: **PR 1 implemented** (Foundation + 3 pain points) · Started 2026-06-30 ·
-Kicked off from issue #327. PRs 2–3 still to come.
+Status: **PR 1 + PR 3 implemented** · Started 2026-06-30 · Kicked off from issue
+#327. PR 1 = Foundation + 3 pain points. PR 3 = Meso reconnection (built next,
+out of sequence — it depends only on the PR 1 token foundation, not on PR 2).
+**PR 2 (rest of main site) still to come.**
 
 ## Goal
 
@@ -104,7 +106,34 @@ removed from `INSTALLED_APPS` / settings / deps. Red→green tests in
 - Store, home, account/auth, product/book pages — template-level cleanups beyond
   what the global re-skin already gave.
 
-### PR 3 — Meso reconnection (final phase)
+### PR 3 — Meso reconnection ✅ implemented
+Done on branch `design-system-pr3-meso-reconnect`. Validated by
+`docs/spikes/basecoat/meso.html`.
+
+- **Shared site nav** — a new `meso/_meso_sitenav.html` partial (the same
+  top-level links as `templates/_nav.html`: brand → home; About / Store /
+  Challenges / **Coaching** [active] / Contact; auth on the right) rides at the
+  top of the Meso shell via a `{% block site_nav %}` in `_meso_base.html`,
+  styled in `meso.css` (`.meso-sitenav`, a black bar matching the main-site
+  nav) since the shell loads only `meso.css`. The Meso workspace sub-header
+  (`.meso-topnav`) is kept below it.
+- **Athlete PWA keeps its installed-app feel** — the phone-first surfaces
+  (`athlete_home`, `athlete_session`, `offline`, `invite_claim`) override
+  `{% block site_nav %}` empty, so the marketing nav never clutters the
+  installed training app. The coach-facing `results` page (breadcrumb back to
+  the roster) keeps the nav.
+- **Accent points at the shared token** — `meso.css`'s `--accent` (and the
+  `--soft` / `--soft-line` / `--accent-deep` family) move from the Meso-only
+  `oklch(0.56 0.14 258)` to the site's steel-blue `#31759d` (mirroring base.css
+  `--accent` / `--accent-soft` / `--accent-line` / `--accent-deep`). The
+  standalone designer's inline token block is repointed to match, and the PWA
+  chrome (manifest `theme_color` + `_pwa_head.html` `theme-color`) moves to
+  `#31759d`. `PWA_CACHE_VERSION` bumped `v2 → v3` (the precached `meso.css`
+  changed).
+- Red→green tests in `meso/tests/test_design_reconnect.py`.
+
+The original task list for reference:
+
 - Add the shared site nav to `_meso_base.html`.
 - Point `meso.css` tokens at the shared core tokens (keep Meso's component
   density / workspace chrome). Validated by `docs/spikes/basecoat/meso.html`.

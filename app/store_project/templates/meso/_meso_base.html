@@ -22,6 +22,12 @@
     {% block head_extra %}{% endblock %}
   </head>
   <body class="meso">
+    {% comment %}
+      The shared site nav reconnects Meso to the rest of Mastering Fitness
+      (design-system unification PR 3). Rendered by default; the phone-first
+      athlete PWA pages override this block to keep their installed-app feel.
+    {% endcomment %}
+    {% block site_nav %}{% include "meso/_meso_sitenav.html" %}{% endblock %}
     <div class="meso-app">
       <nav class="meso-topnav">
         <a class="meso-brand" href="{% url 'meso:roster' %}">
