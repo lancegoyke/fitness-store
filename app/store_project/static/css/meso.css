@@ -16,20 +16,23 @@ body.meso {
 }
 
 body.meso {
-  background: #f5f6f7;
+  background: #f4f4f5;
   font-family: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
 }
 
-/* Default design tokens. The designer also sets these inline on its root (so it
-   stays self-contained); here they live on .meso so the standard pages inherit
-   them without repeating the block. */
+/* Design tokens, re-pointed at the shared core token VALUES (design-system
+   unification, PR 3) so Meso reads as part of Mastering Fitness: steel-blue
+   accent #31759d (was an oklch blue-purple), shared neutrals, and the shared
+   dark-nav colours that nav.css consumes. The designer also sets these inline
+   on its root (so it stays self-contained); here they live on .meso so the
+   standard pages inherit them without repeating the block. */
 .meso {
-  --bg: #f5f6f7;
+  --bg: #f4f4f5;
   --surface: #ffffff;
   --rail: #fbfbfc;
-  --ink: #16181c;
-  --dim: #71777e;
-  --line: #e7e9ec;
+  --ink: #0a0a0a;
+  --dim: #6b7280;
+  --line: #e4e4e7;
   --line-2: #f1f3f5;
   --radius: 8px;
   --pad: 14px;
@@ -45,6 +48,9 @@ body.meso {
   --warn: #b4541f;
   --warn-soft: #fbefe8;
   --ok: #2f8f56;
+  /* shared dark site nav (PR 3) — same values as base.css :root */
+  --nav-bg: #0a0a0a;
+  --nav-fg: #ededed;
 }
 
 /* Hide Alpine-managed elements until Alpine initializes (avoids a flash). */
@@ -280,54 +286,9 @@ body.meso {
   flex: 1;
 }
 
-/* --- shared site nav (design-system unification PR 3) ---
-   Reconnects the Meso workspace to the rest of Mastering Fitness: the same
-   top-level navigation as templates/_nav.html, styled here because the Meso
-   shell loads only meso.css. It rides above the Meso workspace sub-header
-   (.meso-topnav), and matches the main-site nav's black bar / light links. */
-.meso-sitenav {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 26px;
-  padding: 13px clamp(16px, 4vw, 40px);
-  background: #0a0a0a;
-  color: #ededed;
-}
-.meso-sitenav-brand {
-  font-weight: 700;
-  font-size: 17px;
-  letter-spacing: -0.01em;
-  color: #ededed;
-  text-decoration: none;
-}
-.meso-sitenav-links {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 20px;
-}
-.meso-sitenav-links a {
-  color: #ededed;
-  opacity: 0.82;
-  text-decoration: none;
-  font-size: 14px;
-  font-weight: 500;
-}
-.meso-sitenav-links a:hover,
-.meso-sitenav-links a:focus-visible {
-  opacity: 1;
-  text-decoration: underline;
-  text-underline-offset: 4px;
-}
-.meso-sitenav-links a.is-active {
-  opacity: 1;
-  text-decoration: underline;
-  text-underline-offset: 5px;
-}
-.meso-sitenav-spacer {
-  margin-left: auto;
-}
+/* The Meso shell's shared site nav lives in the cross-site nav.css (loaded by
+   _meso_base alongside meso.css) — design-system unification PR 3. The earlier
+   Meso-only `.meso-sitenav` partial was retired in favour of that one nav. */
 
 /* --- page scaffold --- */
 .meso-page {

@@ -79,6 +79,10 @@
   --accent-soft: #eaf2f7;
   --accent-line: #bcd6e4;
   --ring: var(--accent);
+  /* shared dark site nav (PR 3) — one bar across the main site and Meso;
+     meso.css mirrors these values on .meso so the included nav matches. */
+  --nav-bg: var(--foreground);
+  --nav-fg: var(--main-color-light-gray);
   /* alias referenced by some templates' inline styles */
   --color-gray: var(--main-color-gray);
 
@@ -426,19 +430,6 @@ a {
 a:hover,
 a:focus,
 a:active {
-  text-decoration: underline;
-}
-
-.navbar a {
-  color: var(--main-color-light-gray);
-  text-decoration: none;
-}
-
-.navbar a:hover,
-.navbar a:focus,
-.navbar a:active {
-  color: var(--main-color-light-gray);
-  background-color: unset;
   text-decoration: underline;
 }
 
@@ -1096,42 +1087,6 @@ a.secondaryAction {
 
 .cluster > * > * {
   margin: calc(var(--cluster-space) / 2);
-}
-
-/* logo and right-aligned menu */
-.nav-cluster {
-  --nav-space: var(--s1);
-  overflow: hidden;
-}
-
-.nav-cluster > * {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  margin: calc(var(--nav-space) / 2 * -1);
-}
-
-.nav-cluster > * > * {
-  margin: calc(var(--nav-space) / 2);
-}
-
-/* the <a> tags in nav bar */
-.menu-cluster {
-  --menu-space: var(--s-1);
-  overflow: hidden;
-}
-
-.menu-cluster > * {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  align-items: center;
-  margin: calc(var(--menu-space) / 2 * -1);
-}
-
-.menu-cluster > * > * {
-  margin: calc(var(--menu-space) / 2);
 }
 
 /*
@@ -1910,23 +1865,8 @@ ul.grid {
 /*
     CUSTOMIZING ELEMENTS
 */
-.navbar {
-  background-color: var(--main-color-dark);
-  color: var(--main-color-light-gray);
-  padding: clamp(1rem, 4vw, var(--s2));
-  /* The navbar is a full-bleed top bar, so it overrides the rounded corners it
-     would otherwise inherit from `.box` (see issue #327). */
-  border-radius: 0;
-}
-
-.nav-menu ul {
-  list-style-type: none;
-}
-
-.logo {
-  font-weight: 700;
-}
-
+/* The site nav now lives in the shared nav.css (PR 3); the old Every-Layout
+   `.box.invert.navbar` rules were removed with the markup. */
 .content {
   background-color: var(--main-color-light);
   padding: clamp(1rem, 4vw, 2.5rem);
@@ -1981,8 +1921,6 @@ ul.grid {
   text-decoration: underline;
 }
 
-.navbar a:focus,
-.navbar a:active,
 .footer a:focus,
 .footer a:active {
   color: var(--main-color-dark);

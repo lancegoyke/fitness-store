@@ -42,7 +42,10 @@ pytestmark = pytest.mark.django_db
 
 SHARED_ACCENT = "#31759d"  # the site's steel-blue (base.css --accent)
 OLD_ACCENT = "oklch(0.56 0.14 258)"  # the Meso-only accent being retired
-SITENAV_MARK = "meso-sitenav"  # class only the shared site nav carries
+# The Meso shell now reuses the one shared site nav (templates/_nav.html, styled
+# by nav.css) rather than a Meso-only partial — design-system unification PR 3
+# follow-up. Its header is the marker that only the shared site nav carries.
+SITENAV_MARK = '<header class="nav"'
 
 
 def make_coach():
@@ -89,9 +92,11 @@ class TestSharedSiteNav:
     def test_coaching_link_is_marked_active(self, client):
         client.force_login(make_coach())
         body = client.get(reverse("meso:roster")).content.decode()
-        # Coaching is the current site section.
-        assert "Coaching" in body
-        assert "is-active" in body
+        # Coaching is the current site section — the shared nav marks it active.
+        expected = '<a class="link active" href="%s">Coaching</a>' % reverse(
+            "meso:roster"
+        )
+        assert expected in body
 
     def test_authenticated_coach_sees_account_and_logout(self, client):
         client.force_login(make_coach())
