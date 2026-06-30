@@ -965,3 +965,21 @@ _(Append dated entries here as decisions land.)_
   (recorded per the owner — not building yet). **Secret-handling note:** Stripe
   Price ids are not secrets (fine to share); the webhook signing secret + the
   Stripe secret key go straight into the prod env, never through chat / the agent.
+- 2026-06-30 — **Agent usage & cost tracking planned** (owner: "we'll need to
+  track real usage … based on the client and the coach"). **Launch stays at
+  $1/seat;** this is the instrumentation that validates that margin. Anthropic's
+  invoice has no coach/athlete attribution, so we capture the `response.usage`
+  block ourselves at the call site. Key insight: **`AgentProposalBatch` is
+  already the per-run ledger** (carries `coach`, `plan`→athlete-or-group,
+  `model`, `status`) — the gap is just **token usage + cost**, so the plan
+  **extends the batch** (not a new model for v1) with input/output/cache tokens,
+  `request_id`, `stop_reason`, `duration_ms`, computed `estimated_cost_usd` (from
+  a per-model rate table in `meso/billing/agent_costs.py`; estimate, invoice is
+  truth), plus slicing dims `trigger` (manual/draft/eval/group — excludes evals)
+  and a **`billing_status` snapshot at run time** (COGS-vs-CAC split). "Client" =
+  the **athlete/seat** (group runs → group, athlete null); the **model** is also
+  a first-class dimension (the cost driver). Captured on **failed** runs too
+  (mid-stream output still bills). Full plan + phasing (capture → report →
+  deferred dashboard) in [`agent-usage-plan.md`](./agent-usage-plan.md); it's the
+  decision input for the two billing pressure valves (drop `MESO_AGENT_MODEL`
+  tier / meter paid runs). Autonomous, no Stripe — can ship before go-live.
