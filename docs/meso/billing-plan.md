@@ -46,6 +46,12 @@ pricing assumptions into the schema.
   keys off `is_active` (∞ seats when active, else the free cap).
 - **D12 — A `comped` status** (unlimited, no Stripe) so the owner and the seeded
   demo coaches are never paywalled.
+- **D13 — Pricing structure: base + per-seat (TrainHeroic-style).** Decided
+  2026-06-30: **$9.99/mo flat base + $1/mo per active seat**, USD — mirroring
+  TrainHeroic's direct-pay Coach Plan ($9.99 + $1/athlete). Implemented as a
+  **two-line-item** subscription (a flat base Price, quantity 1, alongside the
+  per-seat Price, quantity = active seats). This **supersedes** the single-Price
+  shape sketched for Phase 2; the conversion is **Phase 6** below.
 
 ## Shape
 
@@ -85,7 +91,9 @@ card), which keeps free/trial coaches entirely off Stripe.
 ### Subscribing + managing (Stripe)
 
 - One Stripe **Product** ("Meso Coaching") with one recurring **Price**
-  (per-seat, monthly, USD; `usage_type=licensed`, quantity = seats).
+  (per-seat, monthly, USD; `usage_type=licensed`, quantity = seats). *(Phase 6
+  splits this into two line items — a flat base Price + the per-seat Price — per
+  D13.)*
 - **Subscribe:** `stripe.checkout.Session.create(mode="subscription",
   line_items=[{price: SEAT_PRICE_ID, quantity: active_count}], customer=…)` →
   on success the webhook materializes the `CoachSubscription` (status `active`,
@@ -162,8 +170,9 @@ v1 froze the whole coach via the coarse `can_edit(coach)`.
 > per-athlete (`can_edit_plan` / `suspended_athlete_ids`): an over-limit coach
 > keeps editing/delivering their oldest `FREE_SEAT_LIMIT` athletes and is frozen
 > only on the rest (group plans keep the coarse coach-wide freeze), with a
-> per-athlete "Suspended" badge on the roster. Remaining Phase-5 item: annual
-> prices.
+> per-athlete "Suspended" badge on the roster. **Next: Phase 6** — base +
+> per-seat pricing (decided $9.99 base + $1/seat, 2026-06-30), with annual prices
+> as a ride-along sub-step.
 
 ### Deploying Phase 2 (Stripe configuration)
 
@@ -224,14 +233,37 @@ deploy succeeds without them (like the VAPID push keys):
    `_editable_plan_or_response` + `batch_apply` so an over-limit coach keeps
    editing/delivering their kept athletes; `presenters` surface a per-athlete
    "Suspended" roster badge + a `suspended_count` on the billing card. Tested in
-   `test_billing_suspension.py`. **Still later:** annual prices.
+   `test_billing_suspension.py`.
+6. **Phase 6 — base + per-seat pricing (TrainHeroic-style) (NEXT).** Convert the
+   single per-seat subscription into a **two-line-item** one (D13): a flat **base**
+   Price (`MESO_BASE_PRICE_ID`, quantity 1, $9.99/mo) alongside the existing
+   **per-seat** Price (`MESO_SEAT_PRICE_ID`, quantity = active seats, $1/mo).
+   - **`stripe_gateway.subscribe`** — Checkout with **both** line items
+     (`[{price: BASE, quantity: 1}, {price: SEAT, quantity: active_count}]`).
+   - **Model** — add a nullable **`stripe_base_item_id`** (a small migration) so
+     seat-sync can target only the *seat* line item; `stripe_item_id` stays the
+     seat item. The webhook upsert records **both** item ids.
+   - **`sync_seat_quantity` + `reconcile_seats`** — adjust **only** the seat
+     item's quantity; the base line is fixed at 1 and never resized.
+   - **Paywall UI** — copy reads "$9.99/mo + $1/athlete" (roster billing card +
+     designer CTA + `become_coach` tiers).
+   - Free/trial/comped gates are **unchanged**; ships **dormant** until the owner
+     creates **both** Prices and registers the webhook (see "Deploying Phase 2").
+   - **Annual prices** ride along once the annual numbers are decided: a second
+     `*_ANNUAL` Price per line (`MESO_BASE_PRICE_ID_ANNUAL` /
+     `MESO_SEAT_PRICE_ID_ANNUAL`) + a monthly/annual toggle at Checkout.
+   - Build red→green (mock the `stripe` SDK as the existing billing tests do — the
+     conversion needs **no live Stripe access**).
 
 ## Open values (numbers, not architecture — confirm before/with Phase 1)
 
 - **Free seat limit** — rec **1** active athlete.
 - **Trial length** — rec **14 days** (matches the invite TTL cadence).
-- **Per-seat price** — **needs a number** (e.g. $X / active athlete / month, USD).
-- **Monthly only** for v1 (annual deferred).
+- **Base fee** — **$9.99 / month**, USD (a flat per-coach charge; new
+  `MESO_BASE_PRICE_ID`). Decided 2026-06-30 (D13).
+- **Per-seat price** — **$1 / active athlete / month**, USD (`MESO_SEAT_PRICE_ID`).
+  Decided 2026-06-30 (D13) — mirrors TrainHeroic's direct-pay Coach Plan.
+- **Monthly first**; annual prices are a Phase-6 ride-along once numbers are set.
 - **Free agent allowance** — set to **5** runs / calendar month (Phase 5; tunable
   via `CoachSubscription.FREE_AGENT_ALLOWANCE`).
 
