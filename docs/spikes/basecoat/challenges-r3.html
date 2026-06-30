@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Challenges — round 3 (affordances: hover / focus / active)</title>
+    <style>
+  /* ----------------------------------------------------------------------
+     ROUND 3 — LOCKED look (Faithful · black buttons · steel-blue #31759d ·
+     soft tags). Focus of this round: INTERACTION AFFORDANCES — how links,
+     buttons, tags, inputs and clickable cards signal that they're
+     interactive (hover / focus / active / disabled).
+     The .s-hover / .s-focus / .s-active helper classes just FORCE those
+     visual states so they show up in a static screenshot; in the real app
+     they'd come from :hover / :focus-visible / :active.
+     --------------------------------------------------------------------- */
+      :root {
+        --background:#ffffff; --foreground:#0a0a0a;
+        --card:#ffffff; --muted:#f4f4f5; --muted-foreground:#6b7280;
+        --border:#e4e4e7; --input:#d4d4d8;
+        --primary:#0a0a0a; --primary-foreground:#ffffff;       /* black buttons */
+        --primary-hover:#262626; --primary-active:#000000;
+        --accent:#31759d; --accent-deep:#1f516b; --accent-soft:#eaf2f7; --accent-line:#bcd6e4;
+        --radius:8px;
+        --font:"system-ui",-apple-system,"Segoe UI",sans-serif;
+        --nav-bg:#0a0a0a; --nav-fg:#ededed;
+      }
+      * { box-sizing:border-box; }
+      html,body { margin:0; }
+      body { background:var(--muted); color:var(--foreground); font-family:var(--font); font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+
+  /* ---------- shared component styles + their interaction states ---------- */
+
+      .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; height:38px; padding:0 16px;
+        border-radius:calc(var(--radius) - 2px); font-size:14px; font-weight:500; font-family:inherit; cursor:pointer;
+        border:1px solid transparent; text-decoration:none; white-space:nowrap;
+        transition:background .12s ease, box-shadow .12s ease, transform .04s ease, border-color .12s; }
+      .btn-primary { background:var(--primary); color:var(--primary-foreground); }
+      .btn-primary:hover, .btn-primary.s-hover { background:var(--primary-hover); box-shadow:0 2px 10px rgb(0 0 0 / .20); }
+      .btn-primary:active, .btn-primary.s-active { background:var(--primary-active); transform:translateY(1px); box-shadow:none; }
+      .btn-outline { background:var(--background); color:var(--foreground); border-color:var(--input); }
+      .btn-outline:hover, .btn-outline.s-hover { background:var(--muted); border-color:#9aa0a6; }
+      .btn-outline:active, .btn-outline.s-active { background:#ececee; transform:translateY(1px); }
+      .btn:focus-visible, .btn.s-focus { outline:2px solid var(--accent); outline-offset:2px; }
+      .btn[disabled], .btn.s-disabled { opacity:.45; cursor:not-allowed; box-shadow:none; transform:none; }
+
+      a.tlink { color:var(--accent-deep); text-decoration:none; text-underline-offset:3px; border-radius:3px; transition:color .12s; }
+      a.tlink:hover, a.tlink.s-hover { color:var(--accent); text-decoration:underline; }
+      a.tlink:focus-visible, a.tlink.s-focus { outline:2px solid var(--accent); outline-offset:2px; text-decoration:underline; }
+
+      .badge { display:inline-flex; align-items:center; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600;
+        background:var(--accent-soft); color:var(--accent-deep); border:1px solid var(--accent-line); text-decoration:none;
+        transition:background .12s, border-color .12s; }
+      a.badge { cursor:pointer; }
+      a.badge:hover, a.badge.s-hover { background:#dcebf3; border-color:var(--accent); }
+      a.badge:focus-visible, a.badge.s-focus { outline:2px solid var(--accent); outline-offset:2px; }
+
+      .input, .select { width:100%; height:38px; background:var(--background); color:var(--foreground); border:1px solid var(--input);
+        border-radius:calc(var(--radius) - 2px); padding:0 12px; font-size:14px; font-family:inherit; appearance:none; outline:none;
+        transition:border-color .12s, box-shadow .12s; }
+      .select { background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>"); background-repeat:no-repeat; background-position:right 10px center; padding-right:34px; }
+      .input::placeholder { color:var(--muted-foreground); }
+      .input:focus, .input.s-focus, .select:focus { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent); }
+
+  /* ---------- states cheat-sheet ---------- */
+      .sheet { max-width:1120px; margin:0 auto; padding:24px clamp(16px,4vw,40px) 4px; }
+      .sheet h1 { font-size:22px; font-weight:700; letter-spacing:-.02em; margin:0 0 2px; }
+      .sheet .sub { color:var(--muted-foreground); font-size:14px; margin:0 0 18px; }
+      .panel { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:0 1px 2px 0 rgb(0 0 0 / .05); padding:20px 22px; }
+      .staterow { display:grid; grid-template-columns:120px 1fr; gap:16px; align-items:center; padding:14px 0; border-top:1px solid var(--border); }
+      .staterow:first-of-type { border-top:0; }
+      .staterow > .lbl { font-size:13px; font-weight:600; color:var(--muted-foreground); }
+      .cells { display:flex; flex-wrap:wrap; gap:26px; align-items:center; }
+      .cell { display:flex; flex-direction:column; align-items:center; gap:7px; }
+      .cell .cap { font-size:11px; color:var(--muted-foreground); letter-spacing:.02em; }
+
+  /* ---------- the page ---------- */
+      .nav { background:var(--nav-bg); color:var(--nav-fg); display:flex; align-items:center; gap:28px; padding:14px clamp(16px,4vw,40px); }
+      .nav .brand { font-weight:700; font-size:17px; color:var(--nav-fg); text-decoration:none; }
+      .nav nav { display:flex; gap:22px; align-items:center; }
+      .nav a.link { color:var(--nav-fg); opacity:.82; text-decoration:none; font-size:14px; font-weight:500; padding:4px 0; border-radius:4px; }
+      .nav a.link:hover { opacity:1; text-decoration:underline; text-underline-offset:5px; }
+      .nav a.link.active { opacity:1; text-decoration:underline; text-decoration-color:#8fc6e6; text-decoration-thickness:2px; text-underline-offset:6px; }
+      .nav .spacer { margin-left:auto; }
+
+      .wrap { max-width:1120px; margin:0 auto; padding:24px clamp(16px,4vw,40px) 48px; }
+      .page-title { font-size:30px; font-weight:700; letter-spacing:-.02em; margin:0 0 22px; }
+      .grid { display:grid; grid-template-columns:300px minmax(0,1fr); gap:24px; align-items:start; }
+      .card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:0 1px 2px 0 rgb(0 0 0 / .05); }
+      .card-pad { padding:20px; }
+      .card h2 { font-size:16px; font-weight:600; margin:0; }
+      .card h2 .accent { color:var(--accent); }
+      .card .desc { font-size:13px; color:var(--muted-foreground); margin:4px 0 0; }
+      .sep { height:1px; background:var(--border); margin:16px 0; border:0; }
+      .label { display:block; font-size:13px; font-weight:500; margin:0 0 6px; }
+      .field + .field { margin-top:14px; }
+      .btn-row { display:flex; gap:10px; }
+      .tagrow { display:flex; flex-wrap:wrap; gap:8px; }
+
+      .stack { display:flex; flex-direction:column; gap:16px; }
+  /* clickable challenge card — whole card is a link target */
+      a.ch { display:flex; flex-direction:column; gap:10px; padding:18px 20px; text-decoration:none; color:inherit;
+        transition:border-color .14s, box-shadow .14s, transform .06s; }
+      a.ch:hover, a.ch.s-hover { border-color:var(--accent-line); box-shadow:0 6px 18px rgb(17 49 67 / .12); transform:translateY(-2px); }
+      a.ch:hover .ch-title, a.ch.s-hover .ch-title { color:var(--accent-deep); }
+      a.ch:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+      .ch-top { display:flex; align-items:center; gap:10px; }
+      .ch-title { font-size:17px; font-weight:600; margin:0; transition:color .12s; }
+      .ch-hint { margin-left:auto; font-size:12.5px; color:var(--accent-deep); font-weight:500; opacity:0; transition:opacity .14s; }
+      a.ch:hover .ch-hint, a.ch.s-hover .ch-hint { opacity:1; }
+      .dot { width:10px; height:10px; border-radius:999px; flex:none; box-shadow:0 0 0 3px color-mix(in srgb,currentColor 18%,transparent); }
+      .dot.beg { color:#16a34a; background:#16a34a; } .dot.int { color:#d97706; background:#d97706; } .dot.adv { color:#dc2626; background:#dc2626; }
+      .ch-sum { font-size:14px; color:var(--muted-foreground); margin:0; }
+      .ch-foot { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-top:2px; }
+      .ch-meta { font-size:12.5px; color:var(--muted-foreground); }
+    </style>
+  </head>
+  <body>
+  <!-- ============ INTERACTION STATES CHEAT-SHEET ============ -->
+    <section class="sheet">
+      <h1>Interaction affordances</h1>
+      <p class="sub">Locked look: Faithful · black buttons · steel-blue #31759d · soft tags. Below: how each element signals it's interactive. (States forced here for the screenshot.)</p>
+      <div class="panel">
+        <div class="staterow">
+          <div class="lbl">Primary button</div>
+          <div class="cells">
+            <div class="cell"><button class="btn btn-primary">Submit</button><span class="cap">Default</span></div>
+            <div class="cell"><button class="btn btn-primary s-hover">Submit</button><span class="cap">Hover — lifts + lightens</span></div>
+            <div class="cell"><button class="btn btn-primary s-focus">Submit</button><span class="cap">Focus — blue ring</span></div>
+            <div class="cell"><button class="btn btn-primary s-active">Submit</button><span class="cap">Active — presses</span></div>
+            <div class="cell"><button class="btn btn-primary s-disabled">Submit</button><span class="cap">Disabled</span></div>
+          </div>
+        </div>
+        <div class="staterow">
+          <div class="lbl">Secondary button</div>
+          <div class="cells">
+            <div class="cell"><a class="btn btn-outline">Clear</a><span class="cap">Default</span></div>
+            <div class="cell"><a class="btn btn-outline s-hover">Clear</a><span class="cap">Hover — fills</span></div>
+            <div class="cell"><a class="btn btn-outline s-focus">Clear</a><span class="cap">Focus — blue ring</span></div>
+            <div class="cell"><a class="btn btn-outline s-active">Clear</a><span class="cap">Active</span></div>
+          </div>
+        </div>
+        <div class="staterow">
+          <div class="lbl">Text link</div>
+          <div class="cells">
+            <div class="cell"><a class="tlink">View challenge</a><span class="cap">Default — blue</span></div>
+            <div class="cell"><a class="tlink s-hover">View challenge</a><span class="cap">Hover — underline</span></div>
+            <div class="cell"><a class="tlink s-focus">View challenge</a><span class="cap">Focus — blue ring</span></div>
+          </div>
+        </div>
+        <div class="staterow">
+          <div class="lbl">Tag</div>
+          <div class="cells">
+            <div class="cell"><a class="badge">Conditioning</a><span class="cap">Default</span></div>
+            <div class="cell"><a class="badge s-hover">Conditioning</a><span class="cap">Hover — deepens</span></div>
+            <div class="cell"><a class="badge s-focus">Conditioning</a><span class="cap">Focus — blue ring</span></div>
+          </div>
+        </div>
+        <div class="staterow">
+          <div class="lbl">Text field</div>
+          <div class="cells">
+            <div class="cell"><input class="input" style="width:200px" placeholder="Search challenges…" /><span class="cap">Default</span></div>
+            <div class="cell"><input class="input s-focus" style="width:200px" placeholder="Search challenges…" /><span class="cap">Focus — blue ring</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  <!-- ============ THE PAGE (2nd card forced to hover) ============ -->
+    <header class="nav" style="margin-top:28px;">
+      <a class="brand" href="#">Mastering Fitness</a>
+      <nav>
+        <a class="link" href="#">About</a><a class="link" href="#">Store</a>
+        <a class="link active" href="#">Challenges</a><a class="link" href="#">Coaching</a><a class="link" href="#">Contact</a>
+      </nav>
+      <span class="spacer"></span>
+      <nav><a class="link" href="#">Login</a><a class="link" href="#">Signup</a></nav>
+    </header>
+
+    <main class="wrap">
+      <h1 class="page-title">Pick a Challenge</h1>
+      <div class="grid">
+        <aside class="card card-pad">
+          <h2>Search <span class="accent">&amp;</span> sort</h2>
+          <p class="desc">Find a challenge to test yourself.</p>
+          <hr class="sep" />
+          <div class="field"><label class="label" for="q">Name contains</label><input class="input" id="q" placeholder="Search challenges…" /></div>
+          <div class="field"><label class="label" for="s">Sort by</label><select class="select" id="s"><option>By Popularity</option><option>Alphabetical</option><option>Newest First</option><option>Oldest First</option></select></div>
+          <div class="field btn-row"><button class="btn btn-primary">Submit</button><a class="btn btn-outline">Clear</a></div>
+          <hr class="sep" />
+          <h2>Tags</h2>
+          <div class="tagrow" style="margin-top:12px;">
+            <a class="badge">Bodyweight</a><a class="badge">Conditioning</a><a class="badge">Strength</a>
+            <a class="badge">Core</a><a class="badge">Endurance</a><a class="badge">Mobility</a>
+          </div>
+        </aside>
+
+        <section class="stack">
+          <a class="card ch" href="#">
+            <div class="ch-top"><h3 class="ch-title">Murph</h3><span class="dot adv" title="Advanced"></span></div>
+            <p class="ch-sum">A hero WOD: 1-mile run, 100 pull-ups, 200 push-ups, 300 air squats, then another mile — for time.</p>
+            <div class="ch-foot"><div class="tagrow"><span class="badge">Conditioning</span><span class="badge">Bodyweight</span></div><span class="ch-meta">128 records · Est. 45m</span></div>
+          </a>
+        <!-- forced hover to show the clickable-card affordance -->
+          <a class="card ch s-hover" href="#">
+            <div class="ch-top"><h3 class="ch-title">Bodyweight Cindy</h3><span class="dot int" title="Intermediate"></span><span class="ch-hint">View challenge →</span></div>
+            <p class="ch-sum">As many rounds as possible in 20 minutes: 5 pull-ups, 10 push-ups, 15 air squats.</p>
+            <div class="ch-foot"><div class="tagrow"><span class="badge">Conditioning</span><span class="badge">Bodyweight</span></div><span class="ch-meta">64 records · Est. 20m</span></div>
+          </a>
+          <a class="card ch" href="#">
+            <div class="ch-top"><h3 class="ch-title">30-Day Plank Builder</h3><span class="dot beg" title="Beginner"></span></div>
+            <p class="ch-sum">Build a rock-solid core by adding a few seconds to your plank hold every day for a month.</p>
+            <div class="ch-foot"><div class="tagrow"><span class="badge">Core</span><span class="badge">Mobility</span></div><span class="ch-meta">212 records · Est. 5m</span></div>
+          </a>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

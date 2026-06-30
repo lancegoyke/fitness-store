@@ -828,3 +828,82 @@ class ChallengeURLLoadingTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "No challenges found")
+
+
+class DesignSystemPR1Tests(TestCase):
+    """Design-system unification PR 1: crispy removal + component classes.
+
+    The challenges forms used to be rendered with ``{{ form|crispy }}``
+    (crispy_bulma) against a Bulma stylesheet that is never loaded. PR 1 drops
+    crispy and renders fields with our own component classes (``input`` /
+    ``select``) applied at the widget level, and makes the challenge list cards
+    clickable with a "View challenge" affordance.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.adminuser = User.objects.create_superuser(
+            username="dspr1admin",
+            email="dspr1admin@example.com",
+            password="testpass123",
+        )
+        cls.challenge = Challenge.objects.create(
+            name="Clickable Challenge",
+            description="A clickable challenge",
+            summary="A clickable challenge summary",
+            slug="clickable-challenge",
+            difficulty_level="beginner",
+        )
+
+    def test_crispy_removed_from_installed_apps(self):
+        from django.conf import settings
+
+        self.assertNotIn("crispy_forms", settings.INSTALLED_APPS)
+        self.assertNotIn("crispy_bulma", settings.INSTALLED_APPS)
+
+    def test_challenge_create_form_uses_component_classes(self):
+        from store_project.challenges.forms import ChallengeCreateForm
+
+        form = ChallengeCreateForm()
+        self.assertIn('class="input"', str(form["name"]))
+        self.assertIn('class="input"', str(form["description"]))
+        self.assertIn('class="select"', str(form["difficulty_level"]))
+
+    def test_record_create_form_uses_component_classes(self):
+        from store_project.challenges.forms import RecordCreateForm
+
+        form = RecordCreateForm()
+        self.assertIn('class="input"', str(form["time_score"]))
+        self.assertIn('class="input"', str(form["notes"]))
+
+    def test_challenge_filter_form_uses_component_classes(self):
+        f = ChallengeFilter()
+        form = f.form
+        self.assertIn('class="select"', str(form["ordering"]))
+        self.assertIn('class="input"', str(form["name__icontains"]))
+
+    def test_challenge_list_renders_without_crispy(self):
+        """List page renders with component classes and a clickable affordance.
+
+        It must expose our ``input`` / ``select`` filter controls (not crispy or
+        Bulma markup) and the clickable-card "View challenge" hint.
+        """
+        response = self.client.get(reverse("challenges:challenge_filtered_list"))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "challenges/challenge_filtered_list.html")
+        self.assertContains(response, "Clickable Challenge")
+        # Filter controls rendered with our component classes (not crispy/Bulma).
+        self.assertContains(response, 'class="select"')
+        self.assertContains(response, 'class="input"')
+        # Whole-card clickable affordance.
+        self.assertContains(response, "View challenge")
+
+    def test_challenge_create_page_renders_without_crispy(self):
+        self.client.login(email="dspr1admin@example.com", password="testpass123")
+        response = self.client.get(reverse("challenges:challenge_create"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="input"')
+        self.assertContains(response, 'class="select"')
+        # crispy_bulma wraps every field in <div id="div_id_<name>">; those
+        # wrappers must be gone once we render the fields ourselves.
+        self.assertNotContains(response, "div_id_")

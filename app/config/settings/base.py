@@ -94,8 +94,6 @@ INSTALLED_APPS = [
     "allauth.socialaccount.providers.facebook",
     "allauth.socialaccount.providers.google",
     "corsheaders",
-    "crispy_bulma",
-    "crispy_forms",
     "django_q",
     "embed_video",
     "markdownx",
@@ -327,10 +325,6 @@ MESO_STRIPE_WEBHOOK_SECRET = os.environ.get("MESO_STRIPE_WEBHOOK_SECRET", "")
 # owner. Default 0.5 (50%); the ``meso_agent_margin_alert`` command's ``--threshold``
 # overrides it. See ``docs/meso/agent-usage-plan.md``.
 MESO_MARGIN_ALERT_THRESHOLD = os.environ.get("MESO_MARGIN_ALERT_THRESHOLD") or "0.5"
-
-# Crispy Forms
-CRISPY_ALLOWED_TEMPLATE_PACKS = ("bulma",)
-CRISPY_TEMPLATE_PACK = "bulma"
 
 # Cache
 

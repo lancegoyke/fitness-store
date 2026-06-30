@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en" data-theme="refresh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meso roster — shared-token spike</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+  /* ----------------------------------------------------------------------
+     SPIKE — the Meso roster rebuilt on the SAME shared core tokens as the
+     main-site /challenges spike. Same [data-theme] system → Meso reads as
+     part of Mastering Fitness instead of a separate design world.
+     --------------------------------------------------------------------- */
+      [data-theme="faithful"] {
+        --background:#ffffff; --foreground:#0a0a0a; --card:#ffffff; --card-foreground:#0a0a0a;
+        --muted:#f4f4f5; --muted-foreground:#6b7280; --border:#e4e4e7; --input:#d4d4d8; --ring:#31759d;
+        --primary:#0a0a0a; --primary-foreground:#ffffff; --secondary:#f4f4f5; --secondary-foreground:#18181b;
+        --link:#31759d; --accent:#31759d; --accent-soft:#eaf2f7; --accent-soft-fg:#1f516b;
+        --ok:#16794a; --ok-soft:#e8f5ee; --warn:#b4541f; --warn-soft:#fbeee6;
+        --radius:8px; --font:"system-ui",-apple-system,"Segoe UI",sans-serif; --nav-bg:#0a0a0a; --nav-fg:#ededed;
+      }
+      [data-theme="refresh"] {
+        --background:#ffffff; --foreground:#09090b; --card:#ffffff; --card-foreground:#09090b;
+        --muted:#f4f4f5; --muted-foreground:#71717a; --border:#e4e4e7; --input:#e4e4e7; --ring:#18181b;
+        --primary:#18181b; --primary-foreground:#fafafa; --secondary:#f4f4f5; --secondary-foreground:#18181b;
+        --link:#18181b; --accent:#4f46e5; --accent-soft:#eef0fb; --accent-soft-fg:#4338ca;
+        --ok:#16794a; --ok-soft:#e8f5ee; --warn:#b4541f; --warn-soft:#fbeee6;
+        --radius:10px; --font:"Inter",ui-sans-serif,system-ui,sans-serif; --nav-bg:#09090b; --nav-fg:#e4e4e7;
+      }
+      [data-theme="accent"] {
+        --background:#ffffff; --foreground:#0a0a0a; --card:#ffffff; --card-foreground:#0a0a0a;
+        --muted:#f4f5f4; --muted-foreground:#64748b; --border:#e6e8e6; --input:#dadedb; --ring:#0d9488;
+        --primary:#0d9488; --primary-foreground:#ffffff; --secondary:#f0f5f4; --secondary-foreground:#0f766e;
+        --link:#0f766e; --accent:#0d9488; --accent-soft:#e6f4f2; --accent-soft-fg:#0f5f57;
+        --ok:#16794a; --ok-soft:#e6f4ec; --warn:#b4541f; --warn-soft:#fbeee6;
+        --radius:10px; --font:"Inter",ui-sans-serif,system-ui,sans-serif; --nav-bg:#0b3b36; --nav-fg:#d7efea;
+      }
+      [data-theme="dark"] {
+        --background:#09090b; --foreground:#fafafa; --card:#18181b; --card-foreground:#fafafa;
+        --muted:#27272a; --muted-foreground:#a1a1aa; --border:#27272a; --input:#3f3f46; --ring:#2dd4bf;
+        --primary:#14b8a6; --primary-foreground:#042925; --secondary:#27272a; --secondary-foreground:#e4e4e7;
+        --link:#2dd4bf; --accent:#2dd4bf; --accent-soft:#0c2e2a; --accent-soft-fg:#5eead4;
+        --ok:#34d399; --ok-soft:#0c2a20; --warn:#f59e0b; --warn-soft:#2a1f0c;
+        --radius:10px; --font:"Inter",ui-sans-serif,system-ui,sans-serif; --nav-bg:#000000; --nav-fg:#e4e4e7;
+      }
+
+      * { box-sizing:border-box; }
+      html,body { margin:0; }
+      body { background:var(--background); color:var(--foreground); font-family:var(--font); font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+
+  /* shared site nav */
+      .nav { background:var(--nav-bg); color:var(--nav-fg); display:flex; align-items:center; gap:28px; padding:14px clamp(16px,4vw,40px); }
+      .nav .brand { font-weight:700; font-size:17px; letter-spacing:-.01em; color:var(--nav-fg); text-decoration:none; }
+      .nav nav { display:flex; gap:22px; align-items:center; }
+      .nav a.link { color:var(--nav-fg); opacity:.82; text-decoration:none; font-size:14px; font-weight:500; }
+      .nav a.link:hover { opacity:1; }
+      .nav a.link.active { opacity:1; text-decoration:underline; text-underline-offset:5px; }
+      .nav .spacer { margin-left:auto; }
+
+  /* meso sub-header (its own workspace chrome, but on shared tokens) */
+      .sub { display:flex; align-items:center; gap:20px; padding:12px clamp(16px,4vw,40px); border-bottom:1px solid var(--border); background:var(--card); }
+      .sub .mark { display:inline-flex; align-items:center; gap:8px; font-weight:700; font-size:15px; letter-spacing:-.01em; }
+      .sub .mark i { width:15px; height:15px; border-radius:5px; background:var(--accent); display:inline-block; }
+      .sub a.tab { font-size:14px; font-weight:500; color:var(--muted-foreground); text-decoration:none; padding:4px 2px; }
+      .sub a.tab.active { color:var(--foreground); border-bottom:2px solid var(--accent); }
+      .sub .spacer { margin-left:auto; }
+      .avatar-sm { width:30px; height:30px; border-radius:999px; background:var(--accent); color:var(--primary-foreground); display:inline-flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; }
+
+      .wrap { max-width:1000px; margin:0 auto; padding:clamp(20px,4vw,36px); }
+      .eyebrow { font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--accent-soft-fg); margin:0 0 4px; }
+      .h1 { font-size:26px; font-weight:700; letter-spacing:-.02em; margin:0; }
+      .sub-line { font-size:14px; color:var(--muted-foreground); margin:4px 0 0; }
+
+      .card { background:var(--card); color:var(--card-foreground); border:1px solid var(--border); border-radius:var(--radius); box-shadow:0 1px 2px 0 rgb(0 0 0 / .05); overflow:hidden; }
+      .card-head { display:flex; align-items:center; gap:10px; padding:13px 18px; border-bottom:1px solid var(--border); }
+      .card-head .eyebrow { margin:0; }
+      .card-head .count { margin-left:auto; font-size:13px; color:var(--muted-foreground); }
+
+      .row { display:flex; align-items:center; gap:14px; padding:14px 18px; text-decoration:none; color:inherit; border-bottom:1px solid var(--border); }
+      .row:last-child { border-bottom:0; }
+      .row:hover { background:var(--muted); }
+      .avatar { width:38px; height:38px; border-radius:999px; flex:none; display:inline-flex; align-items:center; justify-content:center; font-size:14px; font-weight:600; background:var(--secondary); color:var(--secondary-foreground); }
+      .avatar.accent { background:var(--accent); color:var(--primary-foreground); }
+      .row .name { font-size:15px; font-weight:600; letter-spacing:-.01em; }
+      .row .meta { font-size:13px; color:var(--muted-foreground); }
+      .row .spacer { margin-left:auto; }
+
+      .badge { display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:999px; font-size:12px; font-weight:500; border:1px solid transparent; }
+      .badge::before { content:""; width:6px; height:6px; border-radius:999px; background:currentColor; }
+      .badge.ok { background:var(--ok-soft); color:var(--ok); }
+      .badge.warn { background:var(--warn-soft); color:var(--warn); }
+      .badge.accent { background:var(--accent-soft); color:var(--accent-soft-fg); }
+      .badge.muted { background:var(--muted); color:var(--muted-foreground); }
+      .badge.muted::before { display:none; }
+
+      .meter { width:84px; height:7px; border-radius:999px; background:var(--muted); overflow:hidden; }
+      .meter > span { display:block; height:100%; background:var(--accent); border-radius:999px; }
+      .meter-wrap { display:flex; align-items:center; gap:8px; width:128px; }
+      .pct { font-size:12px; color:var(--muted-foreground); font-variant-numeric:tabular-nums; }
+      .chev { color:var(--muted-foreground); font-size:18px; }
+
+      .btn { display:inline-flex; align-items:center; justify-content:center; height:36px; padding:0 14px; border-radius:calc(var(--radius) - 2px); font-size:14px; font-weight:500; cursor:pointer; border:1px solid var(--input); background:var(--background); color:var(--foreground); text-decoration:none; }
+      .btn-primary { background:var(--primary); color:var(--primary-foreground); border-color:var(--primary); }
+
+      .switch { position:sticky; top:0; z-index:10; display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px clamp(16px,4vw,40px); background:color-mix(in srgb,var(--background) 88%,transparent); backdrop-filter:blur(6px); border-bottom:1px solid var(--border); font-size:13px; }
+      .switch b { font-weight:600; }
+      .switch .seg { display:flex; gap:6px; }
+      .switch button { font:inherit; font-size:12.5px; font-weight:500; cursor:pointer; padding:5px 11px; border-radius:7px; border:1px solid var(--border); background:var(--card); color:var(--foreground); }
+      .switch button[aria-pressed="true"] { background:var(--primary); color:var(--primary-foreground); border-color:var(--primary); }
+      .switch .note { color:var(--muted-foreground); margin-left:auto; }
+    </style>
+  </head>
+  <body>
+    <div class="switch">
+      <b>Preview theme:</b>
+      <div class="seg">
+        <button data-set="faithful" aria-pressed="false">1 · Faithful</button>
+        <button data-set="refresh" aria-pressed="true">2 · Modern neutral</button>
+        <button data-set="accent" aria-pressed="false">3 · Brand accent</button>
+        <button data-set="dark" aria-pressed="false">4 · Dark mode</button>
+      </div>
+      <span class="note">Meso roster · shared-token spike</span>
+    </div>
+
+  <!-- shared site nav, so Meso is reconnected to the main site -->
+    <header class="nav">
+      <a class="brand" href="#">Mastering Fitness</a>
+      <nav>
+        <a class="link" href="#">About</a>
+        <a class="link" href="#">Store</a>
+        <a class="link" href="#">Challenges</a>
+        <a class="link active" href="#">Coaching</a>
+        <a class="link" href="#">Contact</a>
+      </nav>
+      <span class="spacer"></span>
+      <nav><a class="link" href="#">Account</a><a class="link" href="#">Logout</a></nav>
+    </header>
+
+  <!-- meso workspace sub-header -->
+    <div class="sub">
+      <span class="mark"><i></i> Meso</span>
+      <a class="tab active" href="#">Roster</a>
+      <a class="tab" href="#">Designer</a>
+      <span class="spacer"></span>
+      <span class="avatar-sm">LG</span>
+    </div>
+
+    <main class="wrap">
+      <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:16px; margin-bottom:20px;">
+        <div>
+          <p class="eyebrow">Coach workspace</p>
+          <h1 class="h1">Your athletes</h1>
+          <p class="sub-line">6 athletes · 2 need review</p>
+        </div>
+        <a class="btn btn-primary" href="#">Invite athlete</a>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <p class="eyebrow">Individuals</p>
+          <span class="count">6 athletes</span>
+        </div>
+
+        <a class="row" href="#">
+          <span class="avatar accent">JV</span>
+          <div><div class="name">Jordan Vance</div><div class="meta">Hypertrophy · week 3 of 5</div></div>
+          <span class="spacer"></span>
+          <span class="badge ok">Delivered</span>
+          <div class="meter-wrap"><div class="meter"><span style="width:92%;"></span></div><span class="pct">92%</span></div>
+          <span class="chev">›</span>
+        </a>
+
+        <a class="row" href="#">
+          <span class="avatar">MS</span>
+          <div><div class="name">Mara Singh</div><div class="meta">Strength · week 1 of 4</div></div>
+          <span class="spacer"></span>
+          <span class="badge accent">Needs review</span>
+          <div class="meter-wrap"><div class="meter"><span style="width:68%;"></span></div><span class="pct">68%</span></div>
+          <span class="chev">›</span>
+        </a>
+
+        <a class="row" href="#">
+          <span class="avatar">DC</span>
+          <div><div class="name">Devin Cole</div><div class="meta">Fat loss · week 2 of 6</div></div>
+          <span class="spacer"></span>
+          <span class="badge ok">Delivered</span>
+          <div class="meter-wrap"><div class="meter"><span style="width:81%;"></span></div><span class="pct">81%</span></div>
+          <span class="chev">›</span>
+        </a>
+
+        <a class="row" href="#">
+          <span class="avatar">PN</span>
+          <div><div class="name">Priya Nair</div><div class="meta">Off-season · week 4 of 8</div></div>
+          <span class="spacer"></span>
+          <span class="badge accent">Needs review</span>
+          <div class="meter-wrap"><div class="meter"><span style="width:54%;"></span></div><span class="pct">54%</span></div>
+          <span class="chev">›</span>
+        </a>
+
+        <a class="row" href="#">
+          <span class="avatar">SO</span>
+          <div><div class="name">Sam Ortiz</div><div class="meta">Demo athlete · sample program</div></div>
+          <span class="spacer"></span>
+          <span class="badge muted">Demo</span>
+          <div class="meter-wrap"><div class="meter"><span style="width:100%;"></span></div><span class="pct">100%</span></div>
+          <span class="chev">›</span>
+        </a>
+
+        <div class="row" style="cursor:default;">
+          <span class="avatar" style="font-weight:400;">@</span>
+          <div><div class="name">alex.reed@email.com</div><div class="meta">Invited Jun 24 · awaiting reply</div></div>
+          <span class="spacer"></span>
+          <span class="badge muted">Pending invite</span>
+          <a class="btn" href="#">Resend</a>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      const html = document.documentElement;
+      document.querySelectorAll('.switch button').forEach(b => {
+        b.addEventListener('click', () => {
+          html.dataset.theme = b.dataset.set;
+          document.querySelectorAll('.switch button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+        });
+      });
+    </script>
+  </body>
+</html>

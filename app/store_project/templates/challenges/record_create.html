@@ -1,7 +1,5 @@
 {% extends '_base.html' %}
 
-{% load crispy_forms_tags %}
-
 
 {% block title %}
   Add Score | {% include "_site_title.html" %}
@@ -20,7 +18,7 @@
         <div class="stack-form">
           <form method="post">
             {% csrf_token %}
-            {{ form|crispy }}
+            {% include "_form_fields.html" with form=form %}
             <button class="button" type="submit">Submit</button>
           </form>
         </div>

@@ -1,6 +1,7 @@
 from django.forms import ModelForm
 from django.forms import TextInput
 
+from .form_styling import apply_component_classes
 from .models import Challenge
 from .models import Record
 
@@ -15,7 +16,13 @@ class ChallengeCreateForm(ModelForm):
             "difficulty_level",
             "challenge_tags",
         ]
-        widgets = {"challenge_tags": TextInput(attrs={"class": "input"})}
+        # Keep the tags field a free-text input (the model field is M2M, whose
+        # default widget is a multi-select list box we don't want here).
+        widgets = {"challenge_tags": TextInput()}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        apply_component_classes(self.fields)
 
 
 class RecordCreateForm(ModelForm):
@@ -25,3 +32,7 @@ class RecordCreateForm(ModelForm):
             "time_score",
             "notes",
         ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        apply_component_classes(self.fields)

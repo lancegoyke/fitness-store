@@ -1,0 +1,33 @@
+{% comment %}
+  Render a form's fields with the site's component classes (replaces
+  crispy_bulma). The `input` / `select` widget classes are applied at the widget
+  level (challenges/form_styling.py); this partial supplies the surrounding
+  field / label / control / help structure that base.css styles.
+
+  Usage: {% include "_form_fields.html" with form=my_form %}
+{% endcomment %}
+{% if form.non_field_errors %}
+  <ul class="errorlist">
+    {% for error in form.non_field_errors %}
+      <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+{% for field in form.hidden_fields %}{{ field }}{% endfor %}
+{% for field in form.visible_fields %}
+  <div class="field">
+    <label class="label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+    <div class="control">{{ field }}</div>
+    {% if field.help_text %}
+      {# id matches the aria-describedby Django emits on the widget #}
+      <p class="help" id="{{ field.auto_id }}_helptext">{{ field.help_text }}</p>
+    {% endif %}
+    {% if field.errors %}
+      <ul class="errorlist">
+        {% for error in field.errors %}
+          <li>{{ error }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+{% endfor %}
