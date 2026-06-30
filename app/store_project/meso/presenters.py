@@ -187,7 +187,12 @@ def _profile_results(link):
     )
     if log is None:
         return None
-    return session_results(log.session)["summary"]
+    summary = session_results(log.session)["summary"]
+    # The card links to *this* session's results, not the bare ``results``
+    # redirect (which lands on the coach's globally-latest logged session —
+    # possibly a different athlete).
+    summary["session_id"] = log.session_id
+    return summary
 
 
 def profile_program(link, working_plan):

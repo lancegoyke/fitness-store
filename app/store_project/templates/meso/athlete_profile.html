@@ -114,7 +114,7 @@
           </div>
 
           {% if results_summary %}
-            <a class="meso-card meso-card--pad" href="{% url 'meso:results' %}" style="text-decoration:none;color:inherit;display:block;">
+            <a class="meso-card meso-card--pad" href="{% url 'meso:results_session' results_summary.session_id %}" style="text-decoration:none;color:inherit;display:block;">
               <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
                 <p class="meso-eyebrow" style="margin:0;">Latest session</p>
                 <div class="meso-spacer"></div>

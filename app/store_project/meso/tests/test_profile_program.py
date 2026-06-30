@@ -265,6 +265,8 @@ class TestResultsSummary:
         summary = presenters.profile_program(rel, None)["results_summary"]
         assert summary is not None
         assert summary["completion"] == 100
+        # The card targets *this* session, not the bare results redirect.
+        assert summary["session_id"] == session.pk
 
     def test_none_when_nothing_logged(self):
         rel = CoachAthleteFactory()
@@ -324,7 +326,7 @@ class TestProfileRender:
 
     def test_delivered_program_renders_block_and_meter(self, client):
         coach, rel = self._coach_with_athlete()
-        make_plan(rel, delivered_block=1, sessions=2, done=1)
+        _, week = make_plan(rel, delivered_block=1, sessions=2, done=1)
         client.force_login(coach)
         resp = client.get(reverse("meso:athlete", kwargs={"pk": rel.athlete_id}))
         assert resp.status_code == 200
@@ -334,6 +336,14 @@ class TestProfileRender:
         assert "50%" in body  # adherence meter
         assert "Realization" in body  # macrocycle rail
         assert "Delivered" in body  # status badge
+        # The latest-session card links to that athlete's logged session.
+        logged = SessionLog.objects.filter(
+            athlete=rel.athlete, status=SessionLog.Status.DONE
+        ).first()
+        assert (
+            reverse("meso:results_session", kwargs={"session_id": logged.session_id})
+            in body
+        )
 
     def test_needs_review_surfaces_the_review_cta(self, client):
         coach, rel = self._coach_with_athlete()
