@@ -75,6 +75,18 @@ class SharedNavCSSTests(TestCase):
         block = _css_block(NAV_CSS.read_text(), ".nav .link.active {")
         self.assertIn("underline", block)
 
+    def test_nav_pins_one_typeface_across_contexts(self):
+        """The nav must not inherit the host font.
+
+        On the main site it would inherit Verdana (base.css ``* { font-family }``)
+        and in the Meso shell Hanken Grotesk, so the same bar renders at
+        different weights/widths. nav.css sets one explicit family and re-asserts
+        inheritance on children (the universal reset would otherwise win).
+        """
+        css = NAV_CSS.read_text()
+        self.assertIn("font-family", _css_block(css, ".nav {"))
+        self.assertIn("font-family: inherit", _css_block(css, ".nav * {"))
+
     def test_nav_has_css_only_mobile_disclosure(self):
         """A burger menu that opens with no JavaScript, and a media query."""
         css = NAV_CSS.read_text()

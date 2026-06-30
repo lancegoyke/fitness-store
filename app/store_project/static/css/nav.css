@@ -21,6 +21,19 @@
   padding: 14px clamp(16px, 4vw, 40px);
   background: var(--nav-bg, #0a0a0a);
   color: var(--nav-fg, #ededed);
+  /* One typeface for the nav in every context. Without this it inherits the
+     host font — Verdana on the main site (base.css `* { font-family }`), Hanken
+     in the Meso shell — so the same bar reads at different weights/widths. A
+     neutral system stack (matching the spike) keeps it identical everywhere and
+     needs no extra font load. */
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* base.css sets `* { font-family: Verdana }` (specificity 0,0,0) directly on
+   every element, which would override the inherited nav font on the links/brand.
+   Re-assert inheritance so they all pick up the .nav typeface above. */
+.nav * {
+  font-family: inherit;
 }
 
 .nav .brand {
