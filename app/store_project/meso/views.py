@@ -601,15 +601,20 @@ def _athlete_plans(user):
     return Plan.objects.for_athlete(user).exclude(status=Plan.Status.ARCHIVED)
 
 
-def _athlete_has_logged(user):
-    """Whether the athlete has ever logged any session (first-time UX Phase 4).
+def _athlete_has_completed_log(user):
+    """Whether the athlete has ever *completed* a session log (Phase 4).
 
-    Drives the one-time first-log coachmark: it's a *first*-log nudge, so any
-    prior log (in any plan) means they already know how — the hint must hide.
+    Drives the one-time first-log coachmark: it's a *first*-log nudge, so once
+    they've finished a real session (in any plan) they know how — the hint hides.
+    Gated on a ``done`` log specifically (not any row): a "Save progress" draft
+    writes a ``pending`` log while the session still reads "To do", and the hint
+    teaches that final "Log session" step, so a draft must not suppress it.
     Server-driven, so the nudge is naturally one-time + cross-device with no
     per-device flag or migration; it vanishes the moment the first log lands.
     """
-    return SessionLog.objects.filter(athlete=user).exists()
+    return SessionLog.objects.filter(
+        athlete=user, status=SessionLog.Status.DONE
+    ).exists()
 
 
 def _athlete_session_or_404(user, pk):
@@ -652,7 +657,7 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         # tap *and* the athlete has never logged — pointing "tap a session below"
         # at an empty week would be noise.
         has_delivered = any(card["sessions"] for card in ctx["plans"])
-        ctx["show_first_log_hint"] = has_delivered and not _athlete_has_logged(
+        ctx["show_first_log_hint"] = has_delivered and not _athlete_has_completed_log(
             self.request.user
         )
         ctx.update(_pwa_context())
@@ -680,7 +685,7 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
         # First-log coachmark (Phase 4): teach the logger only to a first-ever
         # logger — any prior log means they already know how.
-        ctx["show_first_log_hint"] = not _athlete_has_logged(self.request.user)
+        ctx["show_first_log_hint"] = not _athlete_has_completed_log(self.request.user)
         ctx.update(_pwa_context())
         return ctx
 

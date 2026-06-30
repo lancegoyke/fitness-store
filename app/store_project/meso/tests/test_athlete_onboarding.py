@@ -30,6 +30,7 @@ from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import Plan
+from store_project.meso.models import SessionLog
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -87,12 +88,25 @@ class TestFirstLogHintHome:
         body = client.get(HOME).content.decode()
         assert HOME_HINT in body
 
-    def test_hidden_once_the_athlete_has_logged(self, client):
+    def test_hidden_once_the_athlete_has_completed_a_log(self, client):
         athlete, _c, session, _p = seed()
-        SessionLogFactory(session=session, athlete=athlete)
+        SessionLogFactory(
+            session=session, athlete=athlete, status=SessionLog.Status.DONE
+        )
         client.force_login(athlete)
         body = client.get(HOME).content.decode()
         assert HOME_HINT not in body
+
+    def test_a_draft_save_keeps_the_hint(self, client):
+        # "Save progress" writes a *pending* log while the session still reads
+        # "To do" — the athlete hasn't truly logged yet, so keep teaching.
+        athlete, _c, session, _p = seed()
+        SessionLogFactory(
+            session=session, athlete=athlete, status=SessionLog.Status.PENDING
+        )
+        client.force_login(athlete)
+        body = client.get(HOME).content.decode()
+        assert HOME_HINT in body
 
     def test_hidden_when_nothing_is_delivered_yet(self, client):
         # No delivered session to tap → the "tap a session below" nudge would
@@ -108,7 +122,9 @@ class TestFirstLogHintHome:
         # don't re-teach.
         athlete, _coach, _s, _p = seed()
         _a2, _c2, other_session, _p2 = seed(athlete=athlete)
-        SessionLogFactory(session=other_session, athlete=athlete)
+        SessionLogFactory(
+            session=other_session, athlete=athlete, status=SessionLog.Status.DONE
+        )
         client.force_login(athlete)
         body = client.get(HOME).content.decode()
         assert HOME_HINT not in body
@@ -123,12 +139,25 @@ class TestFirstLogHintSession:
         body = client.get(session_url(session)).content.decode()
         assert SESSION_HINT in body
 
-    def test_hidden_once_the_athlete_has_logged(self, client):
+    def test_hidden_once_the_athlete_has_completed_a_log(self, client):
         athlete, _c, session, _p = seed()
-        SessionLogFactory(session=session, athlete=athlete)
+        SessionLogFactory(
+            session=session, athlete=athlete, status=SessionLog.Status.DONE
+        )
         client.force_login(athlete)
         body = client.get(session_url(session)).content.decode()
         assert SESSION_HINT not in body
+
+    def test_a_draft_save_keeps_the_session_hint(self, client):
+        # A pending draft on this very session must not retract the how-to-log
+        # coachmark — the athlete hasn't completed "Log session" yet.
+        athlete, _c, session, _p = seed()
+        SessionLogFactory(
+            session=session, athlete=athlete, status=SessionLog.Status.PENDING
+        )
+        client.force_login(athlete)
+        body = client.get(session_url(session)).content.decode()
+        assert SESSION_HINT in body
 
 
 class TestOnboardingWiring:
