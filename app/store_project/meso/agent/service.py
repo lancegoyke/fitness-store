@@ -17,11 +17,14 @@ ever sees safe, in-plan edits, and the human review gate is unchanged.
 """
 
 import logging
+import time
 
 from django.db import transaction
 
 from .. import models
 from .. import serializers
+from ..billing import access as billing_access
+from ..billing import agent_costs
 from . import client as client_module
 from . import validation
 
@@ -76,26 +79,68 @@ def build_context(plan):
     }
 
 
-def create_drafting_batch(plan, instruction, *, coach):
-    """Persist a ``drafting`` batch the endpoint returns before the job runs."""
+def create_drafting_batch(
+    plan, instruction, *, coach, trigger=models.AgentProposalBatch.Trigger.MANUAL
+):
+    """Persist a ``drafting`` batch the endpoint returns before the job runs.
+
+    Snapshots the slicing dimensions for the usage ledger at creation: ``trigger``
+    (what kicked the run off) and the coach's ``billing_status`` *now* (lossy to
+    reconstruct later — COGS vs CAC). The usage/cost columns fill in once the job
+    resolves the batch (``_persist_result`` / ``_fail``).
+    """
     return models.AgentProposalBatch.objects.create(
         plan=plan,
         coach=coach,
         instruction=instruction,
         status=models.AgentProposalBatch.Status.DRAFTING,
+        trigger=trigger,
+        billing_status=billing_access.billing_status(coach),
     )
 
 
-def _persist_result(batch, result, *, model):
+def _apply_usage(batch, usage, *, model, duration_ms):
+    """Stamp the captured usage + estimated cost onto ``batch`` (no save).
+
+    Returns the list of ``update_fields`` written, so the caller saves exactly the
+    touched columns. The cost is computed at write time from the per-model rate
+    table (``None`` for an unknown model — we don't guess).
+    """
+    batch.input_tokens = usage.input_tokens
+    batch.output_tokens = usage.output_tokens
+    batch.cache_creation_input_tokens = usage.cache_creation_input_tokens
+    batch.cache_read_input_tokens = usage.cache_read_input_tokens
+    batch.api_calls = usage.api_calls
+    batch.request_id = (usage.request_id or "")[:128]
+    batch.stop_reason = (usage.stop_reason or "")[:32]
+    batch.duration_ms = duration_ms
+    batch.estimated_cost_usd = agent_costs.estimate_cost(model, usage)
+    return [
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "api_calls",
+        "request_id",
+        "stop_reason",
+        "duration_ms",
+        "estimated_cost_usd",
+    ]
+
+
+def _persist_result(batch, result, *, model, duration_ms=None):
     """Validate the model's candidates and persist the clean ones onto ``batch``.
 
-    Flips the batch to ``pending`` in one transaction and returns the list of
-    rejected candidates (``{"raw": ..., "errors": [...]}``) for logging.
+    Flips the batch to ``pending`` in one transaction — writing the run's token
+    usage + estimated cost alongside (the batch is the per-run usage ledger) — and
+    returns the list of rejected candidates (``{"raw": ..., "errors": [...]}``) for
+    logging. ``result`` may be a ``client.ProposalResult`` (the real client, with
+    usage) or a bare dict (scripted/test clients → zero usage); both normalize.
     """
-    if not isinstance(result, dict):
-        result = {}
-    raw_changes = result.get("changes") or []
-    summary = result.get("summary") or ""
+    normalized = client_module.normalize_result(result)
+    data = normalized.data
+    raw_changes = data.get("changes") or []
+    summary = data.get("summary") or ""
 
     forbidden = validation.forbidden_terms(batch.plan)
     rejected = []
@@ -103,6 +148,9 @@ def _persist_result(batch, result, *, model):
     with transaction.atomic():
         batch.summary = summary
         batch.model = model
+        usage_fields = _apply_usage(
+            batch, normalized.usage, model=model, duration_ms=duration_ms
+        )
         order = 0
         for raw in raw_changes:
             cleaned, errors = validation.clean_change(
@@ -115,7 +163,7 @@ def _persist_result(batch, result, *, model):
             order += 1
         batch.status = models.AgentProposalBatch.Status.PENDING
         batch.error = ""
-        batch.save(update_fields=["summary", "model", "status", "error"])
+        batch.save(update_fields=["summary", "model", "status", "error", *usage_fields])
 
     if rejected:
         logger.info(
@@ -126,11 +174,24 @@ def _persist_result(batch, result, *, model):
     return rejected
 
 
-def _fail(batch, message):
-    """Mark a drafting batch as ``failed`` with the reason for the status poll."""
+def _fail(batch, message, *, model="", duration_ms=None):
+    """Mark a drafting batch ``failed`` with the reason for the status poll.
+
+    Records ``model`` + ``duration_ms`` when known so a failed run still attributes
+    in the usage report (U5). Token usage stays zero: a non-streaming call that
+    raised before returning gave us no ``usage`` block to capture — the Anthropic
+    invoice reconciliation (deferred) covers any tokens billed on such a drop.
+    """
     batch.status = models.AgentProposalBatch.Status.FAILED
     batch.error = (message or "The agent run failed.")[:2000]
-    batch.save(update_fields=["status", "error"])
+    fields = ["status", "error"]
+    if model:
+        batch.model = model
+        fields.append("model")
+    if duration_ms is not None:
+        batch.duration_ms = duration_ms
+        fields.append("duration_ms")
+    batch.save(update_fields=fields)
     return batch, []
 
 
@@ -148,43 +209,64 @@ def run_proposal_job(batch_id, *, client=None):
         if client is None:
             return _fail(batch, "The Meso agent is not configured (no API key).")
 
-        # Network call outside any DB transaction; wrap provider failures.
+        model = getattr(client, "model", "")
+        # Network call outside any DB transaction; wrap provider failures. Time it
+        # for the usage ledger — recorded on both the success and the failure path.
+        started = time.monotonic()
         try:
             result = client.propose(
                 context=build_context(batch.plan), instruction=batch.instruction
             )
         except Exception as exc:  # external boundary
-            return _fail(batch, f"The agent request failed: {exc}")
+            duration_ms = int((time.monotonic() - started) * 1000)
+            return _fail(
+                batch,
+                f"The agent request failed: {exc}",
+                model=model,
+                duration_ms=duration_ms,
+            )
 
-        rejected = _persist_result(batch, result, model=getattr(client, "model", ""))
+        duration_ms = int((time.monotonic() - started) * 1000)
+        rejected = _persist_result(batch, result, model=model, duration_ms=duration_ms)
         return batch, rejected
     except Exception:  # never leave a batch stuck drafting
         logger.exception("Meso agent job crashed for batch %s", batch_id)
         return _fail(batch, "The agent run failed unexpectedly.")
 
 
-def propose_changes(plan, instruction, *, coach, client=None):
+def propose_changes(
+    plan,
+    instruction,
+    *,
+    coach,
+    client=None,
+    trigger=models.AgentProposalBatch.Trigger.MANUAL,
+):
     """Run the agent synchronously and persist a reviewable batch.
 
     Blocking contract (kept for direct callers + tests): raises
     ``AgentNotConfigured`` when no client is available and ``AgentError`` on a
     provider failure — and persists no batch in either case. Returns
-    ``(batch, rejected)`` on success.
+    ``(batch, rejected)`` on success. ``trigger`` tags the run for the usage ledger
+    (the eval harness passes ``eval`` so its runs are excluded from cost reports).
     """
     client = client or client_module.get_default_client()
     if client is None:
         raise AgentNotConfigured("The Meso agent is not configured (no API key).")
 
     context = build_context(plan)
+    model = getattr(client, "model", "")
     # Network call happens outside the DB transaction. Wrap provider failures
     # (timeouts, API errors, a bad configured model) as AgentError so the
     # endpoint degrades to a 502 instead of an unhandled 500.
+    started = time.monotonic()
     try:
         result = client.propose(context=context, instruction=instruction)
     except AgentError:
         raise
     except Exception as exc:  # external boundary
         raise AgentError(f"The agent request failed: {exc}") from exc
+    duration_ms = int((time.monotonic() - started) * 1000)
 
     with transaction.atomic():
         batch = models.AgentProposalBatch.objects.create(
@@ -192,7 +274,9 @@ def propose_changes(plan, instruction, *, coach, client=None):
             coach=coach,
             instruction=instruction,
             status=models.AgentProposalBatch.Status.PENDING,
+            trigger=trigger,
+            billing_status=billing_access.billing_status(coach),
         )
-        rejected = _persist_result(batch, result, model=getattr(client, "model", ""))
+        rejected = _persist_result(batch, result, model=model, duration_ms=duration_ms)
 
     return batch, rejected

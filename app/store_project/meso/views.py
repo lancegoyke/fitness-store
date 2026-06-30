@@ -522,7 +522,10 @@ def _reserve_plan_draft(request, plan):
         "moment.",
     )
     return agent_service.create_drafting_batch(
-        plan, agent_service.DRAFT_INSTRUCTION, coach=request.user
+        plan,
+        agent_service.DRAFT_INSTRUCTION,
+        coach=request.user,
+        trigger=AgentProposalBatch.Trigger.DRAFT,
     )
 
 

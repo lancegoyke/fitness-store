@@ -18,10 +18,62 @@ volatile per-plan grounding + instruction go in the user turn. Revisit auto
 """
 
 import json
+from dataclasses import dataclass
+from dataclasses import field
 
 from django.conf import settings
 
 TOOL_NAME = "propose_program_changes"
+
+
+@dataclass
+class RunUsage:
+    """Token usage + tracing metadata from one Claude proposal call (agent-usage v1).
+
+    Captured at the call site (``MesoAgentClient.propose``) and threaded onto the
+    ``AgentProposalBatch`` so a run's cost is attributable to the coach + athlete.
+    Defaults are zero/empty so a no-network client (the scripted eval client, the
+    test fakes that return a bare dict) records an honest "no API usage" run.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    request_id: str = ""
+    stop_reason: str = ""
+    # Completed Claude calls behind this run. Defaults to 0 (no network) so a
+    # scripted/test client doesn't overcount the ledger; ``_extract_usage`` sets it
+    # to 1 for a real response. >1 once group/multi-turn lands.
+    api_calls: int = 0
+
+
+@dataclass
+class ProposalResult:
+    """What ``propose`` returns: the tool data + the run's usage/tracing block.
+
+    ``data`` is the tool-input dict (``summary`` + ``changes``) callers consume;
+    ``usage`` is the captured token block. A client that returns a bare dict (the
+    scripted eval client, test fakes) is coerced to one of these — with empty
+    usage — by ``normalize_result``, so the service handles both uniformly.
+    """
+
+    data: dict = field(default_factory=dict)
+    usage: RunUsage = field(default_factory=RunUsage)
+
+
+def normalize_result(result):
+    """Coerce a client's ``propose`` return into a ``ProposalResult``.
+
+    Accepts a ``ProposalResult`` (the real client), a bare dict (fakes / scripted
+    clients that don't measure usage → empty usage), or anything else (→ empty).
+    """
+    if isinstance(result, ProposalResult):
+        return result
+    if isinstance(result, dict):
+        return ProposalResult(data=result)
+    return ProposalResult()
+
 
 PROPOSE_TOOL = {
     "name": TOOL_NAME,
@@ -174,6 +226,25 @@ def _user_prompt(context, instruction):
     )
 
 
+def _extract_usage(message):
+    """Build a ``RunUsage`` from an anthropic ``Message`` (defensive getattrs).
+
+    The cache token fields are absent on a response that used no prompt caching, so
+    each read tolerates a missing attribute and a ``None`` value → 0. ``_request_id``
+    is the SDK's per-call id (private attr, but the documented accessor).
+    """
+    raw = getattr(message, "usage", None)
+    return RunUsage(
+        input_tokens=getattr(raw, "input_tokens", 0) or 0,
+        output_tokens=getattr(raw, "output_tokens", 0) or 0,
+        cache_creation_input_tokens=getattr(raw, "cache_creation_input_tokens", 0) or 0,
+        cache_read_input_tokens=getattr(raw, "cache_read_input_tokens", 0) or 0,
+        request_id=getattr(message, "_request_id", "") or "",
+        stop_reason=getattr(message, "stop_reason", "") or "",
+        api_calls=1,
+    )
+
+
 class MesoAgentClient:
     """Wraps the anthropic SDK (lazily imported so it isn't a hard dependency)."""
 
@@ -191,7 +262,14 @@ class MesoAgentClient:
         return self._client
 
     def propose(self, *, context, instruction):
-        """Call Claude with a forced proposal tool; return the tool input dict."""
+        """Call Claude with a forced proposal tool; return a ``ProposalResult``.
+
+        The tool-input dict (``data``) plus the call's token usage + ``_request_id``
+        + ``stop_reason`` (``usage``). The usage feeds the per-run cost ledger
+        (``AgentProposalBatch``) so a run is attributable to the coach + athlete;
+        the Anthropic invoice stays the billing source of truth, our number is an
+        internal estimate.
+        """
         message = self.client.messages.create(
             model=self.model,
             max_tokens=8000,
@@ -206,10 +284,12 @@ class MesoAgentClient:
             tool_choice={"type": "tool", "name": TOOL_NAME},
             messages=[{"role": "user", "content": _user_prompt(context, instruction)}],
         )
+        data = {"summary": "", "changes": []}
         for block in message.content:
             if block.type == "tool_use" and block.name == TOOL_NAME:
-                return dict(block.input)
-        return {"summary": "", "changes": []}
+                data = dict(block.input)
+                break
+        return ProposalResult(data=data, usage=_extract_usage(message))
 
 
 def get_default_client():

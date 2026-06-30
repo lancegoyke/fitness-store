@@ -24,6 +24,7 @@ checks are covered without a key.
 from dataclasses import dataclass
 from dataclasses import field
 
+from ..models import AgentProposalBatch
 from . import service
 from . import validation
 
@@ -131,7 +132,11 @@ def check_result(case, plan, batch, rejected):
 def evaluate(plan, case, *, client):
     """Run one golden case against ``plan`` with ``client`` and check invariants."""
     batch, rejected = service.propose_changes(
-        plan, case.instruction, coach=plan.coach, client=client
+        plan,
+        case.instruction,
+        coach=plan.coach,
+        client=client,
+        trigger=AgentProposalBatch.Trigger.EVAL,
     )
     failures, warnings = check_result(case, plan, batch, rejected)
     return EvalResult(
