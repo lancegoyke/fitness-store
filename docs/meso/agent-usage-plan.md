@@ -1,6 +1,6 @@
 # Meso — agent usage & cost tracking
 
-**Status:** 🟢 Phase 1 (capture) shipped · 🟢 Phase 2 (report) shipped · 🟢 Phase 3 (margin alert) shipped · started 2026-06-30
+**Status:** 🟢 Phase 1 (capture) shipped · 🟢 Phase 2 (report) shipped · 🟢 Phase 3 (margin alert) shipped · 🟢 Phase 4 (owner dashboard) shipped · started 2026-06-30
 **Context:** Billing launches at **$9.99/mo base + $1/mo per active seat** (D13 in
 [`billing-plan.md`](./billing-plan.md)). The **AI agent is the cost-bearing
 feature** — every proposal run is a Claude API call. To confirm the $1/seat
@@ -177,8 +177,27 @@ def estimate_cost(model, usage) -> Decimal:
    previous-month window, the owner email, the command across windows/thresholds/
    dry-run/validation) + `test_scheduler.py` (the monthly registration + the task
    wrapper over the previous month).
-4. *(Deferred)* an owner **dashboard**; a reconciliation job against the Anthropic
-   Admin/Usage API (sanity-check our estimate vs the invoice).
+4. **Owner dashboard — ✅ DONE (no migration).** The web read-out of the Phase-2
+   report. `UsageDashboardView` (`/meso/usage/`, **staff-gated** via
+   `UserPassesTestMixin` on `is_staff` — anon bounces to login, an authenticated
+   non-staff coach gets a flat 403, so a coach can't probe org-wide spend) renders
+   `build_report` for a `?month=YYYY-MM` window (a malformed month degrades to the
+   current month with a flashed warning — never 500s). `presenters.usage_dashboard`
+   adapts the `Report` into the template context (a `YYYY-MM` label + prev/next
+   month nav, the threshold %, the `margin_alerts` subset, the roll-ups pre-sorted
+   by cost). New pure, tested helpers on `agent_usage_report`: `shift_month` (the
+   prev/next arithmetic), `resolve_alert_threshold` (a never-raising
+   settings/override resolver, `DEFAULT_ALERT_THRESHOLD` 0.5 — the dashboard must
+   render even with a misconfigured env value), and `sorted_totals` (cost-sorted
+   roll-up pairs). `usage_dashboard.html` + `_usage_rollup.html` render the totals,
+   the margin-alert banner, the by-tier/model/trigger roll-ups, and the per-coach
+   cost-vs-revenue-margin rows with a per-client breakdown; an `is_staff`-gated
+   "Usage" nav link in `_meso_base.html`. Tests: `test_agent_usage_dashboard.py`
+   (pure helpers, the presenter, the staff gate, month windowing/invalid-month
+   fallback, margin-alert surfacing, group attribution).
+5. *(Deferred)* a reconciliation job against the Anthropic Admin/Usage API
+   (sanity-check our estimate vs the invoice) — needs an Admin API key + live org
+   access, so it can't ship autonomously.
 
 This should land **before or with billing go-live** so the very first paid month
 produces real margin data — but it's independent of the Stripe wiring, so it can

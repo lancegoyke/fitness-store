@@ -1063,3 +1063,31 @@ _(Append dated entries here as decisions land.)_
   owner dashboard + Anthropic Admin/Usage-API reconciliation (both deferred);
   remaining Meso backlog otherwise: billing annual prices (blocked on the owner's
   annual numbers) + the group agent (LARGE owner-decision).
+- 2026-06-30 — **Agent usage tracking Phase 4 (owner dashboard) built** (no
+  migration). The web read-out of the data Phases 1–3 capture/aggregate/alert on,
+  closing the deferred dashboard item. `UsageDashboardView` (`/meso/usage/`) is a
+  **staff-gated**, all-coach view of `build_report` for a `?month=YYYY-MM` window:
+  `UserPassesTestMixin` on `is_staff` bounces an anonymous visitor to login and
+  gives an authenticated non-staff coach a flat **403** (`handle_no_permission`),
+  so a coach can't probe org-wide spend; a malformed `month` degrades to the
+  current month with a flashed warning rather than 500ing. `presenters.usage_dashboard`
+  adapts the `Report` into the template context (a `YYYY-MM` label + prev/next
+  month nav, the threshold %, the `margin_alerts` subset, the roll-ups pre-sorted
+  by cost). Three new **pure, tested** helpers on `agent_usage_report`:
+  `shift_month` (prev/next month arithmetic, year-boundary safe), `resolve_alert_threshold`
+  (a **never-raising** settings/override resolver, `DEFAULT_ALERT_THRESHOLD` 0.5 —
+  the dashboard must render even with a misconfigured `MESO_MARGIN_ALERT_THRESHOLD`,
+  so unlike the command's `_threshold` it returns the default rather than erroring),
+  and `sorted_totals` (cost-sorted roll-up pairs). `usage_dashboard.html` +
+  `_usage_rollup.html` render the totals, a margin-alert banner, the by-tier/model/
+  trigger roll-ups, and the per-coach cost-vs-revenue-margin rows with a per-client
+  breakdown; an `is_staff`-gated **"Usage"** nav link in `_meso_base.html` (the
+  first owner-only meso surface). **No model change, no migration.** Red→green:
+  **+25 pytest** (`test_agent_usage_dashboard.py` — pure helpers, presenter, the
+  staff gate, month windowing / invalid-month fallback, margin-alert surfacing,
+  group attribution); 1263 meso pytest green, ruff + DjHTML + `makemigrations
+  --check` clean. **Codex review loop CLEAN on iteration 1.** **Remaining
+  agent-usage backlog:** only the Anthropic Admin/Usage-API reconciliation
+  (deferred — needs an Admin API key + live org access). Remaining Meso backlog
+  otherwise unchanged: billing annual prices (blocked on the owner's annual
+  numbers) + the group agent (LARGE owner-decision).
