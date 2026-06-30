@@ -116,11 +116,30 @@ def _avoid_clause(text):
     return text
 
 
+def _active_contraindication_texts(plan):
+    """Active contraindication texts the plan must honor.
+
+    An **individual** plan honors its one athlete's; a **group** plan honors the
+    union across *every active member* — the shared row trains all of them, so a
+    movement unsafe for any one member is forbidden for the whole group.
+    """
+    if plan.is_group:
+        texts = []
+        for user in plan.group.active_member_users():
+            texts.extend(c.text for c in user.contraindications.all() if c.active)
+        return texts
+    return [c.text for c in plan.athlete.contraindications.filter(active=True)]
+
+
 def forbidden_terms(plan):
-    """Movement terms a swap must not re-introduce, from active contraindications."""
+    """Movement terms a swap must not re-introduce, from active contraindications.
+
+    Folds across a group's active members for a group plan (the conservative
+    backstop — see ``_active_contraindication_texts``).
+    """
     terms = set()
-    for c in plan.athlete.contraindications.filter(active=True):
-        terms |= _significant_words(_avoid_clause(c.text))
+    for text in _active_contraindication_texts(plan):
+        terms |= _significant_words(_avoid_clause(text))
     return terms
 
 

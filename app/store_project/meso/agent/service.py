@@ -63,20 +63,60 @@ def _coach_style(coach):
     return {"tags": profile.programming_style or [], "avoid": profile.avoid_rules}
 
 
-def build_context(plan):
-    """Everything the model is grounded on, as a JSON-serializable dict."""
+def _group_context(group):
+    """Group grounding (groups Phase 1 — the group agent edits the shared program).
+
+    A group plan has no single athlete, so the agent grounds on the *group*: its
+    name/focus, each active member with their own active contraindications, and —
+    most importantly for safety — the **folded** set of every member's
+    contraindications. The shared row trains everyone, so the agent must honor the
+    union; the deterministic backstop (``validation.forbidden_terms``) folds the
+    same way, regardless of what the model returns.
+    """
+    members = group.active_member_users()
+    member_data = []
+    folded = set()
+    for user in members:
+        texts = [c.text for c in user.contraindications.all() if c.active]
+        folded.update(texts)
+        member_data.append({"name": user.display_name(), "contraindications": texts})
     return {
-        "plan": serializers.serialize_plan(plan),
-        "athlete": {
-            "name": plan.athlete.display_name(),
-            "contraindications": [
-                c.text for c in plan.athlete.contraindications.filter(active=True)
-            ],
-        },
-        "coach_style": _coach_style(plan.coach),
-        # What the athlete actually logged recently (Phase 4 grounding).
-        "recent_logs": serializers.serialize_recent_logs(plan, limit=RECENT_LOG_LIMIT),
+        "name": group.name,
+        "focus": group.focus or "",
+        "member_count": len(member_data),
+        "members": member_data,
+        # The union the shared program must honor — every member's constraints.
+        "contraindications": sorted(folded),
     }
+
+
+def build_context(plan):
+    """Everything the model is grounded on, as a JSON-serializable dict.
+
+    An **individual** plan grounds on its one athlete (profile, contraindications,
+    recent logs). A **group** plan grounds on the group instead (members + the
+    contraindications folded across them); there is no single athlete log stream,
+    so ``recent_logs`` is empty for a group.
+    """
+    context = {
+        "plan": serializers.serialize_plan(plan),
+        "coach_style": _coach_style(plan.coach),
+    }
+    if plan.is_group:
+        context["group"] = _group_context(plan.group)
+        context["recent_logs"] = []
+        return context
+    context["athlete"] = {
+        "name": plan.athlete.display_name(),
+        "contraindications": [
+            c.text for c in plan.athlete.contraindications.filter(active=True)
+        ],
+    }
+    # What the athlete actually logged recently (Phase 4 grounding).
+    context["recent_logs"] = serializers.serialize_recent_logs(
+        plan, limit=RECENT_LOG_LIMIT
+    )
+    return context
 
 
 def create_drafting_batch(
@@ -202,7 +242,7 @@ def run_proposal_job(batch_id, *, client=None):
     ``(batch, rejected)``.
     """
     batch = models.AgentProposalBatch.objects.select_related(
-        "plan", "plan__relationship", "plan__relationship__athlete"
+        "plan", "plan__relationship", "plan__relationship__athlete", "plan__group"
     ).get(pk=batch_id)
     try:
         client = client or client_module.get_default_client()

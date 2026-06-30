@@ -344,21 +344,31 @@ class TestGroupPlanEndpoints:
         )
         assert resp.status_code == 400
 
-    def test_agent_rejects_group_plan(self, client):
-        # The group agent is a later phase; grounding assumes an athlete.
+    def test_agent_accepts_group_plan(self, client, monkeypatch):
+        # The group agent (Phase 1) edits the SHARED program: a group plan is no
+        # longer a 400 — it grounds on the group and runs behind the review gate.
+        # Full coverage lives in ``test_group_agent.py``.
+        from store_project.meso.agent import client as agent_client_module
+        from store_project.meso.tests.test_agent_service import FakeClient
+
         coach = UserFactory()
         # The AI agent is paid-only (S6 Phase 3, D4), so a coach iterating a plan
         # with the agent in these tests has full access — comp keeps the gate open.
         CoachSubscription.comp(coach)
         group = MesoGroupFactory(coach=coach)
         plan = group.create_shared_plan()
+        monkeypatch.setattr(
+            agent_client_module,
+            "get_default_client",
+            lambda: FakeClient({"summary": "", "changes": []}),
+        )
         client.force_login(coach)
         resp = client.post(
             reverse("meso:api_plan_agent", kwargs={"plan_id": plan.pk}),
             data={"instruction": "progress loads"},
             content_type="application/json",
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 202
 
 
 # -- view: group detail surfaces the shared-program entry point --------------
