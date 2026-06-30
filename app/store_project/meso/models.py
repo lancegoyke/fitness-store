@@ -1190,6 +1190,76 @@ class Mesocycle(models.Model):
     def __str__(self):
         return self.name
 
+    def append_week(self):
+        """Materialize the next week in this block, copying the latest week's grid.
+
+        A coach building a multi-week mesocycle progresses from a real template,
+        not a blank slate — so the new week mirrors the latest week's sessions and
+        their prescriptions (loads carried forward as a starting point the coach
+        then tweaks). The new week is a **non-current, undelivered draft**: adding
+        a future week never changes what's live or what delivery targets — making
+        a week the deliver target is the separate ``week_set_current`` action.
+        ``week_count`` grows to stay >= the highest materialized index so the
+        periodization rail stays honest. Returns the new ``Week``.
+
+        A degenerate block with no weeks yet seeds one starter day (mirroring
+        ``Plan.scaffold``) so the result is immediately editable.
+        """
+        source = self.weeks.order_by("-index").first()
+        next_index = (source.index if source else 0) + 1
+        week = Week.objects.create(
+            mesocycle=self,
+            index=next_index,
+            phase=source.phase if source else "",
+            volume=source.volume if source else 0,
+            intensity=source.intensity if source else 0,
+            is_deload=source.is_deload if source else False,
+            is_current=False,
+        )
+        if source is None:
+            session = Session.objects.create(
+                week=week, day_number=1, name="Day 1", order=0
+            )
+            ExercisePrescription.objects.create(
+                session=session,
+                name="New exercise",
+                order=0,
+                sets="3",
+                reps="10",
+                rpe="7",
+            )
+        else:
+            for src_session in source.sessions.prefetch_related("prescriptions"):
+                new_session = Session.objects.create(
+                    week=week,
+                    day_number=src_session.day_number,
+                    name=src_session.name,
+                    bias=src_session.bias,
+                    order=src_session.order,
+                )
+                ExercisePrescription.objects.bulk_create(
+                    [
+                        ExercisePrescription(
+                            session=new_session,
+                            exercise_id=presc.exercise_id,
+                            name=presc.name,
+                            order=presc.order,
+                            sets=presc.sets,
+                            reps=presc.reps,
+                            load=presc.load,
+                            load_type=presc.load_type,
+                            rpe=presc.rpe,
+                            note=presc.note,
+                            tags=list(presc.tags or []),
+                        )
+                        for presc in src_session.prescriptions.all()
+                    ]
+                )
+        if week.index > self.week_count:
+            self.week_count = week.index
+            self.save(update_fields=["week_count"])
+        return week
+
 
 class Week(models.Model):
     """One week within a mesocycle — a column in the designer's week strip."""

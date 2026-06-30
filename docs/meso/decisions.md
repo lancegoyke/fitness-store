@@ -790,3 +790,40 @@ _(Append dated entries here as decisions land.)_
   **add-week / week-switcher** deferral (designer is single-current-week) and **S6
   billing Phase 5 annual prices** (blocked on the owner's per-seat number + a Stripe
   annual Price). Plan in [`first-time-ux-plan.md`](./first-time-ux-plan.md).
+- 2026-06-29 — **Multi-week designer built** (branch `meso-multi-week-designer`,
+  **no migration**): closes the long-standing **add-week / week-switcher** deferral.
+  A plan was effectively **single-week** — `Plan.scaffold` materialized one `Week`
+  (`is_current`) and the only growth verb was `session_add` (a day in *that* week),
+  so a coach could not build a multi-week mesocycle, review an earlier week, or aim
+  delivery anywhere but the scaffold's first week. Three model/seam pieces +
+  three endpoints + a designer strip: **(1)** `Mesocycle.append_week()` materializes
+  the next week by **copying the latest week's grid** (sessions + prescriptions — a
+  real progression starting point, loads carried forward for the coach to tweak, not
+  a blank); the new week is a **non-current, undelivered draft** (adding it never
+  changes what's live or deliverable), and `week_count` grows to track the highest
+  materialized index. **(2)** `serialize_week` gains `id`/`index` and `serialize_plan`
+  gains **`viewing`** (the open week's pk) so the client can tell the *viewed* week
+  apart from the *current* (deliver-target) one. **(3)** three endpoints under
+  `api/plan/<id>/week/…` — `GET week/<id>/` **views** any week (a pure read, scoped by
+  ownership only, **not** billing-gated, so a suspended coach keeps read access);
+  `POST week/` **adds** the next week (edit-gated, mesocycle row-locked against the
+  `unique_week_index` race); `POST week/<id>/current/` **sets the live/deliver-target**
+  week (edit-gated, plan row-locked, clears the other weeks). The designer renders a
+  **week-switcher strip** in the week view (chips → `switchWeek`, a live-week dot,
+  "+ Add week" → `addWeek`, and a "Make current" → `setCurrentWeek` shown only when the
+  viewed week isn't live) and the periodization timeline bars are now click-to-view;
+  `meso.js` tracks `viewedWeekId`, and a shared `applyPlanData` keeps program / week
+  strip / phases / viewed pointer in lockstep across init + the three verbs; the
+  week/cycle **headers follow the viewed week**. **Design call:** *viewing is a pure
+  read; making a week the deliver target is the separate explicit `set-current`
+  action* — so building weeks ahead never silently moves what delivery sends, and
+  reviewing a past week never re-marks it live (no footgun). Deliver code is
+  **unchanged** (still sends `current_week`, now coach-controllable). Built red→green:
+  `test_week_management.py` (**+31 pytest**: `append_week`, the three endpoints incl.
+  scoping/402/404/405, serializer shape, a group variant, render/JS wiring) +
+  `frontend/meso.test.js` (**+9 vitest**: `applyPlanData`, the viewed-week getters,
+  `switchWeek`/`addWeek`/`setCurrentWeek` incl. no-op + failure paths); updated the
+  exact-shape serializer test for `id`/`index`/`viewing`. 1214 pytest + 112 vitest
+  green, ruff + format clean. Remaining Meso backlog: **deliver a chosen non-current
+  week without first making it current** (a natural follow-up) and **S6 billing Phase
+  5 annual prices** (blocked on the owner's per-seat number + a Stripe annual Price).

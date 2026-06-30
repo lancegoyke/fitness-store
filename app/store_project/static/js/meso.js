@@ -69,6 +69,11 @@ function createMeso() {
     planId: null,
     csrf: "",
 
+    // The week whose grid `program` currently holds (the multi-week switcher can
+    // point this away from the live `current` week). init() seeds it from the
+    // injected plan's `viewing`; switchWeek/addWeek/setCurrentWeek update it.
+    viewedWeekId: null,
+
     // The thread starts with a single orienting greeting. On load, init()
     // replaces it with the plan's persisted conversation (rebuilt server-side
     // from the proposal batches and injected as `meso-chat-thread`) when there
@@ -113,24 +118,41 @@ function createMeso() {
     get currentWeek() {
       return this.weeks.find((w) => w.current) || this.weeks[0] || null;
     },
+    // The week the grid is showing — the switcher can point it away from the
+    // live (`current`) week. Falls back to the current week before a switch.
+    get viewedWeek() {
+      return (
+        this.weeks.find((w) => w.id === this.viewedWeekId) ||
+        this.currentWeek
+      );
+    },
+    weekIsViewed(w) {
+      return !!w && w.id === this.viewedWeekId;
+    },
+    // True when the viewed week is also the live (deliver-target) week — drives
+    // whether the "Make current" affordance shows.
+    get viewedIsCurrent() {
+      const w = this.viewedWeek;
+      return !!(w && w.current);
+    },
     get currentPhase() {
       return (
         this.phases.find((p) => p.state === "current") || this.phases[0] || null
       );
     },
-    // The top-bar cycle chip, e.g. "Hypertrophy · Wk 2 / 4".
+    // The top-bar cycle chip, e.g. "Hypertrophy · Wk 2 / 4" — for the viewed week.
     get cycleLabel() {
       const p = this.currentPhase;
-      const w = this.currentWeek;
+      const w = this.viewedWeek;
       const phase = p ? p.name : "";
       const wk = w
         ? w.label + (this.weeks.length ? " / " + this.weeks.length : "")
         : "";
       return [phase, wk].filter(Boolean).join(" · ");
     },
-    // The week-view heading, e.g. "Wk 2 — Accum".
+    // The week-view heading for the viewed week, e.g. "Wk 2 — Accum".
     get weekHeading() {
-      const w = this.currentWeek;
+      const w = this.viewedWeek;
       if (!w) return "This week";
       return w.phase ? w.label + " — " + w.phase : w.label;
     },
@@ -157,9 +179,7 @@ function createMeso() {
       this.live = true;
       this.planId = data.plan.id;
       if (data.plan.unit) this.unit = data.plan.unit;
-      this.program = data.program;
-      this.weeks = data.weeks;
-      this.phases = data.phases;
+      this.applyPlanData(data);
       // The real athlete identity for the individual left rail (null for groups).
       this.athlete = data.athlete || null;
       // A group shared program opens in Group mode and renders its real identity
@@ -624,6 +644,62 @@ function createMeso() {
         bias: "",
         exercises: [],
       });
+    },
+
+    // ---- multi-week designer (view / add / set-current) ----
+    //
+    // The plan is multi-week: the strip switches which week the grid shows, a
+    // coach can append the next week (the server copies the latest week's grid),
+    // and any week can be made the live (deliver-target) one. Each action hits a
+    // re-serialize endpoint and swaps the grid via applyPlanData.
+
+    // Swap the grid to a (re)serialized plan payload. Shared by init, switchWeek,
+    // addWeek, setCurrentWeek so the program / week strip / phases / viewed-week
+    // pointer always move together.
+    applyPlanData(data) {
+      this.program = data.program;
+      this.weeks = data.weeks;
+      this.phases = data.phases;
+      this.viewedWeekId = data.viewing != null ? data.viewing : null;
+    },
+
+    // Switch the grid to another week — a pure read (viewing never changes what's
+    // live). No-op when already viewing it or before a plan is loaded.
+    async switchWeek(weekId) {
+      if (!this.live || weekId == null || weekId === this.viewedWeekId) return;
+      try {
+        const res = await fetch(`/meso/api/plan/${this.planId}/week/${weekId}/`);
+        if (!res.ok) throw new Error("Request failed: " + res.status);
+        this.applyPlanData(await res.json());
+      } catch (err) {
+        console.error("Switch week failed", err);
+      }
+    },
+
+    // Append the next week to the active block and switch onto it. The server
+    // copies the latest week's grid so the new week starts from a real template.
+    async addWeek() {
+      if (!this.live) return;
+      try {
+        const data = await this.apiPost(`/meso/api/plan/${this.planId}/week/`, null);
+        this.applyPlanData(data);
+      } catch (err) {
+        console.error("Add week failed", err);
+      }
+    },
+
+    // Make a week the live (deliver-target) week — delivery sends current_week.
+    async setCurrentWeek(weekId) {
+      if (!this.live || weekId == null) return;
+      try {
+        const data = await this.apiPost(
+          `/meso/api/plan/${this.planId}/week/${weekId}/current/`,
+          null,
+        );
+        this.applyPlanData(data);
+      } catch (err) {
+        console.error("Set current week failed", err);
+      }
     },
 
     // ---- agent chat ----
