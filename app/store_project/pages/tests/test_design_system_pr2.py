@@ -121,6 +121,12 @@ class DesignSystemPR2CSSTests(TestCase):
         # card-stack row gap stacked on top — that left too much space).
         self.assertIn("margin-top: 0", _css_block(_css(), ".card-stack > .frame + * {"))
 
+    def test_detail_page_tags_reuse_the_soft_pill(self):
+        """Detail-page tags get the soft accent pill, like the list/Challenges."""
+        block = _css_block(_css(), ".product-switcher .tag {")
+        self.assertIn("var(--accent-soft)", block)
+        self.assertIn("border-radius: 999px", block)
+
     def test_input_group_joins_input_and_button(self):
         """Newsletter input + Submit join into one control.
 
