@@ -1,0 +1,117 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Billing · Meso{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-crumbs">
+      <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span> <span>Billing &amp; usage</span>
+    </div>
+
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Your plan &amp; agent usage</p>
+        <h1 class="meso-h1">{{ state.status_label }}</h1>
+        <p class="meso-sub">{{ month_label }}</p>
+      </div>
+    </div>
+
+    <div class="meso-grid meso-grid--profile">
+      <!-- left: plan + bill -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="meso-card meso-card--pad" style="display:flex;flex-direction:column;gap:11px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <p class="meso-eyebrow" style="margin:0;">Plan</p>
+            <div class="meso-spacer"></div>
+            <span class="meso-badge {% if state.is_active %}meso-badge--ok{% else %}meso-badge--muted{% endif %}"><i></i>{{ state.status_label }}</span>
+          </div>
+
+          {% if state.over_limit %}
+            <p class="meso-sub" style="margin:0;color:var(--warn);">Over your plan limit &#8212; {{ state.seat_count }} of {{ state.seat_limit }} athlete{{ state.seat_limit|pluralize }}. Your longest-standing athletes stay editable; the other {{ state.suspended_count }} {{ state.suspended_count|pluralize:"is,are" }} suspended until you re-subscribe or end a relationship.</p>
+          {% elif state.on_trial %}
+            <p class="meso-sub" style="margin:0;">Free trial &#8212; ends {{ state.trial_end|date:"M j" }}. Subscribe to keep full access when it ends.</p>
+          {% elif state.is_active %}
+            <p class="meso-sub" style="margin:0;">{{ state.seat_count }} active athlete{{ state.seat_count|pluralize }} &#183; full access.</p>
+          {% else %}
+            <p class="meso-sub" style="margin:0;">Free plan &#8212; {{ state.seat_count }} of {{ state.seat_limit }} athlete{{ state.seat_limit|pluralize }}. Subscribe for unlimited athletes and agent runs.</p>
+          {% endif %}
+
+          <!-- The bill: base + per active seat (Stripe floors the seat line at 1). -->
+          <div style="border-top:1px solid var(--line-2);padding-top:11px;">
+            <p class="meso-eyebrow" style="margin:0 0 6px;">
+              {% if state.has_stripe_subscription %}Your monthly bill{% else %}If you subscribe{% endif %}
+            </p>
+            <div style="display:flex;flex-direction:column;gap:3px;">
+              <div class="meso-row-meta">Base <span style="float:right;color:var(--ink);">${{ base_price|floatformat:2 }}</span></div>
+              <div class="meso-row-meta">{{ billed_seats }} active seat{{ billed_seats|pluralize }} &#215; ${{ seat_unit_price|floatformat:2 }} <span style="float:right;color:var(--ink);">${{ seat_cost|floatformat:2 }}</span></div>
+              <div class="meso-row-name" style="border-top:1px solid var(--line-2);margin-top:5px;padding-top:6px;">Total <span style="float:right;">${{ projected_total|floatformat:2 }}/mo</span></div>
+            </div>
+            {% if not state.is_active %}
+              <p class="meso-muted" style="margin:8px 0 0;font-size:12px;">You aren't being charged on the free plan &#8212; this is what a subscription would cost at your current athlete count.</p>
+            {% endif %}
+          </div>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            {% if state.can_start_trial %}
+              <form method="post" action="{% url 'meso:billing_start_trial' %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--primary">Start free trial</button>
+              </form>
+            {% endif %}
+            {% if not state.is_active or state.on_trial or state.over_limit %}
+              <form method="post" action="{% url 'meso:billing_subscribe' %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn {% if state.can_start_trial %}meso-btn--ghost{% else %}meso-btn--primary{% endif %}">Subscribe</button>
+              </form>
+            {% endif %}
+            {% if state.has_stripe_subscription %}
+              <form method="post" action="{% url 'meso:billing_portal' %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--ghost">Manage billing</button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- right: agent usage this month -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="meso-card">
+          <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
+            <p class="meso-eyebrow" style="margin:0;">AI agent this month</p>
+            <div class="meso-spacer"></div>
+            <span class="meso-row-meta" style="color:var(--ink);">{{ runs_this_month }} run{{ runs_this_month|pluralize }}</span>
+          </div>
+
+          {% if state.agent.metered %}
+            <div style="padding:11px 16px;border-bottom:1px solid var(--line-2);">
+              <p class="meso-sub" style="margin:0;">
+                Free allowance &#8212; {{ state.agent.remaining }} of {{ state.agent.allowance }} run{{ state.agent.allowance|pluralize }} left this month.
+                {% if not state.agent.can_use %}<span style="color:var(--warn);">You're out of free runs &#8212; subscribe for unlimited.</span>{% endif %}
+              </p>
+            </div>
+          {% else %}
+            <div style="padding:11px 16px;border-bottom:1px solid var(--line-2);">
+              <p class="meso-sub" style="margin:0;">Unlimited agent runs on your plan.</p>
+            </div>
+          {% endif %}
+
+          {% for row in breakdown %}
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line-2);">
+              <span class="meso-row-name" style="min-width:0;">
+                {% if row.is_group %}<span class="meso-badge meso-badge--muted"><i></i>group</span> {% endif %}{{ row.label }}
+              </span>
+              <div class="meso-spacer"></div>
+              <span class="meso-row-meta">{{ row.runs }} run{{ row.runs|pluralize }}</span>
+            </div>
+          {% empty %}
+            <div class="meso-row" style="color:var(--dim);padding:16px;">
+              No agent runs yet this month. Open a program in the
+              <a href="{% url 'meso:designer' %}" style="color:var(--accent-ink);">Designer</a> and ask the agent for help.
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

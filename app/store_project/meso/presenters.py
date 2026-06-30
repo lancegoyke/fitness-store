@@ -253,6 +253,45 @@ def billing_state(coach):
     }
 
 
+def coach_billing(coach):
+    """The coach-facing billing & usage page context (agent-usage — coach surface).
+
+    The complement to the staff-only owner dashboard (``usage_dashboard``): that
+    shows org-wide **cost** (COGS); this shows *one coach* their **bill** (revenue
+    they owe — base + per active seat) and **how much agent they've used** this
+    month, broken down per athlete/group. The hard line: a coach sees what they pay
+    and how much they've used, **never** the internal per-run cost estimate, so this
+    context carries run counts and revenue only — no ``cost``/``margin`` keys.
+
+    ``billed_seats`` floors the active-seat count at one to mirror Stripe billing
+    (``stripe_gateway`` rejects a seat quantity of 0), so a coach with no active
+    athletes still sees the one-seat minimum their subscription would charge. The
+    month window is the report's current calendar month, the same window the
+    free-tier agent meter counts against, so ``runs_this_month`` reconciles with the
+    allowance in ``state["agent"]``.
+    """
+    state = billing_state(coach)
+    seats = state["seat_count"]
+    billed_seats = max(seats, 1)
+    base = agent_usage_report.BASE_PRICE_USD
+    seat_unit = agent_usage_report.SEAT_PRICE_USD
+    seat_cost = seat_unit * billed_seats
+    start, end = agent_usage_report.current_month_bounds()
+    breakdown = agent_usage_report.coach_run_breakdown(coach, start=start, end=end)
+    return {
+        "state": state,
+        "base_price": base,
+        "seat_unit_price": seat_unit,
+        "seats": seats,
+        "billed_seats": billed_seats,
+        "seat_cost": seat_cost,
+        "projected_total": base + seat_cost,
+        "runs_this_month": sum(row.runs for row in breakdown),
+        "breakdown": breakdown,
+        "month_label": start.strftime("%B %Y"),
+    }
+
+
 def athlete_pending(user):
     """Pending coach links the athlete sees on their training home (N4 Phase 2).
 
