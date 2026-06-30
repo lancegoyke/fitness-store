@@ -30,6 +30,20 @@ logger = logging.getLogger(__name__)
 # How many recent logged sessions feed the agent's grounding.
 RECENT_LOG_LIMIT = 5
 
+# The canned instruction behind "Draft with AI": a coach-readable ask (it shows as
+# the coach's turn in the persisted chat thread) that also tells the agent to build
+# the bare scaffold out — swap the placeholder rows and ``add`` accessory work for
+# the athlete's goal. The result lands in the review gate like any other batch.
+DRAFT_INSTRUCTION = (
+    "Draft a complete first training week for this athlete from scratch. The plan "
+    'currently holds only placeholder rows named "New exercise" — for each '
+    "training day, swap the placeholder for a sensible primary lift and add the "
+    "accessory exercises that round the day out for the athlete's goal. Give every "
+    "exercise sensible sets, reps, and an RPE target; leave loads blank or "
+    "conservative since no training maxes are known yet. Honor every active "
+    "contraindication — never program a movement one flags."
+)
+
 
 class AgentError(Exception):
     """Base class for agent failures the endpoint surfaces to the coach."""

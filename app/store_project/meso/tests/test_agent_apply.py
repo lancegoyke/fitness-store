@@ -133,6 +133,58 @@ class TestApplyChange:
         presc.refresh_from_db()
         assert presc.load == before
 
+    def test_add_creates_a_new_prescription_on_the_session(self):
+        # ``add`` is the verb that lets the agent draft a program: it creates a
+        # brand-new exercise row on the target session (it has no prescription to
+        # edit), ordered after the existing rows.
+        plan, session, presc = make_plan()  # one starter row at order 0
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.ADD,
+            prescription=None,
+            session=session,
+            payload={
+                "name": "Romanian Deadlift",
+                "sets": "3",
+                "reps": "8-10",
+                "rpe": "7",
+            },
+        )
+        result = agent_apply.apply_change(change)
+
+        added = session.prescriptions.order_by("order").last()
+        assert added.name == "Romanian Deadlift"
+        assert added.sets == "3"
+        assert added.reps == "8-10"
+        assert added.rpe == "7"
+        assert added.order > presc.order
+        assert result["kind"] == ProposedChange.Kind.ADD
+        assert session.prescriptions.count() == 2
+
+    def test_add_without_a_name_is_a_noop(self):
+        plan, session, _ = make_plan()
+        before = session.prescriptions.count()
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.ADD,
+            prescription=None,
+            session=session,
+            payload={"sets": "3"},
+        )
+        assert agent_apply.apply_change(change) is None
+        assert session.prescriptions.count() == before
+
+    def test_add_without_a_session_is_a_noop(self):
+        plan, _, _ = make_plan()
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.ADD,
+            prescription=None,
+            session=None,
+            payload={"name": "Plank"},
+        )
+        assert agent_apply.apply_change(change) is None
+
 
 class TestApplyBatch:
     def test_applies_non_rejected_and_marks_batch_applied(self):

@@ -28,8 +28,10 @@ PROPOSE_TOOL = {
     "description": (
         "Propose a batch of edits to the athlete's CURRENT training week. Each "
         "change must target a real session or exercise by the id given in the "
-        "plan context. Honor every active contraindication and the coach's "
-        "avoid-rules — never introduce a movement a contraindication flags."
+        "plan context (an 'add' introduces a NEW exercise row into a session, so "
+        "it targets a session_id, not a prescription). Honor every active "
+        "contraindication and the coach's avoid-rules — never introduce a movement "
+        "a contraindication flags."
     ),
     "input_schema": {
         "type": "object",
@@ -48,11 +50,14 @@ PROPOSE_TOOL = {
                     "properties": {
                         "kind": {
                             "type": "string",
-                            "enum": ["swap", "progress", "volume", "deload"],
+                            "enum": ["swap", "progress", "volume", "deload", "add"],
                         },
                         "session_id": {
                             "type": ["integer", "null"],
-                            "description": "Target session id from the plan context.",
+                            "description": (
+                                "Target session id from the plan context (required "
+                                "for an 'add', which creates a row in that session)."
+                            ),
                         },
                         "prescription_id": {
                             "type": ["integer", "null"],
@@ -85,22 +90,38 @@ PROPOSE_TOOL = {
                         "new_name": {
                             "type": "string",
                             "description": (
-                                "swap only: the exercise name to set on the row "
+                                "swap/add: the exercise name to set on the row "
                                 "(defaults to introduces_exercise if omitted)."
                             ),
                         },
                         "new_load": {
                             "type": "string",
                             "description": (
-                                "progress only: the load to set. For an "
-                                "absolute-load row (load_type 'abs') a weight in "
-                                "the plan's unit, e.g. '92.5 kg'; for a %1RM row "
-                                "(load_type 'pct') a percentage of 1RM, e.g. '82'."
+                                "progress (or an optional starting load for add): "
+                                "the load to set. For an absolute-load row "
+                                "(load_type 'abs') a weight in the plan's unit, e.g. "
+                                "'92.5 kg'; for a %1RM row (load_type 'pct') a "
+                                "percentage of 1RM, e.g. '82'. A new exercise added "
+                                "by 'add' is an absolute-load row."
                             ),
                         },
                         "new_sets": {
                             "type": "string",
-                            "description": "volume only: the set count to set, e.g. '4'.",
+                            "description": (
+                                "volume/add: the set count to set, e.g. '4'."
+                            ),
+                        },
+                        "new_reps": {
+                            "type": "string",
+                            "description": (
+                                "add only: the rep target for the new row, e.g. '8-10'."
+                            ),
+                        },
+                        "new_rpe": {
+                            "type": "string",
+                            "description": (
+                                "add only: the RPE target for the new row, e.g. '7'."
+                            ),
                         },
                     },
                     "required": ["kind", "title", "rationale"],
@@ -124,6 +145,13 @@ SYSTEM_PROMPT = (
     "alternative and name it in introduces_exercise.\n"
     "- Anchor load progressions to the values already in the plan; prefer small, "
     "defensible steps.\n"
+    "- Use the 'add' kind to introduce a NEW exercise into a day: target the day "
+    "by session_id, give the exercise in new_name, and set new_sets/new_reps/"
+    "new_rpe (and new_load only if you want a starting weight). This is how you "
+    "build out a bare or placeholder plan — fill each day with the work the "
+    "athlete's goal calls for, and swap any placeholder rows for real lifts. For "
+    "an add, set 'after' to the new exercise and leave 'before' empty so the "
+    "review reads cleanly.\n"
     "- Each exercise row carries a load_type: 'abs' means its load is an absolute "
     "weight in the plan's unit (kg/lb); 'pct' means the load is a percentage of "
     "1RM. When you progress a 'pct' lift, new_load is a percentage (keep it in a "

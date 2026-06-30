@@ -6,7 +6,8 @@ performs the structured edit each ``ProposedChange`` describes:
 - **swap**     → set the prescription's ``name`` to the introduced exercise;
 - **progress** → set the prescription's ``load``;
 - **volume**   → set the prescription's set count (``sets``);
-- **deload**   → flag the target week (``is_deload``).
+- **deload**   → flag the target week (``is_deload``);
+- **add**      → create a new exercise row on the target session (the draft verb).
 
 The edit value lives in ``ProposedChange.payload`` (built deterministically by
 ``agent.validation``). ``apply_batch`` runs every non-rejected change in a single
@@ -19,6 +20,7 @@ and is reported as skipped, never an error.
 from django.db import transaction
 
 from ..models import AgentProposalBatch
+from ..models import ExercisePrescription
 from ..models import ProposedChange
 from ..serializers import current_week
 
@@ -62,6 +64,37 @@ def _apply_volume(change):
     }
 
 
+def _apply_add(change):
+    """Create a new exercise row on the change's target session (the draft verb).
+
+    An ``add`` has no prescription to edit — it appends a brand-new row to the
+    day, ordered after the existing rows. A missing session or name is a safe
+    no-op (reported as skipped), mirroring the other kinds.
+    """
+    payload = change.payload or {}
+    name = payload.get("name")
+    session = change.session
+    if session is None or not name:
+        return None
+    last = session.prescriptions.order_by("-order").first()
+    order = (last.order + 1) if last is not None else 0
+    presc = ExercisePrescription.objects.create(
+        session=session,
+        name=name,
+        order=order,
+        sets=payload.get("sets", ""),
+        reps=payload.get("reps", ""),
+        load=payload.get("load", ""),
+        rpe=payload.get("rpe", ""),
+    )
+    return {
+        "id": change.pk,
+        "kind": change.kind,
+        "field": "added",
+        "value": presc.pk,
+    }
+
+
 def _apply_deload(change):
     """Flag the change's week as a deload (its session's week, else current)."""
     week = change.session.week if change.session_id else current_week(change.batch.plan)
@@ -87,6 +120,8 @@ def apply_change(change):
         return _apply_volume(change)
     if change.kind == ProposedChange.Kind.DELOAD:
         return _apply_deload(change)
+    if change.kind == ProposedChange.Kind.ADD:
+        return _apply_add(change)
     return None
 
 

@@ -178,6 +178,9 @@
                     {% csrf_token %}
                     <span class="meso-avatar meso-avatar--sm {% if a.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ a.initials }}</span>
                     <span style="flex:1;min-width:0;font-size:13px;color:var(--ink);">{{ a.name }}</span>
+                    {% if billing.can_use_agent and not a.has_working_plan %}
+                      <button type="submit" name="draft" value="agent" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Draft with AI</button>
+                    {% endif %}
                     <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">New program</button>
                   </form>
                 {% endfor %}
