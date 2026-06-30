@@ -880,3 +880,37 @@ _(Append dated entries here as decisions land.)_
   dev-facing comments of asserted tokens). Remaining Meso backlog: **S6 billing
   Phase 5 annual prices** (blocked on the owner's per-seat number + a Stripe
   annual Price) — no other autonomous slice outstanding.
+- 2026-06-30 — **First-time UX — Q2 fast-follow: agent-drafted starter plan
+  built, merged & deployed** (PR #335, squash `f94d48c`, migration `0023`):
+  closes the first-time-UX **Q2** fast-follow ("blank scaffold first, optional
+  agent draft as a fast follow"). When a coach creates a new individual program,
+  a **"Draft with AI"** CTA hands the freshly-created scaffold to the agent to
+  draft the first week; the proposal lands in the **existing review gate** (no
+  auto-apply). The agent previously only *edited* existing rows
+  (swap/progress/volume/deload), so it couldn't build onto a bare scaffold — this
+  adds an **`add`** verb (`ProposedChange.Kind.ADD`, migration `0023`, a
+  schemaless choices alter): the client tool gains the `add` kind +
+  `new_reps`/`new_rpe` fields + prompt guidance; `agent/validation.py` validates
+  an `add` (targets a *session* in the current week, builds the new row, requires
+  a name, and the **contraindication backstop screens the introduced movement**
+  exactly like a swap); `agent/apply.py` `_apply_add` creates the prescription on
+  the target session, ordered after existing rows. **Draft kickoff:**
+  `plan_create` takes a `draft` flag — it only fires on a **freshly-created** plan
+  (never overwrites an existing program), is **metered like the manual agent run**
+  (coach-row-locked `can_use_agent` reservation; the `AgentProposalBatch` table is
+  the run ledger), creates a `drafting` batch with the canned
+  `agent_service.DRAFT_INSTRUCTION`, and dispatches the job; the coach lands in
+  the designer where the persisted chat thread shows the draft resolve with a
+  "Review N changes →" link. Degrades to a **blank plan + a flash** when the
+  allowance is exhausted or no API key is configured. **UI:** "Draft with AI"
+  buttons on the athlete-profile first-program CTA and the roster "+ New program"
+  disclosure, gated on the agent allowance (and, on the roster, hidden for an
+  athlete who already has a plan — where the draft would be a no-op, the Codex P3
+  fix). Built red→green: **+48 pytest** (`test_plan_draft.py` + add-kind coverage
+  in `test_agent_validation.py`/`test_agent_apply.py`); 1263 project pytest + 115
+  vitest green, ruff + DjHTML + `makemigrations --check` clean. **Codex review
+  loop CLEAN after 1 fix iteration** (the roster no-op CTA). Prod-verified: deploy
+  succeeded (migration `0023` applied), `/meso/` serves 200 after restart.
+  Remaining Meso backlog unchanged: **S6 billing Phase 5 annual prices** (blocked
+  on the owner's per-seat number + a Stripe annual Price) — no other autonomous
+  slice outstanding.
