@@ -320,6 +320,12 @@ def deliver_screen(plan, week=None):
     """
     live = current_week(plan)
     target = week or live
+    # "Live" everywhere = the week ``current_week`` *resolves* to, not the raw
+    # ``is_current`` flag: a plan with no flagged week falls back to its earliest
+    # week as the live target, and the chip marker + the "not the live week"
+    # warning must agree with that fallback (else the screen contradicts itself —
+    # "sending Wk 1, not the live week (Wk 1)").
+    live_id = live.pk if live else None
     mesocycle = target.mesocycle if target else None
     session_count = target.sessions.count() if target else 0
     is_redelivery = target is not None and target.deliveries.exists()
@@ -328,7 +334,7 @@ def deliver_screen(plan, week=None):
         {
             "id": w.pk,
             "label": f"Wk {w.index}",
-            "is_current": w.is_current,
+            "is_current": w.pk == live_id,
             "is_delivered": w.delivered_at is not None,
             "is_target": target is not None and w.pk == target.pk,
         }
@@ -350,7 +356,7 @@ def deliver_screen(plan, week=None):
             "is_redelivery": is_redelivery,
             "week_id": target.pk if target else None,
             "week_label": f"Wk {target.index}" if target else "",
-            "is_current": target is not None and target.is_current,
+            "is_current": target is not None and target.pk == live_id,
             "current_label": f"Wk {live.index}" if live else "",
             "weeks": weeks,
         },

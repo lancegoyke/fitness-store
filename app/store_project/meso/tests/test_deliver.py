@@ -418,3 +418,23 @@ class TestDeliverScreen:
         ctx = self._screen(client, plan, week="nope").context["deliver"]
 
         assert ctx["week_id"] == week1.pk
+
+    def test_screen_no_flagged_week_treats_the_fallback_as_live(self, client):
+        # When no week is flagged ``is_current``, ``current_week`` falls back to the
+        # earliest week as the live target. The screen must agree: default target ==
+        # that fallback, marked live, with no contradictory "not the live week" notice.
+        plan, week1, _, _ = seed_plan()
+        week1.is_current = False
+        week1.save(update_fields=["is_current"])
+        add_week(plan, index=2, is_current=False)
+        client.force_login(plan.relationship.coach)
+
+        resp = self._screen(client, plan)
+
+        ctx = resp.context["deliver"]
+        assert ctx["week_id"] == week1.pk
+        assert ctx["is_current"] is True
+        assert "live week" not in resp.content.decode().lower()
+        # The fallback week is the one marked live in the selector.
+        live_chip = next(w for w in ctx["weeks"] if w["id"] == week1.pk)
+        assert live_chip["is_current"] is True
