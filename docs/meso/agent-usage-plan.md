@@ -1,6 +1,6 @@
 # Meso — agent usage & cost tracking
 
-**Status:** 🟢 Phase 1 (capture) shipped · 🟡 Phase 2 (report) pending · started 2026-06-30
+**Status:** 🟢 Phase 1 (capture) shipped · 🟢 Phase 2 (report) shipped · started 2026-06-30
 **Context:** Billing launches at **$9.99/mo base + $1/mo per active seat** (D13 in
 [`billing-plan.md`](./billing-plan.md)). The **AI agent is the cost-bearing
 feature** — every proposal run is a Claude API call. To confirm the $1/seat
@@ -140,7 +140,22 @@ def estimate_cost(model, usage) -> Decimal:
    helper) + `test_agent_usage.py` (client capture, persist on success+failure,
    trigger/billing snapshots). Existing fakes returning a bare dict normalize to
    zero usage, so they stayed green.
-2. **Report (NEXT).** The `meso_agent_usage_report` command + the admin readout.
+2. **Report — ✅ DONE (no migration).** `meso/billing/agent_usage_report.py`
+   `build_report(start, end)` aggregates a calendar month's **non-eval** runs into
+   per-coach **cost vs revenue → margin** (a `flagged` flag fires only for a
+   *paying* coach whose summed cost beats revenue — a free/trial coach's $0-revenue
+   cost is CAC by design, never a flag), a per-(coach, client) breakdown sorted by
+   cost (client = athlete on an individual plan, or the **group** on a group plan),
+   and roll-ups by `model`, `trigger`, and **billing tier** (`cost_bucket` → paid /
+   comped / free-trial off each run's snapshot `billing_status`). Revenue =
+   `BASE_PRICE_USD + SEAT_PRICE_USD × current billable seats` (the constants mirror
+   `presenters.PRICE_SUMMARY`; only `active`/`past_due` coaches bill, all else $0) —
+   an approximation, since per-month historical seat counts aren't stored. The
+   `meso_agent_usage_report` command renders a text table (`--month YYYY-MM`,
+   default current month) or `--json`. Unknown-model runs (cost `None`) are counted
+   as `unknown_cost_runs`, never summed as $0. The admin readout shipped in Phase 1.
+   Tests: `test_agent_usage_report.py` (helpers, month window, attribution, eval
+   exclusion, aggregation, margin/flagging, tier/model/trigger roll-ups, the command).
 3. *(Deferred)* dashboard; a margin-threshold alert (e.g. flag when a coach's
    monthly agent cost exceeds a set fraction of their revenue); a reconciliation
    job against the Anthropic Admin/Usage API.
