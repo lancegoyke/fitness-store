@@ -18,16 +18,18 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="{% static 'css/meso.css' %}" />
+    <link rel="stylesheet" href="{% static 'css/nav.css' %}" />
     {% block pwa %}{% endblock %}
     {% block head_extra %}{% endblock %}
   </head>
   <body class="meso">
     {% comment %}
-      The shared site nav reconnects Meso to the rest of Mastering Fitness
-      (design-system unification PR 3). Rendered by default; the phone-first
-      athlete PWA pages override this block to keep their installed-app feel.
+      The shared site nav (one nav.css across the whole site) reconnects the
+      Meso coach workspace to Mastering Fitness — design-system unification PR 3.
+      Athlete-PWA + offline surfaces override this block to opt out (a full site
+      nav there would link athletes to coach-only / dead-offline pages).
     {% endcomment %}
-    {% block site_nav %}{% include "meso/_meso_sitenav.html" %}{% endblock %}
+    {% block site_nav %}{% include "_nav.html" %}{% endblock %}
     <div class="meso-app">
       <nav class="meso-topnav">
         <a class="meso-brand" href="{% url 'meso:roster' %}">

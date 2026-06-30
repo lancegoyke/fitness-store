@@ -1,27 +1,31 @@
-<!-- THE NAVBAR -->
-<div class="box invert navbar nav-cluster">
-  <!-- intermediary wrapper -->
-  <div>
-    <a class="logo" href="{% url 'pages:home' %}">Mastering Fitness</a>
-    <div class="nav-menu menu-cluster">
-      <!-- intermediary wrapper -->
+<!-- THE NAVBAR (shared across the main site and the Meso app — see nav.css) -->
+{% with rm=request.resolver_match %}
+  <header class="nav">
+    <a class="brand" href="{% url 'pages:home' %}">Mastering Fitness</a>
+
+  <!-- CSS-only mobile disclosure: a focusable checkbox toggles the burger. -->
+    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Toggle navigation menu" />
+    <label for="nav-toggle" class="nav-burger" aria-hidden="true"><span></span><span></span><span></span></label>
+
+    <div class="nav-links">
       <nav>
-        <a href="{% url 'pages:single' 'about' %}">About</a>
-        <a href="{% url 'products:store' %}">Store</a>
-        <a href="{% url 'challenges:challenge_filtered_list' %}">Challenges</a>
-        <a href="{% url 'meso:roster' %}">Coaching</a>
-        <a href="{% url 'pages:contact' %}">Contact</a>
-
+        <a class="link{% if rm.url_name == 'single' and rm.kwargs.slug == 'about' %} active{% endif %}" href="{% url 'pages:single' 'about' %}">About</a>
+        <a class="link{% if rm.namespace == 'products' %} active{% endif %}" href="{% url 'products:store' %}">Store</a>
+        <a class="link{% if rm.namespace == 'challenges' %} active{% endif %}" href="{% url 'challenges:challenge_filtered_list' %}">Challenges</a>
+        <a class="link{% if rm.namespace == 'meso' %} active{% endif %}" href="{% url 'meso:roster' %}">Coaching</a>
+        <a class="link{% if rm.url_name == 'contact' %} active{% endif %}" href="{% url 'pages:contact' %}">Contact</a>
+      </nav>
+      <span class="spacer"></span>
+      <nav>
         {% if user.is_authenticated %}
-          <a href="{% url 'users:profile' %}">Account</a>
-          <a href="{% url 'account_logout' %}">Logout</a>
+          <a class="link" href="{% url 'users:profile' %}">Account</a>
+          <a class="link" href="{% url 'account_logout' %}">Logout</a>
         {% else %}
-          <a href="{% url 'account_login' %}">Login</a>
-          <a href="{% url 'account_signup' %}">Signup</a>
+          <a class="link" href="{% url 'account_login' %}">Login</a>
+          <a class="link" href="{% url 'account_signup' %}">Signup</a>
         {% endif %}
-
       </nav>
     </div>
-  </div>
-</div>
-<!-- END .navbar -->
+  </header>
+{% endwith %}
+<!-- END .nav -->

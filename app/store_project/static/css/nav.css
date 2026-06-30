@@ -1,0 +1,190 @@
+/* ============================================================================
+   Shared site nav — design-system unification, PR 3.
+
+   One nav, one stylesheet. Loaded by the main-site bases (_base / _base_wide /
+   _base_full / home) AND by Meso's _meso_base, so the Meso app reads as part of
+   Mastering Fitness instead of a separate design world. Refactored off the old
+   Every-Layout `.box.invert.navbar` markup onto the cleaner shared-token bar
+   validated in docs/spikes/basecoat/meso.html.
+
+   Colours come from --nav-bg / --nav-fg, which BOTH base.css (:root) and
+   meso.css (.meso) define to the same values; the fallbacks keep the bar legible
+   even if a page forgets to define them. Font-family is intentionally left to
+   inherit so the bar matches whichever surface hosts it.
+   ============================================================================ */
+
+.nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 14px clamp(16px, 4vw, 40px);
+  background: var(--nav-bg, #0a0a0a);
+  color: var(--nav-fg, #ededed);
+}
+
+.nav .brand {
+  flex: 0 0 auto;
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+  color: var(--nav-fg, #ededed);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.nav .brand:hover,
+.nav .brand:focus-visible {
+  text-decoration: none;
+}
+
+.nav-links {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 22px;
+}
+
+.nav-links nav {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+
+.nav .link {
+  color: var(--nav-fg, #ededed);
+  opacity: 0.82;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.nav .link:hover,
+.nav .link:focus-visible {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 5px;
+}
+
+.nav .link.active {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 5px;
+  text-decoration-thickness: 2px;
+}
+
+.nav .spacer {
+  margin-left: auto;
+}
+
+/* The mobile disclosure controls are hidden on desktop, where the full menu is
+   always visible. */
+.nav-toggle,
+.nav-burger {
+  display: none;
+}
+
+/* ---- mobile: a dependency-free, CSS-only burger menu ---------------------- */
+@media (max-width: 760px) {
+  .nav {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  /* The checkbox stays in the DOM (it drives the :checked toggle) but is
+     visually hidden while remaining keyboard-focusable. */
+  .nav-toggle {
+    display: block;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .nav-burger {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    margin-left: auto;
+    width: 42px;
+    height: 42px;
+    padding: 9px;
+    border-radius: var(--radius, 8px);
+    cursor: pointer;
+  }
+
+  .nav-burger span {
+    display: block;
+    width: 100%;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--nav-fg, #ededed);
+    transition:
+      transform 0.2s ease,
+      opacity 0.2s ease;
+  }
+
+  /* Visible focus ring on the burger when its (hidden) checkbox has focus. */
+  .nav-toggle:focus-visible ~ .nav-burger {
+    outline: 2px solid var(--nav-fg, #ededed);
+    outline-offset: 2px;
+  }
+
+  .nav-links {
+    display: none;
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .nav-links nav {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    width: 100%;
+  }
+
+  .nav .spacer {
+    display: none;
+  }
+
+  .nav .link {
+    opacity: 1;
+    padding: 11px 6px;
+    font-size: 15px;
+    border-bottom: 1px solid rgb(255 255 255 / 0.08);
+  }
+
+  /* Open the menu when the checkbox is checked. */
+  .nav-toggle:checked ~ .nav-links {
+    display: flex;
+  }
+
+  /* Morph the burger into an X while open. */
+  .nav-toggle:checked ~ .nav-burger span:nth-child(1) {
+    transform: translateY(7px) rotate(45deg);
+  }
+
+  .nav-toggle:checked ~ .nav-burger span:nth-child(2) {
+    opacity: 0;
+  }
+
+  .nav-toggle:checked ~ .nav-burger span:nth-child(3) {
+    transform: translateY(-7px) rotate(-45deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-burger span {
+    transition: none;
+  }
+}
