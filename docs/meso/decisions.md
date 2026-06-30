@@ -949,3 +949,19 @@ _(Append dated entries here as decisions land.)_
   after restart. Remaining Meso backlog unchanged: **S6 billing Phase 5 annual
   prices** (blocked on the owner's per-seat number + a Stripe annual Price) — no
   other autonomous slice outstanding.
+- 2026-06-30 — **Billing price + structure decided (D13): base + per-seat,
+  TrainHeroic-style.** The long-open "per-seat price TBD" is settled: **$9.99/mo
+  flat base + $1/mo per active seat**, USD — mirroring TrainHeroic's direct-pay
+  Coach Plan. This changes the billing *shape* from a single per-seat Price to a
+  **two-line-item** subscription (flat base + per-seat quantity), so it's a code
+  slice, not just config: **Phase 6** in [`billing-plan.md`](./billing-plan.md)
+  (`stripe_gateway.subscribe` two line items, a nullable `stripe_base_item_id`
+  model field + small migration, seat-sync/`reconcile_seats` adjusting only the
+  seat item, paywall copy "$9.99/mo + $1/athlete"; annual prices ride along once
+  the annual numbers are set). Buildable autonomously red→green (mock the `stripe`
+  SDK — no live Stripe access needed); ships **dormant** until the owner creates
+  both Prices (`MESO_BASE_PRICE_ID` + `MESO_SEAT_PRICE_ID`) and registers the
+  webhook (`MESO_STRIPE_WEBHOOK_SECRET`). **Phase 6 is now the next Meso slice**
+  (recorded per the owner — not building yet). **Secret-handling note:** Stripe
+  Price ids are not secrets (fine to share); the webhook signing secret + the
+  Stripe secret key go straight into the prod env, never through chat / the agent.
