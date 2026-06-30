@@ -1,0 +1,1 @@
+Meso margin alert: {{ count }} coach{{ count|pluralize:",es" }} over {{ threshold_pct }}% for {{ month_label }}

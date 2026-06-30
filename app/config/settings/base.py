@@ -321,6 +321,12 @@ MESO_BASE_PRICE_ID = os.environ.get("MESO_BASE_PRICE_ID", "")
 # endpoint is registered in Stripe; the webhook view rejects unsigned/unverifiable
 # requests, so billing stays dormant (not broken) until this is set.
 MESO_STRIPE_WEBHOOK_SECRET = os.environ.get("MESO_STRIPE_WEBHOOK_SECRET", "")
+# Agent margin-alert threshold (agent-usage tracking Phase 3). A paying coach whose
+# estimated monthly agent cost exceeds this fraction of their plan revenue is an
+# early-warning "at risk" — the monthly ``meso-agent-margin-alert`` sweep emails the
+# owner. Default 0.5 (50%); the ``meso_agent_margin_alert`` command's ``--threshold``
+# overrides it. See ``docs/meso/agent-usage-plan.md``.
+MESO_MARGIN_ALERT_THRESHOLD = os.environ.get("MESO_MARGIN_ALERT_THRESHOLD") or "0.5"
 
 # Crispy Forms
 CRISPY_ALLOWED_TEMPLATE_PACKS = ("bulma",)

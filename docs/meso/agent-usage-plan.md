@@ -1,6 +1,6 @@
 # Meso — agent usage & cost tracking
 
-**Status:** 🟢 Phase 1 (capture) shipped · 🟢 Phase 2 (report) shipped · started 2026-06-30
+**Status:** 🟢 Phase 1 (capture) shipped · 🟢 Phase 2 (report) shipped · 🟢 Phase 3 (margin alert) shipped · started 2026-06-30
 **Context:** Billing launches at **$9.99/mo base + $1/mo per active seat** (D13 in
 [`billing-plan.md`](./billing-plan.md)). The **AI agent is the cost-bearing
 feature** — every proposal run is a Claude API call. To confirm the $1/seat
@@ -156,9 +156,29 @@ def estimate_cost(model, usage) -> Decimal:
    as `unknown_cost_runs`, never summed as $0. The admin readout shipped in Phase 1.
    Tests: `test_agent_usage_report.py` (helpers, month window, attribution, eval
    exclusion, aggregation, margin/flagging, tier/model/trigger roll-ups, the command).
-3. *(Deferred)* dashboard; a margin-threshold alert (e.g. flag when a coach's
-   monthly agent cost exceeds a set fraction of their revenue); a reconciliation
-   job against the Anthropic Admin/Usage API.
+3. **Margin alert — ✅ DONE (migration `0026`, schedule-only; no Stripe).** The
+   early-warning push on top of Phase 2's passive report. `CoachUsage` gained
+   `cost_to_revenue_ratio` (`None` when revenue is $0) and `at_risk(threshold)` —
+   a *paying* coach whose estimated agent cost crossed `threshold × revenue`
+   (strict; `flagged` is the `threshold == 1` case it generalizes). A new
+   `agent_usage_report.margin_alerts(report, threshold)` collects the at-risk
+   coaches worst-ratio-first, and `previous_month_bounds()` gives the closed-month
+   window for the cron. `notifications/emails.send_margin_alert_email` emails the
+   owner (`settings.ADMINS`, from the `SERVER_EMAIL` robot) a summary; sent only
+   when there are alerts and an admin address. The `meso_agent_margin_alert`
+   command (`--month` / `--last-month` / `--threshold` / `--dry-run`) builds the
+   month, finds the at-risk coaches, prints them, and sends the email best-effort
+   (a mail failure is logged, never fails the run). The default threshold is
+   `MESO_MARGIN_ALERT_THRESHOLD` (0.5). `tasks.agent_margin_alert` wraps it with
+   `--last-month`; migration `0026` registers a **monthly** `django_q.Schedule`
+   (`schedule_type="M"`) pointing at it — the first non-daily Meso sweep. Free/
+   trial coaches never alert ($0 revenue is CAC by design). Tests:
+   `test_agent_margin_alert.py` (ratio/at-risk/margin_alerts pure logic, the
+   previous-month window, the owner email, the command across windows/thresholds/
+   dry-run/validation) + `test_scheduler.py` (the monthly registration + the task
+   wrapper over the previous month).
+4. *(Deferred)* an owner **dashboard**; a reconciliation job against the Anthropic
+   Admin/Usage API (sanity-check our estimate vs the invoice).
 
 This should land **before or with billing go-live** so the very first paid month
 produces real margin data — but it's independent of the Stripe wiring, so it can
@@ -184,8 +204,9 @@ this tracking is what tells us **whether** to pull either:
 ## Open values
 
 - **Rate table** — current Anthropic pricing (above); update on price changes.
-- **Margin-alert threshold** — e.g. flag a coach when monthly agent cost > 50%
-  of their revenue. (Phase 3, deferred.)
+- **Margin-alert threshold** — flag a coach when monthly agent cost > 50% of
+  their revenue. **Decided & shipped (Phase 3):** default `0.5` via
+  `MESO_MARGIN_ALERT_THRESHOLD`, per-run overridable with `--threshold`.
 
 ## Testing
 

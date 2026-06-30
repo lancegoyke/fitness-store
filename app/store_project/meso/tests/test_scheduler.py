@@ -17,6 +17,7 @@ under ``Q_CLUSTER["sync"]``); we test the unit of work and its registration.
 
 import importlib
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 from django.core import mail
@@ -24,7 +25,13 @@ from django.utils import timezone
 from django_q.models import Schedule
 
 from store_project.meso import tasks
+from store_project.meso.billing import agent_usage_report as report_mod
+from store_project.meso.factories import AgentProposalBatchFactory
+from store_project.meso.factories import CoachSubscriptionFactory
+from store_project.meso.factories import PlanFactory
+from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachInvite
+from store_project.meso.models import CoachSubscription
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -55,6 +62,33 @@ class TestInviteTasks:
         assert mail.outbox[0].to == ["ath@example.com"]
 
 
+# -- the margin-alert task runs over the previous month --------------------
+
+
+class TestMarginAlertTask:
+    def test_margin_alert_task_emails_owner_for_last_month_risk(self):
+        """The wrapper reports the *previous* month and alerts the owner."""
+        prev_start, _ = report_mod.previous_month_bounds()
+        sub = CoachSubscriptionFactory(status=CoachSubscription.Status.ACTIVE)
+        coach = sub.coach
+        plan = PlanFactory(relationship__coach=coach)
+        batch = AgentProposalBatchFactory(
+            plan=plan,
+            coach=coach,
+            billing_status=CoachSubscription.Status.ACTIVE,
+            estimated_cost_usd=Decimal("9.00"),  # > revenue ($10.99) fraction
+        )
+        AgentProposalBatch.objects.filter(pk=batch.pk).update(
+            created_at=prev_start + timedelta(days=1)
+        )
+
+        tasks.agent_margin_alert()
+
+        assert len(mail.outbox) == 1
+        assert mail.outbox[0].to == ["lance@lancegoyke.com"]
+        assert coach.display_name() in mail.outbox[0].body
+
+
 # -- the registered schedules ----------------------------------------------
 
 
@@ -77,3 +111,26 @@ class TestScheduleRegistration:
             module_path, _, attr = func.rpartition(".")
             resolved = getattr(importlib.import_module(module_path), attr)
             assert callable(resolved)
+
+
+class TestMarginAlertScheduleRegistration:
+    NAME = "meso-agent-margin-alert"
+    FUNC = "store_project.meso.tasks.agent_margin_alert"
+
+    def test_margin_alert_schedule_registered_monthly(self):
+        sched = Schedule.objects.get(name=self.NAME)
+        assert sched.func == self.FUNC
+        assert sched.schedule_type == Schedule.MONTHLY
+
+    def test_margin_alert_schedule_anchored_to_month_boundary(self):
+        # Anchored to the 1st of a month in the future, so it doesn't fire on
+        # deploy (a surprise owner email) or lag a month behind the deploy day.
+        sched = Schedule.objects.get(name=self.NAME)
+        assert sched.next_run is not None
+        assert timezone.localtime(sched.next_run).day == 1  # local month boundary
+        assert sched.next_run > timezone.now()
+
+    def test_margin_alert_func_is_importable_callable(self):
+        module_path, _, attr = self.FUNC.rpartition(".")
+        resolved = getattr(importlib.import_module(module_path), attr)
+        assert callable(resolved)
