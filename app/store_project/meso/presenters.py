@@ -19,6 +19,7 @@ from django.utils.timesince import timesince
 from . import adherence
 from .billing import access as billing_access
 from .billing import agent_usage_report
+from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachSubscription
@@ -30,10 +31,12 @@ from .models import WeekDelivery
 from .one_rm import one_rm_values
 from .serializers import _fmt_num
 from .serializers import _num
+from .serializers import _phase_states
 from .serializers import current_week
 from .serializers import diff_week_snapshots
 from .serializers import initials
 from .serializers import latest_delivered_week
+from .serializers import serialize_mesocycle
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 from .serializers import serialize_week_snapshot
@@ -126,6 +129,115 @@ def profile_athlete(user):
         "compliance": None,
         "status": "",
         "status_label": "",
+    }
+
+
+def _profile_status(link, working_plan, delivered_plan):
+    """The program block's status badge — the athlete's most actionable state.
+
+    ``needs_review`` (a pending agent proposal the coach can apply now) outranks
+    ``drafting`` (a run still in flight off the request thread), which outranks the
+    steady ``delivered``. Scoped to the coach's *own* plans for this athlete — the
+    individual working plan and the delivered plan. A group-delivery snapshot's
+    proposals live on the shared group plan (reviewed from the group designer, not
+    this individual profile), so a group-only athlete simply reads ``delivered``.
+    """
+    plan_ids = {delivered_plan.pk}
+    if working_plan is not None:
+        plan_ids.add(working_plan.pk)
+    batches = AgentProposalBatch.objects.filter(plan_id__in=plan_ids)
+    if batches.filter(status=AgentProposalBatch.Status.PENDING).exists():
+        return "needs_review", "Needs review"
+    if batches.filter(status=AgentProposalBatch.Status.DRAFTING).exists():
+        return "drafting", "Drafting…"
+    return "delivered", "Delivered"
+
+
+def _profile_results(link):
+    """The athlete's most recent *done* session, scored for the profile card.
+
+    Reuses ``session_results`` (the coach results screen) so the profile's "Latest
+    session" card shows the same completion %, RPE-vs-target, and overshoot flag.
+    Scoped to this link's plans (individual *and* group-delivery snapshot, both
+    rooted at the relationship), to non-archived plans, and to the athlete's own
+    *done* logs — a pending "Save progress" draft isn't a result. ``None`` when the
+    athlete has logged nothing yet (the card is hidden).
+    """
+    log = (
+        SessionLog.objects.filter(
+            session__week__mesocycle__plan__relationship=link,
+            athlete=link.athlete,
+            status=SessionLog.Status.DONE,
+        )
+        .exclude(session__week__mesocycle__plan__status=Plan.Status.ARCHIVED)
+        .select_related("session__week__mesocycle__plan__relationship")
+        .order_by("-date", "-created_at")
+        .first()
+    )
+    if log is None:
+        return None
+    return session_results(log.session)["summary"]
+
+
+def profile_program(link, working_plan):
+    """The athlete-profile program block — what the athlete is currently training.
+
+    Lights up the long-dead ``has_program`` block (``macrocycle``/``compliance``/
+    ``results_summary`` were ``[]``/``None`` placeholders). It keys off the
+    athlete's most recently delivered week (``adherence.link_latest_delivered_week``
+    — the same week the roster meter measures), so everything describes the
+    athlete's *delivered* reality, spanning the coach's individual plan and any
+    group-delivery snapshot:
+
+    - ``block``/``week`` — the delivered week's mesocycle name + ``Wk N`` label;
+    - ``macrocycle`` — the plan's blocks, the rail positioned at that week's block;
+    - ``compliance`` — adherence to that week (``adherence.link_compliance``);
+    - ``status`` — needs_review / drafting / delivered (``_profile_status``);
+    - ``results_summary`` — the athlete's most recent logged session.
+
+    ``has_program`` is False — the template falls back to the create / in-progress
+    empty state — until a *measurable* week has been delivered (compliance is
+    ``None`` with no delivered week, or an empty one). The goal still surfaces from
+    the plan the coach is shaping so the left rail isn't blank pre-delivery.
+    """
+    week = adherence.link_latest_delivered_week(link)
+    compliance = adherence.link_compliance(link)
+    if week is None or compliance is None:
+        goal = working_plan.goal if working_plan else ""
+        return {
+            "athlete": {
+                "has_program": False,
+                "block": "",
+                "week": "",
+                "compliance": None,
+                "status": "",
+                "status_label": "",
+                "goals": [goal] if goal else [],
+            },
+            "macrocycle": [],
+            "results_summary": None,
+        }
+
+    plan = week.mesocycle.plan
+    mesocycles = list(plan.mesocycles.all())
+    states = _phase_states(mesocycles, week.mesocycle)
+    macrocycle = [serialize_mesocycle(m, s) for m, s in zip(mesocycles, states)]
+    status, status_label = _profile_status(link, working_plan, plan)
+    # The goal of the plan the coach is actively shaping if there is one, else the
+    # delivered plan's — a group-only athlete has no individual working plan.
+    goal = (working_plan.goal if working_plan else "") or plan.goal
+    return {
+        "athlete": {
+            "has_program": True,
+            "block": week.mesocycle.name,
+            "week": f"Wk {week.index}",
+            "compliance": compliance,
+            "status": status,
+            "status_label": status_label,
+            "goals": [goal] if goal else [],
+        },
+        "macrocycle": macrocycle,
+        "results_summary": _profile_results(link),
     }
 
 

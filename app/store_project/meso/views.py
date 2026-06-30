@@ -387,18 +387,23 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         if link is None:
             raise Http404("Unknown athlete")
         ctx["active"] = "roster"
-        ctx["athlete"] = presenters.profile_athlete(link.athlete)
-        ctx["coach_style"] = presenters.coach_style(self.request.user)
         # The relationship's working program (first-time-UX Phase 1): when one
         # exists the CTAs open it in the designer; when not, they create one.
-        ctx["working_plan"] = link.working_plan()
+        working_plan = link.working_plan()
+        ctx["working_plan"] = working_plan
+        # Light up the program block off the athlete's delivered reality (current
+        # block/week, the macrocycle rail, adherence, status, latest session). The
+        # athlete identity record carries the program overlay merged in.
+        athlete = presenters.profile_athlete(link.athlete)
+        program = presenters.profile_program(link, working_plan)
+        athlete.update(program["athlete"])
+        ctx["athlete"] = athlete
+        ctx["macrocycle"] = program["macrocycle"]
+        ctx["results_summary"] = program["results_summary"]
+        ctx["coach_style"] = presenters.coach_style(self.request.user)
         # Whether to offer "Draft with AI" on the create CTA — the same agent
         # allowance gate the endpoint enforces (the draft *is* an agent run).
         ctx["can_use_agent"] = billing_access.can_use_agent(self.request.user)
-        # Current block / macrocycle / latest results arrive with the program
-        # schema (Phase 2) and logging (Phase 3).
-        ctx["macrocycle"] = []
-        ctx["results_summary"] = None
         return ctx
 
 
