@@ -21,19 +21,24 @@
   padding: 14px clamp(16px, 4vw, 40px);
   background: var(--nav-bg, #0a0a0a);
   color: var(--nav-fg, #ededed);
-  /* One typeface for the nav in every context. Without this it inherits the
-     host font — Verdana on the main site (base.css `* { font-family }`), Hanken
-     in the Meso shell — so the same bar reads at different weights/widths. A
-     neutral system stack (matching the spike) keeps it identical everywhere and
-     needs no extra font load. */
+  /* One typeface AND line-height for the nav in every context. Otherwise it
+     inherits the host's: Verdana / line-height 1.5 on the main site (base.css's
+     universal `* { font-family; line-height }`), Hanken / browser-default
+     line-height in the Meso shell — so the same bar reads at different
+     weights/widths and, because the taller line-height grows the brand's line
+     box, a different overall height. A neutral system stack + fixed line-height
+     keep it identical everywhere and need no extra font load. */
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.2;
 }
 
-/* base.css sets `* { font-family: Verdana }` (specificity 0,0,0) directly on
-   every element, which would override the inherited nav font on the links/brand.
-   Re-assert inheritance so they all pick up the .nav typeface above. */
+/* base.css sets `* { font-family: Verdana; line-height: 1.5 }` (specificity
+   0,0,0) directly on every element, which would override the *inherited* nav
+   font/line-height on the links/brand. Re-assert inheritance so they all pick up
+   the .nav values above (keeping the bar the same height in both shells). */
 .nav * {
   font-family: inherit;
+  line-height: inherit;
 }
 
 .nav .brand {
