@@ -123,6 +123,29 @@ class TestSeedCreatesDemo:
         seed(delete=True)
         assert not User.objects.filter(email="hopeful@example.com").exists()
 
+    def test_creates_a_past_athlete(self):
+        # The relationship-history surface ("Past athletes"): a former athlete on
+        # an ENDED link, so the surface is populated on a fresh DB.
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        past = CoachAthlete.objects.for_coach(coach).closed()
+        assert past.count() == 1
+        link = past.get()
+        assert link.status == CoachAthlete.Status.ENDED
+        assert link.athlete.email == "alum@example.com"
+        assert link.ended_at is not None
+
+    def test_reseed_does_not_duplicate_past_athlete(self):
+        seed()
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        assert CoachAthlete.objects.for_coach(coach).closed().count() == 1
+
+    def test_delete_removes_past_athlete(self):
+        seed()
+        seed(delete=True)
+        assert not User.objects.filter(email="alum@example.com").exists()
+
     def test_creates_one_sample_plan(self):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
@@ -342,9 +365,10 @@ class TestIdempotent:
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
         assert User.objects.filter(email__in=ATHLETE_EMAILS).count() == 5
-        # 5 active athletes + 1 pending athlete→coach request (N4 Phase 2).
+        # 5 active athletes + 1 pending athlete→coach request (N4 Phase 2) + 1
+        # ended past athlete (the relationship-history surface).
         assert CoachAthlete.objects.for_coach(coach).active().count() == 5
-        assert CoachAthlete.objects.for_coach(coach).count() == 6
+        assert CoachAthlete.objects.for_coach(coach).count() == 7
         assert Plan.objects.for_coach(coach).count() == 1
         # Children are not re-created on a second run (the individual sample plan;
         # ``for_coach`` excludes the group-delivery snapshots seeded in Phase 4).

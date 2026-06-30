@@ -11,6 +11,7 @@ from .views import DeliverView
 from .views import GroupDetailView
 from .views import MesoDesignerView
 from .views import OfflineView
+from .views import RelationshipHistoryView
 from .views import ResultsView
 from .views import RosterView
 from .views import UsageDashboardView
@@ -18,6 +19,12 @@ from .views import UsageDashboardView
 app_name = "meso"
 urlpatterns = [
     path("", RosterView.as_view(), name="roster"),
+    # Past athletes — ended/declined relationships, with re-invite.
+    path(
+        "history/",
+        RelationshipHistoryView.as_view(),
+        name="relationship_history",
+    ),
     path("designer/", MesoDesignerView.as_view(), name="designer"),
     # Owner-facing agent usage + margin dashboard (agent-usage Phase 4) —
     # staff-gated, all-coach; the web read-out of meso_agent_usage_report.
@@ -108,6 +115,11 @@ urlpatterns = [
         "relationship/<uuid:token>/end/",
         views.relationship_end,
         name="relationship_end",
+    ),
+    path(
+        "relationship/<uuid:token>/reinvite/",
+        views.relationship_reinvite,
+        name="relationship_reinvite",
     ),
     # Athlete → coach requests (N4 Phase 2): the athlete asks, then may withdraw.
     path("request/", views.athlete_request_coach, name="athlete_request_coach"),

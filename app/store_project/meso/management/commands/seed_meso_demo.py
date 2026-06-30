@@ -354,6 +354,11 @@ PENDING_INVITE_EMAIL = "prospect@example.com"
 PENDING_REQUEST_EMAIL = "hopeful@example.com"
 PENDING_REQUEST_NAME = "Hopeful Newcomer"
 
+# A former athlete (an ENDED link) so the relationship-history surface ("Past
+# athletes", re-invitable) is visible on a fresh DB.
+PAST_ATHLETE_EMAIL = "alum@example.com"
+PAST_ATHLETE_NAME = "Jordan Alumni"
+
 
 def _months_before(today, months):
     """The date ``months`` whole months before ``today`` (day clamped to ≤28)."""
@@ -401,13 +406,14 @@ class Command(BaseCommand):
         self._ensure_group(coach)
         self._ensure_pending_invite(coach)
         self._ensure_pending_request(coach)
+        self._ensure_past_athlete(coach, today)
 
         self.stdout.write(
             self.style.SUCCESS(
                 f"✓ Meso demo seeded for {coach.email}: "
                 f"{len(ATHLETES)} athletes, 1 group (+ shared program), "
                 "1 sample plan, 1 logged session, 1 pending invite, "
-                "1 pending request."
+                "1 pending request, 1 past athlete."
             )
         )
 
@@ -422,6 +428,8 @@ class Command(BaseCommand):
         ).delete()
         # Drop the requester (their pending request link cascades with the user).
         User.objects.filter(email=PENDING_REQUEST_EMAIL).delete()
+        # Drop the former athlete (their ended link cascades with the user).
+        User.objects.filter(email=PAST_ATHLETE_EMAIL).delete()
         emails = [spec["email"] for spec in ATHLETES]
         deleted, _ = User.objects.filter(email__in=emails).delete()
         self.stdout.write(
@@ -521,6 +529,36 @@ class Command(BaseCommand):
                 "invited_by": CoachAthlete.InvitedBy.ATHLETE,
                 "responded_at": None,
                 "ended_at": None,
+            },
+        )
+
+    def _ensure_past_athlete(self, coach, today):
+        """A former athlete on an ENDED link so the history surface shows.
+
+        The relationship-history page ("Past athletes") lists ended/declined
+        links — a coach used to train this person, then the relationship ended.
+        ``update_or_create`` keeps a reseed idempotent and repairs the row back to
+        ``ended`` if a prior run (or a manual reopen) left it elsewhere.
+        """
+        alum, created = User.objects.get_or_create(
+            email=PAST_ATHLETE_EMAIL,
+            defaults={
+                "username": PAST_ATHLETE_EMAIL,
+                "name": PAST_ATHLETE_NAME,
+                "birthday": _years_before(today, 31),
+            },
+        )
+        if created:
+            alum.set_unusable_password()
+            alum.save(update_fields=["password"])
+        CoachAthlete.objects.update_or_create(
+            coach=coach,
+            athlete=alum,
+            defaults={
+                "status": CoachAthlete.Status.ENDED,
+                "invited_by": CoachAthlete.InvitedBy.COACH,
+                "responded_at": None,
+                "ended_at": timezone.now(),
             },
         )
 
