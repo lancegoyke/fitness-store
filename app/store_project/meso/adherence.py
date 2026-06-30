@@ -10,6 +10,7 @@ Nothing here mutates state; it's a pure read layer the presenter formats.
 """
 
 from .models import CoachAthlete
+from .models import Plan
 from .models import SessionLog
 from .models import Week
 
@@ -20,14 +21,18 @@ def link_latest_delivered_week(link):
     Spans both the coach's individual plan and any group-delivery snapshot
     (``source_group`` set) rooted at this relationship — both are work this coach
     delivered to the athlete, so adherence should reflect whichever week was
-    delivered most recently. Returns ``None`` when the coach hasn't delivered
-    anything to this athlete yet.
+    delivered most recently. **Archived** plans are excluded (matching
+    ``working_plan`` / ``athlete_home``): removing an athlete from a group
+    archives their materialized snapshot while the link stays active, and the
+    athlete can no longer see or log it, so it must not drive the meter. Returns
+    ``None`` when the coach hasn't delivered anything live to this athlete yet.
     """
     return (
         Week.objects.filter(
             mesocycle__plan__relationship=link,
             delivered_at__isnull=False,
         )
+        .exclude(mesocycle__plan__status=Plan.Status.ARCHIVED)
         .select_related("mesocycle")
         .order_by("-delivered_at")
         .first()
@@ -78,14 +83,15 @@ def recent_logs(coach, *, limit=8):
     """The coach's athletes' most recently completed sessions (newest first).
 
     Scoped to the coach's *active* links (an ended relationship's history drops
-    off the feed, matching the roster's athlete list) and to *done* logs only —
-    the feed answers "who finished a session," not "who opened one." Spans
-    individual and group-delivered sessions alike, since both root at the
-    athlete's relationship with the coach. Ordered by when the log was written
-    (``created_at``), so re-saving an old workout surfaces as fresh activity and
-    the order never depends on the nullable workout ``date``. ``select_related``
-    the athlete + session so the presenter formats each event without a per-row
-    query.
+    off the feed, matching the roster's athlete list), to non-**archived** plans
+    (a removed group member's archived snapshot must not resurface), and to
+    *done* logs only — the feed answers "who finished a session," not "who opened
+    one." Spans individual and group-delivered sessions alike, since both root at
+    the athlete's relationship with the coach. Ordered by when the log was
+    written (``created_at``), so re-saving an old workout surfaces as fresh
+    activity and the order never depends on the nullable workout ``date``.
+    ``select_related`` the athlete + session so the presenter formats each event
+    without a per-row query.
     """
     return list(
         SessionLog.objects.filter(
@@ -95,6 +101,7 @@ def recent_logs(coach, *, limit=8):
                 CoachAthlete.Status.ACTIVE
             ),
         )
+        .exclude(session__week__mesocycle__plan__status=Plan.Status.ARCHIVED)
         .select_related("athlete", "session")
         .order_by("-created_at")[:limit]
     )

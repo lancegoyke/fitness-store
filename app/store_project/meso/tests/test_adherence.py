@@ -29,19 +29,27 @@ from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
 
 
-def delivered_week(rel, *, sessions=3, done=0, delivered_at=None, index=1):
+def delivered_week(
+    rel, *, sessions=3, done=0, delivered_at=None, index=1, archived=False
+):
     """A delivered week under ``rel`` with ``sessions`` days, ``done`` of them logged.
 
     Returns the ``Week``. The first ``done`` sessions get a *done* ``SessionLog``
-    for the relationship's athlete; the rest are left un-logged.
+    for the relationship's athlete; the rest are left un-logged. ``archived``
+    parks the plan in the ARCHIVED state (e.g. a removed group member's
+    materialized snapshot).
     """
-    meso = MesocycleFactory(plan=PlanFactory(relationship=rel), order=index)
+    plan_status = Plan.Status.ARCHIVED if archived else Plan.Status.DRAFT
+    meso = MesocycleFactory(
+        plan=PlanFactory(relationship=rel, status=plan_status), order=index
+    )
     week = WeekFactory(
         mesocycle=meso,
         index=index,
@@ -128,6 +136,32 @@ class TestLinkCompliance:
         # The stranger's done logs are not this athlete's adherence.
         assert adherence.link_compliance(rel) == 0
 
+    def test_ignores_archived_plans(self):
+        rel = CoachAthleteFactory()
+        # The only delivered week lives on an archived plan (e.g. a removed
+        # group member's snapshot) — the athlete can't see/log it, so it must
+        # not drive the meter.
+        delivered_week(rel, sessions=2, done=2, archived=True)
+        assert adherence.link_compliance(rel) is None
+
+    def test_prefers_active_plan_over_newer_archived(self):
+        rel = CoachAthleteFactory()
+        now = timezone.now()
+        # A live (older) delivered plan plus a newer *archived* one: the meter
+        # measures the live program, not the hidden archived snapshot.
+        delivered_week(
+            rel, sessions=2, done=1, delivered_at=now - timedelta(days=2), index=1
+        )
+        delivered_week(
+            rel,
+            sessions=2,
+            done=2,
+            delivered_at=now,
+            index=2,
+            archived=True,
+        )
+        assert adherence.link_compliance(rel) == 50
+
     def test_duplicate_done_logs_count_the_session_once(self):
         rel = CoachAthleteFactory()
         week = delivered_week(rel, sessions=2, done=0)
@@ -184,6 +218,13 @@ class TestRecentLogs:
         assert len(logs) == 3
         created = [log.created_at for log in logs]
         assert created == sorted(created, reverse=True)
+
+    def test_excludes_archived_plans(self):
+        rel = CoachAthleteFactory()
+        delivered_week(rel, sessions=1, done=1, archived=True)
+        # A removed group member's archived snapshot must not resurface as
+        # "recent activity."
+        assert adherence.recent_logs(rel.coach) == []
 
     def test_spans_multiple_athletes(self):
         coach = UserFactory()
