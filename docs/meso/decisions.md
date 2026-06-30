@@ -1176,3 +1176,41 @@ _(Append dated entries here as decisions land.)_
   prod-verified (`/meso/billing/` 302→login for anon, the route is live). **Remaining
   Meso backlog unchanged:** billing annual prices (BLOCKED on owner numbers + Stripe
   annual Prices); Anthropic Admin/Usage-API reconciliation (deferred, needs Admin key).
+- 2026-06-30 — **Coach roster adherence built: the compliance meter + activity
+  feed go live** (no migration). The roster carried two dead placeholders since
+  Phase 1 — `presenters.roster_athlete` returned `compliance=None` and `RosterView`
+  set `activity=[]`, both flagged in-code as "Phase 2/3 concepts awaiting logged
+  data." Delivery + logging have existed since the athlete slice, so the data was
+  finally there; this wires it. The roster **UI already existed** (the `meso-meter`
+  bar + the "Recent activity" card), so the slice is **backend-only**. New
+  `meso/adherence.py` (pure read-side aggregation): `link_compliance(link)` = the %
+  of the **latest delivered week's** sessions the athlete marked *done*
+  (`link_latest_delivered_week` spans the individual plan **and** any group-delivery
+  snapshot rooted at the link — adherence to whatever was delivered most recently);
+  `recent_logs(coach)` = the coach's active-link athletes' most recently completed
+  sessions. **Decisions:** `None` (no delivered week) hides the meter while `0` (the
+  coach delivered, the athlete hasn't logged) is a real, distinct signal that's
+  kept; ordering is by `created_at` (when logged) — *not* the nullable workout
+  `date`, whose NULL sort order differs SQLite↔Postgres. `presenters.roster_activity`
+  shapes the feed (athlete + session + a compact "N ago" off `timesince`, since
+  `humanize` isn't installed). **Profile page left untouched** — its compliance meter
+  is bundled behind `has_program` with still-unfilled `block`/`week`/`macrocycle`
+  placeholders, so lighting it up is a separate, larger slice. The seeded demo
+  already delivers + logs Maya's week, so the one-click demo showcases the meter for
+  free. Red→green (`test_adherence.py`, +25): compliance math/scoping (latest-week-
+  only, own-done-only, dedup, **archived-plan exclusion**), `recent_logs` scoping/
+  ordering (active links, **non-archived plans**, **athlete tied to the plan's own
+  athlete**), presenter shaping, the RosterView render. 1353 meso pytest green, ruff
+  + DjHTML + `makemigrations --check` clean. **Codex review loop CLEAN after 2 fix
+  iters** — both real: (1 = P2) the queries didn't exclude **archived** plans, so a
+  removed group member's archived snapshot (link stays active) could drive the meter/
+  feed for a program the athlete can't see → excluded, matching `working_plan`/
+  `athlete_home`; (2 = P2) `recent_logs` didn't tie `SessionLog.athlete` to the
+  plan's relationship athlete (the write path always does, but the model has no DB
+  constraint), so a stray mismatched row could leak an unrelated name + an unreachable
+  profile link → added an `F()` predicate. **Remaining Meso backlog unchanged:**
+  billing annual prices (BLOCKED on owner numbers + Stripe annual Prices); Anthropic
+  Admin/Usage-API reconciliation (deferred, needs Admin key). **Deferred follow-up:**
+  lighting up the athlete-profile program block (compliance + current block +
+  macrocycle) as its own slice; per-athlete `delivered`/`needs_review`/`drafting`
+  status badges (need agent/delivery state).
