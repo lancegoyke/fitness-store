@@ -304,7 +304,7 @@
                be. Billing actions live on the roster (the endpoint also 402s, so
                this isn't the only guard). -->
             <div x-show="isIndividual" style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:13px 14px 15px;">
-              <p style="margin:0 0 9px;font-size:12px;color:var(--dim);line-height:1.4;">You've used all {{ agent_allowance.allowance }} free agent run{{ agent_allowance.allowance|pluralize }} this month. Start your free trial or subscribe for unlimited agent runs.</p>
+              <p style="margin:0 0 9px;font-size:12px;color:var(--dim);line-height:1.4;">You've used all {{ agent_allowance.allowance }} free agent run{{ agent_allowance.allowance|pluralize }} this month. Start your free trial or subscribe ({{ price_summary }}) for unlimited agent runs.</p>
               <a href="{% url 'meso:roster' %}" data-hover="brighten" style="display:inline-block;text-decoration:none;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:8px 14px;">Upgrade to use the agent</a>
             </div>
           {% endif %}

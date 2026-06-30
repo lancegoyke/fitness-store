@@ -825,7 +825,17 @@ class CoachSubscription(models.Model):
         max_length=255,
         blank=True,
         default="",
-        help_text=_("The subscription line item — for seat-quantity updates."),
+        help_text=_("The per-seat subscription line item — for seat-quantity updates."),
+    )
+    stripe_base_item_id = models.CharField(
+        _("Stripe base subscription item id"),
+        max_length=255,
+        blank=True,
+        default="",
+        help_text=_(
+            "The flat base ($9.99/mo) line item, fixed at quantity 1 (S6 Phase 6). "
+            "Seat sync only resizes the per-seat item, never this one."
+        ),
     )
     trial_end = models.DateTimeField(
         _("Trial ends at"),

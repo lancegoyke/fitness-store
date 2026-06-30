@@ -249,6 +249,7 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         agent_meter = presenters.agent_allowance(self.request.user)
         ctx["agent_allowance"] = agent_meter
         ctx["can_use_agent"] = agent_meter["can_use"]
+        ctx["price_summary"] = presenters.PRICE_SUMMARY
         return ctx
 
 
@@ -2398,7 +2399,9 @@ def billing_subscribe(request):
     """Start a subscription Checkout — redirect the coach to Stripe to pay."""
     if not _is_coach(request.user):
         return redirect("meso:roster")
-    if not settings.MESO_SEAT_PRICE_ID:
+    # Base + per-seat billing (D13) needs *both* Prices configured; ship dormant
+    # (bounce gracefully) until the owner creates both, so we never half-charge.
+    if not settings.MESO_SEAT_PRICE_ID or not settings.MESO_BASE_PRICE_ID:
         messages.error(request, "Subscriptions aren't configured yet.")
         return redirect("meso:roster")
     # Don't open a second Checkout for a coach who already has a live Stripe
@@ -2512,6 +2515,7 @@ class BecomeCoachView(TemplateView):
         ctx = super().get_context_data(**kwargs)
         ctx["free_seats"] = CoachSubscription.FREE_SEAT_LIMIT
         ctx["trial_days"] = CoachSubscription.TRIAL_DAYS
+        ctx["price_summary"] = presenters.PRICE_SUMMARY
         # allauth returns here after signup/login (?next=), where the visitor —
         # now authenticated — sees the start-coaching form.
         ctx["next_url"] = reverse("meso:become_coach")

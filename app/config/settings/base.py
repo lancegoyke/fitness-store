@@ -310,6 +310,12 @@ MESO_VAPID_SUBJECT = os.environ.get("MESO_VAPID_SUBJECT", "mailto:lance@lancegoy
 # id lets the app boot and CI run without billing creds; Phase 2 (subscription
 # Checkout / Customer Portal / webhook) needs it set to the live/test Price id.
 MESO_SEAT_PRICE_ID = os.environ.get("MESO_SEAT_PRICE_ID", "")
+# The flat base fee Price (S6 Phase 6, D13 — $9.99/mo, quantity 1) billed
+# alongside the per-seat Price (TrainHeroic-style base + per-seat). Empty until
+# the owner creates the base Product/Price; the subscribe view requires *both*
+# this and ``MESO_SEAT_PRICE_ID`` before opening Checkout, so billing stays
+# dormant (not broken) until both are configured.
+MESO_BASE_PRICE_ID = os.environ.get("MESO_BASE_PRICE_ID", "")
 # The signing secret for the *billing* webhook endpoint (a separate Stripe
 # endpoint from the products webhook, so its own secret). Empty until the
 # endpoint is registered in Stripe; the webhook view rejects unsigned/unverifiable

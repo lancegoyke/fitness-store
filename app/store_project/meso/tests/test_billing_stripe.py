@@ -504,6 +504,7 @@ class TestSubscribeView:
 
     def test_redirects_to_stripe_checkout(self, settings):
         settings.MESO_SEAT_PRICE_ID = "price_seat_test"
+        settings.MESO_BASE_PRICE_ID = "price_base_test"
         coach, c = self._coach_client()
         with mock.patch(
             "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
@@ -530,6 +531,7 @@ class TestSubscribeView:
     def test_already_subscribed_coach_is_not_double_charged(self, settings):
         """A coach with a live Stripe subscription is bounced, not sent to a new Checkout."""
         settings.MESO_SEAT_PRICE_ID = "price_seat_test"
+        settings.MESO_BASE_PRICE_ID = "price_base_test"
         coach, c = self._coach_client()
         CoachSubscriptionFactory(
             coach=coach,
@@ -547,6 +549,7 @@ class TestSubscribeView:
 
     def test_canceled_coach_can_resubscribe(self, settings):
         settings.MESO_SEAT_PRICE_ID = "price_seat_test"
+        settings.MESO_BASE_PRICE_ID = "price_base_test"
         coach, c = self._coach_client()
         CoachSubscriptionFactory(
             coach=coach,

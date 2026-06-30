@@ -34,6 +34,12 @@ from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 from .serializers import serialize_week_snapshot
 
+#: Paywall display copy for the base + per-seat plan (S6 Phase 6, D13). The
+#: authoritative amount is the Stripe Price the owner configures; this is the
+#: marketing string shown in the roster card, the designer upgrade CTA, and the
+#: become-a-coach tiers — one constant so the three surfaces never drift.
+PRICE_SUMMARY = "$9.99/mo + $1 per active athlete"
+
 
 def _age(user):
     birthday = getattr(user, "birthday", None)
@@ -242,6 +248,7 @@ def billing_state(coach):
         "suspended_count": len(billing_access.suspended_athlete_ids(coach)),
         "can_start_trial": can_start_trial,
         "has_stripe_subscription": bool(sub and sub.stripe_subscription_id),
+        "price_summary": PRICE_SUMMARY,
     }
 
 

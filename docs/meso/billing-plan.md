@@ -170,18 +170,23 @@ v1 froze the whole coach via the coarse `can_edit(coach)`.
 > per-athlete (`can_edit_plan` / `suspended_athlete_ids`): an over-limit coach
 > keeps editing/delivering their oldest `FREE_SEAT_LIMIT` athletes and is frozen
 > only on the rest (group plans keep the coarse coach-wide freeze), with a
-> per-athlete "Suspended" badge on the roster. **Next: Phase 6** — base +
-> per-seat pricing (decided $9.99 base + $1/seat, 2026-06-30), with annual prices
-> as a ride-along sub-step.
+> per-athlete "Suspended" badge on the roster. **Phase 6 ✅** (2026-06-30,
+> migration `0024`) — base + per-seat pricing ($9.99 base + $1/seat): two-line-item
+> Checkout, the `stripe_base_item_id` field, Price-id item classification in the
+> webhook, the both-Prices subscribe guard, and the `PRICE_SUMMARY` paywall copy;
+> tested in `test_billing_phase6.py`. **Remaining: annual prices** (a `*_ANNUAL`
+> Price per line + a monthly/annual Checkout toggle), blocked on the annual numbers.
 
 ### Deploying Phase 2 (Stripe configuration)
 
 The code ships dormant — billing does nothing until these are configured, so a
 deploy succeeds without them (like the VAPID push keys):
 
-1. In Stripe, create one **Product** ("Meso Coaching") with one recurring
-   per-seat **Price** (monthly, USD, `usage_type=licensed`). Set
-   `MESO_SEAT_PRICE_ID` to that Price id.
+1. In Stripe, create the **Meso Coaching** Product with **two** recurring monthly
+   USD Prices (Phase 6, D13): a flat **base** Price ($9.99/mo, `usage_type=licensed`,
+   billed quantity 1) → `MESO_BASE_PRICE_ID`, and a **per-seat** Price ($1/mo,
+   `usage_type=licensed`, quantity = active seats) → `MESO_SEAT_PRICE_ID`. The
+   subscribe view stays dormant until **both** are set.
 2. Register a **billing webhook endpoint** → `https://<host>/meso/billing/webhook/`
    subscribed to `customer.subscription.created|updated|deleted`, `invoice.paid`,
    `invoice.payment_failed`. Set `MESO_STRIPE_WEBHOOK_SECRET` to that endpoint's
@@ -234,7 +239,7 @@ deploy succeeds without them (like the VAPID push keys):
    editing/delivering their kept athletes; `presenters` surface a per-athlete
    "Suspended" roster badge + a `suspended_count` on the billing card. Tested in
    `test_billing_suspension.py`.
-6. **Phase 6 — base + per-seat pricing (TrainHeroic-style) (NEXT).** Convert the
+6. **Phase 6 — base + per-seat pricing (TrainHeroic-style) (DONE).** Convert the
    single per-seat subscription into a **two-line-item** one (D13): a flat **base**
    Price (`MESO_BASE_PRICE_ID`, quantity 1, $9.99/mo) alongside the existing
    **per-seat** Price (`MESO_SEAT_PRICE_ID`, quantity = active seats, $1/mo).
