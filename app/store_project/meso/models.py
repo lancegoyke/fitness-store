@@ -1542,8 +1542,9 @@ class AgentProposalBatch(models.Model):
     cache_read_input_tokens = models.PositiveIntegerField(
         _("Cache-read input tokens"), default=0
     )
-    # Claude calls in this run — 1 today; >1 once group-agent/multi-turn lands.
-    api_calls = models.PositiveIntegerField(_("API calls"), default=1)
+    # Completed Claude calls in this run — 0 until one returns (a scripted/failed
+    # run never overcounts), 1 today on success; >1 once group/multi-turn lands.
+    api_calls = models.PositiveIntegerField(_("API calls"), default=0)
     # Anthropic ``_request_id`` (tracing / support escalation) + the stop reason
     # (``max_tokens`` truncation, ``refusal``, …) for diagnostics.
     request_id = models.CharField(_("Anthropic request id"), max_length=128, blank=True)

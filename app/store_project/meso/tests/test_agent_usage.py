@@ -172,6 +172,7 @@ class TestPersistUsageOnSuccess:
             cache_read_input_tokens=3000,
             request_id="req_run",
             stop_reason="tool_use",
+            api_calls=1,  # a real completed call
         )
 
         service.run_proposal_job(batch.pk, client=UsageClient(usage))
@@ -210,6 +211,8 @@ class TestPersistUsageOnSuccess:
         batch.refresh_from_db()
         assert batch.input_tokens == 0
         assert batch.output_tokens == 0
+        # No real API call was made, so the ledger must not count one (Codex P2).
+        assert batch.api_calls == 0
         # DictClient.model isn't in the rate table → cost is None, not a wrong 0.
         assert batch.estimated_cost_usd is None
 

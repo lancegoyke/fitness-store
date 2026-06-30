@@ -42,8 +42,10 @@ class RunUsage:
     cache_read_input_tokens: int = 0
     request_id: str = ""
     stop_reason: str = ""
-    # Claude calls behind this run — 1 today; >1 once group/multi-turn lands.
-    api_calls: int = 1
+    # Completed Claude calls behind this run. Defaults to 0 (no network) so a
+    # scripted/test client doesn't overcount the ledger; ``_extract_usage`` sets it
+    # to 1 for a real response. >1 once group/multi-turn lands.
+    api_calls: int = 0
 
 
 @dataclass
