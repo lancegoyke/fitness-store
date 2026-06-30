@@ -83,6 +83,38 @@ class DesignSystemPR2CSSTests(TestCase):
         self.assertNotIn(".box.purchase:focus {", css)
         self.assertIn(".box.purchase:focus-visible {", css)
 
+    def test_card_box_inner_boxes_are_seamless(self):
+        """A product card reads as one cohesive surface.
+
+        PR 1's global ``.box`` re-skin gave every ``.box`` its own
+        border/shadow/radius, so the stacked segments inside a ``.card-box``
+        (image / body / price footer) each drew a separate rounded outline.
+        The inner panels must be flat — only the ``.card-box`` owns the outline.
+        """
+        block = _css_block(_css(), ".card-box .box {")
+        self.assertIn("border: 0", block)
+        self.assertIn("box-shadow: none", block)
+        self.assertIn("border-radius: 0", block)
+
+    def test_input_group_joins_input_and_button(self):
+        """Newsletter input + Submit join into one control.
+
+        Base Coat button-group: a flex row where only the outer corners stay
+        rounded and the joined edges are squared off.
+        """
+        css = _css()
+        self.assertIn("display: flex", _css_block(css, ".input-group {"))
+        # the field's joined (right) edge is squared off
+        self.assertIn(
+            "border-start-end-radius: 0",
+            _css_block(css, ".input-group > :first-child {"),
+        )
+        # the button's joined (left) edge is squared off
+        self.assertIn(
+            "border-start-start-radius: 0",
+            _css_block(css, ".input-group > :last-child {"),
+        )
+
 
 class DesignSystemPR2TemplateTests(TestCase):
     """Render the real templates and assert the markup-level fixes."""
@@ -102,6 +134,14 @@ class DesignSystemPR2TemplateTests(TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "font-weight: unset")
+
+    def test_newsletter_form_uses_joined_input_group(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        # Email field + Submit button are joined (no gap) via the input group.
+        self.assertContains(response, 'class="input-group"')
+        self.assertContains(response, 'role="group"')
+        self.assertContains(response, 'id="id_newsletter_email"')
 
     def test_home_testimonial_avatars_sized_via_css(self):
         response = self.client.get("/")

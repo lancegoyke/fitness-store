@@ -818,6 +818,16 @@ a.secondaryAction {
   clip-path: polygon(0 0, 100% 0, 100% 100%, 0 calc(100% - 1rem));
 }
 
+/* Inside a card the stacked segments read as one cohesive surface: the
+   .card-box owns the single outline + shadow, so its inner .box panels drop
+   their own border / shadow / radius (PR 1's global .box re-skin otherwise
+   gives each segment its own rounded outline and fragments the card). */
+.card-box .box {
+  border: 0 solid;
+  box-shadow: none;
+  border-radius: 0;
+}
+
 /* clickable challenge cards: title shifts to accent, "View challenge" reveals */
 .card-box:hover h3 a,
 .card-box:hover h4 a,
@@ -971,6 +981,48 @@ a.secondaryAction {
 .form-with-sidebar input,
 .form-with-sidebar button {
   box-shadow: none;
+}
+
+/*
+    THE INPUT GROUP
+
+    Description: join an input and its action button into one control — a
+    subscribe / search bar. Adjacent edges merge; only the outer corners stay
+    rounded. (Base Coat-style "button-group" pattern.)
+
+    Usage:
+      <div class="input-group" role="group" aria-label="...">
+        <input ... />
+        <button class="button" type="submit">Submit</button>
+      </div>
+*/
+.input-group {
+  display: flex;
+  align-items: stretch;
+}
+
+/* the text field flexes to fill; the button keeps its intrinsic width */
+.input-group > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* square the joined edges, keep the outer corners rounded */
+.input-group > :first-child {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.input-group > :last-child {
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+/* a focused field lifts above its neighbour so the accent ring isn't clipped */
+.input-group > :focus,
+.input-group > :focus-visible {
+  position: relative;
+  z-index: 1;
 }
 
 /*
