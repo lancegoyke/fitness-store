@@ -474,6 +474,34 @@ class UsageDashboardView(UserPassesTestMixin, TemplateView):
         return usage_report.current_month_bounds()
 
 
+class CoachBillingView(LoginRequiredMixin, TemplateView):
+    """Coach-facing billing & plan page (agent-usage — coach surface).
+
+    A coach's own plan/tier, the bill they owe (base + per active seat), the
+    upgrade CTAs, and their AI-agent runs this month broken down per athlete/group
+    — the coach-scoped complement to the staff-only owner usage dashboard (which
+    shows org-wide *cost*). A coach never sees the internal cost estimate here, only
+    what they pay and how much they've used (``presenters.coach_billing``).
+
+    Gate: anonymous → login (``LoginRequiredMixin``); a pure athlete (no coach
+    signal) is routed to their training home, mirroring the roster's role split, so
+    a non-coach never lands on an empty billing surface.
+    """
+
+    template_name = "meso/coach_billing.html"
+
+    def get(self, request, *args, **kwargs):
+        if not _is_coach(request.user):
+            return redirect("meso:athlete_home")
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["active"] = "billing"
+        ctx.update(presenters.coach_billing(self.request.user))
+        return ctx
+
+
 def _coach_active_athletes(coach, athlete_ids):
     """Resolve posted athlete ids to this coach's *active*-link athletes.
 

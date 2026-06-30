@@ -242,6 +242,21 @@ class ClientUsage:
 
 
 @dataclass
+class ClientRun:
+    """A coach's *run count* against one client — the coach-facing breakdown row.
+
+    Deliberately carries **no cost**: the coach-facing billing page (the ``coach``
+    surface, not the owner dashboard) shows what they pay (revenue) and how much
+    they've used (run counts), never the internal per-run cost estimate. So this is
+    the run-count sibling of :class:`ClientUsage` (which carries the COGS ``Totals``).
+    """
+
+    label: str
+    is_group: bool
+    runs: int
+
+
+@dataclass
 class CoachUsage:
     """One coach's month: cost vs revenue, the margin, and a per-client breakdown."""
 
@@ -433,6 +448,37 @@ def sorted_totals(mapping):
     return sorted(
         mapping.items(), key=lambda kv: (kv[1].cost, kv[1].runs), reverse=True
     )
+
+
+def coach_run_breakdown(coach, *, start, end):
+    """One coach's agent runs in ``[start, end)`` grouped by client, heaviest first.
+
+    The coach-facing per-client breakdown ("Devon 3 · Priya 2 · the squad 1"). A
+    client is the athlete on an individual plan, or the group on a group plan
+    (``_attribution``). **Run counts only** — no cost (the coach never sees COGS).
+
+    Counts *every* batch the coach started in the window (eval runs included — a
+    real coach never has them, and counting all batches keeps this reconciled with
+    ``billing/access.agent_runs_this_month``, which the free-tier meter reads, so
+    the breakdown total always equals the headline "runs this month").
+    """
+    batches = AgentProposalBatch.objects.filter(
+        coach=coach, created_at__gte=start, created_at__lt=end
+    ).select_related(
+        "plan",
+        "plan__relationship__athlete",
+        "plan__group",
+    )
+    clients = {}  # key -> ClientRun
+    for batch in batches:
+        key, label, is_group = _attribution(batch.plan)
+        row = clients.get(key)
+        if row is None:
+            row = ClientRun(label=label, is_group=is_group, runs=0)
+            clients[key] = row
+        row.runs += 1
+    # Heaviest first; the label tiebreak keeps equal-count rows in a stable order.
+    return sorted(clients.values(), key=lambda r: (-r.runs, r.label))
 
 
 def margin_alerts(report, threshold):
