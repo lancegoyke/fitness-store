@@ -1003,3 +1003,33 @@ _(Append dated entries here as decisions land.)_
   mocked. Ships **dormant** until the owner creates both Prices + registers the
   webhook. **Annual prices** (a `*_ANNUAL` Price per line + a Checkout toggle) are
   the remaining ride-along, still blocked on the annual numbers.
+- 2026-06-30 — **Agent usage tracking Phase 1 (capture) built** (migration `0025`,
+  PR #344). Extended `AgentProposalBatch` (the per-run ledger) with the token/cost/
+  dimension columns: `input_tokens`/`output_tokens`/`cache_creation_input_tokens`/
+  `cache_read_input_tokens`/`api_calls`/`request_id`/`stop_reason`/`duration_ms`,
+  a computed `estimated_cost_usd` (Decimal, from `meso/billing/agent_costs.py`'s
+  per-model rate table — unknown model → `None`, never a wrong $0), plus the
+  `trigger` (manual/draft/eval/group) and `billing_status` snapshots. `client.propose`
+  now returns a `ProposalResult(data, usage)` carrying the Anthropic `usage` block +
+  `_request_id` + `stop_reason`; the service threads it (with the measured
+  `duration_ms`) onto the batch. A **failed** run still records model + duration (U5).
+  Admin surfaces the columns read-only. No Stripe — independent of go-live.
+- 2026-06-30 — **Agent usage tracking Phase 2 (report) built** (no migration). The
+  read side of the captured data: `meso/billing/agent_usage_report.py`
+  `build_report(start, end)` rolls a calendar month's **non-eval** runs up into
+  per-coach **cost vs revenue → margin** (flagging any *paying* coach whose agent
+  cost outran their plan — the $1/seat tail risk D13 called out), a per-(coach,
+  client) breakdown to surface the heavy seats (a client = the athlete on an
+  individual plan, or the **group** on a group plan, athlete null), and roll-ups by
+  **model**, **trigger**, and **billing tier** (the COGS-vs-CAC split off each run's
+  snapshot `billing_status`: active/past_due = paid, comped = owner/demo, else
+  free/trial = CAC). Revenue = the coach's *current* plan price (`$9.99 base + $1 ×
+  current billable seats` — `BASE_PRICE_USD`/`SEAT_PRICE_USD` mirror
+  `presenters.PRICE_SUMMARY`), an approximation since per-month historical seat
+  counts aren't stored. The `meso_agent_usage_report` management command renders it
+  (`--month YYYY-MM`, default current; `--json` for machine output). Estimated cost
+  stays the internal number; the Anthropic invoice is authoritative. Eval runs are
+  excluded everywhere (a quality check, not coach usage) but counted as a footnote.
+  Red→green; `test_agent_usage_report.py`. **Deferred** (Phase 3): an owner
+  dashboard, a margin-threshold alert, and reconciliation against the Anthropic
+  Admin/Usage API.
