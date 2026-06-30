@@ -275,6 +275,15 @@ deploy succeeds without them (like the VAPID push keys):
   at all** (Phase 1 has zero Stripe surface).
 - The `stripe` CLI forwards webhooks locally for Phase 2.
 
+## Related work
+
+- **Agent usage & cost tracking** — [`agent-usage-plan.md`](./agent-usage-plan.md).
+  The $1/seat margin rides on the agent's per-run Claude cost; that plan
+  instruments real usage attributed to the coach + athlete (client) so we can
+  validate the margin, catch the tail-risk power user, and decide later whether
+  to pull either pressure valve (drop the agent's `MESO_AGENT_MODEL` tier, or
+  meter paid runs). Independent of the Stripe wiring — can ship before go-live.
+
 ## Deferred
 
 - Annual billing; promo codes / coupons (Stripe supports both when wanted).
