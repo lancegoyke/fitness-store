@@ -23,7 +23,7 @@
             {% if book.featured_image %}
               <img src="{{ book.featured_image.url }}" alt="{{ book.name }}" />
             {% else %}
-              <img style="background-color: var(--main-color-dark);">
+              <div class="image-placeholder"></div>
             {% endif %}
           </div>
           <div class="box stack">

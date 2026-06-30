@@ -8,10 +8,10 @@
 
   <h1>Update Account</h1>
 
-  <form method="POST">
+  <form class="stack-form" method="POST">
     {% csrf_token %}
     {{ form.as_p }}
-    <button type="submit">Update</button>
+    <button class="button" type="submit">Update</button>
   </form>
 
 {% endblock content %}

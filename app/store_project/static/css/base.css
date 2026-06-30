@@ -284,6 +284,14 @@ tbody tr:last-child td:last-child {
   outline-offset: 2px;
 }
 
+/* Button-shaped links must never underline — the global a:hover/:focus/:active
+   underline rule would otherwise leak onto <a class="button"> on interaction. */
+.button:hover,
+.button:focus,
+.button:active {
+  text-decoration: none;
+}
+
 .button:disabled,
 .button[disabled],
 .button.disabled {
@@ -353,6 +361,9 @@ form label {
   display: grid;
   grid-template-columns: 1em auto;
   gap: var(--s1);
+  /* Inline checkbox labels (e.g. the newsletter consent) read as body text,
+     not the bold `form label` weight. */
+  font-weight: 400;
 }
 
 .stack-form fieldset {
@@ -644,11 +655,21 @@ ul.errorlist {
   border-color: transparent;
 }
 
-.box.purchase:active,
-.box.purchase:hover,
-.box.purchase:focus {
+/* Animate like a button — lighten the accent + lift on hover, press on
+   :active — instead of the old link-style underline. */
+.box.purchase:hover {
   cursor: pointer;
-  text-decoration: underline;
+  text-decoration: none;
+  background-color: color-mix(in srgb, var(--accent) 86%, #fff);
+  box-shadow: 0 2px 10px rgb(31 81 107 / 0.3);
+}
+
+.box.purchase:active {
+  cursor: pointer;
+  text-decoration: none;
+  background-color: var(--accent-deep);
+  transform: translateY(1px);
+  box-shadow: none;
 }
 
 .box.owned {
@@ -721,6 +742,11 @@ a.box.login:active {
   flex: 1;
   height: 1px;
   background-color: #cac7c7;
+}
+
+/* Secondary auth-form links (e.g. "Forgot Password?") read as subordinate. */
+a.secondaryAction {
+  font-size: var(--s-1);
 }
 
 /*
@@ -805,9 +831,22 @@ a.box.login:active {
   text-decoration: none;
 }
 
-/* pretty styles for photo */
-.card-box .frame > img {
+/* pretty styles for photo (and the placeholder, so both share the angled cut) */
+.card-box .frame > img,
+.card-box .frame > .image-placeholder {
   clip-path: polygon(0 0, 100% 0, 100% 100%, 0 calc(100% - 1rem));
+}
+
+/* Inside a card the stacked segments read as one cohesive surface: the
+   .card-box owns the single outline + shadow, so its inner .box panels drop
+   their own border / shadow / radius (PR 1's global .box re-skin otherwise
+   gives each segment its own rounded outline and fragments the card). */
+.card-box .box {
+  border: 0 solid;
+  box-shadow: none;
+  border-radius: 0;
+  /* generic-UI card density: a tighter, uniform content inset */
+  padding: var(--s0);
 }
 
 /* clickable challenge cards: title shifts to accent, "View challenge" reveals */
@@ -843,7 +882,14 @@ a.box.login:active {
 }
 
 .card-stack h3 > a {
-  font-size: var(--s1);
+  /* card title sits at a generic-UI scale, not the big page-heading size */
+  font-size: var(--s0);
+}
+
+/* card description reads as secondary supporting text */
+.card-stack p {
+  font-size: 0.875rem;
+  color: var(--main-color-gray);
 }
 
 .card-stack {
@@ -859,6 +905,13 @@ a.box.login:active {
 
 .card-stack > * + * {
   margin-top: var(--s-1);
+}
+
+/* the image is full-bleed, so the body's own padding is the only gap beneath
+   it — don't stack the card-stack row gap on top (that left too much space
+   between the clipped image and the title). */
+.card-stack > .frame + * {
+  margin-top: 0;
 }
 
 .card-stack:only-child {
@@ -945,11 +998,12 @@ a.box.login:active {
 .form-with-sidebar > * {
   display: flex;
   flex-wrap: wrap;
-  margin: calc(0px / 2 * -1);
+  /* A real gap so the input + button don't sit flush (the old
+     zero-width negative-margin trick gave them no separation). */
+  gap: var(--s-1);
 }
 
 .form-with-sidebar > * > * {
-  margin: calc(0px / 2);
   flex-grow: 1;
 }
 
@@ -962,6 +1016,48 @@ a.box.login:active {
 .form-with-sidebar input,
 .form-with-sidebar button {
   box-shadow: none;
+}
+
+/*
+    THE INPUT GROUP
+
+    Description: join an input and its action button into one control — a
+    subscribe / search bar. Adjacent edges merge; only the outer corners stay
+    rounded. (Base Coat-style "button-group" pattern.)
+
+    Usage:
+      <div class="input-group" role="group" aria-label="...">
+        <input ... />
+        <button class="button" type="submit">Submit</button>
+      </div>
+*/
+.input-group {
+  display: flex;
+  align-items: stretch;
+}
+
+/* the text field flexes to fill; the button keeps its intrinsic width */
+.input-group > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* square the joined edges, keep the outer corners rounded */
+.input-group > :first-child {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.input-group > :last-child {
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+/* a focused field lifts above its neighbour so the accent ring isn't clipped */
+.input-group > :focus,
+.input-group > :focus-visible {
+  position: relative;
+  z-index: 1;
 }
 
 /*
@@ -1264,6 +1360,29 @@ ul.grid {
   inline-size: 100%;
   block-size: 100%;
   object-fit: cover;
+}
+
+/* Subtle branded placeholder for products/tests with no featured image: the
+   Mastering Fitness mark as a faint watermark on a soft neutral panel (moved
+   off the hard black fill). The mark is recolored via a CSS mask since the
+   source SVG is white-on-transparent. */
+.image-placeholder {
+  position: relative;
+  inline-size: 100%;
+  block-size: 100%;
+  background-color: var(--muted);
+}
+
+.image-placeholder::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* Render the actual mark (white fills + dark strokes) faded down: on the
+     light panel the fills nearly vanish and the strokes read as a faint
+     outline, so the weights/bar structure stays legible. */
+  background:
+    url("../svg/favicon-light.svg") no-repeat center / clamp(56px, 30%, 104px);
+  opacity: 0.4;
 }
 
 /*
@@ -1835,7 +1954,7 @@ ul.grid {
 }
 
 .cta .button:hover,
-.cta .button:focus,
+.cta .button:focus-visible,
 .cta .button:active {
   box-shadow: white 0 0 20px 5px;
   transition-duration: 0.2s;
@@ -1852,7 +1971,7 @@ ul.grid {
 }
 
 .footer a {
-  font-weight: 700;
+  font-weight: 400;
   color: var(--main-color-light-gray);
   text-decoration: none;
 }
@@ -1964,6 +2083,12 @@ table tr:nth-child(even) {
 .testimonial-footer img {
   border-radius: 50%;
   margin-right: var(--s-1);
+}
+
+/* Avatar sizing moved off the HTML width/height attrs. */
+.testimonial-avatar {
+  inline-size: 50px;
+  block-size: 50px;
 }
 
 .testimonial-footer .byline {
@@ -2147,7 +2272,8 @@ table tr:nth-child(even) {
 
 /* Challenge card + sidebar category tags: soft accent pills (matches spike) */
 .card-box .tag,
-.sidebar-main-layout .tag {
+.sidebar-main-layout .tag,
+.product-switcher .tag {
   background: var(--accent-soft);
   color: var(--accent-deep);
   border: 1px solid var(--accent-line);
@@ -2165,7 +2291,8 @@ table tr:nth-child(even) {
 }
 
 .card-box .tag:hover,
-.sidebar-main-layout .tag:hover {
+.sidebar-main-layout .tag:hover,
+.product-switcher .tag:hover {
   background: #dcebf3;
   border-color: var(--accent);
   color: var(--accent-deep);

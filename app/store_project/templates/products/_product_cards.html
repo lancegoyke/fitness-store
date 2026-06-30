@@ -8,7 +8,7 @@
           {% if product.featured_image %}
             <img src="{{ product.featured_image.url }}" alt="{{ product.name }}" />
           {% else %}
-            <img style="background-color: var(--main-color-dark);">
+            <div class="image-placeholder"></div>
           {% endif %}
         </div>
         <div class="box stack">
