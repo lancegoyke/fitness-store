@@ -19,7 +19,8 @@
     <label class="label" for="{{ field.id_for_label }}">{{ field.label }}</label>
     <div class="control">{{ field }}</div>
     {% if field.help_text %}
-      <p class="help">{{ field.help_text }}</p>
+      {# id matches the aria-describedby Django emits on the widget #}
+      <p class="help" id="{{ field.auto_id }}_helptext">{{ field.help_text }}</p>
     {% endif %}
     {% if field.errors %}
       <ul class="errorlist">

@@ -233,10 +233,15 @@ tbody tr:last-child td:last-child {
     Based off of THE BOX
 */
 .button {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-decoration: none;
   cursor: pointer;
-  padding: var(--s0);
+  /* One consistent compact height for every button shape — <input type=submit>,
+     <a class=button>, <button> — so they line up next to each other. */
+  min-height: 38px;
+  padding: 0 16px;
   border: 1px solid transparent;
   border-radius: var(--border-radius);
   outline: var(--border-thin) solid transparent;
@@ -306,8 +311,12 @@ input[type="radio"] {
 }
 
 /* Text-like inputs + selects share one height; this kills the skinny native
-   <select> that mismatched the inputs once Bulma stopped being loaded. */
-input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+   <select> that mismatched the inputs once Bulma stopped being loaded. Button-
+   type inputs (submit/button/reset/image) are excluded — they are styled by
+   .button so they match anchor/button buttons. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(
+    [type="submit"]
+  ):not([type="button"]):not([type="reset"]):not([type="image"]),
 select {
   height: 38px;
   padding: 0 12px;
@@ -322,7 +331,9 @@ select {
   padding-right: 34px;
 }
 
-input:not([type="checkbox"]):not([type="radio"]):focus,
+input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not(
+    [type="button"]
+  ):not([type="reset"]):not([type="image"]):focus,
 textarea:focus,
 select:focus {
   border-color: var(--accent);
@@ -1322,7 +1333,7 @@ ul.grid {
   padding: 3px 10px;
   border-radius: 999px;
   font-size: var(--s-1);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .tag.filter-btn {
@@ -2117,7 +2128,7 @@ table tr:nth-child(even) {
   padding: 3px 10px;
   border-radius: 999px;
   font-size: var(--s-1);
-  font-weight: 600;
+  font-weight: 500;
   text-decoration: none;
   box-shadow: none;
   transition:
@@ -2140,7 +2151,7 @@ table tr:nth-child(even) {
   padding: 3px 10px;
   border-radius: 999px;
   font-size: var(--s-1);
-  font-weight: 600;
+  font-weight: 500;
   box-shadow: none;
   transition:
     background 0.12s ease,
