@@ -111,6 +111,14 @@ class TestServiceWorker:
         assert OFFLINE in body
         assert HOME in body
 
+    def test_precaches_athlete_scripts(self, client):
+        # Every script the athlete shell loads must be in the precache, or it
+        # silently stops working offline after a worker update.
+        body = client.get(SW).content.decode()
+        assert "js/meso_athlete.js" in body
+        assert "js/meso_push.js" in body
+        assert "js/meso_onboarding.js" in body
+
     def test_no_login_required(self, client):
         assert client.get(SW).status_code == 200
 

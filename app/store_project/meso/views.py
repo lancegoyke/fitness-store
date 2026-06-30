@@ -962,7 +962,8 @@ def manifest_webmanifest(request):
 
 # Bumped when the cached shell changes so the worker drops stale caches on
 # activate. Keep in sync with the cache name baked into the worker template.
-PWA_CACHE_VERSION = "meso-pwa-v1"
+# v2: added meso_onboarding.js to the precached shell (first-time UX Phase 4).
+PWA_CACHE_VERSION = "meso-pwa-v2"
 
 
 @require_GET
