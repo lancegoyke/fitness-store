@@ -24,11 +24,11 @@
   <div class="cluster">
   <!-- intermediary wrapper -->
     <p>
-      <a class="box" href="{% url 'products:store' %}">
-        < Back to Store
+      <a class="button outline" href="{% url 'products:store' %}">
+        ‹ Back to Store
       </a>
       {% if user.is_superuser %}
-        <a class="box padding:s-1" href="{% url 'admin:products_book_change' book.id %}">
+        <a class="button outline" href="{% url 'admin:products_book_change' book.id %}">
           Admin
         </a>
       {% endif %}

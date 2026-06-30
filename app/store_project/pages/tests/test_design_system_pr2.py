@@ -100,8 +100,9 @@ class DesignSystemPR2CSSTests(TestCase):
         # Matches the design-system :focus-visible ring pattern (PR 1).
         self.assertNotIn(".cta .button:focus,", css)
         self.assertIn(".cta .button:focus-visible,", css)
+        # .box.purchase no longer carries its own :focus underline rule — it
+        # animates like a button, and keyboard focus uses .button:focus-visible.
         self.assertNotIn(".box.purchase:focus {", css)
-        self.assertIn(".box.purchase:focus-visible {", css)
 
     def test_card_box_inner_boxes_are_seamless(self):
         """A product card reads as one cohesive surface.
@@ -126,6 +127,16 @@ class DesignSystemPR2CSSTests(TestCase):
         block = _css_block(_css(), ".product-switcher .tag {")
         self.assertIn("var(--accent-soft)", block)
         self.assertIn("border-radius: 999px", block)
+
+    def test_button_links_never_underline(self):
+        """<a class="button"> must not pick up the global a:hover underline."""
+        self.assertIn("text-decoration: none", _css_block(_css(), ".button:focus,"))
+
+    def test_purchase_button_animates_instead_of_underlining(self):
+        """The purchase button lifts on hover (not the old link underline)."""
+        block = _css_block(_css(), ".box.purchase:hover {")
+        self.assertIn("box-shadow", block)
+        self.assertNotIn("underline", block)
 
     def test_input_group_joins_input_and_button(self):
         """Newsletter input + Submit join into one control.
@@ -218,6 +229,13 @@ class DesignSystemPR2TemplateTests(TestCase):
         self.assertContains(response, f'data-product-slug="{self.book.slug}"')
         self.assertNotContains(response, "data-productType")
         self.assertNotContains(response, "data-productSlug")
+
+    def test_detail_back_link_is_an_outline_button(self):
+        response = self.client.get(
+            reverse("products:program_detail", args=[self.program.slug])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="button outline"')
 
     def test_profile_update_form_and_button_are_styled(self):
         self.client.force_login(self.user)
