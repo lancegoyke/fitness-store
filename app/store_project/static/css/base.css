@@ -813,8 +813,9 @@ a.secondaryAction {
   text-decoration: none;
 }
 
-/* pretty styles for photo */
-.card-box .frame > img {
+/* pretty styles for photo (and the placeholder, so both share the angled cut) */
+.card-box .frame > img,
+.card-box .frame > .image-placeholder {
   clip-path: polygon(0 0, 100% 0, 100% 100%, 0 calc(100% - 1rem));
 }
 
@@ -826,6 +827,8 @@ a.secondaryAction {
   border: 0 solid;
   box-shadow: none;
   border-radius: 0;
+  /* generic-UI card density: a tighter, uniform content inset */
+  padding: var(--s0);
 }
 
 /* clickable challenge cards: title shifts to accent, "View challenge" reveals */
@@ -861,7 +864,14 @@ a.secondaryAction {
 }
 
 .card-stack h3 > a {
-  font-size: var(--s1);
+  /* card title sits at a generic-UI scale, not the big page-heading size */
+  font-size: var(--s0);
+}
+
+/* card description reads as secondary supporting text */
+.card-stack p {
+  font-size: 0.875rem;
+  color: var(--main-color-gray);
 }
 
 .card-stack {
@@ -877,6 +887,13 @@ a.secondaryAction {
 
 .card-stack > * + * {
   margin-top: var(--s-1);
+}
+
+/* the image is full-bleed, so the body's own padding is the only gap beneath
+   it — don't stack the card-stack row gap on top (that left too much space
+   between the clipped image and the title). */
+.card-stack > .frame + * {
+  margin-top: 0;
 }
 
 .card-stack:only-child {
@@ -1327,9 +1344,27 @@ ul.grid {
   object-fit: cover;
 }
 
-/* Placeholder fill for products/tests with no featured image. */
+/* Subtle branded placeholder for products/tests with no featured image: the
+   Mastering Fitness mark as a faint watermark on a soft neutral panel (moved
+   off the hard black fill). The mark is recolored via a CSS mask since the
+   source SVG is white-on-transparent. */
 .image-placeholder {
-  background-color: var(--main-color-dark);
+  position: relative;
+  inline-size: 100%;
+  block-size: 100%;
+  background-color: var(--muted);
+}
+
+.image-placeholder::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* Render the actual mark (white fills + dark strokes) faded down: on the
+     light panel the fills nearly vanish and the strokes read as a faint
+     outline, so the weights/bar structure stays legible. */
+  background:
+    url("../svg/favicon-light.svg") no-repeat center / clamp(56px, 30%, 104px);
+  opacity: 0.4;
 }
 
 /*

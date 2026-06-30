@@ -72,8 +72,28 @@ class DesignSystemPR2CSSTests(TestCase):
     def test_secondary_action_link_is_styled(self):
         self.assertIn("a.secondaryAction", _css())
 
-    def test_image_placeholder_rule_exists(self):
-        self.assertIn(".image-placeholder", _css())
+    def test_image_placeholder_is_subtle_and_branded(self):
+        """Imageless products show a soft branded watermark, not a black box."""
+        css = _css()
+        # anchor to the line-start rule (the clip-path rule also ends in
+        # "> .image-placeholder {").
+        block = _css_block(css, "\n.image-placeholder {")
+        self.assertIn("var(--muted)", block)
+        self.assertNotIn("var(--main-color-dark)", block)
+        # the brand mark is layered in as a faded watermark via ::before
+        before = _css_block(css, ".image-placeholder::before {")
+        self.assertIn("favicon", before)
+
+    def test_card_typography_is_generic_ui(self):
+        """Card title sits at the body scale, description reads as muted text.
+
+        (The title was the big page-heading size, dominating the card.)
+        """
+        css = _css()
+        self.assertIn("font-size: var(--s0)", _css_block(css, ".card-stack h3 > a {"))
+        desc = _css_block(css, ".card-stack p {")
+        self.assertIn("font-size: 0.875rem", desc)
+        self.assertIn("var(--main-color-gray)", desc)
 
     def test_focus_states_use_focus_visible(self):
         css = _css()
@@ -95,6 +115,11 @@ class DesignSystemPR2CSSTests(TestCase):
         self.assertIn("border: 0", block)
         self.assertIn("box-shadow: none", block)
         self.assertIn("border-radius: 0", block)
+        # tighter, uniform generic-UI content inset
+        self.assertIn("padding: var(--s0)", block)
+        # the full-bleed image's own padding is the only gap below it (no extra
+        # card-stack row gap stacked on top — that left too much space).
+        self.assertIn("margin-top: 0", _css_block(_css(), ".card-stack > .frame + * {"))
 
     def test_input_group_joins_input_and_button(self):
         """Newsletter input + Submit join into one control.
