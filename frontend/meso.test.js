@@ -715,3 +715,28 @@ describe("week switcher", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });
+
+// The top-bar "Deliver" link target. The multi-week designer can view a week
+// other than the live one; "Deliver" should send the week on screen, so the
+// link carries the viewed week as ?week=. Falls back to the bare deliver URL
+// with no plan (the bare designer redirects to a real plan anyway).
+describe("deliver link (deliverHref)", () => {
+  it("carries the viewed week as a ?week= query param", () => {
+    const c = makeMeso();
+    c.viewedWeekId = 2;
+    expect(c.deliverHref).toBe("/meso/deliver/7/?week=2");
+  });
+
+  it("omits ?week= when no week is viewed yet", () => {
+    const c = makeMeso();
+    c.viewedWeekId = null;
+    expect(c.deliverHref).toBe("/meso/deliver/7/");
+  });
+
+  it("falls back to the bare deliver URL without a plan", () => {
+    const c = makeMeso();
+    c.planId = null;
+    c.viewedWeekId = 2;
+    expect(c.deliverHref).toBe("/meso/deliver/");
+  });
+});

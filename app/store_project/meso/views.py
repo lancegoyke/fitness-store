@@ -1503,6 +1503,40 @@ def _editable_plan_or_response(request, plan_id):
     return plan, None
 
 
+def _body_week_id(request):
+    """A designer write's optional ``week_id``, parsed from the JSON request body.
+
+    The real callers post ``application/json`` (``apiPost`` and the deliver
+    ``fetch`` always set it, even for an empty ``body: null``); a bodyless / form /
+    multipart post carries no ``week_id`` → fall back to the live week. A declared
+    JSON body, though, is validated strictly: returns ``(None, HttpResponseBadRequest)``
+    when it's malformed (bad JSON, not an object, or a non-integer ``week_id``) so a
+    truncated / tampered request that meant to pin a week fails loudly rather than
+    silently acting on the live week (which, for deliver, would email/push the wrong
+    week). On success returns ``(week_id, None)`` — ``week_id`` is None when absent.
+    ``week_id`` arrives from JSON, not an ``<int:...>`` URL segment, so the int
+    coercion also guards the pk query against a 500.
+    """
+    if request.content_type != "application/json" or not request.body:
+        return None, None
+    try:
+        payload = json.loads(request.body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, HttpResponseBadRequest("Expected a JSON object.")
+    if not isinstance(payload, dict):
+        return None, HttpResponseBadRequest("Expected a JSON object.")
+    week_id = payload.get("week_id")
+    if week_id is None:
+        return None, None
+    # A real client sends a JSON integer; accept only that. ``int()`` would
+    # silently coerce ``1.9``→1 or ``True``→1 onto a valid pk — the exact
+    # wrong-week action this strict path exists to reject. ``bool`` is an ``int``
+    # subclass, so exclude it explicitly.
+    if not isinstance(week_id, int) or isinstance(week_id, bool):
+        return None, HttpResponseBadRequest("week_id must be an integer.")
+    return week_id, None
+
+
 def _touch_plan(plan):
     """Bump the plan's ``modified`` so it reads as the coach's working plan.
 
@@ -1602,13 +1636,11 @@ def session_add(request, plan_id):
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    # An empty / non-JSON body (the pre-switcher callers post no body) means
-    # "no week_id" — fall back to the live week — rather than a 400.
-    try:
-        payload = json.loads(request.body or "{}")
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        payload = {}
-    week_id = payload.get("week_id") if isinstance(payload, dict) else None
+    # An empty body (the pre-switcher callers post none) means "no week_id" —
+    # fall back to the live week; a present-but-malformed body is a 400.
+    week_id, bad = _body_week_id(request)
+    if bad is not None:
+        return bad
     if week_id is not None:
         week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
     else:
@@ -1929,18 +1961,39 @@ def _fan_out_group_delivery(request, plan):
 @login_required
 @require_POST
 def plan_deliver(request, plan_id):
-    """Deliver the plan's current week: stamp ``delivered_at`` + snapshot it (Phase 4)."""
+    """Deliver a week of the plan: stamp ``delivered_at`` + snapshot it (Phase 4).
+
+    Delivers the plan's **current** (live) week by default, or a specific week
+    when the body carries a ``week_id`` — the multi-week designer's "send the week
+    I'm viewing". A coach can deliver a built-ahead week directly: delivering never
+    changes ``is_current``, so sending a future week doesn't move the live pointer.
+    Visibility is by newest ``delivered_at`` (``latest_delivered_week``), so the
+    athlete lands on the week just sent while the live pointer stays put. The chosen
+    week must belong to the plan (a foreign week is a 404). A group plan ignores
+    ``week_id`` and fans out its current week (per-week delivery is an
+    individual-designer affordance).
+    """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
     if plan.is_group:
         # A group plan fans its current week out to every active member (each
-        # member's *resolved* program), groups Phase 4.
+        # member's *resolved* program), groups Phase 4. ``week_id`` is ignored —
+        # the group always sends its current week.
         summary, error = _fan_out_group_delivery(request, plan)
         if error is not None:
             return HttpResponseBadRequest(error)
         return JsonResponse({"ok": True, **summary}, status=201)
-    week = current_week(plan)
+    # An empty body (the bare deliver button) means "no week_id" — deliver the
+    # live week, as before; a present-but-malformed body is a 400, not a silent
+    # delivery of the wrong week.
+    week_id, bad = _body_week_id(request)
+    if bad is not None:
+        return bad
+    if week_id is not None:
+        week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
+    else:
+        week = current_week(plan)
     if week is None:
         return HttpResponseBadRequest("This plan has no week to deliver.")
     now = timezone.now()
@@ -2538,8 +2591,25 @@ class DeliverView(LoginRequiredMixin, TemplateView):
         if plan is None:
             raise Http404("Unknown plan")
         ctx["plan_id"] = plan.pk
-        ctx.update(presenters.deliver_screen(plan))
+        ctx.update(presenters.deliver_screen(plan, week=self._target_week(plan)))
         return ctx
+
+    def _target_week(self, plan):
+        """The week the deliver screen targets, from the ``?week=`` query param.
+
+        Resolves ``?week=`` to a week of this plan, or None (the presenter falls
+        back to the live week). A missing / foreign / non-numeric ``week`` is
+        ignored rather than a 404: the confirm screen always renders something
+        deliverable, and the deliver POST itself validates the chosen week strictly.
+        """
+        raw = self.request.GET.get("week")
+        if not raw:
+            return None
+        try:
+            week_id = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return Week.objects.filter(pk=week_id, mesocycle__plan=plan).first()
 
 
 class ResultsView(LoginRequiredMixin, TemplateView):

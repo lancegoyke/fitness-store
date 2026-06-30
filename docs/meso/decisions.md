@@ -834,3 +834,49 @@ _(Append dated entries here as decisions land.)_
   vitest green, ruff + format clean. Remaining Meso backlog: **deliver a chosen non-current
   week without first making it current** (a natural follow-up) and **S6 billing Phase
   5 annual prices** (blocked on the owner's per-seat number + a Stripe annual Price).
+- 2026-06-30 — **Deliver any week built** (branch `meso-deliver-any-week`,
+  **no migration**): closes the multi-week designer's follow-up — **deliver a
+  chosen, non-current week without first making it current**. After the
+  multi-week designer, a coach could build weeks ahead and switch which is live,
+  but `plan_deliver` only ever sent `current_week`, so sending a built-ahead week
+  meant first flipping it current (moving the live pointer as a side effect).
+  Now: **(1)** `plan_deliver` takes an optional `week_id` (individual plans) and
+  delivers *that* week — stamp `delivered_at` + `WeekDelivery` snapshot —
+  **without touching `is_current`**; a foreign week is a 404, absent → the live
+  week (unchanged), and a **group plan ignores `week_id`** (still fans out its
+  current week — per-week delivery is an individual-designer affordance). **(2)**
+  `deliver_screen(plan, week=None)` targets a chosen week, lists every week for a
+  selector, and flags whether the target is the live week. **(3)** `DeliverView`
+  resolves `?week=` (foreign / non-numeric → silently falls back to live; the
+  confirm screen always renders something deliverable, the POST validates
+  strictly). The deliver screen gains a **per-week selector** (chips link
+  `?week=<id>`, server-rendered so the summary stays consistent) + a **"not the
+  live week" notice**; the designer's "Deliver" link carries the **viewed** week
+  (`:href="deliverHref"` → `?week=<viewedWeekId>`) so "Deliver" sends the week on
+  screen. **Design call:** *delivery never moves the live pointer* — visibility
+  stays "newest delivery wins" (`latest_delivered_week`), so the athlete lands on
+  the week just sent while the coach's `is_current`/deliver-default holds (the
+  multi-week "no footgun" stance, extended to delivery). Built red→green:
+  `test_deliver.py` (**+~20 pytest**: per-week deliver + leaves-current,
+  athlete-visible week, foreign-404, over-limit 402, screen `?week=` targeting /
+  selector / notice / fallback) + `test_group_deliver.py` (**+1**: group ignores
+  `week_id`) + `frontend/meso.test.js` (**+3 vitest**: `deliverHref`). 1097 meso
+  pytest + 54 vitest green; ruff + format + djhtml + `makemigrations --check`
+  clean. **Codex review loop:** 4 fix iterations then CLEAN — all four were the
+  same class of **strict-input** nit on the new JSON `week_id` path (P2 non-int pk
+  → 500 → coerce; P2 malformed-body → silent live-week delivery → 400, gated on
+  `content_type == "application/json"` so bodyless/multipart callers still mean
+  "live week"; **shared `_body_week_id` helper** wired into `plan_deliver` *and*
+  the adjacent pre-existing `session_add`, which carried the identical latent
+  vector; P3 the live-week warning read the raw `is_current` flag, contradicting
+  `current_week`'s earliest-week fallback → resolve one `live_id` for both the
+  chip marker and the notice; P2 `int()` coerced `1.9`→1 / `True`→1 → accept only
+  a genuine JSON integer, `bool` excluded). **GOTCHA (reusable):** Django's test
+  client `client.post(url)` with **no data still sends a non-empty multipart
+  body** (boundary bytes), so a `if not request.body` guard won't see it as empty
+  — gate strict JSON parsing on `request.content_type` instead. Plus the
+  recurring render-test gotcha (a `// live week` comment in the deliver
+  `<script>` tripped the "no 'live week' on the current screen" assert — scrub
+  dev-facing comments of asserted tokens). Remaining Meso backlog: **S6 billing
+  Phase 5 annual prices** (blocked on the owner's per-seat number + a Stripe
+  annual Price) — no other autonomous slice outstanding.

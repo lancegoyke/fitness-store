@@ -163,6 +163,20 @@ function createMeso() {
       return p.name + " — " + p.weeks + " mesocycle";
     },
 
+    // The top-bar "Deliver" link target — the deliver/confirm screen for this
+    // plan, pinned to the week the coach is *viewing* (?week=) so "Deliver" sends
+    // the week on screen rather than always the live one (the deliver screen lets
+    // a coach send a built-ahead week without first making it current). Falls back
+    // to the bare deliver URL with no plan (the bare designer redirects to a real
+    // plan anyway).
+    get deliverHref() {
+      if (this.planId == null) return "/meso/deliver/";
+      const base = `/meso/deliver/${this.planId}/`;
+      return this.viewedWeekId != null
+        ? `${base}?week=${this.viewedWeekId}`
+        : base;
+    },
+
     // ---- backend hydration + autosave (Phase 3) ----
     init() {
       // Hydrate dismissed coachmarks first, so it works even without a plan.
