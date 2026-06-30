@@ -1929,18 +1929,40 @@ def _fan_out_group_delivery(request, plan):
 @login_required
 @require_POST
 def plan_deliver(request, plan_id):
-    """Deliver the plan's current week: stamp ``delivered_at`` + snapshot it (Phase 4)."""
+    """Deliver a week of the plan: stamp ``delivered_at`` + snapshot it (Phase 4).
+
+    Delivers the plan's **current** (live) week by default, or a specific week
+    when the body carries a ``week_id`` — the multi-week designer's "send the week
+    I'm viewing". A coach can deliver a built-ahead week directly: delivering never
+    changes ``is_current``, so sending a future week doesn't move the live pointer.
+    Visibility is by newest ``delivered_at`` (``latest_delivered_week``), so the
+    athlete lands on the week just sent while the live pointer stays put. The chosen
+    week must belong to the plan (a foreign week is a 404). A group plan ignores
+    ``week_id`` and fans out its current week (per-week delivery is an
+    individual-designer affordance).
+    """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
     if plan.is_group:
         # A group plan fans its current week out to every active member (each
-        # member's *resolved* program), groups Phase 4.
+        # member's *resolved* program), groups Phase 4. ``week_id`` is ignored —
+        # the group always sends its current week.
         summary, error = _fan_out_group_delivery(request, plan)
         if error is not None:
             return HttpResponseBadRequest(error)
         return JsonResponse({"ok": True, **summary}, status=201)
-    week = current_week(plan)
+    # An empty / non-JSON body (the bare deliver button posts none) means "no
+    # week_id" — deliver the live week, as before — rather than a 400.
+    try:
+        payload = json.loads(request.body or "{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = {}
+    week_id = payload.get("week_id") if isinstance(payload, dict) else None
+    if week_id is not None:
+        week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
+    else:
+        week = current_week(plan)
     if week is None:
         return HttpResponseBadRequest("This plan has no week to deliver.")
     now = timezone.now()
@@ -2538,8 +2560,25 @@ class DeliverView(LoginRequiredMixin, TemplateView):
         if plan is None:
             raise Http404("Unknown plan")
         ctx["plan_id"] = plan.pk
-        ctx.update(presenters.deliver_screen(plan))
+        ctx.update(presenters.deliver_screen(plan, week=self._target_week(plan)))
         return ctx
+
+    def _target_week(self, plan):
+        """The week the deliver screen targets, from the ``?week=`` query param.
+
+        Resolves ``?week=`` to a week of this plan, or None (the presenter falls
+        back to the live week). A missing / foreign / non-numeric ``week`` is
+        ignored rather than a 404: the confirm screen always renders something
+        deliverable, and the deliver POST itself validates the chosen week strictly.
+        """
+        raw = self.request.GET.get("week")
+        if not raw:
+            return None
+        try:
+            week_id = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return Week.objects.filter(pk=week_id, mesocycle__plan=plan).first()
 
 
 class ResultsView(LoginRequiredMixin, TemplateView):

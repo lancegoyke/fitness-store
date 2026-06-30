@@ -92,7 +92,7 @@
         <!-- Review + Deliver are individual-only flows; group review + deliver-to-all
              are groups Phase 3/4, so a group plan shows a "soon" chip instead. -->
         <a x-show="isIndividual" href="{% url 'meso:review' %}" data-hover="rail" style="text-decoration:none;font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px 13px;">Review changes</a>
-        <a x-show="isIndividual" href="{% if plan_data %}{% url 'meso:deliver_plan' plan_data.plan.id %}{% else %}{% url 'meso:deliver' %}{% endif %}" data-hover="brighten" style="text-decoration:none;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:8px 15px;box-shadow:0 1px 2px rgba(16,18,22,0.12);">Deliver</a>
+        <a x-show="isIndividual" href="{% if plan_data %}{% url 'meso:deliver_plan' plan_data.plan.id %}{% else %}{% url 'meso:deliver' %}{% endif %}" :href="deliverHref" data-hover="brighten" style="text-decoration:none;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:8px 15px;box-shadow:0 1px 2px rgba(16,18,22,0.12);">Deliver</a>
         <span x-show="isGroup" style="font-size:12.5px;font-weight:600;color:var(--dim);background:var(--rail);border:1px solid var(--line);border-radius:8px;padding:7px 13px;">Deliver to all &#183; soon</span>
       </div>
 

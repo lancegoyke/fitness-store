@@ -333,6 +333,25 @@ class TestPlanDeliverGroup:
         assert data["delivered_at"]
         assert Plan.objects.filter(source_group=group).count() == 2
 
+    def test_group_ignores_a_week_id_and_fans_out_current(self, client):
+        # Per-week delivery is an individual-designer affordance; a group plan
+        # always fans out its current week, so a stray ``week_id`` in the body is
+        # ignored (the group branch short-circuits before the body is read).
+        import json
+
+        group, plan, memberships = seed_group(member_count=2)
+        client.force_login(group.coach)
+
+        resp = client.post(
+            deliver_url(plan),
+            data=json.dumps({"week_id": 999999}),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["members"] == 2
+        assert Plan.objects.filter(source_group=group).count() == 2
+
     def test_notifies_each_member_once(
         self, client, mailoutbox, django_capture_on_commit_callbacks
     ):

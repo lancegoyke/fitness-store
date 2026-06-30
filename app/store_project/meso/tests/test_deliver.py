@@ -16,6 +16,8 @@ These tests cover the server seam:
 - the plan-bound deliver screen renders real data and 404s a non-owned plan.
 """
 
+import json
+
 import pytest
 from django.urls import reverse
 
@@ -49,8 +51,25 @@ def seed_plan(coach=None, athlete=None):
     return plan, week, session, presc
 
 
+def add_week(plan, *, index, is_current=False):
+    """Append another week (with one session) to the plan's first block."""
+    meso = plan.mesocycles.order_by("order").first()
+    week = WeekFactory(mesocycle=meso, index=index, is_current=is_current)
+    SessionFactory(week=week, day_number=1, name=f"Day {index}")
+    return week
+
+
 def deliver_url(plan):
     return reverse("meso:api_plan_deliver", kwargs={"plan_id": plan.pk})
+
+
+def post_week(client, plan, week_id):
+    """POST the deliver endpoint with an explicit ``week_id`` JSON body."""
+    return client.post(
+        deliver_url(plan),
+        data=json.dumps({"week_id": week_id}),
+        content_type="application/json",
+    )
 
 
 class TestDeliver:
@@ -119,6 +138,18 @@ class TestDeliver:
         assert data["week"]["id"] == week.pk
         assert data["delivered_at"]
 
+    def test_empty_json_body_delivers_current_week(self, client):
+        # The bare deliver button posts no useful body; an explicit ``{}`` (or no
+        # body) must still mean "deliver the live week", not a 400.
+        plan, week, _, _ = seed_plan()
+        client.force_login(plan.relationship.coach)
+
+        resp = post_week(client, plan, None)
+
+        assert resp.status_code == 201
+        week.refresh_from_db()
+        assert week.delivered_at is not None
+
     def test_non_owner_deliver_forbidden(self, client):
         plan, week, _, _ = seed_plan()
         client.force_login(UserFactory())  # a stranger
@@ -171,6 +202,88 @@ class TestDeliver:
         assert resp.status_code == 405
 
 
+class TestDeliverChosenWeek:
+    """Deliver a chosen (non-current) week via an explicit ``week_id``.
+
+    The multi-week designer lets a coach build weeks ahead; this lets them
+    *send* a built-ahead week directly — without first flipping it to the live
+    (current) week. The athlete sees the newest-delivered week, the coach's live
+    pointer is left untouched, and a foreign week is rejected.
+    """
+
+    def test_delivers_the_chosen_non_current_week(self, client):
+        plan, week1, _, _ = seed_plan()
+        week2 = add_week(plan, index=2, is_current=False)
+        client.force_login(plan.relationship.coach)
+
+        resp = post_week(client, plan, week2.pk)
+
+        assert resp.status_code == 201
+        assert resp.json()["week"]["id"] == week2.pk
+        week1.refresh_from_db()
+        week2.refresh_from_db()
+        # Only the chosen week is delivered + snapshotted; the live week is not.
+        assert week2.delivered_at is not None
+        assert week1.delivered_at is None
+        assert WeekDelivery.objects.filter(week=week2).count() == 1
+        assert WeekDelivery.objects.filter(week=week1).count() == 0
+
+    def test_delivering_a_week_does_not_change_the_current_pointer(self, client):
+        plan, week1, _, _ = seed_plan()
+        week2 = add_week(plan, index=2, is_current=False)
+        client.force_login(plan.relationship.coach)
+
+        post_week(client, plan, week2.pk)
+
+        week1.refresh_from_db()
+        week2.refresh_from_db()
+        # Delivering never flips ``is_current`` — week1 stays the live target.
+        assert week1.is_current is True
+        assert week2.is_current is False
+
+    def test_chosen_week_becomes_the_athletes_visible_week(self, client):
+        from store_project.meso.serializers import latest_delivered_week
+
+        plan, _, _, _ = seed_plan()
+        week2 = add_week(plan, index=2, is_current=False)
+        client.force_login(plan.relationship.coach)
+
+        post_week(client, plan, week2.pk)
+
+        # Newest delivery wins → the athlete lands on the week just sent.
+        assert latest_delivered_week(plan).pk == week2.pk
+
+    def test_foreign_week_id_is_404_and_delivers_nothing(self, client):
+        plan, _, _, _ = seed_plan()
+        other_plan, other_week, _, _ = seed_plan()
+        client.force_login(plan.relationship.coach)
+
+        resp = post_week(client, plan, other_week.pk)
+
+        assert resp.status_code == 404
+        other_week.refresh_from_db()
+        assert other_week.delivered_at is None
+        assert not WeekDelivery.objects.exists()
+
+    def test_over_limit_coach_cannot_deliver_a_chosen_week(self, client):
+        # The D6 freeze guards the endpoint before the body is read, so a
+        # per-week deliver is gated exactly like the current-week deliver. A free
+        # coach with a kept link + a newer (suspended) one is over the seat cap.
+        from store_project.meso.models import CoachAthlete
+
+        coach = UserFactory()
+        CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)  # kept
+        plan, _, _, _ = seed_plan(coach=coach)  # newer link → suspended → over
+        week2 = add_week(plan, index=2, is_current=False)
+        client.force_login(coach)
+
+        resp = post_week(client, plan, week2.pk)
+
+        assert resp.status_code == 402
+        week2.refresh_from_db()
+        assert week2.delivered_at is None
+
+
 class TestDeliverScreen:
     def test_plan_screen_renders_real_plan(self, client):
         plan, _, _, _ = seed_plan(athlete=UserFactory(name="Maya Okonkwo"))
@@ -198,3 +311,76 @@ class TestDeliverScreen:
         client.force_login(coach)
         resp = client.get(reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 404
+
+    def _screen(self, client, plan, **params):
+        url = reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk})
+        return client.get(url, params)
+
+    def test_screen_defaults_to_current_week(self, client):
+        plan, week1, _, _ = seed_plan()
+        add_week(plan, index=2, is_current=False)
+        client.force_login(plan.relationship.coach)
+
+        ctx = self._screen(client, plan).context["deliver"]
+
+        assert ctx["week_id"] == week1.pk
+        assert ctx["is_current"] is True
+
+    def test_screen_targets_the_week_query_param(self, client):
+        plan, _, _, _ = seed_plan()
+        week2 = add_week(plan, index=2, is_current=False)
+        client.force_login(plan.relationship.coach)
+
+        resp = self._screen(client, plan, week=week2.pk)
+
+        ctx = resp.context["deliver"]
+        assert ctx["week_id"] == week2.pk
+        # Targeting a non-current week flags it so the screen can warn the coach.
+        assert ctx["is_current"] is False
+        assert "Wk 2" in resp.content.decode()
+
+    def test_screen_lists_every_week_for_the_selector(self, client):
+        plan, week1, _, _ = seed_plan()
+        week2 = add_week(plan, index=2, is_current=False)
+        client.force_login(plan.relationship.coach)
+
+        resp = self._screen(client, plan)
+
+        weeks = resp.context["deliver"]["weeks"]
+        ids = {w["id"] for w in weeks}
+        assert ids == {week1.pk, week2.pk}
+        body = resp.content.decode()
+        # Each week is a link that re-targets the screen at that week.
+        assert f"?week={week1.pk}" in body
+        assert f"?week={week2.pk}" in body
+
+    def test_screen_warns_when_target_is_not_the_live_week(self, client):
+        plan, _, _, _ = seed_plan()
+        week2 = add_week(plan, index=2, is_current=False)
+        client.force_login(plan.relationship.coach)
+
+        on_current = self._screen(client, plan).content.decode()
+        on_other = self._screen(client, plan, week=week2.pk).content.decode()
+
+        # The "not the live week" notice shows only when sending a non-live week.
+        assert "live week" not in on_current.lower()
+        assert "live week" in on_other.lower()
+
+    def test_screen_foreign_week_param_falls_back_to_current(self, client):
+        plan, week1, _, _ = seed_plan()
+        _, other_week, _, _ = seed_plan()
+        client.force_login(plan.relationship.coach)
+
+        ctx = self._screen(client, plan, week=other_week.pk).context["deliver"]
+
+        # A foreign / stale ?week= silently falls back to the live week (the
+        # confirm screen always renders something deliverable); the POST is strict.
+        assert ctx["week_id"] == week1.pk
+
+    def test_screen_non_numeric_week_param_falls_back_to_current(self, client):
+        plan, week1, _, _ = seed_plan()
+        client.force_login(plan.relationship.coach)
+
+        ctx = self._screen(client, plan, week="nope").context["deliver"]
+
+        assert ctx["week_id"] == week1.pk

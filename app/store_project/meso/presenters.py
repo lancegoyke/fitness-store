@@ -21,6 +21,7 @@ from .models import CoachSubscription
 from .models import LoadType
 from .models import Plan
 from .models import SessionLog
+from .models import Week
 from .one_rm import one_rm_values
 from .serializers import _fmt_num
 from .serializers import _num
@@ -305,28 +306,53 @@ def group_detail(group):
     }
 
 
-def deliver_screen(plan):
-    """Context for the plan-bound deliver screen (Phase 4).
+def deliver_screen(plan, week=None):
+    """Context for the plan-bound deliver screen (Phase 4; per-week, multi-week).
 
-    Real athlete + current-week summary. Scheduling and the full "changes since
-    last delivery" diff are later-slice concerns (notifications / agent), so the
-    template hides those controls in plan mode; we only surface whether this is
-    a first delivery or a re-delivery.
+    Summarizes the **target** week — the plan's current (live) week by default, or
+    an explicit ``week`` the coach chose in the designer's switcher. ``deliver.weeks``
+    lists every week (id / label / whether it's the live week / whether it's already
+    been delivered) so the screen offers a per-week selector, and ``is_current``
+    /``current_label`` let it warn when the coach is sending a week that isn't the
+    live one (delivering it won't move the live pointer). Scheduling and the full
+    "changes since last delivery" diff are later-slice concerns; we only surface
+    whether this is a first delivery or a re-delivery.
     """
-    week = current_week(plan)
-    mesocycle = week.mesocycle if week else None
-    session_count = week.sessions.count() if week else 0
-    is_redelivery = week is not None and week.deliveries.exists()
+    live = current_week(plan)
+    target = week or live
+    mesocycle = target.mesocycle if target else None
+    session_count = target.sessions.count() if target else 0
+    is_redelivery = target is not None and target.deliveries.exists()
+
+    weeks = [
+        {
+            "id": w.pk,
+            "label": f"Wk {w.index}",
+            "is_current": w.is_current,
+            "is_delivered": w.delivered_at is not None,
+            "is_target": target is not None and w.pk == target.pk,
+        }
+        for w in (
+            Week.objects.filter(mesocycle__plan=plan)
+            .select_related("mesocycle")
+            .order_by("mesocycle__order", "index")
+        )
+    ]
 
     athlete = profile_athlete(plan.athlete)
     athlete["block"] = mesocycle.name if mesocycle else ""
-    athlete["week"] = f"Wk {week.index}" if week else ""
+    athlete["week"] = f"Wk {target.index}" if target else ""
     return {
         "athlete": athlete,
         "deliver": {
             "what": plan.title,
             "sessions": session_count,
             "is_redelivery": is_redelivery,
+            "week_id": target.pk if target else None,
+            "week_label": f"Wk {target.index}" if target else "",
+            "is_current": target is not None and target.is_current,
+            "current_label": f"Wk {live.index}" if live else "",
+            "weeks": weeks,
         },
     }
 
