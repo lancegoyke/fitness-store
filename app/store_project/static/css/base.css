@@ -353,6 +353,9 @@ form label {
   display: grid;
   grid-template-columns: 1em auto;
   gap: var(--s1);
+  /* Inline checkbox labels (e.g. the newsletter consent) read as body text,
+     not the bold `form label` weight. */
+  font-weight: 400;
 }
 
 .stack-form fieldset {
@@ -646,7 +649,7 @@ ul.errorlist {
 
 .box.purchase:active,
 .box.purchase:hover,
-.box.purchase:focus {
+.box.purchase:focus-visible {
   cursor: pointer;
   text-decoration: underline;
 }
@@ -721,6 +724,11 @@ a.box.login:active {
   flex: 1;
   height: 1px;
   background-color: #cac7c7;
+}
+
+/* Secondary auth-form links (e.g. "Forgot Password?") read as subordinate. */
+a.secondaryAction {
+  font-size: var(--s-1);
 }
 
 /*
@@ -945,11 +953,12 @@ a.box.login:active {
 .form-with-sidebar > * {
   display: flex;
   flex-wrap: wrap;
-  margin: calc(0px / 2 * -1);
+  /* A real gap so the input + button don't sit flush (the old
+     zero-width negative-margin trick gave them no separation). */
+  gap: var(--s-1);
 }
 
 .form-with-sidebar > * > * {
-  margin: calc(0px / 2);
   flex-grow: 1;
 }
 
@@ -1264,6 +1273,11 @@ ul.grid {
   inline-size: 100%;
   block-size: 100%;
   object-fit: cover;
+}
+
+/* Placeholder fill for products/tests with no featured image. */
+.image-placeholder {
+  background-color: var(--main-color-dark);
 }
 
 /*
@@ -1835,7 +1849,7 @@ ul.grid {
 }
 
 .cta .button:hover,
-.cta .button:focus,
+.cta .button:focus-visible,
 .cta .button:active {
   box-shadow: white 0 0 20px 5px;
   transition-duration: 0.2s;
@@ -1852,7 +1866,7 @@ ul.grid {
 }
 
 .footer a {
-  font-weight: 700;
+  font-weight: 400;
   color: var(--main-color-light-gray);
   text-decoration: none;
 }
@@ -1964,6 +1978,12 @@ table tr:nth-child(even) {
 .testimonial-footer img {
   border-radius: 50%;
   margin-right: var(--s-1);
+}
+
+/* Avatar sizing moved off the HTML width/height attrs. */
+.testimonial-avatar {
+  inline-size: 50px;
+  block-size: 50px;
 }
 
 .testimonial-footer .byline {

@@ -25,7 +25,7 @@
   <div class="cluster">
   <!-- intermediary wrapper -->
     <p>
-      <a class="box padding" href="{% url 'products:store' %}">
+      <a class="box" href="{% url 'products:store' %}">
         < Back to Store
       </a>
       {% if user.is_superuser %}
@@ -43,7 +43,7 @@
           {% if program.featured_image %}
             <img src="{{ program.featured_image.url }}" alt="" />
           {% else %}
-            <img style="background-color: var(--main-color-dark);">
+            <img class="image-placeholder">
           {% endif %}
         </div>
       </div>

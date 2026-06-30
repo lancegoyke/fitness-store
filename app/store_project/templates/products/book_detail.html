@@ -24,7 +24,7 @@
   <div class="cluster">
   <!-- intermediary wrapper -->
     <p>
-      <a class="box padding" href="{% url 'products:store' %}">
+      <a class="box" href="{% url 'products:store' %}">
         < Back to Store
       </a>
       {% if user.is_superuser %}
@@ -42,7 +42,7 @@
           {% if book.featured_image %}
             <img src="{{ book.featured_image.url }}" alt="" />
           {% else %}
-            <img style="background-color: var(--main-color-dark);">
+            <img class="image-placeholder">
           {% endif %}
         </div>
       </div>
@@ -78,8 +78,8 @@
                 <button
                   class="button box purchase"
                   id="submitButton"
-                  data-productType="book"
-                  data-productSlug="{{ book.slug }}">
+                  data-product-type="book"
+                  data-product-slug="{{ book.slug }}">
                   Purchase!
                 </button>
               {% endif %}
