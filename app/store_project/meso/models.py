@@ -1478,7 +1478,15 @@ class WeekDelivery(models.Model):
 
 
 class AgentProposalBatch(models.Model):
-    """One agent run: the coach's instruction + the batch of edits it proposed."""
+    """One agent run: the coach's instruction + the batch of edits it proposed.
+
+    The batch is also the **per-run usage ledger** (agent-usage tracking v1): one
+    Claude call today, so the token usage + estimated cost live right on the row
+    (``docs/meso/agent-usage-plan.md`` U1). ``coach`` (who pays) + ``plan`` (→
+    athlete or group) + ``model`` were already the attribution; the usage/cost
+    columns and the ``trigger`` / ``billing_status`` snapshots close the gap so a
+    later report can split COGS (paid) vs CAC (free/trial) and find the heavy seats.
+    """
 
     class Status(models.TextChoices):
         # The agent run happens off the request thread (Phase 4): a batch starts
@@ -1489,6 +1497,15 @@ class AgentProposalBatch(models.Model):
         FAILED = "failed", _("Failed")
         APPLIED = "applied", _("Applied")
         DISMISSED = "dismissed", _("Dismissed")
+
+    class Trigger(models.TextChoices):
+        # What kicked off the run — a slicing dimension for the usage report.
+        # ``eval`` runs (the golden corpus) are excluded from cost reporting;
+        # ``group`` is reserved for the future group-agent fan-out.
+        MANUAL = "manual", _("Manual")
+        DRAFT = "draft", _("Draft with AI")
+        EVAL = "eval", _("Eval")
+        GROUP = "group", _("Group")
 
     plan = models.ForeignKey(
         Plan,
@@ -1512,6 +1529,46 @@ class AgentProposalBatch(models.Model):
     # Why a background run failed — surfaced to the coach via the status poll.
     error = models.TextField(_("Error"), blank=True)
     created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+
+    # -- agent-usage tracking (per-run cost attribution; v1) -------------
+    # Token usage captured from the Claude call (``agent.client.RunUsage``). Zero
+    # for a run that made no API call (a scripted/test client) or one that failed
+    # before the SDK returned. Cache writes ≈ 1.25× input, cache reads ≈ 0.1×.
+    input_tokens = models.PositiveIntegerField(_("Input tokens"), default=0)
+    output_tokens = models.PositiveIntegerField(_("Output tokens"), default=0)
+    cache_creation_input_tokens = models.PositiveIntegerField(
+        _("Cache-write input tokens"), default=0
+    )
+    cache_read_input_tokens = models.PositiveIntegerField(
+        _("Cache-read input tokens"), default=0
+    )
+    # Claude calls in this run — 1 today; >1 once group-agent/multi-turn lands.
+    api_calls = models.PositiveIntegerField(_("API calls"), default=1)
+    # Anthropic ``_request_id`` (tracing / support escalation) + the stop reason
+    # (``max_tokens`` truncation, ``refusal``, …) for diagnostics.
+    request_id = models.CharField(_("Anthropic request id"), max_length=128, blank=True)
+    stop_reason = models.CharField(_("Stop reason"), max_length=32, blank=True)
+    # Wall-clock latency of the Claude call (null until measured / on early failure).
+    duration_ms = models.PositiveIntegerField(_("Duration (ms)"), null=True, blank=True)
+    # tokens × per-model rate, computed at write time so a later price change can't
+    # rewrite history. An internal *estimate* — the Anthropic invoice is the truth.
+    # Null when the model isn't in the rate table (don't guess; the report flags it).
+    estimated_cost_usd = models.DecimalField(
+        _("Estimated cost (USD)"),
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    # Slicing dimensions snapshotted at run time (lossy to reconstruct later).
+    trigger = models.CharField(
+        _("Trigger"), max_length=16, choices=Trigger.choices, default=Trigger.MANUAL
+    )
+    # The coach's billing tier when the run fired (free/trialing/active/comped/…) —
+    # the COGS-vs-CAC split for the usage report. Blank for legacy rows.
+    billing_status = models.CharField(
+        _("Billing status at run time"), max_length=16, blank=True
+    )
 
     class Meta:
         ordering = ["-created_at"]

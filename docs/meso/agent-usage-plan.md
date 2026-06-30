@@ -1,6 +1,6 @@
 # Meso — agent usage & cost tracking
 
-**Status:** 🟡 Proposed · started 2026-06-30
+**Status:** 🟢 Phase 1 (capture) shipped · 🟡 Phase 2 (report) pending · started 2026-06-30
 **Context:** Billing launches at **$9.99/mo base + $1/mo per active seat** (D13 in
 [`billing-plan.md`](./billing-plan.md)). The **AI agent is the cost-bearing
 feature** — every proposal run is a Claude API call. To confirm the $1/seat
@@ -126,12 +126,21 @@ def estimate_cost(model, usage) -> Decimal:
 
 ## Phasing
 
-1. **Capture (NEXT, autonomous — no Stripe).** Add the columns + migration;
-   thread `usage` / `_request_id` / `duration_ms` from `MesoAgentClient.propose`
-   → `service._persist_result` → the batch; add `agent_costs.py` + compute
-   `estimated_cost_usd` on **every** run (success **and** failure, U5);
-   snapshot `trigger` + `billing_status`. Red→green, `stripe` SDK untouched.
-2. **Report.** The `meso_agent_usage_report` command + the admin readout.
+1. **Capture — ✅ DONE (migration `0025`, no Stripe).** Added the usage/cost/
+   dimension columns to `AgentProposalBatch` (the per-run ledger). `client.propose`
+   now returns a `ProposalResult(data, usage)` carrying the Anthropic `usage` block
+   + `_request_id` + `stop_reason` (`RunUsage`); the service threads it (plus the
+   measured `duration_ms`) through `_persist_result` onto the batch and computes
+   `estimated_cost_usd` from `billing/agent_costs.py` (per-model rate table; unknown
+   model → `None`). `trigger` (`manual`/`draft`/`eval`/`group`) + the coach's
+   `billing_status` are snapshotted at batch creation. A **failed** run still records
+   model + duration (U5); a non-streaming raise yields no `usage` block, so tokens
+   stay 0 and the deferred invoice reconciliation covers any tokens billed on a drop.
+   The admin surfaces the columns read-only. Tests: `test_agent_costs.py` (pure
+   helper) + `test_agent_usage.py` (client capture, persist on success+failure,
+   trigger/billing snapshots). Existing fakes returning a bare dict normalize to
+   zero usage, so they stayed green.
+2. **Report (NEXT).** The `meso_agent_usage_report` command + the admin readout.
 3. *(Deferred)* dashboard; a margin-threshold alert (e.g. flag when a coach's
    monthly agent cost exceeds a set fraction of their revenue); a reconciliation
    job against the Anthropic Admin/Usage API.

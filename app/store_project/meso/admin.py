@@ -241,11 +241,42 @@ class ProposedChangeInline(admin.TabularInline):
 
 @admin.register(AgentProposalBatch)
 class AgentProposalBatchAdmin(admin.ModelAdmin):
-    list_display = ("__str__", "plan", "coach", "status", "model", "created_at")
-    list_filter = ("status",)
-    search_fields = ("plan__title", "coach__email", "coach__name", "instruction")
+    list_display = (
+        "__str__",
+        "plan",
+        "coach",
+        "status",
+        "trigger",
+        "model",
+        "estimated_cost_usd",
+        "created_at",
+    )
+    list_filter = ("status", "trigger", "billing_status", "model")
+    search_fields = (
+        "plan__title",
+        "coach__email",
+        "coach__name",
+        "instruction",
+        "request_id",
+    )
     raw_id_fields = ("plan", "coach")
-    readonly_fields = ("error", "created_at")
+    # The usage/cost columns are captured by the agent run — read-only here so the
+    # admin can inspect per-run cost without hand-editing the ledger.
+    readonly_fields = (
+        "error",
+        "created_at",
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "api_calls",
+        "request_id",
+        "stop_reason",
+        "duration_ms",
+        "estimated_cost_usd",
+        "trigger",
+        "billing_status",
+    )
     inlines = (ProposedChangeInline,)
 
 

@@ -43,6 +43,19 @@ def _subscription(coach):
     return getattr(coach, "coach_subscription", None)
 
 
+def billing_status(coach):
+    """The coach's billing tier *right now* — snapshotted onto an agent run (U4).
+
+    The raw ``CoachSubscription.status`` (``free`` / ``trialing`` / ``active`` /
+    ``past_due`` / ``canceled`` / ``comped``), or ``free`` when the coach has no
+    subscription row (existing coaches predate billing). Captured at run time
+    because reconstructing a coach's tier *as of* a past run is lossy; the usage
+    report buckets it into COGS (paid: active/comped) vs CAC (free/trial).
+    """
+    sub = _subscription(coach)
+    return sub.status if sub else CoachSubscription.Status.FREE
+
+
 def is_active(coach):
     """The single predicate: does this coach have full (unlimited) access right now?
 
