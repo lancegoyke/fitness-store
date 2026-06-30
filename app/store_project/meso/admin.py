@@ -285,7 +285,7 @@ class ProposedChangeAdmin(admin.ModelAdmin):
     list_display = ("title", "batch", "kind", "status", "honors", "order")
     list_filter = ("kind", "status")
     search_fields = ("title", "rationale")
-    raw_id_fields = ("batch", "session", "prescription")
+    raw_id_fields = ("batch", "session", "prescription", "membership")
 
 
 # -- groups (S1) -----------------------------------------------------------

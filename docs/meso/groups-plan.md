@@ -382,3 +382,59 @@ program directly").
 Tests: `test_group_agent.py`. **Deferred:** group agent **Phase 2** = per-athlete
 auto-adjusts (the agent generates per-member `PrescriptionOverride`s instead of
 editing the shared row).
+
+## Phase 6 — the group agent's per-athlete auto-adjusts (Phase 2)
+
+Shipped 2026-06-30 (migration `meso.0027`). Phase 5 let the group agent edit the
+*shared* program (every member inherits). This slice adds the other half the Phase
+3 overlay always supported by hand: the agent can now propose a per-member
+**`PrescriptionOverride`** — a swap, a load %, or a volume tweak that diverges
+**one** member from the shared base — behind the same propose → review → apply gate.
+Both paths coexist; the agent picks a *shared* edit (for the whole group) or an
+*adjust* (to personalize one member) from the instruction. Additive — every Phase 5
+path is unchanged.
+
+- **A new agent verb `adjust` (`ProposedChange.Kind.ADJUST`).** The first kind that
+  edits *neither* the shared row *nor* a new row — it materializes an override.
+  `ProposedChange` gains a nullable `membership` FK (`SET_NULL`, like
+  `session`/`prescription`, so a member removed between propose and apply leaves the
+  change a safe no-op skip). Migration `meso.0027` (FK + the `kind` choices alter).
+- **Targeting.** An `adjust` names the member by **`member_id`** — the
+  `GroupMembership` pk, which `service._group_context` now exposes per member (one
+  query with the contraindication prefetch; the membership pk is the stable id the
+  model echoes back) — plus the shared `prescription_id` it overrides. The tool gains
+  two adjust-only fields, `member_id` and `load_pct` (an integer percentage, 90 =
+  −10%); the swap/volume reuse the existing `new_name`/`new_sets`/`new_reps`.
+- **Per-member safety — the key property.** A *shared* swap/add is screened against
+  the **folded** set of every member's contraindications (Phase 5); an `adjust` swap
+  only trains the one member, so it is screened against **that member's own**
+  contraindications (`validation.member_forbidden_terms`). A movement unsafe for a
+  *different* member is allowed — it never reaches them. (`forbidden_terms` was
+  refactored onto a shared `_terms_from_texts` so the two foldings share one
+  tokenizer.) `validation.clean_change` resolves the member (active member of *this*
+  plan's group — a foreign/ended/unknown member is rejected, mirroring
+  `add_athlete`'s tenancy), bounds `load_pct` to the override's
+  `MIN/MAX_LOAD_PCT` band (dropping a no-op 100%), builds the override diff, and
+  requires at least one real diff. An `adjust` on an individual plan is rejected (no
+  members to diverge).
+- **Apply (`agent.apply._apply_adjust`).** Calls `GroupMembership.set_override` — the
+  *same* upsert the coach's click-to-adjust editor uses — so the override shows on the
+  designer `adj` overlay and flows through deliver-to-all (`sync_delivered_plan`)
+  with **zero** new apply/delivery code. The shared row is untouched; only the one
+  member diverges. A null membership/prescription or empty diff is a skip.
+- **Review clarity.** `serialize_proposed_change` carries a `member` name for an
+  `adjust` (blank for every other kind), surfaced as a badge on the review screen and
+  a chip on the inline change card, so the coach sees *who* diverges regardless of how
+  the model phrases the title. The three change-serialization sites `select_related`
+  the membership to avoid an N+1.
+- **Grounding / prompt.** The cached system prompt is unchanged (individual-focused);
+  the group-only guidance — shared-edit vs per-member-adjust, and how to target a
+  member by `member_id` — lives in the volatile `_GROUP_FRAMING` user turn, the same
+  split Phase 5 used. The designer Group-mode greeting now invites both ("change it
+  for the whole group, or adjust one athlete").
+
+Tests: `test_group_agent_adjust.py` (+19: grounding member ids, validation —
+targeting / per-member backstop / load bounds / individual-plan rejection /
+diff-required, apply creating + upserting the override, end-to-end propose→apply,
+tool schema + framing, review serialization). **No further group-agent backlog** —
+the shared-edit (Phase 5) and per-athlete-adjust (this) halves are both built.

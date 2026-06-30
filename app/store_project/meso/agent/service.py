@@ -64,22 +64,41 @@ def _coach_style(coach):
 
 
 def _group_context(group):
-    """Group grounding (groups Phase 1 — the group agent edits the shared program).
+    """Group grounding (groups agent — the group agent edits a group's program).
 
     A group plan has no single athlete, so the agent grounds on the *group*: its
-    name/focus, each active member with their own active contraindications, and —
-    most importantly for safety — the **folded** set of every member's
-    contraindications. The shared row trains everyone, so the agent must honor the
-    union; the deterministic backstop (``validation.forbidden_terms``) folds the
-    same way, regardless of what the model returns.
+    name/focus, each active member (with a stable ``member_id`` the agent targets
+    a per-athlete ``adjust`` by, Phase 2) and their own active contraindications,
+    and — most importantly for a *shared* edit's safety — the **folded** set of
+    every member's contraindications. A shared row trains everyone, so the agent
+    must honor the union; the deterministic backstop (``validation.forbidden_terms``)
+    folds the same way. A per-member adjust is screened against that one member's
+    constraints instead (``validation.member_forbidden_terms``).
     """
-    members = group.active_member_users()
+    # One query with the contraindication prefetch (mirrors ``active_member_users``
+    # scoping). The membership pk is the ``member_id`` an ``adjust`` change targets.
+    memberships = (
+        group.memberships.select_related("relationship", "relationship__athlete")
+        .prefetch_related("relationship__athlete__contraindications")
+        .filter(
+            relationship__coach=group.coach,
+            relationship__status=models.CoachAthlete.Status.ACTIVE,
+        )
+        .order_by("relationship__athlete__name", "relationship__athlete__email")
+    )
     member_data = []
     folded = set()
-    for user in members:
+    for membership in memberships:
+        user = membership.relationship.athlete
         texts = [c.text for c in user.contraindications.all() if c.active]
         folded.update(texts)
-        member_data.append({"name": user.display_name(), "contraindications": texts})
+        member_data.append(
+            {
+                "member_id": membership.pk,
+                "name": user.display_name(),
+                "contraindications": texts,
+            }
+        )
     return {
         "name": group.name,
         "focus": group.focus or "",

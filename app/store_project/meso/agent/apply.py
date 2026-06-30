@@ -95,6 +95,40 @@ def _apply_add(change):
     }
 
 
+def _apply_adjust(change):
+    """Set one member's per-athlete override (groups agent Phase 2).
+
+    Unlike every other kind (which edits the shared row), an ``adjust`` diverges
+    *one* member: ``GroupMembership.set_override`` upserts the override the
+    designer overlay renders and delivery resolves. A null membership/prescription
+    (a member removed between propose and apply) or an empty diff is a safe no-op
+    skip, mirroring the other kinds.
+    """
+    membership = change.membership
+    presc = change.prescription
+    if membership is None or presc is None:
+        return None
+    payload = change.payload or {}
+    override = membership.set_override(
+        presc,
+        swap_name=payload.get("swap_name", ""),
+        load_pct=payload.get("load_pct"),
+        sets=payload.get("sets", ""),
+        reps=payload.get("reps", ""),
+        note=payload.get("note", ""),
+    )
+    if override is None:
+        # An empty diff cleared instead of stored — validation should prevent
+        # this, but treat it as a skip rather than counting a phantom apply.
+        return None
+    return {
+        "id": change.pk,
+        "kind": change.kind,
+        "field": "override",
+        "value": membership.pk,
+    }
+
+
 def _apply_deload(change):
     """Flag the change's week as a deload (its session's week, else current)."""
     week = change.session.week if change.session_id else current_week(change.batch.plan)
@@ -122,6 +156,8 @@ def apply_change(change):
         return _apply_deload(change)
     if change.kind == ProposedChange.Kind.ADD:
         return _apply_add(change)
+    if change.kind == ProposedChange.Kind.ADJUST:
+        return _apply_adjust(change)
     return None
 
 
@@ -137,7 +173,9 @@ def apply_batch(batch):
     with transaction.atomic():
         changes = batch.changes.exclude(
             status=ProposedChange.Status.REJECTED
-        ).select_related("prescription", "session__week")
+        ).select_related(
+            "prescription", "session__week", "membership__relationship__athlete"
+        )
         for change in changes:
             result = apply_change(change)
             if result is None:
