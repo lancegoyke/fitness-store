@@ -81,6 +81,13 @@ class TestPureHelpers:
         rev = report_mod.monthly_revenue(CoachSubscription.Status.PAST_DUE, 2)
         assert rev == Decimal("11.99")
 
+    def test_monthly_revenue_paid_floors_seats_at_one(self):
+        # Stripe bills at least one seat (``_seat_quantity`` floors at 1), so a paid
+        # coach with zero active athletes still owes base + one seat = $10.99.
+        assert report_mod.monthly_revenue(
+            CoachSubscription.Status.ACTIVE, 0
+        ) == Decimal("10.99")
+
     @pytest.mark.parametrize(
         "status",
         [
@@ -92,6 +99,14 @@ class TestPureHelpers:
     )
     def test_monthly_revenue_unpaid_is_zero(self, status):
         assert report_mod.monthly_revenue(status, 10) == Decimal("0")
+
+    def test_current_month_bounds_uses_local_month(self):
+        # The default month must match the localized now, not a bare UTC now —
+        # otherwise the window and its month label can disagree near a boundary.
+        local = timezone.localtime(timezone.now())
+        assert report_mod.current_month_bounds() == report_mod.month_bounds(
+            local.year, local.month
+        )
 
 
 # --- month windowing ------------------------------------------------------

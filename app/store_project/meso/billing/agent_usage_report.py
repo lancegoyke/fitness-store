@@ -78,8 +78,14 @@ def month_bounds(year, month):
 
 
 def current_month_bounds():
-    """``month_bounds`` for the month containing ``now`` — the report's default."""
-    now = timezone.now()
+    """``month_bounds`` for the *local* month containing now — the report's default.
+
+    ``month_bounds`` builds its window in the current timezone, so the default
+    month must come from the localized now: a bare UTC ``timezone.now()`` can
+    already read as next month during the last local evening of the month when the
+    app timezone is behind UTC, mismatching the window it then builds.
+    """
+    now = timezone.localtime(timezone.now())
     return month_bounds(now.year, now.month)
 
 
@@ -107,9 +113,15 @@ def monthly_revenue(status, seats):
     comped, canceled, or no row at all yield $0 (revenue we collect, not list
     price). ``seats`` is the coach's *current* billable active-athlete count — an
     approximation of the report month, since historical seat counts aren't stored.
+
+    The seat line is **floored at one** to mirror Stripe billing
+    (``stripe_gateway._seat_quantity`` rejects a quantity of 0): a paid coach with
+    zero active athletes still pays for one seat, so revenue is ``$9.99 + $1``, not
+    just the base — otherwise the report could under-report revenue and wrongly
+    flag a zero-seat paid coach as negative-margin.
     """
     if status in CoachSubscription.LIVE_STRIPE_STATUSES:
-        return BASE_PRICE_USD + SEAT_PRICE_USD * seats
+        return BASE_PRICE_USD + SEAT_PRICE_USD * max(seats, 1)
     return _ZERO
 
 
