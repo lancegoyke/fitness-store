@@ -42,6 +42,20 @@
       <span class="meso-row-meta">sets logged — fill in what you did, then log the session.</span>
     </div>
 
+    {% if show_first_log_hint %}
+      <!-- First-log coachmark (first-time UX Phase 4): server-driven, shown only
+           to a first-ever logger; meso_onboarding.js persists a manual dismiss. -->
+      <div class="meso-card meso-card--pad" data-coachmark-key="firstlog-session"
+           style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent-ink);">
+        <span style="font-size:18px;line-height:1.3;">💡</span>
+        <span style="flex:1;min-width:0;">
+          <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">How to log a set</span>
+          <span class="meso-row-meta">For each set, type the reps and weight you did, then tap the circle on the right to check it off. When you're done, tap <strong>Log session</strong> at the bottom.</span>
+        </span>
+        <button type="button" data-coachmark-dismiss aria-label="Dismiss tip" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;">&times;</button>
+      </div>
+    {% endif %}
+
     <template x-for="ex in exercises" :key="ex.id">
       <div class="meso-card" style="margin-bottom:12px;overflow:hidden;">
         <div style="padding:11px 16px 9px;border-bottom:1px solid var(--line-2);">

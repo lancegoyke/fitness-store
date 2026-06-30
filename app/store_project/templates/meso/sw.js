@@ -26,6 +26,7 @@ const PRECACHE = [
   "{% static 'css/meso.css' %}",
   "{% static 'js/meso_athlete.js' %}",
   "{% static 'js/meso_push.js' %}",
+  "{% static 'js/meso_onboarding.js' %}",
   "{% static 'js/alpine.min.js' %}",
   "{% static 'png/meso-icon-192.png' %}",
   "{% static 'png/meso-icon-512.png' %}",

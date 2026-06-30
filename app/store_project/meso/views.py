@@ -601,6 +601,22 @@ def _athlete_plans(user):
     return Plan.objects.for_athlete(user).exclude(status=Plan.Status.ARCHIVED)
 
 
+def _athlete_has_completed_log(user):
+    """Whether the athlete has ever *completed* a session log (Phase 4).
+
+    Drives the one-time first-log coachmark: it's a *first*-log nudge, so once
+    they've finished a real session (in any plan) they know how — the hint hides.
+    Gated on a ``done`` log specifically (not any row): a "Save progress" draft
+    writes a ``pending`` log while the session still reads "To do", and the hint
+    teaches that final "Log session" step, so a draft must not suppress it.
+    Server-driven, so the nudge is naturally one-time + cross-device with no
+    per-device flag or migration; it vanishes the moment the first log lands.
+    """
+    return SessionLog.objects.filter(
+        athlete=user, status=SessionLog.Status.DONE
+    ).exists()
+
+
 def _athlete_session_or_404(user, pk):
     """A delivered session the athlete owns, or ``Http404``.
 
@@ -637,6 +653,13 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         ctx["pending"] = presenters.athlete_pending(self.request.user)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
+        # First-log coachmark (Phase 4): only when there's a delivered session to
+        # tap *and* the athlete has never logged — pointing "tap a session below"
+        # at an empty week would be noise.
+        has_delivered = any(card["sessions"] for card in ctx["plans"])
+        ctx["show_first_log_hint"] = has_delivered and not _athlete_has_completed_log(
+            self.request.user
+        )
         ctx.update(_pwa_context())
         return ctx
 
@@ -660,6 +683,9 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
         ctx["log_data"] = presenters.athlete_log_payload(sess)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
+        # First-log coachmark (Phase 4): teach the logger only to a first-ever
+        # logger — any prior log means they already know how.
+        ctx["show_first_log_hint"] = not _athlete_has_completed_log(self.request.user)
         ctx.update(_pwa_context())
         return ctx
 
@@ -936,7 +962,8 @@ def manifest_webmanifest(request):
 
 # Bumped when the cached shell changes so the worker drops stale caches on
 # activate. Keep in sync with the cache name baked into the worker template.
-PWA_CACHE_VERSION = "meso-pwa-v1"
+# v2: added meso_onboarding.js to the precached shell (first-time UX Phase 4).
+PWA_CACHE_VERSION = "meso-pwa-v2"
 
 
 @require_GET

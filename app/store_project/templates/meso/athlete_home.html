@@ -35,6 +35,25 @@
       </button>
     {% endif %}
 
+    <!-- Install prompt (first-time UX Phase 4): kept hidden; meso_onboarding.js
+         reveals it only when the app is installable and not already installed or
+         dismissed, and swaps in the native button vs the manual iOS steps. -->
+    <div id="meso-install-card" class="meso-card meso-card--pad"
+         style="display:none;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent-ink);">
+      <span style="font-size:18px;line-height:1.3;">📲</span>
+      <span style="flex:1;min-width:0;">
+        <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Install Meso on your phone</span>
+        <span data-install-mode="prompt" style="display:none;">
+          <span class="meso-row-meta" style="display:block;margin:2px 0 9px;">Add it to your home screen for one-tap access and offline logging at the gym.</span>
+          <button type="button" id="meso-install-btn" class="meso-btn meso-btn--primary" style="padding:6px 12px;font-size:13px;">Install</button>
+        </span>
+        <span data-install-mode="ios" style="display:none;">
+          <span class="meso-row-meta" style="display:block;margin-top:2px;">Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>, for one-tap access and offline logging at the gym.</span>
+        </span>
+      </span>
+      <button type="button" data-install-dismiss aria-label="Dismiss install prompt" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;">&times;</button>
+    </div>
+
     <!-- Your coaches (N4 Phase 2): invites awaiting you, requests you've sent,
          and the request-a-coach form. -->
     <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
@@ -85,6 +104,21 @@
         <p class="meso-row-meta" style="margin-top:8px;">Enter your coach's email to ask to train with them.</p>
       </details>
     </div>
+
+    {% if show_first_log_hint %}
+      <!-- First-log coachmark (first-time UX Phase 4): server-driven (shown only
+           until the athlete's first log lands), so it's one-time + cross-device;
+           meso_onboarding.js persists a manual dismiss across reloads. -->
+      <div class="meso-card meso-card--pad" data-coachmark-key="firstlog-home"
+           style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent-ink);">
+        <span style="font-size:18px;line-height:1.3;">👇</span>
+        <span style="flex:1;min-width:0;">
+          <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">New here? Log your first workout</span>
+          <span class="meso-row-meta">Tap a session below to open the plan, fill in what you did, and check off each set.</span>
+        </span>
+        <button type="button" data-coachmark-dismiss aria-label="Dismiss tip" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;">&times;</button>
+      </div>
+    {% endif %}
 
     {% for plan in plans %}
       <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
