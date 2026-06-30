@@ -326,7 +326,7 @@ MESO_STRIPE_WEBHOOK_SECRET = os.environ.get("MESO_STRIPE_WEBHOOK_SECRET", "")
 # early-warning "at risk" — the monthly ``meso-agent-margin-alert`` sweep emails the
 # owner. Default 0.5 (50%); the ``meso_agent_margin_alert`` command's ``--threshold``
 # overrides it. See ``docs/meso/agent-usage-plan.md``.
-MESO_MARGIN_ALERT_THRESHOLD = os.environ.get("MESO_MARGIN_ALERT_THRESHOLD", "0.5")
+MESO_MARGIN_ALERT_THRESHOLD = os.environ.get("MESO_MARGIN_ALERT_THRESHOLD") or "0.5"
 
 # Crispy Forms
 CRISPY_ALLOWED_TEMPLATE_PACKS = ("bulma",)

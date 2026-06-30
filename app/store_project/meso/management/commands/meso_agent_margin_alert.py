@@ -33,6 +33,10 @@ from store_project.notifications.emails import send_margin_alert_email
 
 logger = logging.getLogger(__name__)
 
+# The documented default when neither --threshold nor the setting supplies one (a
+# blank ``MESO_MARGIN_ALERT_THRESHOLD=`` env value), mirroring the settings default.
+DEFAULT_THRESHOLD = Decimal("0.5")
+
 
 class Command(BaseCommand):
     help = "Email the owner about paying coaches whose agent cost outpaces revenue."
@@ -115,11 +119,20 @@ class Command(BaseCommand):
         return start, end, start.strftime("%Y-%m")
 
     def _threshold(self, raw):
-        """Resolve the alert fraction from the flag or the setting; validate it."""
+        """Resolve the alert fraction from the flag or the setting; validate it.
+
+        A blank source — an unset flag *and* a blank ``MESO_MARGIN_ALERT_THRESHOLD``
+        env value — falls back to :data:`DEFAULT_THRESHOLD`, so a deployment that
+        leaves the env var empty still runs the sweep (honoring the documented
+        "blank uses the default") instead of erroring out of the scheduled run.
+        """
         if raw is None:
             raw = settings.MESO_MARGIN_ALERT_THRESHOLD
+        raw = str(raw).strip()
+        if not raw:
+            return DEFAULT_THRESHOLD
         try:
-            threshold = Decimal(str(raw))
+            threshold = Decimal(raw)
         except InvalidOperation as exc:
             raise CommandError(f"--threshold must be a number, got {raw!r}.") from exc
         if threshold <= 0:

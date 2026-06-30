@@ -257,6 +257,17 @@ class TestCommand:
             call_command("meso_agent_margin_alert", "--month", "2026-06")
         assert mail.outbox == []  # default raised above the run's ratio
 
+    def test_blank_setting_falls_back_to_default_not_error(self):
+        # A blank MESO_MARGIN_ALERT_THRESHOLD= env value must not crash the
+        # scheduled run — it falls back to the documented 0.5 default.
+        start, _ = report_mod.month_bounds(2026, 6)
+        coach = _paid_at_risk_run(start, cost="6.00")  # ratio ~0.55 > 0.5
+
+        with override_settings(MESO_MARGIN_ALERT_THRESHOLD=""):
+            call_command("meso_agent_margin_alert", "--month", "2026-06")
+        assert len(mail.outbox) == 1
+        assert coach.display_name() in mail.outbox[0].body
+
     def test_last_month_window(self):
         prev_start, _ = report_mod.previous_month_bounds()
         coach = _paid_at_risk_run(prev_start)
