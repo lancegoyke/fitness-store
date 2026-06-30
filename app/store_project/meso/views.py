@@ -1070,7 +1070,7 @@ def _clean_logged_sets(raw_sets, session):
 # ``{% static %}`` at render time, so its precache list stays valid every deploy.
 
 PWA_THEME_COLOR = "#31759d"  # shared site accent (base.css --accent, steel-blue)
-PWA_BACKGROUND_COLOR = "#f5f6f7"  # meso app background (--bg)
+PWA_BACKGROUND_COLOR = "#f4f4f5"  # meso app background (meso.css --bg)
 
 
 @require_GET
