@@ -1214,3 +1214,49 @@ _(Append dated entries here as decisions land.)_
   lighting up the athlete-profile program block (compliance + current block +
   macrocycle) as its own slice; per-athlete `delivered`/`needs_review`/`drafting`
   status badges (need agent/delivery state).
+- 2026-06-30 — **Athlete-profile program block lit up** (PR #361, no migration).
+  Closes both of #359's deferred follow-ups in one backend-only slice: the
+  profile's `has_program` block (Current block · Wk N + adherence meter + the
+  macrocycle rail + the Latest-session card + the left-rail Goals) and the
+  per-athlete status badge. The template was already built; it was fed dead
+  placeholders (`presenters.profile_athlete` returned `has_program=False`;
+  `AthleteProfileView` hard-coded `macrocycle=[]` / `results_summary=None`). New
+  `presenters.profile_program(link, working_plan)` (+ `_profile_status` /
+  `_profile_results`) keys off `adherence.link_latest_delivered_week` — the
+  athlete's *delivered* reality, the same week the roster meter measures, spanning
+  the individual plan **and** any group-delivery snapshot: `block` = that week's
+  mesocycle name, `week` = `Wk {index}`, `compliance` = `link_compliance`,
+  `macrocycle` = `serializers._phase_states` / `serialize_mesocycle` (reused from
+  `serialize_plan`) positioned at the delivered block, `status` =
+  `needs_review` > `drafting` > `delivered`, `results_summary` =
+  `presenters.session_results(...)["summary"]`. **Decision:** `has_program` is
+  gated on a *measurable* delivered week (a week exists **and** compliance isn't
+  `None`), so an undelivered / empty-week athlete falls through to the existing
+  create / in-progress empty state rather than a half-lit block; the goal still
+  surfaces pre-delivery from the working-or-delivered plan. The view merges the
+  program overlay onto the `profile_athlete` identity dict (the same pattern
+  `deliver_screen` uses). **The Codex review loop's three fix iters were all one
+  class — a now-data-rich card must point every link at an athlete/session-specific
+  *and authorized* target, never a bare redirect:** (1, P2) the "Review agent
+  changes" CTA linked to bare `meso:review`, which redirects to the coach's
+  globally-latest pending batch (possibly a different athlete) → thread *this*
+  athlete's newest pending-batch id and link to `review_batch`; (1b) the
+  Latest-session card rendered unconditionally inside `has_program`, so a
+  delivered-but-unlogged program showed a blank card with a dangling `%` → gate the
+  card on `results_summary` (and the warning chip on a non-empty `flag`); (2, P2)
+  the card linked to bare `meso:results` (the coach's globally-latest logged
+  session) → thread the `session_id` and link to `results_session`; (3, P2) the card
+  could target a materialized group-delivery snapshot session, but `ResultsView`
+  authorizes through `Plan.objects.for_coach` (individual-only — excludes
+  `source_group`), so the link would 404 → scope `_profile_results` to non-snapshot
+  (individual) plans (the block/adherence still light up off the snapshot; only the
+  unopenable card is hidden). Red→green (`test_profile_program.py`, +27): the
+  empty/in-progress/delivered states, block/week labels, macrocycle states, status
+  precedence + batch-id threading + leak-scoping, results scoring + own-athlete +
+  draft + snapshot exclusion, the group-snapshot block, and the rendered page. 1380
+  meso pytest green, ruff + DjHTML + `makemigrations --check` clean. **Codex review
+  loop CLEAN after 3 fix iters.** Deploy success; prod healthy (`/meso/` 200,
+  `/meso/me/` 302). **Remaining Meso backlog:** billing annual prices (BLOCKED on
+  owner numbers + Stripe annual Prices); Anthropic Admin/Usage-API reconciliation
+  (deferred, needs Admin key). Autonomous slices still open: roster
+  relationship-history view; push re-deliver debounce.
