@@ -282,6 +282,23 @@ class TestDeliverChosenWeek:
         assert week.delivered_at is None
         assert not WeekDelivery.objects.exists()
 
+    def test_malformed_json_body_is_a_400_not_a_silent_current_delivery(self, client):
+        # A truncated / tampered body that meant to pin a week must fail loudly,
+        # not silently stamp + email/push the live week.
+        plan, week, _, _ = seed_plan()
+        client.force_login(plan.relationship.coach)
+
+        resp = client.post(
+            deliver_url(plan),
+            data="{not valid json",
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 400
+        week.refresh_from_db()
+        assert week.delivered_at is None
+        assert not WeekDelivery.objects.exists()
+
     def test_over_limit_coach_cannot_deliver_a_chosen_week(self, client):
         # The D6 freeze guards the endpoint before the body is read, so a
         # per-week deliver is gated exactly like the current-week deliver. A free

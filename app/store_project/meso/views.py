@@ -1503,16 +1503,29 @@ def _editable_plan_or_response(request, plan_id):
     return plan, None
 
 
-def _coerce_week_id(payload):
-    """A JSON body's ``week_id`` as an int, or an error response if malformed.
+def _body_week_id(request):
+    """A designer write's optional ``week_id``, parsed from the JSON request body.
 
-    Returns ``(week_id, None)`` — ``week_id`` is None when absent (the caller
-    falls back to the live week) — or ``(None, HttpResponseBadRequest)`` when the
-    value is present but not integer-coercible. ``week_id`` arrives from JSON (not
-    an ``<int:...>`` URL segment), so a tampered value ("abc", "") must answer a
-    clean 400 rather than letting a non-int pk reach the query and 500.
+    The real callers post ``application/json`` (``apiPost`` and the deliver
+    ``fetch`` always set it, even for an empty ``body: null``); a bodyless / form /
+    multipart post carries no ``week_id`` → fall back to the live week. A declared
+    JSON body, though, is validated strictly: returns ``(None, HttpResponseBadRequest)``
+    when it's malformed (bad JSON, not an object, or a non-integer ``week_id``) so a
+    truncated / tampered request that meant to pin a week fails loudly rather than
+    silently acting on the live week (which, for deliver, would email/push the wrong
+    week). On success returns ``(week_id, None)`` — ``week_id`` is None when absent.
+    ``week_id`` arrives from JSON, not an ``<int:...>`` URL segment, so the int
+    coercion also guards the pk query against a 500.
     """
-    week_id = payload.get("week_id") if isinstance(payload, dict) else None
+    if request.content_type != "application/json" or not request.body:
+        return None, None
+    try:
+        payload = json.loads(request.body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, HttpResponseBadRequest("Expected a JSON object.")
+    if not isinstance(payload, dict):
+        return None, HttpResponseBadRequest("Expected a JSON object.")
+    week_id = payload.get("week_id")
     if week_id is None:
         return None, None
     try:
@@ -1620,13 +1633,9 @@ def session_add(request, plan_id):
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    # An empty / non-JSON body (the pre-switcher callers post no body) means
-    # "no week_id" — fall back to the live week — rather than a 400.
-    try:
-        payload = json.loads(request.body or "{}")
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        payload = {}
-    week_id, bad = _coerce_week_id(payload)
+    # An empty body (the pre-switcher callers post none) means "no week_id" —
+    # fall back to the live week; a present-but-malformed body is a 400.
+    week_id, bad = _body_week_id(request)
     if bad is not None:
         return bad
     if week_id is not None:
@@ -1972,13 +1981,10 @@ def plan_deliver(request, plan_id):
         if error is not None:
             return HttpResponseBadRequest(error)
         return JsonResponse({"ok": True, **summary}, status=201)
-    # An empty / non-JSON body (the bare deliver button posts none) means "no
-    # week_id" — deliver the live week, as before — rather than a 400.
-    try:
-        payload = json.loads(request.body or "{}")
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        payload = {}
-    week_id, bad = _coerce_week_id(payload)
+    # An empty body (the bare deliver button) means "no week_id" — deliver the
+    # live week, as before; a present-but-malformed body is a 400, not a silent
+    # delivery of the wrong week.
+    week_id, bad = _body_week_id(request)
     if bad is not None:
         return bad
     if week_id is not None:
