@@ -1528,10 +1528,13 @@ def _body_week_id(request):
     week_id = payload.get("week_id")
     if week_id is None:
         return None, None
-    try:
-        return int(week_id), None
-    except (TypeError, ValueError):
+    # A real client sends a JSON integer; accept only that. ``int()`` would
+    # silently coerce ``1.9``→1 or ``True``→1 onto a valid pk — the exact
+    # wrong-week action this strict path exists to reject. ``bool`` is an ``int``
+    # subclass, so exclude it explicitly.
+    if not isinstance(week_id, int) or isinstance(week_id, bool):
         return None, HttpResponseBadRequest("week_id must be an integer.")
+    return week_id, None
 
 
 def _touch_plan(plan):

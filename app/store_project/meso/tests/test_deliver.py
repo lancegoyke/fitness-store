@@ -265,15 +265,27 @@ class TestDeliverChosenWeek:
         assert other_week.delivered_at is None
         assert not WeekDelivery.objects.exists()
 
-    def test_malformed_week_id_is_a_clean_400_not_500(self, client):
-        # ``week_id`` arrives from JSON, so a tampered non-integer must answer a
-        # clean 400 — not crash the int-pk query with a 500.
+    @pytest.mark.parametrize(
+        "bad_value",
+        [
+            "not-a-number",  # string → not an int-pk
+            1.9,  # float → must not coerce to 1
+            True,  # bool → must not coerce to 1
+            [1],  # wrong type entirely
+        ],
+    )
+    def test_non_integer_week_id_is_a_clean_400(self, client, bad_value):
+        # ``week_id`` arrives from JSON; only a genuine integer is honored. A
+        # string would 500 the int-pk query; a float/bool would silently coerce
+        # onto a valid pk and act on the wrong week — both must answer 400.
         plan, week, _, _ = seed_plan()
+        # A week whose pk could be the coercion target (1) of 1.9 / True.
+        add_week(plan, index=2, is_current=False)
         client.force_login(plan.relationship.coach)
 
         resp = client.post(
             deliver_url(plan),
-            data=json.dumps({"week_id": "not-a-number"}),
+            data=json.dumps({"week_id": bad_value}),
             content_type="application/json",
         )
 
