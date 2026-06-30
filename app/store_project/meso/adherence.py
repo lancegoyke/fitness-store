@@ -9,6 +9,8 @@ athlete slice, so the data is finally there to measure.
 Nothing here mutates state; it's a pure read layer the presenter formats.
 """
 
+from django.db.models import F
+
 from .models import CoachAthlete
 from .models import Plan
 from .models import SessionLog
@@ -89,9 +91,12 @@ def recent_logs(coach, *, limit=8):
     one." Spans individual and group-delivered sessions alike, since both root at
     the athlete's relationship with the coach. Ordered by when the log was
     written (``created_at``), so re-saving an old workout surfaces as fresh
-    activity and the order never depends on the nullable workout ``date``.
-    ``select_related`` the athlete + session so the presenter formats each event
-    without a per-row query.
+    activity and the order never depends on the nullable workout ``date``. The
+    log's ``athlete`` is tied to the plan's own athlete: the write path always
+    enforces this, but the model carries no DB constraint, so a stray mismatched
+    row (admin / import) must not surface an unrelated name + a profile link the
+    coach can't open. ``select_related`` the athlete + session so the presenter
+    formats each event without a per-row query.
     """
     return list(
         SessionLog.objects.filter(
@@ -100,6 +105,7 @@ def recent_logs(coach, *, limit=8):
             session__week__mesocycle__plan__relationship__status=(
                 CoachAthlete.Status.ACTIVE
             ),
+            athlete=F("session__week__mesocycle__plan__relationship__athlete"),
         )
         .exclude(session__week__mesocycle__plan__status=Plan.Status.ARCHIVED)
         .select_related("athlete", "session")

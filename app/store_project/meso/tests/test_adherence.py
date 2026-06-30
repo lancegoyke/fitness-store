@@ -226,6 +226,19 @@ class TestRecentLogs:
         # "recent activity."
         assert adherence.recent_logs(rel.coach) == []
 
+    def test_excludes_logs_by_a_non_linked_athlete(self):
+        rel = CoachAthleteFactory()
+        week = delivered_week(rel, sessions=1, done=0)
+        session = week.sessions.first()
+        stranger = UserFactory()
+        # A done log on the coach's session but by someone other than the plan's
+        # athlete (the model permits it; the write path never does) must not leak
+        # into the feed — it would show an unrelated name + an unreachable link.
+        SessionLogFactory(
+            session=session, athlete=stranger, status=SessionLog.Status.DONE
+        )
+        assert adherence.recent_logs(rel.coach) == []
+
     def test_spans_multiple_athletes(self):
         coach = UserFactory()
         a = CoachAthleteFactory(coach=coach)
