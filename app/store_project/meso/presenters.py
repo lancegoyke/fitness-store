@@ -169,14 +169,18 @@ def _profile_results(link):
 
     Reuses ``session_results`` (the coach results screen) so the profile's "Latest
     session" card shows the same completion %, RPE-vs-target, and overshoot flag.
-    Scoped to this link's plans (individual *and* group-delivery snapshot, both
-    rooted at the relationship), to non-archived plans, and to the athlete's own
-    *done* logs — a pending "Save progress" draft isn't a result. ``None`` when the
-    athlete has logged nothing yet (the card is hidden).
+    Scoped to the athlete's own *done* logs — a pending "Save progress" draft isn't
+    a result — on this link's **individual** plans only. A *materialized*
+    group-delivery snapshot (``source_group`` set) is excluded: the card links to
+    ``results_session``, whose ``ResultsView`` authorizes through
+    ``Plan.objects.for_coach`` (individual-only), so a snapshot session would 404.
+    Archived plans are excluded too. ``None`` — the card is hidden — when the
+    athlete has no openable logged session yet.
     """
     log = (
         SessionLog.objects.filter(
             session__week__mesocycle__plan__relationship=link,
+            session__week__mesocycle__plan__source_group__isnull=True,
             athlete=link.athlete,
             status=SessionLog.Status.DONE,
         )

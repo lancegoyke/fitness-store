@@ -293,6 +293,21 @@ class TestResultsSummary:
         )
         assert presenters.profile_program(rel, None)["results_summary"] is None
 
+    def test_skips_a_group_snapshot_session(self):
+        # A group snapshot's session isn't openable via ``ResultsView`` (it scopes
+        # through ``for_coach``, individual-only), so the card must not link to it.
+        coach = UserFactory()
+        rel = CoachAthleteFactory(coach=coach)
+        group = MesoGroupFactory(coach=coach)
+        _, week = make_plan(
+            rel, sessions=1, done=1, source_group=group, goal="Group block"
+        )
+        program = presenters.profile_program(rel, None)
+        # The block still lights up off the delivered snapshot...
+        assert program["athlete"]["has_program"] is True
+        # ...but the latest-session card is hidden (no openable individual log).
+        assert program["results_summary"] is None
+
 
 # -- a group-delivery snapshot ---------------------------------------------
 
