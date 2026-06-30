@@ -168,6 +168,15 @@ class DesignSystemPR2TemplateTests(TestCase):
         self.assertContains(response, 'role="group"')
         self.assertContains(response, 'id="id_newsletter_email"')
 
+    def test_home_scroll_indicator_is_not_a_box(self):
+        """The hero "Scroll down" hint is decorative, not a bordered box.
+
+        It has no action, so it carries the transparent (no-surface) treatment.
+        """
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "box transparent inherit-colors")
+
     def test_home_testimonial_avatars_sized_via_css(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
