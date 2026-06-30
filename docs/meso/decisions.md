@@ -1260,3 +1260,36 @@ _(Append dated entries here as decisions land.)_
   owner numbers + Stripe annual Prices); Anthropic Admin/Usage-API reconciliation
   (deferred, needs Admin key). Autonomous slices still open: roster
   relationship-history view; push re-deliver debounce.
+- 2026-06-30 — **Relationship-history view built & deployed** (PR #364, no
+  migration). Closes the "roster relationship-history view" autonomous slice. An
+  ended or declined `CoachAthlete` link vanished from the active roster
+  (`RosterView` queries only `.active()`), though the row + its `ended_at` +
+  the archived plans all persist — a coach had no way to see past athletes or
+  re-engage them. New surface: `CoachAthleteQuerySet.closed()` (ended + declined)
+  + `CoachAthlete.is_closed`/`closed_at` (ended_at for ended, responded_at for
+  declined); `presenters.relationship_history(coach)` splits one query into
+  **past** (ended/declined, newest-closed first, re-invitable) and
+  **reconnecting** (coach-side `pending_coach_invite` re-invites awaiting the
+  athlete — surfaced nowhere else), demo links excluded;
+  `RelationshipHistoryView` (`/meso/history/`, login + coach-only, non-coach →
+  training home, mirroring `RosterView`); `relationship_reinvite` (POST) reopens
+  a closed link to a fresh `pending_coach_invite` via the existing
+  `CoachAthlete.invite` primitive (row-locked under explicit `transaction.atomic`),
+  **seat-gated** (D4 — accepting would create a billable seat), closed-only
+  no-op, coach-scoped 404. The re-invited athlete (already a registered user)
+  discovers the invite on their training home (the canonical peer-invite surface
+  — `athlete_pending`). A discreet "Past athletes" link on the roster +
+  `relationship_history.html`; a seeded demo past athlete so the surface shows on
+  a fresh DB (billing-neutral — an ended link isn't a billable seat). **No
+  migration** (QuerySet method + properties only). +24 tests
+  (`test_relationship_history.py` + seed coverage); 1404 meso pytest green, ruff +
+  DjHTML + `makemigrations --check` clean. **Codex review loop CLEAN after 1 fix
+  iter** — the P2: a re-invite reopens the row in place, so `created_at` is the
+  *original* relationship date; the reconnecting surface now shows **state**
+  ("Awaiting their reply"), not a misleading "Re-invited {date}", and sorts by
+  `created_at` only for a stable order (a true reopen timestamp would need a
+  migration — not worth it for a P2, per the project's defer-new-tables taste).
+  **The "push re-deliver debounce" slice was already YAGNI-skipped** (2026-06-29
+  review: mitigated by the push `tag` collapse), so the autonomous Meso backlog is
+  now: billing annual prices (BLOCKED on owner numbers + Stripe annual Prices) and
+  the Anthropic Admin/Usage-API reconciliation (deferred, needs an Admin key).
