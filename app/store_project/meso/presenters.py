@@ -410,11 +410,14 @@ def relationship_history(coach):
             row["when"] = link.closed_at or link.created_at
             past.append(row)
         else:
-            row["when"] = link.created_at
-            reconnecting.append(row)
+            # A re-invite reopens the row in place, so no field records *when* the
+            # re-invite was sent (``created_at`` is the original link date). The
+            # reconnecting surface shows state ("awaiting reply"), not a date, and
+            # orders by ``created_at`` only for a stable, deterministic sequence.
+            reconnecting.append((link.created_at, row))
     past.sort(key=lambda r: r["when"], reverse=True)
-    reconnecting.sort(key=lambda r: r["when"], reverse=True)
-    return {"past": past, "reconnecting": reconnecting}
+    reconnecting.sort(key=lambda pair: pair[0], reverse=True)
+    return {"past": past, "reconnecting": [row for _, row in reconnecting]}
 
 
 def agent_allowance(coach):
