@@ -1,9 +1,12 @@
-"""Thin, mockable wrappers over the Stripe SDK (S6 billing, Phase 2).
+"""Thin, mockable wrappers over the Stripe SDK (S6 billing, Phase 2; Phase 6).
 
 Everything that actually talks to Stripe lives here, so the views and the sweep
-stay testable and the call surface is one small, mocked module. Per-seat
-subscription billing (D2/D7): one recurring Stripe Price (``MESO_SEAT_PRICE_ID``),
-``quantity`` = the coach's active-athlete count.
+stay testable and the call surface is one small, mocked module. Base + per-seat
+subscription billing (D13, TrainHeroic-style): a flat **base** Price
+(``MESO_BASE_PRICE_ID``, quantity 1 — $9.99/mo) billed alongside the **per-seat**
+Price (``MESO_SEAT_PRICE_ID``, quantity = the coach's active-athlete count —
+$1/mo). The base line is fixed at one and never resized; only the per-seat
+quantity tracks the seat count.
 
 - ``create_subscription_checkout_session`` — a ``mode="subscription"`` Checkout
   Session the coach is redirected to in order to enter a card and subscribe.
@@ -38,17 +41,32 @@ def _seat_quantity(coach):
     return max(access.active_seat_count(coach), 1)
 
 
+def _checkout_line_items(coach):
+    """The Checkout line items: the flat base (qty 1) before the per-seat item (qty N).
+
+    The base line is included only when ``MESO_BASE_PRICE_ID`` is configured; with
+    no base Price set this degrades to the Phase-2 seat-only Checkout (the
+    subscribe view requires *both* Prices before reaching here, so the seat-only
+    branch is a defensive fallback, not the live path).
+    """
+    line_items = []
+    if settings.MESO_BASE_PRICE_ID:
+        line_items.append({"price": settings.MESO_BASE_PRICE_ID, "quantity": 1})
+    line_items.append(
+        {"price": settings.MESO_SEAT_PRICE_ID, "quantity": _seat_quantity(coach)}
+    )
+    return line_items
+
+
 def create_subscription_checkout_session(coach, *, success_url, cancel_url):
-    """A subscription Checkout Session for the per-seat plan (the coach subscribes)."""
+    """A subscription Checkout Session for the base + per-seat plan (the coach subscribes)."""
     stripe.api_key = settings.STRIPE_SECRET_KEY
     customer = stripe_customer_get_or_create(coach)
     return stripe.checkout.Session.create(
         mode="subscription",
         customer=customer.id,
         client_reference_id=str(coach.id),
-        line_items=[
-            {"price": settings.MESO_SEAT_PRICE_ID, "quantity": _seat_quantity(coach)}
-        ],
+        line_items=_checkout_line_items(coach),
         success_url=success_url,
         cancel_url=cancel_url,
         allow_promotion_codes=True,

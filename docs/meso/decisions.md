@@ -983,3 +983,23 @@ _(Append dated entries here as decisions land.)_
   deferred dashboard) in [`agent-usage-plan.md`](./agent-usage-plan.md); it's the
   decision input for the two billing pressure valves (drop `MESO_AGENT_MODEL`
   tier / meter paid runs). Autonomous, no Stripe — can ship before go-live.
+- 2026-06-30 — **Billing Phase 6 built: base + per-seat (TrainHeroic-style, D13).**
+  Converted the single per-seat subscription into a **two-line-item** one. New
+  `MESO_BASE_PRICE_ID` setting (the $9.99/mo flat base, quantity 1) billed
+  alongside the existing `MESO_SEAT_PRICE_ID` (per-seat, quantity = active seats).
+  `stripe_gateway` Checkout now emits both line items (base before seat; base
+  included only when its Price id is configured — a defensive seat-only fallback).
+  Model gained a nullable **`stripe_base_item_id`** (migration `0024`) so seat-sync
+  targets only the *seat* item — the base line is fixed at 1 and never resized
+  (`sync_seat_quantity`/`reconcile_seats` unchanged: they already key off
+  `stripe_item_id` = the seat item). The webhook now **classifies** a
+  subscription's two items by Price id (`_classify_items` → the seat item drives
+  `stripe_item_id` + `quantity`, the base item → `stripe_base_item_id`), with a
+  legacy single-line fallback (first non-base item = seat). The subscribe view
+  requires **both** Prices configured before opening Checkout (ships dormant, never
+  half-charges). Paywall copy centralised in `presenters.PRICE_SUMMARY`
+  ("$9.99/mo + $1 per active athlete") → roster billing card + designer upgrade CTA
+  + become-a-coach tiers. Free/trial/comped gates unchanged. Red→green, Stripe SDK
+  mocked. Ships **dormant** until the owner creates both Prices + registers the
+  webhook. **Annual prices** (a `*_ANNUAL` Price per line + a Checkout toggle) are
+  the remaining ride-along, still blocked on the annual numbers.
