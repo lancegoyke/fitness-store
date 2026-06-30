@@ -15,6 +15,7 @@ that long-deferred gap:
   (the open week's id) so the client tracks which week's grid it is showing.
 """
 
+import json
 from datetime import timedelta
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import LoadType
+from store_project.meso.models import Session
 from store_project.meso.models import Week
 from store_project.meso.serializers import serialize_week
 from store_project.users.factories import UserFactory
@@ -395,6 +397,55 @@ class TestGroupWeekManagement:
         new_week = _latest_week(plan)
         # The shared structure is copied so the new week is immediately editable.
         assert new_week.sessions.count() >= 1
+
+
+# ---------------------------------------------------------------------------
+# session_add is week-scoped — "+ Add day" lands on the *viewed* week, not the
+# live one (regression: the switcher can open a non-current week)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionAddWeekScoping:
+    def _url(self, plan):
+        return reverse("meso:api_session_add", kwargs={"plan_id": plan.pk})
+
+    def _two_week_plan(self):
+        link = CoachAthleteFactory()
+        plan = link.create_plan()
+        meso = plan.mesocycles.get()
+        return link, plan, meso.weeks.get(index=1), meso.append_week()
+
+    def test_adds_the_day_to_the_posted_week(self, client):
+        link, plan, week1, week2 = self._two_week_plan()  # week1 is current
+        client.force_login(link.coach)
+        resp = client.post(
+            self._url(plan),
+            data=json.dumps({"week_id": week2.pk}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 201
+        new_session = Session.objects.get(pk=resp.json()["session"]["id"])
+        # The day lands on the viewed (non-current) week, not the live one.
+        assert new_session.week_id == week2.pk
+
+    def test_defaults_to_the_current_week_without_a_week_id(self, client):
+        link, plan, week1, week2 = self._two_week_plan()
+        client.force_login(link.coach)
+        resp = client.post(self._url(plan))  # no body → live week
+        assert resp.status_code == 201
+        new_session = Session.objects.get(pk=resp.json()["session"]["id"])
+        assert new_session.week_id == week1.pk
+
+    def test_404_for_a_week_in_another_plan(self, client):
+        link, plan, week1, week2 = self._two_week_plan()
+        foreign = WeekFactory()
+        client.force_login(link.coach)
+        resp = client.post(
+            self._url(plan),
+            data=json.dumps({"week_id": foreign.pk}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

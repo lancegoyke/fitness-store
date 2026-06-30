@@ -1588,18 +1588,31 @@ def session_add_exercise(request, plan_id, pk):
 @login_required
 @require_POST
 def session_add(request, plan_id):
-    """Append a blank training day (with a starter row) to the plan's current week.
+    """Append a blank training day (with a starter row) to a week of the plan.
 
-    The designer edits the current week, so "add a day" means add a ``Session`` to
-    that week — letting a scaffolded plan grow past its two starter days
-    (first-time-UX Phase 1). Scoped + edit-gated like the other designer writes via
-    ``_editable_plan_or_response`` (403 foreign, 402 over-limit). Returns the new
-    day in the grid's day shape so the client can append it without a reload.
+    "Add a day" adds a ``Session`` to the week the designer is showing. An optional
+    ``week_id`` in the body pins that week — the multi-week switcher can open a week
+    other than the live one, and the day must land where the coach is looking (else
+    a reload shows it on the wrong week). It defaults to ``current_week`` for the
+    first-time-UX caller that predates the switcher. The week is scoped to the plan
+    (a foreign week is a 404). Scoped + edit-gated like the other designer writes via
+    ``_editable_plan_or_response`` (403 foreign, 402 over-limit). Returns the new day
+    in the grid's day shape so the client can append it without a reload.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    week = current_week(plan)
+    # An empty / non-JSON body (the pre-switcher callers post no body) means
+    # "no week_id" — fall back to the live week — rather than a 400.
+    try:
+        payload = json.loads(request.body or "{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = {}
+    week_id = payload.get("week_id") if isinstance(payload, dict) else None
+    if week_id is not None:
+        week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
+    else:
+        week = current_week(plan)
     if week is None:
         return HttpResponseBadRequest("This plan has no week to add a day to.")
     # Allocate the next day_number/order under a row lock on the week so a

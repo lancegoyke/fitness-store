@@ -503,8 +503,9 @@ describe("coach 1RM editor", () => {
 // Mirrors addExercise: live → POST and push the server's day; offline → a local
 // placeholder; a failed add leaves the grid untouched.
 describe("addDay", () => {
-  it("appends the server's new day to the grid when live", async () => {
+  it("appends the server's new day to the viewed week when live", async () => {
     const c = makeMeso();
+    c.viewedWeekId = 5; // viewing a week other than the live one
     c.program = [{ id: 1, n: 1, name: "Day 1", exercises: [] }];
     const newDay = {
       id: 2,
@@ -519,6 +520,8 @@ describe("addDay", () => {
     await c.addDay();
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(global.fetch.mock.calls[0][0]).toBe("/meso/api/plan/7/session/");
+    // The day is scoped to the viewed week so it lands where the coach is looking.
+    expect(sentBody(0).week_id).toBe(5);
     expect(c.program).toHaveLength(2);
     expect(c.program[1]).toEqual(newDay);
   });

@@ -619,16 +619,16 @@ function createMeso() {
       });
     },
 
-    // Add a training day to the current week (first-time-UX Phase 1). The server
-    // appends the Session to the plan's current week and returns it in the grid's
-    // day shape; we push it so the new (empty-but-for-a-starter-row) day appears
-    // without a reload.
+    // Add a training day to the *viewed* week (first-time-UX Phase 1; week-scoped
+    // for the multi-week switcher). The server appends the Session to that week and
+    // returns it in the grid's day shape; we push it so the new
+    // (empty-but-for-a-starter-row) day appears without a reload.
     async addDay() {
       if (this.live) {
         try {
           const data = await this.apiPost(
             `/meso/api/plan/${this.planId}/session/`,
-            null,
+            { week_id: this.viewedWeekId },
           );
           this.program.push(data.session);
         } catch (err) {
