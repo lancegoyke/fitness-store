@@ -122,6 +122,14 @@ class TestMarginAlertScheduleRegistration:
         assert sched.func == self.FUNC
         assert sched.schedule_type == Schedule.MONTHLY
 
+    def test_margin_alert_schedule_anchored_to_month_boundary(self):
+        # Anchored to the 1st of a month in the future, so it doesn't fire on
+        # deploy (a surprise owner email) or lag a month behind the deploy day.
+        sched = Schedule.objects.get(name=self.NAME)
+        assert sched.next_run is not None
+        assert timezone.localtime(sched.next_run).day == 1  # local month boundary
+        assert sched.next_run > timezone.now()
+
     def test_margin_alert_func_is_importable_callable(self):
         module_path, _, attr = self.FUNC.rpartition(".")
         resolved = getattr(importlib.import_module(module_path), attr)
