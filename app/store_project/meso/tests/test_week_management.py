@@ -25,10 +25,13 @@ from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso.factories import CoachAthleteFactory
+from store_project.meso.factories import GroupMembershipFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import ExercisePrescription
 from store_project.meso.models import LoadType
+from store_project.meso.models import PrescriptionOverride
 from store_project.meso.models import Session
 from store_project.meso.models import Week
 from store_project.meso.serializers import serialize_week
@@ -397,6 +400,37 @@ class TestGroupWeekManagement:
         new_week = _latest_week(plan)
         # The shared structure is copied so the new week is immediately editable.
         assert new_week.sessions.count() >= 1
+
+    def test_append_week_carries_per_athlete_overrides_forward(self):
+        # A member's per-athlete adjust must survive week duplication — else the
+        # new week resolves the unadjusted base and silently drops it on delivery.
+        group = MesoGroupFactory()
+        membership = GroupMembershipFactory(group=group)
+        plan = group.create_shared_plan()
+        meso = plan.mesocycles.get()
+        week1 = meso.weeks.get()
+        presc = (
+            ExercisePrescription.objects.filter(session__week=week1)
+            .order_by("session__day_number", "order")
+            .first()
+        )
+        presc.name = "Back Squat"  # make the copied row unambiguous
+        presc.save()
+        PrescriptionOverride.objects.create(
+            membership=membership, prescription=presc, load_pct=90, note="knee"
+        )
+
+        new_week = meso.append_week()
+
+        copied = ExercisePrescription.objects.get(
+            session__week=new_week, name="Back Squat"
+        )
+        carried = copied.overrides.get()
+        assert carried.membership_id == membership.pk
+        assert carried.load_pct == 90
+        assert carried.note == "knee"
+        # The source override is untouched (a copy, not a move).
+        assert presc.overrides.count() == 1
 
 
 # ---------------------------------------------------------------------------

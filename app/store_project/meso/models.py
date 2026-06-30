@@ -1229,7 +1229,10 @@ class Mesocycle(models.Model):
                 rpe="7",
             )
         else:
-            for src_session in source.sessions.prefetch_related("prescriptions"):
+            carried_overrides = []
+            for src_session in source.sessions.prefetch_related(
+                "prescriptions__overrides"
+            ):
                 new_session = Session.objects.create(
                     week=week,
                     day_number=src_session.day_number,
@@ -1237,24 +1240,38 @@ class Mesocycle(models.Model):
                     bias=src_session.bias,
                     order=src_session.order,
                 )
-                ExercisePrescription.objects.bulk_create(
-                    [
-                        ExercisePrescription(
-                            session=new_session,
-                            exercise_id=presc.exercise_id,
-                            name=presc.name,
-                            order=presc.order,
-                            sets=presc.sets,
-                            reps=presc.reps,
-                            load=presc.load,
-                            load_type=presc.load_type,
-                            rpe=presc.rpe,
-                            note=presc.note,
-                            tags=list(presc.tags or []),
+                for presc in src_session.prescriptions.all():
+                    new_presc = ExercisePrescription.objects.create(
+                        session=new_session,
+                        exercise_id=presc.exercise_id,
+                        name=presc.name,
+                        order=presc.order,
+                        sets=presc.sets,
+                        reps=presc.reps,
+                        load=presc.load,
+                        load_type=presc.load_type,
+                        rpe=presc.rpe,
+                        note=presc.note,
+                        tags=list(presc.tags or []),
+                    )
+                    # Carry each member's per-athlete adjust forward onto the copied
+                    # row (group plans). Without this the new week resolves the
+                    # unadjusted base and silently drops a member's accommodation —
+                    # a swap or load cut they still need every week.
+                    for override in presc.overrides.all():
+                        carried_overrides.append(
+                            PrescriptionOverride(
+                                membership_id=override.membership_id,
+                                prescription=new_presc,
+                                swap_name=override.swap_name,
+                                load_pct=override.load_pct,
+                                sets=override.sets,
+                                reps=override.reps,
+                                note=override.note,
+                            )
                         )
-                        for presc in src_session.prescriptions.all()
-                    ]
-                )
+            if carried_overrides:
+                PrescriptionOverride.objects.bulk_create(carried_overrides)
         if week.index > self.week_count:
             self.week_count = week.index
             self.save(update_fields=["week_count"])
