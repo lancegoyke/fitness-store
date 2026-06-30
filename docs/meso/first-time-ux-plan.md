@@ -1,9 +1,11 @@
 # Meso — first-time UX / onboarding slice plan
 
-**Status:** 🟢 Building · Q1–Q4 resolved 2026-06-29 · **Phase 1 (individual plan
-creation) + Phase 2 (coach first-run: one-click demo + empty-state teaching) +
-Phase 3 (the front door: anon landing + main-site link) + Phase 4 (athlete
-first-run: install prompt + first-log coachmark) done** · Phase 5 remains
+**Status:** ✅ Slice complete · Q1–Q4 resolved 2026-06-29 · **Phase 1 (individual
+plan creation) + Phase 2 (coach first-run: one-click demo + empty-state teaching)
++ Phase 3 (the front door: anon landing + main-site link) + Phase 4 (athlete
+first-run: install prompt + first-log coachmark) + Phase 5 (designer & agent
+self-explanation: dismissible coachmarks + review-gate note + real left-rail
+chrome) all done**
 **Companion to:** [`decisions.md`](./decisions.md) (B1 multi-coach, B2 athlete
 login, N3 roles, N4 invites) · [`invites-plan.md`](./invites-plan.md) ·
 [`athlete-plan.md`](./athlete-plan.md) · [`groups-plan.md`](./groups-plan.md)
@@ -298,13 +300,32 @@ without confusion.
 > (`test_athlete_onboarding.py` + a precache guard) + 13 vitest
 > (`meso_onboarding.test.js`); Codex review loop **CLEAN** after 3 fix iterations.
 
-### Phase 5 — Designer & agent self-explanation (coach · optional)
+### Phase 5 — Designer & agent self-explanation (coach · optional) ✅ Built
 Dismissible first-run **coachmarks** on the designer's three regions (grid · agent
 · phone preview), a one-line **"how the agent works"** note making the
 propose → review → apply loop explicit (a first-timer won't expect the agent only
 *proposes*), and replacing the static prototype left-rail chrome where it misleads.
 *Done when:* a first-time coach in the designer understands the grid, the agent, and
 the review gate without external help.
+
+> **What shipped (no migration).** Three parts. **(1) Coachmarks** — three
+> dismissible first-run notes anchor the designer's regions (week grid · agent ·
+> phone preview). They show until dismissed; the dismissal persists client-side in
+> `localStorage` (`meso.js`, keys namespaced `meso-coachmark-designer-<key>` so they
+> never collide with the athlete onboarding coachmarks' `meso-coachmark-` prefix) —
+> **no server "seen" flag, no migration**, like the athlete chrome (resolving the
+> plan's "persist where?" Q for the coach side). **(2) Agent self-explanation** — a
+> *persistent* "propose → review → apply" note under the agent header makes the
+> review gate explicit for everyone, not just first-timers; individual-only (the
+> group agent's composer is hidden). **(3) Real chrome** — `serialize_plan` now
+> carries the individual plan's real athlete identity (`serialize_athlete_identity`:
+> name / initials / goal / **active** contraindications — the same global injuries
+> the agent grounds on), and the left-rail athlete card, macrocycle rail, top-bar
+> identity/chip, and week/block headers render the real `athlete`/`weeks`/`phases`
+> (new `meso.js` getters). The fabricated "Coach's programming style" block was
+> removed as misleading; group mode (already real, via `group`) is untouched. +10
+> pytest (`test_designer_onboarding.py`) + 5 vitest (`meso.test.js`); Codex review
+> loop CLEAN on iteration 1. **This completes the first-time-UX slice (Phases 1–5).**
 
 ---
 

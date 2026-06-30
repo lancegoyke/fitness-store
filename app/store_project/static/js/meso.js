@@ -24,6 +24,11 @@ function createMeso() {
     // is a group's shared program; null for an individual plan. Hydrated by
     // init() from the injected plan's `group` payload (serialize_group_identity).
     group: null,
+    // Individual identity (real athlete name / initials / goal / active
+    // contraindications) for the left rail; null for a group plan. Hydrated by
+    // init() from the injected plan's `athlete` payload (serialize_athlete_identity).
+    // Replaces the prototype's hardcoded "Maya Okonkwo" chrome (Phase 5).
+    athlete: null,
     view: "week", // week | block | athlete
     periodStyle: "timeline", // timeline | ladder | calendar
     inputText: "",
@@ -31,6 +36,15 @@ function createMeso() {
     delivered: false,
     checks: {},
     exSeq: 1,
+
+    // ---- first-run coachmarks (first-time UX Phase 5) ----
+    // Three dismissible region notes (week grid / agent / phone preview) orient a
+    // first-time coach. They show until dismissed; the dismissal persists in
+    // localStorage so a coach who waved one away never sees it again (no server
+    // "seen" flag — the persistence lives client-side, like the athlete onboarding
+    // chrome). The reactive map drives `x-show`; init() hydrates it from storage.
+    coachmarkKeys: ["grid", "agent", "phone"],
+    coachmarksDismissed: {},
 
     // Group mode only: the open per-athlete override editor (one shared row),
     // or null when closed. Holds the targeted row (`ex`), the group's members,
@@ -93,8 +107,44 @@ function createMeso() {
       return this.mode !== "group";
     },
 
+    // ---- real plan headers (Phase 5) ----
+    // The prototype hardcoded "Week 2 — Accumulation" / "Hypertrophy block" over
+    // whatever plan was open; these derive the same chrome from the real plan.
+    get currentWeek() {
+      return this.weeks.find((w) => w.current) || this.weeks[0] || null;
+    },
+    get currentPhase() {
+      return (
+        this.phases.find((p) => p.state === "current") || this.phases[0] || null
+      );
+    },
+    // The top-bar cycle chip, e.g. "Hypertrophy · Wk 2 / 4".
+    get cycleLabel() {
+      const p = this.currentPhase;
+      const w = this.currentWeek;
+      const phase = p ? p.name : "";
+      const wk = w
+        ? w.label + (this.weeks.length ? " / " + this.weeks.length : "")
+        : "";
+      return [phase, wk].filter(Boolean).join(" · ");
+    },
+    // The week-view heading, e.g. "Wk 2 — Accum".
+    get weekHeading() {
+      const w = this.currentWeek;
+      if (!w) return "This week";
+      return w.phase ? w.label + " — " + w.phase : w.label;
+    },
+    // The block-view heading, e.g. "Hypertrophy — 4 wk mesocycle".
+    get blockHeading() {
+      const p = this.currentPhase;
+      if (!p) return "Mesocycle";
+      return p.name + " — " + p.weeks + " mesocycle";
+    },
+
     // ---- backend hydration + autosave (Phase 3) ----
     init() {
+      // Hydrate dismissed coachmarks first, so it works even without a plan.
+      this.loadCoachmarks();
       const el = document.getElementById("meso-plan-data");
       if (!el) return; // no plan injected → empty grid (bare URL redirects away)
       let data;
@@ -110,6 +160,8 @@ function createMeso() {
       this.program = data.program;
       this.weeks = data.weeks;
       this.phases = data.phases;
+      // The real athlete identity for the individual left rail (null for groups).
+      this.athlete = data.athlete || null;
       // A group shared program opens in Group mode and renders its real identity
       // (members / flags); an individual plan stays in Individual mode. The group
       // agent (per-athlete auto-adjusts) is a later phase, so swap the agent
@@ -384,6 +436,47 @@ function createMeso() {
         console.error("1RM save failed", err);
         this.oneRm.error = "Couldn't save that 1RM. Please try again.";
         this.oneRm.saving = false;
+      }
+    },
+
+    // ---- first-run coachmarks (Phase 5) ----
+    //
+    // The localStorage key for one region note's dismissal — namespaced under
+    // `-designer-` so it never collides with the athlete onboarding coachmarks
+    // (meso_onboarding.js uses the `meso-coachmark-` prefix too).
+    coachmarkStorageKey(key) {
+      return "meso-coachmark-designer-" + key;
+    },
+    // Read persisted dismissals into reactive state. Storage can be absent/throw
+    // (Safari private mode) — treat that as "nothing dismissed".
+    loadCoachmarks() {
+      const next = {};
+      for (let i = 0; i < this.coachmarkKeys.length; i++) {
+        const key = this.coachmarkKeys[i];
+        if (this.readCoachmark(key)) next[key] = true;
+      }
+      this.coachmarksDismissed = next;
+    },
+    readCoachmark(key) {
+      try {
+        const store = typeof window !== "undefined" && window.localStorage;
+        return !!store && store.getItem(this.coachmarkStorageKey(key)) === "1";
+      } catch (e) {
+        return false;
+      }
+    },
+    coachmarkVisible(key) {
+      return !this.coachmarksDismissed[key];
+    },
+    // Hide a note and remember it. Reassign the map (not mutate) so Alpine
+    // re-evaluates `x-show`; persist best-effort (the note hides regardless).
+    dismissCoachmark(key) {
+      this.coachmarksDismissed = { ...this.coachmarksDismissed, [key]: true };
+      try {
+        const store = typeof window !== "undefined" && window.localStorage;
+        if (store) store.setItem(this.coachmarkStorageKey(key), "1");
+      } catch (e) {
+        /* best-effort — hidden in-page via reactive state regardless */
       }
     },
 

@@ -544,3 +544,57 @@ describe("addDay", () => {
     expect(c.program).toHaveLength(1);
   });
 });
+
+// ---- first-run coachmarks (first-time UX Phase 5) ----
+//
+// Three dismissible region notes (grid / agent / phone) orient a first-time
+// coach. They show until dismissed; the dismissal persists in localStorage so a
+// coach who waved one away never sees it again. The reactive `coachmarksDismissed`
+// map drives `x-show` in the template; here we cover the pure key helper and the
+// load/dismiss/visibility round-trip (jsdom gives us a real localStorage).
+describe("designer coachmarks", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("namespaces each coachmark's storage key", () => {
+    const c = createMeso();
+    expect(c.coachmarkStorageKey("grid")).toBe("meso-coachmark-designer-grid");
+    expect(c.coachmarkStorageKey("phone")).toBe("meso-coachmark-designer-phone");
+  });
+
+  it("shows every coachmark until it is dismissed", () => {
+    const c = createMeso();
+    for (const key of c.coachmarkKeys) {
+      expect(c.coachmarkVisible(key)).toBe(true);
+    }
+  });
+
+  it("hides a coachmark and persists the dismissal", () => {
+    const c = createMeso();
+    c.dismissCoachmark("agent");
+    expect(c.coachmarkVisible("agent")).toBe(false);
+    expect(c.coachmarkVisible("grid")).toBe(true); // others unaffected
+    expect(window.localStorage.getItem("meso-coachmark-designer-agent")).toBe("1");
+  });
+
+  it("loads a previously persisted dismissal into reactive state", () => {
+    window.localStorage.setItem("meso-coachmark-designer-phone", "1");
+    const c = createMeso();
+    c.loadCoachmarks();
+    expect(c.coachmarkVisible("phone")).toBe(false);
+    expect(c.coachmarkVisible("grid")).toBe(true);
+  });
+
+  it("still hides in-page when storage write throws (private mode)", () => {
+    const c = createMeso();
+    const spy = vi
+      .spyOn(window.localStorage.__proto__, "setItem")
+      .mockImplementation(() => {
+        throw new Error("QuotaExceeded");
+      });
+    expect(() => c.dismissCoachmark("grid")).not.toThrow();
+    expect(c.coachmarkVisible("grid")).toBe(false);
+    spy.mockRestore();
+  });
+});
