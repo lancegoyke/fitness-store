@@ -363,6 +363,60 @@ def pending_request(link):
     }
 
 
+#: Human labels for the relationship-history surface, keyed by terminal/pending
+#: status. ``PENDING_COACH_INVITE`` here is a *re-invite* awaiting the athlete.
+_HISTORY_STATUS_LABELS = {
+    CoachAthlete.Status.ENDED: "Ended",
+    CoachAthlete.Status.DECLINED: "Declined",
+    CoachAthlete.Status.PENDING_COACH_INVITE: "Awaiting response",
+}
+
+
+def relationship_history(coach):
+    """The coach's relationship history: past athletes + pending re-invites.
+
+    A coach (or athlete) who ends a relationship — or declines an invite/request —
+    drops the ``CoachAthlete`` row to a terminal status, so it leaves the active
+    roster though the row + its archived plans persist. This surfaces those rows
+    in one query (mirroring ``athlete_pending``'s split):
+
+    - ``past`` — ended/declined links, newest-closed first, each re-invitable;
+    - ``reconnecting`` — re-invites awaiting the athlete's response (a coach-side
+      ``pending_coach_invite``, which the athlete sees on their training home and
+      which is surfaced nowhere else).
+
+    Demo relationships are excluded — history is about real past clients.
+    """
+    links = (
+        CoachAthlete.objects.for_coach(coach)
+        .exclude(is_demo=True)
+        .filter(status__in=list(_HISTORY_STATUS_LABELS))
+        .select_related("athlete")
+    )
+    past, reconnecting = [], []
+    for link in links:
+        name = link.athlete.display_name()
+        row = {
+            "id": link.athlete_id,
+            "name": name,
+            "initials": initials(name),
+            "token": link.token,
+            "status": link.status,
+            "status_label": _HISTORY_STATUS_LABELS[link.status],
+        }
+        if link.is_closed:
+            # ``closed_at`` is set for any link closed through the state machine;
+            # fall back to ``created_at`` for a hand-written/legacy row.
+            row["when"] = link.closed_at or link.created_at
+            past.append(row)
+        else:
+            row["when"] = link.created_at
+            reconnecting.append(row)
+    past.sort(key=lambda r: r["when"], reverse=True)
+    reconnecting.sort(key=lambda r: r["when"], reverse=True)
+    return {"past": past, "reconnecting": reconnecting}
+
+
 def agent_allowance(coach):
     """The free-tier AI-agent meter for the designer + roster card (S6 Phase 5).
 

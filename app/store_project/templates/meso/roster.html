@@ -67,6 +67,7 @@
             <p class="meso-eyebrow" style="margin:0;">Individuals</p>
             <div class="meso-spacer"></div>
             <span class="meso-row-meta">{{ athletes|length }} athlete{{ athletes|length|pluralize }}</span>
+            <a href="{% url 'meso:relationship_history' %}" class="meso-row-meta" style="text-decoration:none;color:var(--accent-ink);white-space:nowrap;">· Past athletes →</a>
           </div>
           {% for a in athletes %}
             <a class="meso-row" href="{% url 'meso:athlete' a.id %}">

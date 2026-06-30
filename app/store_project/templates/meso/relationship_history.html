@@ -1,0 +1,75 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Past athletes · Meso{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Coach workspace</p>
+        <h1 class="meso-h1">Past athletes</h1>
+        <p class="meso-sub">Relationships you've ended or that were declined. Re-invite anyone to pick back up — their archived programs are kept.</p>
+      </div>
+      <div class="meso-spacer"></div>
+      <a class="meso-btn meso-btn--ghost" href="{% url 'meso:roster' %}">← Back to roster</a>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:18px;max-width:640px;">
+
+      {% if is_empty %}
+        <div class="meso-card meso-card--pad">
+          <p class="meso-sub" style="margin:0;">No past relationships yet. When you or an athlete ends a relationship — or an invite is declined — it shows here so you can re-invite them later.</p>
+        </div>
+      {% endif %}
+
+      {% if reconnecting %}
+        <!-- Re-invites awaiting the athlete's response (a coach-side pending peer
+             link, surfaced nowhere else): so a just-re-invited athlete is visible. -->
+        <div class="meso-card">
+          <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
+            <p class="meso-eyebrow" style="margin:0;">Reconnecting</p>
+            <div class="meso-spacer"></div>
+            <span class="meso-row-meta">{{ reconnecting|length }} awaiting reply</span>
+          </div>
+          {% for r in reconnecting %}
+            <div class="meso-row" style="cursor:default;">
+              <div class="meso-avatar">{{ r.initials }}</div>
+              <div style="min-width:0;">
+                <div class="meso-row-name">{{ r.name }}</div>
+                <div class="meso-row-meta">Re-invited {{ r.when|date:"M j" }} · awaiting their reply</div>
+              </div>
+              <div class="meso-spacer"></div>
+              <span class="meso-badge"><i></i>{{ r.status_label }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      {% if past %}
+        <div class="meso-card">
+          <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
+            <p class="meso-eyebrow" style="margin:0;">Past relationships</p>
+            <div class="meso-spacer"></div>
+            <span class="meso-row-meta">{{ past|length }} athlete{{ past|length|pluralize }}</span>
+          </div>
+          {% for a in past %}
+            <div class="meso-row" style="cursor:default;">
+              <div class="meso-avatar" style="background:var(--rail);color:var(--dim);">{{ a.initials }}</div>
+              <div style="min-width:0;">
+                <div class="meso-row-name">{{ a.name }}</div>
+                <div class="meso-row-meta">{{ a.status_label }}{% if a.when %} {{ a.when|date:"M j, Y" }}{% endif %}</div>
+              </div>
+              <div class="meso-spacer"></div>
+              <span class="meso-badge meso-badge--muted"><i></i>{{ a.status_label }}</span>
+              <form method="post" action="{% url 'meso:relationship_reinvite' token=a.token %}" style="margin:0;">
+                {% csrf_token %}
+                <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Re-invite</button>
+              </form>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+    </div>
+  </div>
+{% endblock %}

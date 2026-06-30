@@ -171,6 +171,15 @@ class CoachAthleteQuerySet(models.QuerySet):
     def pending(self):
         return self.filter(status__in=CoachAthlete.PENDING_STATUSES)
 
+    def closed(self):
+        """Terminal-state links — declined or ended (the relationship history).
+
+        These vanish from the active roster (only ``active()`` is shown), but the
+        row + its ``ended_at``/``responded_at`` timestamp + the archived plans all
+        persist, so a coach can review past athletes and re-invite them.
+        """
+        return self.filter(status__in=CoachAthlete.CLOSED_STATUSES)
+
     def for_coach(self, user):
         """Links where ``user`` is the coach (i.e. the coach's athletes)."""
         return self.filter(coach=user)
@@ -346,6 +355,24 @@ class CoachAthlete(models.Model):
     @property
     def is_pending(self):
         return self.status in self.PENDING_STATUSES
+
+    @property
+    def is_closed(self):
+        """Terminal state — declined or ended (a row the history surface shows)."""
+        return self.status in self.CLOSED_STATUSES
+
+    @property
+    def closed_at(self):
+        """When the link entered its terminal state, or ``None`` while open.
+
+        An ended link carries ``ended_at``; a declined one carries ``responded_at``
+        (``decline`` stamps it). Used to order and label the relationship history.
+        """
+        if self.status == self.Status.ENDED:
+            return self.ended_at
+        if self.status == self.Status.DECLINED:
+            return self.responded_at
+        return None
 
     def recipient(self):
         """The party whose acceptance the link is waiting on (None if not pending)."""

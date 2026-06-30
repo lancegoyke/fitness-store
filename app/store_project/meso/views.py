@@ -369,6 +369,34 @@ class RosterView(TemplateView):
         return ctx
 
 
+class RelationshipHistoryView(LoginRequiredMixin, TemplateView):
+    """Past athletes (``/meso/history/``) — the coach surface for closed links.
+
+    An ended or declined ``CoachAthlete`` vanishes from the active roster, but the
+    row + archived plans persist. This lists those past relationships so the coach
+    can see who they used to train and **re-invite** them (reopening the link to a
+    fresh ``pending_coach_invite`` the athlete sees on their training home), plus
+    any such re-invites still awaiting a response. A coach surface, so a non-coach
+    is routed to their training home (mirroring ``RosterView``).
+    """
+
+    template_name = "meso/relationship_history.html"
+
+    def get(self, request, *args, **kwargs):
+        if not _is_coach(request.user):
+            return redirect("meso:athlete_home")
+        return super().get(request, *args, **kwargs)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        history = presenters.relationship_history(self.request.user)
+        ctx["active"] = "roster"
+        ctx["past"] = history["past"]
+        ctx["reconnecting"] = history["reconnecting"]
+        ctx["is_empty"] = not history["past"] and not history["reconnecting"]
+        return ctx
+
+
 class AthleteProfileView(LoginRequiredMixin, TemplateView):
     """Full athlete record — only viewable by a coach with an active link."""
 
@@ -1324,6 +1352,44 @@ def relationship_end(request, token):
     billing_seats.schedule_seat_sync(link.coach)
     messages.success(request, "Relationship ended.")
     return redirect("meso:roster")
+
+
+@login_required
+@require_POST
+def relationship_reinvite(request, token):
+    """Coach re-invites a former athlete from the relationship-history surface.
+
+    Reopens the existing closed (ended/declined) ``CoachAthlete`` link to a fresh
+    ``pending_coach_invite`` (``CoachAthlete.invite`` rotates the token + clears
+    the close timestamps), which the athlete — already a registered user — sees
+    on their training home and accepts/declines. Coach-scoped (a foreign token is
+    a 404). The seat gate (D4) applies: a free coach at the cap can't re-activate
+    a seat they aren't paying for until they upgrade — accepting would create a
+    billable seat. A non-closed link (already active/pending) is a friendly no-op.
+    Locks the row so a re-invite can't race a concurrent claim. The pending peer
+    link is then visible on this page's "Reconnecting" list (surfaced nowhere
+    else), so the coach can see where the re-invited athlete went.
+    """
+    with transaction.atomic():
+        link = get_object_or_404(
+            CoachAthlete.objects.select_for_update(),
+            token=token,
+            coach=request.user,
+        )
+        if not link.is_closed:
+            messages.info(request, "That relationship isn't closed.")
+            return redirect("meso:relationship_history")
+        # Seat gate (D4): accepting the re-invite would consume a billable seat.
+        if not billing_access.can_add_athlete(request.user):
+            messages.error(request, SEAT_LIMIT_MESSAGE)
+            return redirect("meso:relationship_history")
+        athlete = link.athlete
+        CoachAthlete.invite(coach=request.user, athlete=athlete)
+    messages.success(
+        request,
+        f"Re-invited {athlete.display_name()} — they'll see it on their training home.",
+    )
+    return redirect("meso:relationship_history")
 
 
 # -- athlete → coach requests (N4 Phase 2) ---------------------------------
