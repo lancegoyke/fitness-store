@@ -1,6 +1,6 @@
 # Meso — agent usage & cost tracking
 
-**Status:** 🟢 Phase 1 (capture) shipped · 🟢 Phase 2 (report) shipped · 🟢 Phase 3 (margin alert) shipped · 🟢 Phase 4 (owner dashboard) shipped · started 2026-06-30
+**Status:** 🟢 Phase 1 (capture) shipped · 🟢 Phase 2 (report) shipped · 🟢 Phase 3 (margin alert) shipped · 🟢 Phase 4 (owner dashboard) shipped · 🟢 Coach-facing billing & usage page shipped · started 2026-06-30
 **Context:** Billing launches at **$9.99/mo base + $1/mo per active seat** (D13 in
 [`billing-plan.md`](./billing-plan.md)). The **AI agent is the cost-bearing
 feature** — every proposal run is a Claude API call. To confirm the $1/seat
@@ -120,7 +120,11 @@ def estimate_cost(model, usage) -> Decimal:
   (exclude `eval`), and **free vs paid** (`billing_status` → COGS vs CAC).
 - **Admin:** surface the usage columns read-only on the `AgentProposalBatch`
   admin.
-- *(Deferred)* an owner dashboard; a coach-facing usage view.
+- **Owner dashboard** — `/meso/usage/`, staff-gated (Phase 4).
+- **Coach-facing billing & usage page** — `/meso/billing/`, coach-scoped: their
+  plan/tier, the bill they owe (base + per active seat), and their agent runs this
+  month per athlete/group. **Revenue + run counts only — never the internal cost
+  estimate** (that's the owner dashboard's COGS view). Shipped (see below).
 
 ---
 
@@ -195,7 +199,24 @@ def estimate_cost(model, usage) -> Decimal:
    "Usage" nav link in `_meso_base.html`. Tests: `test_agent_usage_dashboard.py`
    (pure helpers, the presenter, the staff gate, month windowing/invalid-month
    fallback, margin-alert surfacing, group attribution).
-5. *(Deferred)* a reconciliation job against the Anthropic Admin/Usage API
+5. **Coach-facing billing & usage page — ✅ DONE (no migration).** The coach-scoped
+   complement to Phase 4's staff-only owner dashboard. `/meso/billing/`
+   (`CoachBillingView`, `LoginRequiredMixin`; a non-coach is routed to their training
+   home, mirroring the roster's role split) shows a coach **their** plan/tier, the
+   bill they owe (base + per active seat, the seat line floored at 1 to mirror Stripe),
+   the upgrade CTAs (start trial / subscribe / manage billing), and their AI-agent
+   runs this month broken down per athlete/group. The hard line: a coach sees **what
+   they pay** (revenue) and **how much they've used** (run counts), **never** the
+   internal per-run cost estimate (`estimated_cost_usd`) — that stays owner-only.
+   `agent_usage_report.coach_run_breakdown(coach, start, end)` + a `ClientRun` row
+   (run counts only, no cost) reuses `_attribution` (a group plan → the group) and
+   counts *all* of the coach's in-window batches, so the breakdown total reconciles
+   with `billing/access.agent_runs_this_month` (the free-tier meter). `presenters.coach_billing`
+   composes `billing_state` + the projected bill + the breakdown. A "Billing" nav
+   link renders on the coach surfaces (athlete pages override the `navlinks` block).
+   Tests: `test_coach_billing.py` (the breakdown helper, the bill math, the
+   no-COGS-leak invariant, the view gate + scoping). Codex review CLEAN iter 1.
+6. *(Deferred)* a reconciliation job against the Anthropic Admin/Usage API
    (sanity-check our estimate vs the invoice) — needs an Admin API key + live org
    access, so it can't ship autonomously.
 
@@ -241,7 +262,8 @@ pytest + factory_boy, mirroring the slice discipline:
 
 ## Deferred
 
-- Coach-facing usage UI; real-time per-run cost display in the designer.
+- ~~Coach-facing usage UI~~ — **shipped** (the `/meso/billing/` page, Phase 5
+  above). Real-time per-run cost display in the designer is still deferred.
 - Reconciliation against the Anthropic Admin/Usage API (sanity-check our
   estimate vs the invoice).
 - 1:N `AgentApiCall` child (when the group agent / multi-turn makes runs

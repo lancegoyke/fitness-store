@@ -1152,3 +1152,27 @@ _(Append dated entries here as decisions land.)_
   the shared-edit and per-athlete-adjust halves are built). **Remaining Meso
   backlog:** billing annual prices (BLOCKED on owner numbers + Stripe annual Prices);
   Anthropic Admin/Usage-API reconciliation (deferred, needs Admin key).
+- 2026-06-30 — **Coach-facing billing & usage page built** (PR #356, no migration).
+  The agent-usage tracking shipped its owner dashboard (Phase 4, staff-gated,
+  org-wide *cost*/COGS) but a coach had no single place to see *their own* plan,
+  bill, and agent usage. This adds the coach-scoped complement at `/meso/billing/`
+  (`CoachBillingView`, `LoginRequiredMixin`; a non-coach is routed to their training
+  home, mirroring the roster's role split): the coach's plan/tier, the bill they
+  owe (base + per active seat, the seat line floored at 1 to mirror Stripe's seat
+  quantity), the upgrade CTAs, and their AI-agent runs this month broken down per
+  athlete/group. **Decision (the hard line):** a coach sees **what they pay**
+  (revenue) and **how much they've used** (run counts), **never** the internal
+  per-run cost estimate (`estimated_cost_usd`) — that COGS view stays owner-only on
+  the staff dashboard. So the new `agent_usage_report.coach_run_breakdown` returns a
+  `ClientRun` row carrying run counts only (no cost), reusing `_attribution` (a group
+  plan → the group) and counting *all* of the coach's in-window batches so the total
+  reconciles with `billing/access.agent_runs_this_month` (the free-tier meter);
+  `presenters.coach_billing` composes `billing_state` + the projected bill + the
+  breakdown. A "Billing" nav link rides the coach surfaces (athlete pages override
+  the `navlinks` block, so it never shows to athletes). Red→green
+  (`test_coach_billing.py`, +14: breakdown helper, bill math, the no-COGS-leak
+  invariant, the view gate + scoping); 1342 meso pytest green, ruff + DjHTML +
+  `makemigrations --check` clean; **Codex review CLEAN iter 1**; deploy success,
+  prod-verified (`/meso/billing/` 302→login for anon, the route is live). **Remaining
+  Meso backlog unchanged:** billing annual prices (BLOCKED on owner numbers + Stripe
+  annual Prices); Anthropic Admin/Usage-API reconciliation (deferred, needs Admin key).
