@@ -52,7 +52,37 @@
   --stack-space: var(--s1);
   --stack-page-space: var(--s5);
   --border-thin: 2px;
-  --border-radius: 12px;
+
+  /*
+    Semantic token layer (design-system unification, PR 1).
+
+    shadcn-style aliases for the locked "Faithful, made consistent" look. Most
+    values match the existing palette, so this mostly re-points names. --radius
+    (8px) is the new global radius; --border-radius is re-pointed at it so the
+    ~2050 existing references soften from 12px to 8px in one move.
+  */
+  --radius: 8px;
+  --background: #fff;
+  --foreground: #0a0a0a;
+  --card: #fff;
+  --card-foreground: #0a0a0a;
+  --muted: #f4f4f5;
+  --muted-foreground: #6b7280;
+  --border: #e4e4e7;
+  --input: #d4d4d8;
+  --primary: #0a0a0a;
+  --primary-foreground: #fff;
+  --primary-hover: #262626;
+  --primary-active: #000;
+  --accent: var(--main-color-accent); /* steel blue #31759d */
+  --accent-deep: #1f516b;
+  --accent-soft: #eaf2f7;
+  --accent-line: #bcd6e4;
+  --ring: var(--accent);
+  /* alias referenced by some templates' inline styles */
+  --color-gray: var(--main-color-gray);
+
+  --border-radius: var(--radius);
   --border-radius-small: 8px;
   --border-radius-large: 20px;
 }
@@ -92,12 +122,13 @@ input,
 textarea,
 select {
   padding: var(--s-1);
-  border: var(--border-thin) solid;
-  border-radius: var(--border-radius);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
   color: var(--main-color-dark-gray);
   background-color: var(--main-color-light);
-  /* The following is a cool effect, but difficult to implement sitewide */
-  /* box-shadow: 2px 3px var(--main-color-dark-gray); */
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
 }
 
 input *,
@@ -206,13 +237,18 @@ tbody tr:last-child td:last-child {
   text-decoration: none;
   cursor: pointer;
   padding: var(--s0);
-  border: 0 solid;
+  border: 1px solid transparent;
   border-radius: var(--border-radius);
   outline: var(--border-thin) solid transparent;
   /* for high contrast mode */
   outline-offset: calc(var(--border-thin) * -1);
   color: var(--main-color-light-gray);
   background-color: var(--main-color-dark);
+  transition:
+    background-color 0.12s ease,
+    box-shadow 0.12s ease,
+    transform 0.04s ease,
+    border-color 0.12s ease;
 }
 
 .copy-btn {
@@ -225,9 +261,31 @@ tbody tr:last-child td:last-child {
   text-decoration: underline;
 }
 
-.button:hover,
-.button:focus {
-  text-decoration: underline;
+/* Black primary button: hover lightens + lifts, focus rings in accent, active
+   presses down, disabled dims. (Locked "Faithful" interaction affordances.) */
+.button:hover {
+  background-color: var(--primary-hover);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.2);
+}
+
+.button:active {
+  background-color: var(--primary-active);
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.button:disabled,
+.button[disabled],
+.button.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 img {
@@ -247,13 +305,29 @@ input[type="radio"] {
   font-size: var(--s4);
 }
 
+/* Text-like inputs + selects share one height; this kills the skinny native
+   <select> that mismatched the inputs once Bulma stopped being loaded. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
 select {
-  border: var(--border-thin) solid var(--main-color-dark);
+  height: 38px;
+  padding: 0 12px;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
-input:focus,
+select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 34px;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):focus,
+textarea:focus,
 select:focus {
-  outline: var(--border-thin) solid var(--main-color-dark);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+  outline: none;
 }
 
 fieldset {
@@ -506,6 +580,13 @@ a:active {
   background-color: var(--color-light);
 }
 
+/* The card-like surface treatment for the default box (re-skins the whole
+   site). Variants below opt out of the light border where they own their look. */
+.box {
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+
 ul.errorlist {
   list-style-type: none;
   padding: 0;
@@ -523,6 +604,7 @@ ul.errorlist {
 .box.invert {
   color: var(--color-light);
   background-color: var(--color-dark);
+  border-color: transparent;
 }
 
 .box.invert.download:hover {
@@ -537,6 +619,8 @@ ul.errorlist {
 
 .box.transparent {
   background-color: unset;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .box.purchase {
@@ -546,6 +630,7 @@ ul.errorlist {
   font-weight: 700;
   color: var(--main-color-light);
   background-color: var(--main-color-accent);
+  border-color: transparent;
 }
 
 .box.purchase:active,
@@ -570,6 +655,7 @@ ul.errorlist {
   );
   background-size: 400% 400%;
   animation: gradient 15s ease infinite;
+  border-color: transparent;
 }
 
 @keyframes gradient {
@@ -589,7 +675,7 @@ ul.errorlist {
 .box.login {
   padding: var(--s-2);
   text-align: center;
-  border: var(--border-thin) solid var(--main-color-dark-gray);
+  border: 1px solid var(--input);
   text-decoration: none;
 }
 
@@ -641,12 +727,17 @@ a.box.login:active {
   --color-light: #fff;
   --color-dark: #000;
   padding: 0;
-  border: var(--border-thin) solid;
+  border: 1px solid var(--border);
   color: var(--color-dark);
   background-color: var(--color-light);
   position: relative;
   overflow: hidden;
   border-radius: var(--border-radius);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease,
+    transform 0.06s ease;
 }
 
 .card-box * {
@@ -679,9 +770,11 @@ a.box.login:active {
   right: 0;
 }
 
-/* affordance - show user that the whole card is clickable */
+/* affordance - the whole card lifts toward the user on hover */
 .card-box:hover {
-  box-shadow: 0 0 0 var(--border-thin);
+  border-color: var(--accent-line);
+  box-shadow: 0 6px 18px rgb(17 49 67 / 0.12);
+  transform: translateY(-2px);
 }
 
 /* a fallback for old browers */
@@ -689,9 +782,11 @@ a.box.login:active {
   text-decoration: underline;
 }
 
-/* add fancy outline */
+/* keyboard focus gets the same lift plus a clear accent edge */
 .card-box:focus-within {
-  box-shadow: 0 0 0 var(--border-thin);
+  border-color: var(--accent);
+  box-shadow: 0 6px 18px rgb(17 49 67 / 0.12);
+  transform: translateY(-2px);
 }
 
 /* remove fallback style if browser is new and hip */
@@ -702,6 +797,29 @@ a.box.login:active {
 /* pretty styles for photo */
 .card-box .frame > img {
   clip-path: polygon(0 0, 100% 0, 100% 100%, 0 calc(100% - 1rem));
+}
+
+/* clickable challenge cards: title shifts to accent, "View challenge" reveals */
+.card-box:hover h3 a,
+.card-box:hover h4 a,
+.card-box:focus-within h3 a,
+.card-box:focus-within h4 a {
+  color: var(--accent-deep);
+}
+
+.card-box .card-hint {
+  margin-left: auto;
+  font-size: var(--s-1);
+  font-weight: 500;
+  color: var(--accent-deep);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.card-box:hover .card-hint,
+.card-box:focus-within .card-hint {
+  opacity: 1;
 }
 
 /*
@@ -1198,11 +1316,13 @@ ul.grid {
     Usage: just wrap in span.tag
 */
 .tag {
-  color: var(--main-color-light);
-  background-color: var(--main-color-dark);
-  padding: var(--s-5) var(--s-3);
-  border-radius: var(--s0);
+  color: var(--accent-deep);
+  background-color: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  padding: 3px 10px;
+  border-radius: 999px;
   font-size: var(--s-1);
+  font-weight: 600;
 }
 
 .tag.filter-btn {
@@ -1238,6 +1358,22 @@ ul.grid {
 
 .tag.private {
   background-color: var(--color-private);
+}
+
+/* Solid status/utility tags keep light text on their own colour (the soft pill
+   treatment above only suits the neutral category tags). */
+.tag.price,
+.tag.duration,
+.tag.frequency,
+.tag.draft,
+.tag.private {
+  color: var(--main-color-light);
+  border-color: transparent;
+}
+
+.tag.filter-btn,
+.tag.copy-btn {
+  border-color: transparent;
 }
 
 .inline-tag {
@@ -1443,10 +1579,47 @@ ul.grid {
   color: var(--main-color-dark);
 }
 
+/* Utility-coloured buttons keep their own background through hover/active so the
+   black-button hover lighten doesn't bleed onto them. */
+.button.debug:hover,
+.button.debug:active {
+  background-color: var(--debug);
+}
+
+.button.info:hover,
+.button.info:active {
+  background-color: var(--info);
+}
+
+.button.success:hover,
+.button.success:active {
+  background-color: var(--success);
+}
+
+.button.warning:hover,
+.button.warning:active {
+  background-color: var(--warning);
+}
+
+.button.error:hover,
+.button.error:active {
+  background-color: var(--error);
+}
+
 .button.outline {
-  color: var(--main-color-dark);
-  background-color: unset;
-  border: solid var(--border-thin) var(--main-color-dark);
+  color: var(--foreground);
+  background-color: var(--background);
+  border: 1px solid var(--input);
+}
+
+.button.outline:hover {
+  background-color: var(--muted);
+  border-color: #9aa0a6;
+  box-shadow: none;
+}
+
+.button.outline:active {
+  background-color: #ececee;
 }
 
 .inherit-colors {
@@ -1553,13 +1726,15 @@ ul.grid {
 }
 
 .challenge-group-expanded .card-box:focus-within {
-  box-shadow: 0 0 0 2px currentColor !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 6px 18px rgb(17 49 67 / 0.12) !important;
   outline: none !important;
   z-index: 1 !important;
 }
 
 .challenge-group-expanded .card-box:hover {
-  box-shadow: 0 0 0 2px currentColor !important;
+  border-color: var(--accent-line) !important;
+  box-shadow: 0 6px 18px rgb(17 49 67 / 0.12) !important;
   z-index: 1 !important;
 }
 
@@ -1936,45 +2111,50 @@ table tr:nth-child(even) {
 }
 
 .challenge-description .tag {
-  background: var(--main-color-light-gray);
-  color: var(--main-color-gray);
-  padding: var(--s-2) var(--s0);
-  border-radius: var(--border-radius-large);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  border: 1px solid var(--accent-line);
+  padding: 3px 10px;
+  border-radius: 999px;
   font-size: var(--s-1);
-  font-weight: 500;
+  font-weight: 600;
   text-decoration: none;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  transition: all 0.2s ease;
+  box-shadow: none;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .challenge-description .tag:hover {
-  background: var(--main-color-gray);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
-  color: var(--main-color-light);
+  background: #dcebf3;
+  border-color: var(--accent);
+  color: var(--accent-deep);
 }
 
-/* Challenge card and sidebar tag styling - subtle gray for reduced visual weight */
+/* Challenge card + sidebar category tags: soft accent pills (matches spike) */
 .card-box .tag,
 .sidebar-main-layout .tag {
-  background: var(--main-color-light-gray);
-  color: var(--main-color-gray);
-  padding: var(--s-4) var(--s-2);
-  border-radius: var(--border-radius);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  border: 1px solid var(--accent-line);
+  padding: 3px 10px;
+  border-radius: 999px;
   font-size: var(--s-1);
-  font-weight: 500;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-  transition: all 0.2s ease;
+  font-weight: 600;
+  box-shadow: none;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
   text-decoration: none;
   display: inline-block;
 }
 
 .card-box .tag:hover,
 .sidebar-main-layout .tag:hover {
-  background: var(--main-color-gray);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  color: var(--main-color-light);
+  background: #dcebf3;
+  border-color: var(--accent);
+  color: var(--accent-deep);
 }
 
 /* Info box component styles */
@@ -2053,4 +2233,24 @@ table tr:nth-child(even) {
 
 .difficulty-advanced {
   color: #ef4444; /* Red for advanced */
+}
+
+/*
+    MOTION
+
+    Respect users who ask for reduced motion: keep colour/shadow affordances,
+    drop the translate lifts and the "View challenge" fade.
+*/
+@media (prefers-reduced-motion: reduce) {
+  .button,
+  .button:active,
+  .card-box,
+  .card-box:hover,
+  .card-box:focus-within {
+    transform: none;
+  }
+
+  .card-box .card-hint {
+    transition: none;
+  }
 }

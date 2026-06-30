@@ -1,5 +1,3 @@
-{% load crispy_forms_tags %}
-
 <div class="stack">
   <div class="box success rounded shadow">
     <div class="stack">
@@ -7,7 +5,7 @@
       <div class="stack-form">
         <form action="" method="POST">
           {% csrf_token %}
-          {{ record_create_form|crispy }}
+          {% include "_form_fields.html" with form=record_create_form %}
           <button class="button" type="submit">Add Score</button>
         </form>
       </div>
@@ -20,7 +18,7 @@
         <h3>Sort and Filter Scores</h3>
         <div class="stack-form">
           <form action="" method="get">
-            {{ filter.form|crispy }}
+            {% include "_form_fields.html" with form=filter.form %}
             <div class="cluster">
               <div>
                 <input class="button" type="submit" value="Submit" />

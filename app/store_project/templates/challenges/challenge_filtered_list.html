@@ -1,5 +1,4 @@
 {% extends '_base.html' %}
-{% load crispy_forms_tags %}
 {% load duration_filters %}
 
 {% block head_title %}Challenges{% endblock head_title %}
@@ -17,7 +16,7 @@
             <h4>Search and sort</h4>
             <div class="stack-form">
               <form action="" method="get">
-                {{ filter.form|crispy }}
+                {% include "_form_fields.html" with form=filter.form %}
                 <div class="cluster">
                   <div>
                     <input class="button" type="submit" value="Submit" />

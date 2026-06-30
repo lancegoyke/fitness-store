@@ -94,8 +94,6 @@ INSTALLED_APPS = [
     "allauth.socialaccount.providers.facebook",
     "allauth.socialaccount.providers.google",
     "corsheaders",
-    "crispy_bulma",
-    "crispy_forms",
     "django_q",
     "embed_video",
     "markdownx",
@@ -321,10 +319,6 @@ MESO_BASE_PRICE_ID = os.environ.get("MESO_BASE_PRICE_ID", "")
 # endpoint is registered in Stripe; the webhook view rejects unsigned/unverifiable
 # requests, so billing stays dormant (not broken) until this is set.
 MESO_STRIPE_WEBHOOK_SECRET = os.environ.get("MESO_STRIPE_WEBHOOK_SECRET", "")
-
-# Crispy Forms
-CRISPY_ALLOWED_TEMPLATE_PACKS = ("bulma",)
-CRISPY_TEMPLATE_PACK = "bulma"
 
 # Cache
 

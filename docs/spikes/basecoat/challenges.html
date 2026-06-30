@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en" data-theme="faithful">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Challenges — Base Coat spike</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+  /* ----------------------------------------------------------------------
+     SPIKE — /challenges rebuilt in the Base Coat / shadcn visual language.
+     Four brand directions, switchable via the [data-theme] attribute on <html>.
+     This is a throwaway visual prototype, NOT production CSS.
+     --------------------------------------------------------------------- */
+
+  /* 1) FAITHFUL — keep today's identity: B&W + teal accent, black buttons */
+      [data-theme="faithful"] {
+        --background:#ffffff; --foreground:#0a0a0a;
+        --card:#ffffff; --card-foreground:#0a0a0a;
+        --muted:#f4f4f5; --muted-foreground:#6b7280;
+        --border:#e4e4e7; --input:#d4d4d8; --ring:#31759d;
+        --primary:#0a0a0a; --primary-foreground:#ffffff;
+        --secondary:#f4f4f5; --secondary-foreground:#18181b;
+        --link:#31759d; --accent-soft:#eaf2f7; --accent-soft-fg:#1f516b;
+        --radius:8px;
+        --font:"system-ui", -apple-system, "Segoe UI", sans-serif;
+        --nav-bg:#0a0a0a; --nav-fg:#ededed;
+      }
+  /* 2) REFRESH — modern neutral shadcn: airy, refined grays, Inter */
+      [data-theme="refresh"] {
+        --background:#ffffff; --foreground:#09090b;
+        --card:#ffffff; --card-foreground:#09090b;
+        --muted:#f4f4f5; --muted-foreground:#71717a;
+        --border:#e4e4e7; --input:#e4e4e7; --ring:#18181b;
+        --primary:#18181b; --primary-foreground:#fafafa;
+        --secondary:#f4f4f5; --secondary-foreground:#18181b;
+        --link:#18181b; --accent-soft:#f4f4f5; --accent-soft-fg:#3f3f46;
+        --radius:10px;
+        --font:"Inter", ui-sans-serif, system-ui, sans-serif;
+        --nav-bg:#09090b; --nav-fg:#e4e4e7;
+      }
+  /* 3) ACCENT — confident fitness-forward teal/green brand */
+      [data-theme="accent"] {
+        --background:#ffffff; --foreground:#0a0a0a;
+        --card:#ffffff; --card-foreground:#0a0a0a;
+        --muted:#f4f5f4; --muted-foreground:#64748b;
+        --border:#e6e8e6; --input:#dadedb; --ring:#0d9488;
+        --primary:#0d9488; --primary-foreground:#ffffff;
+        --secondary:#f0f5f4; --secondary-foreground:#0f766e;
+        --link:#0f766e; --accent-soft:#e6f4f2; --accent-soft-fg:#0f5f57;
+        --radius:10px;
+        --font:"Inter", ui-sans-serif, system-ui, sans-serif;
+        --nav-bg:#0b3b36; --nav-fg:#d7efea;
+      }
+  /* 4) DARK — dark mode carrying the teal brand accent */
+      [data-theme="dark"] {
+        --background:#09090b; --foreground:#fafafa;
+        --card:#18181b; --card-foreground:#fafafa;
+        --muted:#27272a; --muted-foreground:#a1a1aa;
+        --border:#27272a; --input:#3f3f46; --ring:#2dd4bf;
+        --primary:#14b8a6; --primary-foreground:#042925;
+        --secondary:#27272a; --secondary-foreground:#e4e4e7;
+        --link:#2dd4bf; --accent-soft:#0c2e2a; --accent-soft-fg:#5eead4;
+        --radius:10px;
+        --font:"Inter", ui-sans-serif, system-ui, sans-serif;
+        --nav-bg:#000000; --nav-fg:#e4e4e7;
+      }
+
+      * { box-sizing:border-box; }
+      html,body { margin:0; }
+      body {
+        background:var(--background);
+        color:var(--foreground);
+        font-family:var(--font);
+        font-size:15px;
+        line-height:1.5;
+        -webkit-font-smoothing:antialiased;
+      }
+
+  /* ---- nav ---- */
+      .nav {
+        background:var(--nav-bg); color:var(--nav-fg);
+        display:flex; align-items:center; gap:28px;
+        padding:14px clamp(16px,4vw,40px);
+      }
+      .nav .brand { font-weight:700; font-size:17px; letter-spacing:-.01em; color:var(--nav-fg); text-decoration:none; }
+      .nav nav { display:flex; gap:22px; align-items:center; margin-left:8px; }
+      .nav a.link { color:var(--nav-fg); opacity:.82; text-decoration:none; font-size:14px; font-weight:500; }
+      .nav a.link:hover { opacity:1; }
+      .nav a.link.active { opacity:1; text-decoration:underline; text-underline-offset:5px; }
+      .nav .spacer { margin-left:auto; }
+
+  /* ---- layout ---- */
+      .wrap { max-width:1120px; margin:0 auto; padding:clamp(20px,4vw,40px); }
+      .page-title { font-size:30px; font-weight:700; letter-spacing:-.02em; margin:0 0 22px; }
+      .grid { display:grid; grid-template-columns:300px minmax(0,1fr); gap:24px; align-items:start; }
+
+  /* ---- card ---- */
+      .card {
+        background:var(--card); color:var(--card-foreground);
+        border:1px solid var(--border);
+        border-radius:var(--radius);
+        box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);
+      }
+      .card-pad { padding:20px; }
+      .card h2 { font-size:16px; font-weight:600; margin:0; letter-spacing:-.01em; }
+      .card .desc { font-size:13px; color:var(--muted-foreground); margin:4px 0 0; }
+      .sep { height:1px; background:var(--border); margin:16px 0; border:0; }
+
+  /* ---- form controls ---- */
+      .label { display:block; font-size:13px; font-weight:500; margin:0 0 6px; }
+      .input, .select {
+        width:100%; height:38px;
+        background:var(--background); color:var(--foreground);
+        border:1px solid var(--input); border-radius:calc(var(--radius) - 2px);
+        padding:0 12px; font-size:14px; font-family:inherit;
+        appearance:none; outline:none;
+      }
+      .select {
+        background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+        background-repeat:no-repeat; background-position:right 10px center; padding-right:34px;
+      }
+      .input::placeholder { color:var(--muted-foreground); }
+      .input:focus, .select:focus { border-color:var(--ring); box-shadow:0 0 0 3px color-mix(in srgb, var(--ring) 30%, transparent); }
+      .field + .field { margin-top:14px; }
+
+  /* ---- buttons ---- */
+      .btn {
+        display:inline-flex; align-items:center; justify-content:center; gap:8px;
+        height:38px; padding:0 16px; border-radius:calc(var(--radius) - 2px);
+        font-size:14px; font-weight:500; font-family:inherit; cursor:pointer;
+        border:1px solid transparent; text-decoration:none; white-space:nowrap;
+        transition:background .12s, opacity .12s, border-color .12s;
+      }
+      .btn-primary { background:var(--primary); color:var(--primary-foreground); }
+      .btn-primary:hover { opacity:.9; }
+      .btn-outline { background:var(--background); color:var(--foreground); border-color:var(--input); }
+      .btn-outline:hover { background:var(--muted); }
+      .btn-row { display:flex; gap:10px; }
+
+  /* ---- badges / tags ---- */
+      .badge {
+        display:inline-flex; align-items:center; gap:5px;
+        padding:3px 9px; border-radius:999px; font-size:12px; font-weight:500;
+        background:var(--accent-soft); color:var(--accent-soft-fg);
+        border:1px solid color-mix(in srgb, var(--accent-soft-fg) 18%, transparent);
+      }
+      .badge-muted { background:var(--muted); color:var(--muted-foreground); border-color:var(--border); }
+      .tagrow { display:flex; flex-wrap:wrap; gap:8px; }
+      a.badge { text-decoration:none; }
+      a.badge:hover { filter:brightness(.97); }
+
+  /* ---- challenge cards ---- */
+      .stack { display:flex; flex-direction:column; gap:16px; }
+      .ch { display:flex; flex-direction:column; gap:10px; padding:18px 20px; }
+      .ch-top { display:flex; align-items:center; gap:10px; }
+      .ch-title { font-size:17px; font-weight:600; letter-spacing:-.01em; margin:0; }
+      .ch-title a { color:var(--foreground); text-decoration:none; }
+      .ch-title a:hover { color:var(--link); }
+      .dot { width:10px; height:10px; border-radius:999px; flex:none; box-shadow:0 0 0 3px color-mix(in srgb,currentColor 18%,transparent); }
+      .dot.beg { color:#16a34a; background:#16a34a; }
+      .dot.int { color:#d97706; background:#d97706; }
+      .dot.adv { color:#dc2626; background:#dc2626; }
+      .ch-sum { font-size:14px; color:var(--muted-foreground); margin:0; }
+      .ch-foot { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-top:2px; }
+      .ch-meta { font-size:12.5px; color:var(--muted-foreground); }
+
+  /* ---- spike theme switcher ---- */
+      .switch {
+        position:sticky; top:0; z-index:10;
+        display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+        padding:10px clamp(16px,4vw,40px);
+        background:color-mix(in srgb, var(--background) 88%, transparent);
+        backdrop-filter:blur(6px);
+        border-bottom:1px solid var(--border);
+        font-size:13px;
+      }
+      .switch b { font-weight:600; }
+      .switch .seg { display:flex; gap:6px; }
+      .switch button {
+        font:inherit; font-size:12.5px; font-weight:500; cursor:pointer;
+        padding:5px 11px; border-radius:7px;
+        border:1px solid var(--border); background:var(--card); color:var(--foreground);
+      }
+      .switch button[aria-pressed="true"] { background:var(--primary); color:var(--primary-foreground); border-color:var(--primary); }
+      .switch .note { color:var(--muted-foreground); margin-left:auto; }
+    </style>
+  </head>
+  <body>
+    <div class="switch">
+      <b>Preview theme:</b>
+      <div class="seg">
+        <button data-set="faithful" aria-pressed="true">1 · Faithful (B&amp;W + teal)</button>
+        <button data-set="refresh" aria-pressed="false">2 · Modern neutral</button>
+        <button data-set="accent" aria-pressed="false">3 · Brand accent</button>
+        <button data-set="dark" aria-pressed="false">4 · Dark mode</button>
+      </div>
+      <span class="note">/challenges · Base Coat spike</span>
+    </div>
+
+    <header class="nav">
+      <a class="brand" href="#">Mastering Fitness</a>
+      <nav>
+        <a class="link" href="#">About</a>
+        <a class="link" href="#">Store</a>
+        <a class="link active" href="#">Challenges</a>
+        <a class="link" href="#">Coaching</a>
+        <a class="link" href="#">Contact</a>
+      </nav>
+      <span class="spacer"></span>
+      <nav>
+        <a class="link" href="#">Login</a>
+        <a class="link" href="#">Signup</a>
+      </nav>
+    </header>
+
+    <main class="wrap">
+      <h1 class="page-title">Pick a Challenge</h1>
+      <div class="grid">
+
+      <!-- SIDEBAR -->
+        <aside class="card card-pad">
+          <h2>Search &amp; sort</h2>
+          <p class="desc">Find a challenge to test yourself.</p>
+          <hr class="sep" />
+          <div class="field">
+            <label class="label" for="q">Name contains</label>
+            <input class="input" id="q" type="text" placeholder="Search challenges…" />
+          </div>
+          <div class="field">
+            <label class="label" for="sort">Sort by</label>
+            <select class="select" id="sort">
+              <option>By Popularity</option>
+              <option>Alphabetical</option>
+              <option>Newest First</option>
+              <option>Oldest First</option>
+            </select>
+          </div>
+          <div class="field btn-row">
+            <button class="btn btn-primary" type="submit">Submit</button>
+            <a class="btn btn-outline" href="#">Clear</a>
+          </div>
+
+          <hr class="sep" />
+          <h2>Tags</h2>
+          <div class="tagrow" style="margin-top:12px;">
+            <a class="badge" href="#">Bodyweight</a>
+            <a class="badge" href="#">Conditioning</a>
+            <a class="badge" href="#">Strength</a>
+            <a class="badge" href="#">Core</a>
+            <a class="badge" href="#">Endurance</a>
+            <a class="badge" href="#">Mobility</a>
+          </div>
+        </aside>
+
+      <!-- MAIN -->
+        <section class="stack">
+          <article class="card ch">
+            <div class="ch-top">
+              <h3 class="ch-title"><a href="#">Murph</a></h3>
+              <span class="dot adv" title="Advanced"></span>
+            </div>
+            <p class="ch-sum">A hero WOD: 1-mile run, 100 pull-ups, 200 push-ups, 300 air squats, then another mile — for time.</p>
+            <div class="ch-foot">
+              <div class="tagrow">
+                <span class="badge">Conditioning</span>
+                <span class="badge">Bodyweight</span>
+              </div>
+              <span class="ch-meta">128 records · Est. 45m</span>
+            </div>
+          </article>
+
+          <article class="card ch">
+            <div class="ch-top">
+              <h3 class="ch-title"><a href="#">Bodyweight Cindy</a></h3>
+              <span class="dot int" title="Intermediate"></span>
+            </div>
+            <p class="ch-sum">As many rounds as possible in 20 minutes: 5 pull-ups, 10 push-ups, 15 air squats.</p>
+            <div class="ch-foot">
+              <div class="tagrow">
+                <span class="badge">Conditioning</span>
+                <span class="badge">Bodyweight</span>
+              </div>
+              <span class="ch-meta">64 records · Est. 20m</span>
+            </div>
+          </article>
+
+          <article class="card ch">
+            <div class="ch-top">
+              <h3 class="ch-title"><a href="#">30-Day Plank Builder</a></h3>
+              <span class="dot beg" title="Beginner"></span>
+            </div>
+            <p class="ch-sum">Build a rock-solid core by adding a few seconds to your plank hold every day for a month.</p>
+            <div class="ch-foot">
+              <div class="tagrow">
+                <span class="badge">Core</span>
+                <span class="badge">Mobility</span>
+              </div>
+              <span class="ch-meta">212 records · Est. 5m</span>
+            </div>
+          </article>
+
+          <article class="card ch">
+            <div class="ch-top">
+              <h3 class="ch-title"><a href="#">500 Burpees for Time</a></h3>
+              <span class="dot adv" title="Advanced"></span>
+            </div>
+            <p class="ch-sum">Exactly what it sounds like. Pace yourself, keep moving, and log your finish time.</p>
+            <div class="ch-foot">
+              <div class="tagrow">
+                <span class="badge">Conditioning</span>
+                <span class="badge">Endurance</span>
+              </div>
+              <span class="ch-meta">41 records · Est. 38m</span>
+            </div>
+          </article>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const html = document.documentElement;
+      document.querySelectorAll('.switch button').forEach(b => {
+        b.addEventListener('click', () => {
+          html.dataset.theme = b.dataset.set;
+          document.querySelectorAll('.switch button').forEach(x =>
+            x.setAttribute('aria-pressed', String(x === b)));
+        });
+      });
+    </script>
+  </body>
+</html>

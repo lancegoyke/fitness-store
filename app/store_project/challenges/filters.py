@@ -6,6 +6,7 @@ from django.db import models
 from django.db.models import Count
 from django.utils import timezone
 
+from .form_styling import apply_component_classes
 from .models import Challenge
 from .models import Record
 
@@ -30,6 +31,7 @@ class ChallengeFilter(django_filters.FilterSet):
         if not self.data.get("ordering"):
             self.data = self.data.copy()
             self.data["ordering"] = "popularity"
+        apply_component_classes(self.form.fields)
 
     def filter_by_ordering(self, queryset, name, value):
         # If no value provided, default to popularity
@@ -86,6 +88,10 @@ class RecordFilter(django_filters.FilterSet):
         lookup_expr="icontains",
         widget=forms.TextInput(attrs={"autocomplete": "off"}),
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        apply_component_classes(self.form.fields)
 
     class Meta:
         model = Record
