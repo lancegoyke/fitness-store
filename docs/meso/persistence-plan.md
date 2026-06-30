@@ -232,7 +232,11 @@ plans; athlete sees all their coaches'), the **invite state machine**, and **aut
 1. ~~**D-a/D-b/D-c** as recorded in `decisions.md`.~~ — **locked** (decisions log, 2026-06-26).
 2. ~~Roles live in the **`meso`** app (not `users`).~~ — **confirmed**; built there in Phase 1.
 3. ~~"Changes since last delivery" = **snapshot-per-delivery now**, full diff UI deferred.~~ —
-   **snapshot done** in Phase 4 (`WeekDelivery.payload`); the full diff *UI* is still deferred to
-   the agent/athlete slice.
+   **DONE** (2026-06-30, PR #337): snapshot captured in Phase 4 (`WeekDelivery.payload`); the
+   full diff **UI** now ships on the **deliver confirm screen** — `serializers.diff_week_snapshots`
+   diffs the target week's live grid against the snapshot last delivered (matched by stable pks:
+   added / removed / changed rows per session, whole days, week-meta), surfaced by
+   `presenters.deliver_screen` (`deliver["changes"]`) and rendered in `deliver.html`. No model
+   change, no migration.
 4. ~~**Logging models defined now**, UI later.~~ — **done**: `SessionLog`/`LoggedSet` built in
    Phase 2 (models + admin + factories only; athlete-facing logging UI lands with the athlete slice).
