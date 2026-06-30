@@ -598,6 +598,31 @@ def serialize_group_identity(group):
     }
 
 
+def serialize_athlete_identity(plan):
+    """The individual plan's athlete identity for the designer left rail (Phase 5).
+
+    Replaces the prototype's hardcoded athlete chrome ("Maya Okonkwo" + invented
+    contraindications) with the *real* athlete — their name/initials, the plan's
+    goal, and their active contraindications (the same global injuries the agent
+    grounds on, so the coach sees the constraints while programming). A group plan
+    has no single athlete (it carries ``group`` instead), so this returns None.
+    """
+    athlete = plan.athlete
+    if athlete is None:
+        return None
+    name = athlete.display_name()
+    return {
+        "name": name,
+        "initials": initials(name),
+        "goal": plan.goal,
+        "contraindications": [
+            {"label": c.label, "text": c.text}
+            for c in athlete.contraindications.all()
+            if c.active
+        ],
+    }
+
+
 def serialize_plan(plan, week=None):
     """Serialize ``plan`` to the designer's ``program``/``weeks``/``phases`` shape.
 
@@ -665,6 +690,9 @@ def serialize_plan(plan, week=None):
             "unit": plan.unit,
         },
         "group": serialize_group_identity(plan.group) if plan.is_group else None,
+        # The real athlete identity for an individual plan's left rail (Phase 5);
+        # ``None`` for a group plan, which renders off ``group`` instead.
+        "athlete": serialize_athlete_identity(plan),
         "program": program,
         "weeks": week_strip,
         "phases": phases,
