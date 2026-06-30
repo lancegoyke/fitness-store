@@ -58,6 +58,7 @@ from .models import GroupMembership
 from .models import InvalidTransition
 from .models import LoadType
 from .models import LoggedSet
+from .models import Mesocycle
 from .models import MesoGroup
 from .models import Plan
 from .models import PrescriptionOverride
@@ -1587,18 +1588,31 @@ def session_add_exercise(request, plan_id, pk):
 @login_required
 @require_POST
 def session_add(request, plan_id):
-    """Append a blank training day (with a starter row) to the plan's current week.
+    """Append a blank training day (with a starter row) to a week of the plan.
 
-    The designer edits the current week, so "add a day" means add a ``Session`` to
-    that week — letting a scaffolded plan grow past its two starter days
-    (first-time-UX Phase 1). Scoped + edit-gated like the other designer writes via
-    ``_editable_plan_or_response`` (403 foreign, 402 over-limit). Returns the new
-    day in the grid's day shape so the client can append it without a reload.
+    "Add a day" adds a ``Session`` to the week the designer is showing. An optional
+    ``week_id`` in the body pins that week — the multi-week switcher can open a week
+    other than the live one, and the day must land where the coach is looking (else
+    a reload shows it on the wrong week). It defaults to ``current_week`` for the
+    first-time-UX caller that predates the switcher. The week is scoped to the plan
+    (a foreign week is a 404). Scoped + edit-gated like the other designer writes via
+    ``_editable_plan_or_response`` (403 foreign, 402 over-limit). Returns the new day
+    in the grid's day shape so the client can append it without a reload.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    week = current_week(plan)
+    # An empty / non-JSON body (the pre-switcher callers post no body) means
+    # "no week_id" — fall back to the live week — rather than a 400.
+    try:
+        payload = json.loads(request.body or "{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = {}
+    week_id = payload.get("week_id") if isinstance(payload, dict) else None
+    if week_id is not None:
+        week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
+    else:
+        week = current_week(plan)
     if week is None:
         return HttpResponseBadRequest("This plan has no week to add a day to.")
     # Allocate the next day_number/order under a row lock on the week so a
@@ -1618,6 +1632,84 @@ def session_add(request, plan_id):
         )
         _touch_plan(plan)
     return JsonResponse({"ok": True, "session": serialize_session(session)}, status=201)
+
+
+@login_required
+@require_GET
+def week_view(request, plan_id, week_id):
+    """Serialize one week's grid so the designer can switch to it (multi-week).
+
+    A pure read — viewing a week never changes which week is live or what delivery
+    targets — so it is scoped by ownership only (404/403), **not** billing-gated:
+    an over-limit coach keeps read access to every week. A week that isn't this
+    plan's is a flat 404. Returns the same ``serialize_plan`` shape the page hydrates
+    from, pinned to ``week`` (``viewing`` reports it back).
+    """
+    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
+    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
+
+
+@login_required
+@require_POST
+def week_add(request, plan_id):
+    """Materialize the next week in the plan's active block and open onto it.
+
+    The designer's "+ Add week": grows the mesocycle of the live (current) week —
+    or, lacking one, the plan's last block — by copying its latest week's grid
+    (``Mesocycle.append_week``). The new week is a non-current draft, so adding it
+    never changes what's live or deliverable. Scoped + edit-gated like the other
+    designer writes (403 foreign, 402 over-limit). Row-locks the mesocycle so two
+    concurrent submits can't both read the same max index and collide on
+    ``unique_week_index`` (explicit transaction — prod views run in autocommit).
+    Returns the plan pinned to the new week so the client switches to it.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    open_week = current_week(plan)
+    mesocycle = (
+        open_week.mesocycle
+        if open_week is not None
+        else plan.mesocycles.order_by("order").last()
+    )
+    if mesocycle is None:
+        return HttpResponseBadRequest("This plan has no block to add a week to.")
+    with transaction.atomic():
+        Mesocycle.objects.select_for_update().filter(pk=mesocycle.pk).first()
+        new_week = mesocycle.append_week()
+        _touch_plan(plan)
+    return JsonResponse({"ok": True, **serialize_plan(plan, week=new_week)}, status=201)
+
+
+@login_required
+@require_POST
+def week_set_current(request, plan_id, week_id):
+    """Make ``week`` the plan's current week — its designer-default + deliver target.
+
+    The designer's "Make current": flips the live pointer to the viewed week so
+    delivery (which sends ``current_week``) targets it and the designer opens onto
+    it next time. Exactly one week is current — the others in the plan are cleared.
+    Scoped + edit-gated (403 foreign, 402 over-limit); a foreign week is a 404.
+    Row-locks the plan so concurrent set-currents serialize. Returns the plan
+    pinned to the new current week.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
+    with transaction.atomic():
+        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        Week.objects.filter(mesocycle__plan=plan).exclude(pk=week.pk).update(
+            is_current=False
+        )
+        if not week.is_current:
+            week.is_current = True
+            week.save(update_fields=["is_current"])
+        _touch_plan(plan)
+    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 
 # Free-form per-athlete override cells, mapped to their model ``max_length``.

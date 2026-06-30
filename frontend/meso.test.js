@@ -503,8 +503,9 @@ describe("coach 1RM editor", () => {
 // Mirrors addExercise: live → POST and push the server's day; offline → a local
 // placeholder; a failed add leaves the grid untouched.
 describe("addDay", () => {
-  it("appends the server's new day to the grid when live", async () => {
+  it("appends the server's new day to the viewed week when live", async () => {
     const c = makeMeso();
+    c.viewedWeekId = 5; // viewing a week other than the live one
     c.program = [{ id: 1, n: 1, name: "Day 1", exercises: [] }];
     const newDay = {
       id: 2,
@@ -519,6 +520,8 @@ describe("addDay", () => {
     await c.addDay();
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(global.fetch.mock.calls[0][0]).toBe("/meso/api/plan/7/session/");
+    // The day is scoped to the viewed week so it lands where the coach is looking.
+    expect(sentBody(0).week_id).toBe(5);
     expect(c.program).toHaveLength(2);
     expect(c.program[1]).toEqual(newDay);
   });
@@ -596,5 +599,119 @@ describe("designer coachmarks", () => {
     expect(() => c.dismissCoachmark("grid")).not.toThrow();
     expect(c.coachmarkVisible("grid")).toBe(false);
     spy.mockRestore();
+  });
+});
+
+// ---- multi-week designer (view / add / set-current) ----
+//
+// The plan is multi-week: the switcher strip swaps which week the grid shows,
+// addWeek appends the next week (server copies the latest week's grid), and
+// setCurrentWeek moves the live (deliver-target) pointer. Each swaps the grid via
+// applyPlanData, which keeps program / weeks / phases / viewedWeekId in lockstep.
+describe("week switcher", () => {
+  // A re-serialized plan payload pinned to `viewing`, in the shape the endpoints
+  // return (and init hydrates from).
+  function planData({ viewing = 2 } = {}) {
+    return {
+      ok: true,
+      program: [{ id: 10, n: 1, name: "Lower", exercises: [] }],
+      weeks: [
+        { id: 1, index: 1, label: "Wk 1", current: true },
+        { id: 2, index: 2, label: "Wk 2", current: false },
+      ],
+      phases: [{ name: "Hypertrophy", weeks: "4 wk", state: "current" }],
+      viewing,
+    };
+  }
+
+  it("applyPlanData swaps the grid and tracks the viewed week", () => {
+    const c = makeMeso();
+    c.applyPlanData(planData({ viewing: 2 }));
+    expect(c.program).toHaveLength(1);
+    expect(c.weeks).toHaveLength(2);
+    expect(c.phases[0].name).toBe("Hypertrophy");
+    expect(c.viewedWeekId).toBe(2);
+  });
+
+  it("derives the viewed week and whether it is the live one", () => {
+    const c = makeMeso();
+    c.applyPlanData(planData({ viewing: 2 }));
+    expect(c.viewedWeek.id).toBe(2);
+    expect(c.weekIsViewed(c.weeks[1])).toBe(true);
+    expect(c.weekIsViewed(c.weeks[0])).toBe(false);
+    // Viewing Wk 2 (not current) → the "Make current" affordance shows.
+    expect(c.viewedIsCurrent).toBe(false);
+    // Switch the viewed pointer to the live week.
+    c.viewedWeekId = 1;
+    expect(c.viewedIsCurrent).toBe(true);
+    expect(c.weekHeading).toBe("Wk 1");
+  });
+
+  it("switchWeek GETs the week and applies it", async () => {
+    const c = makeMeso();
+    c.viewedWeekId = 1;
+    global.fetch = vi.fn().mockResolvedValue(res({ body: planData({ viewing: 2 }) }));
+    await c.switchWeek(2);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toBe("/meso/api/plan/7/week/2/");
+    expect(c.viewedWeekId).toBe(2);
+  });
+
+  it("switchWeek is a no-op when already viewing that week", async () => {
+    const c = makeMeso();
+    c.viewedWeekId = 2;
+    global.fetch = vi.fn();
+    await c.switchWeek(2);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("switchWeek leaves the grid unchanged when the fetch fails", async () => {
+    const c = makeMeso();
+    c.viewedWeekId = 1;
+    c.program = [{ id: 99 }];
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 404 }));
+    await c.switchWeek(2);
+    expect(c.viewedWeekId).toBe(1);
+    expect(c.program).toEqual([{ id: 99 }]);
+  });
+
+  it("addWeek POSTs to the week endpoint and switches onto the new week", async () => {
+    const c = makeMeso();
+    c.viewedWeekId = 1;
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(res({ status: 201, body: planData({ viewing: 2 }) }));
+    await c.addWeek();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toBe("/meso/api/plan/7/week/");
+    expect(global.fetch.mock.calls[0][1].method).toBe("POST");
+    expect(c.viewedWeekId).toBe(2);
+    expect(c.weeks).toHaveLength(2);
+  });
+
+  it("setCurrentWeek POSTs to the current endpoint and applies the result", async () => {
+    const c = makeMeso();
+    // The server flips week 2 to current and returns the re-serialized plan.
+    const data = planData({ viewing: 2 });
+    data.weeks = [
+      { id: 1, index: 1, label: "Wk 1", current: false },
+      { id: 2, index: 2, label: "Wk 2", current: true },
+    ];
+    global.fetch = vi.fn().mockResolvedValue(res({ body: data }));
+    await c.setCurrentWeek(2);
+    expect(global.fetch.mock.calls[0][0]).toBe("/meso/api/plan/7/week/2/current/");
+    expect(global.fetch.mock.calls[0][1].method).toBe("POST");
+    expect(c.viewedIsCurrent).toBe(true);
+  });
+
+  it("week methods no-op without a network call when not live", async () => {
+    const c = makeMeso();
+    c.live = false;
+    global.fetch = vi.fn();
+    await c.switchWeek(2);
+    await c.addWeek();
+    await c.setCurrentWeek(2);
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });

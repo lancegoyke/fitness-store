@@ -128,6 +128,23 @@ urlpatterns = [
         views.session_add,
         name="api_session_add",
     ),
+    # Multi-week designer: view any week (read), add the next week (write), and
+    # set the live/deliver-target week. ``week/<id>/`` GET views; POST sets current.
+    path(
+        "api/plan/<int:plan_id>/week/",
+        views.week_add,
+        name="api_week_add",
+    ),
+    path(
+        "api/plan/<int:plan_id>/week/<int:week_id>/",
+        views.week_view,
+        name="api_week_view",
+    ),
+    path(
+        "api/plan/<int:plan_id>/week/<int:week_id>/current/",
+        views.week_set_current,
+        name="api_week_set_current",
+    ),
     # Per-athlete override on a group's shared program (groups Phase 3).
     path(
         "api/plan/<int:plan_id>/prescription/<int:pk>/override/",

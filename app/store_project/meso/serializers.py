@@ -147,8 +147,14 @@ def serialize_session(session):
 
 
 def serialize_week(week):
-    """One column in the designer's week strip."""
+    """One column in the designer's week strip.
+
+    ``id``/``index`` let the client target a week for the switcher (view, add,
+    set-current); ``current`` flags the live (deliver-target) week.
+    """
     return {
+        "id": week.pk,
+        "index": week.index,
         "label": f"Wk {week.index}",
         "phase": week.phase,
         "vol": week.volume,
@@ -695,5 +701,10 @@ def serialize_plan(plan, week=None):
         "athlete": serialize_athlete_identity(plan),
         "program": program,
         "weeks": week_strip,
+        # The id of the week whose grid ``program`` holds — the *viewed* week,
+        # which the multi-week switcher may point away from the live (current)
+        # one. The client tracks this so it can highlight the open week and tell
+        # "viewing" apart from "current" (the deliver target).
+        "viewing": open_week.pk if open_week is not None else None,
         "phases": phases,
     }

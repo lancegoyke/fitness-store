@@ -29,6 +29,7 @@ from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
+from store_project.meso.models import Week
 from store_project.meso.serializers import serialize_plan
 
 pytestmark = pytest.mark.django_db
@@ -177,8 +178,17 @@ class TestSerializePlan:
     def test_weeks_match_current_mesocycle(self):
         plan = build_maya_plan()
         result = serialize_plan(plan)
+        # ``id``/``index`` carry the real week pk so the switcher can target it.
+        weeks = list(
+            Week.objects.filter(mesocycle__plan=plan, mesocycle__order=1).order_by(
+                "index"
+            )
+        )
+        ids = [w.pk for w in weeks]
         assert result["weeks"] == [
             {
+                "id": ids[0],
+                "index": 1,
                 "label": "Wk 1",
                 "phase": "Accum",
                 "vol": 70,
@@ -187,6 +197,8 @@ class TestSerializePlan:
                 "current": False,
             },
             {
+                "id": ids[1],
+                "index": 2,
                 "label": "Wk 2",
                 "phase": "Accum",
                 "vol": 85,
@@ -195,6 +207,8 @@ class TestSerializePlan:
                 "current": True,
             },
             {
+                "id": ids[2],
+                "index": 3,
                 "label": "Wk 3",
                 "phase": "Accum",
                 "vol": 100,
@@ -203,6 +217,8 @@ class TestSerializePlan:
                 "current": False,
             },
             {
+                "id": ids[3],
+                "index": 4,
                 "label": "Wk 4",
                 "phase": "Deload",
                 "vol": 55,
@@ -211,6 +227,12 @@ class TestSerializePlan:
                 "current": False,
             },
         ]
+
+    def test_serialize_plan_reports_the_viewed_week(self):
+        plan = build_maya_plan()
+        result = serialize_plan(plan)
+        current = Week.objects.get(mesocycle__plan=plan, is_current=True)
+        assert result["viewing"] == current.pk
 
     def test_program_is_current_weeks_sessions(self):
         plan = build_maya_plan()
