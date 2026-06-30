@@ -728,3 +728,28 @@ _(Append dated entries here as decisions land.)_
   point → first-time-UX **Phase 4** (athlete install/first-log polish) **or Phase 5**
   (designer/agent self-explanation). Plan in
   [`first-time-ux-plan.md`](./first-time-ux-plan.md).
+- 2026-06-30 — **First-time UX — Phase 4 built & merged** (branch
+  `meso-first-time-ux-phase4`, PR #330, **no migration**): **athlete first-run
+  polish** — a PWA **install prompt** + a one-time **first-log coachmark**. The
+  coachmark is **server-driven**: `views._athlete_has_completed_log(user)` gates it
+  on the home (only when a delivered session exists to tap) and the session logger,
+  so it's naturally one-time + cross-device and vanishes the moment the first
+  *completed* log lands — **no per-device flag, no migration**. Gated on a `done`
+  log specifically (a "Save progress" `pending` draft must not retract the hint that
+  teaches the final "Log session" step). New **`meso_onboarding.js`** reveals the
+  install card from a captured `beforeinstallprompt` (Chromium), falls back to manual
+  *Add to Home Screen* steps on iOS (incl. **iPadOS-13+ Safari's desktop "Macintosh"
+  UA** via `detectIOS(ua, maxTouchPoints)`), stays hidden when already
+  installed/dismissed, and persists manual coachmark dismissals. Visibility toggles
+  via inline `style.display`, **not** the `hidden` attribute — an inline `display:flex`
+  carried for layout beats the UA `[hidden]` rule (the existing push CTA has this
+  latent bug, masked only because push is unconfigured in prod). The script is added
+  to the SW **PRECACHE** (cache bumped **`v1`→`v2`**) so it works offline like the
+  other athlete scripts. Built red→green: **+12 pytest** (`test_athlete_onboarding.py`
+  + a precache guard in `test_athlete_pwa.py`) + **+13 vitest**
+  (`meso_onboarding.test.js`); 1035 meso pytest + 99 vitest green. **Codex review loop
+  CLEAN after 3 fix iterations** (iPadOS UA detection → done-log gating → SW precache).
+  **Prod-verified:** `/meso/sw.js` now serves `CACHE = "meso-pwa-v2"` + the hashed
+  `meso_onboarding.*.js` (HTTP 200). Resume point → first-time-UX **Phase 5**
+  (designer/agent self-explanation) **or** the add-week/week-switcher deferral. Plan in
+  [`first-time-ux-plan.md`](./first-time-ux-plan.md).

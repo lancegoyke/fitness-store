@@ -2,8 +2,8 @@
 
 **Status:** 🟢 Building · Q1–Q4 resolved 2026-06-29 · **Phase 1 (individual plan
 creation) + Phase 2 (coach first-run: one-click demo + empty-state teaching) +
-Phase 3 (the front door: anon landing + main-site link) done** · Phases 4–5
-remain
+Phase 3 (the front door: anon landing + main-site link) + Phase 4 (athlete
+first-run: install prompt + first-log coachmark) done** · Phase 5 remains
 **Companion to:** [`decisions.md`](./decisions.md) (B1 multi-coach, B2 athlete
 login, N3 roles, N4 invites) · [`invites-plan.md`](./invites-plan.md) ·
 [`athlete-plan.md`](./athlete-plan.md) · [`groups-plan.md`](./groups-plan.md)
@@ -273,13 +273,30 @@ access).
 > `test_roster_requires_login` became `test_anonymous_sees_landing_not_login`.
 > Codex review CLEAN on iteration 1.
 
-### Phase 4 — Athlete first-run polish (athlete)
+### Phase 4 — Athlete first-run polish (athlete) ✅ Built
 An **install (PWA) prompt** and a one-time **first-log coachmark** on `/meso/me/`
 and the session logger. The athlete-initiated join path that was the bulk of this
 phase is **already built** (#311's "Your coaches" card + request-a-coach form), so
 Phase 4 narrows to install + first-log polish.
 *Done when:* a newly-invited athlete installs Meso and logs their first session
 without confusion.
+
+> **What shipped (PR #330, no migration).** The **first-log coachmark** is
+> **server-driven** — `views._athlete_has_completed_log(user)` gates it on the home
+> (only when a delivered session exists to tap) and the session logger, so it's
+> naturally one-time + cross-device and vanishes the moment the first *completed*
+> log lands (resolving the plan's open "persist where?" question with **no
+> per-device flag and no migration**). It's gated on a `done` log specifically: a
+> "Save progress" `pending` draft must not retract the hint that teaches the final
+> "Log session" step. The **install prompt** is a new `meso_onboarding.js` that
+> reveals the install card from a captured `beforeinstallprompt` (Chromium), falls
+> back to manual *Add to Home Screen* steps on iOS (incl. iPadOS-13+ Safari's
+> desktop "Macintosh" UA), stays hidden when already installed/dismissed, and
+> persists manual coachmark dismissals; it's added to the SW precache (cache bumped
+> v1→v2) so it works offline. Visibility toggles via inline `style.display` (an
+> inline `display:flex` beats the UA `[hidden]` rule). +12 pytest
+> (`test_athlete_onboarding.py` + a precache guard) + 13 vitest
+> (`meso_onboarding.test.js`); Codex review loop **CLEAN** after 3 fix iterations.
 
 ### Phase 5 — Designer & agent self-explanation (coach · optional)
 Dismissible first-run **coachmarks** on the designer's three regions (grid · agent
