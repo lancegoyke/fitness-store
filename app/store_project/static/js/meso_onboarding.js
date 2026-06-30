@@ -30,6 +30,16 @@
     return { show: false, mode: null };
   }
 
+  // Whether this is an iOS device — the install path with no `beforeinstallprompt`,
+  // where we show manual Add-to-Home-Screen steps instead. iPhone/iPod/iPad report
+  // it in the UA; iPadOS 13+ Safari reports a desktop "Macintosh" UA but is
+  // touch-capable (maxTouchPoints > 1), so detect that too or iPads get nothing.
+  function detectIOS(ua, maxTouchPoints) {
+    const agent = String(ua || "");
+    if (/iphone|ipad|ipod/i.test(agent)) return true;
+    return /macintosh/i.test(agent) && (maxTouchPoints || 0) > 1;
+  }
+
   // Read a dismissal flag, defensively: storage can be absent or throw (Safari
   // private mode), in which case "not dismissed" is the safe default.
   function isDismissed(key, storage) {
@@ -105,13 +115,12 @@
     } catch (e) {
       standalone = false;
     }
-    const ua = (root.navigator && root.navigator.userAgent) || "";
-    const isIOS = /iphone|ipad|ipod/i.test(ua) && !root.MSStream;
+    const nav = root.navigator || {};
     return {
       standalone: standalone,
       dismissed: isDismissed(INSTALL_DISMISS_KEY),
       canPrompt: !!root.__mesoInstallEvent,
-      isIOS: isIOS,
+      isIOS: detectIOS(nav.userAgent, nav.maxTouchPoints),
     };
   }
 
@@ -187,6 +196,6 @@
 
   // Test hook for Node-based runners (vitest); skipped in the browser.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { installPromptState, isDismissed };
+    module.exports = { installPromptState, isDismissed, detectIOS };
   }
 })(typeof window !== "undefined" ? window : this);

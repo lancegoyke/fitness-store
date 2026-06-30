@@ -11,7 +11,18 @@
 import {
   installPromptState,
   isDismissed,
+  detectIOS,
 } from "../app/store_project/static/js/meso_onboarding.js";
+
+const IPHONE_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15";
+// iPadOS 13+ Safari reports a desktop "Macintosh" UA but is touch-capable.
+const IPADOS_DESKTOP_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
+const MAC_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome";
+const ANDROID_UA =
+  "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile";
 
 describe("installPromptState", () => {
   it("hides when the app is already running standalone (installed)", () => {
@@ -52,6 +63,27 @@ describe("installPromptState", () => {
 
   it("treats a missing env as nothing-to-show", () => {
     expect(installPromptState()).toEqual({ show: false, mode: null });
+  });
+});
+
+describe("detectIOS", () => {
+  it("detects an iPhone from its UA", () => {
+    expect(detectIOS(IPHONE_UA, 5)).toBe(true);
+  });
+
+  it("detects iPadOS 13+ Safari posing as desktop Macintosh (touch-capable)", () => {
+    expect(detectIOS(IPADOS_DESKTOP_UA, 5)).toBe(true);
+  });
+
+  it("does not treat a real Mac (no touch) as iOS", () => {
+    expect(detectIOS(MAC_UA, 0)).toBe(false);
+    // A Mac UA with an undefined touch count must not throw or false-positive.
+    expect(detectIOS(MAC_UA)).toBe(false);
+  });
+
+  it("is false for Android and a missing UA", () => {
+    expect(detectIOS(ANDROID_UA, 5)).toBe(false);
+    expect(detectIOS()).toBe(false);
   });
 });
 
