@@ -103,20 +103,33 @@ def _apply_adjust(change):
     designer overlay renders and delivery resolves. A null membership/prescription
     (a member removed between propose and apply) or an empty diff is a safe no-op
     skip, mirroring the other kinds.
+
+    An agent adjust is a *partial* edit (the model proposes only the field(s) it
+    wants to change — validation stores just those in ``payload``). ``set_override``
+    is a full replace, so we **merge** the proposal onto the member's existing
+    override first: a load-only adjust applied to a member who already has a
+    coach-authored swap keeps the swap (the coach reviewed a load tweak, not a
+    removal). Only the fields the agent actually proposed move.
     """
     membership = change.membership
     presc = change.prescription
     if membership is None or presc is None:
         return None
     payload = change.payload or {}
-    override = membership.set_override(
-        presc,
-        swap_name=payload.get("swap_name", ""),
-        load_pct=payload.get("load_pct"),
-        sets=payload.get("sets", ""),
-        reps=payload.get("reps", ""),
-        note=payload.get("note", ""),
-    )
+    existing = membership.overrides.filter(prescription=presc).first()
+    merged = {
+        "swap_name": existing.swap_name if existing else "",
+        "load_pct": existing.load_pct if existing else None,
+        "sets": existing.sets if existing else "",
+        "reps": existing.reps if existing else "",
+        "note": existing.note if existing else "",
+    }
+    # Overlay only the fields the proposal carried (validation kept just those),
+    # leaving the member's other existing adjustments untouched.
+    for key in merged:
+        if key in payload:
+            merged[key] = payload[key]
+    override = membership.set_override(presc, **merged)
     if override is None:
         # An empty diff cleared instead of stored — validation should prevent
         # this, but treat it as a skip rather than counting a phantom apply.

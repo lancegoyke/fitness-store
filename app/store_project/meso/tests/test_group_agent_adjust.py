@@ -273,16 +273,20 @@ class TestAdjustApply:
         batch.refresh_from_db()
         assert batch.status == AgentProposalBatch.Status.APPLIED
 
-    def test_apply_upserts_an_existing_override(self):
+    def test_apply_merges_onto_an_existing_override(self):
+        # A partial agent adjust (load only) must NOT wipe a member's pre-existing
+        # coach-authored swap — the coach reviewed a load tweak, not a removal.
         coach, group, plan, presc, m, batch, change = self.make_batch_with_adjust(
             {"load_pct": 80}
         )
-        m.set_override(presc, swap_name="Old Swap")
+        m.set_override(presc, swap_name="Old Swap", sets="5")
 
         agent_apply.apply_batch(batch)
 
         override = PrescriptionOverride.objects.get(membership=m, prescription=presc)
-        assert override.load_pct == 80
+        assert override.load_pct == 80  # the agent's proposed change applied
+        assert override.swap_name == "Old Swap"  # untouched fields preserved
+        assert override.sets == "5"
 
     def test_apply_skips_an_orphaned_membership(self):
         # If the membership was removed between propose and apply, the SET_NULL FK
