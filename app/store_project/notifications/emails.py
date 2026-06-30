@@ -173,6 +173,67 @@ def send_coach_request_email(*, athlete, coach, roster_url) -> bool:
     return True
 
 
+def send_margin_alert_email(*, alerts, month_label, threshold) -> bool:
+    """Email the owner that paying coaches' agent cost is eating their margin.
+
+    Meso agent-usage tracking Phase 3: the monthly ``meso-agent-margin-alert``
+    sweep finds paying coaches whose estimated agent cost has crossed a fraction of
+    their plan revenue (``meso/billing/agent_usage_report.margin_alerts``) and
+    sends this internal, owner-facing summary so the $1/seat tail risk surfaces
+    before the month closes. The recipients are ``settings.ADMINS`` (the owner),
+    not a coach — this is operational, not customer-facing.
+
+    Args:
+        alerts: the at-risk ``CoachUsage`` rows (worst cost-to-revenue ratio
+            first), each carrying its label, revenue, totals, and margin.
+        month_label: the report month, e.g. ``"2026-06"`` (subject + body).
+        threshold: the alert fraction as a ``Decimal`` (``0.5`` renders "50%").
+
+    Returns:
+        ``True`` if a message was sent, ``False`` if skipped because there were no
+        alerts or no admin address to send to.
+
+    Raises a mail backend exception (``fail_silently=False``); callers that must
+    not fail a scheduled sweep on a bounced email should treat this as best-effort.
+    """
+    recipients = [email for _name, email in settings.ADMINS if email]
+    if not alerts or not recipients:
+        return False
+    rows = [
+        {
+            "label": coach.label,
+            "billing_status": coach.billing_status,
+            "seats": coach.billable_seats,
+            "runs": coach.totals.runs,
+            "cost": f"{coach.totals.cost:.2f}",
+            "revenue": f"{coach.revenue:.2f}",
+            "margin": f"{coach.margin:.2f}",
+            "ratio_pct": f"{coach.cost_to_revenue_ratio * 100:.0f}",
+        }
+        for coach in alerts
+    ]
+    context = {
+        "rows": rows,
+        "count": len(rows),
+        "month_label": month_label,
+        "threshold_pct": f"{threshold * 100:.0f}",
+    }
+    subject = render_to_string(
+        "notifications/margin_alert_subject.txt", context
+    ).strip()
+    msg_plain = render_to_string("notifications/margin_alert.md", context)
+    msg_html = render_to_string("notifications/margin_alert.html", context)
+    send_mail(
+        subject=subject,
+        message=msg_plain,
+        html_message=msg_html,
+        from_email=settings.SERVER_EMAIL,  # the robot, not the owner's own address
+        recipient_list=recipients,
+        fail_silently=False,
+    )
+    return True
+
+
 def send_week_delivered_email(
     *, athlete, coach, plan, week, home_url, unsubscribe_url=None
 ) -> bool:

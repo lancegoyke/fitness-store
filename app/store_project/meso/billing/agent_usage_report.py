@@ -89,6 +89,22 @@ def current_month_bounds():
     return month_bounds(now.year, now.month)
 
 
+def previous_month_bounds():
+    """``month_bounds`` for the calendar month *before* the local current one.
+
+    The default window for the scheduled margin sweep: a monthly cron fires after a
+    month has fully closed, so it should report that closed month, not the partial
+    current one. Built off the localized now for the same boundary safety as
+    ``current_month_bounds``.
+    """
+    now = timezone.localtime(timezone.now())
+    if now.month == 1:
+        year, month = now.year - 1, 12
+    else:
+        year, month = now.year, now.month - 1
+    return month_bounds(year, month)
+
+
 def cost_bucket(billing_status):
     """Map a run's snapshot ``billing_status`` to a COGS-vs-CAC tier.
 
@@ -201,6 +217,17 @@ class CoachUsage:
         return self.revenue - self.totals.cost
 
     @property
+    def cost_to_revenue_ratio(self):
+        """Estimated agent cost as a fraction of revenue, or ``None`` when unpaid.
+
+        ``None`` (not zero/infinity) when ``revenue`` is $0 — a free/trial coach has
+        no revenue to compare against, so the ratio is undefined by design.
+        """
+        if self.revenue <= _ZERO:
+            return None
+        return self.totals.cost / self.revenue
+
+    @property
     def flagged(self):
         """A *paying* coach whose agent cost outran their revenue (the tail risk).
 
@@ -208,6 +235,17 @@ class CoachUsage:
         cost would trivially "exceed" it — that's CAC, not a margin problem.
         """
         return self.is_paid and self.totals.cost > self.revenue
+
+    def at_risk(self, threshold):
+        """Is a *paying* coach's agent cost over ``threshold`` × their revenue?
+
+        The tunable early-warning generalization of :attr:`flagged` (which is the
+        ``threshold == 1`` case — cost already past revenue). ``threshold`` is a
+        fraction (``Decimal("0.5")`` = 50%); the comparison is strict, so a coach
+        exactly at the threshold is not yet over it. Only paid coaches qualify, for
+        the same reason ``flagged`` does — $0 revenue is CAC, not a margin problem.
+        """
+        return self.is_paid and self.totals.cost > threshold * self.revenue
 
 
 @dataclass
@@ -340,3 +378,18 @@ def _bucket(mapping, key):
         totals = Totals()
         mapping[key] = totals
     return totals
+
+
+def margin_alerts(report, threshold):
+    """The report's at-risk coaches — cost over ``threshold`` × revenue, worst first.
+
+    The owner-facing early-warning subset (Phase 3): paying coaches whose estimated
+    agent cost has crossed ``threshold`` of their revenue, sorted by
+    cost-to-revenue ratio descending so the deepest margin compression leads. A
+    ``threshold`` of ``Decimal("0.5")`` flags any paying coach spending more than
+    half their plan on the agent. Free/trial coaches never appear (see
+    :meth:`CoachUsage.at_risk`).
+    """
+    alerts = [coach for coach in report.coaches if coach.at_risk(threshold)]
+    alerts.sort(key=lambda c: c.cost_to_revenue_ratio, reverse=True)
+    return alerts

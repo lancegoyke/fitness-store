@@ -1033,3 +1033,33 @@ _(Append dated entries here as decisions land.)_
   Red→green; `test_agent_usage_report.py`. **Deferred** (Phase 3): an owner
   dashboard, a margin-threshold alert, and reconciliation against the Anthropic
   Admin/Usage API.
+- 2026-06-30 — **Agent usage tracking Phase 3 (margin alert) built** (migration
+  `0026`, schedule-only — no Stripe). The early-warning push on top of Phase 2's
+  passive report: instead of the owner remembering to run a report, the app
+  proactively emails them when a *paying* coach's estimated agent cost crosses a
+  fraction of their plan revenue. `CoachUsage` gained `cost_to_revenue_ratio`
+  (`None` at $0 revenue) and `at_risk(threshold)` — a paying coach with
+  `cost > threshold × revenue` (strict; it generalizes `flagged`, the
+  `threshold == 1` / cost-already-past-revenue case). `agent_usage_report`
+  gained `margin_alerts(report, threshold)` (at-risk coaches, worst ratio first)
+  and `previous_month_bounds()` (the closed-month window for the cron).
+  `notifications/emails.send_margin_alert_email` emails the owner
+  (`settings.ADMINS`, from the `SERVER_EMAIL` robot) — operational, not
+  customer-facing — only when there are alerts and an admin address. The
+  `meso_agent_margin_alert` command (`--month` / `--last-month` / `--threshold` /
+  `--dry-run`) builds the month, lists the at-risk coaches, and sends the email
+  best-effort (a mail failure is logged, never crashes the sweep). Default
+  threshold = `MESO_MARGIN_ALERT_THRESHOLD` (0.5, overridable per run).
+  `tasks.agent_margin_alert` wraps the command with `--last-month`; migration
+  `0026` registers a **monthly** `django_q.Schedule` (`schedule_type="M"`) at it —
+  the first non-daily Meso sweep (a monthly cron summarizes a full closed month,
+  not the partial current one). Free/trial coaches never alert ($0 revenue is CAC
+  by design — same rule as `flagged`). Red→green: `test_agent_margin_alert.py`
+  (pure ratio/at-risk/margin_alerts, previous-month window, owner email, command
+  across windows/thresholds/dry-run/validation) + `test_scheduler.py` (monthly
+  registration + the task wrapper over the previous month). The two billing
+  pressure valves it informs (drop `MESO_AGENT_MODEL` / meter paid runs) stay
+  deferred — gated on what the data shows. **Remaining agent-usage backlog:** an
+  owner dashboard + Anthropic Admin/Usage-API reconciliation (both deferred);
+  remaining Meso backlog otherwise: billing annual prices (blocked on the owner's
+  annual numbers) + the group agent (LARGE owner-decision).

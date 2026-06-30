@@ -30,3 +30,13 @@ def reconcile_seats():
     The daily backstop behind the inline best-effort seat sync (S6 billing Phase 2).
     """
     call_command("meso_reconcile_seats")
+
+
+def agent_margin_alert():
+    """Email the owner about paying coaches over the agent margin threshold.
+
+    The monthly margin-alert sweep (agent-usage tracking Phase 3). Runs over the
+    *previous* (closed) calendar month so the report covers a full month, not the
+    partial current one (``meso_agent_margin_alert --last-month``).
+    """
+    call_command("meso_agent_margin_alert", "--last-month")
