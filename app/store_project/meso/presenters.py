@@ -15,6 +15,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .billing import access as billing_access
+from .billing import agent_usage_report
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachSubscription
@@ -875,4 +876,40 @@ def athlete_log_payload(session_ctx):
             }
             for e in session_ctx["exercises"]
         ],
+    }
+
+
+def _pct_label(threshold):
+    """A fraction (``Decimal("0.5")``) as a whole-percent string (``"50"``).
+
+    ``normalize`` strips the trailing zeros a ``×100`` leaves; the ``:f`` format
+    keeps it out of scientific notation (``5E+1`` → ``"50"``).
+    """
+    return f"{(threshold * 100).normalize():f}"
+
+
+def usage_dashboard(report, *, threshold):
+    """Adapt a usage :class:`Report` into the owner dashboard's template context.
+
+    The owner-facing read surface (agent-usage Phase 4). Reuses the report's own
+    objects (``coaches``/``totals`` carry their cost/revenue/margin properties) and
+    adds: a ``YYYY-MM`` month label with prev/next links for navigation, the
+    margin-alert subset (paying coaches over ``threshold`` × revenue), and the
+    roll-ups pre-sorted by cost. ``threshold`` is the alert fraction (see
+    ``agent_usage_report.resolve_alert_threshold``).
+    """
+    year, month = report.start.year, report.start.month
+    prev_year, prev_month = agent_usage_report.shift_month(year, month, -1)
+    next_year, next_month = agent_usage_report.shift_month(year, month, 1)
+    return {
+        "report": report,
+        "month_label": report.start.strftime("%Y-%m"),
+        "prev_month": f"{prev_year:04d}-{prev_month:02d}",
+        "next_month": f"{next_year:04d}-{next_month:02d}",
+        "threshold": threshold,
+        "threshold_pct": _pct_label(threshold),
+        "alerts": agent_usage_report.margin_alerts(report, threshold),
+        "by_tier": agent_usage_report.sorted_totals(report.by_tier),
+        "by_model": agent_usage_report.sorted_totals(report.by_model),
+        "by_trigger": agent_usage_report.sorted_totals(report.by_trigger),
     }

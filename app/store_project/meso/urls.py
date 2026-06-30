@@ -12,11 +12,15 @@ from .views import MesoDesignerView
 from .views import OfflineView
 from .views import ResultsView
 from .views import RosterView
+from .views import UsageDashboardView
 
 app_name = "meso"
 urlpatterns = [
     path("", RosterView.as_view(), name="roster"),
     path("designer/", MesoDesignerView.as_view(), name="designer"),
+    # Owner-facing agent usage + margin dashboard (agent-usage Phase 4) —
+    # staff-gated, all-coach; the web read-out of meso_agent_usage_report.
+    path("usage/", UsageDashboardView.as_view(), name="usage_dashboard"),
     path("designer/<int:plan_id>/", MesoDesignerView.as_view(), name="designer_plan"),
     path("review/", ChangeReviewView.as_view(), name="review"),
     path(

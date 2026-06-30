@@ -1,0 +1,19 @@
+{% comment %}
+  One roll-up card for the usage dashboard: a title and cost-sorted (key, Totals)
+  rows. ``rows`` is a list of (key, Totals) tuples from
+  ``agent_usage_report.sorted_totals``.
+{% endcomment %}
+<div class="meso-card meso-card--pad">
+  <p class="meso-eyebrow">{{ title }}</p>
+  {% for key, totals in rows %}
+    <div style="display:flex;align-items:baseline;gap:8px;padding:4px 0;">
+      <span style="min-width:0;color:var(--ink);">{{ key }}</span>
+      <div class="meso-spacer"></div>
+      <span class="meso-row-meta">
+        {{ totals.runs }} run{{ totals.runs|pluralize }} · ${{ totals.cost|floatformat:4 }}{% if totals.unknown_cost_runs %} · {{ totals.unknown_cost_runs }} unpriced{% endif %}
+      </span>
+    </div>
+  {% empty %}
+    <p class="meso-sub" style="margin:6px 0 0;">No runs.</p>
+  {% endfor %}
+</div>

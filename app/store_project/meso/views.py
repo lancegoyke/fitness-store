@@ -11,6 +11,8 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.mixins import UserPassesTestMixin
+from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
@@ -45,6 +47,7 @@ from .agent import client as agent_client
 from .agent import jobs as agent_jobs
 from .agent import service as agent_service
 from .billing import access as billing_access
+from .billing import agent_usage_report as usage_report
 from .billing import seats as billing_seats
 from .billing import stripe_gateway as billing_gateway
 from .billing import webhooks as billing_webhooks
@@ -415,6 +418,60 @@ class GroupDetailView(LoginRequiredMixin, TemplateView):
         ctx["active"] = "roster"
         ctx["group"] = presenters.group_detail(group)
         return ctx
+
+
+class UsageDashboardView(UserPassesTestMixin, TemplateView):
+    """Owner-facing agent usage + margin dashboard (agent-usage Phase 4).
+
+    A **staff-gated**, all-coach view of the per-month usage report that Phases 1–3
+    capture, aggregate (``build_report``), and alert on (``margin_alerts``) — the
+    web read-out the ``meso_agent_usage_report`` command renders as text. Not
+    coach-scoped: it's the operator's cost/margin view across the whole tenant.
+
+    Gate: an anonymous visitor bounces to login (``UserPassesTestMixin`` default);
+    an authenticated non-staff user gets a flat 403 (``handle_no_permission``), so
+    a logged-in coach can't probe org-wide spend.
+    """
+
+    template_name = "meso/usage_dashboard.html"
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
+        # Authenticated-but-unauthorized → 403 (not a pointless login bounce);
+        # anonymous → the mixin's login redirect.
+        if self.request.user.is_authenticated:
+            raise PermissionDenied
+        return super().handle_no_permission()
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        start, end = self._window()
+        report = usage_report.build_report(start=start, end=end)
+        threshold = usage_report.resolve_alert_threshold()
+        ctx["active"] = "usage"
+        ctx.update(presenters.usage_dashboard(report, threshold=threshold))
+        return ctx
+
+    def _window(self):
+        """The report window from ``?month=YYYY-MM``; current month on bad input.
+
+        A hand-edited or malformed ``month`` degrades to the current month with a
+        flashed warning rather than erroring, so the page always renders.
+        """
+        raw = self.request.GET.get("month")
+        if raw:
+            try:
+                year, month = usage_report.parse_month(raw)
+            except ValueError:
+                messages.error(
+                    self.request,
+                    f"Ignoring invalid month {raw!r}; showing the current month.",
+                )
+            else:
+                return usage_report.month_bounds(year, month)
+        return usage_report.current_month_bounds()
 
 
 def _coach_active_athletes(coach, athlete_ids):
