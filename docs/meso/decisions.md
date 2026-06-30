@@ -914,3 +914,38 @@ _(Append dated entries here as decisions land.)_
   Remaining Meso backlog unchanged: **S6 billing Phase 5 annual prices** (blocked
   on the owner's per-seat number + a Stripe annual Price) — no other autonomous
   slice outstanding.
+- 2026-06-30 — **Changes-since-last-delivery diff UI built, merged & deployed**
+  (PR #337, squash `3224d30`, **no migration**): ships the long-deferred **full
+  diff UI** (persistence-plan open assumption #3, cited across the
+  persistence/agent/athlete/first-time-UX plans). Delivering a week always
+  recorded a `WeekDelivery` snapshot (`serialize_week_snapshot`), but nothing
+  read it back — the deliver screen's "Changes since last delivery" card just
+  said "re-delivering with your latest edits". Now, on a **re-delivery**, the
+  deliver confirm screen diffs the **target** week's live grid against the
+  snapshot last delivered so the coach reviews exactly what's about to change for
+  the athlete. Three seams: **(1)** `serializers.diff_week_snapshots(current,
+  previous)` — a **pure** diff over two snapshot payloads matched by **stable
+  pks** (a row in both with differing fields is *changed*, with per-field
+  before/after over name/sets/reps/load/load_type/rpe/note/tag; a new pk is
+  *added*, a missing one *removed*; whole sessions added/removed are surfaced
+  separately and not double-counted as row diffs; week-meta
+  phase/volume/intensity/deload diffed too). Returns `None` when there's no prior
+  payload; `has_changes` is `False` when the week is unchanged since its last
+  delivery. **(2)** `presenters.deliver_screen` computes `deliver["changes"]`
+  (the last `WeekDelivery.payload` for the **target** week vs its live snapshot)
+  — `None` on a first delivery; because it keys on the *target* week, a
+  built-ahead week diffs against *its own* last delivery. **(3)** `deliver.html`
+  renders first-delivery / no-changes / the grouped diff, styled with the
+  existing tokens (`var(--ok)` add, `var(--warn)` remove). **No model change, no
+  migration; no JS — fully server-rendered.** Built red→green: **+17 pytest**
+  (`test_delivery_diff.py` — pure diff, presenter context incl. chosen-week
+  targeting, screen render). 1280 project pytest green; ruff + format + DjHTML +
+  `makemigrations --check` clean. **Codex review loop CLEAN after 1 fix
+  iteration** — a P2: Django's `default` filter treats a valid `0`
+  (volume/intensity) as falsy and rendered the em-dash, fixed with
+  `default_if_none` for the week-meta line (prescription string fields keep
+  `default`, where blank → dash is intended) + a regression test. **Prod-verified:**
+  deploy succeeded (no migration), `https://mastering.fitness/meso/` serves 200
+  after restart. Remaining Meso backlog unchanged: **S6 billing Phase 5 annual
+  prices** (blocked on the owner's per-seat number + a Stripe annual Price) — no
+  other autonomous slice outstanding.
