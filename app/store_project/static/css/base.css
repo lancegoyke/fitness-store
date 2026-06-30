@@ -1609,6 +1609,9 @@ ul.grid {
   background-color: var(--main-color-dark);
   color: var(--main-color-light-gray);
   padding: clamp(1rem, 4vw, var(--s2));
+  /* The navbar is a full-bleed top bar, so it overrides the rounded corners it
+     would otherwise inherit from `.box` (see issue #327). */
+  border-radius: 0;
 }
 
 .nav-menu ul {
