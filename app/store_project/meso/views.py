@@ -38,6 +38,7 @@ from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
 from store_project.notifications.emails import send_week_delivered_email
 
+from . import adherence as meso_adherence
 from . import demo as meso_demo
 from . import one_rm as meso_one_rm
 from . import presenters
@@ -319,6 +320,9 @@ class RosterView(TemplateView):
                 suspended=link.pk in suspended,
                 demo=link.is_demo,
                 has_working_plan=link.pk in have_plan,
+                # Adherence to the athlete's latest delivered week (read-side
+                # aggregation over their done logs); ``None`` hides the meter.
+                compliance=meso_adherence.link_compliance(link),
             )
             for link in links
         ]
@@ -330,8 +334,7 @@ class RosterView(TemplateView):
         ctx["active"] = "roster"
         ctx["athletes"] = athletes
         # Groups (S1 Phase 1) read real rows; the shared program + per-athlete
-        # auto-adjusts land in groups Phase 2/3. Activity (Phase 3) needs logged
-        # sessions; needs-review (Phase 2) needs agent state. Empty until then.
+        # auto-adjusts land in groups Phase 2/3.
         ctx["groups"] = [presenters.roster_group(g) for g in groups]
         # Outstanding email invites the coach has sent — pending *or* expired (N4);
         # an expired one still shows so the coach can Resend it (Phase 3).
@@ -354,7 +357,9 @@ class RosterView(TemplateView):
         # Billing/paywall state (S6 Phase 3): tier, seat usage, and the upgrade
         # CTAs (start trial / subscribe / manage billing).
         ctx["billing"] = presenters.billing_state(self.request.user)
-        ctx["activity"] = []
+        # Recent-activity feed: the coach's athletes' latest completed sessions.
+        ctx["activity"] = presenters.roster_activity(self.request.user)
+        # Needs-review (agent batch state) is a separate slice — still neutral.
         ctx["needs_review"] = 0
         # First-run UX (Phase 2): a fresh coach with nothing yet gets an
         # onboarding card that teaches the model and offers the one-click demo;

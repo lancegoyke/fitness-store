@@ -3,9 +3,10 @@
 The roster/profile templates were built against a fixtures module (since
 retired). Phase 1 feeds them real, scoped data for everything that exists yet —
 the athlete, their training history, and their (global) contraindications.
-Program/compliance/activity fields are Phase 2/3 concepts; we pass honest
-neutral values (``compliance=None``, ``status=""``, ``has_program=False``) so
-the layout holds without inventing numbers.
+Roster **compliance** (the per-athlete adherence meter) and **activity** (the
+recent-completed-sessions feed) are now wired off real logged data via
+``adherence``; the profile's ``compliance`` and ``has_program`` stay neutral
+until those surfaces grow their own slices.
 """
 
 import math
@@ -13,7 +14,9 @@ from collections import defaultdict
 
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.timesince import timesince
 
+from . import adherence
 from .billing import access as billing_access
 from .billing import agent_usage_report
 from .models import CoachAthlete
@@ -72,7 +75,9 @@ def _active_contraindications(user):
     return [c for c in user.contraindications.all() if c.active]
 
 
-def roster_athlete(user, *, suspended=False, demo=False, has_working_plan=False):
+def roster_athlete(
+    user, *, suspended=False, demo=False, has_working_plan=False, compliance=None
+):
     """A row in the coach's roster list.
 
     ``suspended`` marks an athlete whose link a downgrade froze (S6 Phase 5): the
@@ -82,6 +87,9 @@ def roster_athlete(user, *, suspended=False, demo=False, has_working_plan=False)
     one-click-demo athlete (first-time-UX Phase 2) so the row is clearly labeled.
     ``has_working_plan`` lets the roster hide the "Draft with AI" CTA for an
     athlete who already has a program (drafting only runs for a fresh plan).
+    ``compliance`` is the athlete's adherence to their latest delivered week
+    (``adherence.link_compliance``) — ``None`` when there's nothing delivered to
+    measure, so the meter stays hidden rather than reading a misleading ``0%``.
     """
     name = user.display_name()
     meta_parts = [p for p in [_training_label(user)] if p]
@@ -92,8 +100,8 @@ def roster_athlete(user, *, suspended=False, demo=False, has_working_plan=False)
         "tone": "neutral",
         "meta": " · ".join(meta_parts) or "No training history on file",
         "flags": [c.label for c in _active_contraindications(user)],
-        # Phase 2 (program/agent) and Phase 3 (logs) — hidden until they exist.
-        "compliance": None,
+        # Adherence to the latest delivered week; ``None`` hides the meter.
+        "compliance": compliance,
         "status": "suspended" if suspended else "",
         "status_label": "Suspended" if suspended else "",
         "is_demo": demo,
@@ -149,6 +157,46 @@ def roster_group(group):
         "meta": meta,
         "status_label": group.get_status_display(),
     }
+
+
+def _relative_when(dt):
+    """A compact "N ago" label for the activity feed (coarsest unit only).
+
+    ``humanize`` isn't installed, so this trims ``timesince`` to its leading
+    unit — "2 days, 3 hours" → "2 days ago" — and collapses a just-now log
+    ("0 minutes") to a friendly "just now".
+    """
+    coarse = timesince(dt).split(",")[0].strip()
+    if not coarse or coarse.startswith("0"):
+        return "just now"
+    return f"{coarse} ago"
+
+
+def roster_activity(coach, *, limit=8):
+    """The coach's recent-activity feed — athletes' latest completed sessions.
+
+    Lights up the roster's long-dead ``activity`` placeholder: each event names
+    the athlete, the session they logged, and how long ago. Scoped to the coach's
+    active links and *done* logs by ``adherence.recent_logs``.
+    """
+    events = []
+    for log in adherence.recent_logs(coach, limit=limit):
+        name = log.athlete.display_name()
+        session_label = log.session.name or f"Day {log.session.day_number}"
+        events.append(
+            {
+                "athlete": {
+                    "id": log.athlete.pk,
+                    "name": name,
+                    "initials": initials(name),
+                    "tone": "neutral",
+                },
+                "kind": "log",
+                "text": f"logged {session_label}",
+                "when": _relative_when(log.created_at),
+            }
+        )
+    return events
 
 
 def pending_invite(invite):
