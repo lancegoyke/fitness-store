@@ -22,14 +22,17 @@ from .models import LoadType
 from .models import Plan
 from .models import SessionLog
 from .models import Week
+from .models import WeekDelivery
 from .one_rm import one_rm_values
 from .serializers import _fmt_num
 from .serializers import _num
 from .serializers import current_week
+from .serializers import diff_week_snapshots
 from .serializers import initials
 from .serializers import latest_delivered_week
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
+from .serializers import serialize_week_snapshot
 
 
 def _age(user):
@@ -317,9 +320,11 @@ def deliver_screen(plan, week=None):
     lists every week (id / label / whether it's the live week / whether it's already
     been delivered) so the screen offers a per-week selector, and ``is_current``
     /``current_label`` let it warn when the coach is sending a week that isn't the
-    live one (delivering it won't move the live pointer). Scheduling and the full
-    "changes since last delivery" diff are later-slice concerns; we only surface
-    whether this is a first delivery or a re-delivery.
+    live one (delivering it won't move the live pointer). On a re-delivery,
+    ``deliver["changes"]`` is the diff of the target week's live grid against the
+    snapshot last delivered (``diff_week_snapshots``) so the coach reviews exactly
+    what's about to change for the athlete; it's ``None`` on a first delivery.
+    Scheduling stays a later-slice concern.
     """
     live = current_week(plan)
     target = week or live
@@ -332,6 +337,20 @@ def deliver_screen(plan, week=None):
     mesocycle = target.mesocycle if target else None
     session_count = target.sessions.count() if target else 0
     is_redelivery = target is not None and target.deliveries.exists()
+
+    # On a re-delivery, diff the live grid against the snapshot last delivered so
+    # the coach sees what's about to change for the athlete. A first delivery (no
+    # prior snapshot) has nothing to diff → None.
+    changes = None
+    if is_redelivery:
+        last_payload = (
+            WeekDelivery.objects.filter(week=target)
+            .order_by("-delivered_at")
+            .values_list("payload", flat=True)
+            .first()
+        )
+        if last_payload:
+            changes = diff_week_snapshots(serialize_week_snapshot(target), last_payload)
 
     weeks = [
         {
@@ -357,6 +376,7 @@ def deliver_screen(plan, week=None):
             "what": plan.title,
             "sessions": session_count,
             "is_redelivery": is_redelivery,
+            "changes": changes,
             "week_id": target.pk if target else None,
             "week_label": f"Wk {target.index}" if target else "",
             "is_current": target is not None and target.pk == live_id,

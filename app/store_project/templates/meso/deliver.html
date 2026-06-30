@@ -70,11 +70,57 @@
 
       <div class="meso-card meso-card--pad">
         <p class="meso-eyebrow">Changes since last delivery</p>
-        <div style="display:flex;flex-direction:column;gap:7px;">
-          <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">
-            {% if deliver.is_redelivery %}Re-delivering {{ athlete.week }} with your latest edits.{% else %}First delivery — {{ athlete.week }} ({{ deliver.sessions }} session{{ deliver.sessions|pluralize }}) is sent to {{ athlete.name }}.{% endif %}
-          </span>
-        </div>
+        {% if not deliver.is_redelivery %}
+        <!-- First delivery: nothing to diff against. -->
+          <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">First delivery — {{ athlete.week }} ({{ deliver.sessions }} session{{ deliver.sessions|pluralize }}) is sent to {{ athlete.name }}.</span>
+        {% elif not deliver.changes.has_changes %}
+        <!-- Re-delivering the same week with no edits since it last went out. -->
+          <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">No changes since you last delivered {{ athlete.week }} — re-delivering it as-is.</span>
+        {% else %}
+        <!-- The week's live grid diffed against the snapshot last delivered: per
+             session, each edited row's fields (before &#8594; after), rows added
+             (+) or removed (&#8722;), then whole days and week-meta changes. -->
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            {% for s in deliver.changes.sessions %}
+              <div>
+                <div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--dim);margin-bottom:4px;">{{ s.name }}</div>
+                <div style="display:flex;flex-direction:column;gap:3px;">
+                  {% for c in s.changed %}
+                    <div style="font-size:12.5px;line-height:1.45;">
+                      <span style="font-weight:650;">{{ c.name }}</span><span style="color:var(--dim);"> &#183; </span>{% for f in c.fields %}{% if not forloop.first %}<span style="color:var(--dim);">, </span>{% endif %}<span style="color:var(--dim);">{{ f.label }}</span> {% if f.field == 'is_deload' %}{{ f.before|yesno:"on,off" }} &#8594; <span style="font-weight:650;">{{ f.after|yesno:"on,off" }}</span>{% else %}<span style="text-decoration:line-through;opacity:0.6;">{{ f.before|default:"&#8212;" }}</span> &#8594; <span style="font-weight:650;">{{ f.after|default:"&#8212;" }}</span>{% endif %}{% endfor %}
+                    </div>
+                  {% endfor %}
+                  {% for a in s.added %}
+                    <div style="font-size:12.5px;line-height:1.45;color:var(--ok);"><span style="font-weight:700;">+</span> {{ a.label }}</div>
+                  {% endfor %}
+                  {% for r in s.removed %}
+                    <div style="font-size:12.5px;line-height:1.45;color:var(--warn);"><span style="font-weight:700;">&#8722;</span> <span style="text-decoration:line-through;opacity:0.8;">{{ r.label }}</span></div>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endfor %}
+
+            {% for a in deliver.changes.added_sessions %}
+              <div style="font-size:12.5px;line-height:1.45;color:var(--ok);"><span style="font-weight:700;">+</span> New day &#183; {{ a.name }} ({{ a.count }} exercise{{ a.count|pluralize }})</div>
+            {% endfor %}
+            {% for r in deliver.changes.removed_sessions %}
+              <div style="font-size:12.5px;line-height:1.45;color:var(--warn);"><span style="font-weight:700;">&#8722;</span> Removed day &#183; {{ r.name }}</div>
+            {% endfor %}
+
+            {% if deliver.changes.week %}
+              <div>
+                <div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--dim);margin-bottom:4px;">Week</div>
+                <div style="display:flex;flex-direction:column;gap:3px;">
+                  {% for f in deliver.changes.week %}
+                    <!-- volume/intensity are ints where 0 is valid — default_if_none
+                         (not default) so a real 0 isn't shown as the em-dash. -->
+                    <div style="font-size:12.5px;line-height:1.45;"><span style="color:var(--dim);">{{ f.label }}</span> {% if f.field == 'is_deload' %}{{ f.before|yesno:"on,off" }} &#8594; <span style="font-weight:650;">{{ f.after|yesno:"on,off" }}</span>{% else %}<span style="text-decoration:line-through;opacity:0.6;">{{ f.before|default_if_none:"&#8212;" }}</span> &#8594; <span style="font-weight:650;">{{ f.after|default_if_none:"&#8212;" }}</span>{% endif %}</div>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
       </div>
 
       <div class="meso-card meso-card--pad">

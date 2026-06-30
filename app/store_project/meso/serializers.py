@@ -223,6 +223,143 @@ def serialize_week_snapshot(week):
     }
 
 
+# Prescription fields a coach cares about when reviewing "what changed", with the
+# label the deliver screen shows. ``name`` first so a swap reads as the headline
+# change; ``tag`` last (it's only present when the row carries one).
+_PRESCRIPTION_DIFF_FIELDS = (
+    ("name", "Exercise"),
+    ("sets", "Sets"),
+    ("reps", "Reps"),
+    ("load", "Load"),
+    ("load_type", "Load type"),
+    ("rpe", "RPE"),
+    ("note", "Note"),
+    ("tag", "Tag"),
+)
+
+# Week-level meta the snapshot captures alongside the grid.
+_WEEK_DIFF_FIELDS = (
+    ("phase", "Phase"),
+    ("volume", "Volume"),
+    ("intensity", "Intensity"),
+    ("is_deload", "Deload"),
+)
+
+
+def _prescription_label(presc):
+    """A compact one-line label for an added/removed exercise row."""
+    name = presc.get("name") or "Exercise"
+    sets = presc.get("sets")
+    reps = presc.get("reps")
+    if sets and reps:
+        return f"{name} {sets}×{reps}"
+    return name
+
+
+def _diff_fields(before, after, fields):
+    """Per-field before/after for two dicts over ``fields`` (key, label) pairs."""
+    out = []
+    for key, label in fields:
+        old = before.get(key)
+        new = after.get(key)
+        if old != new:
+            out.append({"field": key, "label": label, "before": old, "after": new})
+    return out
+
+
+def _diff_exercises(current, previous):
+    """Added / removed / changed exercise rows between two session grids.
+
+    Rows match by pk (``id``) — a stable DB identity across edits — so an edited
+    row reads as *changed* (with per-field before/after), a brand-new row as
+    *added*, and a deleted one as *removed*. (A delete-then-re-add of the same
+    movement honestly shows as remove + add, since it's a different row.)
+    """
+    prev_by_id = {e.get("id"): e for e in previous}
+    cur_by_id = {e.get("id"): e for e in current}
+    added = [
+        {"label": _prescription_label(e)}
+        for e in current
+        if e.get("id") not in prev_by_id
+    ]
+    removed = [
+        {"label": _prescription_label(e)}
+        for e in previous
+        if e.get("id") not in cur_by_id
+    ]
+    changed = []
+    for e in current:
+        prev_e = prev_by_id.get(e.get("id"))
+        if prev_e is None:
+            continue
+        fields = _diff_fields(prev_e, e, _PRESCRIPTION_DIFF_FIELDS)
+        if fields:
+            changed.append({"name": e.get("name") or "Exercise", "fields": fields})
+    return {"added": added, "removed": removed, "changed": changed}
+
+
+def _session_label(session):
+    return session.get("name") or f"Day {session.get('n')}"
+
+
+def diff_week_snapshots(current, previous):
+    """Diff a week's live snapshot against the one last delivered.
+
+    Both args are ``serialize_week_snapshot`` payloads. Sessions match by pk;
+    a session in ``current`` but not ``previous`` is wholly *added* (and not
+    double-counted as per-row diffs), the reverse is *removed*, and a session in
+    both yields its added/removed/changed exercise rows. Week-meta differences
+    (phase/volume/intensity/deload) are surfaced separately. Returns ``None``
+    when there's nothing to diff against (no/blank prior payload); otherwise a
+    dict whose ``has_changes`` is ``False`` when the week is unchanged since its
+    last delivery.
+    """
+    if not previous or "sessions" not in previous:
+        return None
+
+    cur_sessions = current.get("sessions", [])
+    prev_sessions = previous.get("sessions", [])
+    prev_by_id = {s.get("id"): s for s in prev_sessions}
+    cur_ids = {s.get("id") for s in cur_sessions}
+
+    session_diffs = []
+    added_sessions = []
+    for s in cur_sessions:
+        prev_s = prev_by_id.get(s.get("id"))
+        if prev_s is None:
+            added_sessions.append(
+                {
+                    "name": _session_label(s),
+                    "day": s.get("n"),
+                    "count": len(s.get("exercises", [])),
+                }
+            )
+            continue
+        ex = _diff_exercises(s.get("exercises", []), prev_s.get("exercises", []))
+        if ex["added"] or ex["removed"] or ex["changed"]:
+            session_diffs.append({"name": _session_label(s), "day": s.get("n"), **ex})
+
+    removed_sessions = [
+        {"name": _session_label(s), "day": s.get("n")}
+        for s in prev_sessions
+        if s.get("id") not in cur_ids
+    ]
+
+    week_changes = _diff_fields(
+        previous.get("week", {}), current.get("week", {}), _WEEK_DIFF_FIELDS
+    )
+
+    return {
+        "has_changes": bool(
+            session_diffs or added_sessions or removed_sessions or week_changes
+        ),
+        "sessions": session_diffs,
+        "added_sessions": added_sessions,
+        "removed_sessions": removed_sessions,
+        "week": week_changes,
+    }
+
+
 def serialize_session_log(log):
     """The athlete's saved log for a session, in the shape the log endpoint returns.
 
