@@ -287,7 +287,7 @@ class RosterView(TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        links = (
+        links = list(
             CoachAthlete.objects.for_coach(self.request.user)
             .active()
             .select_related("athlete", "athlete__athlete_profile")
@@ -297,11 +297,24 @@ class RosterView(TemplateView):
         # The downgrade soft-suspends every active link beyond the oldest free cap
         # (S6 Phase 5); flag those rows so the roster shows a "Suspended" badge.
         suspended = billing_access.suspended_athlete_ids(self.request.user)
+        # Relationships that already have an editable working plan (mirrors
+        # ``working_plan``: non-archived, not a materialized group snapshot). The
+        # roster hides the "Draft with AI" CTA for these — ``plan_create`` reopens
+        # an existing plan rather than drafting, so the action would be a no-op.
+        have_plan = set(
+            Plan.objects.filter(
+                relationship_id__in=[link.pk for link in links],
+                source_group__isnull=True,
+            )
+            .exclude(status=Plan.Status.ARCHIVED)
+            .values_list("relationship_id", flat=True)
+        )
         athletes = [
             presenters.roster_athlete(
                 link.athlete,
                 suspended=link.pk in suspended,
                 demo=link.is_demo,
+                has_working_plan=link.pk in have_plan,
             )
             for link in links
         ]

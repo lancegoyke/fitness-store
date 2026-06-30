@@ -62,7 +62,7 @@ def _active_contraindications(user):
     return [c for c in user.contraindications.all() if c.active]
 
 
-def roster_athlete(user, *, suspended=False, demo=False):
+def roster_athlete(user, *, suspended=False, demo=False, has_working_plan=False):
     """A row in the coach's roster list.
 
     ``suspended`` marks an athlete whose link a downgrade froze (S6 Phase 5): the
@@ -70,6 +70,8 @@ def roster_athlete(user, *, suspended=False, demo=False):
     within the free cap. It surfaces as a warning badge so the coach sees *which*
     athletes are frozen, not just that they're over the limit. ``demo`` marks a
     one-click-demo athlete (first-time-UX Phase 2) so the row is clearly labeled.
+    ``has_working_plan`` lets the roster hide the "Draft with AI" CTA for an
+    athlete who already has a program (drafting only runs for a fresh plan).
     """
     name = user.display_name()
     meta_parts = [p for p in [_training_label(user)] if p]
@@ -85,6 +87,7 @@ def roster_athlete(user, *, suspended=False, demo=False):
         "status": "suspended" if suspended else "",
         "status_label": "Suspended" if suspended else "",
         "is_demo": demo,
+        "has_working_plan": has_working_plan,
     }
 
 

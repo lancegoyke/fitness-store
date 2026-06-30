@@ -233,3 +233,15 @@ class TestDraftCTAs:
 
         body = client.get(reverse("meso:roster")).content.decode()
         assert 'name="draft" value="agent"' in body
+
+    def test_roster_hides_draft_for_athlete_with_a_plan(self, client):
+        # Drafting only runs for a fresh plan; for an athlete who already has one
+        # the CTA would be a no-op, so the roster hides it (the plain "New
+        # program" reopen stays).
+        link = CoachAthleteFactory()
+        link.create_plan()
+        client.force_login(link.coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert 'name="draft" value="agent"' not in body
+        assert "New program" in body
