@@ -483,3 +483,145 @@ class TestPercentAwarePrompt:
         props = client.PROPOSE_TOOL["input_schema"]["properties"]
         new_load = props["changes"]["items"]["properties"]["new_load"]
         assert "%" in new_load["description"] or "1RM" in new_load["description"]
+
+
+class TestAddKind:
+    """The ``add`` kind introduces a NEW exercise row into a session.
+
+    Unlike swap/progress (which edit an existing prescription) an ``add`` targets
+    a *session* by id and carries the new row's fields (name + sets/reps/load/rpe).
+    It is the verb that lets the agent draft a program onto a bare scaffold; like a
+    swap it introduces a movement, so the contraindication backstop screens it.
+    """
+
+    def add_change(self, **overrides):
+        change = {
+            "kind": "add",
+            "day_label": "Day 1 · Lower",
+            "title": "Add Romanian Deadlift",
+            "rationale": "Posterior-chain accessory for the goal.",
+            "new_name": "Romanian Deadlift",
+            "new_sets": "3",
+            "new_reps": "8-10",
+            "new_rpe": "7",
+        }
+        change.update(overrides)
+        return change
+
+    def test_valid_add_targets_a_session_and_builds_the_row(self):
+        plan, session, _ = make_plan()
+        cleaned, errors = validation.clean_change(
+            self.add_change(session_id=session.pk), plan
+        )
+        assert errors == []
+        assert cleaned["kind"] == "add"
+        assert cleaned["session"] == session
+        assert cleaned["prescription"] is None
+        assert cleaned["payload"] == {
+            "name": "Romanian Deadlift",
+            "sets": "3",
+            "reps": "8-10",
+            "rpe": "7",
+        }
+
+    def test_add_carries_only_the_fields_given(self):
+        # An add with just a name is valid — sets/reps/load/rpe are optional.
+        plan, session, _ = make_plan()
+        cleaned, errors = validation.clean_change(
+            {
+                "kind": "add",
+                "title": "Add Plank",
+                "rationale": "Core.",
+                "session_id": session.pk,
+                "new_name": "Plank",
+            },
+            plan,
+        )
+        assert errors == []
+        assert cleaned["payload"] == {"name": "Plank"}
+
+    def test_add_name_falls_back_to_introduces_exercise(self):
+        plan, session, _ = make_plan()
+        cleaned, errors = validation.clean_change(
+            {
+                "kind": "add",
+                "title": "Add accessory",
+                "rationale": "...",
+                "session_id": session.pk,
+                "introduces_exercise": "Goblet Squat",
+            },
+            plan,
+        )
+        assert errors == []
+        assert cleaned["payload"]["name"] == "Goblet Squat"
+
+    def test_add_without_a_session_is_rejected(self):
+        plan, _, _ = make_plan()
+        cleaned, errors = validation.clean_change(self.add_change(), plan)
+        assert cleaned is None
+        assert any("session" in e for e in errors)
+
+    def test_add_without_a_name_is_rejected(self):
+        plan, session, _ = make_plan()
+        cleaned, errors = validation.clean_change(
+            {
+                "kind": "add",
+                "title": "Add something",
+                "rationale": "...",
+                "session_id": session.pk,
+            },
+            plan,
+        )
+        assert cleaned is None
+        assert any("name" in e for e in errors)
+
+    def test_add_introducing_a_contraindicated_movement_is_rejected(self):
+        plan, session, _ = make_plan()
+        ContraindicationFactory(
+            athlete=plan.athlete, text="L knee — avoid deep knee flexion under load"
+        )
+        cleaned, errors = validation.clean_change(
+            self.add_change(session_id=session.pk, new_name="Deep Knee Flexion Drill"),
+            plan,
+        )
+        assert cleaned is None
+        assert any("contraindication" in e for e in errors)
+
+    def test_add_session_must_be_in_the_current_week(self):
+        # A session from another week is out of contract, like swap/progress.
+        plan, _, _ = make_plan()
+        other_week = WeekFactory(
+            mesocycle=plan.mesocycles.first(), index=2, is_current=False
+        )
+        other_session = SessionFactory(week=other_week, day_number=1, name="Upper")
+        cleaned, errors = validation.clean_change(
+            self.add_change(session_id=other_session.pk), plan
+        )
+        assert cleaned is None
+        assert any("session" in e for e in errors)
+
+    def test_add_field_values_are_length_capped(self):
+        plan, session, _ = make_plan()
+        cleaned, _ = validation.clean_change(
+            self.add_change(session_id=session.pk, new_sets="9" * 99), plan
+        )
+        assert len(cleaned["payload"]["sets"]) == 32
+
+
+class TestAddAwareTool:
+    """The tool + prompt must expose ``add`` so the model can draft a program."""
+
+    def test_kind_enum_includes_add(self):
+        props = client.PROPOSE_TOOL["input_schema"]["properties"]
+        kind = props["changes"]["items"]["properties"]["kind"]
+        assert "add" in kind["enum"]
+
+    def test_tool_exposes_new_reps_and_new_rpe(self):
+        props = client.PROPOSE_TOOL["input_schema"]["properties"]["changes"]["items"][
+            "properties"
+        ]
+        assert "new_reps" in props
+        assert "new_rpe" in props
+
+    def test_system_prompt_explains_add(self):
+        assert "add" in client.SYSTEM_PROMPT.lower()

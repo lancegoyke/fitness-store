@@ -1526,6 +1526,9 @@ class ProposedChange(models.Model):
         PROGRESS = "progress", _("Progress")
         VOLUME = "volume", _("Volume")
         DELOAD = "deload", _("Deload")
+        # Introduce a NEW exercise row into a session (no row to edit) — the verb
+        # that lets the agent draft a program onto a bare scaffold.
+        ADD = "add", _("Add")
 
     class Status(models.TextChoices):
         PENDING = "pending", _("Pending")

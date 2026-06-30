@@ -122,6 +122,12 @@ OVER_LIMIT_MESSAGE = (
     "to edit or deliver programs."
 )
 
+#: Flashed when a free coach asks the AI to draft a plan but is out of monthly runs.
+DRAFT_ALLOWANCE_MESSAGE = (
+    "You're out of free AI agent runs this month, so your program starts blank. "
+    "Start your free trial or subscribe for unlimited agent runs."
+)
+
 
 def _over_limit_json():
     """402 JSON for an API edit/deliver blocked by the D6 over-limit freeze."""
@@ -364,6 +370,9 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         # The relationship's working program (first-time-UX Phase 1): when one
         # exists the CTAs open it in the designer; when not, they create one.
         ctx["working_plan"] = link.working_plan()
+        # Whether to offer "Draft with AI" on the create CTA — the same agent
+        # allowance gate the endpoint enforces (the draft *is* an agent run).
+        ctx["can_use_agent"] = billing_access.can_use_agent(self.request.user)
         # Current block / macrocycle / latest results arrive with the program
         # schema (Phase 2) and logging (Phase 3).
         ctx["macrocycle"] = []
@@ -473,6 +482,36 @@ def group_design(request, pk):
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
+def _reserve_plan_draft(request, plan):
+    """Reserve an agent run + a drafting batch to draft ``plan``, or ``None``.
+
+    Mirrors ``agent_propose``'s metering: lock the coach row, check the agent
+    allowance, and create the batch inside the caller's transaction so concurrent
+    reservations serialize (the batch table is the run ledger). Returns the batch
+    to dispatch, or ``None`` — with a flash — when the draft can't run (allowance
+    exhausted, or no API key). On ``None`` the plan is still created blank so the
+    coach can build it by hand. Must be called within a transaction.
+    """
+    User.objects.select_for_update().filter(pk=request.user.pk).first()
+    if not billing_access.can_use_agent(request.user):
+        messages.info(request, DRAFT_ALLOWANCE_MESSAGE)
+        return None
+    if agent_client.get_default_client() is None:
+        messages.info(
+            request,
+            "The AI agent isn't configured here, so your program starts blank.",
+        )
+        return None
+    messages.success(
+        request,
+        "Drafting your program with the AI agent — review the proposed week in a "
+        "moment.",
+    )
+    return agent_service.create_drafting_batch(
+        plan, agent_service.DRAFT_INSTRUCTION, coach=request.user
+    )
+
+
 @login_required
 @require_POST
 def plan_create(request, pk):
@@ -487,7 +526,14 @@ def plan_create(request, pk):
     athlete (an over-limit coach's newer relationships) is frozen — a flashed
     redirect, no plan created — consistent with the edit gate the designer would
     hit immediately. Lands in the designer.
+
+    With ``draft`` set (the "Draft with AI" CTA), a *freshly-created* scaffold is
+    handed to the agent to draft the first week (Q2 fast-follow); the proposal
+    lands in the review gate. The draft only fires on a new plan — never
+    overwriting an existing program — and is metered like the manual agent run.
     """
+    draft = bool(request.POST.get("draft"))
+    draft_batch = None
     with transaction.atomic():
         relationship = (
             CoachAthlete.objects.select_for_update()
@@ -503,7 +549,14 @@ def plan_create(request, pk):
         if relationship.pk in billing_access.suspended_athlete_ids(request.user):
             messages.error(request, OVER_LIMIT_MESSAGE)
             return redirect("meso:athlete", pk=pk)
-        plan = relationship.working_plan() or relationship.create_plan()
+        existing = relationship.working_plan()
+        plan = existing or relationship.create_plan()
+        if draft and existing is None:
+            draft_batch = _reserve_plan_draft(request, plan)
+    # Dispatch (and bump the plan) outside the lock, mirroring ``agent_propose``.
+    if draft_batch is not None:
+        agent_jobs.dispatch_proposal(draft_batch.pk)
+        _touch_plan(plan)
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 

@@ -7,9 +7,12 @@
   {% if working_plan %}
     <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer_plan' working_plan.id %}">Open in designer</a>
   {% else %}
-    <form method="post" action="{% url 'meso:plan_create' athlete.id %}" style="margin:0;">
+    <form method="post" action="{% url 'meso:plan_create' athlete.id %}" style="display:flex;gap:8px;margin:0;">
       {% csrf_token %}
       <button type="submit" class="meso-btn meso-btn--primary">Build a program</button>
+      {% if can_use_agent %}
+        <button type="submit" name="draft" value="agent" class="meso-btn">Draft with AI</button>
+      {% endif %}
     </form>
   {% endif %}
 {% endblock %}
@@ -139,9 +142,12 @@
               <a class="meso-btn meso-btn--primary" href="{% url 'meso:designer_plan' working_plan.id %}">Open in designer</a>
             {% else %}
               <p class="meso-sub" style="margin:8px 0 14px;">No active program yet.</p>
-              <form method="post" action="{% url 'meso:plan_create' athlete.id %}" style="margin:0;">
+              <form method="post" action="{% url 'meso:plan_create' athlete.id %}" style="display:flex;gap:8px;justify-content:center;margin:0;">
                 {% csrf_token %}
                 <button type="submit" class="meso-btn meso-btn--primary">Build a program</button>
+                {% if can_use_agent %}
+                  <button type="submit" name="draft" value="agent" class="meso-btn">Draft with AI</button>
+                {% endif %}
               </form>
             {% endif %}
           </div>

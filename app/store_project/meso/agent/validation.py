@@ -22,7 +22,7 @@ from ..models import LoadType
 from ..models import Session
 from ..serializers import current_week
 
-VALID_KINDS = {"swap", "progress", "volume", "deload"}
+VALID_KINDS = {"swap", "progress", "volume", "deload", "add"}
 
 # A %1RM progression moves a PERCENT, so its value is bounded to a sane band. The
 # ceiling sits above legitimate supramaximal work (eccentrics / walkouts run a
@@ -31,13 +31,15 @@ VALID_KINDS = {"swap", "progress", "volume", "deload"}
 MAX_PERCENT_1RM = 120
 
 # What an actionable change of each kind must resolve to within the plan. A swap
-# or progression edits a specific exercise row; a volume change edits a day; a
-# deload is week/plan-level and needs no specific row. (A resolved prescription
-# backfills its session, so a "session" requirement is met by either.)
+# or progression edits a specific exercise row; a volume change or an add edits a
+# day (volume rewrites its rows, add appends one); a deload is week/plan-level and
+# needs no specific row. (A resolved prescription backfills its session, so a
+# "session" requirement is met by either.)
 _REQUIRED_TARGET = {
     "swap": "prescription",
     "progress": "prescription",
     "volume": "session",
+    "add": "session",
 }
 
 # Generic words that survive the length filter but carry no movement meaning.
@@ -61,6 +63,19 @@ _APPLY_FIELD = {
     "progress": ("load", "new_load", 32),
     "volume": ("sets", "new_sets", 32),
 }
+
+# An ``add`` builds a whole new prescription, so it carries several fields rather
+# than the single value the other kinds set, as (prescription field, tool field,
+# model ``max_length``). ``name`` is required (it falls back to
+# introduces_exercise, like a swap); the rest are optional row columns. A new row
+# is an absolute-load row, so ``load_type`` is left at the model default.
+_ADD_FIELDS = (
+    ("name", "new_name", 255),
+    ("sets", "new_sets", 32),
+    ("reps", "new_reps", 32),
+    ("load", "new_load", 32),
+    ("rpe", "new_rpe", 32),
+)
 
 
 def _singular(word):
@@ -248,6 +263,16 @@ def clean_change(raw, plan, *, forbidden=None):
             value = cleaned["introduces_exercise"]
         if value:
             payload[field] = value
+    elif kind == "add":
+        # Build the new row from its fields; an absent name falls back to the
+        # contraindication-checked introduces_exercise (same as a swap).
+        for field, raw_field, max_len in _ADD_FIELDS:
+            value = raw.get(raw_field, "")
+            value = value.strip()[:max_len] if isinstance(value, str) else ""
+            if value:
+                payload[field] = value
+        if not payload.get("name") and cleaned["introduces_exercise"]:
+            payload["name"] = cleaned["introduces_exercise"]
     cleaned["payload"] = payload
 
     # %1RM bound — a progress on a percent-typed lift moves a PERCENTAGE. The
@@ -272,8 +297,8 @@ def clean_change(raw, plan, *, forbidden=None):
             else:
                 payload["load"] = _fmt_percent(pct)
 
-    # Contraindication backstop — only a SWAP introduces a new movement, so only
-    # swaps are screened (a volume/progress edit that *mentions* a flagged
+    # Contraindication backstop — only a SWAP or an ADD introduces a new movement,
+    # so only those are screened (a volume/progress edit that *mentions* a flagged
     # movement, e.g. "overhead pressing − 1 set", is safe and must pass). Check
     # the name actually applied (``payload['name']``, which folds in ``new_name``)
     # plus ``introduces_exercise`` and ``after`` — any of them can carry the new
@@ -281,7 +306,7 @@ def clean_change(raw, plan, *, forbidden=None):
     # *removed* exercise, often the contraindicated one being swapped out.
     if forbidden is None:
         forbidden = forbidden_terms(plan)
-    if forbidden and kind == "swap":
+    if forbidden and kind in ("swap", "add"):
         introduced = (
             f"{payload.get('name', '')} "
             f"{cleaned['introduces_exercise']} {cleaned['after']}"
@@ -299,6 +324,11 @@ def clean_change(raw, plan, *, forbidden=None):
     # falls back to its (contraindication-checked) introduced exercise.
     if kind in ("progress", "volume") and not payload:
         errors.append(f"a {kind} change needs a value to apply ({spec[1]})")
+
+    # An add must name the exercise it introduces (the new row needs a name), or
+    # the apply step has nothing to create.
+    if kind == "add" and not payload.get("name"):
+        errors.append("an add change needs an exercise name (new_name)")
 
     if errors:
         return None, errors
