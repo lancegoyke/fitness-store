@@ -218,8 +218,20 @@ SYSTEM_PROMPT = (
 )
 
 
+_GROUP_FRAMING = (
+    "This is a GROUP's SHARED program — every listed member trains off it, so "
+    "your edits apply to ALL of them. Ground on the group context: honor EVERY "
+    "member's contraindications (the group.contraindications list folds them "
+    "together). Do not personalize per athlete here; edit the one shared week.\n\n"
+)
+
+
 def _user_prompt(context, instruction):
+    # Group framing lives in the volatile user turn (not the cached system prompt)
+    # so individual runs keep their stable, cache-friendly prompt unchanged.
+    framing = _GROUP_FRAMING if "group" in context else ""
     return (
+        f"{framing}"
         "Plan context (JSON):\n"
         f"{json.dumps(context, ensure_ascii=False, sort_keys=True)}\n\n"
         f"Coach instruction:\n{instruction}"

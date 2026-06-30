@@ -207,21 +207,22 @@
             <div x-show="agentTyping" class="meso-flex" style="align-items:center;gap:5px;font-size:11px;color:var(--dim);"><div style="width:6px;height:6px;border-radius:50%;background:var(--accent);"></div>drafting&#8230;</div>
             <div x-show="!agentTyping" class="meso-flex" style="align-items:center;gap:5px;font-size:11px;color:var(--dim);"><div style="width:6px;height:6px;border-radius:50%;background:var(--ok);"></div>ready</div>
             <div style="flex:1;"></div>
-            <div style="font-size:11px;color:var(--dim);">grounded on profile + logs</div>
+            <div style="font-size:11px;color:var(--dim);" x-text="isGroup ? 'grounded on the group' : 'grounded on profile + logs'"></div>
           </div>
 
           <!-- How the agent works (Phase 5): a persistent note making the review
                gate explicit — a first-timer won't expect the agent to only
-               *propose*. Always shown for an individual plan (the group agent is
-               a later phase, so its composer is hidden). -->
-          <div x-show="isIndividual" style="flex:0 0 auto;display:flex;align-items:flex-start;gap:7px;padding:8px 16px;border-bottom:1px solid var(--line-2);background:var(--rail);font-size:11px;line-height:1.4;color:var(--dim);">
+               *propose*. Shown in both modes: the group agent (groups Phase 1)
+               edits the shared program behind the same review gate. -->
+          <div style="flex:0 0 auto;display:flex;align-items:flex-start;gap:7px;padding:8px 16px;border-bottom:1px solid var(--line-2);background:var(--rail);font-size:11px;line-height:1.4;color:var(--dim);">
             <span style="font-weight:700;color:var(--accent-deep);white-space:nowrap;">Propose &#8594; review &#8594; apply</span>
             <span>The agent proposes; you review every change before it touches the program — nothing applies until you approve.</span>
           </div>
 
           <!-- Agent coachmark (Phase 5): dismissible first-run orientation for the
-               agent column. Individual-only (no live composer in group mode). -->
-          <div x-show="isIndividual && coachmarkVisible('agent')" style="flex:0 0 auto;display:flex;align-items:flex-start;gap:9px;margin:12px 14px 0;padding:11px 12px;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;">
+               agent column. Shown in both modes — the agent is live for groups
+               too (groups Phase 1, the shared program). -->
+          <div x-show="coachmarkVisible('agent')" style="flex:0 0 auto;display:flex;align-items:flex-start;gap:9px;margin:12px 14px 0;padding:11px 12px;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;">
             <div style="flex:1;min-width:0;line-height:1.4;">
               <div style="font-size:12.5px;font-weight:700;color:var(--accent-deep);">Talk to the agent</div>
               <div style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Ask in plain words &#8212; &#8220;lighten Friday,&#8221; &#8220;add a deload week.&#8221; It drafts changes you can review.</div>
@@ -272,16 +273,8 @@
             </template>
           </div>
 
-          <!-- The agent grounds on one athlete's profile + logs; a group agent
-               (per-athlete auto-adjusts) is groups Phase 3, so group mode shows a
-               note instead of the live composer. -->
-          <template x-if="isGroup">
-            <div style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:13px 14px 15px;font-size:12px;color:var(--dim);line-height:1.4;">
-              The agent works per athlete &#8212; a group agent that auto-adjusts each member arrives in the next phase. Edit the shared program directly for now.
-            </div>
-          </template>
           {% if can_use_agent %}
-            <div x-show="isIndividual" style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:11px 14px 13px;">
+            <div style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:11px 14px 13px;">
               <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:9px;">
                 <template x-for="c in chips" :key="c.label">
                   <button data-hover="chip" @click="onChip(c.label)" :disabled="agentTyping" x-text="c.label" style="appearance:none;cursor:pointer;font:inherit;white-space:nowrap;font-size:11.5px;font-weight:550;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 11px;flex:0 0 auto;"></button>
@@ -302,8 +295,9 @@
           <!-- Agent gate (S6 Phase 3 / Phase 5): a free coach who has spent their
                monthly agent allowance sees an upgrade CTA where the composer would
                be. Billing actions live on the roster (the endpoint also 402s, so
-               this isn't the only guard). -->
-            <div x-show="isIndividual" style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:13px 14px 15px;">
+               this isn't the only guard). Shown in both modes (the group agent is
+               metered the same way). -->
+            <div style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:13px 14px 15px;">
               <p style="margin:0 0 9px;font-size:12px;color:var(--dim);line-height:1.4;">You've used all {{ agent_allowance.allowance }} free agent run{{ agent_allowance.allowance|pluralize }} this month. Start your free trial or subscribe ({{ price_summary }}) for unlimited agent runs.</p>
               <a href="{% url 'meso:roster' %}" data-hover="brighten" style="display:inline-block;text-decoration:none;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:8px 14px;">Upgrade to use the agent</a>
             </div>

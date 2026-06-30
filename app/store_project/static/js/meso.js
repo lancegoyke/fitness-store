@@ -197,10 +197,11 @@ function createMeso() {
       // The real athlete identity for the individual left rail (null for groups).
       this.athlete = data.athlete || null;
       // A group shared program opens in Group mode and renders its real identity
-      // (members / flags); an individual plan stays in Individual mode. The group
-      // agent (per-athlete auto-adjusts) is a later phase, so swap the agent
-      // greeting for a group-appropriate one (the live composer is hidden in the
-      // template — hydrateThread keeps this when the plan has no batches).
+      // (members / flags); an individual plan stays in Individual mode. The agent
+      // edits the shared program for a group (groups Phase 1) — it grounds on the
+      // members + their folded contraindications — so swap the greeting for a
+      // group-appropriate one (hydrateThread keeps this when the plan has no
+      // batches). Per-athlete auto-adjusts are still a later phase.
       this.group = data.group || null;
       if (this.group) {
         this.mode = "group";
@@ -208,7 +209,7 @@ function createMeso() {
           {
             id: 1,
             role: "agent",
-            text: "This is the group's shared program — every member trains off it. Edit it directly here; a group agent that auto-adjusts each athlete arrives in the next phase.",
+            text: "This is the group's shared program — every member trains off it. Ask me to adjust it and I'll propose changes for you to review; I honor every member's contraindications. (Per-athlete auto-adjusts come in a later phase.)",
           },
         ];
       }

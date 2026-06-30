@@ -398,10 +398,14 @@ def review_changes(batch):
     """Context for the review screen from a real ``AgentProposalBatch`` (B6).
 
     Feeds the same template the prototype fixtures did, so a real batch renders
-    unchanged; per-change approve/reject persistence + apply land in Phase 2.
+    unchanged; per-change approve/reject persistence + apply land in Phase 2. A
+    **group** batch (the group agent edits the shared program) has no single
+    athlete, so the review heading names the *group* instead.
     """
+    plan = batch.plan
+    subject = plan.group.name if plan.is_group else plan.athlete.display_name()
     return {
-        "athlete": {"name": batch.plan.athlete.display_name()},
+        "athlete": {"name": subject},
         "changes": [serialize_proposed_change(c) for c in batch.changes.all()],
     }
 

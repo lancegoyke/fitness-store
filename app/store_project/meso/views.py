@@ -2269,11 +2269,6 @@ def agent_propose(request, plan_id):
                 },
                 status=402,
             )
-        if plan.is_group:
-            # The agent grounds on a single athlete's profile + logs; a group agent
-            # (per-athlete auto-adjusts) is groups Phase 3. Reject before any work
-            # so it never dereferences ``plan.athlete``.
-            return HttpResponseBadRequest("The agent isn't available for groups yet.")
         try:
             payload = json.loads(request.body or "{}")
         except json.JSONDecodeError:
@@ -2297,8 +2292,16 @@ def agent_propose(request, plan_id):
                 status=503,
             )
 
+        # A group run grounds on the group (members + folded contraindications)
+        # and edits the shared program (groups Phase 1); tag it ``group`` for the
+        # usage ledger (attributed to the group, athlete null).
+        trigger = (
+            AgentProposalBatch.Trigger.GROUP
+            if plan.is_group
+            else AgentProposalBatch.Trigger.MANUAL
+        )
         batch = agent_service.create_drafting_batch(
-            plan, instruction, coach=request.user
+            plan, instruction, coach=request.user, trigger=trigger
         )
     # The batch is committed; enqueue the worker run and bump the plan outside the
     # lock so neither holds the coach row.
@@ -2351,12 +2354,18 @@ def batch_status(request, batch_id):
 
 
 def _coach_batch_or_404(request, batch_id):
-    """The batch the requester coaches, or raise ``Http404``."""
+    """The batch the requester coaches, or raise ``Http404``.
+
+    Scoped to a plan the coach may *edit* (``editable_by``), so it covers an
+    individual plan over an active relationship **and** a group plan the coach owns
+    (the group agent runs behind this same review gate) — a foreign/unknown batch
+    is a 404.
+    """
     batch = (
         AgentProposalBatch.objects.filter(
-            pk=batch_id, plan__in=Plan.objects.for_coach(request.user)
+            pk=batch_id, plan__in=Plan.objects.editable_by(request.user)
         )
-        .select_related("plan", "plan__relationship")
+        .select_related("plan", "plan__relationship", "plan__group")
         .first()
     )
     if batch is None:
@@ -2370,7 +2379,7 @@ def change_set_status(request, pk):
     """Persist a coach's approve/reject decision on one proposed change."""
     change = (
         ProposedChange.objects.filter(
-            pk=pk, batch__plan__in=Plan.objects.for_coach(request.user)
+            pk=pk, batch__plan__in=Plan.objects.editable_by(request.user)
         )
         .select_related("batch")
         .first()
@@ -2412,14 +2421,21 @@ def batch_apply(request, batch_id):
             {"ok": False, "error": "This batch has already been resolved."}, status=409
         )
     result = agent_apply.apply_batch(batch)
+    # Where the review screen sends the coach next. An individual plan has a
+    # deliver screen; a group plan's delivery is deliver-to-all (no individual
+    # deliver screen — ``DeliverView`` is ``for_coach`` individual-only and would
+    # 404 a group plan), so a group batch lands back in the designer where the
+    # shared program + its group delivery live.
+    if batch.plan.is_group:
+        next_url = reverse("meso:designer_plan", kwargs={"plan_id": batch.plan_id})
+    else:
+        next_url = reverse("meso:deliver_plan", kwargs={"plan_id": batch.plan_id})
     return JsonResponse(
         {
             "ok": True,
             "applied": result["applied"],
             "skipped": result["skipped"],
-            "deliver_url": reverse(
-                "meso:deliver_plan", kwargs={"plan_id": batch.plan_id}
-            ),
+            "deliver_url": next_url,
         }
     )
 
@@ -2658,7 +2674,7 @@ class ChangeReviewView(LoginRequiredMixin, TemplateView):
             # working plan.
             batch = (
                 AgentProposalBatch.objects.filter(
-                    plan__in=Plan.objects.for_coach(request.user),
+                    plan__in=Plan.objects.editable_by(request.user),
                     status=AgentProposalBatch.Status.PENDING,
                 )
                 .order_by("-created_at")
@@ -2676,9 +2692,9 @@ class ChangeReviewView(LoginRequiredMixin, TemplateView):
         batch = (
             AgentProposalBatch.objects.filter(
                 pk=kwargs["batch_id"],
-                plan__in=Plan.objects.for_coach(self.request.user),
+                plan__in=Plan.objects.editable_by(self.request.user),
             )
-            .select_related("plan", "plan__relationship__athlete")
+            .select_related("plan", "plan__relationship__athlete", "plan__group")
             .first()
         )
         if batch is None:
