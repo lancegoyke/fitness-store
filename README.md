@@ -86,54 +86,69 @@ python manage.py shell
 >>> me.save()
 ```
 
-...or in the Django admin at `http://localhost:8000/backside/users/user/`
+...or in the Django admin at `http://localhost:8034/backside/users/user/`
 
 ## Local Development
 
 ### Environment Variables
 
-Be sure to include [Stripe test mode publishable and secret keys](https://stripe.com/docs/test-mode) in `.env.dev`.
-AWS credentials are optional when running locally because `settings/local.py` now sets
+Copy `.env.example` to `.env` — it lists every variable with notes and safe dev
+defaults, and most can be left blank locally. At minimum, set [Stripe test mode
+keys](https://stripe.com/docs/test-mode), and point `SQL_PORT=5434` and
+`REDIS_URL=redis://localhost:6334/0` at the dev containers (see Docker Compose below).
+
+AWS credentials are optional when running locally because `settings/local.py` sets
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` to dummy values if they are not
 provided.
-Set `GOOGLE_API_KEY` to enable Gemini-powered challenge summaries.
+Set `GOOGLE_API_KEY` to enable Gemini-powered challenge summaries. The optional
+Meso features (AI agent, web push, Stripe billing) have their own `ANTHROPIC_API_KEY`
+and `MESO_*` variables — all documented in `.env.example` and all no-ops when unset.
 
 ### Docker Compose
 
-To build the database and cache containers:
+To start the Postgres (`:5434`) and Redis (`:6334`) containers:
 
 ```
-cd fitness-store
-docker-compose up -d --build
+just services
 ```
 
 ### Python & Django
 
-To run the Django development server:
+To run the Django development server (on http://localhost:8034/):
 
 ```
-cd app
-python manage.py runserver
+just dev
 ```
 
 To update the database schema:
 
 ```
-cd app
-python manage.py migrate
+just migrate
+```
+
+The `django-q2` cluster that runs scheduled/background tasks (invite sweeps, the
+`reconcile_seats` billing sweep, async Meso agent jobs) is a separate process —
+start it in its own terminal when you need it (locally you can instead set
+`MESO_AGENT_RUN_SYNC=true` to run agent jobs inline):
+
+```
+just qcluster
 ```
 
 To see running container logs:
 
 ```
-docker-compose logs -f
+docker compose logs -f
 ```
 
 To test if a purchase gives a user the permission to view a purchased product, you'll need to [forward those events from Stripe to the local server](https://stripe.com/docs/webhooks/test) instead of the live server in production. Make sure to list the appropriate webhook URL for handling the triggered events.
 
 ```
 stripe login
-stripe listen --forward-to localhost:8000/payments/webhook/
+# One-time product purchases:
+stripe listen --forward-to localhost:8034/payments/webhook/
+# Meso subscription billing (separate endpoint + signing secret; run in its own terminal):
+stripe listen --forward-to localhost:8034/meso/billing/webhook/
 ```
 
 Once listening, you must trigger the event by performing the corresponding actions on your site or by using the Stripe CLI, e.g. `stripe trigger checkout.session.completed`.
