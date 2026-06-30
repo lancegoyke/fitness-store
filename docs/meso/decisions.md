@@ -753,3 +753,40 @@ _(Append dated entries here as decisions land.)_
   `meso_onboarding.*.js` (HTTP 200). Resume point → first-time-UX **Phase 5**
   (designer/agent self-explanation) **or** the add-week/week-switcher deferral. Plan in
   [`first-time-ux-plan.md`](./first-time-ux-plan.md).
+- 2026-06-30 — **First-time UX — Phase 5 built** (branch `meso-first-time-ux-phase5`,
+  **no migration**): **designer & agent self-explanation** — the **last first-time-UX
+  phase**. The designer is a self-contained Alpine page that shipped a pile of
+  *prototype chrome*: a hardcoded fake athlete (a stock name + invented
+  contraindications), a fabricated "Coach's programming style" block, and a hardcoded
+  macrocycle — **all rendered over whatever real plan the coach opened**. A first-time
+  coach also got no orientation: nothing said the grid autosaves, that the agent only
+  *proposes* (changes wait at the review gate), or that the phone column is the
+  athlete's real view. Three parts: **(1) Coachmarks** — three **dismissible** first-run
+  notes anchor the designer's regions (week grid · agent · phone preview); they show
+  until dismissed, the dismissal persisting client-side in `localStorage` (`meso.js`,
+  namespaced `meso-coachmark-designer-<key>` so it never collides with the athlete
+  onboarding coachmarks' `meso-coachmark-` prefix) — **no server "seen" flag**, like
+  the athlete chrome. **(2) Agent self-explanation** — a **persistent** "propose →
+  review → apply" note under the agent header makes the review gate explicit for
+  *everyone* (not just first-timers — a newcomer won't expect the agent to only
+  propose); individual-only (the group agent's composer is hidden). **(3) Real chrome**
+  — `serialize_plan` now carries the individual plan's **real athlete identity**
+  (`serialize_athlete_identity`: name / initials / goal / **active** contraindications,
+  the same global injuries the agent grounds on), and the left-rail athlete card,
+  macrocycle rail, top-bar identity/chip, and week/block headers render the real
+  `athlete`/`weeks`/`phases` (new `meso.js` getters `currentWeek`/`currentPhase`/
+  `cycleLabel`/`weekHeading`/`blockHeading`). The invented coach-preferences block was
+  **removed** as misleading; group mode (already real, via `group`) is untouched —
+  `serialize_athlete_identity` returns `None` for a group plan. Built red→green: the
+  dismiss logic is unit-tested in `frontend/meso.test.js` (**+5 vitest**), the server
+  seam (serializer identity, rendered coachmarks + note, absence of the fabricated
+  chrome, `meso.js` dismiss API) in `test_designer_onboarding.py` (**+10 pytest**);
+  1055 meso pytest + 104 vitest green, ruff + format clean, DjHTML clean. **Gotcha
+  (cost me 2 cycles):** the render tests assert the fabricated strings are *gone*
+  (`"Maya"`, `"programming style"` ∉ body) — my own explanatory template comments
+  mentioning those strings tripped the asserts, so dev-facing comments must avoid the
+  very tokens the tests forbid. **Codex review loop CLEAN on iteration 1.** This
+  **completes the first-time-UX slice** (Phases 1–5). Remaining Meso backlog: the
+  **add-week / week-switcher** deferral (designer is single-current-week) and **S6
+  billing Phase 5 annual prices** (blocked on the owner's per-seat number + a Stripe
+  annual Price). Plan in [`first-time-ux-plan.md`](./first-time-ux-plan.md).
