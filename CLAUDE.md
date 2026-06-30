@@ -141,11 +141,14 @@ Uses django-allauth with email-only login, social authentication (Facebook, Goog
 - ruff for code formatting and linting
 
 ## Environment Variables
-Key variables needed in `.env.dev` for local development:
+Local dev loads `.env` (via `load_dotenv()`); copy `.env.example` to `.env` for the
+full, annotated list. Key variables needed for local development:
 - `STRIPE_PUBLISHABLE_KEY` and `STRIPE_SECRET_KEY` (test mode)
-- Database credentials for PostgreSQL
+- Database credentials for PostgreSQL (`SQL_PORT=5434` for the dev container)
+- `REDIS_URL=redis://localhost:6334/0` (dev Redis; sessions live in the cache)
 - Social auth keys for Facebook and Google
 - AWS credentials for S3 storage
+- Optional Meso features: `ANTHROPIC_API_KEY` and `MESO_*` (all no-ops when unset)
 
 ## Testing Strategy
 - Test files located in `tests/` subdirectories within each app
