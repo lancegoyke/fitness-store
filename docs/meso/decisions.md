@@ -1091,3 +1091,29 @@ _(Append dated entries here as decisions land.)_
   (deferred — needs an Admin API key + live org access). Remaining Meso backlog
   otherwise unchanged: billing annual prices (blocked on the owner's annual
   numbers) + the group agent (LARGE owner-decision).
+- 2026-06-30 — **Group agent Phase 1 built: the AI agent edits the shared program**
+  (PR #350, no migration). The proposal agent rejected a group plan with a `400`
+  (its grounding dereferenced a single `plan.athlete`); now it grounds on the
+  **group** and edits the group's **shared program** behind the same
+  propose → review → apply gate. `service.build_context` branches on `plan.is_group`
+  (a `_group_context`: members + each one's contraindications + the **folded** set
+  across all active members; no single-athlete `recent_logs`); `validation.forbidden_terms`
+  folds the contraindication backstop across **every active member** (a swap/add
+  unsafe for any one member is rejected — the shared row trains everyone);
+  `agent.apply` is **unchanged** (it already writes onto the shared
+  `ExercisePrescription`, so every member inherits). `agent_propose` drops the
+  `400` and tags a group run `trigger=group` (usage ledger → group, athlete null);
+  the review/status/apply endpoints widen `for_coach`→`editable_by` to cover group
+  batches (identical set for individual plans — no regression); `presenters.review_changes`
+  names the group; a group batch's post-apply link routes to the **designer** (no
+  individual deliver screen — group delivery is deliver-to-all). The client adds
+  group framing in the *user* turn (cached system prompt unchanged); the designer
+  shows the agent composer in Group mode (the stale "later phase" placeholder is
+  gone). **Decision:** shared-template editing is the first slice — it reuses the
+  entire pipeline (validation/apply/review/usage) and is consistent with the group
+  designer; **per-athlete auto-adjust generation (Phase 2)** — the agent emits
+  per-member `PrescriptionOverride`s — is the deferred follow-up. Red→green
+  (`test_group_agent.py`), Codex CLEAN iter 1, deploy success, prod-verified.
+  **Remaining Meso backlog:** billing annual prices (BLOCKED on owner numbers +
+  Stripe annual Prices); Anthropic Admin/Usage-API reconciliation (deferred, needs
+  Admin key); group agent Phase 2 (per-athlete auto-adjusts).

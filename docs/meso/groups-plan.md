@@ -349,3 +349,36 @@ agent, and athlete slices.
   only with a shared program + members.
 - Seed (`test_seed_demo.py`): the demo group's members get a materialized delivered plan, not
   duplicated on reseed.
+
+## Phase 5 — the group agent (the AI agent edits the shared program)
+
+Shipped 2026-06-30 (PR #350, no migration). The "What a group plan can't do yet"
+note above is now **superseded for the agent**: `agent_propose` no longer `400`s a
+group plan. The AI proposal agent edits the group's **shared program** behind the
+same propose → review → apply gate every individual run uses. **Per-athlete
+auto-adjust generation by the agent stays a later phase** — this is shared-template
+editing (the simplest correct first slice; the conservative folded backstop keeps
+it safe), consistent with how the group designer already works ("edit the shared
+program directly").
+
+- **Grounding (`agent.service.build_context`).** A group plan grounds on the
+  *group* (a new `_group_context`): name/focus, each active member + their active
+  contraindications, and the **folded** set across all active members. No
+  single-athlete `recent_logs`.
+- **Safety (`agent.validation.forbidden_terms`).** The contraindication backstop
+  folds across **every active member** — a swap/add unsafe for *any one* member is
+  rejected (the shared row trains everyone).
+- **Apply (`agent.apply`) is unchanged** — it writes onto the shared
+  `ExercisePrescription`, so every member inherits the edit.
+- **Scoping.** The review/status/apply endpoints widened from `for_coach`
+  (individual-only) to `editable_by`, so a coach reaches their group batches
+  (identical set for individual plans — no regression). A group run is tagged
+  `trigger=group` (usage ledger → attributed to the group, athlete null).
+- **Post-apply routing.** A group batch routes back to the **designer** (a group
+  has no individual deliver screen; delivery is deliver-to-all).
+- **Designer UI.** The agent composer / coachmark / review-gate note now render in
+  Group mode; the "group agent arrives in the next phase" placeholder is gone.
+
+Tests: `test_group_agent.py`. **Deferred:** group agent **Phase 2** = per-athlete
+auto-adjusts (the agent generates per-member `PrescriptionOverride`s instead of
+editing the shared row).
