@@ -135,6 +135,8 @@ class Command(BaseCommand):
             threshold = Decimal(raw)
         except InvalidOperation as exc:
             raise CommandError(f"--threshold must be a number, got {raw!r}.") from exc
-        if threshold <= 0:
-            raise CommandError("--threshold must be greater than zero.")
+        # is_finite() first: it rejects Infinity/NaN, and guards the comparison
+        # below — ``Decimal("NaN") <= 0`` itself raises InvalidOperation.
+        if not threshold.is_finite() or threshold <= 0:
+            raise CommandError(f"--threshold must be a positive number, got {raw!r}.")
         return threshold

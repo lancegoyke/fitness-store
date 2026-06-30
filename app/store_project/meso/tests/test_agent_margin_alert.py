@@ -287,3 +287,10 @@ class TestCommand:
     def test_nonpositive_threshold_raises_command_error(self):
         with pytest.raises(CommandError):
             call_command("meso_agent_margin_alert", "--threshold", "0")
+
+    @pytest.mark.parametrize("bad", ["Infinity", "NaN", "-1"])
+    def test_non_finite_or_negative_threshold_raises_command_error(self, bad):
+        # Decimal() accepts Infinity/NaN; a non-finite threshold would silently
+        # suppress every alert (cost > Infinity) or crash the <= comparison (NaN).
+        with pytest.raises(CommandError):
+            call_command("meso_agent_margin_alert", "--threshold", bad)
