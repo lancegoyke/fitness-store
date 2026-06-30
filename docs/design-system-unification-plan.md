@@ -1,9 +1,10 @@
 # Design-system unification — plan
 
-Status: **PR 1 + PR 3 implemented** · Started 2026-06-30 · Kicked off from issue
-#327. PR 1 = Foundation + 3 pain points. PR 3 = Meso reconnection (built next,
-out of sequence — it depends only on the PR 1 token foundation, not on PR 2).
-**PR 2 (rest of main site) still to come.**
+Status: **COMPLETE — PRs 1, 2 & 3 all implemented** · Started & finished
+2026-06-30 · Kicked off from issue #327. PR 1 = Foundation + 3 pain points
+(#346); PR 2 = rest of main site + store/detail polish (#349); PR 3 = Meso
+reconnection (#354, built before PR 2 landed — it depends only on the PR 1 token
+foundation, not on PR 2). The whole site now runs on the one token-driven look.
 
 ## Goal
 
@@ -101,7 +102,13 @@ removed from `INSTALLED_APPS` / settings / deps. Red→green tests in
    `.box.purchase`/`.box.login` page, product detail — they inherit the new
    `.box`/`.button`/`.tag` look automatically.
 
-### PR 2 — Rest of main site
+### PR 2 — Rest of main site ✅ implemented
+Shipped in #349. Newsletter joined into an input-group with form/button
+cleanups; de-crispy-era template fixes; cohesive product cards (subtle branded
+placeholder, generic-UI type, tighter spacing); de-boxed hero scroll indicator;
+store detail-page soft-pill tags + animated outline/purchase buttons; a global
+button-link underline fix. The original task list:
+
 - Newsletter form (`_newsletter.html`) — fix the broken field/button layout.
 - Store, home, account/auth, product/book pages — template-level cleanups beyond
   what the global re-skin already gave.
