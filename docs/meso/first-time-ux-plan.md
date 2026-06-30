@@ -133,12 +133,17 @@ These are genuine product calls; the owner delegated them. Resolved as below
   later is a one-flag retrofit, gated on the billing slice (S6).
 - **Q2 · Individual plan creation shape — blank scaffold, template library, or
   agent-drafted-from-a-brief?**
-  **✅ Decided: blank scaffold first, agent-draft as a fast follow.** Phase 1 ships
-  a **blank-but-editable scaffold** (one mesocycle, one deliverable week, a couple
-  of empty sessions) — the smallest change that kills the dead end. Then layer an
-  **optional agent draft** ("draft a starting block from this goal") reusing the
-  existing proposal engine behind the review gate. **Template library deferred** —
-  it needs a corpus of templates we don't have yet.
+  **✅ Decided & both shipped: blank scaffold first, agent-draft as a fast follow.**
+  Phase 1 (PR #326) shipped the **blank-but-editable scaffold** (one mesocycle,
+  one deliverable week, a couple of sessions) — the smallest change that kills the
+  dead end. The **agent-draft fast follow** then shipped in **PR #335** (squash
+  `f94d48c`, migration `0023`): a "Draft with AI" CTA hands the fresh scaffold to
+  the agent to draft the first week into the existing review gate, on the back of
+  a new **`add`** agent verb (introduce a new exercise row into a session — the
+  others only edit existing rows). Metered like the manual agent run; degrades to
+  a blank plan when the allowance is exhausted / no API key. See the decision-log
+  entry. **Template library still deferred** — it needs a corpus of templates we
+  don't have yet.
 - **Q3 · One-click demo for a new coach?**
   **✅ Decided: yes.** A coach-scoped UI wrapper over the existing idempotent
   `seed_meso_demo` logic, with **tear-down** ("remove demo data"). Two guardrails:
