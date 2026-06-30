@@ -1503,6 +1503,24 @@ def _editable_plan_or_response(request, plan_id):
     return plan, None
 
 
+def _coerce_week_id(payload):
+    """A JSON body's ``week_id`` as an int, or an error response if malformed.
+
+    Returns ``(week_id, None)`` — ``week_id`` is None when absent (the caller
+    falls back to the live week) — or ``(None, HttpResponseBadRequest)`` when the
+    value is present but not integer-coercible. ``week_id`` arrives from JSON (not
+    an ``<int:...>`` URL segment), so a tampered value ("abc", "") must answer a
+    clean 400 rather than letting a non-int pk reach the query and 500.
+    """
+    week_id = payload.get("week_id") if isinstance(payload, dict) else None
+    if week_id is None:
+        return None, None
+    try:
+        return int(week_id), None
+    except (TypeError, ValueError):
+        return None, HttpResponseBadRequest("week_id must be an integer.")
+
+
 def _touch_plan(plan):
     """Bump the plan's ``modified`` so it reads as the coach's working plan.
 
@@ -1608,7 +1626,9 @@ def session_add(request, plan_id):
         payload = json.loads(request.body or "{}")
     except (json.JSONDecodeError, UnicodeDecodeError):
         payload = {}
-    week_id = payload.get("week_id") if isinstance(payload, dict) else None
+    week_id, bad = _coerce_week_id(payload)
+    if bad is not None:
+        return bad
     if week_id is not None:
         week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
     else:
@@ -1958,7 +1978,9 @@ def plan_deliver(request, plan_id):
         payload = json.loads(request.body or "{}")
     except (json.JSONDecodeError, UnicodeDecodeError):
         payload = {}
-    week_id = payload.get("week_id") if isinstance(payload, dict) else None
+    week_id, bad = _coerce_week_id(payload)
+    if bad is not None:
+        return bad
     if week_id is not None:
         week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
     else:

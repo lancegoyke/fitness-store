@@ -265,6 +265,23 @@ class TestDeliverChosenWeek:
         assert other_week.delivered_at is None
         assert not WeekDelivery.objects.exists()
 
+    def test_malformed_week_id_is_a_clean_400_not_500(self, client):
+        # ``week_id`` arrives from JSON, so a tampered non-integer must answer a
+        # clean 400 — not crash the int-pk query with a 500.
+        plan, week, _, _ = seed_plan()
+        client.force_login(plan.relationship.coach)
+
+        resp = client.post(
+            deliver_url(plan),
+            data=json.dumps({"week_id": "not-a-number"}),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 400
+        week.refresh_from_db()
+        assert week.delivered_at is None
+        assert not WeekDelivery.objects.exists()
+
     def test_over_limit_coach_cannot_deliver_a_chosen_week(self, client):
         # The D6 freeze guards the endpoint before the body is read, so a
         # per-week deliver is gated exactly like the current-week deliver. A free
