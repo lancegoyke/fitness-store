@@ -112,7 +112,9 @@
                 <div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--dim);margin-bottom:4px;">Week</div>
                 <div style="display:flex;flex-direction:column;gap:3px;">
                   {% for f in deliver.changes.week %}
-                    <div style="font-size:12.5px;line-height:1.45;"><span style="color:var(--dim);">{{ f.label }}</span> {% if f.field == 'is_deload' %}{{ f.before|yesno:"on,off" }} &#8594; <span style="font-weight:650;">{{ f.after|yesno:"on,off" }}</span>{% else %}<span style="text-decoration:line-through;opacity:0.6;">{{ f.before|default:"&#8212;" }}</span> &#8594; <span style="font-weight:650;">{{ f.after|default:"&#8212;" }}</span>{% endif %}</div>
+                    <!-- volume/intensity are ints where 0 is valid — default_if_none
+                         (not default) so a real 0 isn't shown as the em-dash. -->
+                    <div style="font-size:12.5px;line-height:1.45;"><span style="color:var(--dim);">{{ f.label }}</span> {% if f.field == 'is_deload' %}{{ f.before|yesno:"on,off" }} &#8594; <span style="font-weight:650;">{{ f.after|yesno:"on,off" }}</span>{% else %}<span style="text-decoration:line-through;opacity:0.6;">{{ f.before|default_if_none:"&#8212;" }}</span> &#8594; <span style="font-weight:650;">{{ f.after|default_if_none:"&#8212;" }}</span>{% endif %}</div>
                   {% endfor %}
                 </div>
               </div>

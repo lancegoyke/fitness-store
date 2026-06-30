@@ -301,3 +301,18 @@ class TestDeliverScreenRendersDiff:
         body = self._screen(client, plan).content.decode()
 
         assert "No changes" in body
+
+    def test_redelivery_screen_renders_a_zero_week_value(self, client):
+        # 0 is a valid volume/intensity (the model default), so a change *to* 0
+        # must render the number — not get swallowed by an em-dash placeholder.
+        plan, week, _, _ = seed_plan()
+        record_delivery(week)  # snapshot at the factory's volume=70
+        week.volume = 0
+        week.save(update_fields=["volume"])
+        client.force_login(plan.relationship.coach)
+
+        body = self._screen(client, plan).content.decode()
+
+        assert "Volume" in body
+        # The new value 0 is rendered, not the em-dash fallback.
+        assert ">0</span>" in body
