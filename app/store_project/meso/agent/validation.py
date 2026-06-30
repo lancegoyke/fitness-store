@@ -383,7 +383,13 @@ def clean_change(raw, plan, *, forbidden=None):
                 errors.append(f"load_pct {load_pct_raw!r} is not an integer")
             else:
                 if load_pct == 100:
-                    pass  # 100% of the shared load — no divergence
+                    # 100% of the shared load = no divergence, so it's dropped (a
+                    # member with no other diff then needs another field to pass the
+                    # diff-required check below). The agent's job here is to CREATE
+                    # divergences; *resetting* an existing member's load back to
+                    # shared is the coach's manual clear in the designer, not an
+                    # agent verb — deliberately out of this slice.
+                    pass
                 elif not (
                     PrescriptionOverride.MIN_LOAD_PCT
                     <= load_pct
