@@ -4,6 +4,9 @@
 
 {% block pwa %}{% include "meso/_pwa_head.html" %}{% endblock %}
 
+{# Phone-first PWA surface — no marketing site nav (keep the installed-app feel). #}
+{% block site_nav %}{% endblock %}
+
 {% block navlinks %}
   <a class="meso-navlink {% if active == 'training' %}is-active{% endif %}" href="{% url 'meso:athlete_home' %}">Training</a>
 {% endblock %}

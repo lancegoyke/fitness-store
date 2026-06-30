@@ -10,6 +10,8 @@
 {% block head_top %}<meta name="referrer" content="no-referrer" />{% endblock %}
 
 {# A brand-new athlete may have no coach/athlete role yet — strip the coach nav. #}
+{# Focused single-action onboarding screen — no marketing site nav either. #}
+{% block site_nav %}{% endblock %}
 {% block navlinks %}{% endblock %}
 {% block topnav_actions %}{% endblock %}
 {% block topnav_avatar %}{% endblock %}

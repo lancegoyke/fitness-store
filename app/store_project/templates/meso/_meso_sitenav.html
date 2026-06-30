@@ -1,0 +1,30 @@
+{% comment %}
+Design-system unification PR 3 — the shared site nav, reconnecting the Meso
+workspace to the rest of Mastering Fitness.
+
+Mirrors the main-site nav (templates/_nav.html: same links, same auth split) but
+is styled by meso.css, because the Meso shell loads only meso.css (not base.css).
+Rendered by default from _meso_base.html's {% block site_nav %}; the phone-first
+athlete PWA pages override that block to keep their installed-app feel. "Coaching"
+is the active section on every Meso page.
+{% endcomment %}
+<header class="meso-sitenav">
+  <a class="meso-sitenav-brand" href="{% url 'pages:home' %}">Mastering Fitness</a>
+  <nav class="meso-sitenav-links">
+    <a href="{% url 'pages:single' 'about' %}">About</a>
+    <a href="{% url 'products:store' %}">Store</a>
+    <a href="{% url 'challenges:challenge_filtered_list' %}">Challenges</a>
+    <a class="is-active" href="{% url 'meso:roster' %}">Coaching</a>
+    <a href="{% url 'pages:contact' %}">Contact</a>
+  </nav>
+  <span class="meso-sitenav-spacer"></span>
+  <nav class="meso-sitenav-links">
+    {% if user.is_authenticated %}
+      <a href="{% url 'users:profile' %}">Account</a>
+      <a href="{% url 'account_logout' %}">Logout</a>
+    {% else %}
+      <a href="{% url 'account_login' %}">Login</a>
+      <a href="{% url 'account_signup' %}">Signup</a>
+    {% endif %}
+  </nav>
+</header>

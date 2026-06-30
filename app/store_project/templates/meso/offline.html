@@ -9,6 +9,9 @@ page exists (athlete slice Phase 4b — S7). Deliberately login-free so it rende
 for an anonymous fetch rather than a useless cached login redirect.
 {% endcomment %}
 
+{# Phone-first PWA offline fallback — no marketing site nav. #}
+{% block site_nav %}{% endblock %}
+
 {% block navlinks %}
   <a class="meso-navlink" href="{% url 'meso:athlete_home' %}">Training</a>
 {% endblock %}
