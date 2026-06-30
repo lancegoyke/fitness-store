@@ -78,12 +78,15 @@ def normalize_result(result):
 PROPOSE_TOOL = {
     "name": TOOL_NAME,
     "description": (
-        "Propose a batch of edits to the athlete's CURRENT training week. Each "
-        "change must target a real session or exercise by the id given in the "
-        "plan context (an 'add' introduces a NEW exercise row into a session, so "
-        "it targets a session_id, not a prescription). Honor every active "
-        "contraindication and the coach's avoid-rules — never introduce a movement "
-        "a contraindication flags."
+        "Propose a batch of edits to the CURRENT training week. Each change must "
+        "target a real session or exercise by the id given in the plan context (an "
+        "'add' introduces a NEW exercise row into a session, so it targets a "
+        "session_id, not a prescription). For a GROUP's shared program you have an "
+        "extra verb: 'adjust' diverges ONE member from the shared row (a "
+        "per-athlete auto-adjust) — it targets that member by member_id plus the "
+        "shared prescription_id, and the other members are unaffected. Honor every "
+        "active contraindication and the coach's avoid-rules — never introduce a "
+        "movement a contraindication flags."
     ),
     "input_schema": {
         "type": "object",
@@ -102,7 +105,14 @@ PROPOSE_TOOL = {
                     "properties": {
                         "kind": {
                             "type": "string",
-                            "enum": ["swap", "progress", "volume", "deload", "add"],
+                            "enum": [
+                                "swap",
+                                "progress",
+                                "volume",
+                                "deload",
+                                "add",
+                                "adjust",
+                            ],
                         },
                         "session_id": {
                             "type": ["integer", "null"],
@@ -175,6 +185,24 @@ PROPOSE_TOOL = {
                                 "add only: the RPE target for the new row, e.g. '7'."
                             ),
                         },
+                        "member_id": {
+                            "type": ["integer", "null"],
+                            "description": (
+                                "adjust only (GROUP plans): the member_id (from the "
+                                "group context) of the ONE member this per-athlete "
+                                "auto-adjust applies to. The shared row is unchanged; "
+                                "only this member diverges."
+                            ),
+                        },
+                        "load_pct": {
+                            "type": ["integer", "null"],
+                            "description": (
+                                "adjust only: scale this member's shared load to "
+                                "this percentage — 90 means −10%, 110 means +10%. "
+                                "Omit for no load change (set new_name for a swap "
+                                "and/or new_sets/new_reps for a volume tweak instead)."
+                            ),
+                        },
                     },
                     "required": ["kind", "title", "rationale"],
                 },
@@ -219,10 +247,19 @@ SYSTEM_PROMPT = (
 
 
 _GROUP_FRAMING = (
-    "This is a GROUP's SHARED program — every listed member trains off it, so "
-    "your edits apply to ALL of them. Ground on the group context: honor EVERY "
-    "member's contraindications (the group.contraindications list folds them "
-    "together). Do not personalize per athlete here; edit the one shared week.\n\n"
+    "This is a GROUP's SHARED program — every listed member trains off it. You "
+    "can edit it two ways:\n"
+    "- A SHARED edit (swap/progress/volume/deload/add) changes the one shared week "
+    "for EVERYONE. Honor every member's contraindications (group.contraindications "
+    "folds them together) — a shared movement must be safe for all of them.\n"
+    "- A per-athlete ADJUST diverges ONE member from the shared row (a swap, a "
+    "load %, or a volume tweak just for them). Use it when the instruction is "
+    "about a single athlete or when one member's constraint differs from the "
+    "group. Set member_id to that member's id from group.members, prescription_id "
+    "to the shared row, and the divergence (new_name / load_pct / new_sets / "
+    "new_reps). An adjust only needs to be safe for THAT member.\n"
+    "Prefer a shared edit when the change is for the whole group; reach for an "
+    "adjust only to personalize one member.\n\n"
 )
 
 

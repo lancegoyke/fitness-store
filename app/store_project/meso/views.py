@@ -2334,7 +2334,10 @@ def batch_status(request, batch_id):
     if batch.status == AgentProposalBatch.Status.FAILED:
         data["error"] = batch.error
     elif batch.status != AgentProposalBatch.Status.DRAFTING:
-        changes = [serialize_proposed_change(c) for c in batch.changes.all()]
+        changes = [
+            serialize_proposed_change(c)
+            for c in batch.changes.select_related("membership__relationship__athlete")
+        ]
         data["changes"] = changes
         if changes:
             data["review_url"] = reverse(

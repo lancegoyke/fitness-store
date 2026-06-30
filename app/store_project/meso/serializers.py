@@ -57,6 +57,8 @@ def serialize_proposed_change(change):
     Matches the prototype's ``PROPOSED_CHANGES`` dicts (``id``/``kind``/``day``/
     ``title``/``before``/``after``/``rationale``/``honors``) so the same template
     renders real batches; ``status`` is added for the (Phase 2) approve gate.
+    ``member`` names the group member a per-athlete ``adjust`` targets (blank for
+    every other kind, which edits the shared row) so the coach sees who diverges.
     """
     return {
         "id": change.pk,
@@ -67,6 +69,11 @@ def serialize_proposed_change(change):
         "after": change.after,
         "rationale": change.rationale,
         "honors": change.honors,
+        "member": (
+            change.membership.relationship.athlete.display_name()
+            if change.membership_id
+            else ""
+        ),
         "status": change.status,
     }
 
@@ -105,7 +112,10 @@ def _agent_reply_for_batch(batch):
         )
         return message
 
-    changes = [serialize_proposed_change(c) for c in batch.changes.all()]
+    changes = [
+        serialize_proposed_change(c)
+        for c in batch.changes.select_related("membership__relationship__athlete")
+    ]
     message["text"] = batch.summary or (_NO_CHANGES_NOTE if not changes else "")
     message["changes"] = changes
     message["reviewUrl"] = (

@@ -1117,3 +1117,38 @@ _(Append dated entries here as decisions land.)_
   **Remaining Meso backlog:** billing annual prices (BLOCKED on owner numbers +
   Stripe annual Prices); Anthropic Admin/Usage-API reconciliation (deferred, needs
   Admin key); group agent Phase 2 (per-athlete auto-adjusts).
+- 2026-06-30 — **Group agent Phase 2 built: the agent proposes per-athlete
+  AUTO-ADJUSTS** (migration `meso.0027`). Phase 1 let the group agent edit the
+  *shared* program (every member inherits); this slice adds the other half — the
+  agent can propose a per-member `PrescriptionOverride` (a swap, a load %, or a
+  volume tweak that diverges **one** member from the shared base) behind the same
+  propose → review → apply gate. Both coexist: the agent picks a shared edit (whole
+  group) or an adjust (personalize one member) from the instruction. **A new agent
+  verb `adjust` (`ProposedChange.Kind.ADJUST`)** — the first kind that edits neither
+  the shared row nor a new row; `ProposedChange` gains a nullable `membership` FK
+  (`SET_NULL`, like `session`/`prescription` → a member removed between propose and
+  apply is a safe no-op skip). The `adjust` targets the member by **`member_id`**
+  (the `GroupMembership` pk `service._group_context` now exposes per member) + the
+  shared `prescription_id`; the tool gains adjust-only `member_id` + `load_pct` (int
+  percentage, 90 = −10%), reusing `new_name`/`new_sets`/`new_reps` for the rest.
+  **Per-member safety is the key property:** a *shared* swap/add is screened against
+  the **folded** set of every member's contraindications (Phase 1), but an `adjust`
+  swap only trains the one member, so it is screened against **that member's own**
+  contraindications (`validation.member_forbidden_terms`) — a movement unsafe for a
+  *different* member is allowed (it never reaches them). Validation resolves the
+  member (active member of *this* group; foreign/ended/unknown rejected), bounds
+  `load_pct` to the override's `MIN/MAX_LOAD_PCT` (dropping a no-op 100%), and
+  requires a real diff; an `adjust` on an individual plan is rejected.
+  **Apply (`agent.apply._apply_adjust`)** calls `GroupMembership.set_override` — the
+  same upsert the coach's click-to-adjust editor uses — so the override shows on the
+  designer `adj` overlay and flows through deliver-to-all (`sync_delivered_plan`)
+  with zero new apply/delivery code. `serialize_proposed_change` carries a `member`
+  name for an adjust (review badge + inline chip) so the coach sees *who* diverges;
+  the three serialization sites `select_related` the membership (no N+1). The cached
+  system prompt is unchanged — the shared-vs-adjust guidance lives in the volatile
+  `_GROUP_FRAMING` user turn (same split as Phase 1). Red→green
+  (`test_group_agent_adjust.py`, +19); 1450 project pytest + 115 vitest green, ruff +
+  DjHTML + `makemigrations --check` clean. **No further group-agent backlog** (both
+  the shared-edit and per-athlete-adjust halves are built). **Remaining Meso
+  backlog:** billing annual prices (BLOCKED on owner numbers + Stripe annual Prices);
+  Anthropic Admin/Usage-API reconciliation (deferred, needs Admin key).

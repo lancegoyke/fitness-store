@@ -346,9 +346,10 @@ class TestGroupDesignerUI:
 
     def test_meso_js_group_greeting_invites_the_agent(self):
         js = self._meso_js()
-        # The group greeting now invites the coach to use the agent on the shared
-        # program rather than telling them it's unavailable.
-        assert "Ask me to adjust it" in js
+        # The group greeting invites the coach to use the agent on the shared
+        # program — for the whole group or to adjust one athlete (Phase 2).
+        assert "change it for the whole group" in js
+        assert "adjust one athlete" in js
 
     def test_group_designer_renders_the_agent_composer(self, client):
         coach, group, plan, athletes = make_group_plan()

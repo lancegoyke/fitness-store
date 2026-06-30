@@ -406,7 +406,10 @@ def review_changes(batch):
     subject = plan.group.name if plan.is_group else plan.athlete.display_name()
     return {
         "athlete": {"name": subject},
-        "changes": [serialize_proposed_change(c) for c in batch.changes.all()],
+        "changes": [
+            serialize_proposed_change(c)
+            for c in batch.changes.select_related("membership__relationship__athlete")
+        ],
     }
 
 

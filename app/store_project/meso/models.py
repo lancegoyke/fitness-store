@@ -1597,6 +1597,10 @@ class ProposedChange(models.Model):
         # Introduce a NEW exercise row into a session (no row to edit) — the verb
         # that lets the agent draft a program onto a bare scaffold.
         ADD = "add", _("Add")
+        # Diverge ONE group member from the shared row (a per-athlete auto-adjust
+        # — the ``adj`` overlay; groups agent Phase 2). Targets a ``membership`` +
+        # the shared ``prescription``; applied via ``GroupMembership.set_override``.
+        ADJUST = "adjust", _("Adjust")
 
     class Status(models.TextChoices):
         PENDING = "pending", _("Pending")
@@ -1625,6 +1629,18 @@ class ProposedChange(models.Model):
         blank=True,
         related_name="proposed_changes",
         verbose_name=_("Prescription"),
+    )
+    # The group member an ``adjust`` change targets (groups agent Phase 2). Null
+    # for every other kind (they edit the shared row, which trains everyone).
+    # ``SET_NULL`` so a membership removed between propose and apply leaves the
+    # change a safe no-op skip, mirroring ``session``/``prescription``.
+    membership = models.ForeignKey(
+        "GroupMembership",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="proposed_changes",
+        verbose_name=_("Membership"),
     )
     day_label = models.CharField(_("Day label"), max_length=128, blank=True)
     title = models.CharField(_("Title"), max_length=255)

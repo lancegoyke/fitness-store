@@ -95,6 +95,53 @@ def _apply_add(change):
     }
 
 
+def _apply_adjust(change):
+    """Set one member's per-athlete override (groups agent Phase 2).
+
+    Unlike every other kind (which edits the shared row), an ``adjust`` diverges
+    *one* member: ``GroupMembership.set_override`` upserts the override the
+    designer overlay renders and delivery resolves. A null membership/prescription
+    (a member removed between propose and apply) or an empty diff is a safe no-op
+    skip, mirroring the other kinds.
+
+    An agent adjust is a *partial* edit (the model proposes only the field(s) it
+    wants to change — validation stores just those in ``payload``). ``set_override``
+    is a full replace, so we **merge** the proposal onto the member's existing
+    override first: a load-only adjust applied to a member who already has a
+    coach-authored swap keeps the swap (the coach reviewed a load tweak, not a
+    removal). Only the fields the agent actually proposed move.
+    """
+    membership = change.membership
+    presc = change.prescription
+    if membership is None or presc is None:
+        return None
+    payload = change.payload or {}
+    existing = membership.overrides.filter(prescription=presc).first()
+    merged = {
+        "swap_name": existing.swap_name if existing else "",
+        "load_pct": existing.load_pct if existing else None,
+        "sets": existing.sets if existing else "",
+        "reps": existing.reps if existing else "",
+        "note": existing.note if existing else "",
+    }
+    # Overlay only the fields the proposal carried (validation kept just those),
+    # leaving the member's other existing adjustments untouched.
+    for key in merged:
+        if key in payload:
+            merged[key] = payload[key]
+    override = membership.set_override(presc, **merged)
+    if override is None:
+        # An empty diff cleared instead of stored — validation should prevent
+        # this, but treat it as a skip rather than counting a phantom apply.
+        return None
+    return {
+        "id": change.pk,
+        "kind": change.kind,
+        "field": "override",
+        "value": membership.pk,
+    }
+
+
 def _apply_deload(change):
     """Flag the change's week as a deload (its session's week, else current)."""
     week = change.session.week if change.session_id else current_week(change.batch.plan)
@@ -122,6 +169,8 @@ def apply_change(change):
         return _apply_deload(change)
     if change.kind == ProposedChange.Kind.ADD:
         return _apply_add(change)
+    if change.kind == ProposedChange.Kind.ADJUST:
+        return _apply_adjust(change)
     return None
 
 
@@ -137,7 +186,9 @@ def apply_batch(batch):
     with transaction.atomic():
         changes = batch.changes.exclude(
             status=ProposedChange.Status.REJECTED
-        ).select_related("prescription", "session__week")
+        ).select_related(
+            "prescription", "session__week", "membership__relationship__athlete"
+        )
         for change in changes:
             result = apply_change(change)
             if result is None:

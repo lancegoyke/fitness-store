@@ -17,12 +17,15 @@ screen. Two layers:
 
 import re
 
+from ..models import CoachAthlete
 from ..models import ExercisePrescription
+from ..models import GroupMembership
 from ..models import LoadType
+from ..models import PrescriptionOverride
 from ..models import Session
 from ..serializers import current_week
 
-VALID_KINDS = {"swap", "progress", "volume", "deload", "add"}
+VALID_KINDS = {"swap", "progress", "volume", "deload", "add", "adjust"}
 
 # A %1RM progression moves a PERCENT, so its value is bounded to a sane band. The
 # ceiling sits above legitimate supramaximal work (eccentrics / walkouts run a
@@ -40,6 +43,8 @@ _REQUIRED_TARGET = {
     "progress": "prescription",
     "volume": "session",
     "add": "session",
+    # An adjust overrides one member's copy of a specific shared row.
+    "adjust": "prescription",
 }
 
 # Generic words that survive the length filter but carry no movement meaning.
@@ -75,6 +80,15 @@ _ADD_FIELDS = (
     ("reps", "new_reps", 32),
     ("load", "new_load", 32),
     ("rpe", "new_rpe", 32),
+)
+
+# An ``adjust`` builds one member's override diff (groups agent Phase 2), applied
+# via ``GroupMembership.set_override``, as (override field, tool field, max_length).
+# ``load_pct`` is an integer (handled separately); these are the string parts.
+_ADJUST_FIELDS = (
+    ("swap_name", "new_name", 255),
+    ("sets", "new_sets", 32),
+    ("reps", "new_reps", 32),
 )
 
 
@@ -131,16 +145,33 @@ def _active_contraindication_texts(plan):
     return [c.text for c in plan.athlete.contraindications.filter(active=True)]
 
 
+def _terms_from_texts(texts):
+    """Fold a list of contraindication texts into their forbidden movement terms."""
+    terms = set()
+    for text in texts:
+        terms |= _significant_words(_avoid_clause(text))
+    return terms
+
+
 def forbidden_terms(plan):
     """Movement terms a swap must not re-introduce, from active contraindications.
 
     Folds across a group's active members for a group plan (the conservative
     backstop — see ``_active_contraindication_texts``).
     """
-    terms = set()
-    for text in _active_contraindication_texts(plan):
-        terms |= _significant_words(_avoid_clause(text))
-    return terms
+    return _terms_from_texts(_active_contraindication_texts(plan))
+
+
+def member_forbidden_terms(membership):
+    """Forbidden terms from one group member's *own* active contraindications.
+
+    A per-athlete ``adjust`` swap only trains that one member, so it is screened
+    against their contraindications alone — not the folded group set a *shared*
+    edit honors (a movement unsafe for a different member never reaches them).
+    """
+    athlete = membership.relationship.athlete
+    texts = [c.text for c in athlete.contraindications.all() if c.active]
+    return _terms_from_texts(texts)
 
 
 def _name_words(name):
@@ -173,6 +204,39 @@ def _resolve(model, value, label, errors, **scope):
     if obj is None:
         errors.append(f"{label} {pk} is not in this plan's current week")
     return obj
+
+
+def _resolve_membership(value, plan, errors):
+    """Resolve an adjust's ``member_id`` to an active membership of this group.
+
+    An ``adjust`` is group-only (an individual plan has no members to diverge),
+    and the member must be an *active* member of *this* plan's group — a foreign
+    or ended member is rejected, mirroring ``MesoGroup.add_athlete``'s tenancy.
+    """
+    if not plan.is_group:
+        errors.append("an adjust change is only valid on a group plan")
+        return None
+    if value in (None, ""):
+        errors.append("an adjust change must target a member (member_id)")
+        return None
+    try:
+        pk = int(value)
+    except (TypeError, ValueError):
+        errors.append(f"member_id {value!r} is not an integer")
+        return None
+    membership = (
+        GroupMembership.objects.filter(
+            pk=pk,
+            group=plan.group,
+            relationship__coach=plan.group.coach,
+            relationship__status=CoachAthlete.Status.ACTIVE,
+        )
+        .select_related("relationship__athlete")
+        .first()
+    )
+    if membership is None:
+        errors.append(f"member {pk} is not an active member of this group")
+    return membership
 
 
 def _percent_load(text):
@@ -260,6 +324,15 @@ def clean_change(raw, plan, *, forbidden=None):
     cleaned["prescription"] = presc
     cleaned["session"] = session
 
+    # An adjust targets one group member (a per-athlete auto-adjust); every other
+    # kind edits the shared row, so its membership stays null.
+    membership = (
+        _resolve_membership(raw.get("member_id"), plan, errors)
+        if (kind == "adjust")
+        else None
+    )
+    cleaned["membership"] = membership
+
     # An actionable change must target a real row (a swap/progress with no
     # prescription, or a volume change with no session, can't be applied).
     required = _REQUIRED_TARGET.get(kind)
@@ -292,6 +365,43 @@ def clean_change(raw, plan, *, forbidden=None):
                 payload[field] = value
         if not payload.get("name") and cleaned["introduces_exercise"]:
             payload["name"] = cleaned["introduces_exercise"]
+    elif kind == "adjust":
+        # Build one member's override diff (the keys map onto set_override).
+        for field, raw_field, max_len in _ADJUST_FIELDS:
+            value = raw.get(raw_field, "")
+            value = value.strip()[:max_len] if isinstance(value, str) else ""
+            if value:
+                payload[field] = value
+        # load_pct scales the shared numeric load (90 = −10%). 100% is a no-op vs
+        # the shared load and is dropped; outside the override's sane band is a
+        # client bug and is rejected.
+        load_pct_raw = raw.get("load_pct")
+        if load_pct_raw not in (None, ""):
+            try:
+                load_pct = int(load_pct_raw)
+            except (TypeError, ValueError):
+                errors.append(f"load_pct {load_pct_raw!r} is not an integer")
+            else:
+                if load_pct == 100:
+                    # 100% of the shared load = no divergence, so it's dropped (a
+                    # member with no other diff then needs another field to pass the
+                    # diff-required check below). The agent's job here is to CREATE
+                    # divergences; *resetting* an existing member's load back to
+                    # shared is the coach's manual clear in the designer, not an
+                    # agent verb — deliberately out of this slice.
+                    pass
+                elif not (
+                    PrescriptionOverride.MIN_LOAD_PCT
+                    <= load_pct
+                    <= PrescriptionOverride.MAX_LOAD_PCT
+                ):
+                    errors.append(
+                        f"load_pct {load_pct} is out of range "
+                        f"({PrescriptionOverride.MIN_LOAD_PCT}–"
+                        f"{PrescriptionOverride.MAX_LOAD_PCT}%)"
+                    )
+                else:
+                    payload["load_pct"] = load_pct
     cleaned["payload"] = payload
 
     # %1RM bound — a progress on a percent-typed lift moves a PERCENTAGE. The
@@ -316,21 +426,30 @@ def clean_change(raw, plan, *, forbidden=None):
             else:
                 payload["load"] = _fmt_percent(pct)
 
-    # Contraindication backstop — only a SWAP or an ADD introduces a new movement,
-    # so only those are screened (a volume/progress edit that *mentions* a flagged
-    # movement, e.g. "overhead pressing − 1 set", is safe and must pass). Check
-    # the name actually applied (``payload['name']``, which folds in ``new_name``)
-    # plus ``introduces_exercise`` and ``after`` — any of them can carry the new
-    # exercise. We deliberately do NOT check ``title``/``before``: those name the
-    # *removed* exercise, often the contraindicated one being swapped out.
+    # Contraindication backstop — only a movement-introducing change is screened
+    # (a volume/progress edit that *mentions* a flagged movement, e.g. "overhead
+    # pressing − 1 set", is safe and must pass). A SWAP/ADD edits the SHARED row,
+    # so it is screened against the plan's forbidden set (folded across a group's
+    # members); an ADJUST's swap only trains its one member, so it is screened
+    # against THAT member's own contraindications (a movement unsafe for a
+    # different member never reaches them). We check the name actually applied
+    # plus ``introduces_exercise``/``after`` — any can carry the new exercise —
+    # but never ``title``/``before``, which name the *removed* exercise.
     if forbidden is None:
         forbidden = forbidden_terms(plan)
-    if forbidden and kind in ("swap", "add"):
+    screen_terms = None
+    introduced = ""
+    if kind in ("swap", "add"):
+        screen_terms = forbidden
         introduced = (
             f"{payload.get('name', '')} "
             f"{cleaned['introduces_exercise']} {cleaned['after']}"
         )
-        hit = _name_words(introduced) & forbidden
+    elif kind == "adjust" and membership is not None and payload.get("swap_name"):
+        screen_terms = member_forbidden_terms(membership)
+        introduced = payload["swap_name"]
+    if screen_terms and introduced:
+        hit = _name_words(introduced) & screen_terms
         if hit:
             errors.append(
                 "introduced movement violates a contraindication "
@@ -348,6 +467,19 @@ def clean_change(raw, plan, *, forbidden=None):
     # the apply step has nothing to create.
     if kind == "add" and not payload.get("name"):
         errors.append("an add change needs an exercise name (new_name)")
+
+    # An adjust must carry at least one real diff (a swap, a load %, or new
+    # volume) — an empty override is a no-op set_override would just clear.
+    if kind == "adjust" and not (
+        payload.get("swap_name")
+        or payload.get("load_pct") is not None
+        or payload.get("sets")
+        or payload.get("reps")
+    ):
+        errors.append(
+            "an adjust change needs at least one of: a swap (new_name), a load % "
+            "(load_pct), or new sets/reps"
+        )
 
     if errors:
         return None, errors
