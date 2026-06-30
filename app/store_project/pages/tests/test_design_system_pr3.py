@@ -83,6 +83,17 @@ class SharedNavCSSTests(TestCase):
         # the checkbox-peer pattern reveals the links when checked
         self.assertIn(".nav-toggle:checked", css)
 
+    def test_mobile_controls_are_scoped_to_beat_base_checkbox_rule(self):
+        """Desktop must hide the toggle/burger.
+
+        base.css styles ``input[type="checkbox"] { display: grid }`` (specificity
+        0,1,1), so a bare ``.nav-toggle`` (0,1,0) loses and the checkbox shows as
+        a stray box. The hide/show rules are scoped under ``.nav`` to win.
+        """
+        css = NAV_CSS.read_text()
+        self.assertIn(".nav .nav-toggle", css)
+        self.assertIn(".nav .nav-burger", css)
+
 
 class SharedNavMarkupTests(TestCase):
     """``_nav.html`` rebuilt on the cleaner shared structure."""

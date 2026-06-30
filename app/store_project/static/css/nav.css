@@ -80,9 +80,11 @@
 }
 
 /* The mobile disclosure controls are hidden on desktop, where the full menu is
-   always visible. */
-.nav-toggle,
-.nav-burger {
+   always visible. Scoped under .nav so this beats base.css's
+   `input[type="checkbox"] { display: grid }` (which is more specific than a bare
+   .nav-toggle). */
+.nav .nav-toggle,
+.nav .nav-burger {
   display: none;
 }
 
@@ -95,7 +97,7 @@
 
   /* The checkbox stays in the DOM (it drives the :checked toggle) but is
      visually hidden while remaining keyboard-focusable. */
-  .nav-toggle {
+  .nav .nav-toggle {
     display: block;
     position: absolute;
     width: 1px;
@@ -108,7 +110,7 @@
     white-space: nowrap;
   }
 
-  .nav-burger {
+  .nav .nav-burger {
     display: flex;
     flex-direction: column;
     justify-content: center;
