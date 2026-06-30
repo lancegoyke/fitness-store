@@ -2064,12 +2064,15 @@ table tr:nth-child(even) {
   padding: var(--s1);
 }
 
-/* Challenge description enhancement */
+/* Challenge description: a content panel, not an interactive control. Uses the
+   neutral box border + subtle shadow (the old 2px steel-blue outline + heavy
+   glow read as a clickable/focused button); identity comes from the thin accent
+   top-bar below, not a full accent border. */
 .challenge-description {
   background: var(--main-color-light);
-  border: 2px solid var(--main-color-accent);
+  border: 1px solid var(--border);
   border-radius: var(--border-radius);
-  box-shadow: 0 8px 32px rgba(49, 117, 157, 0.15);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   position: relative;
   overflow: hidden;
   padding: var(--s2);
