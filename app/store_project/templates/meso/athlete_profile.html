@@ -32,7 +32,7 @@
         </div>
       </div>
       {% if athlete.status == 'needs_review' %}
-        <a class="meso-btn meso-btn--primary" href="{% url 'meso:review' %}">Review agent changes</a>
+        <a class="meso-btn meso-btn--primary" href="{% url 'meso:review_batch' athlete.review_batch_id %}">Review agent changes</a>
       {% endif %}
     </div>
 
@@ -113,27 +113,31 @@
             </div>
           </div>
 
-          <a class="meso-card meso-card--pad" href="{% url 'meso:results' %}" style="text-decoration:none;color:inherit;display:block;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-              <p class="meso-eyebrow" style="margin:0;">Latest session</p>
-              <div class="meso-spacer"></div>
-              <span class="meso-row-meta">{{ results_summary.session }}</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:22px;">
-              <div>
-                <div style="font-size:22px;font-weight:800;letter-spacing:-0.02em;">{{ results_summary.completion }}%</div>
-                <div class="meso-row-meta">completed</div>
+          {% if results_summary %}
+            <a class="meso-card meso-card--pad" href="{% url 'meso:results' %}" style="text-decoration:none;color:inherit;display:block;">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+                <p class="meso-eyebrow" style="margin:0;">Latest session</p>
+                <div class="meso-spacer"></div>
+                <span class="meso-row-meta">{{ results_summary.session }}</span>
               </div>
-              <div>
-                <div style="font-size:22px;font-weight:800;letter-spacing:-0.02em;" class="meso-mono">{{ results_summary.avg_rpe_delta }}</div>
-                <div class="meso-row-meta">avg RPE vs target</div>
+              <div style="display:flex;align-items:center;gap:22px;">
+                <div>
+                  <div style="font-size:22px;font-weight:800;letter-spacing:-0.02em;">{{ results_summary.completion }}%</div>
+                  <div class="meso-row-meta">completed</div>
+                </div>
+                <div>
+                  <div style="font-size:22px;font-weight:800;letter-spacing:-0.02em;" class="meso-mono">{{ results_summary.avg_rpe_delta }}</div>
+                  <div class="meso-row-meta">avg RPE vs target</div>
+                </div>
+                {% if results_summary.flag %}
+                  <div style="flex:1;display:flex;gap:8px;align-items:flex-start;padding:9px 11px;border-radius:8px;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 22%,#fff);">
+                    <i style="width:5px;height:5px;border-radius:50%;background:var(--warn);margin-top:6px;flex:0 0 auto;"></i>
+                    <span style="font-size:12px;color:var(--warn);font-weight:600;line-height:1.3;">{{ results_summary.flag }}</span>
+                  </div>
+                {% endif %}
               </div>
-              <div style="flex:1;display:flex;gap:8px;align-items:flex-start;padding:9px 11px;border-radius:8px;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 22%,#fff);">
-                <i style="width:5px;height:5px;border-radius:50%;background:var(--warn);margin-top:6px;flex:0 0 auto;"></i>
-                <span style="font-size:12px;color:var(--warn);font-weight:600;line-height:1.3;">{{ results_summary.flag }}</span>
-              </div>
-            </div>
-          </a>
+            </a>
+          {% endif %}
         {% else %}
           <div class="meso-card meso-card--pad" style="text-align:center;color:var(--dim);">
             <p class="meso-eyebrow">Current block</p>

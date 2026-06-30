@@ -183,9 +183,30 @@ class TestStatus:
     def test_needs_review_with_a_pending_batch(self):
         rel = CoachAthleteFactory()
         plan, _ = make_plan(rel)
-        AgentProposalBatchFactory(plan=plan, status=AgentProposalBatch.Status.PENDING)
+        batch = AgentProposalBatchFactory(
+            plan=plan, status=AgentProposalBatch.Status.PENDING
+        )
         athlete = presenters.profile_program(rel, plan)["athlete"]
         assert athlete["status"] == "needs_review"
+        # The CTA carries *this* athlete's pending batch, not a bare redirect.
+        assert athlete["review_batch_id"] == batch.pk
+
+    def test_review_batch_id_is_the_newest_pending(self):
+        rel = CoachAthleteFactory()
+        plan, _ = make_plan(rel)
+        AgentProposalBatchFactory(plan=plan, status=AgentProposalBatch.Status.PENDING)
+        newer = AgentProposalBatchFactory(
+            plan=plan, status=AgentProposalBatch.Status.PENDING
+        )
+        athlete = presenters.profile_program(rel, plan)["athlete"]
+        assert athlete["review_batch_id"] == newer.pk
+
+    def test_review_batch_id_none_without_a_pending_batch(self):
+        rel = CoachAthleteFactory()
+        plan, _ = make_plan(rel)
+        athlete = presenters.profile_program(rel, plan)["athlete"]
+        assert athlete["status"] == "delivered"
+        assert athlete["review_batch_id"] is None
 
     def test_drafting_with_an_in_flight_run(self):
         rel = CoachAthleteFactory()
@@ -317,13 +338,26 @@ class TestProfileRender:
     def test_needs_review_surfaces_the_review_cta(self, client):
         coach, rel = self._coach_with_athlete()
         plan, _ = make_plan(rel)
-        AgentProposalBatchFactory(
+        batch = AgentProposalBatchFactory(
             plan=plan, coach=coach, status=AgentProposalBatch.Status.PENDING
         )
         client.force_login(coach)
         resp = client.get(reverse("meso:athlete", kwargs={"pk": rel.athlete_id}))
         body = resp.content.decode()
         assert "Review agent changes" in body
+        # The CTA links to *this* batch's review screen, not the bare redirect.
+        assert reverse("meso:review_batch", kwargs={"batch_id": batch.pk}) in body
+
+    def test_delivered_but_unlogged_hides_the_latest_session_card(self, client):
+        # has_program is true (a measurable delivered week), but nothing's logged
+        # yet — the Latest-session card must not render blank with a dangling %.
+        coach, rel = self._coach_with_athlete()
+        make_plan(rel, sessions=2, done=0)
+        client.force_login(coach)
+        resp = client.get(reverse("meso:athlete", kwargs={"pk": rel.athlete_id}))
+        body = resp.content.decode()
+        assert "0%" in body  # the adherence meter still shows
+        assert "Latest session" not in body
 
     def test_undelivered_with_working_plan_shows_in_progress(self, client):
         coach, rel = self._coach_with_athlete()

@@ -141,16 +141,27 @@ def _profile_status(link, working_plan, delivered_plan):
     individual working plan and the delivered plan. A group-delivery snapshot's
     proposals live on the shared group plan (reviewed from the group designer, not
     this individual profile), so a group-only athlete simply reads ``delivered``.
+
+    Returns ``(status, label, review_batch_id)`` — the id of the *this athlete's*
+    pending batch (newest first) so the profile's "Review agent changes" CTA links
+    straight to it, rather than the bare ``review`` redirect that lands on the
+    coach's globally-latest pending batch (possibly a different athlete). ``None``
+    when there's nothing to review.
     """
     plan_ids = {delivered_plan.pk}
     if working_plan is not None:
         plan_ids.add(working_plan.pk)
     batches = AgentProposalBatch.objects.filter(plan_id__in=plan_ids)
-    if batches.filter(status=AgentProposalBatch.Status.PENDING).exists():
-        return "needs_review", "Needs review"
+    pending = (
+        batches.filter(status=AgentProposalBatch.Status.PENDING)
+        .order_by("-created_at")
+        .first()
+    )
+    if pending is not None:
+        return "needs_review", "Needs review", pending.pk
     if batches.filter(status=AgentProposalBatch.Status.DRAFTING).exists():
-        return "drafting", "Drafting…"
-    return "delivered", "Delivered"
+        return "drafting", "Drafting…", None
+    return "delivered", "Delivered", None
 
 
 def _profile_results(link):
@@ -212,6 +223,7 @@ def profile_program(link, working_plan):
                 "compliance": None,
                 "status": "",
                 "status_label": "",
+                "review_batch_id": None,
                 "goals": [goal] if goal else [],
             },
             "macrocycle": [],
@@ -222,7 +234,7 @@ def profile_program(link, working_plan):
     mesocycles = list(plan.mesocycles.all())
     states = _phase_states(mesocycles, week.mesocycle)
     macrocycle = [serialize_mesocycle(m, s) for m, s in zip(mesocycles, states)]
-    status, status_label = _profile_status(link, working_plan, plan)
+    status, status_label, review_batch_id = _profile_status(link, working_plan, plan)
     # The goal of the plan the coach is actively shaping if there is one, else the
     # delivered plan's — a group-only athlete has no individual working plan.
     goal = (working_plan.goal if working_plan else "") or plan.goal
@@ -234,6 +246,7 @@ def profile_program(link, working_plan):
             "compliance": compliance,
             "status": status,
             "status_label": status_label,
+            "review_batch_id": review_batch_id,
             "goals": [goal] if goal else [],
         },
         "macrocycle": macrocycle,
