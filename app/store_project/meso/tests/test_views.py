@@ -33,6 +33,20 @@ class TestRosterScoping:
         assert "Devon Reyes" not in body  # pending, not on roster
         assert "Priya Nair" not in body  # another coach's athlete
 
+    def test_roster_hides_contraindications(self, client):
+        # Issue #382: the roster is a scannable index of athletes; a client's
+        # contraindications live on their profile, not as badges on the row.
+        coach = UserFactory()
+        athlete = UserFactory(name="Maya Okonkwo")
+        CoachAthleteFactory(coach=coach, athlete=athlete)
+        ContraindicationFactory(
+            athlete=athlete, text="Cervical spine — avoid overhead pressing"
+        )
+        client.force_login(coach)
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert "Maya Okonkwo" in body  # athlete still listed
+        assert "Cervical spine" not in body  # contraindication not shown here
+
     def test_anonymous_sees_landing_not_login(self, client):
         # First-time-UX Phase 3: ``/meso/`` no longer bounces an anonymous
         # visitor to login — it renders the public landing (front door).

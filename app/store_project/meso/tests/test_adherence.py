@@ -23,6 +23,7 @@ from store_project.meso import adherence
 from store_project.meso import presenters
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachProfileFactory
+from store_project.meso.factories import ContraindicationFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionFactory
@@ -262,6 +263,16 @@ class TestRosterPresenters:
         user = UserFactory()
         row = presenters.roster_athlete(user)
         assert row["compliance"] is None
+
+    def test_roster_athlete_omits_contraindications(self):
+        # Issue #382: contraindications belong on the athlete profile, not the
+        # scannable roster row — the presenter must not carry them as flags.
+        user = UserFactory()
+        ContraindicationFactory(
+            athlete=user, text="Cervical spine — avoid overhead pressing"
+        )
+        row = presenters.roster_athlete(user)
+        assert "flags" not in row
 
     def test_roster_activity_shape(self):
         rel = CoachAthleteFactory()
