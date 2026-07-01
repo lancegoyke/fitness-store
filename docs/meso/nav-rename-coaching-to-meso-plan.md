@@ -1,6 +1,6 @@
 # Meso — rename top-nav "Coaching" → "Meso"
 
-Status: **PLANNED** — not started. Tracking issue: _(add issue link when filed)_.
+Status: **PLANNED** — not started. Tracking issue: [#390](https://github.com/lancegoyke/fitness-store/issues/390).
 
 ## Why
 

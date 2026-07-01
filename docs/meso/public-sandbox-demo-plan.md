@@ -1,6 +1,6 @@
 # Meso — public, no-signup interactive sandbox (Level-2 demo)
 
-Status: **PLANNED** — not started. Tracking issue: _(add issue link when filed)_.
+Status: **PLANNED** — not started. Tracking issue: [#389](https://github.com/lancegoyke/fitness-store/issues/389).
 
 ## Why
 

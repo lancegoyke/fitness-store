@@ -1,6 +1,6 @@
 # Meso — Level-1 walkthrough demo video (automated, re-recordable)
 
-Status: **PLANNED** — not started. Tracking issue: _(add issue link when filed)_.
+Status: **PLANNED** — not started. Tracking issue: [#388](https://github.com/lancegoyke/fitness-store/issues/388).
 
 ## Why
 
