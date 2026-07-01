@@ -1479,7 +1479,7 @@ def request_withdraw(request, token):
 # by email (who may not have an account yet), we send a tokened claim link, and
 # whoever follows it while authenticated materializes — and immediately activates
 # — a CoachAthlete link. Distinct from the peer-invite token views above, which
-# act on an existing CoachAthlete between two Users. See docs/meso/invites-plan.md.
+# act on an existing CoachAthlete between two Users. See docs/archive/meso/invites-plan.md.
 
 
 @login_required

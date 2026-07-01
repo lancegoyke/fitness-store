@@ -9,7 +9,7 @@ device change, and invisible to the coach.** This slice promotes it to a real,
 **auto-derived** row.
 
 See [`units-rpe-plan.md`](./units-rpe-plan.md) for the slice it completes and
-[`decisions.md`](./decisions.md) for the standing decisions.
+[`decisions.md`](../../meso/decisions.md) for the standing decisions.
 
 ---
 

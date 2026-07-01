@@ -1,7 +1,7 @@
 # Meso — units & RPE/%1RM slice (S2) plan
 
 **Status:** living document · started 2026-06-28
-**Decision context:** [`decisions.md`](./decisions.md) S2 — *Units & RPE vs %1RM —
+**Decision context:** [`decisions.md`](../../meso/decisions.md) S2 — *Units & RPE vs %1RM —
 per-athlete/coach setting; needs a home.* The major Meso slices (individual coach +
 agent + athlete PWA + groups) are all built and deployed (`mockdata.py` is gone), so
 S2 is the next deferred secondary decision picked up.

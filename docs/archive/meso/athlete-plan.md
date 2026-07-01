@@ -11,12 +11,12 @@ notifications — done & merged, PR #293, squash `dfbebee`; deployed to Hetzner;
 +9 tests, no migration) + 4b (PWA + web push — **built**, see Phase 4b below;
 +43 tests, 354 meso / 494 project-wide; ruff clean; **one migration**
 `0006_pushsubscription`; new dep `pywebpush`).**
-**Companion to:** [`decisions.md`](./decisions.md) (B2, S3, S7, N1/D-a/D-b) ·
+**Companion to:** [`decisions.md`](../../meso/decisions.md) (B2, S3, S7, N1/D-a/D-b) ·
 [`persistence-plan.md`](./persistence-plan.md) · [`agent-plan.md`](./agent-plan.md)
 **Goal of this slice:** give the **athlete** a real, logged-in surface — see the
 plan their coach delivered, log the sessions they train — and feed those logs
 back into the coach's results screen and the agent's grounding. This is item 3
-in the [decisions.md suggested sequence](./decisions.md#suggested-sequence):
+in the [decisions.md suggested sequence](../../meso/decisions.md#suggested-sequence):
 *"Athlete delivery + logging — the athlete PWA surface, notifications, then
 results feeding back to the agent."*
 

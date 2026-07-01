@@ -12,7 +12,7 @@ These tests pin: the model shape (unique per member+prescription, the
 same-group tenancy guard), the ``set_override`` / ``clear_override`` helpers,
 the effective-program resolution + the ``adj`` label, the serialized ``adj``
 overlay the designer renders, and the override API endpoint. See
-``docs/meso/groups-plan.md``.
+``docs/archive/meso/groups-plan.md``.
 """
 
 import pytest

@@ -2,8 +2,8 @@
 
 Status: **✅ COMPLETE — all three PRs shipped & deployed.** Drafted 2026-06-30 ·
 Implements issue **#352 "[UI] Redesign auth pages"** · Follow-on to the
-**COMPLETE** `docs/design-system-unification-plan.md` (phase 1: PRs 1–3 +
-nav-refresh #358) and **COMPLETE** `docs/design-system-phase-2-plan.md` (PR A
+**COMPLETE** `docs/archive/design-system-unification-plan.md` (phase 1: PRs 1–3 +
+nav-refresh #358) and **COMPLETE** `docs/archive/design-system-phase-2-plan.md` (PR A
 body typography #363, PR B footer #366, PR C docs #367).
 
 **Shipped:**

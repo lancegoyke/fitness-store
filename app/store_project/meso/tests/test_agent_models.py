@@ -3,7 +3,7 @@
 ``AgentProposalBatch`` is one agent run behind the review gate; ``ProposedChange``
 is a single proposed edit it wrote (swap / progress / volume / deload), targeting
 a real session/prescription within the plan. Both start ``pending`` — the coach
-still approves (apply lands in Phase 2). See ``docs/meso/agent-plan.md``.
+still approves (apply lands in Phase 2). See ``docs/archive/meso/agent-plan.md``.
 """
 
 import pytest

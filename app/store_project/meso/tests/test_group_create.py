@@ -5,7 +5,7 @@ but a group could still only be born from the seed/admin. Phase 2b is the
 create-group entry point: a coach names a group, gives it a focus, and picks
 members from their roster.
 
-These tests pin the contract (see ``docs/meso/groups-plan.md``): ``name`` is
+These tests pin the contract (see ``docs/archive/meso/groups-plan.md``): ``name`` is
 required, members are scoped to the coach's *active* links (a foreign/stale pick
 is silently ignored, never a leak or a 500), and a successful create lands on
 the new group's detail page. The model helper (``create_for_coach``) carries the

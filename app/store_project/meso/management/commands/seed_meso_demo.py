@@ -1,6 +1,6 @@
 """Seed the Meso coach-side demo: a coach, athletes, relationships, a plan.
 
-Phase 5 of the persistence slice (``docs/meso/persistence-plan.md``) retires the
+Phase 5 of the persistence slice (``docs/archive/meso/persistence-plan.md``) retires the
 client-side mock for the coach-side screens. This command stands up the same
 demo the prototype showed — **now real, DB-backed rows** — so a fresh dev
 database renders the roster, athlete profile, and designer from actual data:

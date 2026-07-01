@@ -1,7 +1,7 @@
 # Meso — groups slice (S1) plan
 
 **Status:** living document · started 2026-06-28
-**Decision context:** [`decisions.md`](./decisions.md) S1 — *Groups: "shared program +
+**Decision context:** [`decisions.md`](../../meso/decisions.md) S1 — *Groups: "shared program +
 per-athlete auto-adjust" modeling (template + override diffs)*. Deferred until individuals
 worked; the individual coach + athlete + agent slices are now complete, so groups is the
 main remaining Meso feature area.

@@ -55,7 +55,7 @@ graceful-degradation layer.
   the bare apex, so it's unaffected by apex email-DNS changes.)
 - **Prod key:** `ANTHROPIC_API_KEY` in the Hetzner box `.env` (and the local `.env`)
   — read by both `web` and the `qcluster` worker (a separate process rebuilds its
-  own Claude client, see [`agent-plan.md`](./agent-plan.md)).
+  own Claude client, see [`agent-plan.md`](../archive/meso/agent-plan.md)).
 
 ## Step 1 — Dedicated business email (`@mastering.fitness`)
 

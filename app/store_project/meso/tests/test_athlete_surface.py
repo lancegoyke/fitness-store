@@ -9,7 +9,7 @@ an athlete at ``/meso/athlete/<uuid>/``):
 - ``/meso/me/session/<id>/`` shows one delivered session's prescribed exercises,
   read-only.
 
-These tests pin the **scoping contract** (see ``docs/meso/athlete-plan.md``):
+These tests pin the **scoping contract** (see ``docs/archive/meso/athlete-plan.md``):
 an athlete sees only plans across their *active* coaches, only **delivered**
 weeks, and never another athlete's data. Delivery — not plan status — is the
 publish gate; an undelivered week is invisible even to its own athlete.
