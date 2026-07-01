@@ -51,7 +51,25 @@ pricing assumptions into the schema.
   TrainHeroic's direct-pay Coach Plan ($9.99 + $1/athlete). Implemented as a
   **two-line-item** subscription (a flat base Price, quantity 1, alongside the
   per-seat Price, quantity = active seats). This **supersedes** the single-Price
-  shape sketched for Phase 2; the conversion is **Phase 6** below.
+  shape sketched for Phase 2; the conversion is **Phase 6** below. **⚠ Superseded
+  by D14 — per-seat billing was dropped for a flat plan.**
+- **D14 — Pricing pivot: a single FLAT monthly Pro price.** Decided 2026-06-30
+  (supersedes D13): **$19/mo flat, unlimited athletes**, USD — one recurring Stripe
+  Price (`MESO_PRO_PRICE_ID`, quantity 1). **Why:** the only cost that scales with
+  usage is the **AI agent** (Claude, ~$0.05–0.10/run) — athletes/groups/storage/
+  delivery are ~$0 marginal — so per-seat pricing didn't track cost, it just dragged
+  in complexity (seat-quantity sync, the daily `reconcile_seats` sweep, proration,
+  two-line-item Checkout). Annual was dropped too: Stripe can't mix monthly + annual
+  lines in one subscription (annual base + monthly seats would need two
+  subscriptions), so it isn't worth it pre-revenue. **The agent is now metered at
+  every tier** (bounds worst-case COGS per coach at cap × ~$0.10): free =
+  `FREE_AGENT_ALLOWANCE` (5)/mo, trial/active = `PAID_AGENT_ALLOWANCE` (150)/mo,
+  comped = unlimited. The free-tier seat **cap** (and the D6 downgrade suspension)
+  stay — only the per-seat **charge** is gone. The seat-sync/annual machinery was
+  removed (dead + a footgun that would mis-resize the flat plan). The agent-usage
+  tracking (`/meso/usage/`) measures real per-coach cost, so per-seat/annual can be
+  reconsidered later from data. Ships **dormant** until the owner creates the one
+  Stripe Price + registers the webhook.
 
 ## Shape
 
@@ -173,20 +191,31 @@ v1 froze the whole coach via the coarse `can_edit(coach)`.
 > per-athlete "Suspended" badge on the roster. **Phase 6 ✅** (2026-06-30,
 > migration `0024`) — base + per-seat pricing ($9.99 base + $1/seat): two-line-item
 > Checkout, the `stripe_base_item_id` field, Price-id item classification in the
-> webhook, the both-Prices subscribe guard, and the `PRICE_SUMMARY` paywall copy;
-> tested in `test_billing_phase6.py`. **Remaining: annual prices** (a `*_ANNUAL`
-> Price per line + a monthly/annual Checkout toggle), blocked on the annual numbers.
+> webhook, the both-Prices subscribe guard, and the `PRICE_SUMMARY` paywall copy.
+> **⚠ Superseded by Phase 7. Phase 7 ✅** (2026-06-30, D14, migration `0028`) — the
+> **flat-plan pivot**: dropped per-seat billing for a single flat **$19/mo Pro
+> Price** (`MESO_PRO_PRICE_ID`, quantity 1). Checkout is one flat line item; the
+> webhook records the single item; the subscribe guard needs only the one Price. The
+> **seat-sync/reconcile machinery was removed** (`billing/seats.py`,
+> `sync_seat_quantity`, `meso_reconcile_seats`, its schedule — dropped in `0028`) —
+> dead + a footgun that would mis-resize the flat plan. The **AI agent is now metered
+> at every tier** (`access.agent_allowance` / `agent_runs_remaining`): free = 5/mo,
+> trial/active = `PAID_AGENT_ALLOWANCE` (150)/mo, comped = unlimited; the designer /
+> roster / coach-billing surfaces speak the flat price + a tier-aware meter. Revenue
+> math is the flat `PRO_PRICE_USD`. The `stripe_base_item_id`/`quantity` columns stay
+> (unused, no schema churn). Tested in `test_billing_flat.py` (+ the reworked
+> `test_billing_stripe.py`; `test_billing_phase6.py` removed). **No autonomous
+> billing backlog remains** — annual is deferred (not worth the two-subscription
+> complexity pre-revenue; revisit from usage data).
 
-### Deploying Phase 2 (Stripe configuration)
+### Deploying billing (Stripe configuration)
 
 The code ships dormant — billing does nothing until these are configured, so a
 deploy succeeds without them (like the VAPID push keys):
 
-1. In Stripe, create the **Meso Coaching** Product with **two** recurring monthly
-   USD Prices (Phase 6, D13): a flat **base** Price ($9.99/mo, `usage_type=licensed`,
-   billed quantity 1) → `MESO_BASE_PRICE_ID`, and a **per-seat** Price ($1/mo,
-   `usage_type=licensed`, quantity = active seats) → `MESO_SEAT_PRICE_ID`. The
-   subscribe view stays dormant until **both** are set.
+1. In Stripe, create the **Meso Coaching** Product with **one** recurring monthly
+   USD Price (D14 flat plan): the flat **Pro** Price ($19/mo, `usage_type=licensed`,
+   quantity 1) → `MESO_PRO_PRICE_ID`. The subscribe view stays dormant until it's set.
 2. Register a **billing webhook endpoint** → `https://<host>/meso/billing/webhook/`
    subscribed to `customer.subscription.created|updated|deleted`, `invoice.paid`,
    `invoice.payment_failed`. Set `MESO_STRIPE_WEBHOOK_SECRET` to that endpoint's
@@ -239,38 +268,47 @@ deploy succeeds without them (like the VAPID push keys):
    editing/delivering their kept athletes; `presenters` surface a per-athlete
    "Suspended" roster badge + a `suspended_count` on the billing card. Tested in
    `test_billing_suspension.py`.
-6. **Phase 6 — base + per-seat pricing (TrainHeroic-style) (DONE).** Convert the
-   single per-seat subscription into a **two-line-item** one (D13): a flat **base**
-   Price (`MESO_BASE_PRICE_ID`, quantity 1, $9.99/mo) alongside the existing
-   **per-seat** Price (`MESO_SEAT_PRICE_ID`, quantity = active seats, $1/mo).
-   - **`stripe_gateway.subscribe`** — Checkout with **both** line items
-     (`[{price: BASE, quantity: 1}, {price: SEAT, quantity: active_count}]`).
-   - **Model** — add a nullable **`stripe_base_item_id`** (a small migration) so
-     seat-sync can target only the *seat* line item; `stripe_item_id` stays the
-     seat item. The webhook upsert records **both** item ids.
-   - **`sync_seat_quantity` + `reconcile_seats`** — adjust **only** the seat
-     item's quantity; the base line is fixed at 1 and never resized.
-   - **Paywall UI** — copy reads "$9.99/mo + $1/athlete" (roster billing card +
-     designer CTA + `become_coach` tiers).
-   - Free/trial/comped gates are **unchanged**; ships **dormant** until the owner
-     creates **both** Prices and registers the webhook (see "Deploying Phase 2").
-   - **Annual prices** ride along once the annual numbers are decided: a second
-     `*_ANNUAL` Price per line (`MESO_BASE_PRICE_ID_ANNUAL` /
-     `MESO_SEAT_PRICE_ID_ANNUAL`) + a monthly/annual toggle at Checkout.
-   - Build red→green (mock the `stripe` SDK as the existing billing tests do — the
-     conversion needs **no live Stripe access**).
+6. **Phase 6 — base + per-seat pricing (TrainHeroic-style) (DONE, ⚠ SUPERSEDED by
+   Phase 7).** Converted the single per-seat subscription into a **two-line-item**
+   one (D13): a flat base Price + a per-seat Price. Phase 7 removed the per-seat line
+   entirely, so the two-line-item machinery below is gone.
+7. **Phase 7 — the flat-plan pivot (D14) (DONE).** Drop per-seat billing for a
+   single flat **$19/mo Pro Price** (`MESO_PRO_PRICE_ID`, quantity 1).
+   - **`stripe_gateway`** — Checkout with one flat line item
+     (`[{price: PRO, quantity: 1}]`); the seat-quantity helpers are gone.
+   - **Webhook** — records the single subscription item as `stripe_item_id`; the
+     base-vs-seat `_classify_items` split is removed. The `stripe_base_item_id` /
+     `quantity` columns stay (unused — no schema churn).
+   - **Removed** — `billing/seats.py`, `sync_seat_quantity`, the
+     `meso_reconcile_seats` command + task, and its `django_q.Schedule` (dropped in
+     migration `0028`). Dead + a footgun that would mis-resize the flat plan.
+   - **Agent metering** — `access.agent_allowance` / `agent_runs_remaining` meter
+     **every** tier except comped: free 5/mo, trial/active `PAID_AGENT_ALLOWANCE`
+     (150)/mo. The endpoint 402 + the designer/roster/coach-billing meters are
+     tier-aware (a free coach's exhausted-CTA offers an upgrade; a paid coach's
+     notes the monthly reset).
+   - **Revenue math** — `monthly_revenue(status)` returns the flat `PRO_PRICE_USD`
+     (no seats arg); the `PRICE_SUMMARY` paywall copy reads "$19/mo — unlimited
+     athletes".
+   - Free/trial/comped seat gates + the D6 downgrade suspension are **unchanged**
+     (the free-tier seat cap stays; only the per-seat charge is gone). Ships
+     **dormant** until the owner creates the one Price + registers the webhook.
+   - Built red→green (mock the `stripe` SDK; `test_billing_flat.py` +
+     reworked `test_billing_stripe.py`; `test_billing_phase6.py` removed).
 
-## Open values (numbers, not architecture — confirm before/with Phase 1)
+## Open values (numbers, not architecture) — settled at the D14 flat pivot
 
-- **Free seat limit** — rec **1** active athlete.
-- **Trial length** — rec **14 days** (matches the invite TTL cadence).
-- **Base fee** — **$9.99 / month**, USD (a flat per-coach charge; new
-  `MESO_BASE_PRICE_ID`). Decided 2026-06-30 (D13).
-- **Per-seat price** — **$1 / active athlete / month**, USD (`MESO_SEAT_PRICE_ID`).
-  Decided 2026-06-30 (D13) — mirrors TrainHeroic's direct-pay Coach Plan.
-- **Monthly first**; annual prices are a Phase-6 ride-along once numbers are set.
-- **Free agent allowance** — set to **5** runs / calendar month (Phase 5; tunable
-  via `CoachSubscription.FREE_AGENT_ALLOWANCE`).
+- **Free seat limit** — **1** active athlete (`CoachSubscription.FREE_SEAT_LIMIT`).
+- **Trial length** — **14 days** (matches the invite TTL cadence).
+- **Pro price** — **$19 / month flat**, USD, unlimited athletes (`MESO_PRO_PRICE_ID`).
+  Decided 2026-06-30 (D14 — supersedes D13's $9.99 base + $1/seat).
+- **Free agent allowance** — **5** runs / calendar month
+  (`CoachSubscription.FREE_AGENT_ALLOWANCE`).
+- **Paid agent allowance** — **150** runs / calendar month
+  (`CoachSubscription.PAID_AGENT_ALLOWANCE`; trial + active, comped uncapped) — the
+  D14 cap that bounds worst-case COGS per coach.
+- **Annual** — deferred (Stripe can't mix monthly + annual lines in one subscription;
+  not worth two subscriptions pre-revenue). Revisit from `/meso/usage/` data.
 
 ## Test / dev story
 

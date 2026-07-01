@@ -49,7 +49,6 @@ from .agent import jobs as agent_jobs
 from .agent import service as agent_service
 from .billing import access as billing_access
 from .billing import agent_usage_report as usage_report
-from .billing import seats as billing_seats
 from .billing import stripe_gateway as billing_gateway
 from .billing import webhooks as billing_webhooks
 from .models import AgentProposalBatch
@@ -1323,9 +1322,6 @@ def invite_accept(request, token):
             )
         return redirect("meso:roster")
     link.accept()
-    # A new active link is a billable seat — best-effort sync the coach's Stripe
-    # quantity (no-op unless they're paid; the daily sweep is the backstop).
-    billing_seats.schedule_seat_sync(link.coach)
     messages.success(request, "Relationship accepted.")
     return redirect("meso:roster")
 
@@ -1348,8 +1344,6 @@ def relationship_end(request, token):
     if not link.is_active or request.user not in (link.coach, link.athlete):
         return HttpResponseForbidden("You cannot end this relationship.")
     link.end()
-    # The seat is freed — best-effort sync the coach's Stripe quantity down.
-    billing_seats.schedule_seat_sync(link.coach)
     messages.success(request, "Relationship ended.")
     return redirect("meso:roster")
 
@@ -1649,9 +1643,6 @@ def invite_claim(request, token):
                 except InvalidTransition as exc:
                     messages.error(request, str(exc))
                     return redirect("meso:roster")
-                # Claiming materializes an active link — a billable seat for the
-                # coach; best-effort sync their Stripe quantity (daily sweep backstop).
-                billing_seats.schedule_seat_sync(invite.coach)
                 messages.success(
                     request,
                     f"You're now training with {invite.coach.display_name()}.",
@@ -2355,23 +2346,28 @@ def agent_propose(request, plan_id):
     # below just commit an empty transaction — nothing is written on those paths.
     with transaction.atomic():
         User.objects.select_for_update().filter(pk=request.user.pk).first()
-        # Agent gate (D4): the Claude agent has real per-call cost. An
-        # active/trial/comped coach is unlimited; a free coach gets
-        # ``FREE_AGENT_ALLOWANCE`` runs/month and then 402s (the designer shows the
-        # upgrade CTA in place of the composer once exhausted). Only a free coach
-        # reaches this branch, so the copy is the allowance-used-up message.
-        # Defended here, not just in the UI, because the API cost is real.
+        # Agent gate (D4, flat plan D14): the Claude agent has real per-call cost,
+        # so every tier is metered per month except comped. Over the cap → 402 (the
+        # designer shows the CTA in place of the composer once exhausted). A *free*
+        # coach can upgrade; a *paid* coach has hit their plan cap and just waits for
+        # the monthly reset (no higher tier to sell). Defended here, not just in the
+        # UI, because the API cost is real.
         if not billing_access.can_use_agent(request.user):
+            cap = billing_access.agent_allowance(request.user)
+            if billing_access.is_active(request.user):
+                error = (
+                    f"You've used all {cap} agent runs this month. "
+                    "Your allowance resets on the 1st."
+                )
+                upgrade = False
+            else:
+                error = (
+                    f"You've used all {cap} free agent runs this month. "
+                    "Start your free trial or subscribe for more."
+                )
+                upgrade = True
             return JsonResponse(
-                {
-                    "ok": False,
-                    "error": (
-                        f"You've used all {CoachSubscription.FREE_AGENT_ALLOWANCE} "
-                        "free agent runs this month. Start your free trial or "
-                        "subscribe for unlimited agent runs."
-                    ),
-                    "upgrade": True,
-                },
+                {"ok": False, "error": error, "upgrade": upgrade},
                 status=402,
             )
         try:
@@ -2583,9 +2579,9 @@ def billing_subscribe(request):
     """Start a subscription Checkout — redirect the coach to Stripe to pay."""
     if not _is_coach(request.user):
         return redirect("meso:roster")
-    # Base + per-seat billing (D13) needs *both* Prices configured; ship dormant
-    # (bounce gracefully) until the owner creates both, so we never half-charge.
-    if not settings.MESO_SEAT_PRICE_ID or not settings.MESO_BASE_PRICE_ID:
+    # The flat Pro plan (D14) needs its one Price configured; ship dormant (bounce
+    # gracefully) until the owner creates it, so a deploy never opens a broken Checkout.
+    if not settings.MESO_PRO_PRICE_ID:
         messages.error(request, "Subscriptions aren't configured yet.")
         return redirect("meso:roster")
     # Don't open a second Checkout for a coach who already has a live Stripe
@@ -2699,6 +2695,8 @@ class BecomeCoachView(TemplateView):
         ctx = super().get_context_data(**kwargs)
         ctx["free_seats"] = CoachSubscription.FREE_SEAT_LIMIT
         ctx["trial_days"] = CoachSubscription.TRIAL_DAYS
+        ctx["free_agent_runs"] = CoachSubscription.FREE_AGENT_ALLOWANCE
+        ctx["paid_agent_runs"] = CoachSubscription.PAID_AGENT_ALLOWANCE
         ctx["price_summary"] = presenters.PRICE_SUMMARY
         # allauth returns here after signup/login (?next=), where the visitor —
         # now authenticated — sees the start-coaching form.

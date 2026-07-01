@@ -42,11 +42,11 @@ def _at(when, **kw):
     return batch
 
 
-def _paid_run(start, *, cost="6.00", label_coach=None):
+def _paid_run(start, *, cost="12.00", label_coach=None):
     """An active paid coach with one in-window run costing ``cost``.
 
-    Revenue is base $9.99 + one seat = $10.99, so a $6.00 run trips the default
-    50% threshold (ratio ~0.55) — *at risk* but not yet ``flagged``.
+    Revenue is the flat Pro price $19 (D14), so a $12.00 run trips the default 50%
+    threshold (ratio ~0.63) — *at risk* but not yet ``flagged``.
     """
     sub = CoachSubscriptionFactory(status=CoachSubscription.Status.ACTIVE)
     coach = sub.coach
@@ -202,7 +202,7 @@ class TestRendering:
 
     def test_margin_alert_is_surfaced(self, client):
         start, _ = report_mod.current_month_bounds()
-        _paid_run(start, cost="6.00", label_coach="Tail Risk")
+        _paid_run(start, cost="12.00", label_coach="Tail Risk")
         client.force_login(SuperAdminFactory())
         body = client.get(URL).content.decode()
         assert "Tail Risk" in body

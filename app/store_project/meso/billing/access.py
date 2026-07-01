@@ -3,11 +3,12 @@
 A thin read over ``CoachSubscription`` so a request gates **without calling
 Stripe** (D8) — Stripe is the source of truth, this is the fast local mirror.
 The **seat cap** (∞ active athletes when active, else ``FREE_SEAT_LIMIT``) keys
-off one predicate (``is_active``). The **AI agent** gate is the metered refinement
-(S6 Phase 5): an active/comped coach is unlimited, while a free coach gets
-``FREE_AGENT_ALLOWANCE`` runs per calendar month (the Claude agent has real
-per-call cost, so the free tier is a taste, not a binary no). A billable seat is
-an *active* ``CoachAthlete`` link (pending invites/requests don't count); an agent
+off one predicate (``is_active``). The **AI agent** is metered per calendar month
+at every tier under the **flat monthly Pro plan** (D14 — the agent is the only
+real per-run cost, so a bounded cap keeps worst-case COGS knowable): a free coach
+gets ``FREE_AGENT_ALLOWANCE`` runs, a trialing/active coach ``PAID_AGENT_ALLOWANCE``,
+and only a ``comped`` coach (owner/demo) is uncapped. A billable seat is an
+*active* ``CoachAthlete`` link (pending invites/requests don't count); an agent
 run is an ``AgentProposalBatch`` (the batch table is the ledger — no separate
 counter).
 
@@ -89,28 +90,52 @@ def agent_runs_this_month(coach):
     ).count()
 
 
-def free_agent_runs_remaining(coach):
-    """Agent runs left this month — ``math.inf`` when unlimited, else the remainder.
+def _is_comped(coach):
+    """True only for a ``comped`` subscription (owner/demo) — the one uncapped tier."""
+    sub = _subscription(coach)
+    return bool(sub and sub.status == CoachSubscription.Status.COMPED)
 
-    An active/trial/comped coach is unlimited (``math.inf``); a free coach gets
-    ``FREE_AGENT_ALLOWANCE`` minus what they've used this month, floored at 0. The
-    active short-circuit means a paying coach never runs the count query.
+
+def agent_allowance(coach):
+    """This coach's monthly agent-run cap — ``None`` when uncapped (D14).
+
+    Under the **flat monthly Pro plan** the agent is metered at *every* paying tier
+    (the agent is the only real per-run cost, so a bounded cap keeps worst-case COGS
+    knowable): a ``comped`` coach (owner/demo) is uncapped (``None``); a trialing or
+    active coach gets ``PAID_AGENT_ALLOWANCE``; a free/lapsed coach gets the smaller
+    ``FREE_AGENT_ALLOWANCE``. ``comped`` is checked before ``is_active`` (which is
+    also True for comped) so the owner/demo tier alone escapes the meter.
     """
-    if is_active(coach):
+    if _is_comped(coach):
+        return None
+    if is_active(coach):  # trialing or active — the paid tiers
+        return CoachSubscription.PAID_AGENT_ALLOWANCE
+    return CoachSubscription.FREE_AGENT_ALLOWANCE
+
+
+def agent_runs_remaining(coach):
+    """Agent runs left this month — ``math.inf`` when uncapped, else the remainder.
+
+    A ``comped`` coach is uncapped (``math.inf``, and skips the count query); every
+    other coach gets their ``agent_allowance`` minus what they've used this month,
+    floored at 0.
+    """
+    cap = agent_allowance(coach)
+    if cap is None:
         return math.inf
-    used = agent_runs_this_month(coach)
-    return max(0, CoachSubscription.FREE_AGENT_ALLOWANCE - used)
+    return max(0, cap - agent_runs_this_month(coach))
 
 
 def can_use_agent(coach):
     """Agent gate — may this coach run the AI program agent right now (D4)?
 
-    An active/trial/comped coach always; a free coach while they still have runs
-    left in their monthly allowance (S6 Phase 5 — the metered refinement of the old
-    binary free=no-agent gate). Defended at the endpoint, not just the UI, because
-    the per-call API cost is real.
+    Any coach with runs left in their monthly allowance: a comped coach always; a
+    trialing/active coach up to ``PAID_AGENT_ALLOWANCE``; a free coach up to
+    ``FREE_AGENT_ALLOWANCE`` (the metered refinement of the old binary
+    free=no-agent gate, now applied to paid tiers too under the flat plan — D14).
+    Defended at the endpoint, not just the UI, because the per-call API cost is real.
     """
-    return free_agent_runs_remaining(coach) > 0
+    return agent_runs_remaining(coach) > 0
 
 
 def active_seat_count(coach):

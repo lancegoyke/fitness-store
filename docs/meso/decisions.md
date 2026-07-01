@@ -1293,3 +1293,31 @@ _(Append dated entries here as decisions land.)_
   review: mitigated by the push `tag` collapse), so the autonomous Meso backlog is
   now: billing annual prices (BLOCKED on owner numbers + Stripe annual Prices) and
   the Anthropic Admin/Usage-API reconciliation (deferred, needs an Admin key).
+- 2026-06-30 — **Billing pivot: base+per-seat → a single FLAT $19/mo Pro plan
+  (D14, billing Phase 7, migration `0028`).** The "unblock annual prices" task
+  surfaced a deeper decision: annualizing a monthly-fluctuating seat count is
+  awkward (Stripe can't mix monthly + annual lines in one subscription — annual
+  base + monthly seats would need *two* subscriptions), and stepping back, the
+  **only cost that scales with usage is the AI agent** (Claude, ~$0.05–0.10/run) —
+  athletes/groups/storage/delivery are ~$0 marginal — so per-seat pricing never
+  tracked cost, it just dragged in complexity (seat sync, the daily
+  `reconcile_seats` sweep, proration, two-line-item Checkout). **Owner chose a flat
+  plan.** New shape: **$19/mo flat, unlimited athletes**, one Stripe Price
+  (`MESO_PRO_PRICE_ID`, qty 1), supersedes D13. The **AI agent is now metered at
+  every tier** to bound worst-case COGS per coach (cap × ~$0.10): free
+  `FREE_AGENT_ALLOWANCE` (5)/mo, trial/active `PAID_AGENT_ALLOWANCE` (150)/mo,
+  comped uncapped — `access.agent_allowance`/`agent_runs_remaining` generalize the
+  old free-only meter; the endpoint 402 + designer/roster/coach-billing meters are
+  tier-aware (free → upgrade CTA; paid → monthly-reset note). The seat-sync/annual
+  machinery was **removed** (`billing/seats.py`, `sync_seat_quantity`,
+  `meso_reconcile_seats` + its schedule, dropped in `0028`; the two-line-item
+  webhook classifier) — dead + a footgun that would mis-resize the flat plan. The
+  free-tier seat **cap** and the D6 downgrade suspension **stay** (only the per-seat
+  *charge* is gone). Revenue math → flat `PRO_PRICE_USD`; `PRICE_SUMMARY` → "$19/mo
+  — unlimited athletes". The already-built agent-usage tracking (`/meso/usage/`)
+  measures real per-coach cost, so per-seat/annual can be reconsidered later from
+  data. Ships **dormant** until the owner creates the one Price + registers the
+  webhook. Red→green (`test_billing_flat.py` + reworked `test_billing_stripe.py`;
+  `test_billing_phase6.py` removed); 1582 project pytest green, ruff + DjHTML +
+  `makemigrations --check` clean. Full detail in [`billing-plan.md`](./billing-plan.md)
+  (D14 / Phase 7). **No autonomous billing backlog remains** (annual deferred).

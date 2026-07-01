@@ -805,10 +805,17 @@ class CoachSubscription(models.Model):
     #: Free-tier AI-agent allowance — agent runs a non-paying coach may make per
     #: calendar month (open value, set to 5). The Phase-5 metered refinement of the
     #: old binary free=no-agent gate (D4): a free coach gets a taste of the Claude
-    #: agent before paying; beyond this the agent endpoint 402s. Active/trial/comped
-    #: coaches are unlimited. A run = an ``AgentProposalBatch`` (the batch table is
-    #: the ledger — see ``billing/access.py``).
+    #: agent before paying; beyond this the agent endpoint 402s. A run = an
+    #: ``AgentProposalBatch`` (the batch table is the ledger — see ``billing/access.py``).
     FREE_AGENT_ALLOWANCE = 5
+
+    #: Paid-tier (flat plan) AI-agent allowance — agent runs a trialing/active coach
+    #: may make per calendar month (D14, set to 150). Under the **flat monthly Pro
+    #: plan** the agent is the only per-run cost, so a generous-but-bounded cap keeps
+    #: worst-case COGS per coach knowable (cap × ~$0.10) instead of open-ended; the
+    #: agent-usage tracking measures real spend so this can be tuned from data. Only a
+    #: ``comped`` coach (owner/demo) is uncapped. See ``docs/meso/billing-plan.md``.
+    PAID_AGENT_ALLOWANCE = 150
 
     class Status(models.TextChoices):
         FREE = "free", _("Free")

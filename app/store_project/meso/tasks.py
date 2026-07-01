@@ -24,14 +24,6 @@ def remind_expiring_invites():
     call_command("meso_remind_expiring_invites")
 
 
-def reconcile_seats():
-    """Correct any Stripe seat-quantity drift for paid coaches (``meso_reconcile_seats``).
-
-    The daily backstop behind the inline best-effort seat sync (S6 billing Phase 2).
-    """
-    call_command("meso_reconcile_seats")
-
-
 def agent_margin_alert():
     """Email the owner about paying coaches over the agent margin threshold.
 

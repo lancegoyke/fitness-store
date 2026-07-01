@@ -220,11 +220,9 @@ class TestBillingAccessIsActive:
         )
         assert access.is_active(sub.coach) is False
 
-    def test_can_use_agent_active_coach_is_unlimited(self):
-        # The agent gate no longer keys purely off ``is_active``: an active/comped
-        # coach is unlimited (no meter), but a fresh free coach has a monthly
-        # allowance (see ``TestAgentAllowance``), so a free row with no runs yet
-        # still passes the gate.
+    def test_can_use_agent_comped_and_fresh_coaches_pass(self):
+        # Under the flat plan (D14) only ``comped`` is unlimited; a fresh free coach
+        # still passes the gate off their monthly allowance (see ``TestAgentAllowance``).
         comped = CoachSubscriptionFactory(status=CoachSubscription.Status.COMPED)
         fresh_free = CoachSubscriptionFactory(status=CoachSubscription.Status.FREE)
         assert access.can_use_agent(comped.coach) is True
@@ -232,13 +230,13 @@ class TestBillingAccessIsActive:
 
 
 class TestAgentAllowance:
-    """The free-tier agent allowance (S6 Phase 5).
+    """The metered agent allowance (S6 Phase 5; flat plan D14).
 
-    The metered refinement of the old binary free=no-agent gate (D4): a free coach
-    gets ``FREE_AGENT_ALLOWANCE`` agent runs per calendar month; an active/comped
-    coach is unlimited. A run is an ``AgentProposalBatch`` (the batch table is the
-    ledger — no separate counter), so the count is "batches this coach started this
-    month."
+    Under the flat monthly Pro plan every tier is metered per calendar month except
+    ``comped``: a free coach gets ``FREE_AGENT_ALLOWANCE`` runs, a trialing/active
+    coach the larger ``PAID_AGENT_ALLOWANCE``, and only a comped coach is unlimited.
+    A run is an ``AgentProposalBatch`` (the batch table is the ledger — no separate
+    counter), so the count is "batches this coach started this month."
     """
 
     def _backdate(self, batch, when):
@@ -246,14 +244,49 @@ class TestAgentAllowance:
         # in a chosen month for the boundary tests.
         AgentProposalBatch.objects.filter(pk=batch.pk).update(created_at=when)
 
+    def _bulk_batches(self, coach, plan, n):
+        # Plant ``n`` runs for the coach cheaply (one query, one plan) — the paid
+        # allowance is large, so a factory-per-row loop would be needlessly slow.
+        AgentProposalBatch.objects.bulk_create(
+            [
+                AgentProposalBatch(coach=coach, plan=plan, instruction="x")
+                for _ in range(n)
+            ]
+        )
+
     def test_fresh_free_coach_has_full_allowance(self):
         coach = UserFactory()  # no row → free
+        assert access.agent_allowance(coach) == CoachSubscription.FREE_AGENT_ALLOWANCE
         assert access.agent_runs_this_month(coach) == 0
         assert (
-            access.free_agent_runs_remaining(coach)
-            == CoachSubscription.FREE_AGENT_ALLOWANCE
+            access.agent_runs_remaining(coach) == CoachSubscription.FREE_AGENT_ALLOWANCE
         )
         assert access.can_use_agent(coach) is True
+
+    def test_paid_coach_gets_the_larger_allowance(self):
+        # A trialing/active coach is metered too now — at the larger paid cap.
+        for status in (
+            CoachSubscription.Status.TRIALING,
+            CoachSubscription.Status.ACTIVE,
+        ):
+            sub = CoachSubscriptionFactory(status=status)
+            assert (
+                access.agent_allowance(sub.coach)
+                == CoachSubscription.PAID_AGENT_ALLOWANCE
+            )
+            assert (
+                access.agent_runs_remaining(sub.coach)
+                == CoachSubscription.PAID_AGENT_ALLOWANCE
+            )
+            assert access.can_use_agent(sub.coach) is True
+
+    def test_paid_coach_gate_closes_at_the_paid_cap(self):
+        sub = CoachSubscriptionFactory(status=CoachSubscription.Status.ACTIVE)
+        self._bulk_batches(
+            sub.coach, PlanFactory(), CoachSubscription.PAID_AGENT_ALLOWANCE
+        )
+        assert access.agent_runs_remaining(sub.coach) == 0
+        assert access.can_use_agent(sub.coach) is False
 
     def test_runs_this_month_count_against_the_allowance(self):
         coach = UserFactory()
@@ -261,7 +294,7 @@ class TestAgentAllowance:
         AgentProposalBatchFactory(coach=coach, plan=PlanFactory())
         assert access.agent_runs_this_month(coach) == 2
         assert (
-            access.free_agent_runs_remaining(coach)
+            access.agent_runs_remaining(coach)
             == CoachSubscription.FREE_AGENT_ALLOWANCE - 2
         )
 
@@ -269,14 +302,14 @@ class TestAgentAllowance:
         coach = UserFactory()
         for _ in range(CoachSubscription.FREE_AGENT_ALLOWANCE):
             AgentProposalBatchFactory(coach=coach, plan=PlanFactory())
-        assert access.free_agent_runs_remaining(coach) == 0
+        assert access.agent_runs_remaining(coach) == 0
         assert access.can_use_agent(coach) is False
 
     def test_remaining_never_goes_negative(self):
         coach = UserFactory()
         for _ in range(CoachSubscription.FREE_AGENT_ALLOWANCE + 3):
             AgentProposalBatchFactory(coach=coach, plan=PlanFactory())
-        assert access.free_agent_runs_remaining(coach) == 0
+        assert access.agent_runs_remaining(coach) == 0
 
     def test_last_months_runs_do_not_count(self):
         coach = UserFactory()
@@ -285,8 +318,7 @@ class TestAgentAllowance:
         self._backdate(old, last_month)
         assert access.agent_runs_this_month(coach) == 0
         assert (
-            access.free_agent_runs_remaining(coach)
-            == CoachSubscription.FREE_AGENT_ALLOWANCE
+            access.agent_runs_remaining(coach) == CoachSubscription.FREE_AGENT_ALLOWANCE
         )
 
     def test_another_coachs_runs_do_not_count(self):
@@ -295,12 +327,14 @@ class TestAgentAllowance:
         AgentProposalBatchFactory(coach=other, plan=PlanFactory())
         assert access.agent_runs_this_month(coach) == 0
 
-    def test_active_coach_is_unlimited_regardless_of_usage(self):
+    def test_comped_coach_is_unlimited_regardless_of_usage(self):
         sub = CoachSubscriptionFactory(status=CoachSubscription.Status.COMPED)
-        # Even with runs on the books, an active coach has no meter.
-        for _ in range(CoachSubscription.FREE_AGENT_ALLOWANCE + 1):
-            AgentProposalBatchFactory(coach=sub.coach, plan=PlanFactory())
-        assert access.free_agent_runs_remaining(sub.coach) == math.inf
+        # Even past the paid cap, a comped coach has no meter.
+        self._bulk_batches(
+            sub.coach, PlanFactory(), CoachSubscription.PAID_AGENT_ALLOWANCE + 1
+        )
+        assert access.agent_allowance(sub.coach) is None
+        assert access.agent_runs_remaining(sub.coach) == math.inf
         assert access.can_use_agent(sub.coach) is True
 
 
