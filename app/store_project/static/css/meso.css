@@ -34,6 +34,9 @@ body.meso {
   --dim: #6b7280;
   --line: #e4e4e7;
   --line-2: #f1f3f5;
+  /* Perceptible neutral hover fill — clearly darker than --rail (#fbfbfc),
+     which sat too close to white surfaces to read as a hover (issue #385). */
+  --hover: #ebedf0;
   --radius: 8px;
   --pad: 14px;
   /* Accent points at the shared site token (base.css --accent, steel-blue) so
@@ -122,21 +125,70 @@ body.meso {
   }
 }
 
+/* Smooth the hover/press feedback so state changes read as intentional rather
+   than snapping. Scoped to the interactive surfaces (issue #385). */
+.meso-btn,
+.meso-navlink,
+.meso-seg-btn,
+a.meso-row,
+button.meso-row,
+a.meso-card,
+button.meso-card,
+.meso [data-hover] {
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease,
+    transform 0.12s ease,
+    filter 0.15s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meso-btn,
+  .meso-navlink,
+  .meso-seg-btn,
+  a.meso-row,
+  button.meso-row,
+  a.meso-card,
+  button.meso-card,
+  .meso [data-hover] {
+    transition: none;
+  }
+  /* Keep colour feedback, drop the motion. */
+  a.meso-card:hover,
+  button.meso-card:hover {
+    transform: none;
+  }
+}
+
 /* Hover/focus affordances that the prototype expressed as inline style-hover /
-   style-focus attributes (not real CSS). Re-expressed here as real rules. */
+   style-focus attributes (not real CSS). Re-expressed here as real rules.
+
+   Issue #385: the designer's data-hover elements set `background`/`border`/
+   `color` INLINE, which outranks these attribute selectors — so the original
+   background swaps never actually applied (only the `brighten` filter did, and
+   only faintly). `!important` is used deliberately to override those inline
+   resting styles; `filter` needs none since it is never set inline. The target
+   values are also strengthened from near-white --rail to the on-brand --soft
+   accent tint so the change is clearly visible. */
 .meso [data-hover="rail"]:hover {
-  background: var(--rail);
+  background: var(--soft) !important;
+  border-color: var(--soft-line) !important;
 }
 .meso [data-hover="brighten"]:hover {
-  filter: brightness(1.06);
+  /* Darkens the filled steel-blue buttons noticeably (was a barely-there
+     +6% brighten that washed them toward white). */
+  filter: brightness(0.9);
 }
 .meso [data-hover="chip"]:hover {
-  background: var(--soft);
-  border-color: var(--soft-line);
+  background: var(--soft) !important;
+  border-color: var(--soft-line) !important;
 }
 .meso [data-hover="add"]:hover {
-  background: var(--rail);
-  color: var(--accent);
+  background: var(--soft) !important;
+  border-color: var(--soft-line) !important;
+  color: var(--accent) !important;
 }
 .meso .meso-cell:focus {
   background: var(--soft);
@@ -185,6 +237,10 @@ body.meso {
   border-radius: 6px;
   background: transparent;
   color: var(--dim);
+}
+.meso .meso-seg-btn:hover:not(.is-on) {
+  background: var(--surface);
+  color: var(--ink);
 }
 .meso .meso-seg-btn.is-on {
   background: var(--surface);
@@ -275,7 +331,7 @@ body.meso {
   border-radius: 7px;
 }
 .meso-navlink:hover {
-  background: var(--rail);
+  background: var(--hover);
   color: var(--ink);
 }
 .meso-navlink.is-active {
@@ -349,6 +405,20 @@ body.meso {
 .meso-card--pad {
   padding: 18px 20px;
 }
+/* Cards used as links/buttons (e.g. a session card, the "Are you a coach?"
+   entry) had no hover at all — just the pointer cursor (issue #385). Lift them
+   with shadow + a small rise; box-shadow/transform survive the inline
+   background/border some of these cards set, so the feedback always shows. */
+a.meso-card,
+button.meso-card {
+  cursor: pointer;
+}
+a.meso-card:hover,
+button.meso-card:hover {
+  border-color: var(--soft-line);
+  box-shadow: 0 4px 14px rgba(16, 18, 22, 0.1);
+  transform: translateY(-2px);
+}
 .meso-grid {
   display: grid;
   gap: 14px;
@@ -384,7 +454,12 @@ body.meso {
   white-space: nowrap;
 }
 .meso-btn:hover {
-  background: var(--rail);
+  /* Was --rail (#fbfbfc) on a white --surface button — invisible. Now an
+     on-brand steel-blue tint with a matching border + faint lift (issue #385). */
+  background: var(--soft);
+  border-color: var(--soft-line);
+  color: var(--accent-deep);
+  box-shadow: 0 1px 3px rgba(16, 18, 22, 0.1);
 }
 .meso-btn--primary {
   color: var(--accent-ink);
@@ -394,8 +469,12 @@ body.meso {
   box-shadow: 0 1px 2px rgba(16, 18, 22, 0.12);
 }
 .meso-btn--primary:hover {
-  filter: brightness(1.06);
-  background: var(--accent);
+  /* Deepen the fill (was a barely-there +6% brighten) and lift it. Reset the
+     border-color the base .meso-btn:hover would otherwise leak in. */
+  background: var(--accent-deep);
+  color: var(--accent-ink);
+  border-color: transparent;
+  box-shadow: 0 3px 8px rgba(31, 81, 107, 0.28);
 }
 .meso-btn--ghost {
   background: transparent;
@@ -405,7 +484,11 @@ body.meso {
   padding-right: 0;
 }
 .meso-btn--ghost:hover {
+  /* Text-only button: reset the border/shadow the base .meso-btn:hover adds. */
   background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--accent-deep);
   text-decoration: underline;
 }
 
@@ -507,8 +590,12 @@ body.meso {
 .meso-row:last-child {
   border-bottom: 0;
 }
-.meso-row:hover {
-  background: var(--rail);
+/* Only the clickable rows (links/buttons) get a hover — the many static
+   div.meso-row layout containers should not light up (issue #385). --soft is
+   clearly visible where the old near-white --rail was not. */
+a.meso-row:hover,
+button.meso-row:hover {
+  background: var(--soft);
 }
 .meso-row-name {
   font-size: 14px;
