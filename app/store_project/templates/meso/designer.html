@@ -84,7 +84,7 @@
 
         <div style="flex:1;"></div>
 
-        <div x-show="cycleLabel" style="display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:7px;background:var(--soft);border:1px solid var(--soft-line);font-size:11.5px;font-weight:600;color:var(--accent-deep);">
+        <div x-show="cycleLabel" class="meso-flex" style="align-items:center;gap:6px;padding:5px 11px;border-radius:7px;background:var(--soft);border:1px solid var(--soft-line);font-size:11.5px;font-weight:600;color:var(--accent-deep);">
           <div style="width:6px;height:6px;border-radius:50%;background:var(--accent);"></div>
           <span x-text="cycleLabel"></span>
         </div>
@@ -222,7 +222,7 @@
           <!-- Agent coachmark (Phase 5): dismissible first-run orientation for the
                agent column. Shown in both modes — the agent is live for groups
                too (groups Phase 1, the shared program). -->
-          <div x-show="coachmarkVisible('agent')" style="flex:0 0 auto;display:flex;align-items:flex-start;gap:9px;margin:12px 14px 0;padding:11px 12px;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;">
+          <div x-show="coachmarkVisible('agent')" class="meso-flex" style="flex:0 0 auto;align-items:flex-start;gap:9px;margin:12px 14px 0;padding:11px 12px;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;">
             <div style="flex:1;min-width:0;line-height:1.4;">
               <div style="font-size:12.5px;font-weight:700;color:var(--accent-deep);">Talk to the agent</div>
               <div style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Ask in plain words &#8212; &#8220;lighten Friday,&#8221; &#8220;add a deload week.&#8221; It drafts changes you can review.</div>
@@ -244,7 +244,7 @@
                             <div style="width:17px;height:17px;border-radius:5px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:var(--accent-ink);font-size:10px;flex:0 0 auto;margin-top:1px;">&#10003;</div>
                             <div style="line-height:1.3;min-width:0;">
                               <div style="font-size:12.5px;font-weight:700;color:var(--accent-deep);" x-text="ch.title"></div>
-                              <div x-show="ch.member" style="font-size:10.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:5px;padding:1px 6px;display:inline-block;margin:3px 0 1px;" x-text="ch.member"></div>
+                              <div x-show="ch.member" class="meso-inline-block" style="font-size:10.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:5px;padding:1px 6px;margin:3px 0 1px;" x-text="ch.member"></div>
                               <div style="font-size:11.5px;color:var(--accent-deep);opacity:0.8;">
                                 <span x-show="ch.before" style="text-decoration:line-through;" x-text="ch.before"></span>
                                 <span x-show="ch.before && ch.after"> &#8594; </span>
@@ -342,7 +342,7 @@
               <!-- Week switcher (multi-week designer): view any week, append the
                    next one, or make the viewed week the live (deliver-target)
                    one. Hidden until a real plan is loaded. -->
-              <div x-show="live && weeks.length" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:16px;">
+              <div x-show="live && weeks.length" class="meso-flex" style="align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:16px;">
                 <template x-for="w in weeks" :key="w.id">
                   <button type="button" @click="switchWeek(w.id)" data-hover="rail" :title="w.current ? 'Live week — delivery sends this one' : ('View ' + w.label)" :style="`appearance:none;cursor:pointer;font:inherit;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px solid ${weekIsViewed(w) ? 'var(--accent)' : 'var(--line)'};background:${weekIsViewed(w) ? 'var(--accent)' : 'var(--surface)'};color:${weekIsViewed(w) ? 'var(--accent-ink)' : 'var(--ink)'};`">
                     <span x-text="w.label"></span>
@@ -355,7 +355,7 @@
 
               <!-- Grid coachmark (Phase 5): dismissible first-run note for the
                    week grid. Shown in both modes (the grid edits the same way). -->
-              <div x-show="coachmarkVisible('grid')" style="display:flex;align-items:flex-start;gap:9px;margin-bottom:16px;padding:11px 13px;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;">
+              <div x-show="coachmarkVisible('grid')" class="meso-flex" style="align-items:flex-start;gap:9px;margin-bottom:16px;padding:11px 13px;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;">
                 <div style="flex:1;min-width:0;line-height:1.4;">
                   <div style="font-size:12.5px;font-weight:700;color:var(--accent-deep);">The week grid</div>
                   <div style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">Tap any cell &#8212; sets, reps, load, RPE, or notes &#8212; to edit it. Every change autosaves.</div>
@@ -510,7 +510,7 @@
               <!-- Phone-preview coachmark (Phase 5): dismissible first-run note
                    making clear this is the athlete's real phone view, and the
                    path to delivery. Full-width so it sits above the phone. -->
-              <div x-show="coachmarkVisible('phone')" style="flex:0 0 100%;display:flex;align-items:flex-start;gap:9px;max-width:760px;padding:11px 13px;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;">
+              <div x-show="coachmarkVisible('phone')" class="meso-flex" style="flex:0 0 100%;align-items:flex-start;gap:9px;max-width:760px;padding:11px 13px;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;">
                 <div style="flex:1;min-width:0;line-height:1.4;">
                   <div style="font-size:12.5px;font-weight:700;color:var(--accent-deep);">Preview as your athlete</div>
                   <div style="font-size:11.5px;color:var(--accent-deep);opacity:0.85;">This is exactly what your athlete sees on their phone. Preview it, then Deliver to send the week.</div>

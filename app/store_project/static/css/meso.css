@@ -208,11 +208,16 @@ button.meso-card,
   box-shadow: 0 0 0 3px var(--soft);
 }
 
-/* Display helper for elements toggled by x-show. Alpine resets style.display to
-   "" when revealing, which would drop an inline `display:flex`; sourcing the
-   flex from a class makes that reset fall back to flex instead of block. */
+/* Display helpers for elements toggled by x-show. Alpine resets style.display
+   to "" when revealing, which would drop an inline `display` value; sourcing the
+   display from a class makes that reset fall back to the intended value instead
+   of the element default (block). */
 .meso .meso-flex {
   display: flex;
+}
+
+.meso .meso-inline-block {
+  display: inline-block;
 }
 
 /* Segmented controls (mode / view / period toggles). The prototype rendered an
