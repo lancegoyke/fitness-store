@@ -8,7 +8,7 @@ rest of Mastering Fitness, and ``meso.css`` used its own purple-blue accent
 This phase reconnects Meso:
 
 - the **shared site nav** rides at the top of every coach-facing Meso shell page
-  (brand → home; About / Store / Challenges / Coaching / Contact; auth on the
+  (brand → home; About / Store / Challenges / Meso / Contact; auth on the
   right), so Meso reads as part of the same site, with the Meso workspace
   sub-header (``.meso-topnav``) kept below it;
 - the phone-first **athlete PWA** surfaces (home, session logger, offline,
@@ -89,13 +89,11 @@ class TestSharedSiteNav:
         assert reverse("challenges:challenge_filtered_list") in body
         assert reverse("pages:contact") in body
 
-    def test_coaching_link_is_marked_active(self, client):
+    def test_meso_link_is_marked_active(self, client):
         client.force_login(make_coach())
         body = client.get(reverse("meso:roster")).content.decode()
-        # Coaching is the current site section — the shared nav marks it active.
-        expected = '<a class="link active" href="%s">Coaching</a>' % reverse(
-            "meso:roster"
-        )
+        # Meso is the current site section — the shared nav marks it active.
+        expected = '<a class="link active" href="%s">Meso</a>' % reverse("meso:roster")
         assert expected in body
 
     def test_authenticated_coach_sees_account_and_logout(self, client):

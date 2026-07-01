@@ -134,7 +134,7 @@ class SharedNavMarkupTests(TestCase):
 
     def test_nav_keeps_every_site_section(self):
         html = _render_nav(AnonymousUser())
-        for label in ("About", "Store", "Challenges", "Coaching", "Contact"):
+        for label in ("About", "Store", "Challenges", "Meso", "Contact"):
             self.assertIn(f">{label}</a>", html)
 
     def test_nav_shows_auth_links_when_anonymous(self):
@@ -154,10 +154,10 @@ class SharedNavMarkupTests(TestCase):
         html = _render_nav(AnonymousUser(), match_url=url)
         self.assertIn(f'<a class="link active" href="{url}">Challenges</a>', html)
 
-    def test_coaching_section_highlights_inside_meso(self):
+    def test_meso_section_highlights_inside_meso(self):
         url = reverse("meso:roster")
         html = _render_nav(AnonymousUser(), match_url=url)
-        self.assertIn(f'<a class="link active" href="{url}">Coaching</a>', html)
+        self.assertIn(f'<a class="link active" href="{url}">Meso</a>', html)
 
     def test_about_section_highlights_on_about_page(self):
         url = reverse("pages:single", args=["about"])

@@ -8,7 +8,7 @@ of Meso met a bare login wall, and Meso was linked from nowhere on the main site
 This phase splits ``/meso/`` on auth — an anonymous visitor sees a real landing
 page (what Meso is + two honest entry actions: log in as an athlete, or become a
 coach), while an authenticated visitor keeps the post-#311 role routing (coach →
-roster, anyone else → their training home). A single discreet "Coaching" link in
+roster, anyone else → their training home). A single discreet "Meso" link in
 the main-site nav makes Meso discoverable at all. See
 ``docs/archive/meso/first-time-ux-plan.md`` (Phase 3).
 
