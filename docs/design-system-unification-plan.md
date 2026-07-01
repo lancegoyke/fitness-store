@@ -6,6 +6,14 @@ Status: **COMPLETE — PRs 1, 2 & 3 all implemented** · Started & finished
 reconnection (#354, built before PR 2 landed — it depends only on the PR 1 token
 foundation, not on PR 2). The whole site now runs on the one token-driven look.
 
+> **Update (2026-06-30, #358):** PR 3 first shipped a *Meso-only* nav partial;
+> the **#358 nav-refresh follow-up superseded it** with one shared nav
+> (`static/css/nav.css` + `_nav.html`) reused across the whole site *and* the
+> Meso shell. The PR 3 section below is reconciled to describe what's on `main`.
+> Later polish (body typography, footer chrome) continued in the separate
+> **`docs/design-system-phase-2-plan.md`** — phase 2: PR A (#363), PR B (#366),
+> and this doc-reconcile as PR C.
+
 ## Goal
 
 Make Mastering Fitness visually consistent by collapsing the competing styling
@@ -113,31 +121,46 @@ button-link underline fix. The original task list:
 - Store, home, account/auth, product/book pages — template-level cleanups beyond
   what the global re-skin already gave.
 
-### PR 3 — Meso reconnection ✅ implemented
-Done on branch `design-system-pr3-meso-reconnect`. Validated by
-`docs/spikes/basecoat/meso.html`.
+### PR 3 — Meso reconnection ✅ implemented (nav superseded by #358)
 
-- **Shared site nav** — a new `meso/_meso_sitenav.html` partial (the same
-  top-level links as `templates/_nav.html`: brand → home; About / Store /
-  Challenges / **Coaching** [active] / Contact; auth on the right) rides at the
-  top of the Meso shell via a `{% block site_nav %}` in `_meso_base.html`,
-  styled in `meso.css` (`.meso-sitenav`, a black bar matching the main-site
-  nav) since the shell loads only `meso.css`. The Meso workspace sub-header
-  (`.meso-topnav`) is kept below it.
-- **Athlete PWA keeps its installed-app feel** — the phone-first surfaces
-  (`athlete_home`, `athlete_session`, `offline`, `invite_claim`) override
-  `{% block site_nav %}` empty, so the marketing nav never clutters the
-  installed training app. The coach-facing `results` page (breadcrumb back to
-  the roster) keeps the nav.
-- **Accent points at the shared token** — `meso.css`'s `--accent` (and the
-  `--soft` / `--soft-line` / `--accent-deep` family) move from the Meso-only
-  `oklch(0.56 0.14 258)` to the site's steel-blue `#31759d` (mirroring base.css
-  `--accent` / `--accent-soft` / `--accent-line` / `--accent-deep`). The
-  standalone designer's inline token block is repointed to match, and the PWA
-  chrome (manifest `theme_color` + `_pwa_head.html` `theme-color`) moves to
-  `#31759d`. `PWA_CACHE_VERSION` bumped `v2 → v3` (the precached `meso.css`
-  changed).
-- Red→green tests in `meso/tests/test_design_reconnect.py`.
+First shipped on `design-system-pr3-meso-reconnect` (**#354**) as a **Meso-only**
+`meso/_meso_sitenav.html` partial styled by `.meso-sitenav` in `meso.css` — a
+black bar that *duplicated* the main-site nav (and had no mobile menu). The
+**#358 nav-refresh follow-up superseded that approach**: instead of a second nav
+just for Meso, it refactored the one real site nav and reused it everywhere.
+Validated by `docs/spikes/basecoat/meso.html`.
+
+**What's on `main` now (#358, `7156c10`):**
+
+- **One shared nav stylesheet** — a new `static/css/nav.css` (`.nav` / `.brand` /
+  `.link`), loaded by the main-site bases (`_base` / `_base_wide` / `_base_full`
+  / `home`) **and** by `_meso_base` via
+  `{% block site_nav %}{% include "_nav.html" %}{% endblock %}`, so the same bar
+  renders across the whole site and the Meso shell. `_nav.html` was rebuilt on
+  these classes off the old Every-Layout `class="box invert navbar"` markup
+  (whose dead rules were stripped from base.css). The `_meso_sitenav.html`
+  partial and its
+  `.meso-sitenav` CSS were **removed**.
+- **CSS-only mobile burger** — a visually-hidden, keyboard-focusable checkbox
+  toggles `:checked ~ .nav-links`; no JavaScript. Active section via
+  `request.resolver_match`.
+- **Identical in both shells** — `.nav` pins `font-family: system-ui` +
+  `line-height: 1.2` (and re-asserts `inherit` on `.nav *`), because base.css's
+  universal `* { font-family; line-height }` reaches the main site but not the
+  Meso shell; without pinning, the same bar rendered at different heights.
+- **Athlete PWA still opts out** — the phone-first surfaces (`athlete_home`,
+  `athlete_session`, `offline`, `invite_claim`) override `{% block site_nav %}`
+  empty, so the installed training app stays uncluttered. Coach-facing pages keep
+  the nav.
+- Tests: `pages/tests/test_design_system_pr3.py` (#358), plus the #354
+  `meso/tests/test_design_reconnect.py` reconciled (its marker `meso-sitenav` →
+  `<header class="nav">`).
+
+**Still from #354, unchanged by #358 — Meso's tokens point at the shared
+palette:** `meso.css`'s `--accent` (and the `--soft` / `--soft-line` /
+`--accent-deep` family) moved off the Meso-only `oklch(0.56 0.14 258)` to the
+site's steel-blue **`#31759d`** (mirroring base.css), and the PWA chrome
+(manifest `theme_color` + `_pwa_head.html` `theme-color`) moved to `#31759d`.
 
 The original task list for reference:
 

@@ -1,8 +1,11 @@
 # Design system — phase 2 plan (typography + remaining chrome)
 
-Status: **Scoped, not started** · Drafted 2026-06-30 · Follow-on to the
-**COMPLETE** `docs/design-system-unification-plan.md` (phase 1: PRs 1–3 + the
-nav-refresh #358).
+Status: **COMPLETE — PRs A, B & C all shipped** · Drafted & finished 2026-06-30 ·
+Follow-on to the **COMPLETE** `docs/design-system-unification-plan.md` (phase 1:
+PRs 1–3 + the nav-refresh #358). PR A = body typography (#363); PR B = footer
+chrome (#366); PR C = phase-1 doc reconcile (this change). Decisions taken:
+**Option A (system-ui)** for the body typeface, **Meso left on Hanken Grotesk**,
+footer **token refresh + nav gutter alignment**.
 
 ## Why a phase 2
 
@@ -28,7 +31,7 @@ Finish the "reads as one modern site" job: one typeface system across the whole
 site (main + Meso) and consistent top/bottom chrome, without adding build tooling
 (stay on Path B — static CSS + WhiteNoise).
 
-## PR A — Body typography unification (the big one)
+## PR A — Body typography unification (the big one) ✅ shipped (#363)
 
 ### Current state
 - Typography is centralized in **one rule**: `base.css`
@@ -85,7 +88,7 @@ Revisit B/C only if a branded display face is wanted later.
   mobile. Confirm no broken wrapping / overflow.
 - Codex review loop; ship through the human merge/deploy gate (mastering.fitness).
 
-## PR B — Footer chrome refresh (small)
+## PR B — Footer chrome refresh (small) ✅ shipped (#366)
 
 ### Current state
 `templates/_footer.html` = `.footer` (dark bar) with `.footer a` links;
@@ -109,7 +112,7 @@ Render `_footer.html` test + browser check on any page footer (incl. Meso, which
 also shows the footer via the main bases? — confirm: Meso shell does **not**
 include `_footer.html`; the main bases do). TDD + codex + gate as usual.
 
-## PR C — Reconcile the phase-1 plan doc (housekeeping, docs-only)
+## PR C — Reconcile the phase-1 plan doc (housekeeping, docs-only) ✅ shipped
 
 `docs/design-system-unification-plan.md` still describes PR 3 as the Meso-only
 `meso/_meso_sitenav.html` partial styled by `.meso-sitenav`. #358 **removed** that
@@ -143,8 +146,11 @@ pipeline and warrants its own plan. Not part of phase 2.
 - Ship through the human merge/deploy gate; merge to `main` auto-deploys via
   GH Actions (Django CI → Deploy) to mastering.fitness.
 
-## Open decisions to confirm at kickoff
-- **Body typeface: A (system-ui, recommended) / B (Inter webfont) / C (Hanken
-  site-wide)?**
-- Leave Meso on Hanken Grotesk (recommended) or unify it with the main body font?
-- Footer: token refresh only, or also align padding/rhythm with the nav?
+## Decisions taken at kickoff (resolved)
+- **Body typeface: A — `system-ui`** (the nav's stack), reused via a `--font`
+  token. Shipped in PR A (#363).
+- **Meso stays on Hanken Grotesk** (app sub-brand) — its shell doesn't load
+  base.css, so PR A left it untouched.
+- **Footer: token refresh *and* nav-gutter alignment** — moved onto
+  `--nav-bg` / `--nav-fg` and picked up the nav's `clamp(16px, 4vw, 40px)`
+  inline padding so top and bottom chrome pair. Shipped in PR B (#366).
