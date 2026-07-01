@@ -201,6 +201,16 @@ class Phase3SignupTemplateTests(TestCase):
     def test_signup_shared_nav_still_frames_the_card(self):
         self.assertContains(self.resp, 'class="nav"')
 
+    def test_signup_signin_link_preserves_next(self):
+        """The header "Sign in" link keeps allauth's ?next passthrough.
+
+        allauth exposes the redirect-preserving login URL as ``login_url``; a
+        hard-coded ``{% url 'account_login' %}`` would drop the ``next`` a user
+        carried in from a protected page.
+        """
+        resp = self.client.get(reverse("account_signup") + "?next=/dashboard/")
+        self.assertContains(resp, "/accounts/login/?next=")
+
     def test_signup_social_anchors_and_media_survive(self):
         """Both provider anchors + the providers media JS survive the migration."""
         self.assertContains(self.resp, 'id="google"')
