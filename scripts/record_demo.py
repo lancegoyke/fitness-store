@@ -41,6 +41,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from dotenv import dotenv_values
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 from playwright.sync_api import sync_playwright
@@ -62,6 +63,9 @@ VIEWPORT = {"width": 1280, "height": 720}
 # Legibility pauses — cosmetic pacing only, see the module docstring.
 BEAT = 1.0  # seconds
 LONG_BEAT = 2.0  # seconds; used where a screen most needs to "read" on camera
+
+# ``seed_demo_recording``'s fixed default (kept in sync with the command).
+DEFAULT_DEMO_PASSWORD = "meso-demo-recording"
 
 # The coach instruction typed into the agent composer (STEP 4). Chosen to echo
 # Maya's seeded contraindication so the pre-baked FakeDemoClient's swap +
@@ -147,9 +151,31 @@ def run_management_command(args, env):
     return result.stdout
 
 
-def seed_demo_data(env):
+def resolve_demo_password():
+    """The password the demo accounts will use, resolved where the seed reads it.
+
+    ``seed_demo_recording`` (a child ``manage.py`` process) resolves its
+    password as CLI → process env → ``.env`` (Django's ``load_dotenv()``) →
+    fixed default — but this parent script never loads ``.env``, so a password
+    set only there would seed the accounts with one value while the recorder
+    logs in with another (and times out at the off-camera login). Resolve from
+    the same sources here and pass it back to the command explicitly
+    (``--password``), making this script the single source of truth.
+    """
+    from_env = os.environ.get("MESO_DEMO_COACH_PASSWORD")
+    if from_env:
+        return from_env
+    from_dotenv = dotenv_values(REPO_ROOT / ".env").get("MESO_DEMO_COACH_PASSWORD")
+    if from_dotenv:
+        return from_dotenv
+    return DEFAULT_DEMO_PASSWORD
+
+
+def seed_demo_data(env, password):
     run_management_command(["migrate", "--no-input"], env)
-    stdout = run_management_command(["seed_demo_recording", "--json"], env)
+    stdout = run_management_command(
+        ["seed_demo_recording", "--json", "--password", password], env
+    )
     data = None
     for line in stdout.splitlines():
         candidate = line.strip()
@@ -502,7 +528,10 @@ def main():
     video_result = None
 
     try:
-        coach_email, athlete_email = run_step("SEED DEMO DATA", seed_demo_data, env)
+        password = resolve_demo_password()
+        coach_email, athlete_email = run_step(
+            "SEED DEMO DATA", seed_demo_data, env, password
+        )
         server_proc = start_server(env)
         run_step(
             "WAIT FOR DEV SERVER",
@@ -514,7 +543,6 @@ def main():
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             try:
-                password = env.get("MESO_DEMO_COACH_PASSWORD", "meso-demo-recording")
                 storage_state = run_step(
                     "OFF-CAMERA LOGIN", offcamera_login, browser, coach_email, password
                 )
