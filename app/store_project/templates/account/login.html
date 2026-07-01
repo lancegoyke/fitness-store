@@ -1,4 +1,4 @@
-{% extends '_base.html' %}
+{% extends "account/base.html" %}
 
 {% load i18n %}
 {% load static account socialaccount %}
@@ -10,69 +10,60 @@
   <meta name="google-signin-client_id" content="739106151618-nvu2uigcvc2rmc5n0esia8doc42ialfo.apps.googleusercontent.com">
 {% endblock header %}
 
-{% block content %}
+{% block auth_title %}{% trans "Login to your account" %}{% endblock auth_title %}
 
-  <h1>{% trans "Login" %}</h1>
+{% block auth_description %}
+  <p class="auth-card__description text-center">
+    {% trans "Enter your email below to login to your account." %}
+    <a href="{% url 'account_signup' %}">{% trans "Sign up" %}</a>
+  </p>
+{% endblock auth_description %}
 
-  <p class="text-center">{% trans "No account? Then please "%} <a href="{% url 'account_signup' %}">{% trans "sign up" %}</a>.</p>
+{% block auth_body %}
+  <form class="stack" id="email-form" method="POST" action="{% url 'account_login' %}">
+    {% csrf_token %}
 
-  <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" next=redirect_field_value %}">
-    <h2>
-      Login with Facebook
-    </h2>
-  </a>
+    <div class="messages">
+      {{ form.non_field_errors }}
+    </div>
 
-  <a class="box login google" id="google" href="{% provider_login_url "google" next=redirect_field_value %}">
-    <h2>
-      Sign in with Google
-    </h2>
-  </a>
+    <div class="stack">
+      <label for="{{ form.login.id_for_label }}">{% trans "Email" %}</label>
+      {{ form.login }}
+      {{ form.login.errors }}
+    </div>
 
+    <div class="stack">
+      <div class="auth-card__field-header">
+        <label for="{{ form.password.id_for_label }}">{% trans "Password" %}</label>
+        <a class="secondaryAction" href="{% url 'account_reset_password' %}">{% trans "Forgot Password?" %}</a>
+      </div>
+      {{ form.password }}
+      {{ form.password.errors }}
+    </div>
+
+    {% if redirect_field_value %}
+      <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
+    {% endif %}
+
+    <button class="primaryAction button block" type="submit">{% trans "Sign In" %}</button>
+  </form>
+{% endblock auth_body %}
+
+{% block auth_footer %}
   <div class="or-separator">
     <div></div>
-    <i>or</i>
+    <i>{% trans "or" %}</i>
     <div></div>
   </div>
 
-  <div class="stack-auth-form">
-    <h2 class="text-center font-size:smallish">Sign in with email</h2>
-    <form class="login center" id="email-form" method="POST" action="{% url 'account_login' %}">
-      {% csrf_token %}
-
-      <div class="messages">
-        {{ form.non_field_errors }}
-      </div>
-
-      <p>
-        <label class="stack" for="{{ form.login.id_for_label }}">
-          <span>Email</span>
-          {{ form.login }}
-          {{ form.login.errors }}
-        </label>
-      </p>
-
-      <p>
-        <label class="stack" for="{{ form.password.id_for_label }}">
-          <span>Password</span>
-          {{ form.password }}
-          {{ form.password.errors }}
-        </label>
-      </p>
-
-
-      {% if redirect_field_value %}
-        <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
-      {% endif %}
-      <p>
-        <a class="secondaryAction" href="{% url 'account_reset_password' %}">{% trans "Forgot Password?" %}</a>
-      </p>
-      <p>
-        <button class="primaryAction button" type="submit">{% trans "Sign In" %}</button>
-      </p>
-    </form>
-  </div>
-
-{% endblock content %}
+  <a class="button outline block" id="google" href="{% provider_login_url "google" next=redirect_field_value %}">
+    {% trans "Sign in with Google" %}
+  </a>
+  <a class="button outline block" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" next=redirect_field_value %}">
+    {% trans "Login with Facebook" %}
+  </a>
+{% endblock auth_footer %}
 
 {% block javascript %}
   {% providers_media_js %}

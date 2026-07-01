@@ -731,18 +731,53 @@ a.box.login:active {
 .or-separator i {
   padding: 3px;
   font-size: 18px;
-  color: #6f6f6f;
+  color: var(--muted-foreground);
 }
 
 .or-separator > div {
   flex: 1;
   height: 1px;
-  background-color: #cac7c7;
+  background-color: var(--border);
 }
 
 /* Secondary auth-form links (e.g. "Forgot Password?") read as subordinate. */
 a.secondaryAction {
   font-size: var(--s-1);
+}
+
+/*
+    AUTH CARD (design-system phase 3, PR A)
+
+    The basecoat-style login card, composed from already-shipped components: a
+    centered `.box` surface (rendered by account/base.html) holding a header, the
+    email form, and the social alternatives. Only the width wrapper, the muted
+    description, the field-header row, and a full-width button variant are
+    genuinely new; everything else reuses `.box`, `.button`, the `input` element
+    rule, `.or-separator`, and `:root` tokens.
+*/
+.auth-card {
+  max-width: 28rem;
+}
+
+/* Muted one-line subtitle under the card title (basecoat card <p>). */
+.auth-card__description {
+  color: var(--muted-foreground);
+  font-size: var(--s-1);
+}
+
+/* "Password" label + inline "Forgot Password?" on one row (basecoat card). */
+.auth-card__field-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s0);
+}
+
+/* Full-width button variant — the card's submit + social buttons span the card
+   (basecoat `.btn w-full`). Applies to `<button class="button block">` and
+   `<a class="button outline block">`. */
+.button.block {
+  width: 100%;
 }
 
 /*
