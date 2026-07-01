@@ -1,0 +1,38 @@
+{% extends "_base.html" %}
+
+{% comment %}
+  Shared auth-card shell (design-system phase 3, PR A).
+
+  Renders the locked "Faithful" login card once — a centered `.box` surface with
+  a header (title + muted description) plus body/footer slots — so every auth
+  page composes the same card instead of re-hand-rolling `.box.login` /
+  `.stack-auth-form`. Overriding `layout` (not `content`) keeps the shared nav +
+  footer from `_base.html` while swapping the reading-width wrapper for the
+  narrower `.auth-card`.
+
+  This is a *dedicated* card base rather than a change to `account/base.html`:
+  the notice pages (`account_inactive`, `signup_closed`, `verification_sent`,
+  `verified_email_required`) still extend `account/base.html` and override its
+  `content` block, so touching that shell would blank them. Pages opt into the
+  card by extending THIS template and filling the blocks below; the remaining
+  auth pages are migrated across in later phase-3 PRs.
+
+    auth_title        — the card heading (basecoat card <h2>)
+    auth_description   — the muted one-line subtitle + any subordinate link
+    auth_body          — the form (fields + its submit button live together here)
+    auth_footer        — alternatives below the form (e.g. the social buttons)
+{% endcomment %}
+
+{% block layout %}
+  <div class="stack center auth-card">
+    {% include '_messages.html' %}
+    <div class="box stack auth-card__panel">
+      <header class="stack auth-card__header">
+        <h1>{% block auth_title %}{% endblock auth_title %}</h1>
+        {% block auth_description %}{% endblock auth_description %}
+      </header>
+      {% block auth_body %}{% endblock auth_body %}
+      {% block auth_footer %}{% endblock auth_footer %}
+    </div>
+  </div>
+{% endblock layout %}

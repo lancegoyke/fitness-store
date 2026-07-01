@@ -117,3 +117,21 @@ class Phase3LoginTemplateTests(TestCase):
         self.assertContains(self.resp, 'id="facebook"')
         # {% providers_media_js %} still emits the Facebook JS SDK loader.
         self.assertContains(self.resp, "connect.facebook.net")
+
+
+class Phase3NoticePageRegressionTests(TestCase):
+    """Notice pages that still extend ``account/base.html`` are unharmed.
+
+    PR A introduces the card via a *dedicated* ``account/base_auth_card.html``
+    that only the login page extends — precisely so the notice pages, which
+    still extend ``account/base.html`` and override its ``content`` block, keep
+    rendering their own content instead of an empty card.
+    """
+
+    def test_inactive_page_still_renders_its_content(self):
+        resp = self.client.get(reverse("account_inactive"))
+        self.assertEqual(resp.status_code, 200)
+        # The notice's own content block still renders (not blanked by the shell).
+        self.assertContains(resp, "This account is inactive.")
+        # ...and the shared nav still frames it.
+        self.assertContains(resp, 'class="nav"')
