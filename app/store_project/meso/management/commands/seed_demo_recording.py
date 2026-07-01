@@ -14,9 +14,12 @@ command is that command's deterministic sibling:
 - the coach is **comped** (``CoachSubscription.comp``) — the demo workspace (5
   athletes + a group) would otherwise trip the free-tier seat/agent gates and
   freeze the designer/agent mid-recording;
-- the full demo workspace is loaded via ``meso.demo.load_demo`` (the same 5
-  athletes + Maya's built/delivered/logged plan + the demo group), so the
-  recording has real, populated screens to show;
+- the demo workspace is **reset** (``clear_demo`` → ``load_demo``) rather than
+  topped up: ``load_demo`` alone upserts rows but keeps whatever a previous
+  recording added on top (applied agent batches, their designer chat history,
+  logged sets), and run N's video would show N-1 stale agent threads on
+  camera. Every recording starts from the same pristine workspace (the same 5
+  athletes + Maya's built/delivered/logged plan + the demo group);
 - Maya Okonkwo — the demo's "hero" athlete — additionally gets a **usable**
   password (the same as the coach's) so an optional athlete-phone-view shot in
   the storyboard can log in as her too; her four demo siblings keep their
@@ -36,6 +39,7 @@ from django.core.management.base import CommandError
 from django.core.management.base import CommandParser
 from django.db import transaction
 
+from store_project.meso.demo import clear_demo
 from store_project.meso.demo import demo_email
 from store_project.meso.demo import load_demo
 from store_project.meso.models import CoachProfile
@@ -110,6 +114,10 @@ class Command(BaseCommand):
         coach = self._ensure_coach(email, password)
         CoachProfile.objects.get_or_create(user=coach)
         CoachSubscription.comp(coach)
+        # Reset, don't top up: drop whatever a previous recording layered onto
+        # the workspace (applied batches + their designer chat thread, logged
+        # sets) so every video starts from the identical pristine state.
+        clear_demo(coach)
         load_demo(coach)
         athlete_email = self._ensure_maya_login(coach, password)
 

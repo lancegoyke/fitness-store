@@ -139,6 +139,65 @@ class TestFakeDemoClientPropose:
         progress = next(c for c in result["changes"] if c["kind"] == "progress")
         assert progress["prescription_id"] == 11
 
+    def test_honors_picks_the_contraindication_the_instruction_is_about(self):
+        # Maya's demo card lists an unrelated flag first; the coach's knee-themed
+        # instruction should pull the knee flag into the honors chip, not
+        # whatever happens to be first in the list.
+        context = {
+            "plan": {
+                "program": [
+                    {
+                        "id": 1,
+                        "name": "Lower",
+                        "exercises": [{"id": 11, "name": "Bulgarian Split Squat"}],
+                    }
+                ]
+            },
+            "athlete": {
+                "contraindications": [
+                    "No max-effort jumping / impact",
+                    "L knee — avoid deep knee flexion under load",
+                ]
+            },
+        }
+        result = FakeDemoClient().propose(
+            context=context,
+            instruction="Her left knee has been cranky — keep this week knee-friendly.",
+        )
+        swap = next(c for c in result["changes"] if c["kind"] == "swap")
+        assert swap["honors"] == "L knee — avoid deep knee flexion under load"
+
+    def test_every_change_fills_the_before_after_row(self):
+        # The review card renders its strikethrough → arrow row unconditionally;
+        # an empty pair shows a dangling arrow on camera.
+        context = {
+            "plan": {
+                "program": [
+                    {
+                        "id": 1,
+                        "name": "Lower",
+                        "exercises": [
+                            {"id": 11, "name": "Back Squat", "load": "100"},
+                            {"id": 12, "name": "Leg Press", "load": "110"},
+                        ],
+                    },
+                    {
+                        "id": 2,
+                        "name": "Upper",
+                        "exercises": [{"id": 21, "name": "Bench Press", "sets": "4"}],
+                    },
+                ]
+            }
+        }
+        result = FakeDemoClient().propose(context=context, instruction="go")
+        assert len(result["changes"]) == 3
+        for change in result["changes"]:
+            assert change["after"], change
+        volume = next(c for c in result["changes"] if c["kind"] == "volume")
+        assert volume["before"] == "4 sets"
+        assert volume["after"] == "3 sets"
+        assert volume["new_sets"] == "3"
+
     def test_abs_progression_stays_a_bare_number(self):
         # ``apply`` writes new_load verbatim into the load column, where every
         # existing row is unitless — a "kg" suffix would be the one odd cell in

@@ -14,6 +14,9 @@ contract:
   same as the coach's) for the optional athlete-phone-view shot;
 - reruns are idempotent and always converge the password back to the known
   value, even if something changed it since the last run;
+- reruns **reset** the workspace (``clear_demo`` → ``load_demo``): whatever a
+  previous recording layered on top (applied agent batches and their designer
+  chat history) is gone, so run N's video never shows run N-1's chat thread;
 - ``--json`` prints exactly ``{"coach_email": ..., "athlete_email": ...}`` and
   never the password;
 - it refuses to run with ``settings.DEBUG`` off unless ``--force`` is passed.
@@ -32,8 +35,10 @@ from store_project.meso.management.commands.seed_demo_recording import (
     DEFAULT_COACH_PASSWORD,
 )
 from store_project.meso.management.commands.seed_demo_recording import Command
+from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import CoachSubscription
+from store_project.meso.models import Plan
 from store_project.users.factories import UserFactory
 from store_project.users.models import User
 
@@ -160,8 +165,32 @@ class TestIdempotent:
         maya.save(update_fields=["password"])
 
         seed()
-        maya.refresh_from_db()
+        # The rerun reset the workspace, so Maya is a *fresh* row (same
+        # deterministic email) — re-fetch rather than refresh the deleted one.
+        maya = User.objects.get(email=demo_email(coach, "maya"))
         assert maya.check_password(DEFAULT_COACH_PASSWORD)
+
+    def test_rerun_resets_prior_agent_batches(self):
+        # ``load_demo`` alone would top up and keep run N-1's applied batches —
+        # whose designer chat thread would then replay on camera in run N. The
+        # command must reset (clear_demo → load_demo) to a pristine workspace.
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        maya = User.objects.get(email=demo_email(coach, "maya"))
+        plan = Plan.objects.filter(
+            relationship__coach=coach, relationship__athlete=maya
+        ).first()
+        assert plan is not None
+        AgentProposalBatch.objects.create(
+            plan=plan,
+            coach=coach,
+            instruction="a previous recording's run",
+            status=AgentProposalBatch.Status.APPLIED,
+        )
+
+        seed()
+        assert not AgentProposalBatch.objects.filter(coach=coach).exists()
+        assert has_demo(coach) is True
 
 
 class TestJsonOutput:

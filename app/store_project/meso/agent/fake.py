@@ -57,12 +57,15 @@ def _contraindication_words(context):
     return words
 
 
-def _honors_note(context):
+def _honors_note(context, instruction):
     """The rule the swap honors, straight from the plan's own grounding.
 
-    The first contraindication text (athlete's, else the group's folded list) —
+    A real contraindication text (athlete's, else the group's folded list) —
     the same line the coach sees on the athlete card, so the review gate reads
-    "this respects *her* flag", not boilerplate. Truncated to the model column
+    "this respects *her* flag", not boilerplate. Prefer the flag the coach's
+    ``instruction`` is actually about (word overlap — "her knee is cranky"
+    picks the knee flag over an unrelated first-in-list one); ties and
+    no-overlap fall back to the first. Truncated to the model column
     (``validation._LIMITS``); a plan with no contraindications gets a generic
     coaching-rule note instead of an empty honors line.
     """
@@ -70,9 +73,21 @@ def _honors_note(context):
     group = context.get("group") or {}
     texts = list(athlete.get("contraindications") or [])
     texts += list(group.get("contraindications") or [])
-    if texts:
-        return texts[0][:255]
-    return "the plan's movement preferences"
+    if not texts:
+        return "the plan's movement preferences"
+    instruction_words = {
+        w
+        for w in re.sub(r"[^a-z\s]", " ", (instruction or "").lower()).split()
+        if len(w) >= 4
+    }
+
+    def overlap(text):
+        text_words = {
+            w for w in re.sub(r"[^a-z\s]", " ", text.lower()).split() if len(w) >= 4
+        }
+        return len(text_words & instruction_words)
+
+    return max(texts, key=overlap)[:255]
 
 
 def _pick_swap_row(rows):
@@ -100,6 +115,22 @@ def _pick_swap_name(current_name, forbidden_words):
             continue  # would reintroduce a flagged movement
         return candidate
     return _FALLBACK_SWAP
+
+
+def _trimmed_sets(session):
+    """``(current, trimmed)`` set counts for a one-set volume trim on ``session``.
+
+    Reads the day's first row (the volume edit sets every row in the session,
+    but one honest number reads better on the review card than none); an
+    unparsable count falls back to ``(None, 3)`` so the card still shows a sane
+    target.
+    """
+    raw = ((session.get("exercises") or [{}])[0].get("sets") or "").strip()
+    try:
+        current = int(raw)
+    except ValueError:
+        return None, 3
+    return current, max(current - 1, 2)
 
 
 def _bump_load(load_type, current_load):
@@ -171,7 +202,7 @@ class FakeDemoClient:
                     "forgiving range of motion — the work stays hard without "
                     "aggravating anything."
                 ),
-                "honors": _honors_note(context),
+                "honors": _honors_note(context, instruction),
                 "introduces_exercise": swap_name,
                 "new_name": swap_name,
             }
@@ -186,13 +217,19 @@ class FakeDemoClient:
             _, progress_exercise = progress_row
             progress_name = progress_exercise.get("name") or "Exercise"
             load_type = progress_exercise.get("load_type") or LoadType.ABSOLUTE
-            new_load = _bump_load(load_type, progress_exercise.get("load"))
+            current_load = progress_exercise.get("load") or ""
+            new_load = _bump_load(load_type, current_load)
             suffix = "%" if load_type == LoadType.PERCENT else ""
             changes.append(
                 {
                     "kind": "progress",
                     "prescription_id": progress_exercise.get("id"),
                     "title": f"{progress_name} → {new_load}{suffix}",
+                    # before/after are display-only, but the review card renders
+                    # its strikethrough → arrow row unconditionally — leaving
+                    # them empty shows a dangling arrow on camera.
+                    "before": f"{current_load}{suffix}" if current_load else "",
+                    "after": f"{new_load}{suffix}",
                     "rationale": (
                         "A small, defensible step up from loads already handled "
                         "comfortably the last couple of sessions."
@@ -201,21 +238,29 @@ class FakeDemoClient:
                 }
             )
 
-        # 3) A volume tweak on a different session, if the plan has more than one.
+        # 3) A volume tweak on a different session, if the plan has another with rows.
         volume_session = next(
-            (s for s in program if s.get("id") != swap_session.get("id")), None
+            (
+                s
+                for s in program
+                if s.get("id") != swap_session.get("id") and (s.get("exercises") or [])
+            ),
+            None,
         )
         if volume_session is not None:
+            current_sets, new_sets = _trimmed_sets(volume_session)
             changes.append(
                 {
                     "kind": "volume",
                     "session_id": volume_session.get("id"),
                     "title": f"{volume_session.get('name') or 'This day'} → trim a set",
+                    "before": f"{current_sets} sets" if current_sets else "",
+                    "after": f"{new_sets} sets",
                     "rationale": (
                         "Fatigue has been creeping up, so pulling back one set "
                         "keeps the stimulus without digging the hole any deeper."
                     ),
-                    "new_sets": "3",
+                    "new_sets": str(new_sets),
                 }
             )
 
