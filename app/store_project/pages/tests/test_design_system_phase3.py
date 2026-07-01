@@ -20,6 +20,7 @@ from pathlib import Path
 
 from allauth.account.forms import default_token_generator
 from allauth.account.utils import user_pk_to_url_str
+from django.template.loader import render_to_string
 from django.test import SimpleTestCase
 from django.test import TestCase
 from django.urls import reverse
@@ -29,6 +30,7 @@ from store_project.users.factories import UserFactory
 APP_ROOT = Path(__file__).resolve().parents[2]
 CSS_DIR = APP_ROOT / "static" / "css"
 BASE_CSS = CSS_DIR / "base.css"
+TEMPLATE_DIR = APP_ROOT / "templates"
 
 
 def _css_block(css: str, selector: str) -> str:
@@ -124,18 +126,19 @@ class Phase3LoginTemplateTests(TestCase):
 
 
 class Phase3NoticePageRegressionTests(TestCase):
-    """Notice pages that still extend ``account/base.html`` are unharmed.
+    """The inactive notice keeps its copy + nav across the card repoint.
 
-    PR A introduces the card via a *dedicated* ``account/base_auth_card.html``
-    that only the login page extends — precisely so the notice pages, which
-    still extend ``account/base.html`` and override its ``content`` block, keep
-    rendering their own content instead of an empty card.
+    PR A introduced the card via a *dedicated* ``account/base_auth_card.html`` so
+    the notice pages — which then still extended ``account/base.html`` — were left
+    untouched. PR C brings those notice pages onto the card explicitly (inheritance
+    alone could not carry it — see ``Phase3SecondTierAuthPageTests``); this guards
+    that the migration preserves the notice's own copy and the shared nav.
     """
 
     def test_inactive_page_still_renders_its_content(self):
         resp = self.client.get(reverse("account_inactive"))
         self.assertEqual(resp.status_code, 200)
-        # The notice's own content block still renders (not blanked by the shell).
+        # The notice's own copy still renders (not blanked by the card shell).
         self.assertContains(resp, "This account is inactive.")
         # ...and the shared nav still frames it.
         self.assertContains(resp, 'class="nav"')
@@ -288,3 +291,141 @@ class Phase3PasswordResetFromKeyTemplateTests(TestCase):
         self.assertContains(resp, 'name="password2"')
         self.assertContains(resp, 'class="button block"', count=1)
         self.assertContains(resp, "csrfmiddlewaretoken")
+
+
+# ---------------------------------------------------------------------------
+# PR C — second-tier auth pages onto the same card
+#
+# PR C brings the remaining allauth auth pages — password change/set, the email-
+# address manager, the confirmation + notice pages, and the socialaccount confirm/
+# connections pages — onto ``account/base_auth_card.html``. Template guards only
+# (the card CSS all shipped in PR A): each renders the real page (or, for the pages
+# the happy-path flow can't cleanly reach, the real template) and asserts the card
+# wrapper plus any surviving form wiring / notice copy.
+#
+# NB the notice pages formerly extended ``account/base.html`` and defined their own
+# ``{% block content %}``, so inheritance alone could NOT have carried the card to
+# them — each was repointed onto the card's ``auth_*`` blocks explicitly.
+# ``render_to_string`` guards the pages the happy path can't reach (set-password
+# needs an unusable-password user; signup-closed / verified-email-required / the
+# socialaccount confirm live behind flow state), matching the plan's "guard that
+# each notice page actually renders the card wrapper, since inheritance won't."
+# ---------------------------------------------------------------------------
+
+CARD_PANEL = 'class="box stack auth-card__panel"'
+
+
+class Phase3SecondTierAuthPageTests(TestCase):
+    """The second-tier auth pages wear the shared card.
+
+    ``TestCase`` (DB access) — allauth touches the session/DB on these GETs.
+    """
+
+    def _login(self):
+        # force_login bypasses auth entirely — no password needed on the user.
+        user = UserFactory()
+        self.client.force_login(user)
+        return user
+
+    # --- reachable through the real view ---
+
+    def test_password_change_renders_the_card(self):
+        self._login()
+        resp = self.client.get(reverse("account_change_password"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, CARD_PANEL)
+        self.assertContains(resp, 'class="nav"')
+        # allauth's exact form wiring survives the migration.
+        self.assertContains(resp, "csrfmiddlewaretoken")
+        self.assertContains(resp, 'name="oldpassword"')
+        self.assertContains(resp, 'name="password1"')
+        self.assertContains(resp, 'name="password2"')
+        # The pre-unification layout is gone.
+        self.assertNotContains(resp, "stack-auth-form")
+
+    def test_email_manager_renders_the_card(self):
+        self._login()
+        resp = self.client.get(reverse("account_email"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, CARD_PANEL)
+        self.assertContains(resp, "csrfmiddlewaretoken")
+        # The add-email field survives.
+        self.assertContains(resp, 'name="email"')
+
+    def test_email_confirm_invalid_key_renders_the_card(self):
+        resp = self.client.get(
+            reverse("account_confirm_email", kwargs={"key": "bogus-key"})
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, CARD_PANEL)
+
+    def test_password_reset_done_renders_the_card(self):
+        resp = self.client.get(reverse("account_reset_password_done"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, CARD_PANEL)
+
+    def test_password_reset_from_key_done_renders_the_card(self):
+        resp = self.client.get(reverse("account_reset_password_from_key_done"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, CARD_PANEL)
+
+    def test_account_inactive_renders_the_card(self):
+        resp = self.client.get(reverse("account_inactive"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, CARD_PANEL)
+        # The notice copy survives the repoint onto the card.
+        self.assertContains(resp, "This account is inactive.")
+
+    def test_verification_sent_renders_the_card(self):
+        resp = self.client.get(reverse("account_email_verification_sent"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, CARD_PANEL)
+
+    def test_socialaccount_connections_renders_the_card(self):
+        self._login()
+        resp = self.client.get(reverse("socialaccount_connections"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, CARD_PANEL)
+        # A fresh user has no linked accounts (so no CSRF-bearing remove form);
+        # the always-present "add a provider" footer confirms the migration.
+        self.assertContains(resp, "Add a 3rd Party Account")
+
+    def test_socialaccount_login_cancelled_renders_the_card(self):
+        resp = self.client.get(reverse("socialaccount_login_cancelled"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, CARD_PANEL)
+
+    # --- rendered directly (the happy-path flow can't reach these cleanly) ---
+
+    def test_password_set_renders_the_card(self):
+        html = render_to_string("account/password_set.html")
+        self.assertIn(CARD_PANEL, html)
+
+    def test_signup_closed_renders_the_card(self):
+        html = render_to_string("account/signup_closed.html")
+        self.assertIn(CARD_PANEL, html)
+        # The notice copy survives.
+        self.assertIn("sign up is currently closed", html)
+
+    def test_verified_email_required_renders_the_card(self):
+        html = render_to_string("account/verified_email_required.html")
+        self.assertIn(CARD_PANEL, html)
+
+    def test_socialaccount_login_confirm_renders_the_card(self):
+        html = render_to_string("socialaccount/login.html")
+        self.assertIn(CARD_PANEL, html)
+
+    def test_socialaccount_authentication_error_renders_the_card(self):
+        html = render_to_string("socialaccount/authentication_error.html")
+        self.assertIn(CARD_PANEL, html)
+
+    def test_socialaccount_signup_extends_the_card(self):
+        """The social finish-signup form extends the card base.
+
+        It carries a bound ``sociallogin`` form the happy path can't fake here, so
+        guard the migration at the source rather than by rendering: it extends the
+        card base, not the old ``_base.html`` content shell.
+        """
+        source = (TEMPLATE_DIR / "socialaccount" / "signup.html").read_text()
+        self.assertIn('extends "account/base_auth_card.html"', source)
+        self.assertNotIn('extends "_base.html"', source)

@@ -1,27 +1,25 @@
-{% extends "_base.html" %}
+{% extends "account/base_auth_card.html" %}
+
 {% load i18n %}
 {% load allauth %}
-{% block head_title %}
-  {% trans "Signup" %}
-{% endblock head_title %}
-{% block content %}
-  {% element h1 %}
-    {% trans "Sign Up" %}
-  {% endelement %}
-  {% element p %}
-    {% blocktrans with provider_name=account.get_provider.name site_name=site.name %}You are about to use your {{provider_name}} account to login to
-      {{site_name}}. As a final step, please complete the following form:{% endblocktrans %}
-  {% endelement %}
+
+{% block head_title %}{% trans "Signup" %}{% endblock head_title %}
+
+{% block auth_title %}{% trans "Sign Up" %}{% endblock auth_title %}
+
+{% block auth_description %}
+  <p class="auth-card__description text-center">
+    {% blocktrans with provider_name=account.get_provider.name site_name=site.name %}You are about to use your {{ provider_name }} account to login to {{ site_name }}. As a final step, please complete the following form:{% endblocktrans %}
+  </p>
+{% endblock auth_description %}
+
+{% block auth_body %}
   {% url 'socialaccount_signup' as action_url %}
-  {% element form form=form method="post" action=action_url %}
-    {% slot body %}
-      {% csrf_token %}
-      {% element fields form=form unlabeled=True %}
-      {% endelement %}
-      {{ redirect_field }}
-    {% endslot %}
-    {% slot actions %}
-      <button class="primaryAction button" type="submit" style="margin-top: var(--s0)">{% trans "Sign Up" %}</button>
-    {% endslot %}
-  {% endelement %}
-{% endblock content %}
+  <form class="stack" method="post" action="{{ action_url }}">
+    {% csrf_token %}
+    {% element fields form=form unlabeled=True %}
+    {% endelement %}
+    {{ redirect_field }}
+    <button class="primaryAction button block" type="submit">{% trans "Sign Up" %}</button>
+  </form>
+{% endblock auth_body %}
