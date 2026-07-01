@@ -16,6 +16,7 @@ camera. No randomness, no network, no ``anthropic`` import.
 import re
 
 from ..models import LoadType
+from .validation import _singular
 
 # Candidate swap targets, roughly ordered by how often they're a safe alternative
 # to a common lower-body/posterior-chain lift. Picked by elimination against the
@@ -53,7 +54,11 @@ def _contraindication_words(context):
     words = set()
     for text in texts:
         cleaned = re.sub(r"[^a-z\s]", " ", text.lower())
-        words.update(w for w in cleaned.split() if len(w) >= 4)
+        # Fold plurals with the guardrail's own ``_singular`` so "avoid squats"
+        # collides with the "Box Squat" candidate here, exactly as it would in
+        # ``validation`` — otherwise the fake proposes a swap the downstream
+        # guardrail rejects, and the batch quietly loses its headline edit.
+        words.update(_singular(w) for w in cleaned.split() if len(w) >= 4)
     return words
 
 
@@ -106,9 +111,12 @@ def _pick_swap_row(rows):
 
 def _pick_swap_name(current_name, forbidden_words):
     """The first candidate alternative that doesn't collide with ``forbidden_words``."""
-    current_words = set(re.sub(r"[^a-z\s]", " ", (current_name or "").lower()).split())
+    current_words = {
+        _singular(w)
+        for w in re.sub(r"[^a-z\s]", " ", (current_name or "").lower()).split()
+    }
     for candidate in _SWAP_ALTERNATIVES:
-        candidate_words = set(candidate.lower().split())
+        candidate_words = {_singular(w) for w in candidate.lower().split()}
         if candidate_words & current_words:
             continue  # not a real swap — same movement family as the current name
         if candidate_words & forbidden_words:
@@ -117,20 +125,28 @@ def _pick_swap_name(current_name, forbidden_words):
     return _FALLBACK_SWAP
 
 
-def _trimmed_sets(session):
-    """``(current, trimmed)`` set counts for a one-set volume trim on ``session``.
+def _pick_trim_row(rows, swap_session, used_ids):
+    """``(session, exercise, current_sets)`` for an honest one-set volume trim.
 
-    Reads the day's first row (the volume edit sets every row in the session,
-    but one honest number reads better on the review card than none); an
-    unparsable count falls back to ``(None, 3)`` so the card still shows a sane
-    target.
+    Targets ONE row (``prescription_id``), never the whole day: a day-wide
+    ``new_sets`` derived from one row would silently *increase* any row that
+    trains fewer sets (``apply._apply_volume`` writes the same count to every
+    row in a session). Wants a row not already edited by the swap/progress,
+    with a parseable count of 2+; rows outside the swap's day are preferred so
+    the batch visibly spans the week.
     """
-    raw = ((session.get("exercises") or [{}])[0].get("sets") or "").strip()
-    try:
-        current = int(raw)
-    except ValueError:
-        return None, 3
-    return current, max(current - 1, 2)
+    ordered = [r for r in rows if r[0].get("id") != swap_session.get("id")]
+    ordered += [r for r in rows if r[0].get("id") == swap_session.get("id")]
+    for session, exercise in ordered:
+        if exercise.get("id") in used_ids:
+            continue
+        try:
+            current = int((exercise.get("sets") or "").strip())
+        except ValueError:
+            continue
+        if current >= 2:
+            return session, exercise, current
+    return None
 
 
 def _bump_load(load_type, current_load):
@@ -238,23 +254,22 @@ class FakeDemoClient:
                 }
             )
 
-        # 3) A volume tweak on a different session, if the plan has another with rows.
-        volume_session = next(
-            (
-                s
-                for s in program
-                if s.get("id") != swap_session.get("id") and (s.get("exercises") or [])
-            ),
-            None,
-        )
-        if volume_session is not None:
-            current_sets, new_sets = _trimmed_sets(volume_session)
+        # 3) A one-set volume trim on a third row, elsewhere in the week if possible.
+        used_ids = {swap_exercise.get("id")}
+        if progress_row is not None:
+            used_ids.add(progress_row[1].get("id"))
+        trim = _pick_trim_row(rows, swap_session, used_ids)
+        if trim is not None:
+            trim_session, trim_exercise, current_sets = trim
+            trim_name = trim_exercise.get("name") or "Exercise"
+            new_sets = current_sets - 1
             changes.append(
                 {
                     "kind": "volume",
-                    "session_id": volume_session.get("id"),
-                    "title": f"{volume_session.get('name') or 'This day'} → trim a set",
-                    "before": f"{current_sets} sets" if current_sets else "",
+                    "prescription_id": trim_exercise.get("id"),
+                    "day_label": trim_session.get("name") or "",
+                    "title": f"{trim_name} → {new_sets} sets",
+                    "before": f"{current_sets} sets",
                     "after": f"{new_sets} sets",
                     "rationale": (
                         "Fatigue has been creeping up, so pulling back one set "

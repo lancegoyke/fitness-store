@@ -97,5 +97,8 @@ db-shell:
 # Regenerate the Meso walkthrough video (docs/demo/README.md) — seeds demo
 # data, drives the real coach + athlete flow in headless Chromium, and writes
 # docs/demo/out/meso-walkthrough.mp4. Zero manual steps; safe to re-run.
-record-demo: services
+# `--wait` blocks on the DB/Redis healthchecks (a plain `up -d` returns before
+# Postgres accepts connections, and a cold run's first `migrate` would fail).
+record-demo:
+    docker compose up -d --wait
     uv run python scripts/record_demo.py

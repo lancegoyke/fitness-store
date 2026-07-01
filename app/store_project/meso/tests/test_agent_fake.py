@@ -198,6 +198,60 @@ class TestFakeDemoClientPropose:
         assert volume["after"] == "3 sets"
         assert volume["new_sets"] == "3"
 
+    def test_swap_respects_plural_contraindication_wording(self):
+        # "avoid squats" must collide with the "Box Squat" candidate the same
+        # way validation's singular-folded guardrail sees it — otherwise the
+        # fake proposes a swap the downstream guardrail rejects and the batch
+        # quietly loses its headline edit.
+        context = {
+            "plan": {
+                "program": [
+                    {
+                        "id": 1,
+                        "name": "Lower",
+                        "exercises": [{"id": 11, "name": "Leg Press"}],
+                    }
+                ]
+            },
+            "athlete": {"contraindications": ["Avoid heavy squats and deadlifts"]},
+        }
+        result = FakeDemoClient().propose(context=context, instruction="go")
+        swap = next(c for c in result["changes"] if c["kind"] == "swap")
+        assert "squat" not in swap["introduces_exercise"].lower()
+        assert "deadlift" not in swap["introduces_exercise"].lower()
+
+    def test_volume_trim_targets_one_row_never_the_whole_day(self):
+        # A day-wide new_sets derived from one row would silently *increase*
+        # any row training fewer sets (apply writes the same count to every
+        # row in a session) — the trim must target a single prescription.
+        context = {
+            "plan": {
+                "program": [
+                    {
+                        "id": 1,
+                        "name": "Lower",
+                        "exercises": [{"id": 11, "name": "Back Squat"}],
+                    },
+                    {
+                        "id": 2,
+                        "name": "Upper",
+                        "exercises": [
+                            {"id": 21, "name": "Bench Press", "sets": "4"},
+                            {"id": 22, "name": "Seated Row", "sets": "2"},
+                        ],
+                    },
+                ]
+            }
+        }
+        result = FakeDemoClient().propose(context=context, instruction="go")
+        volume = next(c for c in result["changes"] if c["kind"] == "volume")
+        # Bench (21) is taken by the progression; the trim lands on the row's
+        # own count (2 → 1), not a day-wide value that would bump it to 3.
+        assert volume["prescription_id"] == 22
+        assert "session_id" not in volume
+        assert volume["new_sets"] == "1"
+        assert volume["before"] == "2 sets"
+
     def test_abs_progression_stays_a_bare_number(self):
         # ``apply`` writes new_load verbatim into the load column, where every
         # existing row is unitless — a "kg" suffix would be the one odd cell in
