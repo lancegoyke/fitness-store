@@ -223,7 +223,7 @@ class Phase3PasswordResetTemplateTests(TestCase):
 
     def test_reset_has_email_field_and_full_width_submit(self):
         self.assertContains(self.resp, 'name="email"')
-        self.assertContains(self.resp, 'class="button block"')
+        self.assertContains(self.resp, 'class="button block"', count=1)
 
     def test_reset_form_wiring_is_preserved(self):
         self.assertContains(self.resp, "csrfmiddlewaretoken")
@@ -276,5 +276,5 @@ class Phase3PasswordResetFromKeyTemplateTests(TestCase):
         self.assertContains(resp, 'class="box stack auth-card__panel"')
         self.assertContains(resp, 'name="password1"')
         self.assertContains(resp, 'name="password2"')
-        self.assertContains(resp, 'class="button block"')
+        self.assertContains(resp, 'class="button block"', count=1)
         self.assertContains(resp, "csrfmiddlewaretoken")
