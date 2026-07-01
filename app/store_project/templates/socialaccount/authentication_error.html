@@ -1,14 +1,11 @@
-{% extends "_base.html" %}
+{% extends "account/base_auth_card.html" %}
+
 {% load i18n %}
-{% load allauth %}
-{% block head_title %}
-  {% trans "Third-Party Login Failure" %}
-{% endblock head_title %}
-{% block content %}
-  {% element h1 %}
-    {% trans "Third-Party Login Failure" %}
-  {% endelement %}
-  {% element p %}
-    {% trans "An error occurred while attempting to login via your third-party account." %}
-  {% endelement %}
-{% endblock content %}
+
+{% block head_title %}{% trans "Third-Party Login Failure" %}{% endblock head_title %}
+
+{% block auth_title %}{% trans "Third-party login failure" %}{% endblock auth_title %}
+
+{% block auth_body %}
+  <p class="auth-card__description text-center">{% trans "An error occurred while attempting to login via your third-party account." %}</p>
+{% endblock auth_body %}
