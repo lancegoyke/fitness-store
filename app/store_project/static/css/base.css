@@ -1019,37 +1019,6 @@ a.secondaryAction {
 }
 
 /*
-    THE FORM SIDEBAR
-*/
-
-.form-with-sidebar {
-  overflow: hidden;
-}
-
-.form-with-sidebar > * {
-  display: flex;
-  flex-wrap: wrap;
-  /* A real gap so the input + button don't sit flush (the old
-     zero-width negative-margin trick gave them no separation). */
-  gap: var(--s-1);
-}
-
-.form-with-sidebar > * > * {
-  flex-grow: 1;
-}
-
-.form-with-sidebar > * > :first-child {
-  flex-basis: 0;
-  flex-grow: 999;
-  min-width: calc(70% - var(--s1));
-}
-
-.form-with-sidebar input,
-.form-with-sidebar button {
-  box-shadow: none;
-}
-
-/*
     THE INPUT GROUP
 
     Description: join an input and its action button into one control — a

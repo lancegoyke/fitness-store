@@ -49,16 +49,15 @@ def _css_block(css: str, selector: str) -> str:
 class DesignSystemPR2CSSTests(TestCase):
     """Guards for changes that live in ``base.css`` (not visible in markup)."""
 
-    def test_form_with_sidebar_uses_a_real_gap(self):
-        """The newsletter input + Submit button must not sit flush.
+    def test_no_zero_width_negative_margin_trick_survives(self):
+        """The broken ``margin: calc(0px / 2 …)`` gutter hack is gone for good.
 
-        The old ``margin: calc(0px / 2 * -1)`` / ``calc(0px / 2)`` trick
-        evaluated to zero, so a real ``gap`` is needed.
+        (Phase-3 PR B removed the ``.form-with-sidebar`` layout — its last
+        consumer, ``password_reset.html``, moved onto the auth card — so the
+        newsletter's input+button spacing is now guarded by
+        ``test_input_group_joins_input_and_button`` instead.)
         """
-        css = _css()
-        self.assertNotIn("calc(0px / 2", css)
-        block = _css_block(css, ".form-with-sidebar > * {")
-        self.assertIn("gap: var(--s-1)", block)
+        self.assertNotIn("calc(0px / 2", _css())
 
     def test_footer_links_render_at_normal_weight(self):
         block = _css_block(_css(), ".footer a {")
@@ -256,8 +255,11 @@ class DesignSystemPR2TemplateTests(TestCase):
             {"form": _PwForm(), "action_url": "/accounts/password/reset/key/x/"},
             request=request,
         )
+        # Phase-3 PR B moved this page onto the auth card, so the styled submit is
+        # now the full-width ``.button.block`` variant — still a styled button, the
+        # property this guard exists to protect (never a raw, unstyled <button>).
         self.assertIn(
-            '<button class="button" type="submit">Change Password</button>', html
+            '<button class="button block" type="submit">Change Password</button>', html
         )
         self.assertNotIn('<button type="submit">Change Password</button>', html)
 
