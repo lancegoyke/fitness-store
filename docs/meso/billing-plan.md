@@ -221,8 +221,10 @@ deploy succeeds without them (like the VAPID push keys):
    `invoice.payment_failed`. Set `MESO_STRIPE_WEBHOOK_SECRET` to that endpoint's
    signing secret (a *separate* secret from the products webhook's
    `STRIPE_ENDPOINT_SECRET`).
-3. The `qcluster` already runs the daily sweeps; the `meso-reconcile-seats`
-   schedule registers itself via migration `0021`.
+3. No billing sweep is needed. The flat plan has no per-seat quantity to
+   reconcile, so the old daily `meso-reconcile-seats` schedule (registered by
+   `0021`) was retired by migration `0028`. Billing state is kept current by the
+   Stripe webhook (step 2) alone.
 
 1. **Phase 1 — the spine (DONE).** `CoachSubscription` model + migration;
    constants (`FREE_SEAT_LIMIT`, `TRIAL_DAYS`, price-id setting); the
