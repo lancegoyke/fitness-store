@@ -295,7 +295,6 @@ class RosterView(TemplateView):
             CoachAthlete.objects.for_coach(self.request.user)
             .active()
             .select_related("athlete", "athlete__athlete_profile")
-            .prefetch_related("athlete__contraindications")
             .order_by("athlete__name", "athlete__email")
         )
         # The downgrade soft-suspends every active link beyond the oldest free cap

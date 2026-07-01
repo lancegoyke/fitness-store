@@ -80,9 +80,6 @@
               {% if a.is_demo %}
                 <span class="meso-badge meso-badge--muted"><i></i>Demo</span>
               {% endif %}
-              {% for f in a.flags %}
-                <span class="meso-badge meso-badge--warn"><i></i>{{ f }}</span>
-              {% endfor %}
               {% if a.compliance is not None %}
                 <div style="width:108px;display:flex;align-items:center;gap:8px;">
                   <div class="meso-meter"><span style="width:{{ a.compliance }}%;"></span></div>

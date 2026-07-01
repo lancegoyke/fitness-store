@@ -102,7 +102,8 @@ def roster_athlete(
         "initials": initials(name),
         "tone": "neutral",
         "meta": " · ".join(meta_parts) or "No training history on file",
-        "flags": [c.label for c in _active_contraindications(user)],
+        # Contraindications are intentionally absent here (issue #382): they belong
+        # on the athlete profile, not as badges cluttering the scannable roster row.
         # Adherence to the latest delivered week; ``None`` hides the meter.
         "compliance": compliance,
         "status": "suspended" if suspended else "",
