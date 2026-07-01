@@ -1,10 +1,25 @@
 # Design system — phase 3 plan (auth pages → basecoat login card)
 
-Status: **DRAFT — scoping only, no code yet.** Drafted 2026-06-30 · Implements
-issue **#352 "[UI] Redesign auth pages"** · Follow-on to the **COMPLETE**
-`docs/design-system-unification-plan.md` (phase 1: PRs 1–3 + nav-refresh #358)
-and **COMPLETE** `docs/design-system-phase-2-plan.md` (PR A body typography #363,
-PR B footer #366, PR C docs #367).
+Status: **✅ COMPLETE — all three PRs shipped & deployed.** Drafted 2026-06-30 ·
+Implements issue **#352 "[UI] Redesign auth pages"** · Follow-on to the
+**COMPLETE** `docs/design-system-unification-plan.md` (phase 1: PRs 1–3 +
+nav-refresh #358) and **COMPLETE** `docs/design-system-phase-2-plan.md` (PR A
+body typography #363, PR B footer #366, PR C docs #367).
+
+**Shipped:**
+- **PR A** — auth card shell (`account/base_auth_card.html`) + login page + the
+  gap CSS (`.button.block`, `.auth-card*`, tokenized `.or-separator`). #372.
+- **PR B** — signup + password-reset request + reset-from-key onto the card
+  (#374); signup `?next` passthrough follow-up (#375).
+- **PR C** — the second-tier auth pages (password change/set, email manager, the
+  confirmation + notice pages, the `socialaccount/*` confirm/connections pages)
+  onto the card. #376. Template migration only, no new CSS, no migration; Codex
+  review CLEAN; prod-verified (`/accounts/confirm-email/…/`,
+  `/accounts/3rdparty/login/cancelled/` render the card live).
+
+With PR C the **entire django-allauth auth surface** wears the one basecoat
+login-card look. (Adopting Base Coat-proper — Tailwind + a Node build — remains
+the separate, larger initiative the phase-2 plan deferred; not this phase.)
 
 **Approach: Path B (static CSS only — no Tailwind/Node), consistent with phases
 1–2.** We reproduce the *look* of basecoat's login-card component by composing
