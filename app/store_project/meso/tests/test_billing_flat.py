@@ -23,6 +23,7 @@ from django.urls import reverse
 from store_project.meso import presenters
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
+from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.factories import CoachSubscriptionFactory
 from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
@@ -131,3 +132,32 @@ class TestPaidCapGate:
 
 def test_price_summary_is_the_flat_price():
     assert presenters.PRICE_SUMMARY == "$19/mo — unlimited athletes"
+
+
+# ---------------------------------------------------------------------------
+# the roster billing card — comped coaches aren't shown a broken meter
+# ---------------------------------------------------------------------------
+
+
+class TestRosterBillingCard:
+    def test_comped_coach_shows_unlimited_not_a_broken_meter(self, client):
+        # A comped coach is active but unmetered (allowance 0, remaining None), so
+        # the active-tier line must not render "None of 0 agent runs left".
+        coach = UserFactory()
+        CoachProfileFactory(user=coach)
+        CoachSubscription.comp(coach)
+        client.force_login(coach)
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert "unlimited agent runs" in body
+        assert "None of 0" not in body
+
+    def test_paid_coach_shows_the_agent_meter(self, client):
+        coach = UserFactory()
+        CoachProfileFactory(user=coach)
+        CoachSubscriptionFactory(coach=coach, status=CoachSubscription.Status.ACTIVE)
+        client.force_login(coach)
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert (
+            f"of {CoachSubscription.PAID_AGENT_ALLOWANCE} agent runs left this month"
+            in body
+        )
