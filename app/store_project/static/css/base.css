@@ -1909,27 +1909,31 @@ ul.grid {
   background-color: var(--main-color-light-gray);
 }
 
+/* Bottom chrome, paired with the nav (design-system phase 2, PR B). Same
+   --nav-bg / --nav-fg tokens the nav uses (so both bars are the identical
+   near-black), inherits --font from the universal reset, and matches the nav's
+   clamp() inline padding so top and bottom align to the same gutter. */
 .footer {
-  color: var(--main-color-light-gray);
-  background-color: var(--main-color-dark);
-  padding: var(--s1);
+  color: var(--nav-fg);
+  background-color: var(--nav-bg);
+  padding: var(--s1) clamp(16px, 4vw, 40px);
 }
 
 .footer a {
   font-weight: 400;
-  color: var(--main-color-light-gray);
+  color: var(--nav-fg);
   text-decoration: none;
 }
 
 .footer a:hover {
-  color: var(--main-color-light);
+  color: var(--primary-foreground);
   text-decoration: underline;
 }
 
 .footer a:focus,
 .footer a:active {
-  color: var(--main-color-dark);
-  background-color: var(--main-color-light-gray);
+  color: var(--nav-bg);
+  background-color: var(--nav-fg);
 }
 
 .messages {
