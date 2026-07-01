@@ -302,18 +302,13 @@ MESO_VAPID_PUBLIC_KEY = os.environ.get("MESO_VAPID_PUBLIC_KEY", "")
 MESO_VAPID_PRIVATE_KEY = os.environ.get("MESO_VAPID_PRIVATE_KEY", "")
 MESO_VAPID_SUBJECT = os.environ.get("MESO_VAPID_SUBJECT", "mailto:lance@lancegoyke.com")
 
-# Meso billing (multi-coach SaaS — decision S6). Per-active-athlete (seat)
-# subscription: one recurring Stripe Price (per seat, monthly, USD). Optional in
-# Phase 1 — the model + gating accessor + local trial need no Stripe, so an empty
-# id lets the app boot and CI run without billing creds; Phase 2 (subscription
-# Checkout / Customer Portal / webhook) needs it set to the live/test Price id.
-MESO_SEAT_PRICE_ID = os.environ.get("MESO_SEAT_PRICE_ID", "")
-# The flat base fee Price (S6 Phase 6, D13 — $9.99/mo, quantity 1) billed
-# alongside the per-seat Price (TrainHeroic-style base + per-seat). Empty until
-# the owner creates the base Product/Price; the subscribe view requires *both*
-# this and ``MESO_SEAT_PRICE_ID`` before opening Checkout, so billing stays
-# dormant (not broken) until both are configured.
-MESO_BASE_PRICE_ID = os.environ.get("MESO_BASE_PRICE_ID", "")
+# Meso billing (multi-coach SaaS — decision S6). A single **flat monthly Pro
+# Price** (D14 — $19/mo, quantity 1): one recurring Stripe Price, USD. Empty until
+# the owner creates the Product/Price; the subscribe view requires it before
+# opening Checkout, so billing stays dormant (not broken) until it's configured.
+# (Supersedes the D13 base+per-seat pair — per-seat billing was dropped for a flat
+# plan; the free-tier seat *cap* stays, only the per-seat *charge* is gone.)
+MESO_PRO_PRICE_ID = os.environ.get("MESO_PRO_PRICE_ID", "")
 # The signing secret for the *billing* webhook endpoint (a separate Stripe
 # endpoint from the products webhook, so its own secret). Empty until the
 # endpoint is registered in Stripe; the webhook view rejects unsigned/unverifiable

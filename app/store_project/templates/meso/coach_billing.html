@@ -31,23 +31,21 @@
           {% elif state.on_trial %}
             <p class="meso-sub" style="margin:0;">Free trial &#8212; ends {{ state.trial_end|date:"M j" }}. Subscribe to keep full access when it ends.</p>
           {% elif state.is_active %}
-            <p class="meso-sub" style="margin:0;">{{ state.seat_count }} active athlete{{ state.seat_count|pluralize }} &#183; full access.</p>
+            <p class="meso-sub" style="margin:0;">{{ state.seat_count }} active athlete{{ state.seat_count|pluralize }} &#183; unlimited athletes.</p>
           {% else %}
-            <p class="meso-sub" style="margin:0;">Free plan &#8212; {{ state.seat_count }} of {{ state.seat_limit }} athlete{{ state.seat_limit|pluralize }}. Subscribe for unlimited athletes and agent runs.</p>
+            <p class="meso-sub" style="margin:0;">Free plan &#8212; {{ state.seat_count }} of {{ state.seat_limit }} athlete{{ state.seat_limit|pluralize }}. Subscribe for unlimited athletes and the full AI agent.</p>
           {% endif %}
 
-          <!-- The bill: base + per active seat (Stripe floors the seat line at 1). -->
+          <!-- The bill: one flat monthly Pro price (D14 — no per-seat line). -->
           <div style="border-top:1px solid var(--line-2);padding-top:11px;">
             <p class="meso-eyebrow" style="margin:0 0 6px;">
               {% if state.has_stripe_subscription %}Your monthly bill{% else %}If you subscribe{% endif %}
             </p>
             <div style="display:flex;flex-direction:column;gap:3px;">
-              <div class="meso-row-meta">Base <span style="float:right;color:var(--ink);">${{ base_price|floatformat:2 }}</span></div>
-              <div class="meso-row-meta">{{ billed_seats }} active seat{{ billed_seats|pluralize }} &#215; ${{ seat_unit_price|floatformat:2 }} <span style="float:right;color:var(--ink);">${{ seat_cost|floatformat:2 }}</span></div>
-              <div class="meso-row-name" style="border-top:1px solid var(--line-2);margin-top:5px;padding-top:6px;">Total <span style="float:right;">${{ projected_total|floatformat:2 }}/mo</span></div>
+              <div class="meso-row-name">Pro plan &#183; unlimited athletes <span style="float:right;">${{ plan_price|floatformat:2 }}/mo</span></div>
             </div>
             {% if not state.is_active %}
-              <p class="meso-muted" style="margin:8px 0 0;font-size:12px;">You aren't being charged on the free plan &#8212; this is what a subscription would cost at your current athlete count.</p>
+              <p class="meso-muted" style="margin:8px 0 0;font-size:12px;">You aren't being charged on the free plan &#8212; this is what the Pro plan costs, whatever your athlete count.</p>
             {% endif %}
           </div>
 
@@ -86,8 +84,8 @@
           {% if state.agent.metered %}
             <div style="padding:11px 16px;border-bottom:1px solid var(--line-2);">
               <p class="meso-sub" style="margin:0;">
-                Free allowance &#8212; {{ state.agent.remaining }} of {{ state.agent.allowance }} run{{ state.agent.allowance|pluralize }} left this month.
-                {% if not state.agent.can_use %}<span style="color:var(--warn);">You're out of free runs &#8212; subscribe for unlimited.</span>{% endif %}
+                {% if state.agent.tier == "free" %}Free allowance{% else %}Monthly allowance{% endif %} &#8212; {{ state.agent.remaining }} of {{ state.agent.allowance }} run{{ state.agent.allowance|pluralize }} left this month.
+                {% if not state.agent.can_use %}<span style="color:var(--warn);">{% if state.agent.tier == "free" %}You're out of free runs &#8212; subscribe for more.{% else %}You've used this month's runs &#8212; your allowance resets on the 1st.{% endif %}</span>{% endif %}
               </p>
             </div>
           {% else %}

@@ -72,21 +72,16 @@ class TestPureHelpers:
         assert report_mod.cost_bucket(S.CANCELED) == report_mod.FREE_TRIAL
         assert report_mod.cost_bucket("") == report_mod.FREE_TRIAL  # legacy blank
 
-    def test_monthly_revenue_paid_is_base_plus_seats(self):
-        rev = report_mod.monthly_revenue(CoachSubscription.Status.ACTIVE, 3)
-        assert rev == report_mod.BASE_PRICE_USD + report_mod.SEAT_PRICE_USD * 3
-        assert rev == Decimal("12.99")
+    def test_monthly_revenue_paid_is_the_flat_price(self):
+        # The flat Pro plan (D14) bills one price, independent of athlete count.
+        rev = report_mod.monthly_revenue(CoachSubscription.Status.ACTIVE)
+        assert rev == report_mod.PRO_PRICE_USD
+        assert rev == Decimal("19.00")
 
     def test_monthly_revenue_past_due_still_bills(self):
-        rev = report_mod.monthly_revenue(CoachSubscription.Status.PAST_DUE, 2)
-        assert rev == Decimal("11.99")
-
-    def test_monthly_revenue_paid_floors_seats_at_one(self):
-        # Stripe bills at least one seat (``_seat_quantity`` floors at 1), so a paid
-        # coach with zero active athletes still owes base + one seat = $10.99.
-        assert report_mod.monthly_revenue(
-            CoachSubscription.Status.ACTIVE, 0
-        ) == Decimal("10.99")
+        assert report_mod.monthly_revenue(CoachSubscription.Status.PAST_DUE) == Decimal(
+            "19.00"
+        )
 
     @pytest.mark.parametrize(
         "status",
@@ -98,7 +93,7 @@ class TestPureHelpers:
         ],
     )
     def test_monthly_revenue_unpaid_is_zero(self, status):
-        assert report_mod.monthly_revenue(status, 10) == Decimal("0")
+        assert report_mod.monthly_revenue(status) == Decimal("0")
 
     def test_current_month_bounds_uses_local_month(self):
         # The default month must match the localized now, not a bare UTC now —
@@ -276,7 +271,7 @@ class TestMargin:
         sub = CoachSubscriptionFactory(status=CoachSubscription.Status.ACTIVE)
         coach = sub.coach
         plan = PlanFactory(relationship__coach=coach)
-        CoachAthleteFactory(coach=coach)  # one extra billable seat → revenue 10.99+...
+        CoachAthleteFactory(coach=coach)  # an extra seat — irrelevant to the flat bill
         _at(
             start + timedelta(days=1),
             plan=plan,
@@ -324,7 +319,9 @@ class TestMargin:
         assert c.revenue == Decimal("0")
         assert c.flagged is False
 
-    def test_revenue_reflects_current_billable_seats(self):
+    def test_revenue_is_flat_regardless_of_seats(self):
+        # Under the flat Pro plan (D14) revenue is one price no matter the athlete
+        # count — seats are still counted (informational), but don't drive the bill.
         start, end = report_mod.month_bounds(2026, 6)
         sub = CoachSubscriptionFactory(status=CoachSubscription.Status.ACTIVE)
         coach = sub.coach
@@ -341,7 +338,7 @@ class TestMargin:
 
         (c,) = report_mod.build_report(start=start, end=end).coaches
         assert c.billable_seats == 3
-        assert c.revenue == Decimal("9.99") + Decimal("3")
+        assert c.revenue == Decimal("19.00")
 
 
 # --- tier / model / trigger roll-ups --------------------------------------

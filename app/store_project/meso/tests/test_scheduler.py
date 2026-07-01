@@ -76,7 +76,7 @@ class TestMarginAlertTask:
             plan=plan,
             coach=coach,
             billing_status=CoachSubscription.Status.ACTIVE,
-            estimated_cost_usd=Decimal("9.00"),  # > revenue ($10.99) fraction
+            estimated_cost_usd=Decimal("12.00"),  # > 50% of the flat $19 revenue
         )
         AgentProposalBatch.objects.filter(pk=batch.pk).update(
             created_at=prev_start + timedelta(days=1)
@@ -96,7 +96,6 @@ class TestScheduleRegistration:
     EXPECTED = {
         "meso-expire-invites": "store_project.meso.tasks.expire_invites",
         "meso-remind-expiring-invites": "store_project.meso.tasks.remind_expiring_invites",
-        "meso-reconcile-seats": "store_project.meso.tasks.reconcile_seats",
     }
 
     def test_invite_schedules_registered_daily(self):
@@ -104,6 +103,10 @@ class TestScheduleRegistration:
             sched = Schedule.objects.get(name=name)
             assert sched.func == func
             assert sched.schedule_type == Schedule.DAILY
+
+    def test_reconcile_seats_schedule_dropped(self):
+        """The flat plan (D14) removed per-seat billing → the sweep is gone (0028)."""
+        assert not Schedule.objects.filter(name="meso-reconcile-seats").exists()
 
     def test_schedule_funcs_are_importable_callables(self):
         """Every registered func path resolves to a callable (catches renames)."""

@@ -12,9 +12,8 @@ subscription object — so a replayed or out-of-order event converges to the sam
 row. Events handled:
 
 - ``customer.subscription.created|updated`` — upsert from the subscription object
-  (status, the per-seat + base item ids, quantity, period end). A base + per-seat
-  subscription (D13, Phase 6) reports two line items; they're classified by Price
-  id (``_classify_items``), the seat item driving ``stripe_item_id`` + ``quantity``.
+  (status, the subscription item id, period end). The flat Pro plan (D14) reports a
+  single line item, recorded as ``stripe_item_id``.
 - ``customer.subscription.deleted`` — the subscription is gone → ``canceled``
   (which gates identically to ``free``; the coach keeps read access, D6).
 - ``invoice.payment_failed`` / ``invoice.paid`` — a belt-and-suspenders status
@@ -152,47 +151,21 @@ def _sync_from_subscription(sub_obj, *, deleted):
             existing.status,
         )
         return
+    # The flat Pro plan (D14) is a single line item; record its id. A legacy
+    # base+per-seat subscription (pre-flat) reports two — take the first item's id
+    # so an old sub still maps to something valid (the id is only used to detect a
+    # stale event for a *different* subscription, never to resize a quantity).
     items = (sub_obj.get("items") or {}).get("data") or [{}]
-    seat_item, base_item = _classify_items(items)
+    item = items[0]
     CoachSubscription.objects.update_or_create(
         coach=coach,
         defaults={
             "status": status,
             "stripe_subscription_id": sub_obj.get("id", ""),
-            "stripe_item_id": seat_item.get("id", ""),
-            "stripe_base_item_id": base_item.get("id", "") if base_item else "",
-            "quantity": seat_item.get("quantity") or 0,
+            "stripe_item_id": item.get("id", ""),
             "current_period_end": _ts_to_dt(sub_obj.get("current_period_end")),
         },
     )
-
-
-def _classify_items(items):
-    """Split a subscription's items into ``(seat_item, base_item)`` by Price id (Phase 6).
-
-    A base + per-seat subscription (D13) reports two line items in any order; the
-    **seat** item drives ``stripe_item_id`` + ``quantity`` (the thing seat-sync
-    resizes) and the **base** item is recorded for the record. Classification is by
-    configured Price id (``MESO_SEAT_PRICE_ID`` / ``MESO_BASE_PRICE_ID``), so list
-    order doesn't matter. A legacy single-line subscription (or any item that
-    matches no configured Price) falls back to the first non-base item as the seat
-    — so a pre-Phase-6 sub still maps cleanly and ``base_item`` is ``None``.
-    """
-    seat_price = settings.MESO_SEAT_PRICE_ID
-    base_price = settings.MESO_BASE_PRICE_ID
-    seat_item = None
-    base_item = None
-    for item in items:
-        price_id = (item.get("price") or {}).get("id")
-        if base_price and price_id == base_price:
-            base_item = item
-        elif seat_price and price_id == seat_price:
-            seat_item = item
-    if seat_item is None:
-        # No Price match (legacy single line, or unconfigured Prices): the first
-        # item that isn't the base line is the seat.
-        seat_item = next((item for item in items if item is not base_item), items[0])
-    return seat_item, base_item
 
 
 def _nudge_status(invoice_obj, *, from_status, to_status):

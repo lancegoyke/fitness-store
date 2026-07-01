@@ -41,11 +41,11 @@ from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 from .serializers import serialize_week_snapshot
 
-#: Paywall display copy for the base + per-seat plan (S6 Phase 6, D13). The
-#: authoritative amount is the Stripe Price the owner configures; this is the
-#: marketing string shown in the roster card, the designer upgrade CTA, and the
-#: become-a-coach tiers — one constant so the three surfaces never drift.
-PRICE_SUMMARY = "$9.99/mo + $1 per active athlete"
+#: Paywall display copy for the flat monthly Pro plan (D14). The authoritative
+#: amount is the Stripe Price the owner configures; this is the marketing string
+#: shown in the roster card, the designer upgrade CTA, and the become-a-coach
+#: tiers — one constant so the three surfaces never drift.
+PRICE_SUMMARY = "$19/mo — unlimited athletes"
 
 
 def _age(user):
@@ -421,31 +421,36 @@ def relationship_history(coach):
 
 
 def agent_allowance(coach):
-    """The free-tier AI-agent meter for the designer + roster card (S6 Phase 5).
+    """The AI-agent meter for the designer + roster card (S6 Phase 5; flat plan D14).
 
-    A free coach gets ``FREE_AGENT_ALLOWANCE`` agent runs per month (the metered
-    refinement of the old binary gate); ``metered`` is True only then, so the UI
-    shows "N of M free agent runs left" for a free coach and nothing for an
-    unlimited (trial/active/comped) coach. ``can_use`` mirrors
-    ``access.can_use_agent`` so a template can drive the composer/CTA off this one
-    read without a second query.
+    Under the flat monthly Pro plan every tier is metered except ``comped``: a free
+    coach gets ``FREE_AGENT_ALLOWANCE`` runs/month, a trialing/active coach the
+    larger ``PAID_AGENT_ALLOWANCE``, and only a comped coach (owner/demo) is
+    unlimited. ``metered`` is True for the capped tiers (the UI shows "N of M agent
+    runs left") and False for comped (nothing shown). ``tier`` (``free`` / ``paid``
+    / ``unlimited``) lets a template pick the copy — a *free* coach's exhausted-CTA
+    offers an upgrade; a *paid* coach's just notes the monthly reset (no higher tier
+    to sell). ``can_use`` mirrors ``access.can_use_agent`` so a template drives the
+    composer/CTA off this one read without a second query.
     """
-    if billing_access.is_active(coach):
+    cap = billing_access.agent_allowance(coach)  # None = uncapped (comped)
+    if cap is None:
         return {
             "metered": False,
             "allowance": 0,
             "used": 0,
             "remaining": None,
             "can_use": True,
+            "tier": "unlimited",
         }
-    allowance = CoachSubscription.FREE_AGENT_ALLOWANCE
-    remaining = billing_access.free_agent_runs_remaining(coach)
+    remaining = billing_access.agent_runs_remaining(coach)
     return {
         "metered": True,
-        "allowance": allowance,
-        "used": allowance - remaining,
+        "allowance": cap,
+        "used": cap - remaining,
         "remaining": remaining,
         "can_use": remaining > 0,
+        "tier": "paid" if billing_access.is_active(coach) else "free",
     }
 
 
@@ -496,35 +501,23 @@ def coach_billing(coach):
     """The coach-facing billing & usage page context (agent-usage — coach surface).
 
     The complement to the staff-only owner dashboard (``usage_dashboard``): that
-    shows org-wide **cost** (COGS); this shows *one coach* their **bill** (revenue
-    they owe — base + per active seat) and **how much agent they've used** this
-    month, broken down per athlete/group. The hard line: a coach sees what they pay
-    and how much they've used, **never** the internal per-run cost estimate, so this
-    context carries run counts and revenue only — no ``cost``/``margin`` keys.
+    shows org-wide **cost** (COGS); this shows *one coach* their **bill** (the flat
+    monthly Pro price they owe, D14) and **how much agent they've used** this month,
+    broken down per athlete/group. The hard line: a coach sees what they pay and how
+    much they've used, **never** the internal per-run cost estimate, so this context
+    carries run counts and the flat price only — no ``cost``/``margin`` keys.
 
-    ``billed_seats`` floors the active-seat count at one to mirror Stripe billing
-    (``stripe_gateway`` rejects a seat quantity of 0), so a coach with no active
-    athletes still sees the one-seat minimum their subscription would charge. The
-    month window is the report's current calendar month, the same window the
-    free-tier agent meter counts against, so ``runs_this_month`` reconciles with the
-    allowance in ``state["agent"]``.
+    The month window is the report's current calendar month, the same window the
+    agent meter counts against, so ``runs_this_month`` reconciles with the allowance
+    in ``state["agent"]``.
     """
     state = billing_state(coach)
-    seats = state["seat_count"]
-    billed_seats = max(seats, 1)
-    base = agent_usage_report.BASE_PRICE_USD
-    seat_unit = agent_usage_report.SEAT_PRICE_USD
-    seat_cost = seat_unit * billed_seats
     start, end = agent_usage_report.current_month_bounds()
     breakdown = agent_usage_report.coach_run_breakdown(coach, start=start, end=end)
     return {
         "state": state,
-        "base_price": base,
-        "seat_unit_price": seat_unit,
-        "seats": seats,
-        "billed_seats": billed_seats,
-        "seat_cost": seat_cost,
-        "projected_total": base + seat_cost,
+        "plan_price": agent_usage_report.PRO_PRICE_USD,
+        "seats": state["seat_count"],
         "runs_this_month": sum(row.runs for row in breakdown),
         "breakdown": breakdown,
         "month_label": start.strftime("%B %Y"),

@@ -14,8 +14,7 @@ side**: aggregate those rows for a calendar month into
 ``eval`` runs are excluded everywhere — they're a golden-corpus quality check, not
 coach usage (the count is surfaced as a footnote). The cost is the **internal
 estimate** stored at write time (the Anthropic invoice stays authoritative);
-revenue is the coach's *current* plan price (base + per active seat), an
-approximation since per-month historical seat counts aren't stored. See
+revenue is the coach's *current* plan price (the flat monthly Pro price, D14). See
 ``docs/meso/agent-usage-plan.md``.
 """
 
@@ -33,11 +32,10 @@ from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachSubscription
 
-# Plan price (S6 Phase 6, D13) — the numeric source for the revenue math, mirroring
-# the ``presenters.PRICE_SUMMARY`` marketing copy ("$9.99/mo + $1 per active
-# athlete"). Strings so the Decimals are exact. Update alongside that copy.
-BASE_PRICE_USD = Decimal("9.99")
-SEAT_PRICE_USD = Decimal("1.00")
+# Plan price (D14, flat monthly Pro plan) — the numeric source for the revenue
+# math, mirroring the ``presenters.PRICE_SUMMARY`` marketing copy ("$19/mo").
+# A string so the Decimal is exact. Update alongside that copy.
+PRO_PRICE_USD = Decimal("19.00")
 
 _ZERO = Decimal("0")
 
@@ -165,22 +163,16 @@ def cost_bucket(billing_status):
     return FREE_TRIAL
 
 
-def monthly_revenue(status, seats):
-    """The coach's current monthly plan price: base + per-seat, or $0 when unpaid.
+def monthly_revenue(status):
+    """The coach's current monthly plan price: the flat Pro price, or $0 when unpaid.
 
     Only a live Stripe subscription (``active``/``past_due``) bills; free, trial,
     comped, canceled, or no row at all yield $0 (revenue we collect, not list
-    price). ``seats`` is the coach's *current* billable active-athlete count — an
-    approximation of the report month, since historical seat counts aren't stored.
-
-    The seat line is **floored at one** to mirror Stripe billing
-    (``stripe_gateway._seat_quantity`` rejects a quantity of 0): a paid coach with
-    zero active athletes still pays for one seat, so revenue is ``$9.99 + $1``, not
-    just the base — otherwise the report could under-report revenue and wrongly
-    flag a zero-seat paid coach as negative-margin.
+    price). Under the flat plan (D14) revenue is a single price independent of the
+    coach's athlete count — no per-seat line to sum.
     """
     if status in CoachSubscription.LIVE_STRIPE_STATUSES:
-        return BASE_PRICE_USD + SEAT_PRICE_USD * max(seats, 1)
+        return PRO_PRICE_USD
     return _ZERO
 
 
@@ -410,7 +402,7 @@ def build_report(*, start, end):
                 billing_status=status,
                 is_paid=status in CoachSubscription.LIVE_STRIPE_STATUSES,
                 billable_seats=seats,
-                revenue=monthly_revenue(status, seats),
+                revenue=monthly_revenue(status),
                 totals=acc["totals"],
                 clients=clients,
             )

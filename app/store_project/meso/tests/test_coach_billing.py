@@ -110,29 +110,24 @@ class TestCoachRunBreakdown:
 
 
 class TestCoachBillingPresenter:
-    def test_projected_bill_is_base_plus_per_seat(self):
+    def test_bill_is_the_flat_pro_price(self):
+        # The flat plan (D14) bills one price regardless of the athlete count.
         coach = _coach()
         for _ in range(3):
-            CoachAthleteFactory(coach=coach)  # 3 billable seats
+            CoachAthleteFactory(coach=coach)  # 3 seats — irrelevant to the bill
 
         ctx = coach_billing(coach)
 
         assert ctx["seats"] == 3
-        assert ctx["billed_seats"] == 3
-        assert ctx["base_price"] == Decimal("9.99")
-        assert ctx["seat_cost"] == Decimal("3.00")
-        assert ctx["projected_total"] == Decimal("12.99")
+        assert ctx["plan_price"] == Decimal("19.00")
 
-    def test_projected_bill_floors_billed_seats_at_one(self):
-        # A coach with zero active athletes still pays for one seat (Stripe floors
-        # the seat quantity at 1), so the projection is base + one seat, not bare base.
+    def test_bill_is_flat_even_with_zero_athletes(self):
         coach = _coach()
 
         ctx = coach_billing(coach)
 
         assert ctx["seats"] == 0
-        assert ctx["billed_seats"] == 1
-        assert ctx["projected_total"] == Decimal("10.99")
+        assert ctx["plan_price"] == Decimal("19.00")
 
     def test_runs_this_month_matches_the_breakdown(self):
         coach = _coach()
@@ -196,7 +191,7 @@ class TestBillingView:
         body = resp.content.decode()
 
         assert resp.status_code == 200
-        assert "10.99" in body  # base $9.99 + the one seat = projected bill
+        assert "19.00" in body  # the flat Pro price
         assert athlete_name in body  # the per-athlete run breakdown
 
     def test_only_shows_the_coachs_own_runs(self, client):

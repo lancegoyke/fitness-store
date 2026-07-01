@@ -56,12 +56,12 @@ def _coach_usage(*, cost, revenue, is_paid=True, label="Coach", runs=1):
     )
 
 
-def _paid_at_risk_run(start, *, cost="6.00"):
+def _paid_at_risk_run(start, *, cost="12.00"):
     """An active paid coach with one in-window run whose cost is >50% of revenue.
 
-    Revenue is base $9.99 + one seat = $10.99, so a $6.00 run trips the default
-    50% threshold (ratio ~0.55) without yet exceeding revenue (so it is *at risk*
-    but not ``flagged``).
+    Revenue is the flat Pro price $19 (D14), so a $12.00 run trips the default 50%
+    threshold (ratio ~0.63) without yet exceeding revenue (so it is *at risk* but
+    not ``flagged``).
     """
     sub = CoachSubscriptionFactory(status=CoachSubscription.Status.ACTIVE)
     coach = sub.coach
@@ -236,7 +236,7 @@ class TestCommand:
 
     def test_threshold_override_changes_the_set(self):
         start, _ = report_mod.month_bounds(2026, 6)
-        _paid_at_risk_run(start, cost="7.70")  # ratio ~0.70 of $10.99
+        _paid_at_risk_run(start, cost="12.00")  # ratio ~0.63 of $19
 
         out = StringIO()
         call_command(
@@ -251,7 +251,7 @@ class TestCommand:
 
     def test_setting_supplies_the_default_threshold(self):
         start, _ = report_mod.month_bounds(2026, 6)
-        _paid_at_risk_run(start, cost="6.00")  # ratio ~0.55
+        _paid_at_risk_run(start, cost="12.00")  # ratio ~0.63
 
         with override_settings(MESO_MARGIN_ALERT_THRESHOLD="0.9"):
             call_command("meso_agent_margin_alert", "--month", "2026-06")
@@ -261,7 +261,7 @@ class TestCommand:
         # A blank MESO_MARGIN_ALERT_THRESHOLD= env value must not crash the
         # scheduled run — it falls back to the documented 0.5 default.
         start, _ = report_mod.month_bounds(2026, 6)
-        coach = _paid_at_risk_run(start, cost="6.00")  # ratio ~0.55 > 0.5
+        coach = _paid_at_risk_run(start, cost="12.00")  # ratio ~0.63 > 0.5
 
         with override_settings(MESO_MARGIN_ALERT_THRESHOLD=""):
             call_command("meso_agent_margin_alert", "--month", "2026-06")
