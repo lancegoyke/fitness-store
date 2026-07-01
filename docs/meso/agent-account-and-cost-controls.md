@@ -1,6 +1,8 @@
 # Meso agent — Anthropic account ownership & cost controls
 
-**Status:** 🟡 Runbook — not yet executed · drafted 2026-07-01
+**Status:** ✅ **COMPLETE 2026-07-01** — Steps 1–4 all done: business email
+`billing@mastering.fitness`, business-owned Anthropic account, prod key rotated +
+verified, old key revoked, and a **$50/mo** hard spend cap. Drafted 2026-07-01.
 **Owner action required** (manual steps in Cloudflare / Anthropic / the prod box).
 
 ## Why
@@ -47,9 +49,9 @@ graceful-degradation layer.
 - **Registrar:** Porkbun (moved from Namecheap). **DNS host:** Cloudflare
   (`nelly`/`hayes.ns.cloudflare.com`). Registrar ≠ DNS host — the registrar move
   left the Cloudflare DNS records untouched.
-- **MX:** `eforward1–5.registrar-servers.com` — **stale Namecheap Email
-  Forwarding**, now dead (Namecheap only forwards for domains registered with them,
-  and the domain left). Orphaned records, safe to delete.
+- **MX:** was `eforward1–5.registrar-servers.com` — stale Namecheap Email
+  Forwarding, dead after the registrar left Namecheap. **✅ Deleted 2026-07-01** and
+  replaced by Cloudflare Email Routing MX (`route1/2/3.mx.cloudflare.net`) — see Step 1.
 - **No apex SPF/TXT** — so a new email setup adding SPF is additive, not
   destructive. (The app's delivery email sends via SES; it is not authenticated on
   the bare apex, so it's unaffected by apex email-DNS changes.)
@@ -63,18 +65,24 @@ Goal: an inbox the business owns, to be the account owner for Anthropic (and Str
 **Receive-only is enough** — account ownership only needs to *receive* verification /
 billing / password-reset mail; you never send *from* it.
 
-Since DNS is already on Cloudflare and the old MX are dead, use **Cloudflare Email
-Routing** (free, native):
+Since DNS is already on Cloudflare and the old MX are dead, we used **Cloudflare Email
+Routing** (free, native). **Done 2026-07-01 via the Cloudflare API** (zone
+`mastering.fitness`), not the dashboard:
 
-- [ ] Cloudflare dashboard → **mastering.fitness** → **Email → Email Routing**.
-- [ ] Run the setup; when it flags the conflicting `eforward*` MX, **let it remove
-      them** and add its own MX (`route1/2/3.mx.cloudflare.net`). They're dead —
-      nothing to preserve.
-- [ ] Add a **destination address** = your personal inbox; click Cloudflare's
-      confirmation email.
-- [ ] Create a route: **`lance@mastering.fitness` → your inbox** (or a catch-all
-      `*@mastering.fitness`).
-- [ ] Send a test email to the new address; confirm it lands.
+- [x] Deleted the 5 dead `eforward*.registrar-servers.com` MX records.
+- [x] Enabled Email Routing → added Cloudflare MX (`route1/2/3.mx.cloudflare.net`),
+      SPF (`v=spf1 include:_spf.mx.cloudflare.net ~all`), and the `cf2024-1._domainkey`
+      DKIM TXT. The `_amazonses` SES TXT was left untouched.
+- [x] Created route: **`billing@mastering.fitness` → `lance@lancegoyke.com`**
+      (address `billing@` chosen over the drafted `lance@mastering.fitness`: role-based,
+      ownership-neutral, no catch-all so zero spam surface). Default catch-all left as
+      *drop*/disabled.
+- [x] Destinations: `lance@lancegoyke.com` (active forwarding target, verified
+      2026-07-01). `lancegoyke@gmail.com` is also a verified account-level destination
+      but is **not** referenced by mastering.fitness — it forwards **setpaid.com**
+      (`hello@` + catch-all), so **do not delete it** (Cloudflare destinations are
+      account-wide; deleting would break setpaid.com's mail).
+- [x] **Owner:** test email to `billing@mastering.fitness` confirmed delivered.
 
 **Heads-up:** Email Routing adds an SPF TXT (`v=spf1 include:_spf.mx.cloudflare.net
 ~all`). Additive today (no apex SPF exists). Don't delete it. Revisit SPF only if the
@@ -87,31 +95,34 @@ ownership; skip unless send-as is needed.
 
 ## Step 2 — Business-owned Anthropic account
 
-- [ ] Create an Anthropic account / organization under **`lance@mastering.fitness`**.
-- [ ] Set its **payment method to the business's** card/account (not the employer's).
-- [ ] Generate a **new production API key** there (name it, e.g., `meso-prod`).
+- [x] Create an Anthropic account / organization under **`billing@mastering.fitness`** (2026-07-01).
+- [x] Set its **payment method to the business's** card/account (not the employer's).
+- [x] Generate a **new production API key** there.
 
 Secret handling: the API key is a secret — it goes **only** into the prod env and
 your local `.env`, never into chat, commits, or this doc.
 
 ## Step 3 — Rotate the production key onto the new account
 
-- [ ] Edit the box env at `/srv/fitness-store/.env` — set `ANTHROPIC_API_KEY` to the
+- [x] Edit the box env at `/srv/fitness-store/.env` — set `ANTHROPIC_API_KEY` to the
       new key (see [`../deploy-hetzner.md`](../deploy-hetzner.md) for box access).
-- [ ] Update the local `.env` too.
-- [ ] Restart the stack so `web` **and** `qcluster` pick up the new key (via the
-      `deploy` CLI / `docker compose up -d`).
-- [ ] **Verify:** run one agent proposal from the designer; confirm it returns a
-      batch, and that usage appears on the **new** account's dashboard.
-- [ ] **Revoke** the old API key on the old account once the new one is confirmed
-      working.
+- [ ] Update the local `.env` too. *(optional — dev-only; do when running the agent locally)*
+- [x] Restart the stack so `web` **and** `qcluster` pick up the new key — use
+      `deploy up` / `docker compose up -d`. **NB: a plain `deploy restart` /
+      `docker compose restart` does NOT reload `.env`** — it kept the old (empty) key
+      and the agent 503'd ("agent isn't configured") until `up -d` recreated the
+      containers (2026-07-01). `deploy config set` now auto-recreates.
+- [x] **Verify:** ran one agent proposal from the designer; it returns a batch. (Also
+      set `MESO_AGENT_MODEL=claude-sonnet-5` — cheaper than the Opus default.)
+- [x] **Revoked** the old API key on the old account (2026-07-01).
 
 ## Step 4 — Hard monthly spend limit (the circuit-breaker)
 
-- [ ] Anthropic Console (new account) → **Limits / Billing** → set a **hard monthly
+- [x] Anthropic Console (new account) → **Limits / Billing** → set a **hard monthly
       spend cap**. This bounds the org-wide bill regardless of app logic — the true
-      bankruptcy backstop covering the per-coach cap's global gap.
-- [ ] Pick a starting number well above expected COGS but survivable as a worst case
+      bankruptcy backstop covering the per-coach cap's global gap. **Set to $50/mo
+      (2026-07-01).**
+- [x] Pick a starting number well above expected COGS but survivable as a worst case
       (e.g. low tens of dollars while pre-revenue; raise as paying coaches grow).
       Worst case if it trips: the agent globally pauses and you're alerted — rare,
       and far better than a surprise invoice.

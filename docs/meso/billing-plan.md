@@ -210,6 +210,18 @@ v1 froze the whole coach via the coarse `can_edit(coach)`.
 
 ### Deploying billing (Stripe configuration)
 
+> **Status: ✅ LIVE & VERIFIED 2026-07-01.** Live flat Pro price
+> `price_1ToS4CGoL3YAcQLUbTsF2Zba` ($19/mo, `usage_type=licensed`, lookup
+> `meso_pro_flat`) + live webhook endpoint `we_1ToSLwGoL3YAcQLUTAF4l9wY`
+> (`https://mastering.fitness/meso/billing/webhook/`, the 5 events below) are
+> registered; `MESO_PRO_PRICE_ID` + `MESO_STRIPE_WEBHOOK_SECRET` are set on the box
+> (live `sk_live_` keys, containers recreated to load them). Verified end-to-end: a
+> no-charge throwaway `incomplete` subscription drove `customer.subscription.created`
+> and (on cleanup) `customer.subscription.deleted` to the endpoint — **both returned
+> HTTP 200** in the box logs (signature verified, handler ran). Issues #321 + #381
+> closed. (One earlier `price.created` shows "failed" in the Stripe event log — benign:
+> Stripe's reason is "Endpoint not configured for event type"; it never reached the app.)
+
 The code ships dormant — billing does nothing until these are configured, so a
 deploy succeeds without them (like the VAPID push keys):
 
