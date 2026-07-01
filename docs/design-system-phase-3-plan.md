@@ -136,7 +136,7 @@ a couple of small polish rules (below).
    `display: inline-flex`, not full width. Add one rule — e.g.
    `.button.block { width: 100%; }` — applied to the submit and the social button.
 2. **Social buttons still use the legacy `.box.login` box** (bordered box, text
-   wrapped in `<h2>`, underline-on-hover). Migrate to `.button.outline .button.block`
+   wrapped in `<h2>`, underline-on-hover). Migrate to `.button.outline.block` (all three classes on one element — `class="button outline block"`, not a descendant selector)
    for a real outline button matching basecoat (optionally with a brand icon).
 3. **Card description subtitle** has no dedicated style. Reuse `.help-text` /
    `--muted-foreground`, or add one small card-scoped rule.
@@ -167,7 +167,8 @@ swallow clicks inside the form; use `.box`.
    less refactor, but duplicates the card shell N times. Recommend the shared
    layout; fall back to per-page if the reset/from-key pages don't fit the shared
    header/footer cleanly.
-2. **Social buttons: migrate `.box.login` → `.button.outline .button.block`.**
+2. **Social buttons: migrate `.box.login` → `.button.outline.block`** (the
+   compound `class="button outline block"` on one element).
    *Recommended: yes*, with an optional inline brand SVG (Google G / Facebook f)
    and centered label. Keep **both** providers (basecoat shows one; we have two).
    Preserve `{% provider_login_url %}`, the Facebook `method="js_sdk"`, and
@@ -191,7 +192,7 @@ a centered "No account? sign up" `<p>`, `.box.login.facebook`/`.google` anchors,
 - Add the gap CSS to `base.css` under an "auth card" section comment:
   `.button.block { width: 100%; }`, the card description rule, the retokenized
   `.or-separator`, and (if used) `.auth-card` width.
-- Migrate the social anchors to `.button.outline .button.block` (Decision 2).
+- Migrate the social anchors to `.button.outline.block` (Decision 2).
 - **Preserve exactly:** `{% csrf_token %}`, `{{ form.non_field_errors }}` + each
   `{{ form.<field>.errors }}`, the `redirect_field_value` hidden input,
   `for="{{ form.<field>.id_for_label }}"` label association, and
@@ -231,10 +232,17 @@ the confirmation pages (`password_reset_done`, `password_reset_from_key_done`,
 `email_confirm`), and the `socialaccount/*` confirm/connections pages into the same
 card family. The `socialaccount/*` pages use allauth's `{% element %}`/`{% slot %}`
 DSL — restyle those mostly via CSS on `.primaryAction.button` / `.socialaccount_provider`
-rather than markup surgery. Notice pages (`account_inactive`, `signup_closed`,
-etc.) inherit the shell automatically.
+rather than markup surgery. **Notice pages** (`account_inactive`, `signup_closed`,
+`verification_sent`, `verified_email_required`) extend `account/base.html` **and
+define their own `{% block content %}`** — so if the shared card shell lives in
+`account/base.html`'s `content` block (Decision 1), their child blocks *override*
+it and they will **not** pick up the card automatically. Migrate each notice page
+to the new auth blocks (e.g. `{% block auth_body %}`) explicitly, or leave them on
+the plain shell — don't assume inheritance covers them.
 
-**Red-green tests:** lightweight template guards per page; reuse PR A/B CSS.
+**Red-green tests:** lightweight template guards per page (including a guard that
+each notice page actually renders the card wrapper, since inheritance won't); reuse
+PR A/B CSS.
 
 ## Red-green test strategy (the idiom to copy)
 
