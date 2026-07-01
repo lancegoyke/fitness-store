@@ -91,7 +91,7 @@
               <span class="meso-row-meta meso-mono" style="white-space:nowrap;" x-show="setImpliedOneRm(r)" x-cloak x-text="'1RM ≈ ' + setImpliedOneRm(r)"></span>
             </template>
             <div class="meso-spacer"></div>
-            <button type="button" @click="toggle(r)" :aria-pressed="r.done" aria-label="Mark set done"
+            <button type="button" data-testid="set-toggle" @click="toggle(r)" :aria-pressed="r.done" aria-label="Mark set done"
                     style="appearance:none;border:0;background:none;cursor:pointer;padding:0;flex:0 0 auto;">
               <template x-if="r.done"><div style="width:26px;height:26px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:var(--accent-ink);font-size:13px;">&#10003;</div></template>
               <template x-if="!r.done"><div style="width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line);background:var(--surface);"></div></template>
@@ -107,7 +107,7 @@
       <span class="meso-row-meta" style="color:var(--ok);" x-show="saved" x-cloak>Saved &#10003;</span>
       <span class="meso-row-meta" style="color:var(--dim);" x-show="queued" x-cloak>Saved offline — will sync when you&#8217;re back.</span>
       <span class="meso-row-meta" style="color:var(--warn);" x-show="error" x-cloak>Couldn&#8217;t save — try again.</span>
-      <button type="button" class="meso-btn" @click="save(false)" :disabled="saving">Save progress</button>
+      <button type="button" data-testid="session-save" class="meso-btn" @click="save(false)" :disabled="saving">Save progress</button>
       <button type="button" class="meso-btn meso-btn--primary" @click="save(true)" :disabled="saving" x-text="saving ? 'Saving…' : 'Log session'">Log session</button>
     </div>
   </div>

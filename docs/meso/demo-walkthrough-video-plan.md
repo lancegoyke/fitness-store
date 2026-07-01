@@ -1,6 +1,6 @@
 # Meso — Level-1 walkthrough demo video (automated, re-recordable)
 
-Status: **PLANNED** — not started. Tracking issue: [#388](https://github.com/lancegoyke/fitness-store/issues/388).
+Status: **SHIPPED** — issue [#388](https://github.com/lancegoyke/fitness-store/issues/388) is done. `just record-demo` (`scripts/record_demo.py`) seeds deterministic demo data, drives the full storyboard below in headless Chromium via Playwright, and writes `docs/demo/out/meso-walkthrough.mp4` — zero manual steps, re-recordable after any UI change. See `docs/demo/README.md` for prerequisites, the enumerated `data-testid`s, and the storyboard-step editing model.
 
 ## Why
 

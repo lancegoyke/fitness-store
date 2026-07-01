@@ -93,3 +93,9 @@ stop-services:
 # Database shell (connects to local PostgreSQL)
 db-shell:
     docker exec -it fitness_store_postgres psql -U postgres
+
+# Regenerate the Meso walkthrough video (docs/demo/README.md) — seeds demo
+# data, drives the real coach + athlete flow in headless Chromium, and writes
+# docs/demo/out/meso-walkthrough.mp4. Zero manual steps; safe to re-run.
+record-demo: services
+    uv run python scripts/record_demo.py
