@@ -23,9 +23,11 @@
   <form class="stack" id="email-form" method="POST" action="{% url 'account_login' %}">
     {% csrf_token %}
 
-    <div class="messages">
-      {{ form.non_field_errors }}
-    </div>
+    {% if form.non_field_errors %}
+      <div class="messages">
+        {{ form.non_field_errors }}
+      </div>
+    {% endif %}
 
     <div class="stack">
       <label for="{{ form.login.id_for_label }}">{% trans "Email" %}</label>
