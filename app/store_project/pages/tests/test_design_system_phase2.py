@@ -1,4 +1,4 @@
-"""Design-system phase 2 — PR A: body typography unification.
+"""Design-system phase 2 — PR A (typography) + PR B (footer chrome).
 
 Phase 1 unified the look, and the #358 nav refresh moved the nav onto a shared
 ``system-ui`` stack (``static/css/nav.css``). That left the rest of the site on
@@ -12,8 +12,15 @@ spots — the ``.box.purchase`` price button and ``.font-monospace`` code — ar
 preserved, as is the existing ``line-height``/``font-size`` rhythm (no type-scale
 scope creep).
 
+PR B brings the *footer* into the same fold: the bottom chrome was still on the
+old ``--main-color-*`` palette (a slightly different near-black than the nav) and
+its own padding. It moves onto the shared ``--nav-bg`` / ``--nav-fg`` tokens the
+nav uses (so both bars are the same colour), inherits the ``--font`` from PR A
+(no explicit family), and picks up the nav's ``clamp(16px, 4vw, 40px)`` inline
+padding so the top and bottom chrome align to the same gutter and read as a pair.
+
 These tests read the real ``base.css``/``nav.css``, so each is red on ``main``
-and green after the PR-A change.
+and green after the corresponding change.
 """
 
 from pathlib import Path
@@ -74,3 +81,48 @@ class BodyTypographyTokenTests(SimpleTestCase):
         css = BASE_CSS.read_text()
         self.assertIn("font-family: monospace", _css_block(css, ".box.purchase {"))
         self.assertIn("font-family: monospace", _css_block(css, ".font-monospace {"))
+
+
+# The footer's four rules, in source order, that PR B moves onto shared tokens.
+FOOTER_SELECTORS = (".footer {", ".footer a {", ".footer a:hover {", ".footer a:focus")
+
+
+class FooterChromeTests(SimpleTestCase):
+    """PR B: the footer reads as a pair with the refreshed nav.
+
+    It moves off the old ``--main-color-*`` palette onto the shared nav tokens,
+    inherits the ``--font`` from PR A (no explicit family), and aligns its
+    horizontal padding with the nav.
+    """
+
+    def test_footer_background_uses_nav_bg_token(self):
+        """The bar is the same near-black as the nav (``--nav-bg``, not #000)."""
+        block = _css_block(BASE_CSS.read_text(), ".footer {")
+        self.assertIn("background-color: var(--nav-bg)", block)
+
+    def test_footer_text_uses_nav_fg_token(self):
+        block = _css_block(BASE_CSS.read_text(), ".footer {")
+        self.assertIn("color: var(--nav-fg)", block)
+
+    def test_footer_links_use_nav_fg_token(self):
+        block = _css_block(BASE_CSS.read_text(), ".footer a {")
+        self.assertIn("color: var(--nav-fg)", block)
+
+    def test_footer_rules_drop_the_old_palette(self):
+        """No hard-coded ``--main-color-*`` anywhere in the footer chrome."""
+        css = BASE_CSS.read_text()
+        for selector in FOOTER_SELECTORS:
+            with self.subTest(selector=selector):
+                self.assertNotIn("--main-color", _css_block(css, selector))
+
+    def test_footer_inherits_the_font_token(self):
+        """No explicit family on ``.footer`` — it inherits ``* { --font }``."""
+        block = _css_block(BASE_CSS.read_text(), ".footer {")
+        self.assertNotIn("font-family", block)
+
+    def test_footer_padding_matches_the_navs_inline_rhythm(self):
+        """Footer picks up the nav's clamp() inline padding so the two pair."""
+        gutter = "clamp(16px, 4vw, 40px)"
+        self.assertIn(gutter, _css_block(BASE_CSS.read_text(), ".footer {"))
+        # ...and that really is the nav's inline padding, so the two agree.
+        self.assertIn(gutter, _css_block(NAV_CSS.read_text(), ".nav {"))
