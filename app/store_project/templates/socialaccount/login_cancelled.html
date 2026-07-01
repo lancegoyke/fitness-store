@@ -1,15 +1,13 @@
-{% extends "_base.html" %}
+{% extends "account/base_auth_card.html" %}
 
 {% load i18n %}
 
-{% block head_title %}{% trans "Login Cancelled" %}{% endblock %}
+{% block head_title %}{% trans "Login Cancelled" %}{% endblock head_title %}
 
-{% block content %}
+{% block auth_title %}{% trans "Login Cancelled" %}{% endblock auth_title %}
 
-  <h1>{% trans "Login Cancelled" %}</h1>
-
+{% block auth_body %}
   {% url 'account_login' as login_url %}
 
-  <p>{% blocktrans %}Logging in to our site using one of your existing social accounts has been cancelled. If this was a mistake, please proceed to <a href="{{login_url}}">sign in</a>.{% endblocktrans %}</p>
-
-{% endblock %}
+  <p class="auth-card__description text-center">{% blocktrans %}Logging in to our site using one of your existing social accounts has been cancelled. If this was a mistake, please proceed to <a href="{{ login_url }}">sign in</a>.{% endblocktrans %}</p>
+{% endblock auth_body %}
