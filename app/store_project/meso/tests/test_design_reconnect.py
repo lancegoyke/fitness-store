@@ -16,7 +16,7 @@ This phase reconnects Meso:
 - ``meso.css``, the standalone designer's inline tokens, and the PWA chrome
   (manifest ``theme_color``) all point at the shared steel-blue accent.
 
-See ``docs/design-system-unification-plan.md`` (PR 3) and the validating spike
+See ``docs/archive/design-system-unification-plan.md`` (PR 3) and the validating spike
 ``docs/spikes/basecoat/meso.html``.
 """
 

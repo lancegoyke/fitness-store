@@ -14,7 +14,7 @@ the editable-by scoping (the designer + autosave surface accepts a group plan
 the coach owns; ``for_coach`` stays individual-only so the individual-only
 deliver/results/review flows never see a group plan), the shared-plan helpers,
 the serialized group payload the designer hydrates Group mode from, and the
-group-design entry point. See ``docs/meso/groups-plan.md``.
+group-design entry point. See ``docs/archive/meso/groups-plan.md``.
 """
 
 import pytest

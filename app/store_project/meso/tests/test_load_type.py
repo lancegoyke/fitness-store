@@ -10,7 +10,7 @@ per-athlete override resolver, and the group deliver fan-out, and rendered as a
 
 RPE is unchanged and orthogonal (its own column, coexists with either type).
 A ``LoggedSet`` has no ``load_type`` — an athlete always logs the actual weight
-lifted (absolute). See ``docs/meso/units-rpe-plan.md``.
+lifted (absolute). See ``docs/archive/meso/units-rpe-plan.md``.
 """
 
 import json

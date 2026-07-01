@@ -1,6 +1,6 @@
 # Meso — N4 athlete onboarding / invites
 
-The still-open foundation decision (N4 in [`decisions.md`](./decisions.md)): how an
+The still-open foundation decision (N4 in [`decisions.md`](../../meso/decisions.md)): how an
 athlete *joins* a coach. Phase 1 of persistence shipped a peer-invite **state
 machine + tokened URLs** on `CoachAthlete` (`invite`/`request`/`accept`/`decline`/
 `end`) and the `invite_accept`/`invite_decline` token views — but those require the
@@ -214,7 +214,7 @@ the notifications function).
 The `meso_expire_invites` + `meso_remind_expiring_invites` sweeps are no longer
 hand-run: they're registered as daily `django_q.Schedule` rows (migration
 `meso/0018`) and executed by an app-managed **django-q2** `qcluster` worker
-(ORM broker). Design + rationale in [`scheduling-plan.md`](./scheduling-plan.md).
+(ORM broker). Design + rationale in [`scheduling-plan.md`](../../meso/scheduling-plan.md).
 
 ## Deferred (Phase 5+)
 

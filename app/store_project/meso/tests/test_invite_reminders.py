@@ -17,7 +17,7 @@ reminder before the link lapses:
   emails each best-effort, and stamps them — the reminder peer of
   ``meso_expire_invites``.
 
-See ``docs/meso/invites-plan.md``. Mail is best-effort; the command sends
+See ``docs/archive/meso/invites-plan.md``. Mail is best-effort; the command sends
 synchronously (no request, no ``on_commit``), so send-asserting tests read
 ``mail.outbox`` directly.
 """

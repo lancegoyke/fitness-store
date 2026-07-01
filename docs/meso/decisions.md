@@ -97,7 +97,7 @@ Provider is **Claude** (project standing guidance). Real decisions:
   omitted (incompatible with a forced `tool_choice`). Contraindications enforced deterministically in
   `meso/agent/validation.py` (not just the prompt); the coach still approves. Execution is sync for
   now (background job + streamed status deferred); eval golden cases deferred. Full phasing in
-  [`agent-plan.md`](./agent-plan.md).
+  [`agent-plan.md`](../archive/meso/agent-plan.md).
 
 ---
 
@@ -148,7 +148,7 @@ request form lives). **Phase 3 built** — invite *lifecycle*: a 14-day TTL (`ex
 new `EXPIRED` status, lazy + swept expiry (the claim path refuses a stale token;
 `meso_expire_invites` bulk-sweeps overdue invites), and an explicit **resend** (rotates the
 token + resets the clock, re-arms an expired invite) surfaced on the roster. Plan + deferred
-items in [`invites-plan.md`](./invites-plan.md).
+items in [`invites-plan.md`](../archive/meso/invites-plan.md).
 
 ---
 
@@ -156,8 +156,8 @@ items in [`invites-plan.md`](./invites-plan.md).
 
 | # | Decision | Note |
 |---|----------|------|
-| S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) + Phase 2a (shared group program + Group-mode designer) + Phase 3 (per-athlete overrides — the `adj` overlay) built; plan in [`groups-plan.md`](./groups-plan.md) |
-| S2 | **Units & RPE vs %1RM** | ✅ Complete — units (kg/lb) shipped with earlier slices; Phase 1 (first-class `load_type` `abs`/`pct`) + Phase 2a (agent %1RM-awareness — prompt + a deterministic %1RM progression bound) + Phase 2b (athlete %1RM logging ergonomics — the estimated-1RM helper) all built & deployed. **Follow-up: persisted, coach-visible 1RM** (Phase 1 — `AthleteOneRm`, auto-derived from logged history) built. Plans in [`units-rpe-plan.md`](./units-rpe-plan.md) / [`one-rm-plan.md`](./one-rm-plan.md) |
+| S1 | **Groups** — "shared program + per-athlete auto-adjust" modeling (template + override diffs) | 🟡 In progress — Phase 1 (group + membership spine + read surface) + Phase 2a (shared group program + Group-mode designer) + Phase 3 (per-athlete overrides — the `adj` overlay) built; plan in [`groups-plan.md`](../archive/meso/groups-plan.md) |
+| S2 | **Units & RPE vs %1RM** | ✅ Complete — units (kg/lb) shipped with earlier slices; Phase 1 (first-class `load_type` `abs`/`pct`) + Phase 2a (agent %1RM-awareness — prompt + a deterministic %1RM progression bound) + Phase 2b (athlete %1RM logging ergonomics — the estimated-1RM helper) all built & deployed. **Follow-up: persisted, coach-visible 1RM** (Phase 1 — `AthleteOneRm`, auto-derived from logged history) built. Plans in [`units-rpe-plan.md`](../archive/meso/units-rpe-plan.md) / [`one-rm-plan.md`](../archive/meso/one-rm-plan.md) |
 | S3 | **Delivery & notifications** | ✅ Built — push (PWA, Phase 4b) + email (`django-ses` + `notifications`). **Email opt-out shipped** (2026-06-29): the delivery email now carries a working one-click `List-Unsubscribe` (RFC 8058) honored by a per-athlete flag — see decision log. |
 | S4 | **Results ↔ `challenges`/records** | ✅ Resolved (2026-06-29, YAGNI review): **keep separate, build nothing now.** The "results screen shows a PR" premise was mock-only (the real results screen never showed a PR), and `challenges.Record` is time-based (wrong domain for a strength PR). Meso already owns best-lift data via `AthleteOneRm`. A motivational PR badge stays deferred until there's a concrete need. |
 | S5 | **Real-time transport** | ❌ Deferred (YAGNI, 2026-06-29): the agent result is atomic behind a human review gate and the stack is WSGI — SSE/websockets buy ~1.5s over a cheap bounded poll for disproportionate ASGI/channels/Redis-channel-layer infra. Revisit only if the agent itself becomes genuinely streaming. |
@@ -244,7 +244,7 @@ _(Append dated entries here as decisions land.)_
   it. **Contraindications enforced in a deterministic validation layer** (current-week scoping,
   target consistency, swap-only contraindication backstop, plural-folded), not just the prompt;
   human approval gate unchanged. 47 new tests (146 meso / 286 project-wide); local Codex review clean
-  (8 rounds). Build plan + phasing in [`agent-plan.md`](./agent-plan.md). Resume point → agent Phase 2
+  (8 rounds). Build plan + phasing in [`agent-plan.md`](../archive/meso/agent-plan.md). Resume point → agent Phase 2
   (per-change approve/reject + **apply** back into the program).
 - 2026-06-27 — **Agent Phase 2 built & merged** (PR #282, squash `ee7d456`; Django CI green, deployed
   to Hetzner — **no migration**, `status`/`payload` already existed): the review gate now **writes
@@ -289,7 +289,7 @@ _(Append dated entries here as decisions land.)_
   → either a **persisted chat thread** (saving the designer conversation, deferred since Phase 3) or the
   **athlete-facing slice** (delivery + logging PWA, then results feeding back to the agent — decisions S3/S7).
 - 2026-06-27 — **Athlete-facing slice started** (decision: build item 3 of the suggested sequence — the
-  athlete surface — over the persisted chat thread). Plan + phasing in [`athlete-plan.md`](./athlete-plan.md)
+  athlete surface — over the persisted chat thread). Plan + phasing in [`athlete-plan.md`](../archive/meso/athlete-plan.md)
   (Phase 1 read surface · Phase 2 logging · Phase 3 results-feedback · Phase 4 PWA + notifications, S3/S7).
   **Phase 1 built** (branch `meso-athlete-phase1`): the athlete's own read surface — `AthleteHomeView`
   (`/meso/me/`) lists their active-coach, non-archived plans with each plan's latest **delivered** week +
@@ -363,7 +363,7 @@ _(Append dated entries here as decisions land.)_
   doesn't go stale. **No model, no migration** — same "reuse what exists, defer new tables" taste as the
   athlete slice. Built red→green: **+16 tests** (`test_chat_thread.py`; 379 meso / 519 project-wide), ruff
   clean. **Local Codex review: 0 blocking across 3 rounds → CLEAN** (two nits fixed: the drafting resume-poll
-  and the scroll-to-latest). Plan in [`chat-thread-plan.md`](./chat-thread-plan.md). **Deferred:** a dedicated
+  and the scroll-to-latest). Plan in [`chat-thread-plan.md`](../archive/meso/chat-thread-plan.md). **Deferred:** a dedicated
   `ChatMessage` model (only if the agent ever sends text not tied to a batch) · editing past turns ·
   pagination of a very long thread. Resume point → next-slice options: **groups (S1)** is the main remaining
   Meso feature area.
@@ -384,7 +384,7 @@ _(Append dated entries here as decisions land.)_
   relationship + an inactive link **on creation only** (so a since-ended row stays re-savable). Built red→green:
   **+28 tests** (`test_groups.py` + seed coverage; 407 meso / 545 project-wide), ruff clean, `makemigrations
   --check` clean. **Local Codex review: 0 blocking → CLEAN** (3 rounds; two P2 membership-tenancy nits fixed).
-  Plan + phasing in [`groups-plan.md`](./groups-plan.md). Resume point → **groups Phase 2** (the shared group
+  Plan + phasing in [`groups-plan.md`](../archive/meso/groups-plan.md). Resume point → **groups Phase 2** (the shared group
   program: `Plan.group` FK + nullable `relationship`, the designer's Group mode, create-group UI).
 - 2026-06-28 — **Groups slice (S1) Phase 2a built** (branch `meso-groups-phase2a`). The **shared group
   program**: a `Plan` rooted at a `MesoGroup` instead of a `CoachAthlete` relationship. Phase 2 is split (like
@@ -405,7 +405,7 @@ _(Append dated entries here as decisions land.)_
   shared program" card; the seeded demo group gets a shared program. `initials` moved to `serializers` (avoids a
   presenters import cycle). Built red→green: **+29 tests** (`test_group_program.py` + seed coverage; 583
   project-wide), ruff clean, `makemigrations --check` clean. Plan + build notes in
-  [`groups-plan.md`](./groups-plan.md). Resume point → **groups Phase 3** (per-athlete overrides: the `adj`
+  [`groups-plan.md`](../archive/meso/groups-plan.md). Resume point → **groups Phase 3** (per-athlete overrides: the `adj`
   overlay — `PrescriptionOverride`, effective-program resolution, the designer's per-row `adj` badge), then
   **Phase 2b** (create-group UI) and **Phase 4** (deliver-to-all).
 - 2026-06-28 — **Groups slice (S1) Phase 3 built** (branch `meso-groups-phase3`). **Per-athlete overrides —
@@ -428,7 +428,7 @@ _(Append dated entries here as decisions land.)_
   override *editor* yet** — the badge renders off seed/admin/API-created diffs; the click-to-adjust UI is the
   immediate follow-up. Built red→green: **+41 tests** (`test_group_overrides.py` + seed coverage; 625
   project-wide), full suite + 30 JS tests green, ruff + format clean, `makemigrations --check` clean. Plan +
-  build notes in [`groups-plan.md`](./groups-plan.md). Resume point → the **override editor UI** (click a row
+  build notes in [`groups-plan.md`](../archive/meso/groups-plan.md). Resume point → the **override editor UI** (click a row
   to set a member's adjust), then **Phase 2b** (create-group UI) and **Phase 4** (deliver-to-all — fan a
   per-athlete *resolved* snapshot out to each member, reusing `resolve_prescription`).
 - 2026-06-28 — **Groups slice (S1) COMPLETE** (Phases 2b + 3-editor + 4 all built, merged & deployed — PRs
@@ -443,7 +443,7 @@ _(Append dated entries here as decisions land.)_
   toggles `%` ⇄ the unit and autosaves the type; the athlete sees a `%` target and the coach results screen
   labels a %1RM target with `%`. Migration `meso.0011`. Agent %1RM-awareness deferred to Phase 2 (the agent
   is type-agnostic — a %1RM number progresses as a number). Plan + phasing in
-  [`units-rpe-plan.md`](./units-rpe-plan.md).
+  [`units-rpe-plan.md`](../archive/meso/units-rpe-plan.md).
 - 2026-06-28 — **S2 Phase 2a — agent %1RM-awareness** (branch `meso-units-rpe-phase2a-agent`, **no
   migration**). Phase 2 split 2a/2b (groups-slice cadence). The agent grounding already carried each row's
   `load_type` (Phase 1 wired `serialize_prescription`), so the two real gaps were the **prompt** (never
@@ -452,7 +452,7 @@ _(Append dated entries here as decisions land.)_
   `progress` on a `PERCENT`-typed target to `0 < pct ≤ 120` (rejects an absolute-looking "180" or a
   non-numeric value, normalizes `'82.5 %'` → `'82.5'`), leaving the absolute path unbounded. The agent still
   does **not** change a row's type. Athlete %1RM logging ergonomics remain → **Phase 2b**. Plan in
-  [`units-rpe-plan.md`](./units-rpe-plan.md).
+  [`units-rpe-plan.md`](../archive/meso/units-rpe-plan.md).
 - 2026-06-28 — **S2 Phase 2b — athlete %1RM logging ergonomics → S2 COMPLETE** (branch
   `meso-units-rpe-phase2b`, **no migration**). A %1RM target is an *intensity, not a weight*: Phase 1 let
   the athlete *see* the `%`, but converting "75%" to a bar load was still manual. Phase 2b adds an
@@ -469,7 +469,7 @@ _(Append dated entries here as decisions land.)_
   frontend), ruff + prettier clean, `makemigrations --check` clean. **Local Codex review: CLEAN on
   iteration 1.** **Deferred:** a persisted/coach-visible estimated 1RM (model + migration) and
   auto-deriving it from logged history. **The whole Meso feature area is now real & deployed; S2 is
-  complete — no obvious next big slice, ask the user.** Plan in [`units-rpe-plan.md`](./units-rpe-plan.md)
+  complete — no obvious next big slice, ask the user.** Plan in [`units-rpe-plan.md`](../archive/meso/units-rpe-plan.md)
 - 2026-06-28 — **S2 follow-up: persisted, auto-derived, coach-visible 1RM — Phase 1 built** (branch
   `meso-one-rm-phase1`). The deferred Phase-2b follow-up: the athlete's estimated 1RM lived only in
   per-device `localStorage`. Phase 1 promotes it to a real **`AthleteOneRm`** row (one per
@@ -484,7 +484,7 @@ _(Append dated entries here as decisions land.)_
   no single athlete, so none). The seed derives Maya's Box Squat 1RM (84) so the demo shows it. Built
   red→green: **+33 pytest** (`test_one_rm.py`; 600 meso / 740 project-wide) + **+5 Vitest** (65 frontend)
   + a seed assertion, ruff + format clean, `makemigrations --check` clean. Plan in
-  [`one-rm-plan.md`](./one-rm-plan.md). **Deferred:** manual entry persisted server-side (a `source` field
+  [`one-rm-plan.md`](../archive/meso/one-rm-plan.md). **Deferred:** manual entry persisted server-side (a `source` field
   + endpoint — today logs only *raise* the estimate), coach-editable 1RM, smarter derivation / unit
   conversion..
 - 2026-06-28 — **S2 follow-up — Phase 2: manual, server-persisted 1RM built** (branch
@@ -505,7 +505,7 @@ _(Append dated entries here as decisions land.)_
   is now a **debounced best-effort server POST** (`saveOneRm`/`_postOneRm`) — the `meso-e1rm` localStorage
   store is **retired**. Admin surfaces `source` (`list_display` + `list_filter`). Built red→green: **+28
   pytest** (`test_one_rm.py`; 664 meso / 776 project-wide) + **+8 Vitest** (70 frontend, net), ruff +
-  prettier + `makemigrations --check` clean. Plan in [`one-rm-plan.md`](./one-rm-plan.md). **Deferred
+  prettier + `makemigrations --check` clean. Plan in [`one-rm-plan.md`](../archive/meso/one-rm-plan.md). **Deferred
   (Phase 3+):** coach-editable 1RM (the `source` field already supports it), offline persistence of a
   manual edit, smarter derivation / cross-unit conversion.
 - 2026-06-29 — **N4 — athlete onboarding / email invites — Phase 1 built** (branch
@@ -533,7 +533,7 @@ _(Append dated entries here as decisions land.)_
   `no-referrer` meta into a new `_meso_base` `head_top` block that precedes the font `<link>`s; a
   P2 claim race — `select_for_update` on the invite row in the claim/revoke views). Plan +
   deferred (athlete→coach request UI, resend/expiry, stub-athlete) in
-  [`invites-plan.md`](./invites-plan.md).
+  [`invites-plan.md`](../archive/meso/invites-plan.md).
 - 2026-06-29 — **N4 — athlete onboarding / invites — Phase 2 built** (branch
   `meso-invites-phase2`, **no migration**). Closes the bidirectional half the relationship spine
   always supported in the model (`CoachAthlete.request` → `pending_athlete_request`) but never in
@@ -556,7 +556,7 @@ _(Append dated entries here as decisions land.)_
   (`hopeful@example.com`) so the surface shows on a fresh DB (idempotent + torn down). Built
   red→green: **+34 pytest** (`test_requests.py`) + 3 seed assertions; full suite green (867).
   **Codex review loop CLEAN on iteration 1.** Plan + deferred (resend/expiry, stub-athlete,
-  attribution) in [`invites-plan.md`](./invites-plan.md).
+  attribution) in [`invites-plan.md`](../archive/meso/invites-plan.md).
 - 2026-06-29 — **N4 — invites — Phase 3 built** (branch `meso-invites-phase3`). Invite
   *lifecycle*: a TTL + an explicit resend, closing the top deferred item. **One migration**
   (`0016_coachinvite_expiry`): `CoachInvite.expires_at` + a new `Status.EXPIRED`. A fresh invite
@@ -576,7 +576,7 @@ _(Append dated entries here as decisions land.)_
   "expired" state; admin lists `expires_at`; the demo invite seeds via `open_for` (real TTL).
   Built red→green: **+38 pytest** (`test_invite_lifecycle.py`); full project suite 904 + 83 Vitest
   green. Plan + deferred (configurable TTL, expiry reminder, cron scheduling, stub-athlete) in
-  [`invites-plan.md`](./invites-plan.md).
+  [`invites-plan.md`](../archive/meso/invites-plan.md).
 - 2026-06-29 — **Agent job → django-q `async_task` built** (branch `meso-agent-django-q`,
   **no migration**). Closes the top deferred item of the scheduling plan: `meso/agent/jobs.py` ran
   the proposal job on a bare daemon thread because there was no queue; now that django-q2 + the
@@ -634,7 +634,7 @@ _(Append dated entries here as decisions land.)_
   needed an off switch. Admin surfaces + filters the flag. Built red→green: **+16 pytest**
   (`test_unsubscribe.py`); ruff + format + `makemigrations --check` clean.
 - 2026-06-29 — **First-time UX / onboarding slice planned** (not built; plan in
-  [`first-time-ux-plan.md`](./first-time-ux-plan.md)). The feature area is broad
+  [`first-time-ux-plan.md`](../archive/meso/first-time-ux-plan.md)). The feature area is broad
   and deployed but has never had an onboarding pass. The plan covers all three
   first-timers (cold visitor · new coach · new athlete) and surfaces the
   **headline blocker**: a coach **cannot create an individual program in the UI** —
@@ -684,7 +684,7 @@ _(Append dated entries here as decisions land.)_
   plan creation, the headline structural fix (`Plan.scaffold` + `CoachAthlete.create_plan` /
   `working_plan` + `plan_create` / `session_add` endpoints + wired CTAs). A real coach can now
   build an individual program in the UI with no seed. Plan in
-  [`first-time-ux-plan.md`](./first-time-ux-plan.md).
+  [`first-time-ux-plan.md`](../archive/meso/first-time-ux-plan.md).
 - 2026-06-29 — **First-time UX — Phase 2 built** (branch `meso-first-time-ux-phase2`): **coach
   first-run — one-click demo + empty-state teaching** (Q3). `meso/demo.py`
   (`load_demo` / `clear_demo` / `has_demo`) is a coach-scoped, idempotent wrapper over the
@@ -727,7 +727,7 @@ _(Append dated entries here as decisions land.)_
   `makemigrations --check` clean. **Codex review loop CLEAN on iteration 1.** Resume
   point → first-time-UX **Phase 4** (athlete install/first-log polish) **or Phase 5**
   (designer/agent self-explanation). Plan in
-  [`first-time-ux-plan.md`](./first-time-ux-plan.md).
+  [`first-time-ux-plan.md`](../archive/meso/first-time-ux-plan.md).
 - 2026-06-30 — **First-time UX — Phase 4 built & merged** (branch
   `meso-first-time-ux-phase4`, PR #330, **no migration**): **athlete first-run
   polish** — a PWA **install prompt** + a one-time **first-log coachmark**. The
@@ -752,7 +752,7 @@ _(Append dated entries here as decisions land.)_
   **Prod-verified:** `/meso/sw.js` now serves `CACHE = "meso-pwa-v2"` + the hashed
   `meso_onboarding.*.js` (HTTP 200). Resume point → first-time-UX **Phase 5**
   (designer/agent self-explanation) **or** the add-week/week-switcher deferral. Plan in
-  [`first-time-ux-plan.md`](./first-time-ux-plan.md).
+  [`first-time-ux-plan.md`](../archive/meso/first-time-ux-plan.md).
 - 2026-06-30 — **First-time UX — Phase 5 built** (branch `meso-first-time-ux-phase5`,
   **no migration**): **designer & agent self-explanation** — the **last first-time-UX
   phase**. The designer is a self-contained Alpine page that shipped a pile of
@@ -789,7 +789,7 @@ _(Append dated entries here as decisions land.)_
   **completes the first-time-UX slice** (Phases 1–5). Remaining Meso backlog: the
   **add-week / week-switcher** deferral (designer is single-current-week) and **S6
   billing Phase 5 annual prices** (blocked on the owner's per-seat number + a Stripe
-  annual Price). Plan in [`first-time-ux-plan.md`](./first-time-ux-plan.md).
+  annual Price). Plan in [`first-time-ux-plan.md`](../archive/meso/first-time-ux-plan.md).
 - 2026-06-29 — **Multi-week designer built** (branch `meso-multi-week-designer`,
   **no migration**): closes the long-standing **add-week / week-switcher** deferral.
   A plan was effectively **single-week** — `Plan.scaffold` materialized one `Week`

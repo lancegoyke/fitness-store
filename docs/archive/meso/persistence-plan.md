@@ -4,7 +4,7 @@
 merged 2026-06-27 (PR #271); Phase 3 merged 2026-06-27 (PR #274); Phase 4 merged 2026-06-27
 (PR #276); Phase 5 merged & deployed 2026-06-27 (PR #278, `seed_meso_demo` + coach-side mock
 retired) · created 2026-06-26 · **next = the agent slice (B6)**
-**Companion to:** [`decisions.md`](./decisions.md)
+**Companion to:** [`decisions.md`](../../meso/decisions.md)
 **Goal of this slice:** turn the **coach-side** screens (designer, roster, athlete profile)
 from client-side mocks into real, DB-backed, **tenant-scoped** data. No agent, no athlete app
 yet — the review and results screens keep running on seeded data until their own slices.

@@ -546,7 +546,7 @@ def latest_delivered_week(plan):
     is reflected, by design; the frozen ``WeekDelivery`` snapshot is the
     historical record for the (deferred) "changes since last delivery" diff, not
     a separate athlete-facing view. Newest delivery wins so the athlete lands on
-    the week their coach just sent. See ``docs/meso/athlete-plan.md``.
+    the week their coach just sent. See ``docs/archive/meso/athlete-plan.md``.
     """
     return (
         models.Week.objects.filter(mesocycle__plan=plan, delivered_at__isnull=False)

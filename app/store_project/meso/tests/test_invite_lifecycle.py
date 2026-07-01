@@ -16,7 +16,7 @@ adds a time-to-live and an explicit *resend*:
 - the ``meso_expire_invites`` management command sweeps overdue pending invites;
 - the coach roster surfaces expired invites with a Resend action.
 
-See ``docs/meso/invites-plan.md``. Mail is best-effort on
+See ``docs/archive/meso/invites-plan.md``. Mail is best-effort on
 ``transaction.on_commit``, so send-asserting view tests wrap the request in
 ``django_capture_on_commit_callbacks`` (same idiom as ``test_invites``).
 """

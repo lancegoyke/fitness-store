@@ -10,7 +10,7 @@ page (what Meso is + two honest entry actions: log in as an athlete, or become a
 coach), while an authenticated visitor keeps the post-#311 role routing (coach →
 roster, anyone else → their training home). A single discreet "Coaching" link in
 the main-site nav makes Meso discoverable at all. See
-``docs/meso/first-time-ux-plan.md`` (Phase 3).
+``docs/archive/meso/first-time-ux-plan.md`` (Phase 3).
 
 These tests cover:
 

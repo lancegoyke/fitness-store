@@ -10,7 +10,7 @@ resumes polling (carries `pollUrl`, `meso.js` `resumeDrafting`) instead of going
 stale; and a long restored thread scrolls to its latest turn on load. · created
 2026-06-28
 **Companion to:** [`agent-plan.md`](./agent-plan.md) (the chat went live in agent
-Phase 3, but the thread was never persisted) · [`decisions.md`](./decisions.md) (B6)
+Phase 3, but the thread was never persisted) · [`decisions.md`](../../meso/decisions.md) (B6)
 **Goal of this slice:** the designer's agent-chat conversation **survives a page
 reload**. Today the chat is ephemeral — `meso.js` re-seeds `messages` to a single
 orienting greeting on every load, so a coach who proposes changes, navigates away,

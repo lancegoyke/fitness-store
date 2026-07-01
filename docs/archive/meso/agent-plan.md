@@ -4,7 +4,7 @@
 (PR #282, squash `ee7d456`; deployed) · Phase 3 done & merged (PR #284, squash `5bfe754`; deployed) ·
 Phase 4 done & merged (PR #286, squash `82fd360`; Django CI green, deployed to Hetzner —
 migration `meso.0005` applied) · created 2026-06-27 · **agent slice complete**
-**Companion to:** [`decisions.md`](./decisions.md) (B6) · [`persistence-plan.md`](./persistence-plan.md)
+**Companion to:** [`decisions.md`](../../meso/decisions.md) (B6) · [`persistence-plan.md`](./persistence-plan.md)
 **Goal of this slice:** replace the designer's canned agent-chat engine
 (`detectIntent`/`applyIntent` in `meso.js`) and the review screen
 (`mockdata.PROPOSED_CHANGES`) with a **real Claude proposal engine behind the

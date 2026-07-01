@@ -2,7 +2,7 @@
 
 This is the first real (DB-backed) slice of the Meso program designer, which
 once ran entirely on a fixtures module (since retired now every screen is
-DB-backed). See ``docs/meso/persistence-plan.md`` (Phase 1) and
+DB-backed). See ``docs/archive/meso/persistence-plan.md`` (Phase 1) and
 ``docs/meso/decisions.md``.
 
 Multi-coach SaaS (B1): every coach is an account, athletes are Users who log in
@@ -499,7 +499,7 @@ class CoachInvite(models.Model):
     invited email (email-only login coexists with social providers, so a new
     athlete may sign up under a different address). The coach sees who accepted on
     the roster and can ``end`` the link if it's wrong. See
-    ``docs/meso/invites-plan.md``.
+    ``docs/archive/meso/invites-plan.md``.
     """
 
     #: How long a fresh claim link stays valid before it must be resent (N4 P3).
@@ -1028,7 +1028,7 @@ class PlanQuerySet(models.QuerySet):
         individual-only deliver/results/review flows) — this is the wider gate for
         the one screen that handles both. A materialized group-delivery plan
         (``source_group`` set) is excluded: the coach edits the *shared* program,
-        never a member's derived snapshot. See ``docs/meso/groups-plan.md``.
+        never a member's derived snapshot. See ``docs/archive/meso/groups-plan.md``.
         """
         return self.filter(
             models.Q(
@@ -1507,7 +1507,7 @@ class WeekDelivery(models.Model):
 # The agent is a *proposal engine behind the existing review gate*: it writes
 # ``ProposedChange`` rows grouped into an ``AgentProposalBatch``; the coach still
 # approves (apply lands in Phase 2). Proposals are inert until then, so writing
-# them is safe. See ``docs/meso/agent-plan.md``.
+# them is safe. See ``docs/archive/meso/agent-plan.md``.
 # ---------------------------------------------------------------------------
 
 
@@ -1744,7 +1744,7 @@ class LoggedSet(models.Model):
 # ``GroupMembership`` linking it to an **active** ``CoachAthlete`` relationship,
 # so membership structurally implies an active coaching link and per-athlete
 # overrides/delivered plans (later) hang off the same relationship that owns
-# individual plans (D-a). See ``docs/meso/groups-plan.md``.
+# individual plans (D-a). See ``docs/archive/meso/groups-plan.md``.
 # ---------------------------------------------------------------------------
 
 
@@ -2196,7 +2196,7 @@ class PrescriptionOverride(models.Model):
     owns the member's individual plans — D-a), and targets a prescription in the
     membership's group's shared program (a same-group invariant enforced by
     ``GroupMembership.set_override`` and ``clean``). One override per
-    member+prescription. See ``docs/meso/groups-plan.md``.
+    member+prescription. See ``docs/archive/meso/groups-plan.md``.
     """
 
     # The widest sane load scaling — a 50% deload through a +100% bump. Outside
@@ -2338,7 +2338,7 @@ class PushSubscription(models.Model):
 # athlete's logged history** (the best Epley estimate per lift), so it survives a
 # device change, powers the logger's suggested load on any device, and is visible
 # to the coach in the designer when they prescribe a %1RM. See
-# ``one_rm.py`` (derive/refresh/read) and ``docs/meso/one-rm-plan.md``.
+# ``one_rm.py`` (derive/refresh/read) and ``docs/archive/meso/one-rm-plan.md``.
 # ---------------------------------------------------------------------------
 
 
@@ -2359,7 +2359,7 @@ class AthleteOneRm(models.Model):
     it (logs only ever raised the derived estimate), and it survives a device
     change and is visible to the coach — the gap the per-device localStorage
     override left open. Clearing a manual value reverts the lift to its
-    log-derived estimate. See ``one_rm.py`` and ``docs/meso/one-rm-plan.md``.
+    log-derived estimate. See ``one_rm.py`` and ``docs/archive/meso/one-rm-plan.md``.
     """
 
     class Source(models.TextChoices):

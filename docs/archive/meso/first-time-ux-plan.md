@@ -6,7 +6,7 @@ plan creation) + Phase 2 (coach first-run: one-click demo + empty-state teaching
 first-run: install prompt + first-log coachmark) + Phase 5 (designer & agent
 self-explanation: dismissible coachmarks + review-gate note + real left-rail
 chrome) all done**
-**Companion to:** [`decisions.md`](./decisions.md) (B1 multi-coach, B2 athlete
+**Companion to:** [`decisions.md`](../../meso/decisions.md) (B1 multi-coach, B2 athlete
 login, N3 roles, N4 invites) · [`invites-plan.md`](./invites-plan.md) ·
 [`athlete-plan.md`](./athlete-plan.md) · [`groups-plan.md`](./groups-plan.md)
 **Goal of this slice:** make Meso **obvious to use for a first-time visitor**
@@ -107,7 +107,7 @@ all.** "Obvious to use" presupposes "usable," so this is Phase 1.
 
 ## Decisions this slice rests on
 
-From [`decisions.md`](./decisions.md): **B1** (multi-coach SaaS), **B2** (athletes
+From [`decisions.md`](../../meso/decisions.md): **B1** (multi-coach SaaS), **B2** (athletes
 are `User`s who log in; coach edits their plan), **N3** (roles: a user is a coach
 via a `CoachProfile` *or* a coach-side link *or* a sent invite — post-#311
 `RosterView` routes on exactly this, so the role is **load-bearing now, not

@@ -15,7 +15,7 @@ promoted out of per-device localStorage (Phase 2b) into ``AthleteOneRm`` rows:
 
 Identity follows the hybrid B4 rule (``serializers._exercise_key``): a
 catalog-linked lift by FK, a free-text lift by normalized name. See
-``docs/meso/one-rm-plan.md``.
+``docs/archive/meso/one-rm-plan.md``.
 """
 
 import math

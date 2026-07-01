@@ -8,7 +8,7 @@ stamps the date. These are the first *real* logged rows — the ones
 fabricated in tests).
 
 The tests pin the same discipline as the read surface (see
-``docs/meso/athlete-plan.md``): the endpoint is athlete-scoped (only the
+``docs/archive/meso/athlete-plan.md``): the endpoint is athlete-scoped (only the
 logged-in athlete, only a **delivered** session they own), every out-of-scope
 target is a flat 404, bad input is a 400 that writes nothing, and the write is
 idempotent (re-logging updates the same ``SessionLog`` rather than piling up

@@ -11,7 +11,7 @@ foundation, not on PR 2). The whole site now runs on the one token-driven look.
 > (`static/css/nav.css` + `_nav.html`) reused across the whole site *and* the
 > Meso shell. The PR 3 section below is reconciled to describe what's on `main`.
 > Later polish (body typography, footer chrome) continued in the separate
-> **`docs/design-system-phase-2-plan.md`** — phase 2: PR A (#363), PR B (#366),
+> **`docs/archive/design-system-phase-2-plan.md`** — phase 2: PR A (#363), PR B (#366),
 > and this doc-reconcile as PR C.
 
 ## Goal

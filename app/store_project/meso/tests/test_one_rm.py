@@ -10,7 +10,7 @@ the designer when prescribing a %1RM.
 These tests pin: the lift-identity key + uniqueness, the Epley derivation
 (matching ``meso_athlete.js`` exactly), the refresh-on-log write path, the read
 helper, the log-endpoint integration, the presenter/serializer threading, and
-the backfill of existing history. See ``docs/meso/one-rm-plan.md``.
+the backfill of existing history. See ``docs/archive/meso/one-rm-plan.md``.
 """
 
 import datetime

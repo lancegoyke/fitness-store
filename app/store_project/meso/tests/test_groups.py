@@ -6,7 +6,7 @@ tenancy-correct foundation: ``MesoGroup`` (coach-owned) + ``GroupMembership``
 (group ↔ an *active* ``CoachAthlete`` link), scoped reads, and the roster
 *Groups* card + a coach-scoped group detail page.
 
-These tests pin the scoping contract (see ``docs/meso/groups-plan.md``): a coach
+These tests pin the scoping contract (see ``docs/archive/meso/groups-plan.md``): a coach
 sees only their own groups; a group's *displayed* members are scoped to active
 links, so ending a relationship hides the member without deleting the membership
 row (reopening the link restores them).

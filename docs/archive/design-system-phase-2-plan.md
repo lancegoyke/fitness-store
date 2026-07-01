@@ -1,7 +1,7 @@
 # Design system — phase 2 plan (typography + remaining chrome)
 
 Status: **COMPLETE — PRs A, B & C all shipped** · Drafted & finished 2026-06-30 ·
-Follow-on to the **COMPLETE** `docs/design-system-unification-plan.md` (phase 1:
+Follow-on to the **COMPLETE** `docs/archive/design-system-unification-plan.md` (phase 1:
 PRs 1–3 + the nav-refresh #358). PR A = body typography (#363); PR B = footer
 chrome (#366); PR C = phase-1 doc reconcile (this change). Decisions taken:
 **Option A (system-ui)** for the body typeface, **Meso left on Hanken Grotesk**,
@@ -114,7 +114,7 @@ include `_footer.html`; the main bases do). TDD + codex + gate as usual.
 
 ## PR C — Reconcile the phase-1 plan doc (housekeeping, docs-only) ✅ shipped
 
-`docs/design-system-unification-plan.md` still describes PR 3 as the Meso-only
+`docs/archive/design-system-unification-plan.md` still describes PR 3 as the Meso-only
 `meso/_meso_sitenav.html` partial styled by `.meso-sitenav`. #358 **removed** that
 in favor of the shared `nav.css` + `_nav.html` reused in `_meso_base` via
 `{% block site_nav %}`. Update the PR 3 section (and the status header) to record

@@ -4,7 +4,7 @@ A coach invites a real person *by email* (who may not have an account yet), we
 send a tokened claim link, and whoever follows it while authenticated
 materializes — and immediately activates — a ``CoachAthlete`` link. This is the
 ``CoachInvite`` artifact that sits in front of the Phase-1 peer-invite state
-machine; see ``docs/meso/invites-plan.md``.
+machine; see ``docs/archive/meso/invites-plan.md``.
 
 These tests cover:
 

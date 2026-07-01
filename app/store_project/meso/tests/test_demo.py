@@ -5,7 +5,7 @@ Phase 1 made individual plan creation real; this phase lets a brand-new coach
 ``meso/demo.py`` wraps the seed's building blocks into ``load_demo`` /
 ``clear_demo`` / ``has_demo``, scoped to the requesting coach.
 
-The guardrails these tests pin (``docs/meso/first-time-ux-plan.md``, Q3):
+The guardrails these tests pin (``docs/archive/meso/first-time-ux-plan.md``, Q3):
 
 - **coach-scoped + collision-free** — each coach's demo athletes are namespaced,
   so two coaches can both load the demo and neither sees the other's data;

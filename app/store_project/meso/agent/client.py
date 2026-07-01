@@ -14,7 +14,7 @@ extended/adaptive thinking, and this is a single constrained extraction. The
 stable system prompt is sent with ``cache_control`` (prompt caching); the
 volatile per-plan grounding + instruction go in the user turn. Revisit auto
 ``tool_choice`` + adaptive thinking when the agent becomes multi-turn — see
-``docs/meso/agent-plan.md``.
+``docs/archive/meso/agent-plan.md``.
 """
 
 import json
