@@ -256,8 +256,11 @@ class DesignSystemPR2TemplateTests(TestCase):
             {"form": _PwForm(), "action_url": "/accounts/password/reset/key/x/"},
             request=request,
         )
+        # Phase-3 PR B moved this page onto the auth card, so the styled submit is
+        # now the full-width ``.button.block`` variant — still a styled button, the
+        # property this guard exists to protect (never a raw, unstyled <button>).
         self.assertIn(
-            '<button class="button" type="submit">Change Password</button>', html
+            '<button class="button block" type="submit">Change Password</button>', html
         )
         self.assertNotIn('<button type="submit">Change Password</button>', html)
 

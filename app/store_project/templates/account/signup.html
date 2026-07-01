@@ -1,61 +1,64 @@
-{% extends "_base.html" %}
+{% extends "account/base_auth_card.html" %}
 
-{% load i18n static account socialaccount %}
+{% load i18n %}
+{% load static account socialaccount %}
+{% get_providers as socialaccount_providers %}
 
-{% block head_title %}{% trans "Sign Up" %}{% endblock %}
+{% block head_title %}{% trans "Sign Up" %}{% endblock head_title %}
 
-{% block content %}
-  <h1>{% trans "Sign Up" %}</h1>
+{% block auth_title %}{% trans "Create your account" %}{% endblock auth_title %}
 
-  <p class="text-center">{% blocktrans %}Already have an account? Then please <a href="{{ login_url }}">sign in</a>.{% endblocktrans %}</p>
+{% block auth_description %}
+  <p class="auth-card__description text-center">
+    {% trans "Enter your email below to create your account." %}
+    <a href="{% url 'account_login' %}">{% trans "Sign in" %}</a>
+  </p>
+{% endblock auth_description %}
 
-  <a class="box login facebook" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" next=redirect_field_value %}">Continue with Facebook</a>
-  <a class="box login google" id="google" href="{% provider_login_url "google" next=redirect_field_value %}">Sign up with Google</a>
+{% block auth_body %}
+  <form class="stack" id="email-form" method="POST" action="{% url 'account_signup' %}">
+    {% csrf_token %}
 
+    {% if form.non_field_errors %}
+      <div class="messages">
+        {{ form.non_field_errors }}
+      </div>
+    {% endif %}
+
+    <div class="stack">
+      <label for="{{ form.email.id_for_label }}">{% trans "Email" %}</label>
+      {{ form.email }}
+      {{ form.email.errors }}
+    </div>
+
+    <div class="stack">
+      <label for="{{ form.password1.id_for_label }}">{% trans "Password" %}</label>
+      {{ form.password1 }}
+      {{ form.password1.errors }}
+    </div>
+
+    {% if redirect_field_value %}
+      <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
+    {% endif %}
+
+    <button class="primaryAction button block" type="submit">{% trans "Sign Up" %}</button>
+  </form>
+{% endblock auth_body %}
+
+{% block auth_footer %}
   <div class="or-separator">
     <div></div>
-    <i>or</i>
+    <i>{% trans "or" %}</i>
     <div></div>
   </div>
 
-  <div class="stack-auth-form">
-    <h2 class="text-center font-size:smallish">Sign up with email</h2>
-    <form class="login center" id="email-form" method="POST" action="{% url 'account_signup' %}">
-      {% csrf_token %}
-
-      <p>
-        {{ form.non_field_errors }}
-      </p>
-
-      <p>
-        <label class="stack" for="{{ form.email.id_for_label }}">
-          <span>Email</span>
-          {{ form.email }}
-          {{ form.email.errors }}
-        </label>
-      </p>
-
-      <p>
-        <label class="stack" for="{{ form.password1.id_for_label }}">
-          <span>Password</span>
-          {{ form.password1 }}
-          {{ form.password1.errors }}
-        </label>
-      </p>
-
-      {% if redirect_field_value %}
-        <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
-      {% endif %}
-      <p>
-        <a class="secondaryAction" href="{% url 'account_reset_password' %}">{% trans "Forgot Password?" %}</a>
-      </p>
-      <p>
-        <button class="primaryAction button" type="submit">{% trans "Sign Up" %}</button>
-      </p>
-    </form>
-  </div>
-
-{% endblock content %}
+  <a class="button outline block" id="google" href="{% provider_login_url "google" next=redirect_field_value %}">
+    {% trans "Sign up with Google" %}
+  </a>
+  <a class="button outline block" id="facebook" href="{% provider_login_url "facebook" method="js_sdk" next=redirect_field_value %}">
+    {% trans "Continue with Facebook" %}
+  </a>
+{% endblock auth_footer %}
 
 {% block javascript %}
   {% providers_media_js %}
