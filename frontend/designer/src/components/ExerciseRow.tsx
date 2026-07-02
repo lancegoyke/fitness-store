@@ -6,6 +6,14 @@ import { useRef } from "react";
 import { loadSuffix } from "../lib/grid";
 import type { Exercise } from "../lib/api";
 import type { OneRmEditorState } from "../hooks/useOneRmEditor";
+import { cellAriaLabel, gridCellDomKey } from "../hooks/useGridNav";
+import type { GridCellBindings, GridCellCallbacks, GridColumn, UseGridNavResult } from "../hooks/useGridNav";
+
+// Phase 3 (grid keyboard navigation): a cell with no gridNav wired up (or no
+// gridNav prop at all) falls back to a harmless, non-tabbable, inert
+// binding — never crashes, never intercepts a key. a11y (data-grid-cell /
+// aria-label) stays unconditional regardless (see below).
+const INERT_GRID_BINDINGS: GridCellBindings = { tabIndex: -1, onFocus: () => {}, onKeyDown: () => {} };
 
 export interface ExerciseRowProps {
   ex: Exercise;
@@ -21,6 +29,9 @@ export interface ExerciseRowProps {
   // source: ExerciseRow takes a `deleting` prop (see ExerciseRow.test.tsx's
   // note).
   deleting: boolean;
+  // Phase 3: optional passthrough from WeekGrid (via DayCard). Absent in
+  // DayCard.test.tsx's existing fixtures — see useGridNav.test.tsx's header.
+  gridNav?: UseGridNavResult;
   onFieldChange(field: keyof Exercise, value: string): void;
   onCommit(): void;
   onRemove(): void;
@@ -40,6 +51,7 @@ export function ExerciseRow(props: ExerciseRowProps) {
     oneRmOpenForRow,
     oneRmEditorState,
     deleting,
+    gridNav,
     onFieldChange,
     onCommit,
     onRemove,
@@ -66,6 +78,25 @@ export function ExerciseRow(props: ExerciseRowProps) {
     dirtySinceFocus.current = false;
     onCommit();
   };
+  // Phase 3 Escape: revert writes through the RAW onFieldChange (bypassing
+  // `changed`'s dirtying) and clears the dirty flag, so a subsequent blur
+  // doesn't re-commit the draft the coach just backed out of.
+  const revert = (field: keyof Exercise, value: string) => {
+    dirtySinceFocus.current = false;
+    onFieldChange(field, value);
+  };
+
+  // Every grid cell's gridNav wiring: same callback shape, keyed by column.
+  // `column` doubles as the Exercise field name (GridColumn's members are a
+  // subset of keyof Exercise by construction).
+  function gridCellBindings(column: GridColumn): GridCellBindings {
+    const callbacks: GridCellCallbacks = {
+      onChange: (value) => changed(column, value),
+      onCommit: commitIfDirty,
+      onRevert: (value) => revert(column, value),
+    };
+    return gridNav ? gridNav.cellProps(ex.id, column, callbacks) : INERT_GRID_BINDINGS;
+  }
 
   return (
     <div className="meso-ex-row">
@@ -73,9 +104,12 @@ export function ExerciseRow(props: ExerciseRowProps) {
         <input
           className="meso-cell meso-ex-name-input"
           data-testid={`exercise-name-${ex.id}`}
+          data-grid-cell={gridCellDomKey(ex.id, "name")}
+          aria-label={cellAriaLabel(ex.name, "name")}
           value={ex.name}
           onChange={(e) => changed("name", e.target.value)}
           onBlur={commitIfDirty}
+          {...gridCellBindings("name")}
         />
         <div className="meso-ex-tags">
           {ex.tag && <span className="meso-tag-chip">{ex.tag}</span>}
@@ -184,17 +218,23 @@ export function ExerciseRow(props: ExerciseRowProps) {
         <input
           className="meso-cell meso-num-input meso-num-input--sets"
           data-testid={`exercise-sets-${ex.id}`}
+          data-grid-cell={gridCellDomKey(ex.id, "sets")}
+          aria-label={cellAriaLabel(ex.name, "sets")}
           value={ex.sets}
           onChange={(e) => changed("sets", e.target.value)}
           onBlur={commitIfDirty}
+          {...gridCellBindings("sets")}
         />
         <span className="meso-x-sep">×</span>
         <input
           className="meso-cell meso-num-input meso-num-input--reps"
           data-testid={`exercise-reps-${ex.id}`}
+          data-grid-cell={gridCellDomKey(ex.id, "reps")}
+          aria-label={cellAriaLabel(ex.name, "reps")}
           value={ex.reps}
           onChange={(e) => changed("reps", e.target.value)}
           onBlur={commitIfDirty}
+          {...gridCellBindings("reps")}
         />
       </div>
 
@@ -202,9 +242,12 @@ export function ExerciseRow(props: ExerciseRowProps) {
         <input
           className="meso-cell meso-num-input meso-num-input--load"
           data-testid={`exercise-load-${ex.id}`}
+          data-grid-cell={gridCellDomKey(ex.id, "load")}
+          aria-label={cellAriaLabel(ex.name, "load")}
           value={ex.load}
           onChange={(e) => changed("load", e.target.value)}
           onBlur={commitIfDirty}
+          {...gridCellBindings("load")}
         />
         <button
           type="button"
@@ -222,9 +265,12 @@ export function ExerciseRow(props: ExerciseRowProps) {
         <input
           className="meso-cell meso-num-input meso-num-input--rpe"
           data-testid={`exercise-rpe-${ex.id}`}
+          data-grid-cell={gridCellDomKey(ex.id, "rpe")}
+          aria-label={cellAriaLabel(ex.name, "rpe")}
           value={ex.rpe ?? ""}
           onChange={(e) => changed("rpe", e.target.value)}
           onBlur={commitIfDirty}
+          {...gridCellBindings("rpe")}
         />
       </div>
 
@@ -232,10 +278,13 @@ export function ExerciseRow(props: ExerciseRowProps) {
         <input
           className="meso-note"
           data-testid={`exercise-note-${ex.id}`}
+          data-grid-cell={gridCellDomKey(ex.id, "note")}
+          aria-label={cellAriaLabel(ex.name, "note")}
           value={ex.note ?? ""}
           placeholder="—"
           onChange={(e) => changed("note", e.target.value)}
           onBlur={commitIfDirty}
+          {...gridCellBindings("note")}
         />
       </div>
     </div>

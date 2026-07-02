@@ -131,6 +131,16 @@
   border-radius: 5px;
   outline: none;
 }
+/* Phase 3 a11y: a visible ring for keyboard-driven grid cell focus, on all
+   six cells (name/sets/reps/load/rpe/note — `data-grid-cell` is set
+   unconditionally, so this doesn't depend on `.meso-cell` specifically,
+   which the note input doesn't carry). Deliberately :focus-visible only —
+   a mouse click into a cell should not show the ring. Overrides the
+   `outline: none` above/on `.meso-note`. */
+[data-grid-cell]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .meso-ex-tags {
   display: flex;
   flex-wrap: wrap;

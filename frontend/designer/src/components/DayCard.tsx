@@ -5,6 +5,7 @@ import { ExerciseRow } from "./ExerciseRow";
 import type { Day, Exercise } from "../lib/api";
 import type { PendingDelete } from "../hooks/usePlanData";
 import type { OneRmEditorState } from "../hooks/useOneRmEditor";
+import type { UseGridNavResult } from "../hooks/useGridNav";
 
 export interface DayCardProps {
   day: Day;
@@ -17,6 +18,10 @@ export interface DayCardProps {
   onConfirmPendingDelete(): void;
   onCancelPendingDelete(): void;
   onAddExercise(dayIndex: number): void;
+  // Phase 3: optional passthrough from WeekGrid, forwarded straight to every
+  // ExerciseRow. Optional so DayCard.test.tsx's existing fixtures (which
+  // never set it) keep passing untouched.
+  gridNav?: UseGridNavResult;
   onFieldChange(dayIndex: number, exIndex: number, field: keyof Exercise, value: string): void;
   onCommit(dayIndex: number, exIndex: number): void;
   onRemoveExercise(dayIndex: number, exIndex: number): void;
@@ -42,6 +47,7 @@ export function DayCard(props: DayCardProps) {
     onConfirmPendingDelete,
     onCancelPendingDelete,
     onAddExercise,
+    gridNav,
     onFieldChange,
     onCommit,
     onRemoveExercise,
@@ -122,6 +128,7 @@ export function DayCard(props: DayCardProps) {
           isGroup={isGroup}
           unit={unit}
           deleting={deleting}
+          gridNav={gridNav}
           oneRmOpenForRow={oneRmOpenForRow(ex)}
           oneRmEditorState={oneRmEditorState}
           onFieldChange={(field, value) => onFieldChange(dayIndex, xi, field, value)}
