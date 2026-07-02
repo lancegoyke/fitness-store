@@ -35,10 +35,14 @@
 //    to wire (one DndContext, one callback) than coordinating two handlers.
 // 3. No-op rule: `!over || active.id === over.id` -> return before ANY
 //    optimistic state change or fetch (spec: "same position / null
-//    over-target"). A type mismatch between active/over (e.g. an exercise
-//    dropped onto a day-strip item, or vice versa) is ALSO a no-op — cross-
-//    type drops aren't a gesture the grid offers, so onDragEnd defends
-//    against a malformed event rather than guessing intent.
+//    over-target"). A same-type match (exercise-over-exercise, day-over-day)
+//    is handled directly. A CROSS-type match is RESOLVED rather than
+//    discarded — see decisions 8 and 9 below, added after live-browser
+//    testing showed dnd-kit's closestCenter routinely resolves `over` to
+//    the wrong item TYPE (a day drag's `over` lands on an exercise row far
+//    more often than on another day card, since rows' centers sit closer to
+//    the pointer) — treating that as a no-op made day reordering
+//    unreachable in practice.
 // 4. Cross-day `index` semantics: the index POSTed to prescription-move is
 //    the target day's CURRENT (pre-insertion, moved-row-excluded)
 //    `exercises.findIndex(overPrescriptionId)` — this matches the backend's
@@ -62,6 +66,32 @@
 //    synchronous no-op path, a Promise for every path that awaits a fetch —
 //    so a caller (or a test) that always `await`s the return value works
 //    either way.
+// 8. Day-over-exercise resolution: when `active.type === "day"` and
+//    `over.type === "exercise"`, resolve `over` to that exercise's OWNING
+//    day (`over.data.current.dayId`) and run the same day-reorder as a
+//    direct day-over-day drop — no-op (no optimistic update, no fetch) if
+//    the resolved day is the dragged day itself.
+// 9. Exercise-over-day resolution (append): when `active.type ===
+//    "exercise"` and `over.type === "day"`, the drop has no specific row to
+//    land on — an EMPTY day, or a drop past a day's last row where the day
+//    card's own droppable (not a row's) is `closestCenter`'s pick — treated
+//    as "append to the end of that day." Cross-day: POST prescription-move
+//    with `index` = the target day's CURRENT (pre-insertion)
+//    `exercises.length` (same insertion semantics as decision 4, just at
+//    the tail). Same-day: a session-reorder with the dragged row moved to
+//    the end of its own array; no-op if it's already last.
+// 10. Stale-week guard: a reorder POSTed while viewing week A can resolve
+//    AFTER the coach has switched to week B — applying week A's envelope
+//    (or re-fetching week A on failure) would yank the view back. Mirrors
+//    usePlanData's `viewedWeekIdRef` idiom exactly: a ref holds the CURRENT
+//    `viewedWeekId`, reassigned unconditionally every render (not just on
+//    change). `postReorder` snapshots the ref's value synchronously at drop
+//    time; on resolve (success OR failure-path re-fetch), it re-reads the
+//    ref and proceeds ONLY if unchanged — otherwise skips entirely (no
+//    `applyPlanData`, and for the failure path, no re-fetch GET at all).
+//    The in-flight `reordering` guard still clears either way (decision 6
+//    is unaffected — a stale reply still releases the lock for the next
+//    drop).
 import { act, renderHook } from "@testing-library/react";
 import { useState } from "react";
 import { useReorder } from "./useReorder";
@@ -141,20 +171,64 @@ function dayDragEvent(activeId: Id, overId: Id | null): ReorderDragEndEvent {
   };
 }
 
-function setup(initialProgram: Day[]) {
+/** Builds a dnd-kit-shaped event: a DAY active, resolved `over` an EXERCISE
+ * row — dnd-kit's closestCenter routinely does this in practice (decision
+ * 8 above). `overDayId` is the row's OWNING day, which may differ from the
+ * dragged day. */
+function dayOverExerciseDragEvent(
+  activeSessionId: Id,
+  overPrescriptionId: Id,
+  overDayId: Id,
+): ReorderDragEndEvent {
+  return {
+    active: { id: activeSessionId, data: { current: { type: "day", sessionId: activeSessionId } } },
+    over: {
+      id: overPrescriptionId,
+      data: { current: { type: "exercise", dayId: overDayId, prescriptionId: overPrescriptionId } },
+    },
+  };
+}
+
+/** Builds a dnd-kit-shaped event: an EXERCISE active, dropped `over` a DAY's
+ * own droppable — its background, not a specific row (an empty day, or past
+ * the last row; decision 9 above). */
+function exerciseOverDayDragEvent(
+  activePrescriptionId: Id,
+  activeDayId: Id,
+  overSessionId: Id,
+): ReorderDragEndEvent {
+  return {
+    active: {
+      id: activePrescriptionId,
+      data: { current: { type: "exercise", dayId: activeDayId, prescriptionId: activePrescriptionId } },
+    },
+    over: { id: `day-${overSessionId}`, data: { current: { type: "day", sessionId: overSessionId } } },
+  };
+}
+
+// Day 101: exercises 1 (Squat), 2 (Bench). Day 102: exercise 3 (Deadlift).
+// Day 103: no exercises — an empty day has no per-row droppable to hit.
+function threeDayProgramWithEmptyDay(): Day[] {
+  return [...twoDayProgram(), { id: 103, n: 3, name: "Day 3", exercises: [] }];
+}
+
+function setup(initialProgram: Day[], initialViewedWeekId: Id | null = 55) {
   const applyPlanData = vi.fn();
-  const hook = renderHook(() => {
-    const [program, setProgram] = useState<Day[]>(initialProgram);
-    const reorder = useReorder({
-      planId: 7,
-      csrf: "tok",
-      viewedWeekId: 55,
-      program,
-      setProgram,
-      applyPlanData,
-    });
-    return { ...reorder, program };
-  });
+  const hook = renderHook(
+    (props: { viewedWeekId: Id | null }) => {
+      const [program, setProgram] = useState<Day[]>(initialProgram);
+      const reorder = useReorder({
+        planId: 7,
+        csrf: "tok",
+        viewedWeekId: props.viewedWeekId,
+        program,
+        setProgram,
+        applyPlanData,
+      });
+      return { ...reorder, program };
+    },
+    { initialProps: { viewedWeekId: initialViewedWeekId } },
+  );
   return { ...hook, applyPlanData };
 }
 
@@ -293,6 +367,167 @@ describe("day reorder", () => {
   });
 });
 
+describe("day drag resolved over an exercise row (decision 8)", () => {
+  it("reorders days relative to the exercise row's owning day, POSTing the same week-reorder endpoint as a direct day-over-day drop", async () => {
+    const { result } = setup(twoDayProgram());
+    globalThis.fetch = vi.fn().mockResolvedValue(res(planEnvelope())) as unknown as typeof fetch;
+    await act(async () => {
+      // Day 101 dragged; dnd-kit's closestCenter resolves `over` to exercise
+      // 3, which lives in day 102 — same outcome as dragging day 101 onto
+      // day 102 directly.
+      await result.current.onDragEnd(dayOverExerciseDragEvent(101, 3, 102));
+    });
+    expect(result.current.program.map((d) => d.id)).toEqual([102, 101]);
+    const [url, opts] = fetchCall(0);
+    expect(url).toBe("/meso/api/plan/7/week/55/reorder/");
+    expect(opts!.method).toBe("POST");
+    expect(sentBody()).toEqual({ order: [102, 101] });
+  });
+});
+
+describe("exercise drag resolved over a day, append-to-end (decision 9)", () => {
+  it("optimistically appends across days before the POST resolves, then adopts the envelope reply", async () => {
+    const { result, applyPlanData } = setup(twoDayProgram());
+    let resolveFetch!: (v: unknown) => void;
+    globalThis.fetch = vi.fn(
+      () =>
+        new Promise((r) => {
+          resolveFetch = r;
+        }),
+    ) as unknown as typeof fetch;
+
+    let pending!: void | Promise<void>;
+    act(() => {
+      // Exercise 1 (day 101) dropped on day 102's own droppable (not a
+      // specific row) — appends after day 102's existing exercise 3.
+      pending = result.current.onDragEnd(exerciseOverDayDragEvent(1, 101, 102));
+    });
+    expect(result.current.program[0]!.exercises.map((e) => e.id)).toEqual([2]);
+    expect(result.current.program[1]!.exercises.map((e) => e.id)).toEqual([3, 1]);
+
+    const reply = planEnvelope();
+    await act(async () => {
+      resolveFetch(res(reply));
+      await pending;
+    });
+    expect(applyPlanData).toHaveBeenCalledWith(reply);
+  });
+
+  it("POSTs prescription-move with index = the target day's pre-insertion exercises.length", async () => {
+    const { result } = setup(twoDayProgram());
+    globalThis.fetch = vi.fn().mockResolvedValue(res(planEnvelope())) as unknown as typeof fetch;
+    await act(async () => {
+      await result.current.onDragEnd(exerciseOverDayDragEvent(1, 101, 102));
+    });
+    const [url, opts] = fetchCall(0);
+    expect(url).toBe("/meso/api/plan/7/prescription/1/move/");
+    expect(opts!.method).toBe("POST");
+    expect(sentBody()).toEqual({ session_id: 102, index: 1 });
+  });
+
+  it("appends into an EMPTY target day at index 0", async () => {
+    const { result } = setup(threeDayProgramWithEmptyDay());
+    globalThis.fetch = vi.fn().mockResolvedValue(res(planEnvelope())) as unknown as typeof fetch;
+    await act(async () => {
+      // Day 103 has no exercises — no per-row droppable exists to hit.
+      await result.current.onDragEnd(exerciseOverDayDragEvent(3, 102, 103));
+    });
+    expect(result.current.program[1]!.exercises).toEqual([]);
+    expect(result.current.program[2]!.exercises.map((e) => e.id)).toEqual([3]);
+    const [url, opts] = fetchCall(0);
+    expect(url).toBe("/meso/api/plan/7/prescription/3/move/");
+    expect(opts!.method).toBe("POST");
+    expect(sentBody()).toEqual({ session_id: 103, index: 0 });
+  });
+
+  it("moves a same-day exercise to the end via session-reorder when dropped on its own day", async () => {
+    const { result } = setup(twoDayProgram());
+    globalThis.fetch = vi.fn().mockResolvedValue(res(planEnvelope())) as unknown as typeof fetch;
+    await act(async () => {
+      // Exercise 1 (index 0 of day 101) dropped on day 101's own droppable.
+      await result.current.onDragEnd(exerciseOverDayDragEvent(1, 101, 101));
+    });
+    expect(result.current.program[0]!.exercises.map((e) => e.id)).toEqual([2, 1]);
+    const [url, opts] = fetchCall(0);
+    expect(url).toBe("/meso/api/plan/7/session/101/reorder/");
+    expect(opts!.method).toBe("POST");
+    expect(sentBody()).toEqual({ order: [2, 1] });
+  });
+});
+
+describe("stale-week guard (decision 10)", () => {
+  it("skips applyPlanData entirely when the coach switched weeks while a reorder POST was in flight", async () => {
+    const { result, rerender, applyPlanData } = setup(twoDayProgram());
+    let resolveFetch!: (v: unknown) => void;
+    globalThis.fetch = vi.fn(
+      () =>
+        new Promise((r) => {
+          resolveFetch = r;
+        }),
+    ) as unknown as typeof fetch;
+
+    let pending!: void | Promise<void>;
+    act(() => {
+      pending = result.current.onDragEnd(exerciseDragEvent(1, 101, 2, 101));
+    });
+    // Coach switches to a different week while the POST is still pending.
+    act(() => {
+      rerender({ viewedWeekId: 999 });
+    });
+    await act(async () => {
+      resolveFetch(res(planEnvelope()));
+      await pending;
+    });
+    expect(applyPlanData).not.toHaveBeenCalled();
+    // The in-flight guard still releases, independent of the stale check.
+    expect(result.current.reordering).toBe(false);
+  });
+
+  it("skips the failure-path re-fetch entirely (no GET, no applyPlanData) when the coach switched weeks before the POST rejects", async () => {
+    const { result, rerender, applyPlanData } = setup(twoDayProgram());
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Queued (not hand-controlled) so an unguarded re-fetch resolves instead
+    // of hanging the test — the behavior under test is the CALL COUNT below,
+    // not resolution timing.
+    const wouldBeRefetch = planEnvelope({ program: [{ id: 101, n: 1, name: "Day 1", exercises: [] }] });
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(res(wouldBeRefetch)) as unknown as typeof fetch;
+
+    let pending!: void | Promise<void>;
+    act(() => {
+      pending = result.current.onDragEnd(exerciseDragEvent(1, 101, 2, 101));
+    });
+    act(() => {
+      rerender({ viewedWeekId: 999 });
+    });
+    await act(async () => {
+      await pending;
+    });
+    // Only the original (now-failed) POST — no re-fetch GET for the
+    // no-longer-viewed week.
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(applyPlanData).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(result.current.reordering).toBe(false);
+  });
+
+  it("still applies the reply when the viewed week is unchanged at resolve time (control case)", async () => {
+    const { result, rerender, applyPlanData } = setup(twoDayProgram());
+    // Rerender with the SAME viewedWeekId — not a week switch.
+    act(() => {
+      rerender({ viewedWeekId: 55 });
+    });
+    const reply = planEnvelope();
+    globalThis.fetch = vi.fn().mockResolvedValue(res(reply)) as unknown as typeof fetch;
+    await act(async () => {
+      await result.current.onDragEnd(exerciseDragEvent(1, 101, 2, 101));
+    });
+    expect(applyPlanData).toHaveBeenCalledWith(reply);
+  });
+});
+
 describe("no-op drop", () => {
   it("does nothing when an exercise is dropped on itself (same position)", async () => {
     const { result } = setup(twoDayProgram());
@@ -323,16 +558,26 @@ describe("no-op drop", () => {
     expect(result.current.program.map((d) => d.id)).toEqual([101, 102]);
   });
 
-  it("does nothing when a day is dropped over an exercise row (type mismatch)", async () => {
+  it("does nothing when a day is dropped over an exercise row belonging to that same day (resolution decision 8, same-day case)", async () => {
     const { result } = setup(twoDayProgram());
     globalThis.fetch = vi.fn() as unknown as typeof fetch;
     await act(async () => {
-      await result.current.onDragEnd({
-        active: { id: 101, data: { current: { type: "day", sessionId: 101 } } },
-        over: { id: 3, data: { current: { type: "exercise", dayId: 102, prescriptionId: 3 } } },
-      });
+      // Exercise 1 belongs to day 101 — the same day being dragged.
+      await result.current.onDragEnd(dayOverExerciseDragEvent(101, 1, 101));
     });
     expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.current.program.map((d) => d.id)).toEqual([101, 102]);
+  });
+
+  it("does nothing when an exercise dropped on its own day is already last (resolution decision 9, same-day case)", async () => {
+    const { result } = setup(twoDayProgram());
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+    await act(async () => {
+      // Exercise 2 is already the last row of day 101.
+      await result.current.onDragEnd(exerciseOverDayDragEvent(2, 101, 101));
+    });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.current.program[0]!.exercises.map((e) => e.id)).toEqual([1, 2]);
   });
 });
 
