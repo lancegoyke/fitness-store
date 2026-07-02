@@ -87,10 +87,16 @@ urlpatterns = [
     # Create (or open) an individual program for an athlete (first-time-UX
     # Phase 1) — the "+ New program" / "Build a program" CTAs.
     path("athlete/<uuid:pk>/plan/new/", views.plan_create, name="plan_create"),
+    # Public, no-signup ephemeral sandbox (issue #389, Phase 1): the entry point
+    # that mints/logs in a throwaway coach.
+    path("demo/", views.sandbox_enter, name="sandbox_enter"),
     # One-click coach demo (first-time-UX Phase 2, Q3): load / remove a populated,
     # coach-scoped demo workspace.
     path("demo/load/", views.demo_load, name="demo_load"),
     path("demo/clear/", views.demo_clear, name="demo_clear"),
+    # The sandbox's conversion hop: log a sandbox coach out, then hand off to
+    # allauth signup (issue #389, Phase 1).
+    path("demo/signup/", views.sandbox_signup, name="sandbox_signup"),
     path("group/new/", views.group_create, name="group_create"),
     path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
     path("group/<int:pk>/design/", views.group_design, name="group_design"),

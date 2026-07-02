@@ -32,3 +32,8 @@ def agent_margin_alert():
     partial current one (``meso_agent_margin_alert --last-month``).
     """
     call_command("meso_agent_margin_alert", "--last-month")
+
+
+def expire_sandboxes():
+    """Reap expired demo-sandbox coach accounts (``meso_expire_sandboxes``)."""
+    call_command("meso_expire_sandboxes")

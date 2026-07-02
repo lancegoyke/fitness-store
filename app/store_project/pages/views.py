@@ -94,5 +94,8 @@ def robots_txt(request):
     lines = [
         "User-Agent: *",
         "Disallow: /backside/",
+        # The public sandbox entry (issue #389): a GET that mints DB rows —
+        # crawlers must not hit it repeatedly.
+        "Disallow: /meso/demo/",
     ]
     return HttpResponse("\n".join(lines), content_type="text/plain")

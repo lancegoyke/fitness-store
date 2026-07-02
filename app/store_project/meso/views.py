@@ -3,15 +3,19 @@ import ipaddress
 import json
 import logging
 import uuid
+from urllib.parse import urlencode
 from urllib.parse import urlparse
 
 import stripe
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.contrib.auth import login
+from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.mixins import UserPassesTestMixin
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
@@ -43,6 +47,7 @@ from . import demo as meso_demo
 from . import one_rm as meso_one_rm
 from . import presenters
 from . import push as meso_push
+from . import sandbox as meso_sandbox
 from .agent import apply as agent_apply
 from .agent import client as agent_client
 from .agent import jobs as agent_jobs
@@ -67,6 +72,7 @@ from .models import Plan
 from .models import PrescriptionOverride
 from .models import ProposedChange
 from .models import PushSubscription
+from .models import SandboxSession
 from .models import Session
 from .models import SessionLog
 from .models import Week
@@ -626,7 +632,12 @@ def _reserve_plan_draft(request, plan):
     to dispatch, or ``None`` — with a flash — when the draft can't run (allowance
     exhausted, or no API key). On ``None`` the plan is still created blank so the
     coach can build it by hand. Must be called within a transaction.
+
+    Sandbox gate (S3): a sandbox coach never drafts — the plan is still built,
+    just blank, same as the no-API-key path.
     """
+    if meso_sandbox.is_sandbox(request.user):
+        return None
     User.objects.select_for_update().filter(pk=request.user.pk).first()
     if not billing_access.can_use_agent(request.user):
         messages.info(request, DRAFT_ALLOWANCE_MESSAGE)
@@ -698,6 +709,83 @@ def plan_create(request, pk):
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
+def _client_ip(request):
+    """The visitor's IP for a ``SandboxSession`` — prod sits behind Caddy.
+
+    Prefers the first hop of ``X-Forwarded-For`` (the original client, set by
+    the reverse proxy); falls back to ``REMOTE_ADDR`` for a direct connection
+    (local dev, tests).
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR")
+
+
+def _sandbox_rate_limited(ip):
+    """Whether this IP has minted too many sandboxes in the rolling hour.
+
+    Cache-counted: ``cache.add`` seeds the counter with its one-hour TTL (a
+    no-op when it already exists), then ``incr`` bumps it — on Redis ``INCR``
+    preserves the TTL, so the window rolls rather than resets. Counts
+    *attempts*, so hammering past the limit never re-opens it early.
+    """
+    if not ip:
+        return False  # unattributable (no proxy header, no REMOTE_ADDR)
+    key = f"meso:sandbox:rate:{ip}"
+    cache.add(key, 0, timeout=3600)
+    count = cache.incr(key)
+    return count > settings.MESO_SANDBOX_PER_IP_PER_HOUR
+
+
+@require_GET
+def sandbox_enter(request):
+    """Public, no-signup entry into a throwaway coach sandbox (issue #389, S1).
+
+    An anonymous visitor gets a fresh, populated sandbox coach (``sandbox.
+    create_sandbox``) and is logged in as it — every existing login-gated view,
+    CSRF token, and coach-scoping query then just works, no special-casing
+    needed. An already-authenticated visitor (including one revisiting this URL
+    mid-visit) is simply routed to the roster — the session cookie is the
+    "resume", so no second sandbox is minted.
+
+    Abuse bounds (Phase 2): every entry mints real DB rows, so creation is
+    capped globally (``MESO_SANDBOX_MAX_CONCURRENT`` live sandboxes; the hourly
+    expiry sweep frees slots) and per IP (``MESO_SANDBOX_PER_IP_PER_HOUR``,
+    cache-counted). A bounded visitor gets a friendly flash and the landing
+    page — no rows created. Every response carries ``X-Robots-Tag: noindex``:
+    a GET that mints DB rows must not be crawled repeatedly.
+    """
+
+    def _noindex(response):
+        response["X-Robots-Tag"] = "noindex"
+        return response
+
+    if request.user.is_authenticated:
+        return _noindex(redirect("meso:roster"))
+    if (
+        SandboxSession.objects.count() >= settings.MESO_SANDBOX_MAX_CONCURRENT
+        or _sandbox_rate_limited(_client_ip(request))
+    ):
+        messages.info(
+            request,
+            "The demo is busy right now — please try again in a little while.",
+        )
+        return _noindex(redirect("meso:roster"))
+    user = meso_sandbox.create_sandbox(source_ip=_client_ip(request))
+    # Two auth backends are configured (ModelBackend + allauth) — login() can't
+    # infer which one, so it must be named explicitly.
+    login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+    # No "keep your work" promise: carry-over at signup is deferred (S6) — a
+    # new account starts a fresh workspace.
+    messages.success(
+        request,
+        "You're in a live demo — explore freely. Create a free account any "
+        "time to run the AI agent.",
+    )
+    return _noindex(redirect("meso:roster"))
+
+
 @login_required
 @require_POST
 def demo_load(request):
@@ -727,6 +815,29 @@ def demo_clear(request):
     meso_demo.clear_demo(request.user)
     messages.success(request, "Demo data removed.")
     return redirect("meso:roster")
+
+
+@require_GET
+def sandbox_signup(request):
+    """The sandbox's conversion hop into a real account (issue #389, S1).
+
+    allauth bounces an already-authenticated visitor away from
+    ``/accounts/signup/``, so a sandbox coach must be logged out first — the
+    sandbox ``User`` row is left in place for the Phase 2 expiry sweep to reap,
+    never carried into the new account (S6: deferred carry-over). A
+    non-sandbox authenticated visitor is just sent along too (harmless).
+
+    ``next`` targets the become-a-coach funnel, not the roster: a brand-new
+    signup has no ``CoachProfile``, so ``RosterView`` would route them to the
+    athlete home — the wrong surface for someone converting to run the AI
+    agent. ``BecomeCoachView`` handles both arrivals: a fresh non-coach gets
+    the start-coaching form (whose POST creates the ``CoachProfile``), and an
+    existing coach is sent on to the roster.
+    """
+    if meso_sandbox.is_sandbox(request.user):
+        logout(request)
+    query = urlencode({"next": reverse("meso:become_coach")})
+    return redirect(f"{reverse('account_signup')}?{query}")
 
 
 @login_required
@@ -1405,7 +1516,20 @@ def athlete_request_coach(request):
     pending request is opened (reopening a previously closed link). The coach is
     notified by email on ``transaction.on_commit``, best-effort — a mail failure
     is logged, never a 500 or a lost request. Always lands back on the home.
+
+    Sandbox gate (S4), both sides of the link: a sandbox *requester* is bounced
+    to the roster, and a resolved *target* who is a sandbox coach is treated
+    exactly like an unknown email (same flash — a throwaway ``@sandbox.invalid``
+    account is not a coach anyone can train under, and the response must not
+    leak that the address exists).
     """
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(
+            request,
+            "Invites are disabled in the demo — create a free account to work "
+            "with real athletes.",
+        )
+        return redirect("meso:roster")
     email = CoachInvite.normalize_email(request.POST.get("email"))
     try:
         validate_email(email)
@@ -1417,7 +1541,7 @@ def athlete_request_coach(request):
         .exclude(pk=request.user.pk)
         .first()
     )
-    if coach is None:
+    if coach is None or meso_sandbox.is_sandbox(coach):
         messages.error(request, "We couldn't find a coach with that email.")
         return redirect("meso:athlete_home")
 
@@ -1491,7 +1615,16 @@ def coach_invite(request):
     re-invite reuses the open pending row (``open_for``). The claim email is sent
     on ``transaction.on_commit`` and is best-effort — a mail backend failure is
     logged, never a 500 or a lost invite. Always lands back on the roster.
+
+    Sandbox gate (S4): a sandbox coach can't invite a real email address.
     """
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(
+            request,
+            "Invites are disabled in the demo — create a free account to work "
+            "with real athletes.",
+        )
+        return redirect("meso:roster")
     email = CoachInvite.normalize_email(request.POST.get("email"))
     try:
         validate_email(email)
@@ -1555,7 +1688,16 @@ def coach_invite_resend(request, token):
     ``transaction.on_commit``. Coach-scoped (a foreign invite is a 404). An
     already-answered invite (accepted/declined/revoked) is a friendly no-op, not
     a 500. Locks the row so a resend can't race a concurrent claim/revoke.
+
+    Sandbox gate (S4): a sandbox coach can't re-arm a real invite.
     """
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(
+            request,
+            "Invites are disabled in the demo — create a free account to work "
+            "with real athletes.",
+        )
+        return redirect("meso:roster")
     with transaction.atomic():
         invite = get_object_or_404(
             CoachInvite.objects.select_for_update(),
@@ -1602,7 +1744,17 @@ def invite_claim(request, token):
     claims (or a claim racing a revoke) can't both pass the pending check and each
     materialize a link — the first to acquire the row wins; the loser sees a
     non-pending invite and no-ops.
+
+    Sandbox gate (S4): the claim is bearer-token authorized, so a visitor still
+    logged in as a throwaway sandbox account would bind a real coach to a
+    disposable athlete the expiry sweep later deletes. End the sandbox session
+    and retry the same URL anonymously — ``login_required`` then routes them
+    through login/signup with ``?next=`` back here, exactly like any logged-out
+    invitee. (No flash: session storage doesn't survive the logout.)
     """
+    if meso_sandbox.is_sandbox(request.user):
+        logout(request)
+        return redirect(request.get_full_path())
     invite = get_object_or_404(CoachInvite, token=token)
     if request.method == "POST":
         action = request.POST.get("action")
@@ -2245,7 +2397,12 @@ def _notify_athlete_delivered(request, plan, week):
     rolled-back deliver must not notify a false "your week is ready". Each
     channel is independently best-effort: a failure in one is swallowed and
     logged, never a 500 or a rolled-back deliver, and never blocks the other.
+
+    Sandbox gate (S4): a sandbox coach's deliveries never notify — there is no
+    real person behind a seeded demo athlete.
     """
+    if meso_sandbox.is_sandbox(plan.coach):
+        return
     home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
     unsubscribe_url = request.build_absolute_uri(
         reverse(
@@ -2333,6 +2490,20 @@ def agent_propose(request, plan_id):
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
+    # Sandbox gate (S3): the sandbox never calls Anthropic — the agent is the
+    # one capability held back, gated behind creating a real account. Checked
+    # before any metering/API-key work so a throwaway visitor never reserves a
+    # run or touches the client.
+    if meso_sandbox.is_sandbox(request.user):
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": "Create a free account to run the AI agent.",
+                "signup_required": True,
+                "signup_url": reverse("meso:sandbox_signup"),
+            },
+            status=403,
+        )
     # Reserve the run atomically (S6 Phase 5 metering): lock the coach row, check
     # the allowance, and create the batch in one transaction so concurrent
     # agent_propose calls serialize — the lock is held until the batch row commits,
@@ -2578,6 +2749,11 @@ def billing_subscribe(request):
     """Start a subscription Checkout — redirect the coach to Stripe to pay."""
     if not _is_coach(request.user):
         return redirect("meso:roster")
+    # Sandbox gate (S4): there's no real coach behind a throwaway sandbox
+    # account to bill — never open a Checkout session for one.
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(request, "Billing is disabled in the demo.")
+        return redirect("meso:roster")
     # The flat Pro plan (D14) needs its one Price configured; ship dormant (bounce
     # gracefully) until the owner creates it, so a deploy never opens a broken Checkout.
     if not settings.MESO_PRO_PRICE_ID:
@@ -2619,6 +2795,10 @@ def billing_portal(request):
     """Open Stripe's hosted Customer Portal so the coach can manage billing."""
     if not _is_coach(request.user):
         return redirect("meso:roster")
+    # Sandbox gate (S4): no real Stripe customer behind a throwaway account.
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(request, "Billing is disabled in the demo.")
+        return redirect("meso:roster")
     if not request.user.stripe_customer_id:
         messages.error(request, "You don't have a subscription to manage yet.")
         return redirect("meso:roster")
@@ -2644,8 +2824,13 @@ def billing_start_trial(request):
     ``TRIAL_DAYS``. Single-use: a coach who has already trialed (even if it
     lapsed) gets a friendly "already used" notice, never a 500. Coach-surface
     only; a non-coach is bounced to the roster (which redirects them home).
+
+    Sandbox gate (S4): a sandbox coach never starts a real trial.
     """
     if not _is_coach(request.user):
+        return redirect("meso:roster")
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(request, "Billing is disabled in the demo.")
         return redirect("meso:roster")
     try:
         CoachSubscription.start_trial_for(request.user)

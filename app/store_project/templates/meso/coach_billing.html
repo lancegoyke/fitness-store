@@ -49,26 +49,30 @@
             {% endif %}
           </div>
 
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            {% if state.can_start_trial %}
-              <form method="post" action="{% url 'meso:billing_start_trial' %}" style="margin:0;">
-                {% csrf_token %}
-                <button type="submit" class="meso-btn meso-btn--primary">Start free trial</button>
-              </form>
-            {% endif %}
-            {% if not state.is_active or state.on_trial or state.over_limit %}
-              <form method="post" action="{% url 'meso:billing_subscribe' %}" style="margin:0;">
-                {% csrf_token %}
-                <button type="submit" class="meso-btn {% if state.can_start_trial %}meso-btn--ghost{% else %}meso-btn--primary{% endif %}">Subscribe</button>
-              </form>
-            {% endif %}
-            {% if state.has_stripe_subscription %}
-              <form method="post" action="{% url 'meso:billing_portal' %}" style="margin:0;">
-                {% csrf_token %}
-                <button type="submit" class="meso-btn meso-btn--ghost">Manage billing</button>
-              </form>
-            {% endif %}
-          </div>
+          {% if is_sandbox %}
+            <p class="meso-sub" style="margin:0;">Billing is disabled in the demo.</p>
+          {% else %}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              {% if state.can_start_trial %}
+                <form method="post" action="{% url 'meso:billing_start_trial' %}" style="margin:0;">
+                  {% csrf_token %}
+                  <button type="submit" class="meso-btn meso-btn--primary">Start free trial</button>
+                </form>
+              {% endif %}
+              {% if not state.is_active or state.on_trial or state.over_limit %}
+                <form method="post" action="{% url 'meso:billing_subscribe' %}" style="margin:0;">
+                  {% csrf_token %}
+                  <button type="submit" class="meso-btn {% if state.can_start_trial %}meso-btn--ghost{% else %}meso-btn--primary{% endif %}">Subscribe</button>
+                </form>
+              {% endif %}
+              {% if state.has_stripe_subscription %}
+                <form method="post" action="{% url 'meso:billing_portal' %}" style="margin:0;">
+                  {% csrf_token %}
+                  <button type="submit" class="meso-btn meso-btn--ghost">Manage billing</button>
+                </form>
+              {% endif %}
+            </div>
+          {% endif %}
         </div>
       </div>
 

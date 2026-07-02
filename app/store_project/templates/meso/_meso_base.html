@@ -40,7 +40,9 @@
           {% block navlinks %}
             <a class="meso-navlink {% if active == 'roster' %}is-active{% endif %}" href="{% url 'meso:roster' %}">Roster</a>
             <a class="meso-navlink {% if active == 'designer' %}is-active{% endif %}" href="{% url 'meso:designer' %}">Designer</a>
-            <a class="meso-navlink {% if active == 'billing' %}is-active{% endif %}" href="{% url 'meso:billing' %}">Billing</a>
+            {% if not is_sandbox %}
+              <a class="meso-navlink {% if active == 'billing' %}is-active{% endif %}" href="{% url 'meso:billing' %}">Billing</a>
+            {% endif %}
             {% if request.user.is_staff %}
               <a class="meso-navlink {% if active == 'usage' %}is-active{% endif %}" href="{% url 'meso:usage_dashboard' %}">Usage</a>
             {% endif %}
@@ -50,6 +52,19 @@
         {% block topnav_actions %}{% endblock %}
         {% block topnav_avatar %}<div class="meso-avatar meso-avatar--sm meso-avatar--accent" title="Coach">LG</div>{% endblock %}
       </nav>
+
+      {% if is_sandbox %}
+        {% comment %}
+          Persistent sandbox banner (issue #389, Phase 1): a slim strip, not a
+          card, so it reads as chrome rather than page content — every screen
+          in the throwaway workspace carries it.
+        {% endcomment %}
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;margin:14px 0 0;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;font-size:13px;color:var(--accent-deep);">
+          {# No "keep your work" promise — carry-over at signup is deferred (S6). #}
+          <span style="flex:1;min-width:0;">You're in a live demo — your work here is temporary. <strong>Create a free account</strong> to run the AI agent.</span>
+          <a class="meso-btn meso-btn--primary" href="{% url 'meso:sandbox_signup' %}">Create a free account</a>
+        </div>
+      {% endif %}
 
       {% if messages %}
         <div style="display:flex;flex-direction:column;gap:8px;margin:14px 0 0;">

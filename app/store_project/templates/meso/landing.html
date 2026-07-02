@@ -26,7 +26,8 @@ honest entry actions: log in as an athlete, or become a coach.
       </div>
     </div>
 
-    <!-- Two entry actions: athlete (log in) and coach (become a coach). -->
+    <!-- Three entry actions: athlete (log in), coach (become a coach), and a
+         no-signup demo sandbox (issue #389). -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:18px;">
       <div class="meso-card meso-card--pad">
         <span class="meso-badge meso-badge--ok"><i></i>Athletes</span>
@@ -47,6 +48,16 @@ honest entry actions: log in as an athlete, or become a coach.
           <a class="meso-btn meso-btn--primary" href="{% url 'meso:become_coach' %}">Get started as a coach</a>
         </div>
         <p class="meso-row-meta" style="margin-top:12px;">See what Meso does for coaches and pick a plan.</p>
+      </div>
+
+      <div class="meso-card meso-card--pad">
+        <span class="meso-badge meso-badge--muted"><i></i>No signup</span>
+        <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:10px 0 4px;">Try the coach demo</p>
+        <p class="meso-row-meta" style="margin-bottom:14px;">No signup. Land in a populated workspace and build a real program.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <a class="meso-btn meso-btn--primary" href="{% url 'meso:sandbox_enter' %}">Try the demo</a>
+        </div>
+        <p class="meso-row-meta" style="margin-top:12px;">Fully interactive — the AI agent is the only thing it holds back.</p>
       </div>
     </div>
 
