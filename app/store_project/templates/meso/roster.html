@@ -153,15 +153,22 @@
             </div>
           {% endfor %}
 
-          <!-- Invite a new athlete by email (N4). -->
-          <details style="border-top:1px solid var(--line-2);">
-            <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent-ink);">+ Invite an athlete</summary>
-            <form method="post" action="{% url 'meso:coach_invite' %}" style="display:flex;gap:9px;padding:4px 16px 16px;">
-              {% csrf_token %}
-              <input name="email" type="email" required maxlength="254" placeholder="athlete@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
-              <button type="submit" class="meso-btn meso-btn--primary">Send invite</button>
-            </form>
-          </details>
+          <!-- Invite a new athlete by email (N4) — off in the demo (S4): no real
+               address should ever be entered into a throwaway sandbox account. -->
+          {% if is_sandbox %}
+            <div style="border-top:1px solid var(--line-2);padding:11px 16px;">
+              <span class="meso-row-meta">Inviting real athletes is off in the demo — <a href="{% url 'meso:sandbox_signup' %}" style="color:var(--accent-ink);">create a free account</a>.</span>
+            </div>
+          {% else %}
+            <details style="border-top:1px solid var(--line-2);">
+              <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent-ink);">+ Invite an athlete</summary>
+              <form method="post" action="{% url 'meso:coach_invite' %}" style="display:flex;gap:9px;padding:4px 16px 16px;">
+                {% csrf_token %}
+                <input name="email" type="email" required maxlength="254" placeholder="athlete@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
+                <button type="submit" class="meso-btn meso-btn--primary">Send invite</button>
+              </form>
+            </details>
+          {% endif %}
 
           <!-- Build an individual program for an athlete (first-time-UX Phase 1).
                A program is rooted at one athlete, so this picks the athlete then
@@ -264,35 +271,39 @@
             <div class="meso-spacer"></div>
             <span class="meso-badge {% if billing.is_active %}meso-badge--ok{% else %}meso-badge--muted{% endif %}"><i></i>{{ billing.status_label }}</span>
           </div>
-          {% if billing.over_limit %}
-            <p class="meso-sub" style="margin:0;color:var(--warn);">Over your plan limit &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }}. Your longest-standing athletes stay editable; the other {{ billing.suspended_count }} {{ billing.suspended_count|pluralize:"is,are" }} suspended until you re-subscribe or end a relationship.</p>
-          {% elif billing.on_trial %}
-            <p class="meso-sub" style="margin:0;">Free trial &#8212; ends {{ billing.trial_end|date:"M j" }}. Subscribe ({{ billing.price_summary }}) to keep full access when it ends.</p>
-          {% elif billing.is_active %}
-            <p class="meso-sub" style="margin:0;">{{ billing.seat_count }} active athlete{{ billing.seat_count|pluralize }} &#183; unlimited athletes{% if billing.agent.metered %} &#183; {{ billing.agent.remaining }} of {{ billing.agent.allowance }} agent run{{ billing.agent.allowance|pluralize }} left this month{% else %} &#183; unlimited agent runs{% endif %}.</p>
+          {% if is_sandbox %}
+            <p class="meso-sub" style="margin:0;">Billing is disabled in the demo.</p>
           {% else %}
-            <p class="meso-sub" style="margin:0;">Free plan &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }} &#183; {{ billing.agent.remaining }} of {{ billing.agent.allowance }} free agent run{{ billing.agent.allowance|pluralize }} left this month. Subscribe ({{ billing.price_summary }}) for unlimited athletes and the full AI agent.</p>
+            {% if billing.over_limit %}
+              <p class="meso-sub" style="margin:0;color:var(--warn);">Over your plan limit &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }}. Your longest-standing athletes stay editable; the other {{ billing.suspended_count }} {{ billing.suspended_count|pluralize:"is,are" }} suspended until you re-subscribe or end a relationship.</p>
+            {% elif billing.on_trial %}
+              <p class="meso-sub" style="margin:0;">Free trial &#8212; ends {{ billing.trial_end|date:"M j" }}. Subscribe ({{ billing.price_summary }}) to keep full access when it ends.</p>
+            {% elif billing.is_active %}
+              <p class="meso-sub" style="margin:0;">{{ billing.seat_count }} active athlete{{ billing.seat_count|pluralize }} &#183; unlimited athletes{% if billing.agent.metered %} &#183; {{ billing.agent.remaining }} of {{ billing.agent.allowance }} agent run{{ billing.agent.allowance|pluralize }} left this month{% else %} &#183; unlimited agent runs{% endif %}.</p>
+            {% else %}
+              <p class="meso-sub" style="margin:0;">Free plan &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }} &#183; {{ billing.agent.remaining }} of {{ billing.agent.allowance }} free agent run{{ billing.agent.allowance|pluralize }} left this month. Subscribe ({{ billing.price_summary }}) for unlimited athletes and the full AI agent.</p>
+            {% endif %}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              {% if billing.can_start_trial %}
+                <form method="post" action="{% url 'meso:billing_start_trial' %}" style="margin:0;">
+                  {% csrf_token %}
+                  <button type="submit" class="meso-btn meso-btn--primary">Start free trial</button>
+                </form>
+              {% endif %}
+              {% if not billing.is_active or billing.on_trial or billing.over_limit %}
+                <form method="post" action="{% url 'meso:billing_subscribe' %}" style="margin:0;">
+                  {% csrf_token %}
+                  <button type="submit" class="meso-btn {% if billing.can_start_trial %}meso-btn--ghost{% else %}meso-btn--primary{% endif %}">Subscribe</button>
+                </form>
+              {% endif %}
+              {% if billing.has_stripe_subscription %}
+                <form method="post" action="{% url 'meso:billing_portal' %}" style="margin:0;">
+                  {% csrf_token %}
+                  <button type="submit" class="meso-btn meso-btn--ghost">Manage billing</button>
+                </form>
+              {% endif %}
+            </div>
           {% endif %}
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            {% if billing.can_start_trial %}
-              <form method="post" action="{% url 'meso:billing_start_trial' %}" style="margin:0;">
-                {% csrf_token %}
-                <button type="submit" class="meso-btn meso-btn--primary">Start free trial</button>
-              </form>
-            {% endif %}
-            {% if not billing.is_active or billing.on_trial or billing.over_limit %}
-              <form method="post" action="{% url 'meso:billing_subscribe' %}" style="margin:0;">
-                {% csrf_token %}
-                <button type="submit" class="meso-btn {% if billing.can_start_trial %}meso-btn--ghost{% else %}meso-btn--primary{% endif %}">Subscribe</button>
-              </form>
-            {% endif %}
-            {% if billing.has_stripe_subscription %}
-              <form method="post" action="{% url 'meso:billing_portal' %}" style="margin:0;">
-                {% csrf_token %}
-                <button type="submit" class="meso-btn meso-btn--ghost">Manage billing</button>
-              </form>
-            {% endif %}
-          </div>
         </div>
 
       <!-- activity column -->

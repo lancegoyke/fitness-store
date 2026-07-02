@@ -624,3 +624,44 @@ class TestDraftWithAiCTAs:
             and "Draft with AI" in body
         )
         assert 'name="draft" value="agent"' not in body
+
+
+# ---------------------------------------------------------------------------
+# UI — inviting a real athlete and billing are both hidden for sandbox coaches
+# ---------------------------------------------------------------------------
+
+
+class TestRosterInviteAndBillingSurfaces:
+    def test_roster_hides_the_real_invite_form_for_a_sandbox_coach(self, client):
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert reverse("meso:coach_invite") not in body
+        assert "off in the demo" in body.lower()
+
+    def test_roster_shows_the_real_invite_form_for_a_real_coach(self, client):
+        coach = UserFactory()
+        CoachProfile.objects.create(user=coach)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert reverse("meso:coach_invite") in body
+
+    def test_roster_hides_billing_actions_for_a_sandbox_coach(self, client):
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert reverse("meso:billing_subscribe") not in body
+        assert reverse("meso:billing_start_trial") not in body
+        assert "billing is disabled in the demo" in body.lower()
+
+    def test_coach_billing_page_hides_actions_for_a_sandbox_coach(self, client):
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:billing")).content.decode()
+        assert reverse("meso:billing_subscribe") not in body
+        assert reverse("meso:billing_start_trial") not in body
+        assert "billing is disabled in the demo" in body.lower()
