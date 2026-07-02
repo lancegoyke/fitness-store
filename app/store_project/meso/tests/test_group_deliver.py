@@ -169,21 +169,26 @@ class TestSyncDeliveredPlan:
         ).prescriptions.get(order=first.order)
         assert row.load == "50"
 
-    def test_dropped_shared_prescription_drops_from_member_week(self):
+    def test_dropped_shared_prescription_hides_on_member_week(self):
         group, plan, [m] = seed_group(member_count=1)
         group_week = plan.mesocycles.get().weeks.get()
         m.sync_delivered_plan(group_week)
         # Drop a row from the shared program, then re-deliver.
         first = shared_prescriptions(plan)[0]
         day = first.session.day_number
+        order = first.order
         first.delete()
 
         _, member_week = m.sync_delivered_plan(group_week)
 
         member_session = member_week.sessions.get(day_number=day)
-        assert member_session.prescriptions.filter(name="Box Squat").count() == 0
+        # The member's copy is *hidden*, never hard-deleted (soft delete,
+        # designer framework Phase 0): the member's LoggedSets may reference
+        # it, and a source row that returns revives it in place.
+        dropped = member_session.prescriptions.get(order=order)
+        assert dropped.deleted_at is not None
         assert (
-            member_session.prescriptions.count()
+            member_session.prescriptions.filter(deleted_at__isnull=True).count()
             == group_week.sessions.get(day_number=day).prescriptions.count()
         )
 

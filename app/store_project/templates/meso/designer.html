@@ -351,6 +351,14 @@
                 </template>
                 <button type="button" @click="addWeek()" data-hover="add" style="appearance:none;cursor:pointer;font:inherit;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px dashed var(--line);background:transparent;color:var(--dim);">+ Add week</button>
                 <button type="button" x-show="!viewedIsCurrent" @click="setCurrentWeek(viewedWeekId)" data-hover="brighten" title="Make this the live week — delivery will send it" style="appearance:none;cursor:pointer;font:inherit;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px solid var(--accent);background:var(--soft);color:var(--accent-deep);">Make current</button>
+                <!-- Remove the *viewed* week (designer framework Phase 0, issue #401).
+                     Hidden for the current week (delivery target — the coach must make
+                     another week current first, matching the server's rule). -->
+                <button type="button" x-show="!viewedIsCurrent && !(pendingDelete && pendingDelete.type === 'week' && pendingDelete.weekId === viewedWeekId)" @click="requestRemoveWeek(viewedWeekId)" :disabled="deleting" data-hover="rail" aria-label="Remove this week" title="Remove this week" style="appearance:none;cursor:pointer;font:inherit;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--dim);">Remove week</button>
+                <span x-show="!viewedIsCurrent && pendingDelete && pendingDelete.type === 'week' && pendingDelete.weekId === viewedWeekId" style="display:inline-flex;align-items:center;gap:5px;">
+                  <button type="button" @click="confirmPendingDelete()" :disabled="deleting" data-hover="brighten" aria-label="Confirm remove week" style="appearance:none;cursor:pointer;font:inherit;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px solid var(--warn);background:transparent;color:var(--warn);">Confirm?</button>
+                  <button type="button" @click="cancelPendingDelete()" :disabled="deleting" data-hover="rail" aria-label="Cancel remove week" style="appearance:none;cursor:pointer;font:inherit;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--dim);">Cancel</button>
+                </span>
               </div>
 
               <!-- Grid coachmark (Phase 5): dismissible first-run note for the
@@ -378,6 +386,13 @@
                     <div style="font-size:11.5px;color:var(--dim);background:var(--rail);border:1px solid var(--line);padding:2px 8px;border-radius:5px;" x-text="day.bias"></div>
                     <div style="flex:1;"></div>
                     <div style="font-size:11.5px;color:var(--dim);" x-text="day.exercises.length + ' exercises'"></div>
+                    <!-- Remove this day (designer framework Phase 0, issue #401):
+                         inline confirm, no native confirm(). -->
+                    <button type="button" x-show="!(pendingDelete && pendingDelete.type === 'day' && pendingDelete.di === di)" @click="requestRemoveDay(di)" :disabled="deleting" data-hover="rail" aria-label="Remove this day" title="Remove this day" style="appearance:none;cursor:pointer;border:0;background:transparent;font:inherit;font-size:15px;line-height:1;color:var(--dim);padding:2px 4px;">&times;</button>
+                    <span x-show="pendingDelete && pendingDelete.type === 'day' && pendingDelete.di === di" style="display:inline-flex;align-items:center;gap:5px;">
+                      <button type="button" @click="confirmPendingDelete()" :disabled="deleting" aria-label="Confirm remove day" style="appearance:none;cursor:pointer;font:inherit;font-size:11px;font-weight:650;border:1px solid var(--warn);background:transparent;color:var(--warn);border-radius:5px;padding:2px 6px;">Confirm?</button>
+                      <button type="button" @click="cancelPendingDelete()" :disabled="deleting" aria-label="Cancel remove day" style="appearance:none;cursor:pointer;font:inherit;font-size:11px;border:0;background:transparent;color:var(--dim);padding:2px 4px;">Cancel</button>
+                    </span>
                   </div>
                   <div style="display:grid;grid-template-columns:minmax(0,1.75fr) 84px 76px 44px minmax(0,0.92fr);gap:10px;padding:7px 16px;background:var(--rail);border-bottom:1px solid var(--line-2);font-size:10px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--dim);">
                     <div>Exercise</div><div style="text-align:center;">Sets &#215; Reps</div><div style="text-align:center;">Load</div><div style="text-align:center;">RPE</div><div>Notes</div>
@@ -410,6 +425,9 @@
                               <span x-show="!ex.adj" style="color:var(--dim);">+ adjust</span>
                             </button>
                           </template>
+                          <!-- Remove this exercise row (designer framework Phase 0, issue
+                               #401) — immediate, no confirm (a stray row is cheap to re-add). -->
+                          <button type="button" @click="removeExercise(di, xi)" :disabled="deleting" data-hover="rail" aria-label="Remove exercise" title="Remove exercise" style="appearance:none;cursor:pointer;border:0;background:transparent;font:inherit;font-size:12px;line-height:1;color:var(--dim);padding:0 2px;">&times;</button>
                         </div>
                       </div>
                       <div style="display:flex;align-items:center;justify-content:center;gap:2px;">

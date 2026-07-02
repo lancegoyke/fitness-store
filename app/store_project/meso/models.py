@@ -1272,9 +1272,16 @@ class Mesocycle(models.Model):
 
         A degenerate block with no weeks yet seeds one starter day (mirroring
         ``Plan.scaffold``) so the result is immediately editable.
+
+        The source is the latest **live** week (a soft-deleted week is not a
+        template to build from), but the new week's ``index`` is one past the
+        highest index over **all** weeks, deleted included — a soft-deleted
+        week keeps its ``(mesocycle, index)`` row, so indexing off only the
+        live weeks could collide with it under ``unique_week_index``.
         """
-        source = self.weeks.order_by("-index").first()
-        next_index = (source.index if source else 0) + 1
+        source = self.weeks.filter(deleted_at__isnull=True).order_by("-index").first()
+        max_index = self.weeks.aggregate(m=models.Max("index"))["m"] or 0
+        next_index = max_index + 1
         week = Week.objects.create(
             mesocycle=self,
             index=next_index,
@@ -1298,9 +1305,9 @@ class Mesocycle(models.Model):
             )
         else:
             carried_overrides = []
-            for src_session in source.sessions.prefetch_related(
-                "prescriptions__overrides"
-            ):
+            for src_session in source.sessions.filter(
+                deleted_at__isnull=True
+            ).prefetch_related("prescriptions__overrides"):
                 new_session = Session.objects.create(
                     week=week,
                     day_number=src_session.day_number,
@@ -1308,7 +1315,11 @@ class Mesocycle(models.Model):
                     bias=src_session.bias,
                     order=src_session.order,
                 )
+                # Filtered in Python (not `.filter()`) so the loop still reads
+                # from the `prescriptions__overrides` prefetch cache above.
                 for presc in src_session.prescriptions.all():
+                    if presc.deleted_at is not None:
+                        continue
                     new_presc = ExercisePrescription.objects.create(
                         session=new_session,
                         exercise_id=presc.exercise_id,
@@ -1362,6 +1373,14 @@ class Week(models.Model):
     is_deload = models.BooleanField(_("Deload"), default=False)
     is_current = models.BooleanField(_("Current"), default=False)
     delivered_at = models.DateTimeField(_("Delivered at"), null=True, blank=True)
+    # Soft delete (designer framework Phase 0): a week is *live* iff this is
+    # None. The delete endpoint stamps only this row — children are hidden by
+    # serializers/lookups filtering live rows at each level of the walk, not by
+    # a cascading write, so an independently-deleted child stays deleted if a
+    # later undo restores this week. See docs/meso/designer-framework-plan.md.
+    deleted_at = models.DateTimeField(
+        _("Deleted at"), null=True, blank=True, default=None
+    )
 
     class Meta:
         ordering = ["index"]
@@ -1390,6 +1409,10 @@ class Session(models.Model):
     name = models.CharField(_("Name"), max_length=255, blank=True)
     bias = models.CharField(_("Bias"), max_length=255, blank=True)
     order = models.PositiveIntegerField(_("Order"), default=0)
+    # Soft delete (designer framework Phase 0) — see ``Week.deleted_at``.
+    deleted_at = models.DateTimeField(
+        _("Deleted at"), null=True, blank=True, default=None
+    )
 
     class Meta:
         ordering = ["order", "day_number"]
@@ -1434,6 +1457,10 @@ class ExercisePrescription(models.Model):
     rpe = models.CharField(_("RPE"), max_length=32, blank=True)
     note = models.CharField(_("Note"), max_length=255, blank=True)
     tags = models.JSONField(_("Tags"), default=list, blank=True)
+    # Soft delete (designer framework Phase 0) — see ``Week.deleted_at``.
+    deleted_at = models.DateTimeField(
+        _("Deleted at"), null=True, blank=True, default=None
+    )
 
     class Meta:
         ordering = ["order"]
@@ -2135,7 +2162,18 @@ class GroupMembership(models.Model):
         )
 
         overrides = {o.prescription_id: o for o in self.overrides.all()}
-        src_sessions = list(group_week.sessions.prefetch_related("prescriptions"))
+        # Source-side reads are live-only — a soft-deleted session/prescription
+        # on the shared program must never materialize onto a member's plan.
+        # Member-side rows dropped from the source are *soft*-deleted below
+        # (never hard-deleted: ``SessionLog.session`` cascades, so a hard
+        # delete would erase the member's logged history on re-delivery), and
+        # a source row that comes back (Phase 1 undo) revives the member's
+        # hidden copy in place via ``deleted_at: None`` in the upsert defaults.
+        src_sessions = list(
+            group_week.sessions.filter(deleted_at__isnull=True).prefetch_related(
+                "prescriptions"
+            )
+        )
         for src_session in src_sessions:
             member_session, _ = Session.objects.update_or_create(
                 week=member_week,
@@ -2144,10 +2182,15 @@ class GroupMembership(models.Model):
                     "name": src_session.name,
                     "bias": src_session.bias,
                     "order": src_session.order,
+                    "deleted_at": None,
                 },
             )
             src_orders = []
+            # Filtered in Python so this still reads from the `prescriptions`
+            # prefetch cache above.
             for src_p in src_session.prescriptions.all():
+                if src_p.deleted_at is not None:
+                    continue
                 resolved = resolve_prescription(src_p, overrides.get(src_p.pk))
                 # A swap means the catalog FK no longer names the lift trained.
                 swapped = resolved["name"] != src_p.name
@@ -2164,12 +2207,17 @@ class GroupMembership(models.Model):
                         "note": resolved["note"],
                         "exercise": None if swapped else src_p.exercise,
                         "tags": src_p.tags,
+                        "deleted_at": None,
                     },
                 )
                 src_orders.append(src_p.order)
-            member_session.prescriptions.exclude(order__in=src_orders).delete()
+            member_session.prescriptions.exclude(order__in=src_orders).filter(
+                deleted_at__isnull=True
+            ).update(deleted_at=timezone.now())
         src_day_numbers = [s.day_number for s in src_sessions]
-        member_week.sessions.exclude(day_number__in=src_day_numbers).delete()
+        member_week.sessions.exclude(day_number__in=src_day_numbers).filter(
+            deleted_at__isnull=True
+        ).update(deleted_at=timezone.now())
         return member_plan, member_week
 
     def clean(self):
