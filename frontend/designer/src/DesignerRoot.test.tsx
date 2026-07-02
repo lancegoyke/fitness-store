@@ -75,7 +75,9 @@ describe("hydration: full payload", () => {
     render(<DesignerRoot />);
 
     expect(screen.getByTestId("exercise-name-9")).toHaveValue("Squat");
-    expect(screen.getByText("Maya Okonkwo")).toBeInTheDocument();
+    // The athlete's name legitimately renders twice — the top-bar identity
+    // chip AND the left rail — exactly as the Alpine template it mirrors did.
+    expect(screen.getAllByText("Maya Okonkwo").length).toBeGreaterThan(0);
     expect(screen.getByTestId("week-chip-1")).toBeInTheDocument();
   });
 
