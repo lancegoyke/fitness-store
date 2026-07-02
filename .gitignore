@@ -24,6 +24,11 @@ repomix-output.*
 node_modules/
 coverage/
 
+# Designer island build output (Decision 3, docs/meso/designer-framework-plan.md):
+# built by Vite everywhere it's needed (Dockerfile node stage, frontend.yml CI,
+# `just frontend-build`/`frontend-watch` in dev) — never committed.
+app/store_project/static/js/dist/
+
 # Meso demo-video recorder output (issue #388) — commit the tool
 # (scripts/record_demo.py), never the generated binary; `just record-demo`
 # regenerates it on demand. See docs/demo/README.md.

@@ -1,9 +1,13 @@
 name: Frontend CI
 
-# Runs the meso front-end unit tests (vitest). This is a SEPARATE workflow from
-# "Django CI" on purpose: the production deploy keys off "Django CI" succeeding,
-# so front-end-test-only changes run here, gate the PR, and never trigger a
-# deploy. Only fires when JS/test files actually change.
+# Runs the meso front-end unit tests (vitest) plus the designer island's
+# typecheck and production build (Decision 3,
+# docs/meso/designer-framework-plan.md). This is a SEPARATE workflow from
+# "Django CI" on purpose: the production deploy keys off "Django CI"
+# succeeding, so front-end-test-only changes run here, gate the PR, and never
+# trigger a deploy — the build here only verifies the bundle compiles; the
+# Dockerfile's node stage is what actually ships it. Only fires when JS/TS/
+# test/build-config files actually change.
 
 on:
   push:
@@ -14,6 +18,9 @@ on:
       - "package.json"
       - "package-lock.json"
       - "vitest.config.js"
+      - "tsconfig*.json"
+      - "vite.config.*"
+      - ".nvmrc"
       - ".github/workflows/frontend.yml"
   pull_request:
     branches: ["main"]
@@ -23,6 +30,9 @@ on:
       - "package.json"
       - "package-lock.json"
       - "vitest.config.js"
+      - "tsconfig*.json"
+      - "vite.config.*"
+      - ".nvmrc"
       - ".github/workflows/frontend.yml"
 
 concurrency:
@@ -47,3 +57,9 @@ jobs:
 
       - name: Run front-end tests
         run: npm test
+
+      - name: Typecheck the designer island
+        run: npm run typecheck
+
+      - name: Build the designer island
+        run: npm run build

@@ -1,5 +1,17 @@
 # syntax=docker/dockerfile:1
 
+# Builds the designer React island (Decision 3,
+# docs/meso/designer-framework-plan.md) to STABLE, un-hashed filenames; the
+# python stage below copies dist/ into the static tree before collectstatic
+# (which re-hashes it via WhiteNoise's manifest storage) runs at container
+# start. A broken frontend build fails here, so it can never reach prod.
+FROM node:22-slim AS frontend-builder
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY frontend/designer/ ./frontend/designer/
+RUN npm run build
+
 # Production image for Mastering Fitness, built on the Hetzner box by the
 # `deploy` tool (docker compose build). Build context is the repo root.
 # WhiteNoise serves static files from this image; media lives on S3.
@@ -27,6 +39,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Application source.
 COPY . .
+
+# Designer island build output, in place before the entrypoint's
+# `collectstatic` (WhiteNoise re-hashes it into the manifest at container
+# start — see the frontend-builder stage above).
+COPY --from=frontend-builder /app/app/store_project/static/js/dist/ /app/app/store_project/static/js/dist/
 
 # Non-root runtime user; staticfiles dir must be writable for collectstatic.
 RUN chmod +x /app/docker-entrypoint.sh \
