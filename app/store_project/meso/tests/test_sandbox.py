@@ -26,6 +26,7 @@ These tests cover:
 """
 
 import json
+from unittest import mock
 
 import pytest
 from django.test import Client
@@ -387,3 +388,26 @@ class TestDraftGuard:
         assert resp.status_code == 302
         assert fresh_link.working_plan() is not None  # the plan still gets built
         assert AgentProposalBatch.objects.count() == 0
+
+
+class TestNotifyGuard:
+    def test_sandbox_delivery_sends_no_email_or_push(
+        self, client, mailoutbox, django_capture_on_commit_callbacks
+    ):
+        coach = _sandbox_coach()
+        plan = _sandbox_individual_plan(coach)
+        client.force_login(coach)
+
+        with (
+            mock.patch(
+                "store_project.meso.views.meso_push.notify_week_delivered"
+            ) as push_mock,
+            django_capture_on_commit_callbacks(execute=True),
+        ):
+            resp = client.post(
+                reverse("meso:api_plan_deliver", kwargs={"plan_id": plan.pk})
+            )
+
+        assert resp.status_code == 201
+        assert mailoutbox == []
+        push_mock.assert_not_called()

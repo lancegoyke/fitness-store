@@ -2308,7 +2308,12 @@ def _notify_athlete_delivered(request, plan, week):
     rolled-back deliver must not notify a false "your week is ready". Each
     channel is independently best-effort: a failure in one is swallowed and
     logged, never a 500 or a rolled-back deliver, and never blocks the other.
+
+    Sandbox gate (S4): a sandbox coach's deliveries never notify — there is no
+    real person behind a seeded demo athlete.
     """
+    if meso_sandbox.is_sandbox(plan.coach):
+        return
     home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
     unsubscribe_url = request.build_absolute_uri(
         reverse(
