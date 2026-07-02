@@ -96,6 +96,16 @@ function createMeso() {
     weeks: [],
     phases: [],
 
+    // ---- undo/redo (designer framework Phase 1) ----
+    // Undo is a *backend* feature (a server-side op-log — see meso/history.py):
+    // the endpoints restore a snapshot and reply with the same re-serialized
+    // plan payload every week endpoint returns, so applyPlanData adopts
+    // `history` like everything else it already adopts. `undoing` is the one
+    // in-flight guard shared by both verbs, so a key-repeat can't stack
+    // requests. Buttons/keys read `history.can_undo`/`can_redo` to no-op.
+    history: { can_undo: false, can_redo: false, undo_label: null, redo_label: null },
+    undoing: false,
+
     // ---- delete controls (designer framework Phase 0, issue #401) ----
     // One shared in-flight guard across every delete verb (removeExercise,
     // and the confirm-armed day/week removal below) — set synchronously
@@ -719,10 +729,78 @@ function createMeso() {
       this.weeks = data.weeks;
       this.phases = data.phases;
       this.viewedWeekId = data.viewing != null ? data.viewing : null;
+      // Every serialize_plan payload carries `history`; fall back to the empty
+      // shape for any caller that doesn't (defensive — keeps the buttons off).
+      this.history = data.history || {
+        can_undo: false,
+        can_redo: false,
+        undo_label: null,
+        redo_label: null,
+      };
       // Any grid swap invalidates an armed delete — `pendingDelete` anchors a
       // day by index, so confirming across a week switch would delete whatever
       // now renders at that index. Disarm instead.
       this.pendingDelete = null;
+    },
+
+    // Undo/redo the plan's most recent (respectively, most recently undone)
+    // change. Both share the `undoing` in-flight guard and the same shape: a
+    // no-op unless live + idle + the endpoint says there's something to do,
+    // POST the viewed week, apply the reply (which carries a fresh `history`),
+    // log and swallow a failure (the grid is untouched either way — the
+    // mutation never left the server), clear the guard in `finally`.
+    async undo() {
+      if (!this.live || this.undoing || !this.history.can_undo) return;
+      this.undoing = true;
+      try {
+        const data = await this.apiPost(`/meso/api/plan/${this.planId}/undo/`, {
+          week_id: this.viewedWeekId,
+        });
+        this.applyPlanData(data);
+      } catch (err) {
+        console.error("Undo failed", err);
+      } finally {
+        this.undoing = false;
+      }
+    },
+
+    async redo() {
+      if (!this.live || this.undoing || !this.history.can_redo) return;
+      this.undoing = true;
+      try {
+        const data = await this.apiPost(`/meso/api/plan/${this.planId}/redo/`, {
+          week_id: this.viewedWeekId,
+        });
+        this.applyPlanData(data);
+      } catch (err) {
+        console.error("Redo failed", err);
+      } finally {
+        this.undoing = false;
+      }
+    },
+
+    // Ctrl/Cmd+Z → undo; Shift+Ctrl/Cmd+Z → redo. Bound `@keydown.window` on the
+    // template. Ignores keystrokes from an input/textarea/select/contenteditable
+    // target so native field undo wins there instead of hijacking it.
+    handleUndoKey(event) {
+      const key = (event.key || "").toLowerCase();
+      if (key !== "z" || !(event.ctrlKey || event.metaKey)) return;
+      const target = event.target || {};
+      const tag = (target.tagName || "").toUpperCase();
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (event.shiftKey) {
+        this.redo();
+      } else {
+        this.undo();
+      }
     },
 
     // Switch the grid to another week — a pure read (viewing never changes what's

@@ -186,6 +186,17 @@ urlpatterns = [
         views.week_delete,
         name="api_week_delete",
     ),
+    # Plan-wide undo/redo op-log (designer framework Phase 1, issue #401).
+    path(
+        "api/plan/<int:plan_id>/undo/",
+        views.api_plan_undo,
+        name="api_plan_undo",
+    ),
+    path(
+        "api/plan/<int:plan_id>/redo/",
+        views.api_plan_redo,
+        name="api_plan_redo",
+    ),
     # Per-athlete override on a group's shared program (groups Phase 3).
     path(
         "api/plan/<int:plan_id>/prescription/<int:pk>/override/",

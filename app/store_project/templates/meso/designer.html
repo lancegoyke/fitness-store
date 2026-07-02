@@ -28,6 +28,7 @@
       class="meso meso-root"
       x-data="meso()"
       x-ref="root"
+      @keydown.window="handleUndoKey($event)"
       style="--bg:#f4f4f5;--surface:#ffffff;--rail:#fbfbfc;--ink:#0a0a0a;--dim:#6b7280;--line:#e4e4e7;--line-2:#f1f3f5;--radius:8px;--pad:14px;--accent:#31759d;--accent-ink:#ffffff;--soft:#eaf2f7;--soft-line:#bcd6e4;--accent-deep:#1f516b;--warn:#b4541f;--warn-soft:#fbefe8;--ok:#2f8f56;display:flex;flex-direction:column;height:100vh;min-width:1240px;overflow:hidden;background:var(--bg);color:var(--ink);font-family:'Hanken Grotesk',system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;"
     >
       <!-- Delivered toast -->
@@ -358,6 +359,15 @@
                 <span x-show="!viewedIsCurrent && pendingDelete && pendingDelete.type === 'week' && pendingDelete.weekId === viewedWeekId" style="display:inline-flex;align-items:center;gap:5px;">
                   <button type="button" @click="confirmPendingDelete()" :disabled="deleting" data-hover="brighten" aria-label="Confirm remove week" style="appearance:none;cursor:pointer;font:inherit;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px solid var(--warn);background:transparent;color:var(--warn);">Confirm?</button>
                   <button type="button" @click="cancelPendingDelete()" :disabled="deleting" data-hover="rail" aria-label="Cancel remove week" style="appearance:none;cursor:pointer;font:inherit;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--dim);">Cancel</button>
+                </span>
+                <!-- Plan-wide undo/redo (designer framework Phase 1, issue #401)
+                     — a server-side op-log; :disabled off `history`/`undoing`
+                     so the buttons stay accurate after every applyPlanData.
+                     Minimal by design (throwaway — replaced by the React
+                     island's toolbar in Phase 2). -->
+                <span style="display:inline-flex;align-items:center;gap:5px;margin-left:auto;">
+                  <button type="button" @click="undo()" :disabled="undoing || !history.can_undo" data-hover="rail" aria-label="Undo" :title="history.undo_label ? ('Undo: ' + history.undo_label) : 'Undo'" style="appearance:none;cursor:pointer;font:inherit;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--dim);">&#8630; Undo</button>
+                  <button type="button" @click="redo()" :disabled="undoing || !history.can_redo" data-hover="rail" aria-label="Redo" :title="history.redo_label ? ('Redo: ' + history.redo_label) : 'Redo'" style="appearance:none;cursor:pointer;font:inherit;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--dim);">Redo &#8631;</button>
                 </span>
               </div>
 

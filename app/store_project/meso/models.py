@@ -2488,3 +2488,62 @@ class AthleteOneRm(models.Model):
 
         self.key = key_str(self.exercise_id, self.name)
         super().save(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Undo/redo op-log (designer framework Phase 1)
+#
+# The designer needs plan-wide undo/redo, built on Phase 0's soft delete: every
+# mutating designer endpoint records ONE ``PlanAction`` on the undo stack — a
+# short human ``label`` plus a plan-wide ``snapshot`` of the editable state
+# taken just BEFORE the mutation (``history.serialize_plan_snapshot``). Undo
+# pops the max-seq undo row, restores its snapshot, and pushes the mirror-image
+# redo row (same seq+label, snapshot = the state just left); redo is the exact
+# mirror. See ``history.py`` (the snapshot serializer/restorer + the
+# ``record_plan_action`` recorder) and ``docs/meso/designer-framework-plan.md``.
+# ---------------------------------------------------------------------------
+
+
+class PlanAction(models.Model):
+    """One entry in a plan's undo/redo op-log.
+
+    ``stack`` + ``seq`` together give every action a stable slot: undo pops the
+    max-``seq`` ``undo`` row and pushes a ``redo`` row at the *same* seq (redo
+    mirrors it back); a fresh mutation always allocates a new, higher seq and
+    clears whatever redo rows existed (a fork in history drops the abandoned
+    future). ``snapshot`` is plan-wide — every ``Week``/``Session``/
+    ``ExercisePrescription``/``PrescriptionOverride`` row belonging to the plan,
+    including soft-deleted ones, so an undo can resurrect a delete or retract an
+    add without ever hard-deleting or recreating a row.
+    """
+
+    class Stack(models.TextChoices):
+        UNDO = "undo", _("Undo")
+        REDO = "redo", _("Redo")
+
+    plan = models.ForeignKey(
+        Plan,
+        on_delete=models.CASCADE,
+        related_name="actions",
+        verbose_name=_("Plan"),
+    )
+    stack = models.CharField(
+        _("Stack"), max_length=8, choices=Stack, default=Stack.UNDO
+    )
+    seq = models.PositiveIntegerField(_("Sequence"))
+    label = models.CharField(_("Label"), max_length=80)
+    snapshot = models.JSONField(_("Snapshot"))
+    created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+
+    class Meta:
+        ordering = ["seq"]
+        verbose_name = "Plan action"
+        verbose_name_plural = "Plan actions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["plan", "stack", "seq"], name="unique_plan_action_seq"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.plan_id} · {self.stack} #{self.seq} · {self.label}"

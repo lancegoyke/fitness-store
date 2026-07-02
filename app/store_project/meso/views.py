@@ -57,6 +57,10 @@ from .billing import access as billing_access
 from .billing import agent_usage_report as usage_report
 from .billing import stripe_gateway as billing_gateway
 from .billing import webhooks as billing_webhooks
+from .history import HistoryUnavailable
+from .history import record_plan_action
+from .history import restore_plan_snapshot
+from .history import serialize_plan_snapshot
 from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
@@ -70,6 +74,7 @@ from .models import LoggedSet
 from .models import Mesocycle
 from .models import MesoGroup
 from .models import Plan
+from .models import PlanAction
 from .models import PrescriptionOverride
 from .models import ProposedChange
 from .models import PushSubscription
@@ -1988,10 +1993,12 @@ def prescription_patch(request, plan_id, pk):
         updates["load_type"] = load_type
 
     if updates:
-        for field, value in updates.items():
-            setattr(prescription, field, value)
-        prescription.save(update_fields=list(updates))
-        _touch_plan(plan)
+        with transaction.atomic():
+            record_plan_action(plan, f"Edited {prescription.name or 'exercise'}")
+            for field, value in updates.items():
+                setattr(prescription, field, value)
+            prescription.save(update_fields=list(updates))
+            _touch_plan(plan)
     return JsonResponse(
         {"ok": True, "prescription": serialize_prescription(prescription)}
     )
@@ -2021,9 +2028,11 @@ def prescription_delete(request, plan_id, pk):
         session__week__deleted_at__isnull=True,
     )
     week = prescription.session.week
-    prescription.deleted_at = timezone.now()
-    prescription.save(update_fields=["deleted_at"])
-    _touch_plan(plan)
+    with transaction.atomic():
+        record_plan_action(plan, f"Deleted {prescription.name or 'exercise'}")
+        prescription.deleted_at = timezone.now()
+        prescription.save(update_fields=["deleted_at"])
+        _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 
@@ -2041,18 +2050,20 @@ def session_add_exercise(request, plan_id, pk):
         deleted_at__isnull=True,
         week__deleted_at__isnull=True,
     )
-    next_order = (session.prescriptions.aggregate(m=Max("order"))["m"] or 0) + 1
-    prescription = ExercisePrescription.objects.create(
-        session=session,
-        name="New exercise",
-        order=next_order,
-        sets="3",
-        reps="10",
-        load="",
-        rpe="7",
-        note="",
-    )
-    _touch_plan(plan)
+    with transaction.atomic():
+        next_order = (session.prescriptions.aggregate(m=Max("order"))["m"] or 0) + 1
+        record_plan_action(plan, "Added exercise")
+        prescription = ExercisePrescription.objects.create(
+            session=session,
+            name="New exercise",
+            order=next_order,
+            sets="3",
+            reps="10",
+            load="",
+            rpe="7",
+            note="",
+        )
+        _touch_plan(plan)
     return JsonResponse(
         {"ok": True, "prescription": serialize_prescription(prescription)}, status=201
     )
@@ -2097,6 +2108,7 @@ def session_add(request, plan_id):
         Week.objects.select_for_update().filter(pk=week.pk).first()
         next_order = (week.sessions.aggregate(m=Max("order"))["m"] or 0) + 1
         next_day = (week.sessions.aggregate(m=Max("day_number"))["m"] or 0) + 1
+        record_plan_action(plan, f"Added Day {next_day}")
         session = Session.objects.create(
             week=week, day_number=next_day, name=f"Day {next_day}", order=next_order
         )
@@ -2131,9 +2143,11 @@ def session_delete(request, plan_id, pk):
         week__deleted_at__isnull=True,
     )
     week = session.week
-    session.deleted_at = timezone.now()
-    session.save(update_fields=["deleted_at"])
-    _touch_plan(plan)
+    with transaction.atomic():
+        record_plan_action(plan, f"Deleted Day {session.day_number}")
+        session.deleted_at = timezone.now()
+        session.save(update_fields=["deleted_at"])
+        _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 
@@ -2184,6 +2198,11 @@ def week_add(request, plan_id):
         return HttpResponseBadRequest("This plan has no block to add a week to.")
     with transaction.atomic():
         Mesocycle.objects.select_for_update().filter(pk=mesocycle.pk).first()
+        # Mirrors ``Mesocycle.append_week``'s own indexing (over ALL weeks,
+        # deleted included) so the recorded label matches the week it creates —
+        # computed under the same lock, so there's no race between the two.
+        next_index = (mesocycle.weeks.aggregate(m=Max("index"))["m"] or 0) + 1
+        record_plan_action(plan, f"Added Week {next_index}")
         new_week = mesocycle.append_week()
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=new_week)}, status=201)
@@ -2215,10 +2234,15 @@ def week_set_current(request, plan_id, week_id):
         week.refresh_from_db()
         if week.deleted_at is not None:
             raise Http404("Week not found.")
+        already_current = week.is_current
+        if not already_current:
+            # Snapshot BEFORE the bulk clear below touches every other week's
+            # ``is_current`` flag, so undo restores exactly who was current.
+            record_plan_action(plan, f"Made Week {week.index} current")
         Week.objects.filter(mesocycle__plan=plan).exclude(pk=week.pk).update(
             is_current=False
         )
-        if not week.is_current:
+        if not already_current:
             week.is_current = True
             week.save(update_fields=["is_current"])
         _touch_plan(plan)
@@ -2274,10 +2298,119 @@ def week_delete(request, plan_id, week_id):
                 {"ok": False, "error": "A plan needs at least one week."},
                 status=400,
             )
+        record_plan_action(plan, f"Deleted Week {week.index}")
         week.deleted_at = timezone.now()
         week.save(update_fields=["deleted_at"])
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan)})
+
+
+def _undo_redo_week_response(plan, week_id):
+    """The (week, week) tuple to pin an undo/redo reply to (viewed-week rule).
+
+    The posted ``week_id`` wins when it's still a live week of this plan (the
+    coach stays where they were looking); otherwise ``serialize_plan`` falls
+    back to the plan's current week — the case where the just-undone/redone
+    action itself un-created or re-created the viewed week.
+    """
+    if week_id is None:
+        return None
+    return Week.objects.filter(
+        pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
+    ).first()
+
+
+@login_required
+@require_POST
+def api_plan_undo(request, plan_id):
+    """Pop the plan's most recent undo action and restore it (Phase 1 op-log).
+
+    Every mutating designer endpoint records one ``PlanAction`` — a plan-wide
+    snapshot of editable state taken just before its write (``history.py``).
+    This pops the max-seq undo row, pushes its mirror-image redo row (same
+    seq+label, snapshot = the *current* state, so redo can put it right back),
+    and restores the popped snapshot — flipping fields/``deleted_at`` only,
+    never hard-deleting or recreating a row, so an undone add redoes onto the
+    same pk and an undone delete resurfaces with its athlete's logs untouched.
+    Optional JSON body ``{"week_id"}`` pins the reply's viewed week (see
+    ``_undo_redo_week_response``). A snapshot referencing a row that no longer
+    exists (history rot — soft delete bypassed) is a 409 that rolls back the
+    whole attempt, leaving the stacks untouched.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    week_id, bad = _body_week_id(request)
+    if bad is not None:
+        return bad
+    try:
+        with transaction.atomic():
+            Plan.objects.select_for_update().filter(pk=plan.pk).first()
+            popped = (
+                PlanAction.objects.filter(plan=plan, stack=PlanAction.Stack.UNDO)
+                .order_by("-seq")
+                .first()
+            )
+            if popped is None:
+                return JsonResponse(
+                    {"ok": False, "error": "Nothing to undo"}, status=400
+                )
+            redo_snapshot = serialize_plan_snapshot(plan)
+            restore_snapshot, seq, label = popped.snapshot, popped.seq, popped.label
+            popped.delete()
+            PlanAction.objects.create(
+                plan=plan,
+                stack=PlanAction.Stack.REDO,
+                seq=seq,
+                label=label,
+                snapshot=redo_snapshot,
+            )
+            restore_plan_snapshot(plan, restore_snapshot)
+            _touch_plan(plan)
+    except HistoryUnavailable:
+        return JsonResponse({"ok": False, "error": "History unavailable"}, status=409)
+    week = _undo_redo_week_response(plan, week_id)
+    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
+
+
+@login_required
+@require_POST
+def api_plan_redo(request, plan_id):
+    """Mirror of ``api_plan_undo``: pop the plan's min-seq redo row and re-apply it."""
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    week_id, bad = _body_week_id(request)
+    if bad is not None:
+        return bad
+    try:
+        with transaction.atomic():
+            Plan.objects.select_for_update().filter(pk=plan.pk).first()
+            popped = (
+                PlanAction.objects.filter(plan=plan, stack=PlanAction.Stack.REDO)
+                .order_by("seq")
+                .first()
+            )
+            if popped is None:
+                return JsonResponse(
+                    {"ok": False, "error": "Nothing to redo"}, status=400
+                )
+            undo_snapshot = serialize_plan_snapshot(plan)
+            restore_snapshot, seq, label = popped.snapshot, popped.seq, popped.label
+            popped.delete()
+            PlanAction.objects.create(
+                plan=plan,
+                stack=PlanAction.Stack.UNDO,
+                seq=seq,
+                label=label,
+                snapshot=undo_snapshot,
+            )
+            restore_plan_snapshot(plan, restore_snapshot)
+            _touch_plan(plan)
+    except HistoryUnavailable:
+        return JsonResponse({"ok": False, "error": "History unavailable"}, status=409)
+    week = _undo_redo_week_response(plan, week_id)
+    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 
 # Free-form per-athlete override cells, mapped to their model ``max_length``.
@@ -2414,8 +2547,10 @@ def prescription_override(request, plan_id, pk):
         return HttpResponseBadRequest("athlete must be an active member of the group.")
 
     if payload.get("clear"):
-        membership.clear_override(prescription)
-        _touch_plan(plan)
+        with transaction.atomic():
+            record_plan_action(plan, "Edited override")
+            membership.clear_override(prescription)
+            _touch_plan(plan)
         return _override_response(plan, prescription)
 
     existing = membership.overrides.filter(prescription=prescription).first()
@@ -2423,12 +2558,14 @@ def prescription_override(request, plan_id, pk):
     if error is not None:
         return error
     try:
-        membership.set_override(prescription, **diff)
+        with transaction.atomic():
+            record_plan_action(plan, "Edited override")
+            membership.set_override(prescription, **diff)
+            _touch_plan(plan)
     except InvalidTransition:
         # The prescription is scoped to this plan above, so its group always
         # matches the membership; this stays defensive against future drift.
         return HttpResponseBadRequest("The prescription is not in this program.")
-    _touch_plan(plan)
     return _override_response(plan, prescription)
 
 
@@ -2868,7 +3005,11 @@ def batch_apply(request, batch_id):
         return JsonResponse(
             {"ok": False, "error": "This batch has already been resolved."}, status=409
         )
-    result = agent_apply.apply_batch(batch)
+    # ONE undo action for the whole batch, snapshotted before any of its
+    # changes land — undo reverts every change the batch applied in one step.
+    with transaction.atomic():
+        record_plan_action(batch.plan, "Applied agent changes")
+        result = agent_apply.apply_batch(batch)
     # Where the review screen sends the coach next. An individual plan has a
     # deliver screen; a group plan's delivery is deliver-to-all (no individual
     # deliver screen — ``DeliverView`` is ``for_coach`` individual-only and would
