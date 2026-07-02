@@ -1,0 +1,224 @@
+/* Block / periodization view (designer.html lines ~468-533). */
+.meso-block-view {
+  padding: 20px 22px 40px;
+  max-width: 1000px;
+}
+.meso-block-periodseg {
+  margin-bottom: 14px;
+}
+.meso-macro-strip {
+  margin: 18px 0 22px;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.meso-macro-block {
+  border-radius: 9px;
+  padding: 11px 13px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.meso-macro-block--current {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.meso-macro-block--next,
+.meso-macro-block--future {
+  opacity: 0.72;
+}
+.meso-macro-block-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.meso-macro-block--current .meso-macro-block-name {
+  color: var(--accent-ink);
+}
+.meso-macro-block--done .meso-macro-block-name {
+  color: var(--accent-deep);
+}
+.meso-macro-block-weeks {
+  font-size: 10.5px;
+  margin-top: 2px;
+  color: var(--dim);
+}
+.meso-macro-block--current .meso-macro-block-weeks {
+  color: var(--accent-ink);
+  opacity: 0.85;
+}
+
+.meso-block-card {
+  padding: 18px 20px;
+}
+.meso-block-legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+.meso-block-legend-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+.meso-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.meso-legend-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.meso-legend-swatch--vol {
+  background: var(--accent);
+}
+.meso-legend-swatch--inten {
+  background: var(--surface);
+  border: 1.5px solid var(--accent);
+}
+
+.meso-timeline {
+  gap: 16px;
+  align-items: flex-end;
+  padding: 12px 6px 4px;
+}
+.meso-timeline-week {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+}
+.meso-timeline-bars {
+  height: 156px;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 7px;
+}
+.meso-bar {
+  width: 20px;
+  border-radius: 5px 5px 0 0;
+}
+.meso-bar--vol {
+  background: var(--soft-line);
+}
+.meso-bar--vol.is-current {
+  background: var(--accent);
+}
+.meso-bar--vol.is-deload {
+  background: color-mix(in srgb, var(--accent) 28%, #fff);
+}
+.meso-bar--inten {
+  background: var(--surface);
+  border: 1.5px solid var(--accent);
+}
+.meso-timeline-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--dim);
+}
+.meso-timeline-label.is-current {
+  color: var(--ink);
+}
+.meso-timeline-phase {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 5px;
+  color: var(--dim);
+}
+.meso-timeline-phase.is-current {
+  color: var(--accent-deep);
+  background: var(--soft);
+}
+.meso-timeline-phase.is-deload {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.meso-ladder {
+  align-items: flex-end;
+  gap: 14px;
+  padding: 12px 6px 4px;
+}
+.meso-ladder-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.meso-ladder-block {
+  border-radius: 9px;
+  background: var(--surface);
+  border: 1.5px solid var(--line);
+  display: flex;
+  align-items: flex-end;
+  padding: 11px;
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+.meso-ladder-block--current {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.meso-ladder-block--done {
+  background: var(--soft);
+  color: var(--accent-deep);
+}
+.meso-ladder-weeks {
+  font-size: 11px;
+  color: var(--dim);
+  text-align: center;
+  font-weight: 600;
+}
+
+.meso-calendar {
+  padding: 14px 6px 4px;
+}
+.meso-cal-header-row {
+  display: grid;
+  grid-template-columns: 50px repeat(7, 1fr);
+  gap: 7px;
+  margin-bottom: 8px;
+}
+.meso-cal-day-label {
+  text-align: center;
+  font-size: 11px;
+  color: var(--dim);
+  font-weight: 700;
+}
+.meso-cal-row {
+  display: grid;
+  grid-template-columns: 50px repeat(7, 1fr);
+  gap: 7px;
+  margin-bottom: 7px;
+  align-items: center;
+}
+.meso-cal-week-label {
+  font-size: 11.5px;
+  color: var(--dim);
+  font-weight: 700;
+}
+.meso-cal-week-label.is-current {
+  color: var(--ink);
+}
+.meso-cal-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.meso-cal-dot.is-current {
+  background: var(--accent-ink);
+}

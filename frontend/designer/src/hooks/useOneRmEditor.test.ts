@@ -91,7 +91,7 @@ describe("saveOneRm", () => {
       await result.current.saveOneRm();
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/prescription/21/one-rm/");
     expect(sentBody()).toEqual({ value: "150" });
     expect(patchExercise).toHaveBeenCalledWith(21, { one_rm: "150", one_rm_source: "manual" });

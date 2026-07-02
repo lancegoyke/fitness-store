@@ -39,7 +39,7 @@ describe("persistRow", () => {
       result.current.persistRow(ex({ load_type: "pct", rpe: "8", note: "tempo" }));
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/prescription/9/");
     expect(opts.method).toBe("POST");
     expect(opts.headers["X-CSRFToken"]).toBe("tok");

@@ -1,0 +1,290 @@
+/* Agent chat panel (designer.html lines ~203-313). */
+.meso-chat-panel {
+  width: 356px;
+  flex: 0 0 auto;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.meso-chat-header {
+  height: 48px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line-2);
+}
+.meso-chat-mark {
+  width: 21px;
+  height: 21px;
+  border-radius: 6px;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.meso-chat-mark-glyph {
+  width: 7px;
+  height: 7px;
+  background: var(--accent-ink);
+  border-radius: 1px;
+  transform: rotate(45deg);
+  display: block;
+}
+.meso-chat-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.meso-status {
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.meso-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dim);
+  display: inline-block;
+}
+.meso-status--typing .meso-status-dot {
+  background: var(--accent);
+}
+.meso-status--ready .meso-status-dot {
+  background: var(--ok);
+}
+
+.meso-chat-note {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--rail);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--dim);
+}
+.meso-chat-note-title {
+  font-weight: 700;
+  color: var(--accent-deep);
+  letter-spacing: 0.01em;
+}
+
+.meso-chat-thread {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.meso-msg-agent-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: 90%;
+}
+.meso-msg-agent {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px 13px 13px 13px;
+  padding: 10px 13px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(16, 18, 22, 0.03);
+}
+.meso-msg-agent--error {
+  border-color: color-mix(in srgb, var(--warn) 36%, #fff);
+  color: var(--warn);
+}
+.meso-msg-coach {
+  align-self: flex-end;
+  margin-left: auto;
+  max-width: 84%;
+  width: fit-content;
+  background: var(--ink);
+  color: #fff;
+  border-radius: 13px 13px 4px 13px;
+  padding: 9px 13px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.meso-msg-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+}
+.meso-change-chip {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  background: var(--soft);
+  border: 1px solid var(--soft-line);
+  border-radius: 9px;
+  padding: 9px 11px;
+  width: 100%;
+}
+.meso-change-check {
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-ink);
+  font-size: 10px;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.meso-change-body {
+  line-height: 1.3;
+  min-width: 0;
+}
+.meso-change-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--accent-deep);
+}
+.meso-change-member {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: 5px;
+  padding: 1px 6px;
+  margin: 3px 0 1px;
+}
+.meso-change-diff {
+  font-size: 11.5px;
+  color: var(--accent-deep);
+  opacity: 0.8;
+}
+.meso-change-before {
+  text-decoration: line-through;
+}
+.meso-review-link {
+  align-self: flex-start;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: 8px;
+  padding: 7px 12px;
+}
+.meso-typing {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px 13px 13px 13px;
+  padding: 11px 14px;
+  align-self: flex-start;
+}
+.meso-typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dim);
+  animation: blink 1.2s infinite;
+}
+.meso-typing-dot:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.meso-typing-dot:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+.meso-chat-footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--line-2);
+  padding: 13px 14px 15px;
+}
+.meso-footer-copy {
+  margin: 0 0 9px;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.4;
+}
+.meso-chip-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 9px;
+}
+.meso-chip {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 11px;
+  flex: 0 0 auto;
+}
+.meso-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--rail);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 7px 7px 7px 12px;
+}
+.meso-composer-input {
+  flex: 1;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  padding: 5px 0;
+}
+.meso-composer-send {
+  appearance: none;
+  cursor: pointer;
+  border: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  font-size: 15px;
+}
+.meso-composer-send:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.meso-allowance-note {
+  margin: 9px 0 0;
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.4;
+}
+.meso-inline-link {
+  color: var(--accent-ink);
+  text-decoration: underline;
+}

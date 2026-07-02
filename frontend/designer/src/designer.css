@@ -1,0 +1,15 @@
+/* Designer island styles (Phase 2 PR B). Ported from the inline styles in
+   app/store_project/templates/meso/designer.html — same layout, same CSS
+   custom properties (--bg, --ink, --accent, ...). The token VALUES are not
+   redefined here: they live on the server-rendered mount div (.meso class +
+   inline tokens, see meso.css / designer.html), this file only *consumes*
+   `var(--token)`. Split into small partials (one per region of the tree) so
+   no single file gets unwieldy; all are pulled in from here. */
+@import "./styles/designer-root.css";
+@import "./styles/designer-topbar.css";
+@import "./styles/designer-rail.css";
+@import "./styles/designer-chat.css";
+@import "./styles/designer-grid.css";
+@import "./styles/designer-block.css";
+@import "./styles/designer-athlete.css";
+@import "./styles/designer-modal.css";

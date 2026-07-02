@@ -75,7 +75,7 @@ describe("removeExercise", () => {
       await result.current.removeExercise(0, 0);
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/prescription/9/delete/");
     expect(opts.method).toBe("POST");
     expect(opts.headers["X-CSRFToken"]).toBe("tok");
@@ -149,7 +149,7 @@ describe("confirmPendingDelete", () => {
     await act(async () => {
       await result.current.confirmPendingDelete();
     });
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/session/5/delete/");
     expect(opts.method).toBe("POST");
     expect(applyPlanData).toHaveBeenCalledWith(data);
@@ -164,7 +164,7 @@ describe("confirmPendingDelete", () => {
     await act(async () => {
       await result.current.confirmPendingDelete();
     });
-    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/week/2/delete/");
     expect(applyPlanData).toHaveBeenCalledWith(data);
     expect(result.current.pendingDelete).toBe(null);

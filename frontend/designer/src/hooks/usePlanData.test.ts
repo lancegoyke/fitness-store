@@ -206,7 +206,7 @@ describe("addExercise", () => {
       await result.current.addExercise(0);
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/session/1/exercise/");
     expect(opts.method).toBe("POST");
     expect(opts.headers["X-CSRFToken"]).toBe("tok");
@@ -226,7 +226,7 @@ describe("addDay", () => {
       await result.current.addDay();
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/session/");
     expect(sentBody().week_id).toBe(5);
     expect(result.current.program).toHaveLength(2);
@@ -250,7 +250,7 @@ describe("switchWeek", () => {
       await result.current.switchWeek(2);
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/week/2/");
     expect(opts).toBeUndefined();
     expect(result.current.viewedWeekId).toBe(2);
@@ -292,7 +292,7 @@ describe("addWeek", () => {
     await act(async () => {
       await result.current.addWeek();
     });
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/week/");
     expect(opts.method).toBe("POST");
     expect(result.current.viewedWeekId).toBe(2);
@@ -314,7 +314,7 @@ describe("setCurrentWeek", () => {
     await act(async () => {
       await result.current.setCurrentWeek(2);
     });
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/week/2/current/");
     expect(opts.method).toBe("POST");
     expect(result.current.viewedIsCurrent).toBe(true);

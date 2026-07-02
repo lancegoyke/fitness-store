@@ -1,0 +1,196 @@
+/* Athlete (phone) preview (designer.html lines ~536-599). */
+.meso-athlete-preview {
+  display: flex;
+  padding: 24px;
+  gap: 30px;
+  align-items: flex-start;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.meso-phone {
+  flex: 0 0 auto;
+  width: 336px;
+  height: 680px;
+  border-radius: 42px;
+  background: #0e0f12;
+  padding: 11px;
+  box-shadow: 0 24px 60px rgba(16, 18, 22, 0.28);
+  position: relative;
+}
+.meso-phone-screen {
+  width: 100%;
+  height: 100%;
+  border-radius: 32px;
+  background: var(--surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.meso-phone-statusbar {
+  height: 40px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 22px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.meso-phone-notch {
+  position: absolute;
+  left: 50%;
+  top: 9px;
+  transform: translateX(-50%);
+  width: 88px;
+  height: 21px;
+  background: #0e0f12;
+  border-radius: 0 0 14px 14px;
+}
+.meso-phone-signal {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+.meso-phone-header {
+  flex: 0 0 auto;
+  padding: 6px 18px 14px;
+  border-bottom: 1px solid var(--line-2);
+}
+.meso-phone-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 11px;
+}
+.meso-phone-back {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.meso-phone-daylabel {
+  font-size: 11px;
+  color: var(--dim);
+}
+.meso-phone-title {
+  margin: 0 0 2px;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.meso-phone-sub {
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: 12px;
+}
+.meso-phone-progress {
+  align-items: center;
+  gap: 9px;
+}
+.meso-phone-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.meso-phone-dots {
+  flex: 1;
+  gap: 3px;
+}
+.meso-phone-dot {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--line);
+}
+.meso-phone-dot.is-done {
+  background: var(--accent);
+}
+.meso-phone-setslabel {
+  font-size: 11px;
+  color: var(--dim);
+}
+.meso-phone-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.meso-phone-exercise {
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  overflow: hidden;
+}
+.meso-phone-exercise-head {
+  padding: 11px 13px 9px;
+  border-bottom: 1px solid var(--line-2);
+}
+.meso-phone-exercise-name {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.meso-phone-exercise-target {
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.meso-phone-set-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 13px;
+  border-bottom: 1px solid var(--line-2);
+}
+.meso-phone-set-n {
+  width: 18px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--dim);
+}
+.meso-phone-input {
+  width: 46px;
+  text-align: center;
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--rail);
+  font: inherit;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
+  padding: 6px 4px;
+  outline: none;
+  color: var(--ink);
+}
+.meso-phone-set-target {
+  flex: 1;
+  font-size: 10.5px;
+  color: var(--dim);
+  text-align: right;
+}
+.meso-phone-check {
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  flex: 0 0 auto;
+}
+.meso-check-on {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-ink);
+  font-size: 13px;
+}
+.meso-check-off {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+}

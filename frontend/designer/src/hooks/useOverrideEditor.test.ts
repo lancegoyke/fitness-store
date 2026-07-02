@@ -145,7 +145,7 @@ describe("saveOverride", () => {
       await result.current.saveOverride();
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/prescription/11/override/");
     expect(sentBody()).toEqual({ athlete: "a2", swap: "Box Squat", load_pct: 85, sets: "", reps: "", note: "" });
     expect(patchExercise).toHaveBeenCalledWith(11, { adj: "2 adjusts", adjusts: [{ id: "a1" }, { id: "a2" }] });

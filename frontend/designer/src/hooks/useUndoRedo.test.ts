@@ -59,7 +59,7 @@ describe("undo", () => {
       await result.current.undo();
     });
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/undo/");
     expect(opts.method).toBe("POST");
     expect(opts.headers["X-CSRFToken"]).toBe("tok");
@@ -102,7 +102,7 @@ describe("redo", () => {
     await act(async () => {
       await result.current.redo();
     });
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/redo/");
     expect(JSON.parse(opts.body)).toEqual({ week_id: 3 });
     expect(applyPlanData).toHaveBeenCalledWith(data);

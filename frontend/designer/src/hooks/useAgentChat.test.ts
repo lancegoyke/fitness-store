@@ -61,7 +61,7 @@ describe("onSend", () => {
     expect(result.current.inputText).toBe("");
     expect(result.current.messages.some((m) => m.role === "coach" && m.text === "lighten Friday")).toBe(true);
     expect(result.current.agentTyping).toBe(true);
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/agent/");
     expect(opts.method).toBe("POST");
     expect(JSON.parse(opts.body)).toEqual({ instruction: "lighten Friday" });
@@ -113,7 +113,7 @@ describe("onChip", () => {
     globalThis.fetch = vi.fn().mockResolvedValue(res({ status_url: null }, true, 202)) as unknown as typeof fetch;
     act(() => result.current.onChip("Add a deload week"));
     expect(result.current.messages.some((m) => m.role === "coach" && m.text === "Add a deload week")).toBe(true);
-    const [, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(JSON.parse(opts.body)).toEqual({ instruction: "Add a deload week" });
     await flush();
   });

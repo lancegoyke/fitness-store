@@ -1,0 +1,132 @@
+/* Top bar (designer.html lines ~42-98). */
+.meso-topbar {
+  height: 55px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 0 17px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  z-index: 20;
+}
+.meso-topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-decoration: none;
+  color: var(--ink);
+}
+.meso-topbar-mark {
+  width: 23px;
+  height: 23px;
+  border-radius: 6px;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.meso-topbar-mark-glyph {
+  width: 8px;
+  height: 8px;
+  background: var(--accent-ink);
+  border-radius: 2px;
+  transform: rotate(45deg);
+  display: block;
+}
+.meso-topbar-title {
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: -0.025em;
+}
+.meso-topbar-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--line);
+}
+
+.meso-identity-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.meso-identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.meso-identity-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--soft);
+  border: 1px solid var(--soft-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-deep);
+  flex: 0 0 auto;
+}
+.meso-identity-info {
+  line-height: 1.15;
+}
+.meso-identity-name {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.meso-identity-goal {
+  font-size: 11px;
+  color: var(--dim);
+}
+.meso-group-avatars {
+  display: flex;
+}
+.meso-group-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #eef0f2;
+  border: 2px solid var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--dim);
+  margin-left: -9px;
+}
+.meso-group-avatar--lead {
+  background: var(--soft);
+  color: var(--accent-deep);
+  margin-left: 0;
+}
+
+.meso-cycle-chip {
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 7px;
+  background: var(--soft);
+  border: 1px solid var(--soft-line);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent-deep);
+}
+.meso-cycle-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.meso-chip-soon {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--dim);
+  background: var(--rail);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 13px;
+}
