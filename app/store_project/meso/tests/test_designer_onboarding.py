@@ -10,12 +10,15 @@ column is the athlete's real view.
 
 Phase 5 fixes both:
 
-- **Coachmarks.** Three dismissible first-run notes anchor the designer's
-  regions (week grid · agent · phone preview). They show until dismissed; the
+- **Coachmarks.** Two dismissible first-run notes anchor the designer's
+  regions (week grid · phone preview). They show until dismissed; the
   dismissal persists client-side (``meso.js`` localStorage), like the athlete
   onboarding chrome. No server "seen" flag, no migration.
 - **Agent self-explanation.** A persistent propose → review → apply note makes
-  the review gate explicit for everyone (not just first-timers).
+  the review gate explicit for everyone (not just first-timers). The agent
+  column originally also had its own dismissible coachmark and a chat greeting
+  that both repeated this guidance — consolidated into this one note plus the
+  greeting, which now just carries the "ask in plain words" examples.
 - **Real chrome.** The fabricated left-rail athlete/programming-style/macrocycle
   is replaced with the *real* plan: the athlete's name + active
   contraindications (now carried in the serialized payload) and the real
@@ -63,19 +66,18 @@ def render_designer(client, plan):
 
 
 class TestCoachmarksRender:
-    """The three dismissible region coachmarks render for a real plan."""
+    """The two dismissible region coachmarks render for a real plan."""
 
-    def test_designer_renders_all_three_coachmarks(self, client):
+    def test_designer_renders_both_coachmarks(self, client):
         plan, _, _ = seed_plan()
         body = render_designer(client, plan)
         assert "The week grid" in body  # grid coachmark
-        assert "Talk to the agent" in body  # agent coachmark
         assert "Preview as your athlete" in body  # phone-preview coachmark
 
     def test_each_coachmark_has_a_dismiss_control(self, client):
         plan, _, _ = seed_plan()
         body = render_designer(client, plan)
-        for key in ("grid", "agent", "phone"):
+        for key in ("grid", "phone"):
             assert f"dismissCoachmark('{key}')" in body
 
 
@@ -85,7 +87,7 @@ class TestAgentSelfExplanation:
     def test_designer_renders_review_gate_note(self, client):
         plan, _, _ = seed_plan()
         body = render_designer(client, plan)
-        assert "you review" in body
+        assert "You review" in body
         assert "until you approve" in body
 
 
@@ -133,7 +135,6 @@ class TestCoachmarkSource:
     def test_template_wires_coachmark_visibility(self):
         html = read_designer_template()
         assert "coachmarkVisible('grid')" in html
-        assert "coachmarkVisible('agent')" in html
         assert "coachmarkVisible('phone')" in html
 
     def test_template_drops_fabricated_left_rail(self):
