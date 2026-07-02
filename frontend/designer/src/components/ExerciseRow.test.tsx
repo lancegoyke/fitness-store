@@ -191,3 +191,63 @@ describe("individual %1RM badge + inline editor", () => {
     expect(screen.getByTestId("one-rm-cancel-9")).toBeDisabled();
   });
 });
+
+describe("no-op blur does not autosave", () => {
+  // Parity with the Alpine template's native @change semantics: focusing a
+  // cell and tabbing away without typing must not fire a commit — an
+  // unconditional onBlur commit would record a no-op undo action server-side
+  // for every cell the coach merely browses through.
+  it("focus + blur without typing does not commit", async () => {
+    const user = userEvent.setup();
+    const onCommit = vi.fn();
+    render(<ExerciseRow {...baseProps({ onCommit })} />);
+    await user.click(screen.getByTestId("exercise-name-9"));
+    await user.tab();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("a later focus + blur without further typing does not re-commit", async () => {
+    const user = userEvent.setup();
+    const onCommit = vi.fn();
+    render(<ExerciseRow {...baseProps({ onCommit })} />);
+    const input = screen.getByTestId("exercise-sets-9");
+    await user.type(input, "4");
+    await user.tab();
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    await user.click(input);
+    await user.tab();
+    expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("1RM editor keyboard", () => {
+  // Parity with the Alpine editor's @keydown.enter.prevent / @keydown.escape.prevent.
+  function editorProps(overrides = {}) {
+    const ex = { ...baseProps().ex, load_type: "pct" as const, one_rm: "84" };
+    return baseProps({
+      isGroup: false,
+      ex,
+      oneRmOpenForRow: true,
+      oneRmEditorState: { ex, value: "84", saving: false, error: "" },
+      ...overrides,
+    });
+  }
+
+  it("Enter saves", async () => {
+    const user = userEvent.setup();
+    const onOneRmSave = vi.fn();
+    render(<ExerciseRow {...editorProps({ onOneRmSave })} />);
+    await user.click(screen.getByTestId("one-rm-input-9"));
+    await user.keyboard("{Enter}");
+    expect(onOneRmSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("Escape cancels", async () => {
+    const user = userEvent.setup();
+    const onOneRmCancel = vi.fn();
+    render(<ExerciseRow {...editorProps({ onOneRmCancel })} />);
+    await user.click(screen.getByTestId("one-rm-input-9"));
+    await user.keyboard("{Escape}");
+    expect(onOneRmCancel).toHaveBeenCalledTimes(1);
+  });
+});

@@ -2,6 +2,7 @@
 // exercise grid row (lines ~410-458): controlled cells (onChange ->
 // onFieldChange, onBlur -> onCommit), load-type toggle, group adjust badge,
 // individual %1RM badge/inline editor, remove ×.
+import { useRef } from "react";
 import { loadSuffix } from "../lib/grid";
 import type { Exercise } from "../lib/api";
 import type { OneRmEditorState } from "../hooks/useOneRmEditor";
@@ -52,6 +53,20 @@ export function ExerciseRow(props: ExerciseRowProps) {
 
   const showOneRm = !isGroup && ex.load_type === "pct";
 
+  // Native @change parity: commit on blur only if the coach actually typed in
+  // a cell since focusing it — an unconditional blur commit would autosave
+  // (and record a no-op undo action for) every cell merely tabbed through.
+  const dirtySinceFocus = useRef(false);
+  const changed = (field: keyof Exercise, value: string) => {
+    dirtySinceFocus.current = true;
+    onFieldChange(field, value);
+  };
+  const commitIfDirty = () => {
+    if (!dirtySinceFocus.current) return;
+    dirtySinceFocus.current = false;
+    onCommit();
+  };
+
   return (
     <div className="meso-ex-row">
       <div className="meso-ex-name-col">
@@ -59,8 +74,8 @@ export function ExerciseRow(props: ExerciseRowProps) {
           className="meso-cell meso-ex-name-input"
           data-testid={`exercise-name-${ex.id}`}
           value={ex.name}
-          onChange={(e) => onFieldChange("name", e.target.value)}
-          onBlur={onCommit}
+          onChange={(e) => changed("name", e.target.value)}
+          onBlur={commitIfDirty}
         />
         <div className="meso-ex-tags">
           {ex.tag && <span className="meso-tag-chip">{ex.tag}</span>}
@@ -96,6 +111,17 @@ export function ExerciseRow(props: ExerciseRowProps) {
                 placeholder={unit}
                 value={oneRmEditorState.value}
                 onChange={(e) => onOneRmChange(e.target.value)}
+                onKeyDown={(e) => {
+                  // Parity with the Alpine editor's @keydown.enter.prevent /
+                  // @keydown.escape.prevent.
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onOneRmSave();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    onOneRmCancel();
+                  }
+                }}
               />
               <button
                 type="button"
@@ -159,16 +185,16 @@ export function ExerciseRow(props: ExerciseRowProps) {
           className="meso-cell meso-num-input meso-num-input--sets"
           data-testid={`exercise-sets-${ex.id}`}
           value={ex.sets}
-          onChange={(e) => onFieldChange("sets", e.target.value)}
-          onBlur={onCommit}
+          onChange={(e) => changed("sets", e.target.value)}
+          onBlur={commitIfDirty}
         />
         <span className="meso-x-sep">×</span>
         <input
           className="meso-cell meso-num-input meso-num-input--reps"
           data-testid={`exercise-reps-${ex.id}`}
           value={ex.reps}
-          onChange={(e) => onFieldChange("reps", e.target.value)}
-          onBlur={onCommit}
+          onChange={(e) => changed("reps", e.target.value)}
+          onBlur={commitIfDirty}
         />
       </div>
 
@@ -177,8 +203,8 @@ export function ExerciseRow(props: ExerciseRowProps) {
           className="meso-cell meso-num-input meso-num-input--load"
           data-testid={`exercise-load-${ex.id}`}
           value={ex.load}
-          onChange={(e) => onFieldChange("load", e.target.value)}
-          onBlur={onCommit}
+          onChange={(e) => changed("load", e.target.value)}
+          onBlur={commitIfDirty}
         />
         <button
           type="button"
@@ -197,8 +223,8 @@ export function ExerciseRow(props: ExerciseRowProps) {
           className="meso-cell meso-num-input meso-num-input--rpe"
           data-testid={`exercise-rpe-${ex.id}`}
           value={ex.rpe ?? ""}
-          onChange={(e) => onFieldChange("rpe", e.target.value)}
-          onBlur={onCommit}
+          onChange={(e) => changed("rpe", e.target.value)}
+          onBlur={commitIfDirty}
         />
       </div>
 
@@ -208,8 +234,8 @@ export function ExerciseRow(props: ExerciseRowProps) {
           data-testid={`exercise-note-${ex.id}`}
           value={ex.note ?? ""}
           placeholder="—"
-          onChange={(e) => onFieldChange("note", e.target.value)}
-          onBlur={onCommit}
+          onChange={(e) => changed("note", e.target.value)}
+          onBlur={commitIfDirty}
         />
       </div>
     </div>
