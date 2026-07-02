@@ -2,7 +2,7 @@
 // Ported from createMeso()'s applyPlanData/addExercise/addDay/switchWeek/
 // addWeek/setCurrentWeek (app/store_project/static/js/meso.js). No `live`
 // fixture branch here (Non-goals) — every verb always talks to the real API.
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { apiPost, EMPTY_HISTORY } from "../lib/api";
 import { deliverHref as buildDeliverHref } from "../lib/deliver";
 import type {
@@ -48,6 +48,11 @@ export function usePlanData(
   const [weeks, setWeeks] = useState<Week[]>(initial.weeks);
   const [phases, setPhases] = useState<Phase[]>(initial.phases);
   const [viewedWeekId, setViewedWeekId] = useState<Id | null>(initial.viewing ?? null);
+  // The CURRENT viewed week, readable at async-resolve time — a row-merge
+  // reply that lands after a week switch must be dropped (see addDay), and
+  // the closure's `viewedWeekId` is frozen at request time.
+  const viewedWeekIdRef = useRef<Id | null>(initial.viewing ?? null);
+  viewedWeekIdRef.current = viewedWeekId;
   const [history, setHistory] = useState<HistoryState>(initial.history ?? EMPTY_HISTORY);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
 
@@ -99,15 +104,21 @@ export function usePlanData(
     async (dayIndex: number) => {
       const day = program[dayIndex];
       if (!day) return;
+      const dayId = day.id;
       try {
         const data = await apiPost<{ prescription: Exercise; history?: HistoryState }>(
-          `/meso/api/plan/${planId}/session/${day.id}/exercise/`,
+          `/meso/api/plan/${planId}/session/${dayId}/exercise/`,
           null,
           csrf,
         );
+        // Merge by day ID, not index: if the grid swapped (week switch) or
+        // shifted (a delete) while the POST was in flight, the reply's day is
+        // simply absent and the merge is a no-op — the row exists server-side
+        // and re-hydrates on switch-back. History is still a valid
+        // post-mutation fact either way.
         setProgram((prev) =>
-          prev.map((d, di) =>
-            di === dayIndex ? { ...d, exercises: [...d.exercises, data.prescription] } : d,
+          prev.map((d) =>
+            d.id === dayId ? { ...d, exercises: [...d.exercises, data.prescription] } : d,
           ),
         );
         adoptHistory(data);
@@ -119,13 +130,19 @@ export function usePlanData(
   );
 
   const addDay = useCallback(async () => {
+    const weekAtRequest = viewedWeekId;
     try {
       const data = await apiPost<{ session: Day; history?: HistoryState }>(
         `/meso/api/plan/${planId}/session/`,
-        { week_id: viewedWeekId },
+        { week_id: weekAtRequest },
         csrf,
       );
-      setProgram((prev) => [...prev, data.session]);
+      // Drop the row merge if the coach switched weeks while the POST was in
+      // flight — the day was created on the OLD week and would otherwise
+      // render under the new grid. (History still adopts; see addExercise.)
+      if (viewedWeekIdRef.current === weekAtRequest) {
+        setProgram((prev) => [...prev, data.session]);
+      }
       adoptHistory(data);
     } catch (err) {
       console.error("Add day failed", err);

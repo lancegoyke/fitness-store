@@ -346,3 +346,70 @@ describe("derived values", () => {
     expect(result.current.deliverHref).toBe("/meso/deliver/7/?week=2");
   });
 });
+
+describe("stale replies after a week switch", () => {
+  // Alpine captured the day ARRAY by reference, so a reply landing after a
+  // week switch mutated a detached object — invisible and harmless. The port
+  // must match: a row-merge reply whose day (or week) is no longer on screen
+  // is dropped — the row exists server-side and re-hydrates on switch-back —
+  // while its history (a valid post-mutation fact) is still adopted.
+  it("addExercise drops a reply that resolves after the grid swapped", async () => {
+    const { result } = setup({ program: [day({ id: 1, exercises: [] })] });
+    let resolveFetch!: (v: unknown) => void;
+    globalThis.fetch = vi.fn().mockReturnValue(
+      new Promise((r) => {
+        resolveFetch = r;
+      }),
+    );
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.addExercise(0);
+    });
+    act(() => {
+      result.current.applyPlanData({
+        program: [day({ id: 99, exercises: [] })],
+        weeks: [week({ id: 2 })],
+        phases: [],
+        viewing: 2,
+      });
+    });
+    await act(async () => {
+      resolveFetch(
+        res({ ok: true, prescription: { id: 12, name: "New exercise" }, history: HISTORY_BOTH }),
+      );
+      await pending;
+    });
+    expect(result.current.program[0]!.exercises).toEqual([]);
+    expect(result.current.history).toEqual(HISTORY_BOTH);
+  });
+
+  it("addDay drops a reply that resolves after the viewed week changed", async () => {
+    const { result } = setup({ program: [day({ id: 1 })] });
+    let resolveFetch!: (v: unknown) => void;
+    globalThis.fetch = vi.fn().mockReturnValue(
+      new Promise((r) => {
+        resolveFetch = r;
+      }),
+    );
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.addDay();
+    });
+    act(() => {
+      result.current.applyPlanData({
+        program: [day({ id: 99 })],
+        weeks: [week({ id: 2 })],
+        phases: [],
+        viewing: 2,
+      });
+    });
+    await act(async () => {
+      resolveFetch(
+        res({ ok: true, session: { id: 55, n: 2, name: "Day 2", exercises: [] }, history: HISTORY_BOTH }),
+      );
+      await pending;
+    });
+    expect(result.current.program.map((d) => d.id)).toEqual([99]);
+    expect(result.current.history).toEqual(HISTORY_BOTH);
+  });
+});
