@@ -163,6 +163,12 @@ urlpatterns = [
         views.session_delete,
         name="api_session_delete",
     ),
+    # Reorder a session's exercise rows (dnd-kit designer, Phase 4, #403).
+    path(
+        "api/plan/<int:plan_id>/session/<int:pk>/reorder/",
+        views.session_reorder,
+        name="api_session_reorder",
+    ),
     # Multi-week designer: view any week (read), add the next week (write), and
     # set the live/deliver-target week. ``week/<id>/`` GET views; POST sets current.
     path(
@@ -186,6 +192,12 @@ urlpatterns = [
         views.week_delete,
         name="api_week_delete",
     ),
+    # Reorder a week's training days (dnd-kit designer, Phase 4, #403).
+    path(
+        "api/plan/<int:plan_id>/week/<int:week_id>/reorder/",
+        views.week_reorder_sessions,
+        name="api_week_reorder_sessions",
+    ),
     # Plan-wide undo/redo op-log (designer framework Phase 1, issue #401).
     path(
         "api/plan/<int:plan_id>/undo/",
@@ -208,6 +220,13 @@ urlpatterns = [
         "api/plan/<int:plan_id>/prescription/<int:pk>/one-rm/",
         views.coach_set_one_rm,
         name="api_coach_set_one_rm",
+    ),
+    # Move an exercise row to a different session, within the same week
+    # (dnd-kit designer cross-day drag, Phase 4, #403).
+    path(
+        "api/plan/<int:plan_id>/prescription/<int:pk>/move/",
+        views.prescription_move,
+        name="api_prescription_move",
     ),
     path(
         "api/plan/<int:plan_id>/deliver/",

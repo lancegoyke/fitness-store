@@ -197,6 +197,12 @@ def restore_plan_snapshot(plan, snapshot):
 
     for presc in models.ExercisePrescription.objects.filter(pk__in=prescription_pks):
         row = prescription_rows[presc.pk]
+        # ``session_id`` is restored too (Phase 4, #403): before
+        # ``prescription_move``, no endpoint ever re-pointed a prescription's
+        # session, so this was captured in the snapshot but never needed
+        # writing back. A move's undo must put the row back in its source
+        # session, not just its old order within whatever session it's in now.
+        presc.session_id = row["session_id"]
         presc.exercise_id = row["exercise_id"]
         presc.name = row["name"]
         presc.order = row["order"]
