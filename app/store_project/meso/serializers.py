@@ -794,6 +794,34 @@ def serialize_athlete_identity(plan):
     }
 
 
+def serialize_plan_history(plan):
+    """The designer's undo/redo button state (Phase 1 op-log).
+
+    ``can_undo``/``can_redo`` reflect whether the plan has a row on the
+    respective stack; the labels are always the row that would pop *next* (the
+    max-seq undo row / min-seq redo row — see ``history.py``), so the buttons
+    can show what they're about to do. Rides every ``serialize_plan`` response
+    (the initial page payload, every week/add/delete/set-current reply) so the
+    designer's buttons stay accurate after every ``applyPlanData``.
+    """
+    undo_row = (
+        models.PlanAction.objects.filter(plan=plan, stack=models.PlanAction.Stack.UNDO)
+        .order_by("-seq")
+        .first()
+    )
+    redo_row = (
+        models.PlanAction.objects.filter(plan=plan, stack=models.PlanAction.Stack.REDO)
+        .order_by("seq")
+        .first()
+    )
+    return {
+        "can_undo": undo_row is not None,
+        "can_redo": redo_row is not None,
+        "undo_label": undo_row.label if undo_row else None,
+        "redo_label": redo_row.label if redo_row else None,
+    }
+
+
 def serialize_plan(plan, week=None):
     """Serialize ``plan`` to the designer's ``program``/``weeks``/``phases`` shape.
 
@@ -884,4 +912,7 @@ def serialize_plan(plan, week=None):
         # "viewing" apart from "current" (the deliver target).
         "viewing": open_week.pk if open_week is not None else None,
         "phases": phases,
+        # Undo/redo button state (designer framework Phase 1) — rides every
+        # serialize_plan response so the designer's buttons stay accurate.
+        "history": serialize_plan_history(plan),
     }
