@@ -5,6 +5,10 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ExerciseRow } from "./ExerciseRow";
 import type { Exercise } from "../lib/api";
+// Phase 3 (grid keyboard navigation) — type-only import, safely erased at
+// build time (verbatimModuleSyntax) even before ../hooks/useGridNav exists,
+// so it can't break this file's EXISTING specs while useGridNav is red.
+import type { GridColumn, UseGridNavResult, GridCellCallbacks } from "../hooks/useGridNav";
 
 function ex(overrides: Partial<Exercise> = {}): Exercise {
   return { id: 9, name: "Squat", sets: "3", reps: "5", load: "100", load_type: "abs", rpe: "8", note: "", ...overrides };
@@ -249,5 +253,154 @@ describe("1RM editor keyboard", () => {
     await user.click(screen.getByTestId("one-rm-input-9"));
     await user.keyboard("{Escape}");
     expect(onOneRmCancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+// === Phase 3: grid keyboard navigation — RED (frontend/designer/CONTRACT.md
+// has no useGridNav section yet; ../hooks/useGridNav does not exist). See
+// useGridNav.test.tsx's header for the full API contract. Additions below,
+// existing specs above are untouched.
+//
+// Design decisions pinned here (ExerciseRow's side of the contract):
+// - `ExerciseRowProps` gains an OPTIONAL `gridNav?: UseGridNavResult` prop
+//   (threaded WeekGrid -> DayCard -> ExerciseRow, both hops optional) so
+//   DayCard.test.tsx's existing fixtures — out of scope for this PR — never
+//   need to change: DayCard forwards `gridNav` straight through, and
+//   ExerciseRow falls back to a harmless no-op (tabIndex -1, inert
+//   onFocus/onKeyDown) when the prop is absent, exactly as these specs
+//   exercise via `baseProps()` (which never sets it).
+// - `aria-label` and `data-grid-cell` are unconditional — pure functions of
+//   (ex.name, ex.id, column) — so they're correct even in that no-gridNav
+//   fallback path (a11y must never depend on the nav feature being wired).
+describe("Phase 3: cell aria-labels (a11y, unconditional)", () => {
+  it("labels every one of the six cells '<exercise name> — <column label>'", () => {
+    render(<ExerciseRow {...baseProps({ ex: ex({ name: "Box Squat" }) })} />);
+    expect(screen.getByTestId("exercise-name-9")).toHaveAttribute("aria-label", "Box Squat — exercise name");
+    expect(screen.getByTestId("exercise-sets-9")).toHaveAttribute("aria-label", "Box Squat — sets");
+    expect(screen.getByTestId("exercise-reps-9")).toHaveAttribute("aria-label", "Box Squat — reps");
+    expect(screen.getByTestId("exercise-load-9")).toHaveAttribute("aria-label", "Box Squat — load");
+    expect(screen.getByTestId("exercise-rpe-9")).toHaveAttribute("aria-label", "Box Squat — RPE");
+    expect(screen.getByTestId("exercise-note-9")).toHaveAttribute("aria-label", "Box Squat — note");
+  });
+
+  it("falls back to 'exercise' in the label when the row has no name yet", () => {
+    render(<ExerciseRow {...baseProps({ ex: ex({ name: "" }) })} />);
+    expect(screen.getByTestId("exercise-sets-9")).toHaveAttribute("aria-label", "exercise — sets");
+  });
+});
+
+describe("Phase 3: grid-cell DOM identity (unconditional)", () => {
+  it("tags every cell input data-grid-cell='<prescriptionId>:<column>'", () => {
+    render(<ExerciseRow {...baseProps()} />);
+    expect(screen.getByTestId("exercise-name-9")).toHaveAttribute("data-grid-cell", "9:name");
+    expect(screen.getByTestId("exercise-sets-9")).toHaveAttribute("data-grid-cell", "9:sets");
+    expect(screen.getByTestId("exercise-reps-9")).toHaveAttribute("data-grid-cell", "9:reps");
+    expect(screen.getByTestId("exercise-load-9")).toHaveAttribute("data-grid-cell", "9:load");
+    expect(screen.getByTestId("exercise-rpe-9")).toHaveAttribute("data-grid-cell", "9:rpe");
+    expect(screen.getByTestId("exercise-note-9")).toHaveAttribute("data-grid-cell", "9:note");
+  });
+});
+
+describe("Phase 3: roving tabIndex wiring (gridNav prop)", () => {
+  function gridNavAnchoredOn(column: GridColumn): UseGridNavResult {
+    return {
+      anchor: { prescriptionId: 9, column },
+      cellProps: vi.fn((_id: number | string, c: GridColumn) => ({
+        tabIndex: c === column ? (0 as const) : (-1 as const),
+        onFocus: vi.fn(),
+        onKeyDown: vi.fn(),
+      })),
+    };
+  }
+
+  it("sets tabIndex=0 only on the gridNav-anchored column, -1 on the rest", () => {
+    render(<ExerciseRow {...baseProps({ gridNav: gridNavAnchoredOn("load") })} />);
+    expect(screen.getByTestId("exercise-name-9")).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByTestId("exercise-sets-9")).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByTestId("exercise-load-9")).toHaveAttribute("tabindex", "0");
+    expect(screen.getByTestId("exercise-note-9")).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("without a gridNav prop, cells fall back to a non-tabbable -1 rather than crashing", () => {
+    render(<ExerciseRow {...baseProps()} />);
+    expect(screen.getByTestId("exercise-name-9")).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByTestId("exercise-sets-9")).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("calls gridNav.cellProps with this row's prescription id and each cell's column", () => {
+    const gridNav = gridNavAnchoredOn("name");
+    render(<ExerciseRow {...baseProps({ gridNav })} />);
+    expect(gridNav.cellProps).toHaveBeenCalledWith(9, "name", expect.anything());
+    expect(gridNav.cellProps).toHaveBeenCalledWith(9, "sets", expect.anything());
+    expect(gridNav.cellProps).toHaveBeenCalledWith(9, "reps", expect.anything());
+    expect(gridNav.cellProps).toHaveBeenCalledWith(9, "load", expect.anything());
+    expect(gridNav.cellProps).toHaveBeenCalledWith(9, "rpe", expect.anything());
+    expect(gridNav.cellProps).toHaveBeenCalledWith(9, "note", expect.anything());
+  });
+});
+
+describe("Phase 3: cellProps callback wiring (Enter-commit / Escape-revert contract)", () => {
+  // ExerciseRow must hand useGridNav's cellProps() a callbacks object whose
+  // onCommit IS the row's existing dirty-gated commit (spec: "the existing
+  // dirty-gated commit — no-op when clean") and whose onRevert writes
+  // through the RAW onFieldChange prop (bypassing the dirtying `changed()`
+  // wrapper) and clears the dirty flag — this is what lets Escape suppress
+  // a subsequent blur-commit. We capture the real callbacks ExerciseRow
+  // passes and invoke them directly, rather than re-deriving useGridNav's
+  // own key-decision logic here (that's useGridNav.test.tsx's job).
+  function captureCallbacks(column: GridColumn) {
+    let captured: GridCellCallbacks | undefined;
+    const gridNav: UseGridNavResult = {
+      anchor: { prescriptionId: 9, column },
+      cellProps: vi.fn((_id: number | string, c: GridColumn, callbacks: GridCellCallbacks) => {
+        if (c === column) captured = callbacks;
+        return { tabIndex: c === column ? (0 as const) : (-1 as const), onFocus: vi.fn(), onKeyDown: vi.fn() };
+      }),
+    };
+    return { gridNav, getCallbacks: () => captured };
+  }
+
+  it("onCommit is a no-op on a clean cell (existing dirty gate)", () => {
+    const onCommit = vi.fn();
+    const { gridNav, getCallbacks } = captureCallbacks("load");
+    render(<ExerciseRow {...baseProps({ gridNav, onCommit })} />);
+    expect(gridNav.cellProps).toHaveBeenCalled();
+    getCallbacks()!.onCommit();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("onCommit fires the row's onCommit prop once the cell has actually been changed", async () => {
+    const user = userEvent.setup();
+    const onCommit = vi.fn();
+    const { gridNav, getCallbacks } = captureCallbacks("load");
+    render(<ExerciseRow {...baseProps({ gridNav, onCommit })} />);
+    await user.type(screen.getByTestId("exercise-load-9"), "5");
+    expect(gridNav.cellProps).toHaveBeenCalled();
+    getCallbacks()!.onCommit();
+    expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("onRevert calls the raw onFieldChange with the given value and suppresses the next blur commit", async () => {
+    const user = userEvent.setup();
+    const onFieldChange = vi.fn();
+    const onCommit = vi.fn();
+    const { gridNav, getCallbacks } = captureCallbacks("load");
+    render(<ExerciseRow {...baseProps({ gridNav, onFieldChange, onCommit })} />);
+    await user.type(screen.getByTestId("exercise-load-9"), "5"); // dirties the row
+    expect(gridNav.cellProps).toHaveBeenCalled();
+    getCallbacks()!.onRevert("100");
+    expect(onFieldChange).toHaveBeenCalledWith("load", "100");
+    await user.click(screen.getByTestId("exercise-load-9"));
+    await user.tab();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("onChange marks the row dirty and forwards to onFieldChange, same as typing", () => {
+    const onFieldChange = vi.fn();
+    const { gridNav, getCallbacks } = captureCallbacks("note");
+    render(<ExerciseRow {...baseProps({ gridNav, onFieldChange })} />);
+    expect(gridNav.cellProps).toHaveBeenCalled();
+    getCallbacks()!.onChange("left knee sore");
+    expect(onFieldChange).toHaveBeenCalledWith("note", "left knee sore");
   });
 });

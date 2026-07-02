@@ -57,6 +57,7 @@ export function WeekStrip(props: WeekStripProps) {
           key={w.id}
           type="button"
           data-testid={`week-chip-${w.id}`}
+          data-grid-restore=""
           data-hover="rail"
           className={`meso-week-chip${w.id === viewedWeekId ? " is-viewed" : ""}`}
           title={w.current ? "Live week — delivery sends this one" : "View " + w.label}
@@ -69,6 +70,7 @@ export function WeekStrip(props: WeekStripProps) {
       <button
         type="button"
         data-testid="add-week-button"
+          data-grid-restore=""
         data-hover="add"
         className="meso-week-strip-btn meso-week-strip-btn--dashed"
         onClick={onAddWeek}
@@ -79,6 +81,7 @@ export function WeekStrip(props: WeekStripProps) {
         <button
           type="button"
           data-testid="make-current-button"
+          data-grid-restore=""
           data-hover="brighten"
           className="meso-week-strip-btn meso-week-strip-btn--accent"
           title="Make this the live week — delivery will send it"
@@ -91,6 +94,7 @@ export function WeekStrip(props: WeekStripProps) {
         <button
           type="button"
           data-testid="remove-week-button"
+          data-grid-restore=""
           data-hover="rail"
           className="meso-week-strip-btn"
           disabled={deleting}
@@ -106,6 +110,7 @@ export function WeekStrip(props: WeekStripProps) {
           <button
             type="button"
             data-testid="confirm-remove-week-button"
+          data-grid-restore=""
             data-hover="brighten"
             className="meso-week-strip-btn meso-week-strip-btn--confirm"
             disabled={deleting}
@@ -117,6 +122,7 @@ export function WeekStrip(props: WeekStripProps) {
           <button
             type="button"
             data-testid="cancel-remove-week-button"
+          data-grid-restore=""
             data-hover="rail"
             className="meso-week-strip-btn"
             disabled={deleting}
@@ -131,6 +137,7 @@ export function WeekStrip(props: WeekStripProps) {
         <button
           type="button"
           data-testid="undo-button"
+          data-grid-restore=""
           data-hover="rail"
           className="meso-week-strip-btn"
           disabled={undoing || !history.can_undo}
@@ -143,6 +150,7 @@ export function WeekStrip(props: WeekStripProps) {
         <button
           type="button"
           data-testid="redo-button"
+          data-grid-restore=""
           data-hover="rail"
           className="meso-week-strip-btn"
           disabled={undoing || !history.can_redo}

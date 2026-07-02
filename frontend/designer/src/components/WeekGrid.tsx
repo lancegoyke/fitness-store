@@ -10,6 +10,7 @@ import { WeekStrip } from "./WeekStrip";
 import type { Day, Exercise, HistoryState, Week } from "../lib/api";
 import type { Id, PendingDelete } from "../hooks/usePlanData";
 import type { OneRmEditorState } from "../hooks/useOneRmEditor";
+import { useGridNav } from "../hooks/useGridNav";
 
 export interface WeekGridProps {
   program: Day[];
@@ -92,6 +93,11 @@ export function WeekGrid(props: WeekGridProps) {
     onRedo,
   } = props;
 
+  // Phase 3: instantiated ONCE here (WeekGrid already receives `program`) —
+  // DayCard/ExerciseRow only ever see the result as an optional passthrough
+  // prop (see useGridNav.test.tsx's header).
+  const gridNav = useGridNav({ program });
+
   return (
     <div>
       <WeekStrip
@@ -154,6 +160,7 @@ export function WeekGrid(props: WeekGridProps) {
           onConfirmPendingDelete={onConfirmPendingDelete}
           onCancelPendingDelete={onCancelPendingDelete}
           onAddExercise={onAddExercise ?? (() => {})}
+          gridNav={gridNav}
           onFieldChange={onFieldChange}
           onCommit={onCommit}
           onRemoveExercise={onRemoveExercise}

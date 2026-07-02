@@ -4,7 +4,8 @@
 // flags json_script elements the same way designer.html's `init()` did, then
 // composes every hook and renders the tree. Absent/malformed payload is the
 // no-op-without-a-plan guard ported from init()'s early return.
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { DesignerRoot } from "./DesignerRoot";
 
 function jsonScript(id: string, data: unknown) {
@@ -137,5 +138,141 @@ describe("hydration: missing or malformed payload", () => {
 
     expect(spy).toHaveBeenCalled();
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+// === Phase 3: grid keyboard navigation — RED (../hooks/useGridNav does not
+// exist; WeekGrid does not call it yet). DesignerRoot.tsx itself needs NO
+// code changes for this PR (useGridNav is instantiated inside WeekGrid,
+// which already receives `program` from usePlanData) — these specs mount
+// the full app because focus-restoration-across-applyPlanData needs a real
+// undo() round trip (usePlanData + useUndoRedo), and the undo-key
+// regression needs the real window keydown listener (useUndoRedo).
+//
+// Restoration tiers tested here are ONLY the three FALLBACKS (spec: "else
+// focus the first cell of the same day ... else the grid's first cell ...
+// else nothing") — tier 1 ("re-focus the same prescriptionId+column")
+// is deliberately NOT pinned at this level: React's keyed reconciliation
+// already keeps the same <input> DOM node (and thus its native focus)
+// across a same-shape program swap with no restoration code involved, so
+// an integration spec for it can't fail today for the right reason (it's
+// covered, and IS discriminating, at the hook level in
+// hooks/useGridNav.test.tsx). Tiers 2/3 genuinely unmount the previously-
+// focused input (its row/day disappears from the array), which drops
+// focus to <body> today with nothing to restore it — that's what makes
+// them real red specs here.
+function twoDayGridProgram() {
+  return [
+    {
+      id: 1,
+      n: 1,
+      name: "Lower",
+      exercises: [
+        { id: 9, name: "Box Squat", sets: "3", reps: "5", load: "100", load_type: "abs" },
+        { id: 10, name: "RDL", sets: "3", reps: "8", load: "80", load_type: "abs" },
+      ],
+    },
+    {
+      id: 2,
+      n: 2,
+      name: "Upper",
+      exercises: [{ id: 11, name: "Bench", sets: "3", reps: "5", load: "70", load_type: "abs" }],
+    },
+  ];
+}
+
+function mountGridPlan() {
+  jsonScript(
+    "meso-plan-data",
+    planPayload({
+      program: twoDayGridProgram(),
+      history: { can_undo: true, can_redo: false, undo_label: "Edited Box Squat", redo_label: null },
+    }),
+  );
+  jsonScript("meso-chat-thread", []);
+  csrfSpan("tok123");
+  jsonScript("meso-designer-flags", flagsPayload());
+  render(<DesignerRoot />);
+}
+
+function mockUndoReply(program: unknown[]) {
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      program,
+      weeks: [{ id: 1, index: 1, label: "Wk 1", current: true }],
+      phases: [{ name: "Hypertrophy", weeks: "4 wk", state: "current" }],
+      viewing: 1,
+      // can_undo stays true: the multi-undo restoration specs click the undo
+      // button repeatedly, and a can_undo:false reply would disable it after
+      // the first click (userEvent.click on a disabled button never fires).
+      history: { can_undo: true, can_redo: true, undo_label: "Edited RDL", redo_label: "Edited Box Squat" },
+    }),
+  }) as unknown as typeof fetch;
+}
+
+describe("Phase 3: grid focus restoration across an applyPlanData swap (undo)", () => {
+  it("tier: falls back to the day's first cell when the focused prescription is gone but its day survives", async () => {
+    const user = userEvent.setup();
+    mountGridPlan();
+    await user.click(screen.getByTestId("exercise-sets-9"));
+
+    // Exercise 9 is gone from day 1 (undone); exercise 10 remains.
+    mockUndoReply([
+      { id: 1, n: 1, name: "Lower", exercises: [{ id: 10, name: "RDL", sets: "3", reps: "8", load: "80", load_type: "abs" }] },
+      { id: 2, n: 2, name: "Upper", exercises: [{ id: 11, name: "Bench", sets: "3", reps: "5", load: "70", load_type: "abs" }] },
+    ]);
+    await user.click(screen.getByTestId("undo-button"));
+
+    await waitFor(() => expect(screen.getByTestId("exercise-name-10")).toHaveFocus());
+  });
+
+  it("tier: falls back to the grid's first cell when the focused day itself is gone; a further swap that empties the grid does not crash", async () => {
+    const user = userEvent.setup();
+    mountGridPlan();
+    await user.click(screen.getByTestId("exercise-sets-11")); // day 2's only exercise
+
+    // Day 2 is gone entirely (undone); only day 1 remains.
+    mockUndoReply([
+      {
+        id: 1,
+        n: 1,
+        name: "Lower",
+        exercises: [
+          { id: 9, name: "Box Squat", sets: "3", reps: "5", load: "100", load_type: "abs" },
+          { id: 10, name: "RDL", sets: "3", reps: "8", load: "80", load_type: "abs" },
+        ],
+      },
+    ]);
+    await user.click(screen.getByTestId("undo-button"));
+
+    await waitFor(() => expect(screen.getByTestId("exercise-name-9")).toHaveFocus());
+
+    // A further swap that empties the whole grid: "else nothing" — must not
+    // throw (an uncaught error here would fail this test), and must not
+    // leave a stale reference to a removed element.
+    mockUndoReply([]);
+    await user.click(screen.getByTestId("undo-button"));
+    await waitFor(() => expect(screen.queryByTestId("exercise-name-9")).not.toBeInTheDocument());
+  });
+});
+
+describe("Phase 3 regression: grid inputs still suppress global undo (handleUndoKey)", () => {
+  it("once a cell has its own keydown wiring, Ctrl+Z there still leaves native field undo alone (no undo POST)", async () => {
+    const user = userEvent.setup();
+    mountGridPlan();
+    await user.click(screen.getByTestId("exercise-sets-9"));
+    // Sanity: this proves the cell truly has Phase 3's own keydown handling
+    // active (not just "nothing is wired so nothing could intercept
+    // anything") before trusting the negative assertion below.
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("exercise-sets-10")).toHaveFocus();
+
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    fireEvent.keyDown(screen.getByTestId("exercise-sets-10"), { key: "z", ctrlKey: true });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
