@@ -32,12 +32,7 @@ existing "no JS runner" pattern of guarding client behavior at the source
 level (previously against ``meso.js``, now against
 ``frontend/designer/src/``) — the island's own rendering behavior has real
 coverage in its vitest suite (``WeekGrid.test.tsx``, ``useCoachmarks.test.ts``,
-``ChatPanel.test.tsx``). NOTE: the *phone-preview* coachmark ("Preview as
-your athlete") was not ported to the island — ``AthletePreview.tsx`` has no
-coachmark UI, even though ``useCoachmarks``/``lib/coachmarks.ts`` still track
-a "phone" key. That half of this file's original assertions is dropped here
-rather than faked; see the PR report for the follow-up decision (port it, or
-formally retire the "phone" key).
+``ChatPanel.test.tsx``, ``AthletePreview.test.tsx``).
 """
 
 from pathlib import Path
@@ -74,15 +69,20 @@ def render_designer(client, plan):
 
 
 class TestCoachmarksRender:
-    """The grid coachmark renders in the island source (WeekGrid.tsx).
+    """Both coachmarks render in the island source.
 
-    Only the grid coachmark made the Phase 2 port — see the module docstring
-    for the dropped phone-preview coachmark.
+    The grid one lives in WeekGrid.tsx; the phone-preview one in
+    AthletePreview.tsx — same dismiss plumbing, same first-run purpose.
     """
 
     def test_week_grid_renders_the_grid_coachmark(self):
         tsx = read_island_source("components", "WeekGrid.tsx")
         assert "The week grid" in tsx  # grid coachmark
+
+    def test_athlete_preview_renders_the_phone_coachmark(self):
+        tsx = read_island_source("components", "AthletePreview.tsx")
+        assert "Preview as your athlete" in tsx
+        assert 'dismissCoachmark?.("phone")' in tsx
 
     def test_grid_coachmark_has_a_dismiss_control(self):
         tsx = read_island_source("components", "WeekGrid.tsx")
@@ -145,10 +145,12 @@ class TestCoachmarkSource:
             assert symbol in hook, f"hooks/useCoachmarks.ts should define {symbol}"
 
     def test_week_grid_wires_coachmark_visibility(self):
-        # Only "grid" is wired to a rendered UI element (see module docstring
-        # re: the dropped "phone" coachmark).
         tsx = read_island_source("components", "WeekGrid.tsx")
         assert 'coachmarkVisible("grid")' in tsx
+
+    def test_athlete_preview_wires_coachmark_visibility(self):
+        tsx = read_island_source("components", "AthletePreview.tsx")
+        assert 'coachmarkVisible?.("phone")' in tsx
 
     def test_template_drops_fabricated_left_rail(self):
         html = read_designer_template()

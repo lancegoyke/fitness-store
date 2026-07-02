@@ -194,3 +194,10 @@
   border: 1.5px solid var(--line);
   background: var(--surface);
 }
+
+/* Phone-preview coachmark: full-width so it sits above the phone (ported from
+   the Alpine template's inline flex:0 0 100%/max-width rule). */
+.meso-coachmark--phone {
+  flex: 0 0 100%;
+  max-width: 760px;
+}

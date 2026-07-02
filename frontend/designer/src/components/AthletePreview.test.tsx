@@ -79,3 +79,32 @@ describe("AthletePreview", () => {
     expect(screen.queryByText("Calf Raise")).not.toBeInTheDocument();
   });
 });
+
+describe("AthletePreview phone coachmark", () => {
+  // Parity with the Alpine template's dismissible first-run note ("Preview as
+  // your athlete") — same coachmark plumbing as WeekGrid's "grid" key.
+  function coachmarkProps(visible: boolean) {
+    return baseProps({
+      coachmarkVisible: vi.fn((key: string) => visible && key === "phone"),
+      dismissCoachmark: vi.fn(),
+    });
+  }
+
+  it("shows the phone coachmark until dismissed", () => {
+    render(<AthletePreview {...coachmarkProps(true)} />);
+    expect(screen.getByText("Preview as your athlete")).toBeInTheDocument();
+  });
+
+  it("hides the coachmark when dismissed", () => {
+    render(<AthletePreview {...coachmarkProps(false)} />);
+    expect(screen.queryByText("Preview as your athlete")).not.toBeInTheDocument();
+  });
+
+  it("the dismiss button reports the phone key", async () => {
+    const user = userEvent.setup();
+    const props = coachmarkProps(true);
+    render(<AthletePreview {...props} />);
+    await user.click(screen.getByLabelText("Dismiss tip"));
+    expect(props.dismissCoachmark).toHaveBeenCalledWith("phone");
+  });
+});

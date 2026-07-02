@@ -361,6 +361,8 @@ export function DesignerRoot() {
                 unit={unit}
                 checks={checks}
                 onToggleCheck={(k) => setChecks((prev) => ({ ...prev, [k]: !prev[k] }))}
+                coachmarkVisible={coachmarks.coachmarkVisible}
+                dismissCoachmark={coachmarks.dismissCoachmark}
               />
             )}
           </div>

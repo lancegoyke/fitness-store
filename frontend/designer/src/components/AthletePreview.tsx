@@ -11,6 +11,10 @@ export interface AthletePreviewProps {
   unit: string;
   checks: Record<string, boolean>;
   onToggleCheck(key: string): void;
+  // Phone-preview coachmark ("phone" key) — same plumbing as WeekGrid's
+  // "grid" coachmark. Optional so isolated renders stay coachmark-free.
+  coachmarkVisible?(key: string): boolean;
+  dismissCoachmark?(key: string): void;
 }
 
 interface AthleteSetRow {
@@ -27,7 +31,14 @@ interface AthleteExerciseRow {
   rows: AthleteSetRow[];
 }
 
-export function AthletePreview({ program, unit, checks, onToggleCheck }: AthletePreviewProps) {
+export function AthletePreview({
+  program,
+  unit,
+  checks,
+  onToggleCheck,
+  coachmarkVisible,
+  dismissCoachmark,
+}: AthletePreviewProps) {
   const athleteDay = useMemo<AthleteExerciseRow[]>(() => {
     const day = program[0];
     if (!day) return [];
@@ -49,6 +60,25 @@ export function AthletePreview({ program, unit, checks, onToggleCheck }: Athlete
 
   return (
     <div className="meso-athlete-preview">
+      {coachmarkVisible?.("phone") && (
+        <div className="meso-flex meso-coachmark meso-coachmark--phone">
+          <div className="meso-coachmark-body">
+            <div className="meso-coachmark-title">Preview as your athlete</div>
+            <div className="meso-coachmark-text">
+              This is exactly what your athlete sees on their phone. Preview it, then Deliver to send the week.
+            </div>
+          </div>
+          <button
+            type="button"
+            data-hover="rail"
+            className="meso-coachmark-dismiss"
+            aria-label="Dismiss tip"
+            onClick={() => dismissCoachmark?.("phone")}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="meso-phone">
         <div className="meso-phone-screen">
           <div className="meso-phone-statusbar">
