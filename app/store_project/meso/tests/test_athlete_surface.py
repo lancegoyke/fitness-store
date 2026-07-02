@@ -248,3 +248,88 @@ class TestRosterRedirect:
         client.force_login(s.coach)
         resp = client.get(reverse("meso:roster"))
         assert resp.status_code == 200
+
+
+# -- soft delete (designer framework Phase 0) --------------------------------
+
+
+class TestSoftDeletedRowsHidden:
+    """A coach's soft-delete must reach the athlete surface, not just the designer.
+
+    Deleting an already-delivered day/exercise stamps ``deleted_at``; the
+    athlete must stop seeing it — home no longer lists the day, its logger
+    404s, and log/1RM writes against a deleted row are rejected — while every
+    log already recorded survives (that survival is pinned by the designer
+    delete tests; here we pin the *hiding*).
+    """
+
+    def _log_post(self, client, session, payload):
+        import json
+
+        return client.post(
+            reverse("meso:athlete_log_session", kwargs={"pk": session.pk}),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_home_hides_soft_deleted_session(self, client):
+        s = seed(session_name="Lower")
+        s.session.deleted_at = timezone.now()
+        s.session.save(update_fields=["deleted_at"])
+        client.force_login(s.athlete)
+        body = client.get(HOME).content.decode()
+        assert session_url(s.session) not in body
+        assert "Lower" not in body
+
+    def test_session_page_404s_when_session_soft_deleted(self, client):
+        s = seed()
+        s.session.deleted_at = timezone.now()
+        s.session.save(update_fields=["deleted_at"])
+        client.force_login(s.athlete)
+        assert client.get(session_url(s.session)).status_code == 404
+
+    def test_session_page_404s_when_week_soft_deleted(self, client):
+        s = seed()
+        s.week.deleted_at = timezone.now()
+        s.week.save(update_fields=["deleted_at"])
+        client.force_login(s.athlete)
+        assert client.get(session_url(s.session)).status_code == 404
+
+    def test_logger_hides_soft_deleted_prescription(self, client):
+        s = seed()
+        ExercisePrescriptionFactory(
+            session=s.session, name="Ghost Curl", deleted_at=timezone.now()
+        )
+        client.force_login(s.athlete)
+        body = client.get(session_url(s.session)).content.decode()
+        assert "Ghost Curl" not in body
+        assert "Box Squat" in body
+
+    def test_logging_a_soft_deleted_prescription_is_rejected(self, client):
+        s = seed()
+        ghost = ExercisePrescriptionFactory(
+            session=s.session, name="Ghost Curl", deleted_at=timezone.now()
+        )
+        client.force_login(s.athlete)
+        resp = self._log_post(
+            client,
+            s.session,
+            {"sets": [{"prescription": ghost.pk, "reps": "8", "load": "60"}]},
+        )
+        assert resp.status_code == 400
+        assert SessionLog.objects.count() == 0
+
+    def test_one_rm_on_a_soft_deleted_prescription_is_rejected(self, client):
+        s = seed()
+        ghost = ExercisePrescriptionFactory(
+            session=s.session, name="Ghost Curl", deleted_at=timezone.now()
+        )
+        client.force_login(s.athlete)
+        import json
+
+        resp = client.post(
+            reverse("meso:athlete_set_one_rm", kwargs={"pk": s.session.pk}),
+            data=json.dumps({"prescription": ghost.pk, "value": "140"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400

@@ -12,6 +12,7 @@ until those surfaces grow their own slices.
 import math
 from collections import defaultdict
 
+from django.db.models import Prefetch
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.timesince import timesince
@@ -23,6 +24,7 @@ from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachSubscription
+from .models import ExercisePrescription
 from .models import LoadType
 from .models import Plan
 from .models import SessionLog
@@ -974,7 +976,20 @@ def athlete_home(user):
         week = latest_delivered_week(plan)
         sessions = []
         if week is not None:
-            session_objs = list(week.sessions.prefetch_related("prescriptions"))
+            # Live rows only (soft delete, designer framework Phase 0): a day
+            # the coach removed after delivering is gone from the athlete's
+            # home too, and a removed exercise stops counting toward the row's
+            # "N exercises" chip (the prefetch feeds ``_athlete_session_row``).
+            session_objs = list(
+                week.sessions.filter(deleted_at__isnull=True).prefetch_related(
+                    Prefetch(
+                        "prescriptions",
+                        queryset=ExercisePrescription.objects.filter(
+                            deleted_at__isnull=True
+                        ),
+                    )
+                )
+            )
             done = _done_session_ids([s.pk for s in session_objs], user)
             sessions = [
                 _athlete_session_row(s, done=s.pk in done) for s in session_objs

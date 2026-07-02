@@ -21,6 +21,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
 from django.db.models import Max
+from django.db.models import Prefetch
 from django.http import Http404
 from django.http import HttpResponse
 from django.http import HttpResponseBadRequest
@@ -926,15 +927,30 @@ def _athlete_session_or_404(user, pk):
     404 unless the session's week is delivered *and* its plan is one the athlete
     reaches through an active coach link — a foreign athlete, an undelivered
     week, an archived plan, or an unknown id are indistinguishable (no leak).
+
+    Soft delete (designer framework Phase 0): a session the coach removed —
+    or one under a removed week — is gone from the athlete's surface too, even
+    if it was already delivered. The prescriptions prefetch is likewise
+    live-only, so every downstream ``session.prescriptions.all()`` (the logger
+    grid, ``_clean_logged_sets``'s allowed ids, ``athlete_set_one_rm``) reads
+    only live rows from the cache. Already-logged history is untouched — those
+    reads go through ``SessionLog``/``LoggedSet``, never this lookup.
     """
     session = (
         Session.objects.filter(
             pk=pk,
             week__delivered_at__isnull=False,
             week__mesocycle__plan__in=_athlete_plans(user),
+            deleted_at__isnull=True,
+            week__deleted_at__isnull=True,
         )
         .select_related("week__mesocycle__plan__relationship")
-        .prefetch_related("prescriptions")
+        .prefetch_related(
+            Prefetch(
+                "prescriptions",
+                queryset=ExercisePrescription.objects.filter(deleted_at__isnull=True),
+            )
+        )
         .first()
     )
     if session is None:
@@ -2174,8 +2190,11 @@ def week_set_current(request, plan_id, week_id):
     delivery (which sends ``current_week``) targets it and the designer opens onto
     it next time. Exactly one week is current — the others in the plan are cleared.
     Scoped + edit-gated (403 foreign, 402 over-limit); a foreign week is a 404.
-    Row-locks the plan so concurrent set-currents serialize. Returns the plan
-    pinned to the new current week.
+    Row-locks the plan so concurrent set-currents serialize, and re-reads the
+    week's liveness under that lock — a concurrent ``week_delete`` (which
+    takes the same lock) could soft-delete this week while we wait, and a
+    deleted week must never become current. Returns the plan pinned to the
+    new current week.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -2185,6 +2204,9 @@ def week_set_current(request, plan_id, week_id):
     )
     with transaction.atomic():
         Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        week.refresh_from_db()
+        if week.deleted_at is not None:
+            raise Http404("Week not found.")
         Week.objects.filter(mesocycle__plan=plan).exclude(pk=week.pk).update(
             is_current=False
         )
