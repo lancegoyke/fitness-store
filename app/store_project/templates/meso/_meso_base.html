@@ -60,24 +60,29 @@
         {% block topnav_avatar %}{% if request.user.is_authenticated %}<a class="meso-avatar meso-avatar--sm meso-avatar--accent meso-avatar--link" href="{% url 'users:profile' %}" title="Signed in as {{ request.user.display_name }} — account">{{ request.user.display_name|initials }}</a>{% endif %}{% endblock %}
       </nav>
 
-      {% if is_sandbox %}
-        {% comment %}
-          Persistent sandbox banner (issue #389, Phase 1): a slim strip, not a
-          card, so it reads as chrome rather than page content — every screen
-          in the throwaway workspace carries it.
-        {% endcomment %}
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;margin:14px 0 0;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;font-size:13px;color:var(--accent-deep);">
-          {# No "keep your work" promise — carry-over at signup is deferred (S6). #}
-          <span style="flex:1;min-width:0;">You're in a live demo — your work here is temporary. <strong>Create a free account</strong> to run the AI agent.</span>
-          <a class="meso-btn meso-btn--primary" href="{% url 'meso:sandbox_signup' %}">Create a free account</a>
-        </div>
-      {% endif %}
+      {% if is_sandbox or messages %}
+        {# Matches .meso-page's gutter (max-width:1120px, 24px side padding) so these strips align with the content below instead of bleeding to the viewport edges. #}
+        <div style="max-width:1120px;margin:0 auto;padding:0 24px;">
+          {% if is_sandbox %}
+            {% comment %}
+              Persistent sandbox banner (issue #389, Phase 1): a slim strip, not a
+              card, so it reads as chrome rather than page content — every screen
+              in the throwaway workspace carries it.
+            {% endcomment %}
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;margin:14px 0 0;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;font-size:13px;color:var(--accent-deep);">
+              {# No "keep your work" promise — carry-over at signup is deferred (S6). #}
+              <span style="flex:1;min-width:0;">You're in a live demo — your work here is temporary. <strong>Create a free account</strong> to run the AI agent.</span>
+              <a class="meso-btn meso-btn--primary" href="{% url 'meso:sandbox_signup' %}">Create a free account</a>
+            </div>
+          {% endif %}
 
-      {% if messages %}
-        <div style="display:flex;flex-direction:column;gap:8px;margin:14px 0 0;">
-          {% for message in messages %}
-            <div class="meso-card meso-card--pad" style="padding:11px 14px;font-size:13px;color:var(--ink);border-left:3px solid {% if message.tags == 'error' %}var(--warn){% else %}var(--accent-ink){% endif %};">{{ message }}</div>
-          {% endfor %}
+          {% if messages %}
+            <div style="display:flex;flex-direction:column;gap:8px;margin:14px 0 0;">
+              {% for message in messages %}
+                <div class="meso-card meso-card--pad" style="padding:11px 14px;font-size:13px;color:var(--ink);border-left:3px solid {% if message.tags == 'error' %}var(--warn){% else %}var(--accent-ink){% endif %};">{{ message }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
         </div>
       {% endif %}
 
