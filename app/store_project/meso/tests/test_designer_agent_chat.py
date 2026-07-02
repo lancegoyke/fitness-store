@@ -9,16 +9,18 @@ shipped in Phase 1): the coach's message is POSTed, the returned batch is
 rendered inline, and a link sends the coach to the review gate. Proposed changes
 stay inert until applied there — the chat never mutates the program grid.
 
-There is no JS test runner in this project, so these guard the refactor at the
-source level (the canned engine is gone, the real wiring is present) alongside a
-behavioral check that the designer renders a real plan's chat column. The
-endpoint itself is covered end-to-end in ``test_agent_endpoint.py``.
+Phase 2 PR B moved this wiring from ``meso.js``/``designer.html`` to the React
+island (``frontend/designer/src/hooks/useAgentChat.ts``,
+``lib/agent.ts``, ``components/ChatPanel.tsx``) — these guard the refactor at
+the (new) source level, same "no JS runner in Django" pattern as before, just
+repointed at the island's TSX. The island's own behavior has real vitest
+coverage (``useAgentChat.test.ts``, ``ChatPanel.test.tsx``). The endpoint
+itself is covered end-to-end in ``test_agent_endpoint.py``.
 """
 
 from pathlib import Path
 
 import pytest
-from django.contrib.staticfiles import finders
 from django.urls import reverse
 
 from store_project.meso.models import CoachSubscription
@@ -26,11 +28,11 @@ from store_project.meso.tests.test_designer_save import seed_plan
 
 pytestmark = pytest.mark.django_db
 
+DESIGNER_SRC = Path(__file__).resolve().parents[4] / "frontend" / "designer" / "src"
 
-def read_meso_js():
-    path = finders.find("js/meso.js")
-    assert path, "static js/meso.js must resolve"
-    return Path(path).read_text()
+
+def read_island_source(*parts):
+    return (DESIGNER_SRC.joinpath(*parts)).read_text()
 
 
 def read_designer_template():
@@ -39,16 +41,18 @@ def read_designer_template():
 
 
 class TestCannedEngineRetired:
-    def test_meso_js_drops_the_intent_engine(self):
-        js = read_meso_js()
+    def test_island_agent_chat_drops_the_intent_engine(self):
+        hook = read_island_source("hooks", "useAgentChat.ts")
+        lib = read_island_source("lib", "agent.ts")
         for symbol in ("detectIntent", "applyIntent", "dispatch("):
-            assert symbol not in js, f"{symbol} should be retired in Phase 3"
+            assert symbol not in hook, f"{symbol} should be retired in Phase 3"
+            assert symbol not in lib, f"{symbol} should be retired in Phase 3"
 
-    def test_meso_js_drops_the_fabricated_seed_thread(self):
+    def test_island_agent_chat_drops_the_fabricated_seed_thread(self):
         # The canned seed messages invented logged loads ("92.5 kg" off a
         # trap-bar deadlift) that were never persisted — retired with the engine.
-        js = read_meso_js()
-        assert "92.5 kg" not in js
+        hook = read_island_source("hooks", "useAgentChat.ts")
+        assert "92.5 kg" not in hook
 
     def test_designer_template_drops_intent_chip_wiring(self):
         html = read_designer_template()
@@ -57,41 +61,41 @@ class TestCannedEngineRetired:
 
 
 class TestRealAgentWiring:
-    def test_meso_js_posts_instructions_to_the_agent_endpoint(self):
-        js = read_meso_js()
-        assert "sendInstruction" in js
+    def test_island_posts_instructions_to_the_agent_endpoint(self):
+        hook = read_island_source("hooks", "useAgentChat.ts")
+        assert "sendInstruction" in hook
         # The chat hits the real Phase 1 endpoint rather than a local matcher.
-        assert "/agent/" in js
+        assert "/agent/" in hook
 
-    def test_meso_js_renders_the_returned_batch_and_review_link(self):
-        js = read_meso_js()
+    def test_island_renders_the_returned_batch_and_review_link(self):
+        lib = read_island_source("lib", "agent.ts")
         # The inline render reads the endpoint's batch shape.
-        assert "review_url" in js
-        assert "summary" in js
+        assert "review_url" in lib
+        assert "summary" in lib
 
-    def test_designer_template_wires_chips_as_instructions(self):
-        html = read_designer_template()
-        assert "onChip(c.label)" in html
+    def test_chat_panel_wires_chips_as_instructions(self):
+        tsx = read_island_source("components", "ChatPanel.tsx")
+        assert "onChip(c.label)" in tsx
 
-    def test_designer_template_renders_inline_changes_and_review_link(self):
-        html = read_designer_template()
+    def test_chat_panel_renders_inline_changes_and_review_link(self):
+        tsx = read_island_source("components", "ChatPanel.tsx")
         # Inline batch render: the per-change list + a link to the review gate.
-        assert "m.changes" in html
-        assert "reviewUrl" in html
+        assert "m.changes" in tsx
+        assert "reviewUrl" in tsx
 
 
 class TestPhase4BackgroundJobWiring:
     """The chat kicks off a background job and polls its status (Phase 4)."""
 
-    def test_meso_js_polls_the_batch_status_endpoint(self):
-        js = read_meso_js()
-        assert "pollBatch" in js
-        assert "status_url" in js
+    def test_island_polls_the_batch_status_endpoint(self):
+        hook = read_island_source("hooks", "useAgentChat.ts")
+        assert "pollBatch" in hook
+        assert "status_url" in hook
 
-    def test_meso_js_handles_drafting_and_failed_states(self):
-        js = read_meso_js()
-        assert '"drafting"' in js or "'drafting'" in js
-        assert '"failed"' in js or "'failed'" in js
+    def test_island_handles_drafting_and_failed_states(self):
+        lib = read_island_source("lib", "agent.ts")
+        assert '"drafting"' in lib or "'drafting'" in lib
+        assert '"failed"' in lib or "'failed'" in lib
 
 
 class TestDesignerStillRendersChatColumn:
@@ -104,6 +108,12 @@ class TestDesignerStillRendersChatColumn:
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 200
         body = resp.content.decode()
-        # The agent column header + composer survive the rebuild.
-        assert "Agent" in body
-        assert "Ask the agent to adjust the program" in body
+        # The composer's server-side gate: a comped coach's flags payload
+        # opens the composer state (ChatPanel branches on this client-side —
+        # see ChatPanel.tsx, which carries the "Ask the agent..." copy itself).
+        assert '"can_use_agent": true' in body
+
+    def test_chat_panel_carries_the_agent_column_copy(self):
+        tsx = read_island_source("components", "ChatPanel.tsx")
+        assert "Agent" in tsx
+        assert "Ask the agent to adjust the program" in tsx

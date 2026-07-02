@@ -322,6 +322,13 @@ class TestClientFraming:
 
 
 class TestGroupDesignerUI:
+    """Phase 2 PR B moved the designer's UI to the React island.
+
+    From ``designer.html``/``meso.js`` to ``frontend/designer/src/`` — these
+    checks were repointed to the island's new source homes; see
+    ``test_designer_agent_chat.py``'s module docstring for the same move.
+    """
+
     def _designer_template(self):
         from pathlib import Path
 
@@ -330,26 +337,27 @@ class TestGroupDesignerUI:
         )
         return path.read_text()
 
-    def _meso_js(self):
+    def _island_source(self, *parts):
         from pathlib import Path
 
-        from django.contrib.staticfiles import finders
-
-        return Path(finders.find("js/meso.js")).read_text()
+        src = Path(__file__).resolve().parents[4] / "frontend" / "designer" / "src"
+        return src.joinpath(*parts).read_text()
 
     def test_stale_next_phase_placeholder_is_gone(self):
         # The "group agent arrives in the next phase" copy contradicts this slice.
         html = self._designer_template()
-        js = self._meso_js()
+        root = self._island_source("DesignerRoot.tsx")
+        chat_panel = self._island_source("components", "ChatPanel.tsx")
         assert "arrives in the next phase" not in html
-        assert "arrives in the next phase" not in js
+        assert "arrives in the next phase" not in root
+        assert "arrives in the next phase" not in chat_panel
 
-    def test_meso_js_group_greeting_invites_the_agent(self):
-        js = self._meso_js()
+    def test_designer_root_group_greeting_invites_the_agent(self):
+        root = self._island_source("DesignerRoot.tsx")
         # The group greeting invites the coach to use the agent on the shared
         # program — for the whole group or to adjust one athlete (Phase 2).
-        assert "change it for the whole group" in js
-        assert "adjust one athlete" in js
+        assert "change it for the whole group" in root
+        assert "adjust one athlete" in root
 
     def test_group_designer_renders_the_agent_composer(self, client):
         coach, group, plan, athletes = make_group_plan()
@@ -357,7 +365,10 @@ class TestGroupDesignerUI:
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 200
         body = resp.content.decode()
-        assert "Ask the agent to adjust the program" in body
+        # The composer's server-side gate (make_group_plan comps the coach);
+        # ChatPanel.tsx carries the "Ask the agent..." copy itself (checked in
+        # test_designer_agent_chat.py's test_chat_panel_carries_the_agent_column_copy).
+        assert '"can_use_agent": true' in body
 
     def test_group_designer_hydrates_a_persisted_group_thread(self, client):
         # Group plans can now have agent batches; the persisted-thread hydration

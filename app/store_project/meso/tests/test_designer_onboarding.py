@@ -1,6 +1,6 @@
 """First-time UX Phase 5 — designer & agent self-explanation.
 
-The designer is a self-contained Alpine page that, until now, shipped a pile of
+The designer used to be a self-contained Alpine page that shipped a pile of
 *prototype chrome*: a hardcoded fake athlete ("Maya Okonkwo" with invented
 contraindications), a fabricated "Coach's programming style" block, and a
 hardcoded macrocycle — all rendered over whatever real plan the coach opened. A
@@ -8,12 +8,11 @@ first-time coach also got no orientation: nothing said the grid autosaves, that
 the agent only *proposes* (changes wait at the review gate), or that the phone
 column is the athlete's real view.
 
-Phase 5 fixes both:
+Phase 5 fixed both:
 
-- **Coachmarks.** Two dismissible first-run notes anchor the designer's
-  regions (week grid · phone preview). They show until dismissed; the
-  dismissal persists client-side (``meso.js`` localStorage), like the athlete
-  onboarding chrome. No server "seen" flag, no migration.
+- **Coachmarks.** A dismissible first-run note anchors the week grid. It
+  shows until dismissed; the dismissal persists client-side (localStorage),
+  like the athlete onboarding chrome. No server "seen" flag, no migration.
 - **Agent self-explanation.** A persistent propose → review → apply note makes
   the review gate explicit for everyone (not just first-timers). The agent
   column originally also had its own dismissible coachmark and a chat greeting
@@ -24,16 +23,21 @@ Phase 5 fixes both:
   contraindications (now carried in the serialized payload) and the real
   macrocycle phases.
 
-There is no JS test runner wired into Django, so the dismiss logic is unit-tested
-in ``frontend/meso.test.js`` and these guard the server seam: the serializer
-carries the real identity, the template renders the coachmarks + note and no
-longer renders the fabricated chrome, and ``meso.js`` exposes the dismiss API.
+Phase 2 PR B (designer-framework-plan.md, frontend/designer/CONTRACT.md) then
+moved the whole UI from server-rendered Alpine to a React island
+(``dist/designer.js``): the template itself no longer contains any of this
+copy, so the render-level checks below were repointed to read the island's
+TSX source instead of the rendered HTML body, mirroring the project's
+existing "no JS runner" pattern of guarding client behavior at the source
+level (previously against ``meso.js``, now against
+``frontend/designer/src/``) — the island's own rendering behavior has real
+coverage in its vitest suite (``WeekGrid.test.tsx``, ``useCoachmarks.test.ts``,
+``ChatPanel.test.tsx``, ``AthletePreview.test.tsx``).
 """
 
 from pathlib import Path
 
 import pytest
-from django.contrib.staticfiles import finders
 from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
@@ -41,16 +45,15 @@ from store_project.meso.factories import ContraindicationFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.serializers import serialize_plan
-from store_project.meso.tests.test_designer_save import seed_plan
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
 
+DESIGNER_SRC = Path(__file__).resolve().parents[4] / "frontend" / "designer" / "src"
 
-def read_meso_js():
-    path = finders.find("js/meso.js")
-    assert path, "static js/meso.js must resolve"
-    return Path(path).read_text()
+
+def read_island_source(*parts):
+    return (DESIGNER_SRC.joinpath(*parts)).read_text()
 
 
 def read_designer_template():
@@ -66,29 +69,33 @@ def render_designer(client, plan):
 
 
 class TestCoachmarksRender:
-    """The two dismissible region coachmarks render for a real plan."""
+    """Both coachmarks render in the island source.
 
-    def test_designer_renders_both_coachmarks(self, client):
-        plan, _, _ = seed_plan()
-        body = render_designer(client, plan)
-        assert "The week grid" in body  # grid coachmark
-        assert "Preview as your athlete" in body  # phone-preview coachmark
+    The grid one lives in WeekGrid.tsx; the phone-preview one in
+    AthletePreview.tsx — same dismiss plumbing, same first-run purpose.
+    """
 
-    def test_each_coachmark_has_a_dismiss_control(self, client):
-        plan, _, _ = seed_plan()
-        body = render_designer(client, plan)
-        for key in ("grid", "phone"):
-            assert f"dismissCoachmark('{key}')" in body
+    def test_week_grid_renders_the_grid_coachmark(self):
+        tsx = read_island_source("components", "WeekGrid.tsx")
+        assert "The week grid" in tsx  # grid coachmark
+
+    def test_athlete_preview_renders_the_phone_coachmark(self):
+        tsx = read_island_source("components", "AthletePreview.tsx")
+        assert "Preview as your athlete" in tsx
+        assert 'dismissCoachmark?.("phone")' in tsx
+
+    def test_grid_coachmark_has_a_dismiss_control(self):
+        tsx = read_island_source("components", "WeekGrid.tsx")
+        assert 'dismissCoachmark("grid")' in tsx
 
 
 class TestAgentSelfExplanation:
     """A persistent note makes the propose → review → apply loop explicit."""
 
-    def test_designer_renders_review_gate_note(self, client):
-        plan, _, _ = seed_plan()
-        body = render_designer(client, plan)
-        assert "You review" in body
-        assert "until you approve" in body
+    def test_chat_panel_renders_the_review_gate_note(self):
+        tsx = read_island_source("components", "ChatPanel.tsx")
+        assert "You review" in tsx
+        assert "until you approve" in tsx
 
 
 class TestStaticChromeReplaced:
@@ -120,22 +127,30 @@ class TestStaticChromeReplaced:
 
 
 class TestCoachmarkSource:
-    """``meso.js`` exposes the (unit-tested) dismiss API the template wires to."""
+    """The island exposes the (vitest-covered) dismiss API the grid wires to.
 
-    def test_meso_js_has_coachmark_api(self):
-        js = read_meso_js()
-        for symbol in (
-            "coachmarkStorageKey",
-            "loadCoachmarks",
-            "coachmarkVisible",
-            "dismissCoachmark",
-        ):
-            assert symbol in js, f"meso.js should define {symbol}"
+    ``lib/coachmarks.ts`` + ``hooks/useCoachmarks.ts`` were ``meso.js`` before
+    Phase 2 PR B; the storage-facing primitives were
+    renamed on the port (``coachmarkStorageKey``/``loadCoachmarks`` ->
+    ``storageKey``/``readDismissed``), ``coachmarkVisible``/
+    ``dismissCoachmark`` kept their names on ``useCoachmarks``.
+    """
 
-    def test_template_wires_coachmark_visibility(self):
-        html = read_designer_template()
-        assert "coachmarkVisible('grid')" in html
-        assert "coachmarkVisible('phone')" in html
+    def test_island_has_the_coachmark_api(self):
+        lib = read_island_source("lib", "coachmarks.ts")
+        hook = read_island_source("hooks", "useCoachmarks.ts")
+        for symbol in ("storageKey", "readDismissed", "dismiss"):
+            assert symbol in lib, f"lib/coachmarks.ts should define {symbol}"
+        for symbol in ("coachmarkVisible", "dismissCoachmark"):
+            assert symbol in hook, f"hooks/useCoachmarks.ts should define {symbol}"
+
+    def test_week_grid_wires_coachmark_visibility(self):
+        tsx = read_island_source("components", "WeekGrid.tsx")
+        assert 'coachmarkVisible("grid")' in tsx
+
+    def test_athlete_preview_wires_coachmark_visibility(self):
+        tsx = read_island_source("components", "AthletePreview.tsx")
+        assert 'coachmarkVisible?.("phone")' in tsx
 
     def test_template_drops_fabricated_left_rail(self):
         html = read_designer_template()

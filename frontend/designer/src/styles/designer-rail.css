@@ -1,0 +1,227 @@
+/* Left rail (designer.html lines ~103-201). */
+.meso-left-rail {
+  width: 266px;
+  flex: 0 0 auto;
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  padding: 16px 15px 24px;
+}
+.meso-rail-block {
+  margin-bottom: 0;
+}
+.meso-rail-identity {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 14px;
+}
+.meso-rail-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  background: var(--soft);
+  border: 1px solid var(--soft-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent-deep);
+  flex: 0 0 auto;
+}
+.meso-rail-avatar--group {
+  color: var(--accent-deep);
+}
+.meso-rail-group-glyph {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--accent-deep);
+  border-radius: 4px;
+  display: block;
+}
+.meso-rail-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+.meso-rail-section {
+  margin-bottom: 16px;
+}
+.meso-rail-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+.meso-rail-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 0 0 8px;
+}
+.meso-rail-section-head .meso-rail-label {
+  margin: 0;
+}
+.meso-goal-tag {
+  display: inline-flex;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: var(--soft);
+  border: 1px solid var(--soft-line);
+  font-size: 11.5px;
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+.meso-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.meso-rail-list--tight {
+  gap: 4px;
+}
+.meso-rail-empty {
+  font-size: 12px;
+  color: var(--dim);
+}
+.meso-warn-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 22%, #fff);
+}
+.meso-warn-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warn);
+  margin-top: 6px;
+  flex: 0 0 auto;
+}
+.meso-warn-text {
+  font-size: 12px;
+  color: var(--warn);
+  font-weight: 600;
+  line-height: 1.3;
+}
+.meso-participant-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.meso-participant-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #eef0f2;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+.meso-participant-avatar--lead {
+  background: var(--soft);
+  color: var(--accent-deep);
+}
+.meso-flag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 22%, #fff);
+  font-size: 11.5px;
+  color: var(--warn);
+  font-weight: 600;
+}
+.meso-flag-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.meso-rail-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 0 16px;
+}
+.meso-open-block-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--accent);
+  padding: 0;
+}
+.meso-macro-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.meso-macro-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.meso-macro-item--current {
+  background: var(--soft);
+  border-color: var(--soft-line);
+}
+.meso-macro-item--done {
+  opacity: 0.62;
+}
+.meso-macro-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--line);
+}
+.meso-macro-item--current .meso-macro-dot {
+  background: var(--accent);
+}
+.meso-macro-item--done .meso-macro-dot {
+  background: var(--dim);
+}
+.meso-macro-item--next .meso-macro-dot,
+.meso-macro-item--future .meso-macro-dot {
+  border: 1px solid var(--dim);
+  background: transparent;
+}
+.meso-macro-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.meso-macro-item--current .meso-macro-name {
+  font-weight: 700;
+  color: var(--accent-deep);
+}
+.meso-macro-weeks {
+  font-size: 10.5px;
+  white-space: nowrap;
+  color: var(--dim);
+}
+.meso-macro-item--current .meso-macro-weeks {
+  font-weight: 600;
+  color: var(--accent-deep);
+}

@@ -1,0 +1,95 @@
+/* Week strip — switcher chips + add/make-current/remove/undo/redo
+   (designer.html lines ~343-372). */
+.meso-week-strip {
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.meso-week-chip {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 650;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+.meso-week-chip.is-viewed {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.meso-week-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.meso-week-chip.is-viewed .meso-week-chip-dot {
+  background: var(--accent-ink);
+}
+.meso-week-strip-btn {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--dim);
+}
+.meso-week-strip-btn--dashed {
+  border-style: dashed;
+}
+.meso-week-strip-btn--accent {
+  border-color: var(--accent);
+  background: var(--soft);
+  color: var(--accent-deep);
+}
+.meso-week-strip-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.meso-week-strip-btn--confirm {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.meso-undo-redo-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+/* Group-mode shared-program banner (designer.html lines ~384-389). */
+.meso-group-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 10px 13px;
+  background: var(--soft);
+  border: 1px solid var(--soft-line);
+  border-radius: 9px;
+}
+.meso-group-banner-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--accent-deep);
+}
+.meso-group-banner-text {
+  font-size: 11.5px;
+  color: var(--accent-deep);
+  opacity: 0.85;
+}

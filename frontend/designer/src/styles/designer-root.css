@@ -1,0 +1,162 @@
+/* Root shell + shared helpers (designer.html's root div + top-level layout). */
+.meso-designer-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-width: 1240px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.meso-designer-root .meso-flex {
+  display: flex;
+}
+.meso-designer-root .meso-wrap {
+  flex-wrap: wrap;
+}
+.meso-designer-root .meso-flex-spacer {
+  flex: 1;
+}
+.meso-designer-root .meso-mono {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.meso-designer-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* ---- canvas (right-hand work area) ---- */
+.meso-canvas {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+}
+.meso-canvas-header {
+  height: 49px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.meso-canvas-autosaved {
+  font-size: 11.5px;
+  color: var(--dim);
+  align-items: center;
+  gap: 6px;
+}
+.meso-canvas-autosaved-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.meso-canvas-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.meso-week-view {
+  padding: 18px 20px 40px;
+  max-width: 1080px;
+}
+.meso-week-view-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.meso-week-view-title {
+  margin: 0 0 3px;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+.meso-week-view-sub {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+
+/* ---- first-run coachmark (reused for grid + phone regions) ---- */
+.meso-coachmark {
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 16px;
+  padding: 11px 13px;
+  background: var(--soft);
+  border: 1px solid var(--soft-line);
+  border-left: 3px solid var(--accent);
+  border-radius: 9px;
+}
+.meso-coachmark-body {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+.meso-coachmark-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--accent-deep);
+}
+.meso-coachmark-text {
+  font-size: 11.5px;
+  color: var(--accent-deep);
+  opacity: 0.85;
+}
+.meso-coachmark-dismiss {
+  appearance: none;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--dim);
+  padding: 2px 4px;
+  flex: 0 0 auto;
+}
+
+/* ---- shared "rail" button used across the top bar / week strip ---- */
+.meso-btn-rail {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 13px;
+  text-decoration: none;
+  display: inline-block;
+}
+.meso-btn-deliver {
+  text-decoration: none;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 15px;
+  box-shadow: 0 1px 2px rgba(16, 18, 22, 0.12);
+  cursor: pointer;
+  display: inline-block;
+}
+.meso-btn-deliver--inline {
+  padding: 8px 14px;
+}
