@@ -665,3 +665,21 @@ class TestRosterInviteAndBillingSurfaces:
         assert reverse("meso:billing_subscribe") not in body
         assert reverse("meso:billing_start_trial") not in body
         assert "billing is disabled in the demo" in body.lower()
+
+
+# ---------------------------------------------------------------------------
+# UI — "Try the demo" CTAs on the two public marketing pages
+# ---------------------------------------------------------------------------
+
+
+class TestTryTheDemoCTAs:
+    def test_landing_offers_the_demo(self, client):
+        resp = client.get(reverse("meso:roster"))  # anon → landing.html
+        body = resp.content.decode()
+        assert f'href="{reverse("meso:sandbox_enter")}"' in body
+        assert "try the demo" in body.lower()
+
+    def test_become_coach_offers_the_demo_to_an_anonymous_visitor(self, client):
+        body = client.get(reverse("meso:become_coach")).content.decode()
+        assert f'href="{reverse("meso:sandbox_enter")}"' in body
+        assert "try the demo" in body.lower()
