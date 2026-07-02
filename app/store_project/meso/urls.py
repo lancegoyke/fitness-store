@@ -94,6 +94,9 @@ urlpatterns = [
     # coach-scoped demo workspace.
     path("demo/load/", views.demo_load, name="demo_load"),
     path("demo/clear/", views.demo_clear, name="demo_clear"),
+    # The sandbox's conversion hop: log a sandbox coach out, then hand off to
+    # allauth signup (issue #389, Phase 1).
+    path("demo/signup/", views.sandbox_signup, name="sandbox_signup"),
     path("group/new/", views.group_create, name="group_create"),
     path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
     path("group/<int:pk>/design/", views.group_design, name="group_design"),

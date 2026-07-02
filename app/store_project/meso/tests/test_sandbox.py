@@ -226,3 +226,54 @@ class TestSandboxEnterView:
     def test_post_not_allowed(self, client):
         resp = client.post(reverse("meso:sandbox_enter"))
         assert resp.status_code == 405
+
+
+# ---------------------------------------------------------------------------
+# sandbox_signup — the conversion hop (allauth bounces authenticated visitors
+# off /accounts/signup/, so a sandbox coach must be logged out first)
+# ---------------------------------------------------------------------------
+
+
+class TestSandboxSignupView:
+    def test_logs_a_sandbox_coach_out_and_redirects_to_signup(self, client):
+        client.get(reverse("meso:sandbox_enter"))
+        assert "_auth_user_id" in client.session
+
+        resp = client.get(reverse("meso:sandbox_signup"))
+        assert "_auth_user_id" not in client.session
+        assert resp.status_code == 302
+        assert resp.url.startswith(reverse("account_signup"))
+        assert f"next={reverse('meso:roster')}" in resp.url or "next=%2Fmeso%2F" in (
+            resp.url
+        )
+
+    def test_the_sandbox_user_row_is_not_deleted(self, client):
+        client.get(reverse("meso:sandbox_enter"))
+        user_id = client.session["_auth_user_id"]
+
+        client.get(reverse("meso:sandbox_signup"))
+
+        from store_project.users.models import User
+
+        assert User.objects.filter(pk=user_id).exists()
+        assert SandboxSession.objects.filter(user_id=user_id).exists()
+
+    def test_non_sandbox_authenticated_visitor_is_also_sent_to_signup(self, client):
+        coach = UserFactory()
+        CoachProfile.objects.create(user=coach)
+        client.force_login(coach)
+
+        resp = client.get(reverse("meso:sandbox_signup"))
+        assert resp.status_code == 302
+        assert resp.url.startswith(reverse("account_signup"))
+        # Harmless — not logged out, since they aren't a sandbox user.
+        assert "_auth_user_id" in client.session
+
+    def test_anonymous_visitor_is_sent_to_signup(self, client):
+        resp = client.get(reverse("meso:sandbox_signup"))
+        assert resp.status_code == 302
+        assert resp.url.startswith(reverse("account_signup"))
+
+    def test_post_not_allowed(self, client):
+        resp = client.post(reverse("meso:sandbox_signup"))
+        assert resp.status_code == 405

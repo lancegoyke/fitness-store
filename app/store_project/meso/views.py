@@ -3,6 +3,7 @@ import ipaddress
 import json
 import logging
 import uuid
+from urllib.parse import urlencode
 from urllib.parse import urlparse
 
 import stripe
@@ -10,6 +11,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login
+from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.mixins import UserPassesTestMixin
@@ -767,6 +769,22 @@ def demo_clear(request):
     meso_demo.clear_demo(request.user)
     messages.success(request, "Demo data removed.")
     return redirect("meso:roster")
+
+
+@require_GET
+def sandbox_signup(request):
+    """The sandbox's conversion hop into a real account (issue #389, S1).
+
+    allauth bounces an already-authenticated visitor away from
+    ``/accounts/signup/``, so a sandbox coach must be logged out first — the
+    sandbox ``User`` row is left in place for the Phase 2 expiry sweep to reap,
+    never carried into the new account (S6: deferred carry-over). A
+    non-sandbox authenticated visitor is just sent along too (harmless).
+    """
+    if meso_sandbox.is_sandbox(request.user):
+        logout(request)
+    query = urlencode({"next": reverse("meso:roster")})
+    return redirect(f"{reverse('account_signup')}?{query}")
 
 
 @login_required
