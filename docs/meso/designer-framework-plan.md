@@ -119,7 +119,7 @@ editing coach, revisit if that changes.
 Each phase is a separately shippable PR (or two); nothing below starts until
 the phase above is verified.
 
-### Phase 0 — deletes (#401) + deliver cleanup (Alpine, ships now)
+### Phase 0 — deletes (#401) + deliver cleanup (Alpine) — ✅ shipped (#404, #405)
 
 - Issue #401 as specced, with one amendment from Decision 2: the three delete
   endpoints **soft-delete** (`deleted_at`), which also resolves #401's open
@@ -130,7 +130,32 @@ the phase above is verified.
 - **Do not** otherwise refactor designer Alpine/template code — it is about to
   be replaced; polish nothing.
 
-### Phase 1 — undo/redo backend + minimal UI (ships this week)
+**Outcome (2026-07-02):** shipped as #404 (deliver extraction →
+`static/js/meso_deliver.js`) + #405 (soft-delete slice, built red→green).
+Review rounds grew the scope beyond the designer, all in #405 — a fresh
+session should treat these as part of the soft-delete contract:
+
+- The **athlete surface** filters live rows too (home, logger,
+  `athlete_log_session`, `_clean_logged_sets`, `athlete_set_one_rm`): a
+  removed delivered day/exercise disappears for the athlete and rejects new
+  logs/1RMs; already-logged history keeps rendering.
+- The logger's save replaces only live-prescription sets, so a hidden row's
+  `LoggedSet`s survive the athlete's next save.
+- `GroupMembership.sync_delivered_plan` **soft**-deletes member-side rows
+  dropped from the source (previously a hard delete — the pre-existing
+  `SessionLog` CASCADE hazard this plan flags) and revives them in place
+  (`deleted_at: None` in the upsert defaults) when a source row returns.
+- `week_delete`/`week_set_current` re-check row flags under the plan lock;
+  the deliver screen (selector, `?week=`, session count) is live-only;
+  `applyPlanData` disarms a pending index-anchored delete confirm.
+
+### Phase 1 — undo/redo backend + minimal UI — 🔴 red suites committed
+
+> Status (2026-07-02): the failing contract suites are committed on branch
+> `meso-designer-phase-1-undo` (`test_designer_undo.py` +
+> `frontend/meso_undo.test.js`); the full spec they encode is a comment on
+> #403 ("Phase 1 spec"). Implement to green against them without modifying
+> them; rebase the branch onto main first (it was cut pre-#405-squash).
 
 - `deleted_at` migration + `PlanAction` model, snapshot serializer/restorer,
   action recording in the endpoints listed in Decision 2, `undo`/`redo`
