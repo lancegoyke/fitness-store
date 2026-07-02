@@ -902,3 +902,31 @@ class TestSandboxEntryRateLimit:
         body = resp.content.decode()
         assert "demo is busy" in body.lower()
         assert reverse("meso:become_coach") in body  # landing.html rendered
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — crawler hardening: noindex the minting GET + robots.txt disallow
+# ---------------------------------------------------------------------------
+
+
+class TestCrawlerHardening:
+    def test_successful_entry_is_noindexed(self, client):
+        resp = client.get(reverse("meso:sandbox_enter"))
+        assert resp["X-Robots-Tag"] == "noindex"
+
+    def test_denied_entry_is_noindexed(self, client, settings):
+        settings.MESO_SANDBOX_MAX_CONCURRENT = 0
+        resp = client.get(reverse("meso:sandbox_enter"))
+        assert resp["X-Robots-Tag"] == "noindex"
+
+    def test_authenticated_resume_is_noindexed(self, client):
+        coach = UserFactory()
+        CoachProfile.objects.create(user=coach)
+        client.force_login(coach)
+        resp = client.get(reverse("meso:sandbox_enter"))
+        assert resp["X-Robots-Tag"] == "noindex"
+
+    def test_robots_txt_disallows_the_sandbox_entry(self, client):
+        resp = client.get("/robots.txt")
+        assert resp.status_code == 200
+        assert "Disallow: /meso/demo/" in resp.content.decode()

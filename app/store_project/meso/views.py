@@ -753,10 +753,16 @@ def sandbox_enter(request):
     capped globally (``MESO_SANDBOX_MAX_CONCURRENT`` live sandboxes; the hourly
     expiry sweep frees slots) and per IP (``MESO_SANDBOX_PER_IP_PER_HOUR``,
     cache-counted). A bounded visitor gets a friendly flash and the landing
-    page — no rows created.
+    page — no rows created. Every response carries ``X-Robots-Tag: noindex``:
+    a GET that mints DB rows must not be crawled repeatedly.
     """
+
+    def _noindex(response):
+        response["X-Robots-Tag"] = "noindex"
+        return response
+
     if request.user.is_authenticated:
-        return redirect("meso:roster")
+        return _noindex(redirect("meso:roster"))
     if (
         SandboxSession.objects.count() >= settings.MESO_SANDBOX_MAX_CONCURRENT
         or _sandbox_rate_limited(_client_ip(request))
@@ -765,7 +771,7 @@ def sandbox_enter(request):
             request,
             "The demo is busy right now — please try again in a little while.",
         )
-        return redirect("meso:roster")
+        return _noindex(redirect("meso:roster"))
     user = meso_sandbox.create_sandbox(source_ip=_client_ip(request))
     # Two auth backends are configured (ModelBackend + allauth) — login() can't
     # infer which one, so it must be named explicitly.
@@ -775,7 +781,7 @@ def sandbox_enter(request):
         "You're in a live demo — explore freely. Create a free account any "
         "time to run the AI agent and keep your work.",
     )
-    return redirect("meso:roster")
+    return _noindex(redirect("meso:roster"))
 
 
 @login_required
