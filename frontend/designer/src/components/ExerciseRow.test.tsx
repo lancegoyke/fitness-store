@@ -256,42 +256,6 @@ describe("1RM editor keyboard", () => {
   });
 });
 
-// === Phase 4 (dnd-kit reordering) — RED. ExerciseRow does not render a drag
-// handle yet; these specs are appended (existing specs above are untouched).
-// Per scratchpad/phase4-spec.md's "Drag handles, not draggable cells": each
-// row gets a grip BUTTON (not the whole cell) so dnd-kit's PointerSensor
-// only starts a drag from that control, and so the handle can double as a
-// KeyboardSensor target riding the Phase 3 tab order without colliding with
-// grid-nav's own cell keydown handling. Two decisions this block pins:
-// - aria-label falls back to "Reorder exercise" for a nameless row, matching
-//   ../hooks/useGridNav's existing `cellAriaLabel` fallback convention
-//   (`exerciseName || "exercise"`) rather than inventing a new one.
-// - the handle is explicitly `type="button"` (never relying on a bare
-//   <button>'s implicit "submit" default) — the same convention every other
-//   testid'd button in this file already follows.
-describe("drag handle (Phase 4, dnd-kit reordering)", () => {
-  it("renders a drag-handle button with the reorder testid/aria-label, before the name cell", () => {
-    render(<ExerciseRow {...baseProps()} />);
-    const handle = screen.getByTestId("exercise-drag-9");
-    expect(handle.tagName).toBe("BUTTON");
-    expect(handle).toHaveAttribute("type", "button");
-    expect(handle).toHaveAttribute("aria-label", "Reorder Squat");
-    const nameInput = screen.getByTestId("exercise-name-9");
-    // DOCUMENT_POSITION_FOLLOWING (4): nameInput comes after handle in the DOM.
-    expect(handle.compareDocumentPosition(nameInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it("falls back to 'Reorder exercise' when the row has no name", () => {
-    render(<ExerciseRow {...baseProps({ ex: ex({ name: "" }) })} />);
-    expect(screen.getByTestId("exercise-drag-9")).toHaveAttribute("aria-label", "Reorder exercise");
-  });
-
-  it("is NOT a grid-nav restoration target (data-grid-restore is for undo/redo/week controls, not drag handles)", () => {
-    render(<ExerciseRow {...baseProps()} />);
-    expect(screen.getByTestId("exercise-drag-9")).not.toHaveAttribute("data-grid-restore");
-  });
-});
-
 // === Phase 3: grid keyboard navigation — RED (frontend/designer/CONTRACT.md
 // has no useGridNav section yet; ../hooks/useGridNav does not exist). See
 // useGridNav.test.tsx's header for the full API contract. Additions below,
@@ -438,5 +402,41 @@ describe("Phase 3: cellProps callback wiring (Enter-commit / Escape-revert contr
     expect(gridNav.cellProps).toHaveBeenCalled();
     getCallbacks()!.onChange("left knee sore");
     expect(onFieldChange).toHaveBeenCalledWith("note", "left knee sore");
+  });
+});
+
+// === Phase 4 (dnd-kit reordering) — RED. ExerciseRow does not render a drag
+// handle yet; these specs are appended (existing specs above are untouched).
+// Per scratchpad/phase4-spec.md's "Drag handles, not draggable cells": each
+// row gets a grip BUTTON (not the whole cell) so dnd-kit's PointerSensor
+// only starts a drag from that control, and so the handle can double as a
+// KeyboardSensor target riding the Phase 3 tab order without colliding with
+// grid-nav's own cell keydown handling. Two decisions this block pins:
+// - aria-label falls back to "Reorder exercise" for a nameless row, matching
+//   ../hooks/useGridNav's existing `cellAriaLabel` fallback convention
+//   (`exerciseName || "exercise"`) rather than inventing a new one.
+// - the handle is explicitly `type="button"` (never relying on a bare
+//   <button>'s implicit "submit" default) — the same convention every other
+//   testid'd button in this file already follows.
+describe("drag handle (Phase 4, dnd-kit reordering)", () => {
+  it("renders a drag-handle button with the reorder testid/aria-label, before the name cell", () => {
+    render(<ExerciseRow {...baseProps()} />);
+    const handle = screen.getByTestId("exercise-drag-9");
+    expect(handle.tagName).toBe("BUTTON");
+    expect(handle).toHaveAttribute("type", "button");
+    expect(handle).toHaveAttribute("aria-label", "Reorder Squat");
+    const nameInput = screen.getByTestId("exercise-name-9");
+    // DOCUMENT_POSITION_FOLLOWING (4): nameInput comes after handle in the DOM.
+    expect(handle.compareDocumentPosition(nameInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("falls back to 'Reorder exercise' when the row has no name", () => {
+    render(<ExerciseRow {...baseProps({ ex: ex({ name: "" }) })} />);
+    expect(screen.getByTestId("exercise-drag-9")).toHaveAttribute("aria-label", "Reorder exercise");
+  });
+
+  it("is NOT a grid-nav restoration target (data-grid-restore is for undo/redo/week controls, not drag handles)", () => {
+    render(<ExerciseRow {...baseProps()} />);
+    expect(screen.getByTestId("exercise-drag-9")).not.toHaveAttribute("data-grid-restore");
   });
 });
