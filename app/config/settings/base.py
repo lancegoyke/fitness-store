@@ -330,6 +330,11 @@ MESO_STRIPE_WEBHOOK_SECRET = os.environ.get("MESO_STRIPE_WEBHOOK_SECRET", "")
 # owner. Default 0.5 (50%); the ``meso_agent_margin_alert`` command's ``--threshold``
 # overrides it. See ``docs/meso/agent-usage-plan.md``.
 MESO_MARGIN_ALERT_THRESHOLD = os.environ.get("MESO_MARGIN_ALERT_THRESHOLD") or "0.5"
+# Public, no-signup ephemeral sandbox (issue #389, Phase 1). ``/meso/demo/``
+# mints a throwaway coach account seeded with demo data and logs the visitor in
+# as it; this is how long the account (and its data) lives before the Phase 2
+# expiry sweep reaps it. See docs/meso/public-sandbox-demo-plan.md.
+MESO_SANDBOX_TTL_HOURS = int(os.environ.get("MESO_SANDBOX_TTL_HOURS", "48"))
 
 # Cache
 
