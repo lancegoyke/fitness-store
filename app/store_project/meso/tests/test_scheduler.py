@@ -137,3 +137,20 @@ class TestMarginAlertScheduleRegistration:
         module_path, _, attr = self.FUNC.rpartition(".")
         resolved = getattr(importlib.import_module(module_path), attr)
         assert callable(resolved)
+
+
+class TestSandboxExpiryScheduleRegistration:
+    """The hourly sandbox-expiry sweep is registered (issue #389, Phase 2)."""
+
+    NAME = "meso-expire-sandboxes"
+    FUNC = "store_project.meso.tasks.expire_sandboxes"
+
+    def test_sandbox_expiry_schedule_registered_hourly(self):
+        sched = Schedule.objects.get(name=self.NAME)
+        assert sched.func == self.FUNC
+        assert sched.schedule_type == Schedule.HOURLY
+
+    def test_sandbox_expiry_func_is_importable_callable(self):
+        module_path, _, attr = self.FUNC.rpartition(".")
+        resolved = getattr(importlib.import_module(module_path), attr)
+        assert callable(resolved)

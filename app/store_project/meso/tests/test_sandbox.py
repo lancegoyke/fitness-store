@@ -23,23 +23,37 @@ These tests cover:
   invite, and the "Try the demo" CTAs;
 - the ``sandbox_signup`` conversion hop (logs a sandbox coach out, then hands
   off to allauth signup with ``?next=`` back to the roster).
+
+Phase 2 (cleanup + hardening):
+
+- the expiry sweep (``sandbox.expire_sandboxes`` / ``meso_expire_sandboxes`` /
+  the ``tasks`` wrapper) — a reaped sandbox must delete the demo-athlete
+  ``User`` rows too (they are separate users with no FK cascade from the
+  coach), and must never touch a real coach;
+- entry hardening — a per-IP rate limit and a global concurrent-sandbox cap
+  on ``sandbox_enter``, plus ``X-Robots-Tag: noindex`` (a GET that mints DB
+  rows must not be crawled repeatedly).
 """
 
 import json
 from unittest import mock
 
 import pytest
+from django.core.management import call_command
 from django.test import Client
 from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso import demo
 from store_project.meso import sandbox
+from store_project.meso import tasks
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachProfile
+from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
 from store_project.meso.models import SandboxSession
 from store_project.users.factories import UserFactory
+from store_project.users.models import User
 
 pytestmark = pytest.mark.django_db
 
@@ -683,3 +697,133 @@ class TestTryTheDemoCTAs:
         body = client.get(reverse("meso:become_coach")).content.decode()
         assert f'href="{reverse("meso:sandbox_enter")}"' in body
         assert "try the demo" in body.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — the expiry sweep (sandbox.expire_sandboxes + command + task)
+# ---------------------------------------------------------------------------
+
+
+def _expire(user, hours_ago=1):
+    """Backdate a sandbox's expiry so the sweep sees it as overdue."""
+    SandboxSession.objects.filter(user=user).update(
+        expires_at=timezone.now() - timezone.timedelta(hours=hours_ago)
+    )
+
+
+class TestExpireSandboxes:
+    def test_expired_sandbox_is_fully_reaped_including_demo_athletes(self):
+        user = sandbox.create_sandbox()
+        athlete_ids = [u.pk for u in demo._demo_athletes(user)]
+        assert len(athlete_ids) == 5
+        _expire(user)
+
+        reaped = sandbox.expire_sandboxes()
+
+        assert reaped == 1
+        assert not User.objects.filter(pk=user.pk).exists()
+        # The leak trap: the demo athletes are SEPARATE User rows with no FK
+        # cascade from the coach — a cascade-only sweep would orphan all five.
+        assert not User.objects.filter(pk__in=athlete_ids).exists()
+        assert not MesoGroup.objects.filter(coach_id=user.pk).exists()
+        assert SandboxSession.objects.count() == 0
+        assert CoachProfile.objects.filter(user_id=user.pk).count() == 0
+
+    def test_unexpired_sandbox_is_untouched(self):
+        user = sandbox.create_sandbox()  # expires 48h out
+
+        reaped = sandbox.expire_sandboxes()
+
+        assert reaped == 0
+        assert User.objects.filter(pk=user.pk).exists()
+        assert SandboxSession.objects.filter(user=user).exists()
+        assert demo.has_demo(user) is True
+
+    def test_regular_coach_with_demo_data_is_never_touched(self):
+        coach = UserFactory()
+        CoachProfile.objects.create(user=coach)
+        demo.load_demo(coach)
+        expired_sandbox = sandbox.create_sandbox()
+        _expire(expired_sandbox)
+
+        sandbox.expire_sandboxes()
+
+        # The real coach and their (identical-shaped) demo data survive.
+        assert User.objects.filter(pk=coach.pk).exists()
+        assert demo.has_demo(coach) is True
+        assert list(demo._demo_athletes(coach))  # all five athlete users intact
+
+    def test_now_parameter_moves_the_cutoff(self):
+        user = sandbox.create_sandbox()  # expires 48h out
+
+        reaped = sandbox.expire_sandboxes(
+            now=timezone.now() + timezone.timedelta(hours=49)
+        )
+
+        assert reaped == 1
+        assert not User.objects.filter(pk=user.pk).exists()
+
+    def test_idempotent_on_rerun(self):
+        user = sandbox.create_sandbox()
+        _expire(user)
+
+        assert sandbox.expire_sandboxes() == 1
+        assert sandbox.expire_sandboxes() == 0
+
+    def test_one_bad_row_does_not_wedge_the_sweep(self):
+        bad = sandbox.create_sandbox()
+        good = sandbox.create_sandbox()
+        _expire(bad)
+        _expire(good)
+        real_clear = demo.clear_demo
+
+        def exploding_clear(coach):
+            if coach.pk == bad.pk:
+                raise RuntimeError("boom")
+            return real_clear(coach)
+
+        with mock.patch.object(sandbox.demo, "clear_demo", exploding_clear):
+            reaped = sandbox.expire_sandboxes()
+
+        # The good sandbox was reaped despite the bad one blowing up.
+        assert reaped == 1
+        assert not User.objects.filter(pk=good.pk).exists()
+        assert User.objects.filter(pk=bad.pk).exists()  # left for the next run
+
+
+class TestExpireSandboxesCommand:
+    def test_command_reaps_and_reports(self):
+        from io import StringIO
+
+        user = sandbox.create_sandbox()
+        _expire(user)
+        out = StringIO()
+
+        call_command("meso_expire_sandboxes", stdout=out)
+
+        assert not User.objects.filter(pk=user.pk).exists()
+        assert "1" in out.getvalue()
+
+    def test_dry_run_reports_without_deleting(self):
+        from io import StringIO
+
+        user = sandbox.create_sandbox()
+        _expire(user)
+        out = StringIO()
+
+        call_command("meso_expire_sandboxes", "--dry-run", stdout=out)
+
+        assert User.objects.filter(pk=user.pk).exists()
+        assert SandboxSession.objects.filter(user=user).exists()
+        assert "1" in out.getvalue()
+        assert "dry run" in out.getvalue().lower()
+
+
+class TestExpireSandboxesTask:
+    def test_task_wrapper_runs_the_sweep(self):
+        user = sandbox.create_sandbox()
+        _expire(user)
+
+        tasks.expire_sandboxes()
+
+        assert not User.objects.filter(pk=user.pk).exists()
