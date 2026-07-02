@@ -551,3 +551,38 @@ class TestSandboxBanner:
 
         body = client.get(reverse("meso:roster")).content.decode()
         assert ">Billing</a>" in body
+
+
+# ---------------------------------------------------------------------------
+# UI — the designer's agent composer becomes a signup gate
+# ---------------------------------------------------------------------------
+
+
+class TestDesignerSignupGate:
+    def test_sandbox_coach_sees_the_signup_gate_not_the_composer(self, client):
+        coach = _sandbox_coach()
+        plan = _sandbox_individual_plan(coach)
+        client.force_login(coach)
+
+        body = client.get(
+            reverse("meso:designer_plan", kwargs={"plan_id": plan.pk})
+        ).content.decode()
+
+        assert 'data-testid="agent-composer-input"' not in body
+        assert reverse("meso:sandbox_signup") in body
+
+    def test_real_coach_with_agent_access_sees_the_composer(self, client):
+        from store_project.meso.factories import CoachAthleteFactory
+        from store_project.meso.factories import PlanFactory
+        from store_project.meso.models import CoachSubscription
+
+        link = CoachAthleteFactory()
+        CoachSubscription.comp(link.coach)
+        plan = PlanFactory(relationship=link)
+        client.force_login(link.coach)
+
+        body = client.get(
+            reverse("meso:designer_plan", kwargs={"plan_id": plan.pk})
+        ).content.decode()
+
+        assert 'data-testid="agent-composer-input"' in body

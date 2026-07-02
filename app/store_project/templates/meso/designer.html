@@ -274,7 +274,15 @@
             </template>
           </div>
 
-          {% if can_use_agent %}
+          {% if is_sandbox %}
+          <!-- Sandbox signup gate (issue #389, Phase 1): the AI agent is the one
+               capability the demo holds back — clone of the exhausted-allowance
+               upgrade card below, pointed at signup instead of billing. -->
+            <div style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:13px 14px 15px;">
+              <p style="margin:0 0 9px;font-size:12px;color:var(--dim);line-height:1.4;">The AI agent is the one thing the demo holds back. Create a free account to draft with AI.</p>
+              <a href="{% url 'meso:sandbox_signup' %}" data-hover="brighten" style="display:inline-block;text-decoration:none;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:8px 14px;">Create a free account</a>
+            </div>
+          {% elif can_use_agent %}
             <div style="flex:0 0 auto;border-top:1px solid var(--line-2);padding:11px 14px 13px;">
               <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:9px;">
                 <template x-for="c in chips" :key="c.label">
