@@ -38,12 +38,15 @@ function createMeso() {
     exSeq: 1,
 
     // ---- first-run coachmarks (first-time UX Phase 5) ----
-    // Three dismissible region notes (week grid / agent / phone preview) orient a
+    // Two dismissible region notes (week grid / phone preview) orient a
     // first-time coach. They show until dismissed; the dismissal persists in
     // localStorage so a coach who waved one away never sees it again (no server
     // "seen" flag — the persistence lives client-side, like the athlete onboarding
     // chrome). The reactive map drives `x-show`; init() hydrates it from storage.
-    coachmarkKeys: ["grid", "agent", "phone"],
+    // (The agent column previously had a third coachmark repeating the same
+    // guidance as the persistent review-gate note and the chat greeting —
+    // dropped; its examples now live in the greeting below.)
+    coachmarkKeys: ["grid", "phone"],
     coachmarksDismissed: {},
 
     // Group mode only: the open per-athlete override editor (one shared row),
@@ -83,7 +86,7 @@ function createMeso() {
       {
         id: 1,
         role: "agent",
-        text: "Tell me how you'd like to adjust this plan — swap a lift, change a day's volume, progress loads, or add a deload. I'll propose changes for you to review before anything touches the program.",
+        text: "Tell me how you'd like to adjust this plan — try “lighten Friday” or “add a deload week.”",
       },
     ],
 

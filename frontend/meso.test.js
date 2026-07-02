@@ -550,11 +550,14 @@ describe("addDay", () => {
 
 // ---- first-run coachmarks (first-time UX Phase 5) ----
 //
-// Three dismissible region notes (grid / agent / phone) orient a first-time
-// coach. They show until dismissed; the dismissal persists in localStorage so a
-// coach who waved one away never sees it again. The reactive `coachmarksDismissed`
-// map drives `x-show` in the template; here we cover the pure key helper and the
-// load/dismiss/visibility round-trip (jsdom gives us a real localStorage).
+// Two dismissible region notes (grid / phone) orient a first-time coach (the
+// former "agent" coachmark was folded into the persistent review-gate note and
+// the chat greeting — see meso.js). They show until dismissed; the dismissal
+// persists in localStorage so a coach who waved one away never sees it again.
+// The reactive `coachmarksDismissed` map drives `x-show` in the template; here
+// we cover the pure key helper — it's generic over any key string, so "agent"
+// below still exercises the dismiss/visibility round-trip even though it's no
+// longer a template-driven coachmark (jsdom gives us a real localStorage).
 describe("designer coachmarks", () => {
   beforeEach(() => {
     window.localStorage.clear();
