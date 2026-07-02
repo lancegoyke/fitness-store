@@ -149,13 +149,23 @@ session should treat these as part of the soft-delete contract:
   the deliver screen (selector, `?week=`, session count) is live-only;
   `applyPlanData` disarms a pending index-anchored delete confirm.
 
-### Phase 1 — undo/redo backend + minimal UI — 🔴 red suites committed
+### Phase 1 — undo/redo backend + minimal UI — ✅ shipped (#407)
 
-> Status (2026-07-02): the failing contract suites are committed on branch
-> `meso-designer-phase-1-undo` (`test_designer_undo.py` +
-> `frontend/meso_undo.test.js`); the full spec they encode is a comment on
-> #403 ("Phase 1 spec"). Implement to green against them without modifying
-> them; rebase the branch onto main first (it was cut pre-#405-squash).
+**Outcome (2026-07-02):** shipped as #407 — a `PlanAction` snapshot op-log
+(migration 0032) + `history.py` (`serialize_plan_snapshot` /
+`restore_plan_snapshot`) + recording in nine endpoints
+(`prescription_patch`, `session_add_exercise`, `session_add`, `week_add`,
+`week_set_current`, `prescription_override`, the three Phase 0 deletes, and
+`batch_apply` as a single undoable step) + `history`
+(`can_undo`/`can_redo`/labels) on both the full plan envelope and row-level
+autosave/add/override payloads. Built red→green against the pre-committed 33
+pytest + 17 vitest specs, unmodified. A 3-round local Codex review loop found
+five fixes, all shipped: row-level replies now refresh `history`;
+`record_plan_action` row-locks the plan against concurrent autosaves; labels
+clamp to 255 chars (Postgres column limit); `session_add`/`week_add` take the
+plan lock before child locks, fixing a lock-order inversion against
+undo/deletes; and snapshot restore skips overrides whose `GroupMembership`
+has since been removed instead of 500ing on the dead FK.
 
 - `deleted_at` migration + `PlanAction` model, snapshot serializer/restorer,
   action recording in the endpoints listed in Decision 2, `undo`/`redo`
@@ -167,7 +177,7 @@ session should treat these as part of the soft-delete contract:
 - Tests: pytest round-trips — edit/undo/redo, delete-day/undo (logs intact!),
   batch_apply/undo, redo-stack cleared by a fresh edit, history cap.
 
-### Phase 2 — the island (behavior-identical migration)
+### Phase 2 — the island (behavior-identical migration) — 🚧 in progress (PR A: scaffolding)
 
 - Vite + React app in `frontend/designer/`; entry reads the same
   `meso-plan-data` / `meso-chat-thread` / `meso-csrf` elements; template

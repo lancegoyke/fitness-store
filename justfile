@@ -41,6 +41,19 @@ test-coverage:
 test-js:
     npm test
 
+# Rebuild the designer React island (frontend/designer/) on every save. Run
+# this alongside `just dev` if you're touching the designer page — there's no
+# HMR yet (Decision 3), and `just dev` alone won't build it: the page will
+# 404 on dist/designer.js in DEBUG until this (or `frontend-build`) has run.
+frontend-watch:
+    npm run watch
+
+# One-shot production build of the designer island to
+# app/store_project/static/js/dist/ (also runs in the Dockerfile node stage
+# and in Frontend CI to catch a broken build before it ships).
+frontend-build:
+    npm run build
+
 lint:
     uv run ruff check
 
