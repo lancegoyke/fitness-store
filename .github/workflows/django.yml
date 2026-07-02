@@ -6,13 +6,15 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
-      # Front-end test scaffold only — these never affect the Django app, so
-      # they should not run Django CI (and thus never trigger a deploy). The
-      # served JS under static/js/** is deliberately NOT ignored: changing it
-      # ships via collectstatic and must deploy. See .github/workflows/frontend.yml.
-      - "frontend/**"
-      - "package.json"
-      - "package-lock.json"
+      # Front-end TEST scaffold only — these never reach the production image,
+      # so they should not run Django CI (and thus never trigger a deploy).
+      # Everything that DOES ship must stay un-ignored: static/js/** (served
+      # via collectstatic), frontend/designer/** and package*.json (inputs to
+      # the Dockerfile's island build stage — a designer change with no Python
+      # diff still needs a deploy to rebuild the bundle into the image). See
+      # .github/workflows/frontend.yml.
+      - "frontend/*.test.js"
+      - "frontend/README.md"
       - "vitest.config.js"
       - ".github/workflows/frontend.yml"
   pull_request:
