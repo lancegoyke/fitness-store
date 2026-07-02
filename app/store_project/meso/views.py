@@ -15,6 +15,7 @@ from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.mixins import UserPassesTestMixin
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
@@ -71,6 +72,7 @@ from .models import Plan
 from .models import PrescriptionOverride
 from .models import ProposedChange
 from .models import PushSubscription
+from .models import SandboxSession
 from .models import Session
 from .models import SessionLog
 from .models import Week
@@ -720,6 +722,22 @@ def _client_ip(request):
     return request.META.get("REMOTE_ADDR")
 
 
+def _sandbox_rate_limited(ip):
+    """Whether this IP has minted too many sandboxes in the rolling hour.
+
+    Cache-counted: ``cache.add`` seeds the counter with its one-hour TTL (a
+    no-op when it already exists), then ``incr`` bumps it — on Redis ``INCR``
+    preserves the TTL, so the window rolls rather than resets. Counts
+    *attempts*, so hammering past the limit never re-opens it early.
+    """
+    if not ip:
+        return False  # unattributable (no proxy header, no REMOTE_ADDR)
+    key = f"meso:sandbox:rate:{ip}"
+    cache.add(key, 0, timeout=3600)
+    count = cache.incr(key)
+    return count > settings.MESO_SANDBOX_PER_IP_PER_HOUR
+
+
 @require_GET
 def sandbox_enter(request):
     """Public, no-signup entry into a throwaway coach sandbox (issue #389, S1).
@@ -730,8 +748,23 @@ def sandbox_enter(request):
     needed. An already-authenticated visitor (including one revisiting this URL
     mid-visit) is simply routed to the roster — the session cookie is the
     "resume", so no second sandbox is minted.
+
+    Abuse bounds (Phase 2): every entry mints real DB rows, so creation is
+    capped globally (``MESO_SANDBOX_MAX_CONCURRENT`` live sandboxes; the hourly
+    expiry sweep frees slots) and per IP (``MESO_SANDBOX_PER_IP_PER_HOUR``,
+    cache-counted). A bounded visitor gets a friendly flash and the landing
+    page — no rows created.
     """
     if request.user.is_authenticated:
+        return redirect("meso:roster")
+    if (
+        SandboxSession.objects.count() >= settings.MESO_SANDBOX_MAX_CONCURRENT
+        or _sandbox_rate_limited(_client_ip(request))
+    ):
+        messages.info(
+            request,
+            "The demo is busy right now — please try again in a little while.",
+        )
         return redirect("meso:roster")
     user = meso_sandbox.create_sandbox(source_ip=_client_ip(request))
     # Two auth backends are configured (ModelBackend + allauth) — login() can't

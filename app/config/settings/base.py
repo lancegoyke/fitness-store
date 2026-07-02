@@ -336,6 +336,13 @@ MESO_MARGIN_ALERT_THRESHOLD = os.environ.get("MESO_MARGIN_ALERT_THRESHOLD") or "
 # as it; this is how long the account (and its data) lives before the Phase 2
 # expiry sweep reaps it. See docs/meso/public-sandbox-demo-plan.md.
 MESO_SANDBOX_TTL_HOURS = int(os.environ.get("MESO_SANDBOX_TTL_HOURS", "48"))
+# Sandbox abuse controls (Phase 2). Each ``/meso/demo/`` visit mints real DB
+# rows, so entry is bounded two ways: a per-IP creation rate (cache-counted,
+# rolling hour) and a global cap on live sandboxes (the hourly expiry sweep
+# frees slots as TTLs lapse). Past either bound the visitor gets a friendly
+# "demo is busy" flash instead of a new sandbox.
+MESO_SANDBOX_PER_IP_PER_HOUR = int(os.environ.get("MESO_SANDBOX_PER_IP_PER_HOUR", "5"))
+MESO_SANDBOX_MAX_CONCURRENT = int(os.environ.get("MESO_SANDBOX_MAX_CONCURRENT", "100"))
 
 # Cache
 

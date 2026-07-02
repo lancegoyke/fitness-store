@@ -39,6 +39,7 @@ import json
 from unittest import mock
 
 import pytest
+from django.core.cache import cache
 from django.core.management import call_command
 from django.test import Client
 from django.urls import reverse
@@ -56,6 +57,19 @@ from store_project.users.factories import UserFactory
 from store_project.users.models import User
 
 pytestmark = pytest.mark.django_db
+
+
+@pytest.fixture(autouse=True)
+def _fresh_cache():
+    """Isolate the per-IP sandbox rate counter between tests.
+
+    LocMemCache persists per-process, and every test client shares the default
+    ``127.0.0.1`` — without a clear, earlier tests' entries would trip the
+    rate limit for later ones.
+    """
+    cache.clear()
+    yield
+    cache.clear()
 
 
 class TestSandboxSessionModel:
@@ -827,3 +841,64 @@ class TestExpireSandboxesTask:
         tasks.expire_sandboxes()
 
         assert not User.objects.filter(pk=user.pk).exists()
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — entry hardening: per-IP rate limit + concurrent-sandbox cap
+# ---------------------------------------------------------------------------
+
+
+class TestSandboxEntryRateLimit:
+    def _enter(self, ip):
+        # A fresh Client per attempt: a successful entry logs the visitor in,
+        # and an authenticated revisit resumes rather than creating.
+        return Client().get(reverse("meso:sandbox_enter"), REMOTE_ADDR=ip)
+
+    def test_sixth_creation_from_the_same_ip_is_denied(self, settings):
+        settings.MESO_SANDBOX_PER_IP_PER_HOUR = 5
+        for _ in range(5):
+            self._enter("10.0.0.1")
+        assert SandboxSession.objects.count() == 5
+
+        resp = self._enter("10.0.0.1")
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        assert SandboxSession.objects.count() == 5  # nothing new minted
+
+    def test_a_different_ip_is_unaffected(self, settings):
+        settings.MESO_SANDBOX_PER_IP_PER_HOUR = 5
+        for _ in range(6):
+            self._enter("10.0.0.2")
+        assert SandboxSession.objects.count() == 5
+
+        self._enter("10.0.0.3")
+
+        assert SandboxSession.objects.count() == 6
+
+    def test_concurrent_cap_denies_creation(self, settings):
+        settings.MESO_SANDBOX_MAX_CONCURRENT = 2
+        sandbox.create_sandbox()
+        sandbox.create_sandbox()
+
+        resp = self._enter("10.0.0.4")
+
+        assert resp.status_code == 302
+        assert SandboxSession.objects.count() == 2
+
+    def test_denial_creates_no_rows_and_lands_on_the_landing_page(self, settings):
+        settings.MESO_SANDBOX_MAX_CONCURRENT = 0
+        users_before = User.objects.count()
+
+        client = Client()
+        resp = client.get(
+            reverse("meso:sandbox_enter"), REMOTE_ADDR="10.0.0.5", follow=True
+        )
+
+        assert User.objects.count() == users_before
+        assert SandboxSession.objects.count() == 0
+        # Denied anonymous visitor lands back on the public landing page,
+        # with the friendly busy message flashed.
+        body = resp.content.decode()
+        assert "demo is busy" in body.lower()
+        assert reverse("meso:become_coach") in body  # landing.html rendered
