@@ -586,3 +586,41 @@ class TestDesignerSignupGate:
         ).content.decode()
 
         assert 'data-testid="agent-composer-input"' in body
+
+
+# ---------------------------------------------------------------------------
+# UI — "Draft with AI" routes to the signup gate instead of a form submit
+# ---------------------------------------------------------------------------
+
+
+class TestDraftWithAiCTAs:
+    def test_roster_new_program_offers_the_signup_gate(self, client):
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert (
+            f'href="{reverse("meso:sandbox_signup")}"' in body
+            and "Draft with AI" in body
+        )
+        assert 'name="draft" value="agent"' not in body
+
+    def test_athlete_profile_offers_the_signup_gate(self, client):
+        from store_project.meso.models import CoachAthlete
+
+        coach = _sandbox_coach()
+        client.force_login(coach)
+        fresh_link = next(
+            link
+            for link in CoachAthlete.objects.for_coach(coach).filter(is_demo=True)
+            if link.working_plan() is None
+        )
+
+        body = client.get(
+            reverse("meso:athlete", kwargs={"pk": fresh_link.athlete.pk})
+        ).content.decode()
+        assert (
+            f'href="{reverse("meso:sandbox_signup")}"' in body
+            and "Draft with AI" in body
+        )
+        assert 'name="draft" value="agent"' not in body
