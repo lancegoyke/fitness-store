@@ -110,14 +110,24 @@ export const typedCollisionDetection: CollisionDetection = (args) => {
 
 export const typedKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) => {
   const containers = args.context.droppableContainers;
-  const filtered = {
-    ...args.context,
-    droppableContainers: Object.assign(Object.create(Object.getPrototypeOf(containers) ?? {}), containers, {
-      getEnabled: () =>
-        filterContainersByActiveType(args.context.active?.id ?? "", containers.getEnabled()),
-    }),
-  };
-  return sortableKeyboardCoordinates(event, { ...args, context: filtered });
+  // DroppableContainersMap is a real Map subclass — a spread/assign clone
+  // borrows its prototype WITHOUT Map internal slots, and .get() then throws
+  // "called on incompatible receiver". Delegate every member to the original
+  // map (methods bound to it), overriding only getEnabled with the filter.
+  const filtered = new Proxy(containers, {
+    get(target, prop) {
+      if (prop === "getEnabled") {
+        return () =>
+          filterContainersByActiveType(args.context.active?.id ?? "", target.getEnabled());
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return sortableKeyboardCoordinates(event, {
+    ...args,
+    context: { ...args.context, droppableContainers: filtered },
+  });
 };
 
 export function WeekGrid(props: WeekGridProps) {

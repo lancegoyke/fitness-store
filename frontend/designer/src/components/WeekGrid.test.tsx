@@ -273,3 +273,49 @@ describe("typedCollisionDetection (day drags collide only with day containers)",
     expect(String(collisions[0]!.id)).toBe("day-1");
   });
 });
+
+describe("typedKeyboardCoordinates delegates to the real droppable map", () => {
+  // dnd-kit's DroppableContainersMap is a real Map subclass; a spread/assign
+  // clone borrows its prototype without Map internal slots, so .get() throws
+  // "called on incompatible receiver" and keyboard reordering dies silently.
+  it("returns coordinates for a day drag without throwing on Map methods", async () => {
+    const { typedKeyboardCoordinates } = await import("./WeekGrid");
+    class FakeContainers extends Map<string, unknown> {
+      getEnabled() {
+        return [...this.values()];
+      }
+    }
+    const mk = (id: string, top: number) => {
+      const node = document.createElement("div");
+      document.body.appendChild(node);
+      return {
+        id,
+        disabled: false,
+        node: { current: node },
+        data: { current: { sortable: { containerId: "week", index: 0, items: [] } } },
+        rect: { current: { top, bottom: top + 100, left: 0, right: 800, width: 800, height: 100 } },
+      };
+    };
+    const containers = new FakeContainers();
+    for (const c of [mk("day-1", 0), mk("ex-9", 30), mk("day-2", 200)]) containers.set(c.id, c);
+    const rects = new Map([...containers.values()].map((c) => {
+      const e = c as { id: string; rect: { current: unknown } };
+      return [e.id, e.rect.current] as const;
+    }));
+    const event = new KeyboardEvent("keydown", { code: "ArrowDown", key: "ArrowDown" });
+    const coords = typedKeyboardCoordinates(event, {
+      currentCoordinates: { x: 0, y: 0 },
+      context: {
+        active: { id: "day-1" },
+        over: null,
+        collisionRect: { top: 0, bottom: 100, left: 0, right: 800, width: 800, height: 100 },
+        droppableRects: rects,
+        droppableContainers: containers,
+        scrollableAncestors: [],
+      },
+    } as never);
+    expect(coords).toBeTruthy();
+    // Proposed target must be day-2 (top 200), never ex-9 (top 30).
+    expect(coords!.y).toBeGreaterThanOrEqual(150);
+  });
+});
