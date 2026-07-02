@@ -9,12 +9,53 @@
   margin-bottom: 15px;
   box-shadow: 0 1px 2px rgba(16, 18, 22, 0.03);
 }
+/* Phase 4 (dnd-kit reordering): the day card being actively dragged, via
+   dnd-kit's CSS.Transform on the sortable item's own root node. */
+.meso-day-card.is-dragging {
+  opacity: 0.85;
+  box-shadow: 0 6px 18px rgba(16, 18, 22, 0.16);
+  position: relative;
+  z-index: 1;
+}
 .meso-day-header {
   display: flex;
   align-items: center;
   gap: 11px;
   padding: 12px 15px;
   border-bottom: 1px solid var(--line-2);
+}
+/* Phase 4 (dnd-kit reordering): shared grip-handle look for both the day
+   card header and every exercise row's name cell. Deliberately minimal —
+   dim glyph, grab cursor, a focus-visible ring matching Phase 3's
+   `[data-grid-cell]:focus-visible` token. `touch-action: none` per dnd-kit's
+   own guidance for handle elements (keeps a touch-drag from also scrolling
+   the page). */
+.meso-drag-handle {
+  appearance: none;
+  cursor: grab;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--dim);
+  padding: 2px 4px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+  touch-action: none;
+}
+.meso-drag-handle:hover {
+  color: var(--ink);
+}
+.meso-drag-handle:active {
+  cursor: grabbing;
+}
+.meso-drag-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.meso-drag-handle--day {
+  font-size: 14px;
 }
 .meso-day-badge {
   width: 25px;
@@ -112,8 +153,23 @@
   border-bottom: 1px solid var(--line-2);
   align-items: center;
 }
+/* Phase 4 (dnd-kit reordering): the row being actively dragged, via
+   dnd-kit's CSS.Transform on the sortable item's own root node. */
+.meso-ex-row.is-dragging {
+  opacity: 0.6;
+  background: var(--soft);
+  box-shadow: 0 3px 10px rgba(16, 18, 22, 0.12);
+  position: relative;
+  z-index: 1;
+}
 .meso-ex-name-col {
   min-width: 0;
+}
+/* Phase 4: the drag handle sits before the name input, both on one line. */
+.meso-ex-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .meso-ex-name-input {
   width: 100%;

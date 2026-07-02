@@ -1,11 +1,14 @@
 // DayCard (CONTRACT.md "DayCard") — ported 1:1 from designer.html's day card
 // (lines ~391-461): day header (name/bias/count + remove-day arm/confirm/
 // cancel), column headers, one ExerciseRow per exercise, "+ Add exercise".
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { ExerciseRow } from "./ExerciseRow";
 import type { Day, Exercise } from "../lib/api";
 import type { PendingDelete } from "../hooks/usePlanData";
 import type { OneRmEditorState } from "../hooks/useOneRmEditor";
 import type { UseGridNavResult } from "../hooks/useGridNav";
+import type { ReorderDragData } from "../hooks/useReorder";
 
 export interface DayCardProps {
   day: Day;
@@ -63,9 +66,41 @@ export function DayCard(props: DayCardProps) {
 
   const armed = !!pendingDelete && pendingDelete.type === "day" && pendingDelete.di === dayIndex;
 
+  // Phase 4 (dnd-kit reordering): DayCard is itself a sortable item in
+  // WeekGrid's day-strip SortableContext, AND a SortableContext provider
+  // for its own exercise rows below — the standard nested-containers dnd-kit
+  // pattern. Drag listeners are bound only to the day handle in the header.
+  const dragData: ReorderDragData = { type: "day", sessionId: day.id };
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: `day-${day.id}`, data: dragData });
+  const cardStyle = { transform: CSS.Transform.toString(transform), transition };
+  const dayHandleLabel = `Reorder ${day.name || `Day ${day.n}`}`;
+
   return (
-    <div className="meso-day-card">
+    <div
+      className={`meso-day-card${isDragging ? " is-dragging" : ""}`}
+      ref={setNodeRef}
+      style={cardStyle}
+    >
       <div className="meso-day-header">
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          data-testid={`day-drag-${day.id}`}
+          className="meso-drag-handle meso-drag-handle--day"
+          aria-label={dayHandleLabel}
+          {...attributes}
+          {...listeners}
+        >
+          ⠿
+        </button>
         <div className="meso-day-badge">{day.n}</div>
         <div className="meso-day-name">{day.name}</div>
         {day.bias && <div className="meso-day-bias">{day.bias}</div>}
@@ -119,29 +154,35 @@ export function DayCard(props: DayCardProps) {
         <div className="meso-col-center">RPE</div>
         <div>Notes</div>
       </div>
-      {day.exercises.map((ex, xi) => (
-        <ExerciseRow
-          key={ex.id}
-          ex={ex}
-          dayIndex={dayIndex}
-          exIndex={xi}
-          isGroup={isGroup}
-          unit={unit}
-          deleting={deleting}
-          gridNav={gridNav}
-          oneRmOpenForRow={oneRmOpenForRow(ex)}
-          oneRmEditorState={oneRmEditorState}
-          onFieldChange={(field, value) => onFieldChange(dayIndex, xi, field, value)}
-          onCommit={() => onCommit(dayIndex, xi)}
-          onRemove={() => onRemoveExercise(dayIndex, xi)}
-          onToggleLoadType={() => onToggleLoadType(ex)}
-          onOpenOverride={() => onOpenOverride(ex)}
-          onOpenOneRm={() => onOpenOneRm(ex)}
-          onOneRmChange={onOneRmChange}
-          onOneRmSave={onOneRmSave}
-          onOneRmCancel={onOneRmCancel}
-        />
-      ))}
+      <SortableContext
+        items={day.exercises.map((ex) => `ex-${ex.id}`)}
+        strategy={verticalListSortingStrategy}
+      >
+        {day.exercises.map((ex, xi) => (
+          <ExerciseRow
+            key={ex.id}
+            ex={ex}
+            dayIndex={dayIndex}
+            exIndex={xi}
+            isGroup={isGroup}
+            unit={unit}
+            deleting={deleting}
+            gridNav={gridNav}
+            dayId={day.id}
+            oneRmOpenForRow={oneRmOpenForRow(ex)}
+            oneRmEditorState={oneRmEditorState}
+            onFieldChange={(field, value) => onFieldChange(dayIndex, xi, field, value)}
+            onCommit={() => onCommit(dayIndex, xi)}
+            onRemove={() => onRemoveExercise(dayIndex, xi)}
+            onToggleLoadType={() => onToggleLoadType(ex)}
+            onOpenOverride={() => onOpenOverride(ex)}
+            onOpenOneRm={() => onOpenOneRm(ex)}
+            onOneRmChange={onOneRmChange}
+            onOneRmSave={onOneRmSave}
+            onOneRmCancel={onOneRmCancel}
+          />
+        ))}
+      </SortableContext>
       <button
         type="button"
         data-hover="add"

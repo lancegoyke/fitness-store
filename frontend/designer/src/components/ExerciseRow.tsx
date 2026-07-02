@@ -3,11 +3,15 @@
 // onFieldChange, onBlur -> onCommit), load-type toggle, group adjust badge,
 // individual %1RM badge/inline editor, remove ×.
 import { useRef } from "react";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { loadSuffix } from "../lib/grid";
 import type { Exercise } from "../lib/api";
+import type { Id } from "../hooks/usePlanData";
 import type { OneRmEditorState } from "../hooks/useOneRmEditor";
 import { cellAriaLabel, gridCellDomKey } from "../hooks/useGridNav";
 import type { GridCellBindings, GridCellCallbacks, GridColumn, UseGridNavResult } from "../hooks/useGridNav";
+import type { ReorderDragData } from "../hooks/useReorder";
 
 // Phase 3 (grid keyboard navigation): a cell with no gridNav wired up (or no
 // gridNav prop at all) falls back to a harmless, non-tabbable, inert
@@ -23,6 +27,12 @@ export interface ExerciseRowProps {
   unit: string;
   oneRmOpenForRow: boolean;
   oneRmEditorState: OneRmEditorState | null;
+  // Phase 4 (dnd-kit reordering): the owning day's id, carried by the drag
+  // handle's sortable data so useReorder's cross-day move can find the
+  // source day without re-deriving it from `program`. Optional so
+  // ExerciseRow.test.tsx's existing fixtures (rendered standalone, with no
+  // parent DayCard) keep passing untouched.
+  dayId?: Id;
   // CONTRACT.md's prop list omits `deleting`, but its own prose says the
   // remove × is `disabled={deleting}` — and the source (designer.html line
   // ~440) binds `:disabled="deleting"` on that button. Resolved toward the
@@ -52,6 +62,7 @@ export function ExerciseRow(props: ExerciseRowProps) {
     oneRmEditorState,
     deleting,
     gridNav,
+    dayId,
     onFieldChange,
     onCommit,
     onRemove,
@@ -64,6 +75,23 @@ export function ExerciseRow(props: ExerciseRowProps) {
   } = props;
 
   const showOneRm = !isGroup && ex.load_type === "pct";
+
+  // Phase 4 (dnd-kit reordering): the row itself is a sortable item (so
+  // dragging it repositions via CSS.Transform), but the drag LISTENERS are
+  // bound only to the handle button below — dnd-kit's documented "drag
+  // handle" pattern — so a click/drag anywhere else in the row (a cell
+  // input, a badge) never starts a drag.
+  const dragData: ReorderDragData = { type: "exercise", dayId: (dayId ?? "") as Id, prescriptionId: ex.id };
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: `ex-${ex.id}`, data: dragData });
+  const rowStyle = { transform: CSS.Transform.toString(transform), transition };
 
   // Native @change parity: commit on blur only if the coach actually typed in
   // a cell since focusing it — an unconditional blur commit would autosave
@@ -99,18 +127,35 @@ export function ExerciseRow(props: ExerciseRowProps) {
   }
 
   return (
-    <div className="meso-ex-row">
+    <div
+      className={`meso-ex-row${isDragging ? " is-dragging" : ""}`}
+      ref={setNodeRef}
+      style={rowStyle}
+    >
       <div className="meso-ex-name-col">
-        <input
-          className="meso-cell meso-ex-name-input"
-          data-testid={`exercise-name-${ex.id}`}
-          data-grid-cell={gridCellDomKey(ex.id, "name")}
-          aria-label={cellAriaLabel(ex.name, "name")}
-          value={ex.name}
-          onChange={(e) => changed("name", e.target.value)}
-          onBlur={commitIfDirty}
-          {...gridCellBindings("name")}
-        />
+        <div className="meso-ex-name-row">
+          <button
+            type="button"
+            ref={setActivatorNodeRef}
+            data-testid={`exercise-drag-${ex.id}`}
+            className="meso-drag-handle"
+            aria-label={`Reorder ${ex.name || "exercise"}`}
+            {...attributes}
+            {...listeners}
+          >
+            ⠿
+          </button>
+          <input
+            className="meso-cell meso-ex-name-input"
+            data-testid={`exercise-name-${ex.id}`}
+            data-grid-cell={gridCellDomKey(ex.id, "name")}
+            aria-label={cellAriaLabel(ex.name, "name")}
+            value={ex.name}
+            onChange={(e) => changed("name", e.target.value)}
+            onBlur={commitIfDirty}
+            {...gridCellBindings("name")}
+          />
+        </div>
         <div className="meso-ex-tags">
           {ex.tag && <span className="meso-tag-chip">{ex.tag}</span>}
           {ex.last && <span className="meso-last-chip">{"last: " + ex.last}</span>}
