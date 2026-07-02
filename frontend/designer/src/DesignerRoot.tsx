@@ -23,6 +23,7 @@ import { useDeletes } from "./hooks/useDeletes";
 import { useUndoRedo } from "./hooks/useUndoRedo";
 import { useOverrideEditor } from "./hooks/useOverrideEditor";
 import { useOneRmEditor } from "./hooks/useOneRmEditor";
+import { useReorder } from "./hooks/useReorder";
 import { useAgentChat } from "./hooks/useAgentChat";
 import type { ChatMessage } from "./hooks/useAgentChat";
 import { useCoachmarks } from "./hooks/useCoachmarks";
@@ -216,6 +217,15 @@ export function DesignerRoot() {
     adoptHistory: planData.adoptHistory,
     patchExercise: planData.patchExercise,
   });
+  const reorder = useReorder({
+    planId,
+    csrf,
+    viewedWeekId: planData.viewedWeekId,
+    setPendingDelete: planData.setPendingDelete,
+    program: planData.program,
+    setProgram: planData.setProgram,
+    applyPlanData: planData.applyPlanData,
+  });
   const agentChat = useAgentChat({
     planId,
     csrf,
@@ -341,6 +351,8 @@ export function DesignerRoot() {
                   onRequestRemoveWeek={deletes.requestRemoveWeek}
                   onUndo={undoRedo.undo}
                   onRedo={undoRedo.redo}
+                  onDragEnd={reorder.onDragEnd}
+                  reordering={reorder.reordering}
                 />
               </div>
             )}

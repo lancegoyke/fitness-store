@@ -236,3 +236,86 @@ describe("Phase 3: aria-labels flow through to rendered cells", () => {
     expect(screen.getByTestId("exercise-sets-9")).toHaveAttribute("aria-label", "Box Squat — sets");
   });
 });
+
+describe("keyboard drag candidate filtering (day drags only target day containers)", () => {
+  // With nested sortables in one DndContext, the stock coordinate getter
+  // proposes the closest droppable of ANY type — a lifted day card keeps
+  // targeting exercise rows and can never reach the neighboring day
+  // (browser-verified). The pure filter below feeds typedKeyboardCoordinates.
+  it("keeps only same-kind droppables for the active drag", async () => {
+    const { filterContainersByActiveType } = await import("./WeekGrid");
+    const containers = [{ id: "day-1" }, { id: "ex-9" }, { id: "day-2" }] as never[];
+    expect(filterContainersByActiveType("day-1", containers).map((c: { id: string }) => c.id)).toEqual(["day-1", "day-2"]);
+    // An exercise drag keeps day containers too — the append/empty-day drop
+    // path (exercise-over-day) must stay reachable for keyboard users.
+    expect(filterContainersByActiveType("ex-9", containers).map((c: { id: string }) => c.id)).toEqual(["day-1", "ex-9", "day-2"]);
+  });
+});
+
+describe("typedCollisionDetection (day drags collide only with day containers)", () => {
+  it("returns only day collisions for a day drag", async () => {
+    const { typedCollisionDetection } = await import("./WeekGrid");
+    const rect = (top: number) => ({ top, bottom: top + 200, left: 0, right: 800, width: 800, height: 200 });
+    const containers = [
+      { id: "day-1", rect: { current: rect(0) }, data: { current: {} }, disabled: false },
+      { id: "ex-9", rect: { current: rect(40) }, data: { current: {} }, disabled: false },
+      { id: "day-2", rect: { current: rect(220) }, data: { current: {} }, disabled: false },
+    ];
+    const collisions = typedCollisionDetection({
+      active: { id: "day-2", rect: { current: { initial: rect(220), translated: rect(10) } }, data: { current: {} } },
+      collisionRect: rect(10),
+      droppableRects: new Map(containers.map((c) => [c.id, c.rect.current])),
+      droppableContainers: containers,
+      pointerCoordinates: null,
+    } as never);
+    expect(collisions.length).toBeGreaterThan(0);
+    expect(collisions.every((c: { id: unknown }) => String(c.id).startsWith("day-"))).toBe(true);
+    expect(String(collisions[0]!.id)).toBe("day-1");
+  });
+});
+
+describe("typedKeyboardCoordinates delegates to the real droppable map", () => {
+  // dnd-kit's DroppableContainersMap is a real Map subclass; a spread/assign
+  // clone borrows its prototype without Map internal slots, so .get() throws
+  // "called on incompatible receiver" and keyboard reordering dies silently.
+  it("returns coordinates for a day drag without throwing on Map methods", async () => {
+    const { typedKeyboardCoordinates } = await import("./WeekGrid");
+    class FakeContainers extends Map<string, unknown> {
+      getEnabled() {
+        return [...this.values()];
+      }
+    }
+    const mk = (id: string, top: number) => {
+      const node = document.createElement("div");
+      document.body.appendChild(node);
+      return {
+        id,
+        disabled: false,
+        node: { current: node },
+        data: { current: { sortable: { containerId: "week", index: 0, items: [] } } },
+        rect: { current: { top, bottom: top + 100, left: 0, right: 800, width: 800, height: 100 } },
+      };
+    };
+    const containers = new FakeContainers();
+    for (const c of [mk("day-1", 0), mk("ex-9", 30), mk("day-2", 200)]) containers.set(c.id, c);
+    const rects = new Map([...containers.values()].map((c) => {
+      const e = c as { id: string; rect: { current: unknown } };
+      return [e.id, e.rect.current] as const;
+    }));
+    const event = new KeyboardEvent("keydown", { code: "ArrowDown", key: "ArrowDown" });
+    const coords = typedKeyboardCoordinates(event, {
+      currentCoordinates: { x: 0, y: 0 },
+      context: {
+        active: { id: "day-1" },
+        over: null,
+        collisionRect: { top: 0, bottom: 100, left: 0, right: 800, width: 800, height: 100 },
+        droppableRects: rects,
+        droppableContainers: containers,
+        scrollableAncestors: [],
+      },
+    } as never);
+    expect(coords).toBeTruthy();
+    // Proposed target must be day-2 (top 200), never ex-9 (top 30).
+    expect(coords!.y).toBeGreaterThanOrEqual(150);
+  });
+});

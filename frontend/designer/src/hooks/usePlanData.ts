@@ -241,6 +241,12 @@ export function usePlanData(
     pendingDelete,
     setPendingDelete,
 
+    // Phase 4 (dnd-kit reordering): a raw setState escape hatch for
+    // useReorder — see useReorder.test.tsx's header comment decision 1.
+    // None of patchExercise/updateExerciseField can reorder/splice arrays
+    // across days or reorder the day array itself.
+    setProgram,
+
     applyPlanData,
     adoptHistory,
     patchExercise,

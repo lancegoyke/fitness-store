@@ -2192,6 +2192,85 @@ def session_delete(request, plan_id, pk):
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 
+def _parse_id_list(request):
+    """A designer reorder POST's ``{"order": [...]}`` body, or a bare 400.
+
+    Structural failures — malformed JSON, a non-object body, a missing/non-list
+    ``order``, or a non-int entry — are asserted as a bare 400 (mirrors
+    ``prescription_patch``'s ``HttpResponseBadRequest`` convention for
+    structurally-invalid bodies), as opposed to the *semantic* id-set mismatch
+    a caller checks afterward against the live rows it's reordering (which the
+    spec promises as ``{"ok": false, "error": ...}``). ``bool`` is an ``int``
+    subclass, so it's excluded explicitly — the same guard ``_body_week_id`` uses.
+    """
+    try:
+        payload = json.loads(request.body or "{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return None, HttpResponseBadRequest("Expected a JSON object.")
+    order = payload.get("order")
+    if not isinstance(order, list) or not all(
+        isinstance(item, int) and not isinstance(item, bool) for item in order
+    ):
+        return None, HttpResponseBadRequest("order must be a list of integers.")
+    return order, None
+
+
+@login_required
+@require_POST
+def session_reorder(request, plan_id, pk):
+    """Reorder one session's exercise rows (dnd-kit designer, Phase 4, #403).
+
+    Body ``{"order": [<prescription ids>]}`` must be EXACTLY the session's live
+    prescription id set — one entry per live row, no missing/extra/duplicate/
+    foreign/soft-deleted id — in the new order; any mismatch is a 400
+    ``{"ok": false, "error": ...}`` (see ``_parse_id_list`` for the structural-
+    vs-semantic 400 split). Writes dense 0-based ``ExercisePrescription.order``
+    values matching the posted order. Idempotent: posting the current order is
+    a 200 no-op that still records one action (the client never sends a no-op
+    post, so this is the simplest contract rather than a special case).
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    session = get_object_or_404(
+        Session,
+        pk=pk,
+        week__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        week__deleted_at__isnull=True,
+    )
+    order, bad = _parse_id_list(request)
+    if bad is not None:
+        return bad
+
+    week = session.week
+    with transaction.atomic():
+        # Lock ordering: plan first (see session_add) — the live id set is read
+        # under this lock so a concurrent write to the same session's rows
+        # can't slip in between the read and this reorder's write.
+        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        live_ids = list(
+            session.prescriptions.filter(deleted_at__isnull=True).values_list(
+                "pk", flat=True
+            )
+        )
+        if len(order) != len(live_ids) or set(order) != set(live_ids):
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "order must be exactly the session's exercises.",
+                },
+                status=400,
+            )
+        record_plan_action(plan, "Reordered exercises")
+        for index, prescription_id in enumerate(order):
+            ExercisePrescription.objects.filter(pk=prescription_id).update(order=index)
+        _touch_plan(plan)
+    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
+
+
 @login_required
 @require_GET
 def week_view(request, plan_id, week_id):
@@ -2346,6 +2425,46 @@ def week_delete(request, plan_id, week_id):
         week.save(update_fields=["deleted_at"])
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan)})
+
+
+@login_required
+@require_POST
+def week_reorder_sessions(request, plan_id, week_id):
+    """Reorder one week's training days (dnd-kit designer, Phase 4, #403).
+
+    Body ``{"order": [<session ids>]}`` must be EXACTLY the week's live session
+    id set, in the new order — validation mirrors ``session_reorder`` (see
+    ``_parse_id_list`` for the structural-vs-semantic 400 split). Writes dense
+    0-based ``Session.order`` values only; ``day_number``/``name`` stay
+    untouched — "Day 1" keeps its label, since ``order`` is presentation order,
+    not the day's identity (``Session.Meta.ordering = ["order", "day_number"]``).
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    week = get_object_or_404(
+        Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
+    )
+    order, bad = _parse_id_list(request)
+    if bad is not None:
+        return bad
+
+    with transaction.atomic():
+        # Lock ordering: plan first (see session_add).
+        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        live_ids = list(
+            week.sessions.filter(deleted_at__isnull=True).values_list("pk", flat=True)
+        )
+        if len(order) != len(live_ids) or set(order) != set(live_ids):
+            return JsonResponse(
+                {"ok": False, "error": "order must be exactly the week's days."},
+                status=400,
+            )
+        record_plan_action(plan, "Reordered days")
+        for index, session_id in enumerate(order):
+            Session.objects.filter(pk=session_id).update(order=index)
+        _touch_plan(plan)
+    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 
 def _undo_redo_week_response(plan, week_id):
@@ -2612,6 +2731,116 @@ def prescription_override(request, plan_id, pk):
         # matches the membership; this stays defensive against future drift.
         return HttpResponseBadRequest("The prescription is not in this program.")
     return _override_response(plan, prescription)
+
+
+def _live_session_in_plan_or_none(plan, session_id):
+    """A live ``Session`` of ``plan`` by pk, or ``None`` (a bad body reference).
+
+    Mirrors ``_group_member_or_none``'s convention: a body-referenced id that
+    doesn't resolve to a live row of this plan answers 400, not the URL-segment
+    404 used for the endpoint's own ``pk``.
+    """
+    return Session.objects.filter(
+        pk=session_id,
+        week__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        week__deleted_at__isnull=True,
+    ).first()
+
+
+@login_required
+@require_POST
+def prescription_move(request, plan_id, pk):
+    """Move one exercise row to a different session, within the same week (Phase 4, #403).
+
+    The designer's cross-day drag: re-points ``prescription.session`` to the
+    posted ``session_id`` and densely renumbers (0-based) BOTH the source and
+    target session's live rows, with the moved row landing at the posted
+    ``index`` (clamped into ``[0, len(target's live rows)]`` — a drop past
+    either end just lands at that end). A target session equal to the source
+    behaves like a plain within-day reorder (the row never leaves, only the
+    one session's rows are renumbered). Cross-*week* moves — a target session
+    in a different week than the source — are a 400
+    ``{"ok": false, "error": "Move within one week."}``; the designer's grid
+    has no cross-week drag gesture. ``LoggedSet.prescription`` rows are left
+    untouched — a move only ever changes ``session``/``order``, never touches
+    an athlete's logged history, so it keeps pointing at the same pk.
+
+    Body ``{"session_id": <int>, "index": <int>}``; malformed JSON, a non-object
+    body, or a missing/non-int field is a bare 400 (mirrors ``prescription_patch``).
+    A ``session_id`` that doesn't resolve to a live session of THIS plan is also
+    a 400 (``_live_session_in_plan_or_none``, mirroring ``prescription_override``'s
+    ``_group_member_or_none`` bad-reference convention) rather than a 404 — only
+    the URL-segment ``pk`` gets the 404 treatment.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    prescription = get_object_or_404(
+        ExercisePrescription,
+        pk=pk,
+        session__week__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        session__deleted_at__isnull=True,
+        session__week__deleted_at__isnull=True,
+    )
+    try:
+        payload = json.loads(request.body or "{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, int) or isinstance(session_id, bool):
+        return HttpResponseBadRequest("session_id must be an integer.")
+    index = payload.get("index")
+    if not isinstance(index, int) or isinstance(index, bool):
+        return HttpResponseBadRequest("index must be an integer.")
+
+    target_session = _live_session_in_plan_or_none(plan, session_id)
+    if target_session is None:
+        return HttpResponseBadRequest("session_id must be a live session of this plan.")
+    source_session = prescription.session
+    if target_session.week_id != source_session.week_id:
+        return JsonResponse({"ok": False, "error": "Move within one week."}, status=400)
+
+    week = source_session.week
+    with transaction.atomic():
+        # Lock ordering: plan first (see session_add).
+        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        record_plan_action(plan, f"Moved {prescription.name or 'exercise'}")
+        if target_session.pk == source_session.pk:
+            siblings = list(
+                source_session.prescriptions.filter(deleted_at__isnull=True)
+                .exclude(pk=prescription.pk)
+                .order_by("order")
+            )
+            clamped = max(0, min(index, len(siblings)))
+            siblings.insert(clamped, prescription)
+            for new_order, row in enumerate(siblings):
+                ExercisePrescription.objects.filter(pk=row.pk).update(order=new_order)
+        else:
+            target_rows = list(
+                target_session.prescriptions.filter(deleted_at__isnull=True).order_by(
+                    "order"
+                )
+            )
+            clamped = max(0, min(index, len(target_rows)))
+            target_rows.insert(clamped, prescription)
+            for new_order, row in enumerate(target_rows):
+                ExercisePrescription.objects.filter(pk=row.pk).update(
+                    order=new_order, session_id=target_session.pk
+                )
+            source_rows = list(
+                source_session.prescriptions.filter(deleted_at__isnull=True)
+                .exclude(pk=prescription.pk)
+                .order_by("order")
+            )
+            for new_order, row in enumerate(source_rows):
+                ExercisePrescription.objects.filter(pk=row.pk).update(order=new_order)
+        _touch_plan(plan)
+    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 
 @login_required
