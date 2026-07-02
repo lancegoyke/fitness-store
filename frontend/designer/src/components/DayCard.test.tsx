@@ -101,3 +101,32 @@ describe("DayCard", () => {
     expect(onAddExercise).toHaveBeenCalledWith(0);
   });
 });
+
+// === Phase 4 (dnd-kit reordering) — RED. DayCard does not render a day-strip
+// drag handle yet; these specs are appended (existing specs above are
+// untouched). Per scratchpad/phase4-spec.md: "each DayCard header gets one
+// [handle] (`data-testid="day-drag-${id}"`, aria-label "Reorder <day
+// name>")". The spec's own example phrase is "<day name or 'Day N'>" — this
+// block resolves the fallback as "Day <day.n>" (the same badge number the
+// header already renders in `.meso-day-badge`), not the array index, so the
+// label stays correct after a day reorder (`n` is the day's own identity;
+// `dayIndex` is presentation position and changes on every drag).
+describe("drag handle (Phase 4, dnd-kit reordering)", () => {
+  it("renders a day-strip drag-handle button with the reorder testid/aria-label", () => {
+    render(<DayCard {...baseProps()} />);
+    const handle = screen.getByTestId("day-drag-1");
+    expect(handle.tagName).toBe("BUTTON");
+    expect(handle).toHaveAttribute("type", "button");
+    expect(handle).toHaveAttribute("aria-label", "Reorder Lower");
+  });
+
+  it("falls back to 'Reorder Day <n>' when the day has no name", () => {
+    render(<DayCard {...baseProps({ day: day({ name: "" }) })} />);
+    expect(screen.getByTestId("day-drag-1")).toHaveAttribute("aria-label", "Reorder Day 1");
+  });
+
+  it("is NOT a grid-nav restoration target", () => {
+    render(<DayCard {...baseProps()} />);
+    expect(screen.getByTestId("day-drag-1")).not.toHaveAttribute("data-grid-restore");
+  });
+});
