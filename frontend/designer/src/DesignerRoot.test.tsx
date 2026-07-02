@@ -205,7 +205,10 @@ function mockUndoReply(program: unknown[]) {
       weeks: [{ id: 1, index: 1, label: "Wk 1", current: true }],
       phases: [{ name: "Hypertrophy", weeks: "4 wk", state: "current" }],
       viewing: 1,
-      history: { can_undo: false, can_redo: true, undo_label: null, redo_label: "Edited Box Squat" },
+      // can_undo stays true: the multi-undo restoration specs click the undo
+      // button repeatedly, and a can_undo:false reply would disable it after
+      // the first click (userEvent.click on a disabled button never fires).
+      history: { can_undo: true, can_redo: true, undo_label: "Edited RDL", redo_label: "Edited Box Squat" },
     }),
   }) as unknown as typeof fetch;
 }
