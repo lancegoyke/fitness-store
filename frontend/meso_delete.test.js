@@ -320,3 +320,24 @@ describe("pending delete confirm flow (day / week removal)", () => {
     expect(global.fetch).toHaveBeenCalledTimes(1); // the guard let the retry through
   });
 });
+
+describe("pendingDelete disarms on grid swap", () => {
+  // Arming Day 2, switching weeks, then pressing the (stale) Confirm must not
+  // delete whatever now renders at that index — any applyPlanData (week
+  // switch, add, delete, undo) invalidates the armed row, so it disarms.
+  it("applyPlanData clears an armed delete", () => {
+    const c = makeMeso();
+    c.requestRemoveDay(1);
+    c.applyPlanData(planData());
+    expect(c.pendingDelete).toBe(null);
+  });
+
+  it("a confirm after the swap is a no-op", async () => {
+    const c = makeMeso();
+    c.requestRemoveDay(1);
+    c.applyPlanData(planData());
+    global.fetch = vi.fn();
+    await c.confirmPendingDelete();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});

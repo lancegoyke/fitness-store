@@ -719,6 +719,10 @@ function createMeso() {
       this.weeks = data.weeks;
       this.phases = data.phases;
       this.viewedWeekId = data.viewing != null ? data.viewing : null;
+      // Any grid swap invalidates an armed delete — `pendingDelete` anchors a
+      // day by index, so confirming across a week switch would delete whatever
+      // now renders at that index. Disarm instead.
+      this.pendingDelete = null;
     },
 
     // Switch the grid to another week — a pure read (viewing never changes what's

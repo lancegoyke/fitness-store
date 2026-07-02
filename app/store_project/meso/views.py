@@ -3207,10 +3207,11 @@ class DeliverView(LoginRequiredMixin, TemplateView):
     def _target_week(self, plan):
         """The week the deliver screen targets, from the ``?week=`` query param.
 
-        Resolves ``?week=`` to a week of this plan, or None (the presenter falls
-        back to the live week). A missing / foreign / non-numeric ``week`` is
-        ignored rather than a 404: the confirm screen always renders something
-        deliverable, and the deliver POST itself validates the chosen week strictly.
+        Resolves ``?week=`` to a *live* week of this plan, or None (the presenter
+        falls back to the live week). A missing / foreign / removed / non-numeric
+        ``week`` is ignored rather than a 404: the confirm screen always renders
+        something deliverable, and the deliver POST itself validates the chosen
+        week strictly (it 404s a soft-deleted target — the screen must agree).
         """
         raw = self.request.GET.get("week")
         if not raw:
@@ -3219,7 +3220,9 @@ class DeliverView(LoginRequiredMixin, TemplateView):
             week_id = int(raw)
         except (TypeError, ValueError):
             return None
-        return Week.objects.filter(pk=week_id, mesocycle__plan=plan).first()
+        return Week.objects.filter(
+            pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
+        ).first()
 
 
 class ResultsView(LoginRequiredMixin, TemplateView):

@@ -617,7 +617,12 @@ def deliver_screen(plan, week=None):
     # "sending Wk 1, not the live week (Wk 1)").
     live_id = live.pk if live else None
     mesocycle = target.mesocycle if target else None
-    session_count = target.sessions.count() if target else 0
+    # Live rows only (soft delete, designer framework Phase 0): a removed day
+    # doesn't count toward "N sessions", and the selector below never offers a
+    # removed week (the deliver POST would 404 it).
+    session_count = (
+        target.sessions.filter(deleted_at__isnull=True).count() if target else 0
+    )
     is_redelivery = target is not None and target.deliveries.exists()
 
     # On a re-delivery, diff the live grid against the snapshot last delivered so
@@ -643,7 +648,7 @@ def deliver_screen(plan, week=None):
             "is_target": target is not None and w.pk == target.pk,
         }
         for w in (
-            Week.objects.filter(mesocycle__plan=plan)
+            Week.objects.filter(mesocycle__plan=plan, deleted_at__isnull=True)
             .select_related("mesocycle")
             .order_by("mesocycle__order", "index")
         )

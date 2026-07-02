@@ -33,7 +33,9 @@ import json
 
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 
+from store_project.meso import presenters
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import GroupMembershipFactory
@@ -672,3 +674,38 @@ class TestGroupRedeliverySoftDelete:
 
         member_extra.refresh_from_db()
         assert member_extra.deleted_at is not None
+
+
+class TestDeliverScreenSoftDelete:
+    """The deliver confirmation screen must not offer removed weeks or days.
+
+    The deliver POST already 404s a soft-deleted target; the *screen* has to
+    agree — its week selector lists live weeks only, a ``?week=`` pointing at a
+    removed week falls back to the live target (same lenient contract as a
+    foreign week), and the session count ignores removed days.
+    """
+
+    def test_week_selector_lists_live_weeks_only(self):
+        link, plan, week1, week2 = _two_week_plan()
+        week2.deleted_at = timezone.now()
+        week2.save(update_fields=["deleted_at"])
+        deliver = presenters.deliver_screen(plan)["deliver"]
+        assert [w["id"] for w in deliver["weeks"]] == [week1.pk]
+
+    def test_week_param_pointing_at_a_removed_week_falls_back_to_live(self, client):
+        link, plan, week1, week2 = _two_week_plan()
+        week2.deleted_at = timezone.now()
+        week2.save(update_fields=["deleted_at"])
+        client.force_login(link.coach)
+        resp = client.get(
+            reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk})
+            + f"?week={week2.pk}"
+        )
+        assert resp.status_code == 200
+        assert resp.context["deliver"]["week_id"] == week1.pk
+
+    def test_session_count_ignores_removed_days(self):
+        plan, week, session, presc = seed_plan()
+        SessionFactory(week=week, day_number=2, name="Upper", deleted_at=timezone.now())
+        deliver = presenters.deliver_screen(plan)["deliver"]
+        assert deliver["sessions"] == 1
