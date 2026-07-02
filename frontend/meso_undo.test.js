@@ -248,3 +248,59 @@ describe("handleUndoKey", () => {
     expect(c.redo).not.toHaveBeenCalled();
   });
 });
+
+describe("history refresh on partial (row-level) responses", () => {
+  // persistRow / addExercise / addDay / submitOverride record an undo action
+  // server-side but reply with row payloads, not the full plan envelope — so
+  // they carry a `history` key the client must adopt, or the Undo button
+  // stays stale until the next full re-serialize.
+  it("persistRow adopts the reply's history", async () => {
+    const c = makeMeso();
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, prescription: { id: 9 }, history: HISTORY_BOTH } }),
+    );
+    await c.persistRow({ id: 9, name: "Squat" });
+    expect(c.history).toEqual(HISTORY_BOTH);
+  });
+
+  it("addExercise adopts the reply's history", async () => {
+    const c = makeMeso();
+    c.program = [{ id: 1, exercises: [] }];
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, prescription: { id: 12 }, history: HISTORY_BOTH } }),
+    );
+    await c.addExercise(0);
+    expect(c.program[0].exercises).toEqual([{ id: 12 }]);
+    expect(c.history).toEqual(HISTORY_BOTH);
+  });
+
+  it("addDay adopts the reply's history", async () => {
+    const c = makeMeso();
+    c.program = [];
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, session: { id: 5, exercises: [] }, history: HISTORY_BOTH } }),
+    );
+    await c.addDay();
+    expect(c.history).toEqual(HISTORY_BOTH);
+  });
+
+  it("submitOverride adopts the reply's history", async () => {
+    const c = makeMeso();
+    const ex = { id: 9 };
+    c.override = { ex, saving: false, error: "" };
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, adj: null, adjusts: [], history: HISTORY_BOTH } }),
+    );
+    await c.submitOverride(ex, { athlete: "a", clear: true });
+    expect(c.history).toEqual(HISTORY_BOTH);
+  });
+
+  it("a reply without history leaves the current history untouched", async () => {
+    const c = makeMeso({ history: { ...HISTORY_BOTH } });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, prescription: { id: 9 } } }),
+    );
+    await c.persistRow({ id: 9 });
+    expect(c.history).toEqual(HISTORY_BOTH);
+  });
+});

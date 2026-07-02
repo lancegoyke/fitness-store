@@ -313,7 +313,17 @@ function createMeso() {
         load_type: ex.load_type ?? "abs",
         rpe: ex.rpe ?? "",
         note: ex.note ?? "",
-      }).catch((err) => console.error("Autosave failed", err));
+      })
+        .then((data) => this.adoptHistory(data))
+        .catch((err) => console.error("Autosave failed", err));
+    },
+
+    // Row-level replies (autosave, add-exercise/day, override) don't go
+    // through applyPlanData, but they still record an undo action — they carry
+    // a refreshed `history` the client must adopt or the undo button goes
+    // stale (e.g. the first cell edit on a fresh page would never enable it).
+    adoptHistory(data) {
+      if (data && data.history) this.history = data.history;
     },
 
     // ---- per-athlete override editor (group mode) ----
@@ -434,6 +444,7 @@ function createMeso() {
         );
         ex.adj = data.adj || null;
         ex.adjusts = data.adjusts || [];
+        this.adoptHistory(data);
         this.override.saving = false; // clear before the guarded close
         this.closeOverride();
       } catch (err) {
@@ -645,6 +656,7 @@ function createMeso() {
             null,
           );
           day.exercises.push(data.prescription);
+          this.adoptHistory(data);
         } catch (err) {
           console.error("Add exercise failed", err);
         }
@@ -699,6 +711,7 @@ function createMeso() {
             { week_id: this.viewedWeekId },
           );
           this.program.push(data.session);
+          this.adoptHistory(data);
         } catch (err) {
           console.error("Add day failed", err);
         }

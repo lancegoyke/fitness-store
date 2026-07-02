@@ -275,7 +275,13 @@ def record_plan_action(plan, label):
        state.
     4. Trim the undo stack to ``UNDO_STACK_CAP``, dropping the oldest
        (lowest-seq) rows first.
+
+    Row-locks the plan first: overlapping designer autosaves would otherwise
+    both read the same max ``seq`` and the loser's insert would 500 on
+    ``unique_plan_action_seq``. (The undo/redo endpoints take the same lock,
+    so recording also serializes against a concurrent restore.)
     """
+    models.Plan.objects.select_for_update().filter(pk=plan.pk).first()
     models.PlanAction.objects.filter(
         plan=plan, stack=models.PlanAction.Stack.REDO
     ).delete()

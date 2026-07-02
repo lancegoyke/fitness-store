@@ -87,6 +87,7 @@ from .serializers import current_week
 from .serializers import group_adjustments
 from .serializers import serialize_chat_thread
 from .serializers import serialize_plan
+from .serializers import serialize_plan_history
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 from .serializers import serialize_session
@@ -1999,8 +2000,15 @@ def prescription_patch(request, plan_id, pk):
                 setattr(prescription, field, value)
             prescription.save(update_fields=list(updates))
             _touch_plan(plan)
+    # Row-level reply + refreshed history: this endpoint records an undo action
+    # but doesn't re-serialize the plan, so without `history` the client's undo
+    # affordance would stay stale until the next full envelope.
     return JsonResponse(
-        {"ok": True, "prescription": serialize_prescription(prescription)}
+        {
+            "ok": True,
+            "prescription": serialize_prescription(prescription),
+            "history": serialize_plan_history(plan),
+        }
     )
 
 
@@ -2064,8 +2072,14 @@ def session_add_exercise(request, plan_id, pk):
             note="",
         )
         _touch_plan(plan)
+    # Row-level reply + refreshed history (see prescription_patch).
     return JsonResponse(
-        {"ok": True, "prescription": serialize_prescription(prescription)}, status=201
+        {
+            "ok": True,
+            "prescription": serialize_prescription(prescription),
+            "history": serialize_plan_history(plan),
+        },
+        status=201,
     )
 
 
@@ -2116,7 +2130,15 @@ def session_add(request, plan_id):
             session=session, name="New exercise", order=0, sets="3", reps="10", rpe="7"
         )
         _touch_plan(plan)
-    return JsonResponse({"ok": True, "session": serialize_session(session)}, status=201)
+    # Row-level reply + refreshed history (see prescription_patch).
+    return JsonResponse(
+        {
+            "ok": True,
+            "session": serialize_session(session),
+            "history": serialize_plan_history(plan),
+        },
+        status=201,
+    )
 
 
 @login_required
@@ -2503,6 +2525,8 @@ def _override_response(plan, prescription):
             "prescription": serialize_prescription(prescription),
             "adj": entry["adj"] if entry else None,
             "adjusts": entry["adjusts"] if entry else [],
+            # Row-level reply + refreshed history (see prescription_patch).
+            "history": serialize_plan_history(plan),
         }
     )
 

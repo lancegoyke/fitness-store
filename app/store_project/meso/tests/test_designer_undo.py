@@ -761,3 +761,60 @@ class TestSerializePlanHistory:
             "undo_label",
             "redo_label",
         }
+
+
+# ---------------------------------------------------------------------------
+# history availability rides partial (row-level) mutation responses too
+# ---------------------------------------------------------------------------
+
+
+class TestPartialResponseHistory:
+    """Row-level mutation replies must carry refreshed ``history``.
+
+    ``prescription_patch`` / ``session_add_exercise`` / ``session_add`` /
+    ``prescription_override`` reply with row payloads, not the full plan
+    envelope — but they still record an undo action, so without a ``history``
+    key the client's undo affordance stays stale (a cell edit on a fresh page
+    would never enable the Undo button until the next full re-serialize).
+    """
+
+    def test_prescription_patch_reply_includes_history(self, client):
+        plan, week, session, presc = seed_plan()
+        client.force_login(plan.relationship.coach)
+        body = patch(client, plan, presc, load="75").json()
+        assert body["history"]["can_undo"] is True
+        assert body["history"]["undo_label"]
+
+    def test_add_exercise_reply_includes_history(self, client):
+        plan, week, session, presc = seed_plan()
+        client.force_login(plan.relationship.coach)
+        resp = client.post(
+            reverse(
+                "meso:api_session_add_exercise",
+                kwargs={"plan_id": plan.pk, "pk": session.pk},
+            )
+        )
+        assert resp.status_code == 201
+        assert resp.json()["history"]["can_undo"] is True
+
+    def test_add_day_reply_includes_history(self, client):
+        plan, week, session, presc = seed_plan()
+        client.force_login(plan.relationship.coach)
+        resp = client.post(reverse("meso:api_session_add", kwargs={"plan_id": plan.pk}))
+        assert resp.status_code == 201
+        assert resp.json()["history"]["can_undo"] is True
+
+    def test_override_reply_includes_history(self, client):
+        group, plan, week, session, presc = seed_group_plan()
+        membership = GroupMembershipFactory(group=group)
+        client.force_login(group.coach)
+        resp = post_json(
+            client,
+            reverse(
+                "meso:api_prescription_override",
+                kwargs={"plan_id": plan.pk, "pk": presc.pk},
+            ),
+            {"athlete": str(membership.relationship.athlete_id), "load_pct": 90},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["history"]["can_undo"] is True
