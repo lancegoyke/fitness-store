@@ -1930,7 +1930,12 @@ def prescription_patch(request, plan_id, pk):
     if forbidden is not None:
         return forbidden
     prescription = get_object_or_404(
-        ExercisePrescription, pk=pk, session__week__mesocycle__plan=plan
+        ExercisePrescription,
+        pk=pk,
+        session__week__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        session__deleted_at__isnull=True,
+        session__week__deleted_at__isnull=True,
     )
     try:
         payload = json.loads(request.body or "{}")
@@ -1970,12 +1975,48 @@ def prescription_patch(request, plan_id, pk):
 
 @login_required
 @require_POST
+def prescription_delete(request, plan_id, pk):
+    """Soft-delete one exercise row (designer framework Phase 0, issue #401).
+
+    Stamps ``deleted_at`` on the target row only — never its ancestors — so
+    ``serialize_plan``/lookups hide it by filtering live rows at each level of
+    the walk rather than by a cascading write. The row (and its session and
+    week) must be live, or this 404s — including a double-delete of the same
+    row. Response is pinned to the prescription's own week, not necessarily the
+    plan's current one, so the client reopens onto the grid it was editing.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    prescription = get_object_or_404(
+        ExercisePrescription,
+        pk=pk,
+        session__week__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        session__deleted_at__isnull=True,
+        session__week__deleted_at__isnull=True,
+    )
+    week = prescription.session.week
+    prescription.deleted_at = timezone.now()
+    prescription.save(update_fields=["deleted_at"])
+    _touch_plan(plan)
+    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
+
+
+@login_required
+@require_POST
 def session_add_exercise(request, plan_id, pk):
     """Append a blank prescription row to a session."""
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    session = get_object_or_404(Session, pk=pk, week__mesocycle__plan=plan)
+    session = get_object_or_404(
+        Session,
+        pk=pk,
+        week__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        week__deleted_at__isnull=True,
+    )
     next_order = (session.prescriptions.aggregate(m=Max("order"))["m"] or 0) + 1
     prescription = ExercisePrescription.objects.create(
         session=session,
@@ -2016,7 +2057,9 @@ def session_add(request, plan_id):
     if bad is not None:
         return bad
     if week_id is not None:
-        week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
+        week = get_object_or_404(
+            Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
+        )
     else:
         week = current_week(plan)
     if week is None:
@@ -2041,6 +2084,36 @@ def session_add(request, plan_id):
 
 
 @login_required
+@require_POST
+def session_delete(request, plan_id, pk):
+    """Soft-delete one training day (designer framework Phase 0, issue #401).
+
+    Stamps ``deleted_at`` on the target ``Session`` only — its prescriptions
+    aren't touched; they're simply hidden underneath a parent that no longer
+    surfaces (serialization filters live rows at each level of the walk, not a
+    cascading write). Any ``SessionLog``/``LoggedSet`` the athlete already
+    logged against this session are untouched — preserving them is the point.
+    The row (and its week) must be live, or this 404s. Response is pinned to
+    the session's own week.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    session = get_object_or_404(
+        Session,
+        pk=pk,
+        week__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        week__deleted_at__isnull=True,
+    )
+    week = session.week
+    session.deleted_at = timezone.now()
+    session.save(update_fields=["deleted_at"])
+    _touch_plan(plan)
+    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
+
+
+@login_required
 @require_GET
 def week_view(request, plan_id, week_id):
     """Serialize one week's grid so the designer can switch to it (multi-week).
@@ -2054,7 +2127,9 @@ def week_view(request, plan_id, week_id):
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
-    week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
+    week = get_object_or_404(
+        Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
+    )
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 
@@ -2105,7 +2180,9 @@ def week_set_current(request, plan_id, week_id):
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
+    week = get_object_or_404(
+        Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
+    )
     with transaction.atomic():
         Plan.objects.select_for_update().filter(pk=plan.pk).first()
         Week.objects.filter(mesocycle__plan=plan).exclude(pk=week.pk).update(
@@ -2116,6 +2193,56 @@ def week_set_current(request, plan_id, week_id):
             week.save(update_fields=["is_current"])
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
+
+
+@login_required
+@require_POST
+def week_delete(request, plan_id, week_id):
+    """Soft-delete one week (designer framework Phase 0, issue #401).
+
+    Stamps ``deleted_at`` on the target ``Week`` only — its sessions and their
+    prescriptions aren't touched; they're hidden underneath a parent that no
+    longer surfaces (serialization filters live rows at each level of the
+    walk, not a cascading write — so a session independently soft-deleted
+    earlier stays deleted if a later undo restores this week).
+
+    Two rules gate the action itself (400, not the row's own 404 — it exists
+    and is live): the **current** (deliver-target) week can't be deleted — the
+    coach must make another week current first — and the plan's **last
+    remaining live week** can't be deleted (a plan always needs at least one).
+    Row-locks the plan (mirrors ``week_set_current``) so a concurrent delete
+    can't race the last-live-week count. Response is *not* pinned to a week —
+    ``serialize_plan`` falls back to the (untouched) current week, which the
+    client uses to reopen even if the deleted week was the one being viewed.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    week = get_object_or_404(
+        Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
+    )
+    if week.is_current:
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": "Make another week current before removing this one.",
+            },
+            status=400,
+        )
+    with transaction.atomic():
+        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        live_week_count = Week.objects.filter(
+            mesocycle__plan=plan, deleted_at__isnull=True
+        ).count()
+        if live_week_count <= 1:
+            return JsonResponse(
+                {"ok": False, "error": "A plan needs at least one week."},
+                status=400,
+            )
+        week.deleted_at = timezone.now()
+        week.save(update_fields=["deleted_at"])
+        _touch_plan(plan)
+    return JsonResponse({"ok": True, **serialize_plan(plan)})
 
 
 # Free-form per-athlete override cells, mapped to their model ``max_length``.
@@ -2233,7 +2360,12 @@ def prescription_override(request, plan_id, pk):
     if not plan.is_group:
         return HttpResponseBadRequest("Overrides apply to a group's shared program.")
     prescription = get_object_or_404(
-        ExercisePrescription, pk=pk, session__week__mesocycle__plan=plan
+        ExercisePrescription,
+        pk=pk,
+        session__week__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        session__deleted_at__isnull=True,
+        session__week__deleted_at__isnull=True,
     )
     try:
         payload = json.loads(request.body or "{}")
@@ -2287,7 +2419,12 @@ def coach_set_one_rm(request, plan_id, pk):
     if plan.is_group:
         return HttpResponseBadRequest("A 1RM belongs to a single athlete, not a group.")
     prescription = get_object_or_404(
-        ExercisePrescription, pk=pk, session__week__mesocycle__plan=plan
+        ExercisePrescription,
+        pk=pk,
+        session__week__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        session__deleted_at__isnull=True,
+        session__week__deleted_at__isnull=True,
     )
     try:
         payload = json.loads(request.body or "{}")
@@ -2365,7 +2502,9 @@ def plan_deliver(request, plan_id):
     if bad is not None:
         return bad
     if week_id is not None:
-        week = get_object_or_404(Week, pk=week_id, mesocycle__plan=plan)
+        week = get_object_or_404(
+            Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
+        )
     else:
         week = current_week(plan)
     if week is None:

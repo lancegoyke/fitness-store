@@ -146,13 +146,22 @@ def serialize_chat_thread(plan):
 
 
 def serialize_session(session):
-    """One training day (a column in the designer grid)."""
+    """One training day (a column in the designer grid).
+
+    Only live prescriptions render (soft delete, designer framework Phase 0):
+    filtered in Python — not via ``.filter()`` — so a caller that prefetched
+    ``prescriptions`` still hits the prefetch cache instead of a fresh query.
+    """
     return {
         "id": session.pk,
         "n": session.day_number,
         "name": session.name,
         "bias": session.bias,
-        "exercises": [serialize_prescription(p) for p in session.prescriptions.all()],
+        "exercises": [
+            serialize_prescription(p)
+            for p in session.prescriptions.all()
+            if p.deleted_at is None
+        ],
     }
 
 
@@ -215,7 +224,9 @@ def serialize_week_snapshot(week):
     """A self-contained snapshot of a week, for a ``WeekDelivery`` payload.
 
     Captures the week's meta plus its full session/prescription grid so a later
-    delivery can diff against it ("changes since last delivery").
+    delivery can diff against it ("changes since last delivery"). Only live
+    sessions (and, via ``serialize_session``, live prescriptions) are included
+    (soft delete, designer framework Phase 0).
     """
     return {
         "week": {
@@ -228,7 +239,9 @@ def serialize_week_snapshot(week):
         },
         "sessions": [
             serialize_session(s)
-            for s in week.sessions.prefetch_related("prescriptions")
+            for s in week.sessions.filter(deleted_at__isnull=True).prefetch_related(
+                "prescriptions"
+            )
         ],
     }
 
@@ -549,7 +562,9 @@ def latest_delivered_week(plan):
     the week their coach just sent. See ``docs/archive/meso/athlete-plan.md``.
     """
     return (
-        models.Week.objects.filter(mesocycle__plan=plan, delivered_at__isnull=False)
+        models.Week.objects.filter(
+            mesocycle__plan=plan, delivered_at__isnull=False, deleted_at__isnull=True
+        )
         .select_related("mesocycle")
         .order_by("-delivered_at")
         .first()
@@ -559,13 +574,16 @@ def latest_delivered_week(plan):
 def current_week(plan, week=None):
     """The week the designer opens to.
 
-    An explicit ``week`` wins; otherwise the flagged current week, or — failing
-    both — the earliest week in the plan.
+    An explicit ``week`` wins (callers are expected to have already checked it
+    is live — the delete endpoints pin the response to the just-touched row's
+    own, still-live, week); otherwise the flagged current week among the
+    plan's **live** weeks, or — failing both — the earliest live week in the
+    plan.
     """
     if week is not None:
         return week
     weeks = list(
-        models.Week.objects.filter(mesocycle__plan=plan)
+        models.Week.objects.filter(mesocycle__plan=plan, deleted_at__isnull=True)
         .select_related("mesocycle")
         .order_by("mesocycle__order", "index")
     )
@@ -788,9 +806,18 @@ def serialize_plan(plan, week=None):
     current_mesocycle = open_week.mesocycle if open_week else None
 
     if open_week is not None:
-        sessions = list(open_week.sessions.prefetch_related("prescriptions"))
+        # Soft delete (designer framework Phase 0): only live sessions surface
+        # in the grid, and — matching ``serialize_session`` — only their live
+        # prescriptions feed the "last time" / 1RM / adjust overlays below.
+        sessions = list(
+            open_week.sessions.filter(deleted_at__isnull=True).prefetch_related(
+                "prescriptions"
+            )
+        )
         program = [serialize_session(s) for s in sessions]
-        prescriptions = [p for s in sessions for p in s.prescriptions.all()]
+        prescriptions = [
+            p for s in sessions for p in s.prescriptions.all() if p.deleted_at is None
+        ]
         if not plan.is_group:
             # Light up the "last time" column from real logs (athlete Phase 3):
             # one query over the plan's logged sets, mapped onto the rendered
@@ -825,7 +852,10 @@ def serialize_plan(plan, week=None):
                     if entry:
                         exercise["adj"] = entry["adj"]
                         exercise["adjusts"] = entry["adjusts"]
-        week_strip = [serialize_week(w) for w in current_mesocycle.weeks.all()]
+        week_strip = [
+            serialize_week(w)
+            for w in current_mesocycle.weeks.filter(deleted_at__isnull=True)
+        ]
     else:
         program = []
         week_strip = []

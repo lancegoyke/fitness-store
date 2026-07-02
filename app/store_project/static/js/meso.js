@@ -96,6 +96,20 @@ function createMeso() {
     weeks: [],
     phases: [],
 
+    // ---- delete controls (designer framework Phase 0, issue #401) ----
+    // One shared in-flight guard across every delete verb (removeExercise,
+    // and the confirm-armed day/week removal below) — set synchronously
+    // before the awaited fetch, cleared in a finally, so a double-click (or
+    // arming a second delete while the first is still in flight) can't fire
+    // two requests.
+    deleting: false,
+    // The confirm-armed day/week delete, or null: `{type: "day", di}` |
+    // `{type: "week", weekId}`. requestRemoveDay/requestRemoveWeek arm it
+    // (replacing whatever was armed before — the two verbs are symmetric);
+    // cancelPendingDelete disarms; confirmPendingDelete executes it. No
+    // native confirm() — this inline arm/confirm/cancel dance is the affordance.
+    pendingDelete: null,
+
     // Each chip's label is sent verbatim as the agent instruction.
     chips: [
       { label: "Lower Day 2 volume" },
@@ -638,6 +652,31 @@ function createMeso() {
       });
     },
 
+    // Remove one exercise row — immediate, no confirm (a stray row is cheap to
+    // re-add). Shares the `deleting` in-flight guard with the confirm-armed
+    // day/week removal below, so it no-ops while any delete is in flight.
+    async removeExercise(di, xi) {
+      if (this.deleting) return;
+      const day = this.program[di];
+      if (!this.live) {
+        day.exercises.splice(xi, 1);
+        return;
+      }
+      const ex = day.exercises[xi];
+      this.deleting = true;
+      try {
+        const data = await this.apiPost(
+          `/meso/api/plan/${this.planId}/prescription/${ex.id}/delete/`,
+          null,
+        );
+        this.applyPlanData(data);
+      } catch (err) {
+        console.error("Remove exercise failed", err);
+      } finally {
+        this.deleting = false;
+      }
+    },
+
     // Add a training day to the *viewed* week (first-time-UX Phase 1; week-scoped
     // for the multi-week switcher). The server appends the Session to that week and
     // returns it in the grid's day shape; we push it so the new
@@ -718,6 +757,68 @@ function createMeso() {
         this.applyPlanData(data);
       } catch (err) {
         console.error("Set current week failed", err);
+      }
+    },
+
+    // ---- day / week removal (confirm-armed, no native confirm()) ----
+    //
+    // A training day or a whole week is destructive enough to want a confirm,
+    // but not a native `confirm()` — instead requestRemoveDay/requestRemoveWeek
+    // arm `pendingDelete` (an inline "Confirm?" affordance the template renders
+    // in place of the control), confirmPendingDelete executes it, and
+    // cancelPendingDelete drops it. Arming either replaces whatever was armed
+    // before — the two verbs are symmetric.
+
+    requestRemoveDay(di) {
+      this.pendingDelete = { type: "day", di };
+    },
+
+    requestRemoveWeek(weekId) {
+      this.pendingDelete = { type: "week", weekId };
+    },
+
+    cancelPendingDelete() {
+      this.pendingDelete = null;
+    },
+
+    // Executes the armed delete and always disarms it afterward — even when
+    // the request fails, so a coach who dismisses/retries doesn't stay stuck
+    // behind a stale confirm. No-ops (leaving `pendingDelete` untouched) when
+    // nothing is armed or another delete is still in flight, sharing the same
+    // `deleting` guard as removeExercise.
+    async confirmPendingDelete() {
+      if (this.deleting || !this.pendingDelete) return;
+      const pending = this.pendingDelete;
+      this.deleting = true;
+      try {
+        if (pending.type === "day") {
+          const day = this.program[pending.di];
+          if (!day) return;
+          if (this.live) {
+            const data = await this.apiPost(
+              `/meso/api/plan/${this.planId}/session/${day.id}/delete/`,
+              null,
+            );
+            this.applyPlanData(data);
+          } else {
+            this.program.splice(pending.di, 1);
+          }
+        } else if (pending.type === "week") {
+          if (this.live) {
+            const data = await this.apiPost(
+              `/meso/api/plan/${this.planId}/week/${pending.weekId}/delete/`,
+              null,
+            );
+            this.applyPlanData(data);
+          } else {
+            this.weeks = this.weeks.filter((w) => w.id !== pending.weekId);
+          }
+        }
+      } catch (err) {
+        console.error("Remove failed", err);
+      } finally {
+        this.deleting = false;
+        this.pendingDelete = null;
       }
     },
 

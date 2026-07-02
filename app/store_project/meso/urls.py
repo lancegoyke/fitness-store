@@ -140,6 +140,12 @@ urlpatterns = [
         views.prescription_patch,
         name="api_prescription_patch",
     ),
+    # Soft-delete an exercise row (designer framework Phase 0, issue #401).
+    path(
+        "api/plan/<int:plan_id>/prescription/<int:pk>/delete/",
+        views.prescription_delete,
+        name="api_prescription_delete",
+    ),
     path(
         "api/plan/<int:plan_id>/session/<int:pk>/exercise/",
         views.session_add_exercise,
@@ -150,6 +156,12 @@ urlpatterns = [
         "api/plan/<int:plan_id>/session/",
         views.session_add,
         name="api_session_add",
+    ),
+    # Soft-delete a training day (designer framework Phase 0, issue #401).
+    path(
+        "api/plan/<int:plan_id>/session/<int:pk>/delete/",
+        views.session_delete,
+        name="api_session_delete",
     ),
     # Multi-week designer: view any week (read), add the next week (write), and
     # set the live/deliver-target week. ``week/<id>/`` GET views; POST sets current.
@@ -167,6 +179,12 @@ urlpatterns = [
         "api/plan/<int:plan_id>/week/<int:week_id>/current/",
         views.week_set_current,
         name="api_week_set_current",
+    ),
+    # Soft-delete a week (designer framework Phase 0, issue #401).
+    path(
+        "api/plan/<int:plan_id>/week/<int:week_id>/delete/",
+        views.week_delete,
+        name="api_week_delete",
     ),
     # Per-athlete override on a group's shared program (groups Phase 3).
     path(
