@@ -557,3 +557,34 @@ describe("review hardening: Escape baseline + focus-steal guard", () => {
     expect(document.activeElement).toBe(composer);
   });
 });
+
+describe("review hardening: modified arrows stay native", () => {
+  // Shift+Arrow extends a selection; Ctrl/Alt/Cmd+Arrow are native text
+  // navigation. None of them may move grid focus or preventDefault.
+  it("Shift+ArrowDown is not intercepted", () => {
+    const cells = mountCells(PROGRAM);
+    cells["9:sets"]!.focus();
+    const { result } = renderHook(() => useGridNav({ program: PROGRAM }));
+    const event = keyEvent("ArrowDown", cells["9:sets"]!, { shiftKey: true });
+    act(() => {
+      result.current.cellProps(9, "sets", NOOP_CALLBACKS).onKeyDown(event);
+    });
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(cells["9:sets"]);
+  });
+
+  it("Ctrl+ArrowLeft at the caret boundary is not intercepted", () => {
+    const cells = mountCells(PROGRAM);
+    const input = cells["9:sets"]!;
+    input.value = "3";
+    input.focus();
+    input.setSelectionRange(0, 0);
+    const { result } = renderHook(() => useGridNav({ program: PROGRAM }));
+    const event = keyEvent("ArrowLeft", input, { ctrlKey: true });
+    act(() => {
+      result.current.cellProps(9, "sets", NOOP_CALLBACKS).onKeyDown(event);
+    });
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(input);
+  });
+});

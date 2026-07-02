@@ -183,6 +183,9 @@ export function useGridNav(options: UseGridNavOptions): UseGridNavResult {
     const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") return; // undo/redo: untouched.
       if (!HANDLED_KEYS.has(event.key)) return;
+      // Modified keys are native text editing (Shift+Arrow selection,
+      // Ctrl/Alt/Cmd+Arrow word- and line-navigation) — never grid moves.
+      if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
 
       // Any handled keydown implies this cell currently holds focus — keep
       // the anchor synced even if no onFocus round-trip preceded it (a
