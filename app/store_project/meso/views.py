@@ -2688,6 +2688,11 @@ def billing_subscribe(request):
     """Start a subscription Checkout — redirect the coach to Stripe to pay."""
     if not _is_coach(request.user):
         return redirect("meso:roster")
+    # Sandbox gate (S4): there's no real coach behind a throwaway sandbox
+    # account to bill — never open a Checkout session for one.
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(request, "Billing is disabled in the demo.")
+        return redirect("meso:roster")
     # The flat Pro plan (D14) needs its one Price configured; ship dormant (bounce
     # gracefully) until the owner creates it, so a deploy never opens a broken Checkout.
     if not settings.MESO_PRO_PRICE_ID:
@@ -2729,6 +2734,10 @@ def billing_portal(request):
     """Open Stripe's hosted Customer Portal so the coach can manage billing."""
     if not _is_coach(request.user):
         return redirect("meso:roster")
+    # Sandbox gate (S4): no real Stripe customer behind a throwaway account.
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(request, "Billing is disabled in the demo.")
+        return redirect("meso:roster")
     if not request.user.stripe_customer_id:
         messages.error(request, "You don't have a subscription to manage yet.")
         return redirect("meso:roster")
@@ -2754,8 +2763,13 @@ def billing_start_trial(request):
     ``TRIAL_DAYS``. Single-use: a coach who has already trialed (even if it
     lapsed) gets a friendly "already used" notice, never a 500. Coach-surface
     only; a non-coach is bounced to the roster (which redirects them home).
+
+    Sandbox gate (S4): a sandbox coach never starts a real trial.
     """
     if not _is_coach(request.user):
+        return redirect("meso:roster")
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(request, "Billing is disabled in the demo.")
         return redirect("meso:roster")
     try:
         CoachSubscription.start_trial_for(request.user)

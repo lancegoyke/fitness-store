@@ -468,3 +468,48 @@ class TestInviteAndRequestGuards:
         assert resp.url == reverse("meso:roster")
         assert not CoachAthlete.objects.filter(coach=other_coach).exists()
         assert mailoutbox == []
+
+
+class TestBillingGuards:
+    def test_subscribe_is_disabled_for_a_sandbox_coach(self, client, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session"
+        ) as create:
+            resp = client.post(reverse("meso:billing_subscribe"))
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        create.assert_not_called()
+
+    def test_portal_is_disabled_for_a_sandbox_coach(self, client):
+        coach = _sandbox_coach()
+        coach.stripe_customer_id = "cus_fake"
+        coach.save(update_fields=["stripe_customer_id"])
+        client.force_login(coach)
+
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_billing_portal_session"
+        ) as create:
+            resp = client.post(reverse("meso:billing_portal"))
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        create.assert_not_called()
+
+    def test_start_trial_is_disabled_for_a_sandbox_coach(self, client):
+        from store_project.meso.models import CoachSubscription
+
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        resp = client.post(reverse("meso:billing_start_trial"))
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        assert not CoachSubscription.objects.filter(
+            coach=coach, status=CoachSubscription.Status.TRIALING
+        ).exists()
