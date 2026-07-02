@@ -290,6 +290,16 @@ MESO_AGENT_RUN_SYNC = os.environ.get("MESO_AGENT_RUN_SYNC", "false").lower() in 
     "true",
     "yes",
 )
+# Demo/sandbox mode (issues #388/#389): swap the Claude client for a curated,
+# deterministic one (``agent.fake.FakeDemoClient``) with no Anthropic call and no
+# network — for a re-recordable walkthrough video or a public sandbox that must
+# not require (or spend) a real API key. Checked before the API-key gate in
+# ``get_default_client``, so it works even when ``ANTHROPIC_API_KEY`` is unset.
+MESO_AGENT_FAKE = os.environ.get("MESO_AGENT_FAKE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # Meso web push (athlete PWA — decision S3/S7). Optional: with no keys configured,
 # push is a silent no-op (subscriptions are still stored, but nothing is sent) so

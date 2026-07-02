@@ -253,7 +253,7 @@
                             </div>
                           </div>
                         </template>
-                        <a :href="m.reviewUrl" data-hover="brighten" style="align-self:flex-start;text-decoration:none;font-size:12px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:7px 12px;">
+                        <a data-testid="agent-review-link" :href="m.reviewUrl" data-hover="brighten" style="align-self:flex-start;text-decoration:none;font-size:12px;font-weight:650;color:var(--accent-ink);background:var(--accent);border-radius:8px;padding:7px 12px;">
                           Review <span x-text="m.changes.length"></span> <span x-text="m.changes.length === 1 ? 'change' : 'changes'"></span> &#8594;
                         </a>
                       </div>
@@ -282,8 +282,8 @@
                 </template>
               </div>
               <div class="meso-composer" style="display:flex;align-items:flex-end;gap:8px;background:var(--rail);border:1px solid var(--line);border-radius:11px;padding:7px 7px 7px 12px;">
-                <input x-model="inputText" @keydown="onInputKey($event)" placeholder="Ask the agent to adjust the program&#8230;" style="flex:1;appearance:none;border:0;background:transparent;outline:none;font:inherit;font-size:13px;color:var(--ink);padding:5px 0;" />
-                <button data-hover="brighten" @click="onSend()" :disabled="agentTyping" :style="agentTyping ? 'opacity:0.55;cursor:default;' : ''" style="appearance:none;cursor:pointer;border:0;width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;flex:0 0 auto;font-size:15px;">&#8593;</button>
+                <input data-testid="agent-composer-input" x-model="inputText" @keydown="onInputKey($event)" placeholder="Ask the agent to adjust the program&#8230;" style="flex:1;appearance:none;border:0;background:transparent;outline:none;font:inherit;font-size:13px;color:var(--ink);padding:5px 0;" />
+                <button data-testid="agent-composer-send" data-hover="brighten" @click="onSend()" :disabled="agentTyping" :style="agentTyping ? 'opacity:0.55;cursor:default;' : ''" style="appearance:none;cursor:pointer;border:0;width:32px;height:32px;border-radius:8px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;flex:0 0 auto;font-size:15px;">&#8593;</button>
               </div>
               {% if agent_allowance.metered %}
               <!-- Agent meter (S6 Phase 5; flat plan D14): every tier gets a monthly

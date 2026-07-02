@@ -48,6 +48,7 @@ dev = [
   "pytest-sugar",
   "pytest-django",
   "ruff",
+  "playwright>=1.61.0",
 ]
 
 [tool.ruff]

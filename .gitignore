@@ -23,3 +23,8 @@ repomix-output.*
 # Front-end test suite (vitest)
 node_modules/
 coverage/
+
+# Meso demo-video recorder output (issue #388) — commit the tool
+# (scripts/record_demo.py), never the generated binary; `just record-demo`
+# regenerates it on demand. See docs/demo/README.md.
+docs/demo/out/

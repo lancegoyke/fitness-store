@@ -342,7 +342,17 @@ class MesoAgentClient:
 
 
 def get_default_client():
-    """The configured client, or ``None`` when no API key is set."""
+    """The configured client, or ``None`` when no API key is set.
+
+    Checked before the API-key gate: demo/sandbox mode (``MESO_AGENT_FAKE``,
+    #388/#389) swaps in a curated, no-network ``FakeDemoClient`` so a recorded
+    walkthrough or a public sandbox needs no real key at all — and never spends
+    one, even if ``ANTHROPIC_API_KEY`` happens to be configured.
+    """
+    if getattr(settings, "MESO_AGENT_FAKE", False):
+        from .fake import FakeDemoClient
+
+        return FakeDemoClient()
     api_key = getattr(settings, "ANTHROPIC_API_KEY", "")
     if not api_key:
         return None

@@ -73,7 +73,7 @@
       <div class="meso-row-meta">Rejected edits are discarded — the program keeps its current values.</div>
       <div class="meso-spacer"></div>
       <button class="meso-btn" @click="dismiss()" :disabled="!pending || busy">Discard</button>
-      <button class="meso-btn meso-btn--primary" @click="apply()" :disabled="!pending || busy">
+      <button data-testid="review-apply" class="meso-btn meso-btn--primary" @click="apply()" :disabled="!pending || busy">
         Apply <span x-text="approved"></span> &amp; deliver →
       </button>
     </div>
