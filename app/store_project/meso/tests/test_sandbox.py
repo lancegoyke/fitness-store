@@ -411,3 +411,60 @@ class TestNotifyGuard:
         assert resp.status_code == 201
         assert mailoutbox == []
         push_mock.assert_not_called()
+
+
+class TestInviteAndRequestGuards:
+    def test_coach_invite_is_disabled_for_a_sandbox_coach(self, client, mailoutbox):
+        from store_project.meso.models import CoachInvite
+
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:coach_invite"), data={"email": "real.person@example.com"}
+        )
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        assert CoachInvite.objects.count() == 0
+        assert mailoutbox == []
+
+    def test_coach_invite_resend_is_disabled_for_a_sandbox_coach(
+        self, client, mailoutbox
+    ):
+        from store_project.meso.factories import CoachInviteFactory
+
+        coach = _sandbox_coach()
+        # A real invite from before the sandbox guard existed (or one somehow
+        # created) must not be resent either.
+        invite = CoachInviteFactory(coach=coach)
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:coach_invite_resend", kwargs={"token": invite.token})
+        )
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        assert mailoutbox == []
+        invite.refresh_from_db()
+        assert invite.status == invite.Status.PENDING  # untouched, not re-armed
+
+    def test_athlete_request_coach_is_disabled_for_a_sandbox_coach(
+        self, client, mailoutbox
+    ):
+        from store_project.meso.models import CoachAthlete
+
+        coach = _sandbox_coach()
+        other_coach = UserFactory()
+        CoachProfile.objects.create(user=other_coach)
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:athlete_request_coach"), data={"email": other_coach.email}
+        )
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        assert not CoachAthlete.objects.filter(coach=other_coach).exists()
+        assert mailoutbox == []

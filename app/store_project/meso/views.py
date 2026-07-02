@@ -1468,7 +1468,17 @@ def athlete_request_coach(request):
     pending request is opened (reopening a previously closed link). The coach is
     notified by email on ``transaction.on_commit``, best-effort — a mail failure
     is logged, never a 500 or a lost request. Always lands back on the home.
+
+    Sandbox gate (S4): a sandbox coach can't be requested by a real athlete
+    (there's no real coach behind the throwaway account to notify).
     """
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(
+            request,
+            "Invites are disabled in the demo — create a free account to work "
+            "with real athletes.",
+        )
+        return redirect("meso:roster")
     email = CoachInvite.normalize_email(request.POST.get("email"))
     try:
         validate_email(email)
@@ -1554,7 +1564,16 @@ def coach_invite(request):
     re-invite reuses the open pending row (``open_for``). The claim email is sent
     on ``transaction.on_commit`` and is best-effort — a mail backend failure is
     logged, never a 500 or a lost invite. Always lands back on the roster.
+
+    Sandbox gate (S4): a sandbox coach can't invite a real email address.
     """
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(
+            request,
+            "Invites are disabled in the demo — create a free account to work "
+            "with real athletes.",
+        )
+        return redirect("meso:roster")
     email = CoachInvite.normalize_email(request.POST.get("email"))
     try:
         validate_email(email)
@@ -1618,7 +1637,16 @@ def coach_invite_resend(request, token):
     ``transaction.on_commit``. Coach-scoped (a foreign invite is a 404). An
     already-answered invite (accepted/declined/revoked) is a friendly no-op, not
     a 500. Locks the row so a resend can't race a concurrent claim/revoke.
+
+    Sandbox gate (S4): a sandbox coach can't re-arm a real invite.
     """
+    if meso_sandbox.is_sandbox(request.user):
+        messages.info(
+            request,
+            "Invites are disabled in the demo — create a free account to work "
+            "with real athletes.",
+        )
+        return redirect("meso:roster")
     with transaction.atomic():
         invite = get_object_or_404(
             CoachInvite.objects.select_for_update(),
