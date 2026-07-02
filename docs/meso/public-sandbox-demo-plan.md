@@ -1,6 +1,29 @@
 # Meso — public, no-signup interactive sandbox (Level-2 demo)
 
-Status: **PLANNED** — not started. Tracking issue: [#389](https://github.com/lancegoyke/fitness-store/issues/389).
+Status: **SHIPPED (Phases 1 + 2)** — 2026-07-01. Tracking issue: [#389](https://github.com/lancegoyke/fitness-store/issues/389).
+Phase 3 (carry-over at signup, S6) remains deferred.
+
+## As shipped (Phases 1 + 2)
+
+- Entry `GET /meso/demo/` (`meso:sandbox_enter`) + conversion hop
+  `GET /meso/demo/signup/` (`meso:sandbox_signup` — logs the sandbox coach out
+  first, because allauth bounces authenticated visitors off `/accounts/signup/`).
+- `SandboxSession` (OneToOne user, `created`, `expires_at`, `source_ip`) in
+  `meso/models.py`; minting + `is_sandbox()` + the sweep live in
+  `meso/sandbox.py`, seeded via the existing `demo.load_demo()`.
+- Expiry sweep is **hourly** (`django_q` Schedule `meso-expire-sandboxes` →
+  `store_project.meso.tasks.expire_sandboxes` → `meso_expire_sandboxes`
+  command, registered by migration `0030`; runs wherever a `qcluster` worker is
+  up — the prod compose stack has one). Reap order is load-bearing: demo
+  athletes are separate `User` rows with no FK cascade from the coach, so the
+  sweep calls `demo.clear_demo(user)` **then** `user.delete()`.
+- Env vars (all optional; defaults fine in prod): `MESO_SANDBOX_TTL_HOURS=48`,
+  `MESO_SANDBOX_PER_IP_PER_HOUR=5`, `MESO_SANDBOX_MAX_CONCURRENT=100`.
+- The per-IP rate limiter counts attempts in the Django cache (Redis in prod —
+  counters survive restarts; locmem in bare dev — they don't).
+- Crawler hardening: `X-Robots-Tag: noindex` on every `sandbox_enter` response
+  + `Disallow: /meso/demo/` in `robots.txt` (a GET that mints DB rows must not
+  be crawled).
 
 ## Why
 
