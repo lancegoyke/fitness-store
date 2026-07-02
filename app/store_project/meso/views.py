@@ -2210,8 +2210,10 @@ def week_delete(request, plan_id, week_id):
     and is live): the **current** (deliver-target) week can't be deleted — the
     coach must make another week current first — and the plan's **last
     remaining live week** can't be deleted (a plan always needs at least one).
-    Row-locks the plan (mirrors ``week_set_current``) so a concurrent delete
-    can't race the last-live-week count. Response is *not* pinned to a week —
+    Row-locks the plan (mirrors ``week_set_current``) and re-reads the row's
+    flags under that lock, so a concurrent ``week_set_current`` or a second
+    delete can't race the current-flag check or the last-live-week count.
+    Response is *not* pinned to a week —
     ``serialize_plan`` falls back to the (untouched) current week, which the
     client uses to reopen even if the deleted week was the one being viewed.
     """
@@ -2221,16 +2223,19 @@ def week_delete(request, plan_id, week_id):
     week = get_object_or_404(
         Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
     )
-    if week.is_current:
-        return JsonResponse(
-            {
-                "ok": False,
-                "error": "Make another week current before removing this one.",
-            },
-            status=400,
-        )
     with transaction.atomic():
         Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        week.refresh_from_db()
+        if week.deleted_at is not None:
+            raise Http404("Week not found.")
+        if week.is_current:
+            return JsonResponse(
+                {
+                    "ok": False,
+                    "error": "Make another week current before removing this one.",
+                },
+                status=400,
+            )
         live_week_count = Week.objects.filter(
             mesocycle__plan=plan, deleted_at__isnull=True
         ).count()
