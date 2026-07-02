@@ -25,6 +25,8 @@ These tests cover:
   off to allauth signup with ``?next=`` back to the roster).
 """
 
+import json
+
 import pytest
 from django.test import Client
 from django.urls import reverse
@@ -32,7 +34,9 @@ from django.utils import timezone
 
 from store_project.meso import demo
 from store_project.meso import sandbox
+from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachProfile
+from store_project.meso.models import Plan
 from store_project.meso.models import SandboxSession
 from store_project.users.factories import UserFactory
 
@@ -277,3 +281,109 @@ class TestSandboxSignupView:
     def test_post_not_allowed(self, client):
         resp = client.post(reverse("meso:sandbox_signup"))
         assert resp.status_code == 405
+
+
+def _sandbox_individual_plan(coach):
+    """The seeded individual plan (Maya's) on the sandbox coach's own demo data."""
+    return (
+        Plan.objects.filter(relationship__coach=coach, relationship__is_demo=True)
+        .exclude(source_group__isnull=False)
+        .first()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guards — the hard invariants: no agent calls, no email/push, no billing
+# ---------------------------------------------------------------------------
+
+
+class TestAgentGuard:
+    def test_sandbox_coach_gets_a_signup_gate_not_the_agent(self, client):
+        coach = _sandbox_coach()
+        plan = _sandbox_individual_plan(coach)
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:api_plan_agent", kwargs={"plan_id": plan.pk}),
+            data=json.dumps({"instruction": "Add more volume."}),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 403
+        body = resp.json()
+        assert body["signup_required"] is True
+        assert body["signup_url"] == reverse("meso:sandbox_signup")
+        assert AgentProposalBatch.objects.count() == 0
+
+    def test_the_gate_fires_before_the_no_api_key_check(self, client, settings):
+        """The guard beats the 503 'not configured' shape (proves fire order)."""
+        settings.ANTHROPIC_API_KEY = ""
+        coach = _sandbox_coach()
+        plan = _sandbox_individual_plan(coach)
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:api_plan_agent", kwargs={"plan_id": plan.pk}),
+            data=json.dumps({"instruction": "Add more volume."}),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 403
+        assert resp.status_code != 503
+
+
+class _AlwaysDraftsClient:
+    """A working fake agent client.
+
+    Proves the guard blocks it, not just a missing API key (mirrors
+    ``test_plan_draft.DraftingClient``).
+    """
+
+    model = "claude-opus-4-8-test"
+
+    def propose(self, *, context, instruction):
+        changes = [
+            {
+                "kind": "add",
+                "session_id": session["id"],
+                "title": f"Add accessory to {session['name']}",
+                "rationale": "Drafted accessory work.",
+                "new_name": "Romanian Deadlift",
+                "new_sets": "3",
+                "new_reps": "8-10",
+                "new_rpe": "7",
+            }
+            for session in context["plan"]["program"]
+        ]
+        return {"summary": "Drafted an initial training week.", "changes": changes}
+
+
+class TestDraftGuard:
+    def test_plan_create_draft_makes_no_batch_for_a_sandbox_coach(
+        self, client, monkeypatch
+    ):
+        from store_project.meso.agent import client as agent_client_module
+        from store_project.meso.models import CoachAthlete
+
+        monkeypatch.setattr(
+            agent_client_module, "get_default_client", lambda: _AlwaysDraftsClient()
+        )
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        # Lena is seeded with no plan (only Maya gets one; the other three are
+        # group members with a *shared* plan) — a fresh target for plan_create.
+        fresh_link = next(
+            link
+            for link in CoachAthlete.objects.for_coach(coach).filter(is_demo=True)
+            if link.working_plan() is None
+        )
+
+        resp = client.post(
+            reverse("meso:plan_create", kwargs={"pk": fresh_link.athlete.pk}),
+            data={"draft": "agent"},
+        )
+
+        assert resp.status_code == 302
+        assert fresh_link.working_plan() is not None  # the plan still gets built
+        assert AgentProposalBatch.objects.count() == 0

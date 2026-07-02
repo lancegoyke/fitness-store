@@ -630,7 +630,12 @@ def _reserve_plan_draft(request, plan):
     to dispatch, or ``None`` — with a flash — when the draft can't run (allowance
     exhausted, or no API key). On ``None`` the plan is still created blank so the
     coach can build it by hand. Must be called within a transaction.
+
+    Sandbox gate (S3): a sandbox coach never drafts — the plan is still built,
+    just blank, same as the no-API-key path.
     """
+    if meso_sandbox.is_sandbox(request.user):
+        return None
     User.objects.select_for_update().filter(pk=request.user.pk).first()
     if not billing_access.can_use_agent(request.user):
         messages.info(request, DRAFT_ALLOWANCE_MESSAGE)
@@ -2391,6 +2396,20 @@ def agent_propose(request, plan_id):
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
+    # Sandbox gate (S3): the sandbox never calls Anthropic — the agent is the
+    # one capability held back, gated behind creating a real account. Checked
+    # before any metering/API-key work so a throwaway visitor never reserves a
+    # run or touches the client.
+    if meso_sandbox.is_sandbox(request.user):
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": "Create a free account to run the AI agent.",
+                "signup_required": True,
+                "signup_url": reverse("meso:sandbox_signup"),
+            },
+            status=403,
+        )
     # Reserve the run atomically (S6 Phase 5 metering): lock the coach row, check
     # the allowance, and create the batch in one transaction so concurrent
     # agent_propose calls serialize — the lock is held until the batch row commits,
