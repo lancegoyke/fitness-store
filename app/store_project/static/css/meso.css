@@ -134,6 +134,7 @@ a.meso-row,
 button.meso-row,
 a.meso-card,
 button.meso-card,
+.meso-avatar--link,
 .meso [data-hover] {
   transition:
     background-color 0.15s ease,
@@ -152,6 +153,7 @@ button.meso-card,
   button.meso-row,
   a.meso-card,
   button.meso-card,
+  .meso-avatar--link,
   .meso [data-hover] {
     transition: none;
   }
@@ -580,6 +582,18 @@ button.meso-card:hover {
   height: 48px;
   border-radius: 13px;
   font-size: 16px;
+}
+/* The topnav identity chip (issue #387) — the one avatar that's a link, so it
+   must read as clickable where the decorative list monograms don't. */
+.meso-avatar--link {
+  text-decoration: none;
+  cursor: pointer;
+}
+.meso-avatar--link:hover,
+.meso-avatar--link:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 1px 6px rgba(49, 117, 157, 0.25);
 }
 
 /* --- athlete rows / list --- */

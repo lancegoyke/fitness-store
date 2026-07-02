@@ -1,4 +1,4 @@
-{% load static %}
+{% load static meso_extras %}
 <!DOCTYPE html>
 <html lang="en">
   <head>
@@ -50,7 +50,14 @@
         </div>
         <div class="meso-spacer"></div>
         {% block topnav_actions %}{% endblock %}
-        {% block topnav_avatar %}<div class="meso-avatar meso-avatar--sm meso-avatar--accent" title="Coach">LG</div>{% endblock %}
+        {% comment %}
+          The corner's job is identity (issue #387): show *who* is signed in —
+          the one thing the site nav's Account/Logout links above don't. It
+          links to the account page; when Meso grows its own settings surface,
+          this chip becomes its entry point. Anonymous shell pages (offline)
+          render nothing here.
+        {% endcomment %}
+        {% block topnav_avatar %}{% if request.user.is_authenticated %}<a class="meso-avatar meso-avatar--sm meso-avatar--accent meso-avatar--link" href="{% url 'users:profile' %}" title="Signed in as {{ request.user.display_name }} — account">{{ request.user.display_name|initials }}</a>{% endif %}{% endblock %}
       </nav>
 
       {% if is_sandbox %}
