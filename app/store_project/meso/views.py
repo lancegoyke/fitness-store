@@ -9,6 +9,7 @@ import stripe
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.mixins import UserPassesTestMixin
@@ -43,6 +44,7 @@ from . import demo as meso_demo
 from . import one_rm as meso_one_rm
 from . import presenters
 from . import push as meso_push
+from . import sandbox as meso_sandbox
 from .agent import apply as agent_apply
 from .agent import client as agent_client
 from .agent import jobs as agent_jobs
@@ -696,6 +698,44 @@ def plan_create(request, pk):
         agent_jobs.dispatch_proposal(draft_batch.pk)
         _touch_plan(plan)
     return redirect("meso:designer_plan", plan_id=plan.pk)
+
+
+def _client_ip(request):
+    """The visitor's IP for a ``SandboxSession`` — prod sits behind Caddy.
+
+    Prefers the first hop of ``X-Forwarded-For`` (the original client, set by
+    the reverse proxy); falls back to ``REMOTE_ADDR`` for a direct connection
+    (local dev, tests).
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR")
+
+
+@require_GET
+def sandbox_enter(request):
+    """Public, no-signup entry into a throwaway coach sandbox (issue #389, S1).
+
+    An anonymous visitor gets a fresh, populated sandbox coach (``sandbox.
+    create_sandbox``) and is logged in as it — every existing login-gated view,
+    CSRF token, and coach-scoping query then just works, no special-casing
+    needed. An already-authenticated visitor (including one revisiting this URL
+    mid-visit) is simply routed to the roster — the session cookie is the
+    "resume", so no second sandbox is minted.
+    """
+    if request.user.is_authenticated:
+        return redirect("meso:roster")
+    user = meso_sandbox.create_sandbox(source_ip=_client_ip(request))
+    # Two auth backends are configured (ModelBackend + allauth) — login() can't
+    # infer which one, so it must be named explicitly.
+    login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+    messages.success(
+        request,
+        "You're in a live demo — explore freely. Create a free account any "
+        "time to run the AI agent and keep your work.",
+    )
+    return redirect("meso:roster")
 
 
 @login_required

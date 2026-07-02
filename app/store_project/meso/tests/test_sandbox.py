@@ -26,6 +26,8 @@ These tests cover:
 """
 
 import pytest
+from django.test import Client
+from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso import demo
@@ -147,3 +149,80 @@ class TestCreateSandbox:
 def _sandbox_coach():
     """A sandbox coach for guard/view tests below."""
     return sandbox.create_sandbox()
+
+
+# ---------------------------------------------------------------------------
+# The public entry view — GET /meso/demo/
+# ---------------------------------------------------------------------------
+
+
+class TestSandboxEnterView:
+    def test_anonymous_visitor_gets_a_seeded_sandbox_and_is_logged_in(self, client):
+        resp = client.get(reverse("meso:sandbox_enter"))
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        assert "_auth_user_id" in client.session
+
+        from store_project.users.models import User
+
+        user = User.objects.get(pk=client.session["_auth_user_id"])
+        assert CoachProfile.objects.filter(user=user).exists()
+        assert SandboxSession.objects.filter(user=user).exists()
+        assert demo.has_demo(user) is True
+
+    def test_follow_redirect_renders_roster_as_coach(self, client):
+        resp = client.get(reverse("meso:sandbox_enter"), follow=True)
+        assert resp.status_code == 200
+        assert b"Roster" in resp.content
+
+    def test_expiry_is_about_48_hours_out(self, client):
+        before = timezone.now()
+        client.get(reverse("meso:sandbox_enter"))
+        session = SandboxSession.objects.get(user_id=client.session["_auth_user_id"])
+        assert session.expires_at - before >= timezone.timedelta(hours=47, minutes=59)
+        assert session.expires_at - before <= timezone.timedelta(hours=48, minutes=1)
+
+    def test_two_anonymous_visitors_get_different_isolated_sandboxes(self):
+        client_a, client_b = Client(), Client()
+        client_a.get(reverse("meso:sandbox_enter"))
+        client_b.get(reverse("meso:sandbox_enter"))
+        user_a_id = client_a.session["_auth_user_id"]
+        user_b_id = client_b.session["_auth_user_id"]
+        assert user_a_id != user_b_id
+
+        from store_project.users.models import User
+
+        user_a = User.objects.get(pk=user_a_id)
+        user_b = User.objects.get(pk=user_b_id)
+        a_athletes = {u.pk for u in demo._demo_athletes(user_a)}
+        b_athletes = {u.pk for u in demo._demo_athletes(user_b)}
+        assert a_athletes.isdisjoint(b_athletes)
+
+    def test_authenticated_visitor_is_redirected_without_a_new_sandbox(self, client):
+        coach = UserFactory()
+        CoachProfile.objects.create(user=coach)
+        client.force_login(coach)
+
+        resp = client.get(reverse("meso:sandbox_enter"))
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        assert sandbox.is_sandbox(coach) is False
+        assert SandboxSession.objects.count() == 0
+
+    def test_authenticated_sandbox_visitor_resumes_their_own_sandbox(self, client):
+        """Revisiting /meso/demo/ mid-session resumes — no second sandbox minted."""
+        client.get(reverse("meso:sandbox_enter"))
+        first_user_id = client.session["_auth_user_id"]
+
+        resp = client.get(reverse("meso:sandbox_enter"))
+        assert resp.status_code == 302
+        assert client.session["_auth_user_id"] == first_user_id
+        assert SandboxSession.objects.count() == 1
+
+    def test_sends_no_email(self, client, mailoutbox):
+        client.get(reverse("meso:sandbox_enter"))
+        assert mailoutbox == []
+
+    def test_post_not_allowed(self, client):
+        resp = client.post(reverse("meso:sandbox_enter"))
+        assert resp.status_code == 405
