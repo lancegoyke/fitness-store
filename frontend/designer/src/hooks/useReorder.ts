@@ -45,30 +45,46 @@ export function useReorder(options: UseReorderOptions) {
     setReordering(value);
   }, []);
 
-  // Failure path: console.error, then GET the viewed week (mirrors
-  // usePlanData's switchWeek — no request body/options) and applyPlanData
-  // the reply. A failed re-fetch is swallowed with its own console.error.
+  // The CURRENT viewed week, readable at async-resolve time — mirrors
+  // usePlanData's viewedWeekIdRef idiom exactly. A reorder POSTed on week A
+  // that resolves after the coach has switched to week B must not apply
+  // (or re-fetch) week A's data.
+  const viewedWeekIdRef = useRef<Id | null>(viewedWeekId);
+  viewedWeekIdRef.current = viewedWeekId;
+
+  // Failure path: console.error, then (only if the week captured at drop
+  // time is STILL the viewed week) GET it (mirrors usePlanData's
+  // switchWeek — no request body/options) and applyPlanData the reply. A
+  // failed re-fetch is swallowed with its own console.error. If the coach
+  // switched weeks before this runs, the re-fetch is skipped entirely — the
+  // now-unviewed week's data isn't worth fetching.
   const refetchWeek = useCallback(
-    async (err: unknown) => {
+    async (err: unknown, weekAtDrop: Id | null) => {
       console.error("Reorder failed", err);
+      if (viewedWeekIdRef.current !== weekAtDrop) return;
       try {
-        const res = await fetch(`/meso/api/plan/${planId}/week/${viewedWeekId}/`);
+        const res = await fetch(`/meso/api/plan/${planId}/week/${weekAtDrop}/`);
         if (!res.ok) throw new Error("Request failed: " + res.status);
         applyPlanData((await res.json()) as PlanEnvelope);
       } catch (refetchErr) {
         console.error("Reorder refetch failed", refetchErr);
       }
     },
-    [planId, viewedWeekId, applyPlanData],
+    [planId, applyPlanData],
   );
 
   const postReorder = useCallback(
     async (url: string, body: unknown) => {
+      // Snapshot synchronously at drop time — compared against the ref's
+      // (possibly-changed) value once the POST resolves.
+      const weekAtDrop = viewedWeekIdRef.current;
       try {
         const data = await apiPost<PlanEnvelope>(url, body, csrf);
-        applyPlanData(data);
+        if (viewedWeekIdRef.current === weekAtDrop) {
+          applyPlanData(data);
+        }
       } catch (err) {
-        await refetchWeek(err);
+        await refetchWeek(err, weekAtDrop);
       } finally {
         setReorderingBoth(false);
       }
@@ -143,6 +159,55 @@ export function useReorder(options: UseReorderOptions) {
     });
   }
 
+  // Dropping an exercise onto a DAY's own droppable (not a specific row) —
+  // an empty day, or past a day's last row where the day card's droppable
+  // (not a row's) is closestCenter's pick — appends it to the end of that
+  // day. Same-day: a session-reorder with the row moved to the end (no-op
+  // if it's already last). Cross-day: prescription-move with `index` = the
+  // target's pre-insertion `exercises.length` (the backend clamps, so
+  // index === length is a valid append).
+  function appendToDay(
+    activeData: { type: "exercise"; dayId: Id; prescriptionId: Id },
+    overData: { type: "day"; sessionId: Id },
+  ) {
+    const sourceIndex = program.findIndex((d) => d.id === activeData.dayId);
+    const targetIndex = program.findIndex((d) => d.id === overData.sessionId);
+    const sourceDay = program[sourceIndex];
+    const targetDay = program[targetIndex];
+    if (!sourceDay || !targetDay) return;
+    const movedIndex = sourceDay.exercises.findIndex((e) => e.id === activeData.prescriptionId);
+    const moved = sourceDay.exercises[movedIndex];
+    if (!moved) return;
+
+    if (sourceIndex === targetIndex) {
+      if (movedIndex === sourceDay.exercises.length - 1) return; // already last: no-op
+      const reordered = [...sourceDay.exercises.filter((_, i) => i !== movedIndex), moved];
+
+      setReorderingBoth(true);
+      setProgram((prev) => prev.map((d, di) => (di === sourceIndex ? { ...d, exercises: reordered } : d)));
+      return postReorder(`/meso/api/plan/${planId}/session/${sourceDay.id}/reorder/`, {
+        order: reordered.map((e) => e.id),
+      });
+    }
+
+    const insertIndex = targetDay.exercises.length; // pre-insertion length == append index
+    const newSourceExercises = sourceDay.exercises.filter((_, i) => i !== movedIndex);
+    const newTargetExercises = [...targetDay.exercises, moved];
+
+    setReorderingBoth(true);
+    setProgram((prev) =>
+      prev.map((d, di) => {
+        if (di === sourceIndex) return { ...d, exercises: newSourceExercises };
+        if (di === targetIndex) return { ...d, exercises: newTargetExercises };
+        return d;
+      }),
+    );
+    return postReorder(`/meso/api/plan/${planId}/prescription/${moved.id}/move/`, {
+      session_id: targetDay.id,
+      index: insertIndex,
+    });
+  }
+
   const onDragEnd = useCallback(
     (event: ReorderDragEndEvent): void | Promise<void> => {
       if (reorderingRef.current) return;
@@ -150,7 +215,6 @@ export function useReorder(options: UseReorderOptions) {
       if (!over || active.id === over.id) return;
       const activeData = active.data.current;
       const overData = over.data.current;
-      if (activeData.type !== overData.type) return;
 
       if (activeData.type === "exercise" && overData.type === "exercise") {
         if (activeData.dayId === overData.dayId) {
@@ -161,6 +225,22 @@ export function useReorder(options: UseReorderOptions) {
 
       if (activeData.type === "day" && overData.type === "day") {
         return dayReorder(activeData, overData);
+      }
+
+      // dnd-kit's closestCenter routinely resolves a day-strip drag onto an
+      // exercise row's droppable (rows' centers sit closer to the pointer
+      // than the day card's) — resolve to that row's owning day instead of
+      // discarding the drop.
+      if (activeData.type === "day" && overData.type === "exercise") {
+        const resolvedSessionId = overData.dayId;
+        if (resolvedSessionId === activeData.sessionId) return; // same day: no-op
+        return dayReorder(activeData, { type: "day", sessionId: resolvedSessionId });
+      }
+
+      // An exercise dropped on a day's own droppable (no specific row under
+      // the pointer) appends it to the end of that day.
+      if (activeData.type === "exercise" && overData.type === "day") {
+        return appendToDay(activeData, overData);
       }
     },
     [program, planId, viewedWeekId, setProgram, postReorder, setReorderingBoth],
