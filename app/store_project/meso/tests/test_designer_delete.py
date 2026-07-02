@@ -12,7 +12,7 @@ deleted row are hidden implicitly because every read (serializers + view
 lookups) filters live rows at each level of the walk, not because the delete
 cascaded a write onto them.
 
-Covers, per ``docs/meso/designer-framework-plan.md`` Phase 0:
+Covers, per ``docs/archive/meso/designer-framework-plan.md`` Phase 0:
 
 - the three new endpoints (``api_prescription_delete``/``api_session_delete``/
   ``api_week_delete``): happy path (200, envelope shape, DB row survives with

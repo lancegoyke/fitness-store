@@ -1,5 +1,10 @@
 # Meso — designer React island + undo/redo, keyboard nav, drag-and-drop
 
+> **Status: COMPLETE (2026-07-02).** All phases shipped — #404/#405 (Phase 0),
+> #407 (Phase 1), #408/#409 (Phase 2), #411 (Phase 3), #412 (Phase 4). The
+> tracking issue #403 is closed; per-phase outcomes are annotated below and
+> in #403's body. Deferred items remain listed at the bottom.
+
 ## Why
 
 The designer (`templates/meso/designer.html` + `static/js/meso.js`) has outgrown
@@ -205,7 +210,7 @@ undo actions), the 1RM editor keeps Enter/Escape, add-exercise/add-day replies
 that resolve after a mid-flight week switch are dropped, and the phone-preview
 coachmark is ported. The full checklist above was verified in a real browser.
 
-### Phase 3 — keyboard navigation — 🚧 next
+### Phase 3 — keyboard navigation — ✅ shipped (#411)
 
 - Roving tabindex across grid cells; arrow keys move focus, Enter commits /
   Escape reverts a cell, Tab follows the natural order; focus survives
@@ -214,7 +219,7 @@ coachmark is ported. The full checklist above was verified in a real browser.
 - Fixes the a11y gaps the #401 review deferred (unlabeled inputs, focus rings
   killed by `outline:none`).
 
-### Phase 4 — drag-and-drop
+### Phase 4 — drag-and-drop — ✅ shipped (#412)
 
 - dnd-kit: reorder exercises within a day, move exercises across days, reorder
   days within a week (weeks-reorder deferred). Keyboard sensor gives

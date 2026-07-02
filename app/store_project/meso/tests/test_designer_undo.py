@@ -1,6 +1,6 @@
 """Phase 1 — undo/redo backend (the ``PlanAction`` op-log).
 
-The designer needs plan-wide undo/redo (``docs/meso/designer-framework-plan.md``
+The designer needs plan-wide undo/redo (``docs/archive/meso/designer-framework-plan.md``
 Decision 2 + Phase 1), built on Phase 0's soft-delete: every mutating designer
 endpoint records ONE ``PlanAction`` (stack ``undo``, monotonically increasing
 ``seq``, a short human ``label``, and a plan-wide ``snapshot`` of the editable
