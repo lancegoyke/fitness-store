@@ -12,7 +12,7 @@ export default defineConfig({
     include: ["frontend/**/*.test.js"],
     coverage: {
       provider: "v8",
-      include: ["app/store_project/static/js/meso.js", "app/store_project/static/js/meso_athlete.js", "app/store_project/static/js/meso_onboarding.js"],
+      include: ["app/store_project/static/js/meso.js", "app/store_project/static/js/meso_athlete.js", "app/store_project/static/js/meso_onboarding.js", "app/store_project/static/js/meso_deliver.js"],
       reporter: ["text", "html"],
     },
   },
