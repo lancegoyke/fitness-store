@@ -333,3 +333,39 @@ class TestSoftDeletedRowsHidden:
             content_type="application/json",
         )
         assert resp.status_code == 400
+
+    def test_resave_preserves_a_hidden_prescriptions_logged_sets(self, client):
+        s = seed()
+        ghost = ExercisePrescriptionFactory(session=s.session, name="Ghost Curl")
+        client.force_login(s.athlete)
+        resp = self._log_post(
+            client,
+            s.session,
+            {
+                "sets": [
+                    {"prescription": s.presc.pk, "reps": "6", "load": "70"},
+                    {"prescription": ghost.pk, "reps": "8", "load": "40"},
+                ]
+            },
+        )
+        assert resp.status_code == 200
+
+        # The coach removes Ghost Curl; the logger no longer shows it, so the
+        # athlete's next save posts only the surviving lift. The hidden row's
+        # already-logged set must NOT be wiped by the save's replace step.
+        ghost.deleted_at = timezone.now()
+        ghost.save(update_fields=["deleted_at"])
+        resp = self._log_post(
+            client,
+            s.session,
+            {"sets": [{"prescription": s.presc.pk, "reps": "5", "load": "75"}]},
+        )
+        assert resp.status_code == 200
+
+        log = SessionLog.objects.get(session=s.session, athlete=s.athlete)
+        ghost_sets = log.sets.filter(prescription=ghost)
+        assert ghost_sets.count() == 1
+        assert ghost_sets.get().reps == "8"
+        live_sets = log.sets.filter(prescription=s.presc)
+        assert live_sets.count() == 1
+        assert live_sets.get().reps == "5"

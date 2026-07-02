@@ -604,3 +604,71 @@ class TestGroupPlanDelete:
         day_numbers = [s.day_number for s in member_week.sessions.all()]
         assert session.day_number not in day_numbers
         assert survivor.day_number in day_numbers
+
+
+class TestGroupRedeliverySoftDelete:
+    """Re-delivering after a shared-program delete must not destroy member logs.
+
+    ``sync_delivered_plan`` reconciles the member's materialized plan against
+    the live source rows; a source row the coach soft-deleted must *hide* the
+    member's copy (flag flip), never hard-delete it — ``SessionLog.session``
+    cascades, so a hard delete erases the member's logged history on the next
+    delivery. A source row that comes back (Phase 1 undo) revives the member's
+    hidden copy in place, same pk.
+    """
+
+    def test_redelivery_hides_member_session_and_keeps_its_logs(self, client):
+        group, plan, week, session, presc = seed_group_plan()
+        membership = GroupMembershipFactory(group=group)
+        _, member_week = membership.sync_delivered_plan(week)
+        member_session = member_week.sessions.get(day_number=session.day_number)
+        member_presc = member_session.prescriptions.get()
+        athlete = membership.relationship.athlete
+        log = SessionLogFactory(session=member_session, athlete=athlete)
+        logged_set = LoggedSetFactory(session_log=log, prescription=member_presc)
+
+        client.force_login(group.coach)
+        resp = client.post(
+            reverse(
+                "meso:api_session_delete", kwargs={"plan_id": plan.pk, "pk": session.pk}
+            )
+        )
+        assert resp.status_code == 200
+        membership.sync_delivered_plan(week)
+
+        member_session.refresh_from_db()
+        assert member_session.deleted_at is not None
+        log.refresh_from_db()
+        assert log.session_id == member_session.pk
+        logged_set.refresh_from_db()
+        assert logged_set.session_log_id == log.pk
+
+        # Simulate Phase 1 undo: the source day returns → the member's hidden
+        # copy is revived in place (same pk, flag cleared), not recreated.
+        session.deleted_at = None
+        session.save(update_fields=["deleted_at"])
+        membership.sync_delivered_plan(week)
+        member_session.refresh_from_db()
+        assert member_session.deleted_at is None
+        assert member_week.sessions.filter(day_number=session.day_number).count() == 1
+
+    def test_redelivery_hides_member_prescription_rows(self, client):
+        group, plan, week, session, presc = seed_group_plan()
+        extra = ExercisePrescriptionFactory(session=session, name="Curl", order=7)
+        membership = GroupMembershipFactory(group=group)
+        _, member_week = membership.sync_delivered_plan(week)
+        member_session = member_week.sessions.get(day_number=session.day_number)
+        member_extra = member_session.prescriptions.get(order=extra.order)
+
+        client.force_login(group.coach)
+        resp = client.post(
+            reverse(
+                "meso:api_prescription_delete",
+                kwargs={"plan_id": plan.pk, "pk": extra.pk},
+            )
+        )
+        assert resp.status_code == 200
+        membership.sync_delivered_plan(week)
+
+        member_extra.refresh_from_db()
+        assert member_extra.deleted_at is not None

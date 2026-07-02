@@ -1083,7 +1083,15 @@ def athlete_log_session(request, pk):
         # else: a re-save with no date keeps the existing workout date.
         log.notes = notes
         log.save()
-        log.sets.all().delete()
+        # Replace only the rows the logger can re-post: sets whose prescription
+        # is still live in this session (``session.prescriptions`` arrives as
+        # the live-only prefetch). A set logged against a since-deleted, hidden
+        # prescription — or one orphaned by an old hard delete — is history,
+        # not draft state; wiping it here would silently destroy the athlete's
+        # record on their next save (soft delete, designer framework Phase 0).
+        log.sets.filter(
+            prescription_id__in=[p.pk for p in session.prescriptions.all()]
+        ).delete()
         LoggedSet.objects.bulk_create(
             [
                 LoggedSet(

@@ -2164,8 +2164,11 @@ class GroupMembership(models.Model):
         overrides = {o.prescription_id: o for o in self.overrides.all()}
         # Source-side reads are live-only — a soft-deleted session/prescription
         # on the shared program must never materialize onto a member's plan.
-        # Member-side rows below are still hard-deleted when dropped from the
-        # source (pre-existing behavior, left as-is).
+        # Member-side rows dropped from the source are *soft*-deleted below
+        # (never hard-deleted: ``SessionLog.session`` cascades, so a hard
+        # delete would erase the member's logged history on re-delivery), and
+        # a source row that comes back (Phase 1 undo) revives the member's
+        # hidden copy in place via ``deleted_at: None`` in the upsert defaults.
         src_sessions = list(
             group_week.sessions.filter(deleted_at__isnull=True).prefetch_related(
                 "prescriptions"
@@ -2179,6 +2182,7 @@ class GroupMembership(models.Model):
                     "name": src_session.name,
                     "bias": src_session.bias,
                     "order": src_session.order,
+                    "deleted_at": None,
                 },
             )
             src_orders = []
@@ -2203,12 +2207,17 @@ class GroupMembership(models.Model):
                         "note": resolved["note"],
                         "exercise": None if swapped else src_p.exercise,
                         "tags": src_p.tags,
+                        "deleted_at": None,
                     },
                 )
                 src_orders.append(src_p.order)
-            member_session.prescriptions.exclude(order__in=src_orders).delete()
+            member_session.prescriptions.exclude(order__in=src_orders).filter(
+                deleted_at__isnull=True
+            ).update(deleted_at=timezone.now())
         src_day_numbers = [s.day_number for s in src_sessions]
-        member_week.sessions.exclude(day_number__in=src_day_numbers).delete()
+        member_week.sessions.exclude(day_number__in=src_day_numbers).filter(
+            deleted_at__isnull=True
+        ).update(deleted_at=timezone.now())
         return member_plan, member_week
 
     def clean(self):
