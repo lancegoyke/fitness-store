@@ -1377,7 +1377,7 @@ class Week(models.Model):
     # None. The delete endpoint stamps only this row — children are hidden by
     # serializers/lookups filtering live rows at each level of the walk, not by
     # a cascading write, so an independently-deleted child stays deleted if a
-    # later undo restores this week. See docs/meso/designer-framework-plan.md.
+    # later undo restores this week. See docs/archive/meso/designer-framework-plan.md.
     deleted_at = models.DateTimeField(
         _("Deleted at"), null=True, blank=True, default=None
     )
@@ -2500,7 +2500,7 @@ class AthleteOneRm(models.Model):
 # pops the max-seq undo row, restores its snapshot, and pushes the mirror-image
 # redo row (same seq+label, snapshot = the state just left); redo is the exact
 # mirror. See ``history.py`` (the snapshot serializer/restorer + the
-# ``record_plan_action`` recorder) and ``docs/meso/designer-framework-plan.md``.
+# ``record_plan_action`` recorder) and ``docs/archive/meso/designer-framework-plan.md``.
 # ---------------------------------------------------------------------------
 
 

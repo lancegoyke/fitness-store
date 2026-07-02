@@ -1,6 +1,6 @@
 """Plan-wide snapshot serializer/restorer for the undo/redo op-log (Phase 1).
 
-The designer needs plan-wide undo/redo (``docs/meso/designer-framework-plan.md``
+The designer needs plan-wide undo/redo (``docs/archive/meso/designer-framework-plan.md``
 Decision 2 + Phase 1), built on Phase 0's soft delete
 (``Week``/``Session``/``ExercisePrescription.deleted_at``). Every mutating
 designer endpoint records ONE ``PlanAction`` (see ``models.py``) on the undo

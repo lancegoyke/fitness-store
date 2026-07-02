@@ -1,7 +1,7 @@
 """Phase 4 — dnd-kit reorder endpoints (RED, designer framework Phase 4, #403).
 
 The designer's drag-and-drop needs three write endpoints, built on Phase 0's
-soft delete + Phase 1's undo op-log (``docs/meso/designer-framework-plan.md``
+soft delete + Phase 1's undo op-log (``docs/archive/meso/designer-framework-plan.md``
 Phase 4):
 
 - ``api_session_reorder`` — reorder the exercise rows within one session

@@ -1,6 +1,6 @@
 """Phase 2 PR B — designer.html swaps from Alpine to the React island.
 
-See ``docs/meso/designer-framework-plan.md`` and
+See ``docs/archive/meso/designer-framework-plan.md`` and
 ``frontend/designer/CONTRACT.md``. The template stops rendering the whole UI
 server-side: it now emits only the
 mount point (``#meso-designer-root``) plus the same hydration payloads the
