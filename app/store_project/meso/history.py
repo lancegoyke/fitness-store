@@ -226,10 +226,22 @@ def restore_plan_snapshot(plan, snapshot):
     ).exclude(pk__in=prescription_pks).update(deleted_at=now)
 
     # Reconcile overrides to the snapshot by natural key (membership, prescription).
+    # A membership hard-deletes when its athlete leaves the group (taking its
+    # override rows with it, CASCADE) — a snapshot recorded before that may
+    # still name it. Skip those rows rather than recreate them: the insert
+    # would die on the dead FK, and failing the whole restore (409) over a
+    # roster change would brick every older undo step. The departed member's
+    # adjustments simply stay gone — membership isn't plan-editable state.
     snapshot_overrides = snapshot.get("overrides", [])
+    live_membership_ids = set(
+        models.GroupMembership.objects.filter(
+            pk__in={row["membership_id"] for row in snapshot_overrides}
+        ).values_list("pk", flat=True)
+    )
     snapshot_by_key = {
         (row["membership_id"], row["prescription_id"]): row
         for row in snapshot_overrides
+        if row["membership_id"] in live_membership_ids
     }
     existing_by_key = {
         (o.membership_id, o.prescription_id): o

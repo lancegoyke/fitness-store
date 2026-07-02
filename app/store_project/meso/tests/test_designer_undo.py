@@ -835,3 +835,38 @@ class TestActionLabelClamp:
         assert resp.status_code == 200
         label = undo_actions(plan).order_by("-seq").first().label
         assert len(label) <= 80
+
+
+class TestRestoreAfterMembershipRemoved:
+    def test_undo_skips_overrides_whose_membership_is_gone(self, client):
+        # A membership hard-deletes when an athlete leaves the group (its
+        # overrides cascade away with it). A snapshot recorded before that must
+        # still restore — the departed member's override is skipped, not
+        # recreated (an IntegrityError-500 here would brick the plan's undo).
+        group, plan, week, session, presc = seed_group_plan()
+        membership = GroupMembershipFactory(group=group)
+        client.force_login(group.coach)
+        resp = post_json(
+            client,
+            reverse(
+                "meso:api_prescription_override",
+                kwargs={"plan_id": plan.pk, "pk": presc.pk},
+            ),
+            {"athlete": str(membership.relationship.athlete_id), "load_pct": 90},
+        )
+        assert resp.status_code == 200
+
+        # A later edit snapshots state WITH the override in it…
+        original_load = presc.load
+        resp = patch(client, plan, presc, load="80")
+        assert resp.status_code == 200
+        # …then the member leaves (membership + its overrides hard-delete).
+        membership.delete()
+
+        # Undo of that edit restores the load — and quietly skips the
+        # departed member's override instead of 500ing on the dead FK.
+        resp = client.post(undo_url(plan))
+        assert resp.status_code == 200
+        presc.refresh_from_db()
+        assert presc.load == original_load
+        assert not PrescriptionOverride.objects.filter(prescription=presc).exists()
