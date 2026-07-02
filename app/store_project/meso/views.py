@@ -826,10 +826,17 @@ def sandbox_signup(request):
     sandbox ``User`` row is left in place for the Phase 2 expiry sweep to reap,
     never carried into the new account (S6: deferred carry-over). A
     non-sandbox authenticated visitor is just sent along too (harmless).
+
+    ``next`` targets the become-a-coach funnel, not the roster: a brand-new
+    signup has no ``CoachProfile``, so ``RosterView`` would route them to the
+    athlete home — the wrong surface for someone converting to run the AI
+    agent. ``BecomeCoachView`` handles both arrivals: a fresh non-coach gets
+    the start-coaching form (whose POST creates the ``CoachProfile``), and an
+    existing coach is sent on to the roster.
     """
     if meso_sandbox.is_sandbox(request.user):
         logout(request)
-    query = urlencode({"next": reverse("meso:roster")})
+    query = urlencode({"next": reverse("meso:become_coach")})
     return redirect(f"{reverse('account_signup')}?{query}")
 
 
@@ -1737,7 +1744,17 @@ def invite_claim(request, token):
     claims (or a claim racing a revoke) can't both pass the pending check and each
     materialize a link — the first to acquire the row wins; the loser sees a
     non-pending invite and no-ops.
+
+    Sandbox gate (S4): the claim is bearer-token authorized, so a visitor still
+    logged in as a throwaway sandbox account would bind a real coach to a
+    disposable athlete the expiry sweep later deletes. End the sandbox session
+    and retry the same URL anonymously — ``login_required`` then routes them
+    through login/signup with ``?next=`` back here, exactly like any logged-out
+    invitee. (No flash: session storage doesn't survive the logout.)
     """
+    if meso_sandbox.is_sandbox(request.user):
+        logout(request)
+        return redirect(request.get_full_path())
     invite = get_object_or_404(CoachInvite, token=token)
     if request.method == "POST":
         action = request.POST.get("action")

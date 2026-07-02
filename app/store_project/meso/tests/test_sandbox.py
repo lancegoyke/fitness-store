@@ -287,9 +287,26 @@ class TestSandboxSignupView:
         assert "_auth_user_id" not in client.session
         assert resp.status_code == 302
         assert resp.url.startswith(reverse("account_signup"))
-        assert f"next={reverse('meso:roster')}" in resp.url or "next=%2Fmeso%2F" in (
-            resp.url
-        )
+        # ``next`` targets the coach-onboarding funnel, NOT the roster: a
+        # brand-new signup has no CoachProfile, so RosterView would bounce
+        # them to the athlete home — dead-ending the "create an account to
+        # run the AI agent" promise on the wrong surface.
+        assert "next=%2Fmeso%2Fcoach%2F" in resp.url
+
+    def test_the_funnel_receives_a_fresh_signup(self, client):
+        """The become-coach funnel receives a just-signed-up non-coach.
+
+        Renders the start-coaching form — not a bounce — proving the ``next``
+        target works for the post-signup authenticated-non-coach shape.
+        """
+        fresh = UserFactory()  # authenticated, no CoachProfile — post-signup shape
+        client.force_login(fresh)
+
+        resp = client.get(reverse("meso:become_coach"))
+
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert reverse("meso:start_coaching") in body  # the CoachProfile-creating POST
 
     def test_the_sandbox_user_row_is_not_deleted(self, client):
         client.get(reverse("meso:sandbox_enter"))
@@ -535,6 +552,47 @@ class TestInviteAndRequestGuards:
         # Identical to the unknown-coach path: same flash, same landing.
         body = resp.content.decode()
         assert "find a coach with that email" in body
+
+    def test_sandbox_user_cannot_claim_a_real_invite(self, client, mailoutbox):
+        """A sandbox user opening a real claim link is logged out, not bound.
+
+        The claim is bearer-token authorized (any authenticated user holding
+        the token may accept), so a visitor still logged in as a throwaway
+        sandbox account would bind a real coach to a disposable
+        ``@sandbox.invalid`` athlete the expiry sweep later deletes — and whose
+        deliveries aren't suppressed (the notification guard checks the coach
+        side only). Instead the sandbox session is ended and the anonymous
+        retry lands on login with ``?next=`` back to the claim, exactly like
+        any logged-out invitee.
+        """
+        from store_project.meso.factories import CoachInviteFactory
+        from store_project.meso.models import CoachAthlete
+        from store_project.meso.models import CoachInvite
+
+        real_coach = UserFactory()
+        CoachProfile.objects.create(user=real_coach)
+        invite = CoachInviteFactory(coach=real_coach)
+        claim_url = reverse("meso:invite_claim", kwargs={"token": invite.token})
+
+        client.get(reverse("meso:sandbox_enter"))
+        sandbox_user_id = client.session["_auth_user_id"]
+
+        resp = client.get(claim_url)
+
+        # Logged out and retried anonymously: back to the same claim URL...
+        assert "_auth_user_id" not in client.session
+        assert resp.status_code == 302
+        assert resp.url == claim_url
+        # ...where login_required sends them to login with ?next= back here.
+        resp2 = client.get(claim_url)
+        assert resp2.status_code == 302
+        assert reverse("account_login") in resp2.url
+        assert claim_url in resp2.url  # carries ?next=
+        # The invite is untouched, no link was bound, nothing was emailed.
+        invite.refresh_from_db()
+        assert invite.status == CoachInvite.Status.PENDING
+        assert not CoachAthlete.objects.filter(athlete_id=sandbox_user_id).exists()
+        assert mailoutbox == []
 
 
 class TestBillingGuards:
