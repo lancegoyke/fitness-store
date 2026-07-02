@@ -818,3 +818,20 @@ class TestPartialResponseHistory:
         )
         assert resp.status_code == 200
         assert resp.json()["history"]["can_undo"] is True
+
+
+class TestActionLabelClamp:
+    def test_long_exercise_names_produce_a_bounded_label(self, client):
+        # `name` allows 255 chars but PlanAction.label caps at 80 — an unclamped
+        # f-string label would make Postgres reject the insert and break
+        # autosave for long-named rows (sqlite doesn't enforce, so assert the
+        # stored length directly).
+        plan, week, session, presc = seed_plan()
+        long_name = ("Extremely Specific Tempo Paused Safety-Bar Box Squat " * 5)[:255]
+        presc.name = long_name
+        presc.save(update_fields=["name"])
+        client.force_login(plan.relationship.coach)
+        resp = patch(client, plan, presc, load="75")
+        assert resp.status_code == 200
+        label = undo_actions(plan).order_by("-seq").first().label
+        assert len(label) <= 80

@@ -2119,6 +2119,10 @@ def session_add(request, plan_id):
     # transaction is required: prod views run in autocommit (ATOMIC_REQUESTS is
     # inert here), so the lock must own its own transaction to be held.
     with transaction.atomic():
+        # Lock ordering: plan BEFORE any child row (undo/redo, the deletes, and
+        # week_set_current all lock the plan first, then touch weeks) — taking
+        # the week lock first here could deadlock against them.
+        Plan.objects.select_for_update().filter(pk=plan.pk).first()
         Week.objects.select_for_update().filter(pk=week.pk).first()
         next_order = (week.sessions.aggregate(m=Max("order"))["m"] or 0) + 1
         next_day = (week.sessions.aggregate(m=Max("day_number"))["m"] or 0) + 1
@@ -2219,6 +2223,8 @@ def week_add(request, plan_id):
     if mesocycle is None:
         return HttpResponseBadRequest("This plan has no block to add a week to.")
     with transaction.atomic():
+        # Lock ordering: plan first (see session_add).
+        Plan.objects.select_for_update().filter(pk=plan.pk).first()
         Mesocycle.objects.select_for_update().filter(pk=mesocycle.pk).first()
         # Mirrors ``Mesocycle.append_week``'s own indexing (over ALL weeks,
         # deleted included) so the recorded label matches the week it creates —

@@ -282,6 +282,10 @@ def record_plan_action(plan, label):
     so recording also serializes against a concurrent restore.)
     """
     models.Plan.objects.select_for_update().filter(pk=plan.pk).first()
+    # Labels often embed a row's free-text name (255 chars allowed) — clamp to
+    # the column, or Postgres rejects the insert and the edit itself 500s.
+    max_len = models.PlanAction._meta.get_field("label").max_length
+    label = label[:max_len]
     models.PlanAction.objects.filter(
         plan=plan, stack=models.PlanAction.Stack.REDO
     ).delete()
