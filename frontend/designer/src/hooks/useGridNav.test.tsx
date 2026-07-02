@@ -506,3 +506,54 @@ describe("focus restoration across a program swap (applyPlanData), decision 6", 
     expect(cells["9:name"]).not.toBe(document.activeElement);
   });
 });
+
+describe("review hardening: Escape baseline + focus-steal guard", () => {
+  it("Enter resets the Escape baseline to the committed value", () => {
+    // Without the reset, an Enter-commit followed by a fresh draft and Escape
+    // would roll the UI back PAST the committed value, desyncing it from the
+    // server (which kept the Enter-committed state).
+    const cells = mountCells(PROGRAM);
+    const loadInput = cells["9:load"]!;
+    loadInput.value = "100";
+    const { result } = renderHook(() => useGridNav({ program: PROGRAM }));
+    const onCommit = vi.fn();
+    const onRevert = vi.fn();
+    const callbacks = { ...NOOP_CALLBACKS, onCommit, onRevert };
+    loadInput.focus();
+    act(() => {
+      result.current.cellProps(9, "load", callbacks).onFocus(focusEvent(loadInput));
+    });
+    loadInput.value = "150";
+    act(() => {
+      result.current.cellProps(9, "load", callbacks).onKeyDown(keyEvent("Enter", loadInput));
+    });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    loadInput.value = "175";
+    act(() => {
+      result.current.cellProps(9, "load", callbacks).onKeyDown(keyEvent("Escape", loadInput));
+    });
+    expect(onRevert).toHaveBeenCalledWith("150");
+  });
+
+  it("restoration never steals focus from a non-grid form field", () => {
+    // A program swap landing while the coach types in e.g. the chat composer
+    // must not yank focus back into the grid — restoration only fires when a
+    // grid cell held focus (or the swap just orphaned it).
+    let cells = mountCells(PROGRAM);
+    const composer = document.createElement("input");
+    document.body.appendChild(composer);
+    const { result, rerender } = renderHook(({ program }) => useGridNav({ program }), {
+      initialProps: { program: PROGRAM },
+    });
+    act(() => {
+      result.current.cellProps(9, "sets", NOOP_CALLBACKS).onFocus(focusEvent(cells[gridCellDomKey(9, "sets")]!));
+    });
+    composer.focus();
+
+    const NEXT: Day[] = [day(1, [ex(10)]), day(2, [ex(11)])];
+    cells = resyncCells(NEXT);
+    act(() => rerender({ program: NEXT }));
+
+    expect(document.activeElement).toBe(composer);
+  });
+});
