@@ -426,9 +426,20 @@ class TestRosterBillingCard:
 
 
 class TestDesignerAgentCta:
+    """The composer-vs-upgrade-CTA *copy* moved client-side in Phase 2 PR B.
+
+    ``ChatPanel.tsx`` branches on the ``meso-designer-flags`` json_script —
+    see ``frontend/designer/CONTRACT.md``. The server-side seam these guard
+    is now ``get_context_data``'s computed values (``can_use_agent``/
+    ``agent_allowance``, mirrored verbatim into ``designer_flags``, which the
+    rendered response's json_script carries) rather than rendered prose; the
+    copy itself is pinned once at the island source level below
+    (``test_chat_panel_carries_the_gate_copy``).
+    """
+
     def test_free_coach_within_allowance_sees_composer_and_meter(self, client):
-        # Phase 5: a free coach with allowance left sees the live composer plus a
-        # "runs left" meter — not the upgrade CTA.
+        # Phase 5: a free coach with allowance left gets composer-open flags
+        # plus a metered allowance — not the exhausted state.
         coach = UserFactory()
         plan, _, _ = _plan_with_prescription(coach)  # 0 runs
         client.force_login(coach)
@@ -440,8 +451,10 @@ class TestDesignerAgentCta:
             resp.context["agent_allowance"]["remaining"]
             == CoachSubscription.FREE_AGENT_ALLOWANCE
         )
-        assert b"Upgrade to use the agent" not in resp.content
-        assert b"free agent run" in resp.content
+        flags = resp.context["designer_flags"]
+        assert flags["can_use_agent"] is True
+        assert flags["agent_allowance"]["metered"] is True
+        assert b'"can_use_agent": true' in resp.content
 
     def test_free_coach_sees_upgrade_cta_once_allowance_exhausted(self, client):
         coach = UserFactory()
@@ -452,7 +465,8 @@ class TestDesignerAgentCta:
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 200
         assert resp.context["can_use_agent"] is False
-        assert b"Upgrade to use the agent" in resp.content
+        assert resp.context["designer_flags"]["can_use_agent"] is False
+        assert b'"can_use_agent": false' in resp.content
 
     def test_comped_coach_sees_composer(self, client):
         coach = UserFactory()
@@ -461,4 +475,15 @@ class TestDesignerAgentCta:
         client.force_login(coach)
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.context["can_use_agent"] is True
-        assert b"Upgrade to use the agent" not in resp.content
+        assert resp.context["designer_flags"]["can_use_agent"] is True
+
+    def test_chat_panel_carries_the_gate_copy(self):
+        # Source-level pin (no JS runner in Django, per this project's
+        # established pattern) for the copy the flags above drive.
+        from pathlib import Path
+
+        src = Path(__file__).resolve().parents[4] / "frontend" / "designer" / "src"
+        tsx = (src / "components" / "ChatPanel.tsx").read_text()
+        assert "Upgrade to use the agent" in tsx
+        assert "free " in tsx
+        assert "agent run" in tsx

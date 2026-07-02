@@ -687,19 +687,30 @@ class TestSandboxBanner:
 
 
 class TestDesignerSignupGate:
-    def test_sandbox_coach_sees_the_signup_gate_not_the_composer(self, client):
+    """The composer-vs-signup-gate *render* moved client-side in Phase 2 PR B.
+
+    ``ChatPanel.tsx`` branches on ``meso-designer-flags``'
+    ``is_sandbox``/``can_use_agent`` — see ``frontend/designer/CONTRACT.md``.
+    Neither the composer nor the signup CTA render server-side any more (both
+    are behind the same island mount point), so the server-side seam these
+    guard is now the flags payload feeding that client branch, not rendered
+    markup — the ``signup_url`` itself is always present in the JSON (it's
+    data for a client-side ``if``, not a server-side gate), so the meaningful
+    check is ``is_sandbox``/``can_use_agent`` themselves.
+    """
+
+    def test_sandbox_coach_gets_is_sandbox_true(self, client):
         coach = _sandbox_coach()
         plan = _sandbox_individual_plan(coach)
         client.force_login(coach)
 
-        body = client.get(
-            reverse("meso:designer_plan", kwargs={"plan_id": plan.pk})
-        ).content.decode()
+        resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
 
-        assert 'data-testid="agent-composer-input"' not in body
-        assert reverse("meso:sandbox_signup") in body
+        assert resp.context["designer_flags"]["is_sandbox"] is True
+        assert b'"is_sandbox": true' in resp.content
+        assert reverse("meso:sandbox_signup").encode() in resp.content
 
-    def test_real_coach_with_agent_access_sees_the_composer(self, client):
+    def test_real_coach_with_agent_access_gets_is_sandbox_false(self, client):
         from store_project.meso.factories import CoachAthleteFactory
         from store_project.meso.factories import PlanFactory
         from store_project.meso.models import CoachSubscription
@@ -709,11 +720,11 @@ class TestDesignerSignupGate:
         plan = PlanFactory(relationship=link)
         client.force_login(link.coach)
 
-        body = client.get(
-            reverse("meso:designer_plan", kwargs={"plan_id": plan.pk})
-        ).content.decode()
+        resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
 
-        assert 'data-testid="agent-composer-input"' in body
+        flags = resp.context["designer_flags"]
+        assert flags["is_sandbox"] is False
+        assert flags["can_use_agent"] is True
 
 
 # ---------------------------------------------------------------------------

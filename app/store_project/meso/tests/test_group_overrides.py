@@ -572,19 +572,30 @@ class TestOverrideEndpoint:
 class TestDesignerOverrideEditor:
     """The designer page wires the in-grid click-to-adjust editor.
 
-    Alpine gates it to Group mode at runtime; this guards the markup the editor
-    methods drive from regressing.
+    The React island gates it to Group mode at runtime (``ExerciseRow``'s
+    ``isGroup`` prop); Phase 2 PR B moved the markup itself from
+    ``designer.html`` to ``frontend/designer/src/components/``, so this now
+    guards the island source from regressing (mirroring the module-docstring
+    move in ``test_designer_agent_chat.py``) — the server-side seam is just
+    that a group plan still renders (checked below).
     """
 
-    def test_group_designer_includes_the_override_editor(self, client):
+    def test_group_designer_renders(self, client):
         group = MesoGroupFactory(name="Squad")
         make_member(group, name="Maya Okonkwo")
         plan = group.create_shared_plan()
         client.force_login(group.coach)
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 200
-        body = resp.content.decode()
+        assert 'id="meso-designer-root"' in resp.content.decode()
+
+    def test_island_wires_the_override_editor(self):
+        from pathlib import Path
+
+        src = Path(__file__).resolve().parents[4] / "frontend" / "designer" / "src"
+        exercise_row = (src / "components" / "ExerciseRow.tsx").read_text()
+        override_modal = (src / "components" / "OverrideModal.tsx").read_text()
         # The per-row affordance and the modal the editor methods drive.
-        assert "openOverride(ex)" in body
-        assert "saveOverride()" in body
-        assert 'x-if="override"' in body
+        assert "onOpenOverride" in exercise_row
+        assert "onSave" in override_modal
+        assert "if (!override) return null;" in override_modal

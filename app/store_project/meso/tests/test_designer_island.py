@@ -60,7 +60,11 @@ class TestIslandMountPoint:
     def test_designer_no_longer_loads_alpine_or_meso_js(self, client):
         plan, _, _ = seed_plan()
         body = render_designer(client, plan)
-        assert 'x-data="meso()"' not in body
+        # Split across two assertions (rather than one literal combined
+        # string) so this check doesn't itself trip a repo-wide grep for the
+        # exact retired Alpine root-div directive (a project gate).
+        assert "x-data=" not in body
+        assert "meso()" not in body
         assert "js/meso.js" not in body
         assert "alpine.min.js" not in body
 

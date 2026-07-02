@@ -1,24 +1,25 @@
 """Persisted designer chat thread — the conversation survives a reload.
 
 The designer's agent chat went live in agent Phase 3, but the thread itself was
-never persisted: ``meso.js`` re-seeds ``messages`` to a single greeting on every
-load. The proposals, though, *are* persisted — every coach turn is an
+never persisted: the front end re-seeds ``messages`` to a single greeting on
+every load. The proposals, though, *are* persisted — every coach turn is an
 ``AgentProposalBatch`` (``instruction`` = the coach's message, ``summary`` + the
 ``ProposedChange`` rows = the agent's reply, ``status``/``created_at`` = state and
 order). So this slice reconstructs the thread from those batches rather than
 adding a model: ``serialize_chat_thread(plan)`` expands the plan's batches into
-the message shape ``meso.js`` renders, the designer view injects it, and the JS
-hydrates ``messages`` from it (falling back to the greeting when empty).
+the message shape the front end renders, the designer view injects it, and the
+JS hydrates ``messages`` from it (falling back to the greeting when empty).
 
-No JS runner in this project, so the JS wiring is guarded at the source level
-(mirroring ``test_designer_agent_chat.py``); the serializer + view seam is
-covered end-to-end here.
+Phase 2 PR B moved the hydration/resume logic from ``meso.js`` to the React
+island's ``DesignerRoot.tsx``/``hooks/useAgentChat.ts`` — the JS-wiring checks
+below were repointed there (mirroring ``test_designer_agent_chat.py``); the
+serializer + view seam is still covered end-to-end here against the rendered
+response body (the hydration payload is still server-injected JSON either way).
 """
 
 from pathlib import Path
 
 import pytest
-from django.contrib.staticfiles import finders
 from django.urls import reverse
 
 from store_project.meso.factories import AgentProposalBatchFactory
@@ -29,11 +30,11 @@ from store_project.meso.tests.test_designer_save import seed_plan
 
 pytestmark = pytest.mark.django_db
 
+DESIGNER_SRC = Path(__file__).resolve().parents[4] / "frontend" / "designer" / "src"
 
-def read_meso_js():
-    path = finders.find("js/meso.js")
-    assert path, "static js/meso.js must resolve"
-    return Path(path).read_text()
+
+def read_island_source(*parts):
+    return (DESIGNER_SRC.joinpath(*parts)).read_text()
 
 
 class TestSerializeChatThread:
@@ -222,19 +223,22 @@ class TestDesignerInjectsThread:
         assert "Other plan ask" not in body
 
 
-class TestMesoJsHydratesThread:
-    def test_meso_js_reads_the_injected_thread(self):
-        js = read_meso_js()
-        assert "meso-chat-thread" in js
+class TestIslandHydratesThread:
+    def test_designer_root_reads_the_injected_thread(self):
+        tsx = read_island_source("DesignerRoot.tsx")
+        assert "meso-chat-thread" in tsx
 
-    def test_meso_js_keeps_the_greeting_fallback(self):
+    def test_designer_root_keeps_the_greeting_fallback(self):
         # An empty history still shows the orienting greeting.
-        js = read_meso_js()
-        assert "Tell me how you'd like to adjust this plan" in js
+        tsx = read_island_source("DesignerRoot.tsx")
+        assert "Tell me how you'd like to adjust this plan" in tsx
 
-    def test_meso_js_resumes_polling_a_hydrated_drafting_run(self):
+    def test_island_resumes_polling_a_hydrated_drafting_run(self):
         # A run still drafting at load resumes via its poll URL so a thread
-        # hydrated mid-run isn't left stuck on the placeholder.
-        js = read_meso_js()
-        assert "resumeDrafting" in js
-        assert "pollUrl" in js
+        # hydrated mid-run isn't left stuck on the placeholder — ported from
+        # meso.js's resumeDrafting into useAgentChat's initialResumeUrl path.
+        tsx = read_island_source("DesignerRoot.tsx")
+        hook = read_island_source("hooks", "useAgentChat.ts")
+        assert "pollUrl" in tsx
+        assert "resumeDrafting" in hook  # breadcrumb comment to the ported behavior
+        assert "initialResumeUrl" in hook

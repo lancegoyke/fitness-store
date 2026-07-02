@@ -20,7 +20,6 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from django.contrib.staticfiles import finders
 from django.urls import reverse
 from django.utils import timezone
 
@@ -484,7 +483,12 @@ class TestSessionAddWeekScoping:
 
 # ---------------------------------------------------------------------------
 # Designer wiring — the switcher strip is rendered + the JS exposes the verbs
-# (source/render-level, per the test_designer_onboarding.py precedent)
+# (source/render-level, per the test_designer_onboarding.py precedent).
+#
+# Phase 2 PR B moved this wiring from designer.html/meso.js to the React
+# island (frontend/designer/src/hooks/usePlanData.ts,
+# components/WeekStrip.tsx) — repointed below the same way
+# test_designer_agent_chat.py repointed the agent-chat checks.
 # ---------------------------------------------------------------------------
 
 
@@ -493,30 +497,37 @@ def _read_designer_template():
     return path.read_text()
 
 
-def _read_meso_js():
-    path = finders.find("js/meso.js")
-    assert path, "static js/meso.js must resolve"
-    return Path(path).read_text()
+def _read_island_source(*parts):
+    src = Path(__file__).resolve().parents[4] / "frontend" / "designer" / "src"
+    return src.joinpath(*parts).read_text()
 
 
 class TestSwitcherWiring:
-    def test_designer_renders_the_week_switcher(self, client):
+    def test_designer_renders_the_mount_point_for_a_plan_with_weeks(self, client):
+        # The switcher strip itself is client-rendered (WeekStrip.tsx, only
+        # when weeks.length > 0) — the server-side seam is that the plan's
+        # weeks are still hydrated into the page for the island to read.
         link = CoachAthleteFactory()
         plan = link.create_plan()
         client.force_login(link.coach)
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 200
         body = resp.content.decode()
-        assert "switchWeek(" in body
-        assert "addWeek()" in body
-        assert "setCurrentWeek(" in body
+        assert 'id="meso-plan-data"' in body
+        assert 'id="meso-designer-root"' in body
 
-    def test_template_wires_all_three_verbs(self):
-        tpl = _read_designer_template()
-        assert 'x-show="live && weeks.length"' in tpl
-        assert "weekIsViewed(w)" in tpl
+    def test_week_strip_wires_all_three_verbs(self):
+        strip = _read_island_source("components", "WeekStrip.tsx")
+        plan_data = _read_island_source("hooks", "usePlanData.ts")
+        # Rendered only when weeks are present (the source's
+        # `x-show="live && weeks.length"`; `live` is dropped per CONTRACT.md).
+        assert "if (!weeks.length) return null;" in strip
+        assert "onSwitchWeek" in strip
+        assert "onAddWeek" in strip
+        assert "onMakeCurrent" in strip
+        assert "weekIsViewed" in plan_data
 
-    def test_meso_js_exposes_the_week_methods(self):
-        js = _read_meso_js()
+    def test_use_plan_data_exposes_the_week_methods(self):
+        js = _read_island_source("hooks", "usePlanData.ts")
         for verb in ("switchWeek", "addWeek", "setCurrentWeek", "applyPlanData"):
             assert verb in js

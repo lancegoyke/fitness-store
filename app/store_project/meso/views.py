@@ -266,6 +266,21 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         ctx["agent_allowance"] = agent_meter
         ctx["can_use_agent"] = agent_meter["can_use"]
         ctx["price_summary"] = presenters.PRICE_SUMMARY
+        # Designer island flags (Phase 2 PR B, frontend/designer/CONTRACT.md):
+        # the React island replaces the template's server-side
+        # {% if is_sandbox %}/{% elif can_use_agent %}/{% else %} composer gate
+        # with this one json_script payload it branches on client-side. No new
+        # predicate — ``is_sandbox`` is the same call the ``sandbox_status``
+        # context processor makes (unavailable here: context processors only
+        # apply at render time, after get_context_data), and the other three
+        # values already exist above; this just also feeds the island.
+        ctx["designer_flags"] = {
+            "is_sandbox": meso_sandbox.is_sandbox(self.request.user),
+            "can_use_agent": ctx["can_use_agent"],
+            "agent_allowance": agent_meter,
+            "signup_url": reverse("meso:sandbox_signup"),
+            "price_summary": presenters.PRICE_SUMMARY,
+        }
         return ctx
 
 
