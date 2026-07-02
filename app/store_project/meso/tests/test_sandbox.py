@@ -513,3 +513,41 @@ class TestBillingGuards:
         assert not CoachSubscription.objects.filter(
             coach=coach, status=CoachSubscription.Status.TRIALING
         ).exists()
+
+
+# ---------------------------------------------------------------------------
+# UI — the persistent banner, hidden billing nav link
+# ---------------------------------------------------------------------------
+
+
+class TestSandboxBanner:
+    def test_roster_shows_the_banner_for_a_sandbox_coach(self, client):
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert "live demo" in body.lower()
+        assert reverse("meso:sandbox_signup") in body
+
+    def test_roster_shows_no_banner_for_a_real_coach(self, client):
+        coach = UserFactory()
+        CoachProfile.objects.create(user=coach)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert "live demo" not in body.lower()
+
+    def test_navlinks_hide_billing_for_a_sandbox_coach(self, client):
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert ">Billing</a>" not in body
+
+    def test_navlinks_show_billing_for_a_real_coach(self, client):
+        coach = UserFactory()
+        CoachProfile.objects.create(user=coach)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert ">Billing</a>" in body

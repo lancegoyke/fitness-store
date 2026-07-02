@@ -138,6 +138,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "store_project.analytics.context_processors.google_analytics",
+                "store_project.meso.context_processors.sandbox_status",
             ],
         },
     },
