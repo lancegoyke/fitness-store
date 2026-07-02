@@ -177,7 +177,7 @@ has since been removed instead of 500ing on the dead FK.
 - Tests: pytest round-trips — edit/undo/redo, delete-day/undo (logs intact!),
   batch_apply/undo, redo-stack cleared by a fresh edit, history cap.
 
-### Phase 2 — the island (behavior-identical migration) — 🚧 in progress (PR A: scaffolding)
+### Phase 2 — the island (behavior-identical migration) — ✅ shipped (#408, #409)
 
 - Vite + React app in `frontend/designer/`; entry reads the same
   `meso-plan-data` / `meso-chat-thread` / `meso-csrf` elements; template
@@ -193,7 +193,19 @@ has since been removed instead of 500ing on the dead FK.
   (individual), agent chat + poll-resume, coachmarks, deliver link with
   `?week=`, undo/redo buttons, and the sandbox/demo plan at `/meso/demo/`.
 
-### Phase 3 — keyboard navigation
+**Outcome (2026-07-02):** #408 (toolchain — plus a review catch: `django.yml`'s
+push `paths-ignore` had to stop ignoring shipped frontend inputs, or a
+designer-only change would never deploy) and #409 (the swap). The island lives
+in `frontend/designer/src/{lib,hooks,components}` (316 vitest specs);
+`meso.js` and its three suites are retired; eight pytest files re-pointed to
+island sources or the new `meso-designer-flags` json_script (the server's
+sandbox/allowance gates as data). Review-loop catches worth knowing: cell
+autosaves are dirty-gated (an unconditional blur commit would record no-op
+undo actions), the 1RM editor keeps Enter/Escape, add-exercise/add-day replies
+that resolve after a mid-flight week switch are dropped, and the phone-preview
+coachmark is ported. The full checklist above was verified in a real browser.
+
+### Phase 3 — keyboard navigation — 🚧 next
 
 - Roving tabindex across grid cells; arrow keys move focus, Enter commits /
   Escape reverts a cell, Tab follows the natural order; focus survives
