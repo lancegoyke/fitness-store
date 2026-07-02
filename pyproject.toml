@@ -16,7 +16,7 @@ dependencies = [
   "django-clearcache",
   "django-embed-video",
   "django-markdownx",
-  "django-ses[events]==4.1.1",
+  "django-ses[events]>=4.7.2",
   "django-storages[s3]",
   "gunicorn",
   "hiredis",
