@@ -236,3 +236,40 @@ describe("Phase 3: aria-labels flow through to rendered cells", () => {
     expect(screen.getByTestId("exercise-sets-9")).toHaveAttribute("aria-label", "Box Squat — sets");
   });
 });
+
+describe("keyboard drag candidate filtering (day drags only target day containers)", () => {
+  // With nested sortables in one DndContext, the stock coordinate getter
+  // proposes the closest droppable of ANY type — a lifted day card keeps
+  // targeting exercise rows and can never reach the neighboring day
+  // (browser-verified). The pure filter below feeds typedKeyboardCoordinates.
+  it("keeps only same-kind droppables for the active drag", async () => {
+    const { filterContainersByActiveType } = await import("./WeekGrid");
+    const containers = [{ id: "day-1" }, { id: "ex-9" }, { id: "day-2" }] as never[];
+    expect(filterContainersByActiveType("day-1", containers).map((c: { id: string }) => c.id)).toEqual(["day-1", "day-2"]);
+    // An exercise drag keeps day containers too — the append/empty-day drop
+    // path (exercise-over-day) must stay reachable for keyboard users.
+    expect(filterContainersByActiveType("ex-9", containers).map((c: { id: string }) => c.id)).toEqual(["day-1", "ex-9", "day-2"]);
+  });
+});
+
+describe("typedCollisionDetection (day drags collide only with day containers)", () => {
+  it("returns only day collisions for a day drag", async () => {
+    const { typedCollisionDetection } = await import("./WeekGrid");
+    const rect = (top: number) => ({ top, bottom: top + 200, left: 0, right: 800, width: 800, height: 200 });
+    const containers = [
+      { id: "day-1", rect: { current: rect(0) }, data: { current: {} }, disabled: false },
+      { id: "ex-9", rect: { current: rect(40) }, data: { current: {} }, disabled: false },
+      { id: "day-2", rect: { current: rect(220) }, data: { current: {} }, disabled: false },
+    ];
+    const collisions = typedCollisionDetection({
+      active: { id: "day-2", rect: { current: { initial: rect(220), translated: rect(10) } }, data: { current: {} } },
+      collisionRect: rect(10),
+      droppableRects: new Map(containers.map((c) => [c.id, c.rect.current])),
+      droppableContainers: containers,
+      pointerCoordinates: null,
+    } as never);
+    expect(collisions.length).toBeGreaterThan(0);
+    expect(collisions.every((c: { id: unknown }) => String(c.id).startsWith("day-"))).toBe(true);
+    expect(String(collisions[0]!.id)).toBe("day-1");
+  });
+});

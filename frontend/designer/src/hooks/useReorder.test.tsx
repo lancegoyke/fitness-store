@@ -683,3 +683,50 @@ describe("shared in-flight guard", () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("review hardening: armed delete confirms disarm before optimistic reorders", () => {
+  // pendingDelete keys a day by INDEX; a day reorder shifts indices while the
+  // POST is still in flight, so a slow reply could leave the Confirm control
+  // pointing at (and deleting) the wrong day. Every drop that mutates the
+  // program disarms the pending confirm BEFORE the fetch, mirroring
+  // applyPlanData's own disarm. Contract addition: useReorder accepts an
+  // optional setPendingDelete and calls it with null on every mutating drop.
+  function setupWithDisarm(initialProgram: Day[]) {
+    const applyPlanData = vi.fn();
+    const setPendingDelete = vi.fn();
+    const hook = renderHook(() => {
+      const [program, setProgram] = useState<Day[]>(initialProgram);
+      const reorder = useReorder({
+        planId: 7,
+        csrf: "tok",
+        viewedWeekId: 55,
+        program,
+        setProgram,
+        applyPlanData,
+        setPendingDelete,
+      });
+      return { ...reorder, program };
+    });
+    return { ...hook, applyPlanData, setPendingDelete };
+  }
+
+  it("a day reorder clears pendingDelete synchronously, before the POST", async () => {
+    const { result, setPendingDelete } = setupWithDisarm(twoDayProgram());
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true, ...planEnvelope() }) }) as unknown as typeof fetch;
+    await act(async () => {
+      await result.current.onDragEnd(dayDragEvent(101, 102));
+    });
+    expect(setPendingDelete).toHaveBeenCalledWith(null);
+    const fetchOrder = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    expect(setPendingDelete.mock.invocationCallOrder[0]!).toBeLessThan(fetchOrder);
+  });
+
+  it("a within-day reorder also disarms", async () => {
+    const { result, setPendingDelete } = setupWithDisarm(twoDayProgram());
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true, ...planEnvelope() }) }) as unknown as typeof fetch;
+    await act(async () => {
+      await result.current.onDragEnd(exerciseDragEvent(1, 101, 2, 101));
+    });
+    expect(setPendingDelete).toHaveBeenCalledWith(null);
+  });
+});

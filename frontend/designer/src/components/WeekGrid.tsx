@@ -15,6 +15,7 @@ import {
 } from "@dnd-kit/core";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import type { CollisionDetection, KeyboardCoordinateGetter } from "@dnd-kit/core";
 import { DayCard } from "./DayCard";
 import { WeekStrip } from "./WeekStrip";
 import type { Day, Exercise, HistoryState, Week } from "../lib/api";
@@ -73,6 +74,52 @@ export interface WeekGridProps {
   reordering?: boolean;
 }
 
+// Keyboard drags with nested sortables: the stock getter proposes the
+// closest droppable of ANY type, so a lifted day card keeps targeting
+// exercise rows and can never reach the neighboring day (browser-verified).
+// Filter the candidates to the active drag's own kind (day-* vs ex-*).
+export function filterContainersByActiveType<T extends { id: unknown }>(
+  activeId: unknown,
+  containers: T[],
+): T[] {
+  if (String(activeId).startsWith("day-")) {
+    // A dragged day only ever lands relative to another day.
+    return containers.filter((c) => String(c.id).startsWith("day-"));
+  }
+  // A dragged exercise keeps day containers too: exercise-over-day is the
+  // append/empty-day drop path, and it must stay reachable by keyboard.
+  return containers.filter(
+    (c) => String(c.id).startsWith("ex-") || String(c.id).startsWith("day-"),
+  );
+}
+
+// Same type-filtering at the collision layer: a lifted day card's center can
+// stay closest to its OWN slot (cards are tall), so `over` never reaches the
+// neighbor even when the keyboard getter proposes its coordinates. Day drags
+// collide only with day containers; exercise drags keep the full set (rows +
+// day cards, for the append-to-day path).
+export const typedCollisionDetection: CollisionDetection = (args) => {
+  if (String(args.active.id).startsWith("day-")) {
+    return closestCenter({
+      ...args,
+      droppableContainers: filterContainersByActiveType(args.active.id, args.droppableContainers),
+    });
+  }
+  return closestCenter(args);
+};
+
+export const typedKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) => {
+  const containers = args.context.droppableContainers;
+  const filtered = {
+    ...args.context,
+    droppableContainers: Object.assign(Object.create(Object.getPrototypeOf(containers) ?? {}), containers, {
+      getEnabled: () =>
+        filterContainersByActiveType(args.context.active?.id ?? "", containers.getEnabled()),
+    }),
+  };
+  return sortableKeyboardCoordinates(event, { ...args, context: filtered });
+};
+
 export function WeekGrid(props: WeekGridProps) {
   const {
     program,
@@ -124,7 +171,7 @@ export function WeekGrid(props: WeekGridProps) {
   // lifts, arrows move, Space/Enter drops, Escape cancels).
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, { coordinateGetter: typedKeyboardCoordinates }),
   );
 
   function handleDragEnd(event: DragEndEvent) {
@@ -185,7 +232,7 @@ export function WeekGrid(props: WeekGridProps) {
         </div>
       )}
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={typedCollisionDetection} onDragEnd={handleDragEnd}>
         <SortableContext
           items={program.map((day) => `day-${day.id}`)}
           strategy={verticalListSortingStrategy}

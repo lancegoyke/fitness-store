@@ -29,10 +29,14 @@ export interface UseReorderOptions {
   program: Day[];
   setProgram: Dispatch<SetStateAction<Day[]>>;
   applyPlanData: (data: PlanEnvelope) => void;
+  /** Disarm an armed day/week delete confirm before a mutating drop —
+   * pendingDelete keys days by INDEX, and a reorder shifts indices while the
+   * POST is in flight, so a stale Confirm could target the wrong day. */
+  setPendingDelete?: (value: null) => void;
 }
 
 export function useReorder(options: UseReorderOptions) {
-  const { planId, csrf, viewedWeekId, program, setProgram, applyPlanData } = options;
+  const { planId, csrf, viewedWeekId, program, setProgram, applyPlanData, setPendingDelete } = options;
 
   // One shared in-flight guard across all three drop shapes (mirrors
   // useDeletes' deletingRef) — checked SYNCHRONOUSLY at the top of
@@ -216,6 +220,11 @@ export function useReorder(options: UseReorderOptions) {
       const activeData = active.data.current;
       const overData = over.data.current;
 
+      // Any routed drop disarms an armed delete confirm first — pendingDelete
+      // keys days by index, and the optimistic reorder below shifts indices
+      // while the POST is still in flight.
+      setPendingDelete?.(null);
+
       if (activeData.type === "exercise" && overData.type === "exercise") {
         if (activeData.dayId === overData.dayId) {
           return withinDayReorder(activeData, overData);
@@ -243,7 +252,7 @@ export function useReorder(options: UseReorderOptions) {
         return appendToDay(activeData, overData);
       }
     },
-    [program, planId, viewedWeekId, setProgram, postReorder, setReorderingBoth],
+    [program, planId, viewedWeekId, setProgram, postReorder, setReorderingBoth, setPendingDelete],
   );
 
   return { reordering, onDragEnd };

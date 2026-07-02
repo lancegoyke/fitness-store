@@ -221,6 +221,7 @@ export function DesignerRoot() {
     planId,
     csrf,
     viewedWeekId: planData.viewedWeekId,
+    setPendingDelete: planData.setPendingDelete,
     program: planData.program,
     setProgram: planData.setProgram,
     applyPlanData: planData.applyPlanData,
