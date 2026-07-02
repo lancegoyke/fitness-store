@@ -62,11 +62,17 @@ class TestCoachTopnavIdentity:
         assert 'title="Coach">LG<' not in body
 
 
-class TestAnonymousDefaultBlock:
-    def test_offline_page_renders_no_avatar(self, client):
-        # offline.html inherits the default block anonymously (it suppresses
-        # the site nav but not the avatar) — an identity chip for nobody, or a
-        # link into a login-gated page from the offline shell, would be wrong.
+class TestOfflineShellStaysGeneric:
+    def test_offline_page_renders_no_avatar_anonymously(self, client):
+        body = client.get(reverse("meso:offline")).content.decode()
+        assert "meso-avatar" not in body
+        assert reverse("users:profile") not in body
+
+    def test_offline_page_renders_no_avatar_when_authenticated(self, client):
+        # The service worker precaches /meso/offline/ with the athlete's
+        # credentials — an inherited identity chip would bake their initials
+        # and a dead /users/profile/ link into the cached offline shell.
+        client.force_login(make_coach(name="Maya Okonkwo"))
         body = client.get(reverse("meso:offline")).content.decode()
         assert "meso-avatar" not in body
         assert reverse("users:profile") not in body
