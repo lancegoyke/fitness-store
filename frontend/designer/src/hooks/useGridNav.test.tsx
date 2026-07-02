@@ -588,3 +588,49 @@ describe("review hardening: modified arrows stay native", () => {
     expect(document.activeElement).toBe(input);
   });
 });
+
+describe("review hardening: row patches don't steal focus from controls", () => {
+  // Clicking a control that mutates `program` but stays mounted (the
+  // load-type toggle patches the exercise) must keep focus on that control —
+  // only grid cells, orphaned focus (body), or controls explicitly marked
+  // data-grid-restore (undo/redo, week chips — swap initiators whose result
+  // SHOULD return the coach to the grid) allow restoration to move focus.
+  it("an unmarked button keeps focus across a program identity change", () => {
+    let cells = mountCells(PROGRAM);
+    const toggle = document.createElement("button");
+    document.body.appendChild(toggle);
+    const { result, rerender } = renderHook(({ program }) => useGridNav({ program }), {
+      initialProps: { program: PROGRAM },
+    });
+    act(() => {
+      result.current.cellProps(9, "sets", NOOP_CALLBACKS).onFocus(focusEvent(cells[gridCellDomKey(9, "sets")]!));
+    });
+    toggle.focus();
+
+    const NEXT: Day[] = [day(1, [ex(9, { load_type: "pct" }), ex(10)]), day(2, [ex(11)])];
+    cells = resyncCells(NEXT);
+    act(() => rerender({ program: NEXT }));
+
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it("a data-grid-restore control still hands focus back to the grid", () => {
+    let cells = mountCells(PROGRAM);
+    const undoButton = document.createElement("button");
+    undoButton.setAttribute("data-grid-restore", "");
+    document.body.appendChild(undoButton);
+    const { result, rerender } = renderHook(({ program }) => useGridNav({ program }), {
+      initialProps: { program: PROGRAM },
+    });
+    act(() => {
+      result.current.cellProps(9, "sets", NOOP_CALLBACKS).onFocus(focusEvent(cells[gridCellDomKey(9, "sets")]!));
+    });
+    undoButton.focus();
+
+    const NEXT: Day[] = [day(1, [ex(10)]), day(2, [ex(11)])];
+    cells = resyncCells(NEXT);
+    act(() => rerender({ program: NEXT }));
+
+    expect(document.activeElement).toBe(cells["10:name"]);
+  });
+});

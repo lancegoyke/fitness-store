@@ -149,21 +149,19 @@ export function useGridNav(options: UseGridNavOptions): UseGridNavResult {
       next = firstOfDay !== undefined ? { prescriptionId: firstOfDay, column: "name" } : firstCellOf(flat);
     }
 
-    // Never steal focus from a non-grid form field (e.g. the chat composer):
-    // restoration fires only when a grid cell holds focus, when the swap just
-    // orphaned it (focus fell to body), or when focus sits on a plain control
-    // (undo/redo buttons, week chips — grid operations whose swap SHOULD
-    // return the coach to the grid).
+    // Restoration may move focus ONLY when it won't steal it: the active
+    // element is a grid cell, focus was orphaned by the swap (fell to body),
+    // or the coach is on a control explicitly marked data-grid-restore
+    // (undo/redo, week chips, add/remove week — swap initiators whose result
+    // should return them to the grid). Anything else — the chat composer, the
+    // load-type toggle re-rendering under focus on a row patch — keeps focus.
     const active = document.activeElement as HTMLElement | null;
-    const activeIsGridCell = !!active && active.hasAttribute("data-grid-cell");
-    const activeIsForeignField =
-      !activeIsGridCell &&
-      !!active &&
-      (active.tagName === "INPUT" ||
-        active.tagName === "TEXTAREA" ||
-        active.tagName === "SELECT" ||
-        active.isContentEditable);
-    commitAnchor(next, flat, focusedOnceRef.current && !activeIsForeignField);
+    const allowFocusMove =
+      !active ||
+      active === document.body ||
+      active.hasAttribute("data-grid-cell") ||
+      active.closest("[data-grid-restore]") !== null;
+    commitAnchor(next, flat, focusedOnceRef.current && allowFocusMove);
     // program is the only externally-driven trigger for restoration; flat is
     // derived from it in lockstep, and the anchor/ref reads are intentionally
     // "current value at effect time", not reactive dependencies.
