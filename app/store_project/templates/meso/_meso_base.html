@@ -60,7 +60,8 @@
           in the throwaway workspace carries it.
         {% endcomment %}
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;margin:14px 0 0;background:var(--soft);border:1px solid var(--soft-line);border-left:3px solid var(--accent);border-radius:9px;font-size:13px;color:var(--accent-deep);">
-          <span style="flex:1;min-width:0;">You're in a live demo — your work here is temporary. <strong>Create a free account</strong> to run the AI agent and keep your work.</span>
+          {# No "keep your work" promise — carry-over at signup is deferred (S6). #}
+          <span style="flex:1;min-width:0;">You're in a live demo — your work here is temporary. <strong>Create a free account</strong> to run the AI agent.</span>
           <a class="meso-btn meso-btn--primary" href="{% url 'meso:sandbox_signup' %}">Create a free account</a>
         </div>
       {% endif %}

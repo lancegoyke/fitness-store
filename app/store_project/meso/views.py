@@ -776,10 +776,12 @@ def sandbox_enter(request):
     # Two auth backends are configured (ModelBackend + allauth) — login() can't
     # infer which one, so it must be named explicitly.
     login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+    # No "keep your work" promise: carry-over at signup is deferred (S6) — a
+    # new account starts a fresh workspace.
     messages.success(
         request,
         "You're in a live demo — explore freely. Create a free account any "
-        "time to run the AI agent and keep your work.",
+        "time to run the AI agent.",
     )
     return _noindex(redirect("meso:roster"))
 
@@ -1508,8 +1510,11 @@ def athlete_request_coach(request):
     notified by email on ``transaction.on_commit``, best-effort — a mail failure
     is logged, never a 500 or a lost request. Always lands back on the home.
 
-    Sandbox gate (S4): a sandbox coach can't be requested by a real athlete
-    (there's no real coach behind the throwaway account to notify).
+    Sandbox gate (S4), both sides of the link: a sandbox *requester* is bounced
+    to the roster, and a resolved *target* who is a sandbox coach is treated
+    exactly like an unknown email (same flash — a throwaway ``@sandbox.invalid``
+    account is not a coach anyone can train under, and the response must not
+    leak that the address exists).
     """
     if meso_sandbox.is_sandbox(request.user):
         messages.info(
@@ -1529,7 +1534,7 @@ def athlete_request_coach(request):
         .exclude(pk=request.user.pk)
         .first()
     )
-    if coach is None:
+    if coach is None or meso_sandbox.is_sandbox(coach):
         messages.error(request, "We couldn't find a coach with that email.")
         return redirect("meso:athlete_home")
 

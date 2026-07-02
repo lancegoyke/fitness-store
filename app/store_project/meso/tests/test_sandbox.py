@@ -208,6 +208,17 @@ class TestSandboxEnterView:
         assert resp.status_code == 200
         assert b"Roster" in resp.content
 
+    def test_welcome_flash_does_not_promise_kept_work(self, client):
+        """No "keep your work" over-promise in the welcome flash.
+
+        Carry-over is deferred (S6): signup starts a FRESH workspace, so no
+        copy may promise the visitor keeps their sandbox work.
+        """
+        resp = client.get(reverse("meso:sandbox_enter"), follow=True)
+        body = resp.content.decode()
+        assert "You&#x27;re in a live demo" in body  # the flash rendered
+        assert "keep your work" not in body
+
     def test_expiry_is_about_48_hours_out(self, client):
         before = timezone.now()
         client.get(reverse("meso:sandbox_enter"))
@@ -497,6 +508,34 @@ class TestInviteAndRequestGuards:
         assert not CoachAthlete.objects.filter(coach=other_coach).exists()
         assert mailoutbox == []
 
+    def test_real_athlete_cannot_request_a_sandbox_coach(self, client, mailoutbox):
+        """The other side of the seam: the requester is real, the *target* isn't.
+
+        A sandbox coach's email is resolvable (it has a ``CoachProfile``) — a
+        real athlete submitting it must get exactly the unknown-email response
+        (no leak that the address exists), no pending link, and no mail queued
+        to the throwaway ``@sandbox.invalid`` address.
+        """
+        from store_project.meso.models import CoachAthlete
+
+        sandbox_coach = _sandbox_coach()
+        athlete = UserFactory()
+        client.force_login(athlete)
+
+        resp = client.post(
+            reverse("meso:athlete_request_coach"),
+            data={"email": sandbox_coach.email},
+            follow=True,
+        )
+
+        assert not CoachAthlete.objects.filter(
+            coach=sandbox_coach, athlete=athlete
+        ).exists()
+        assert mailoutbox == []
+        # Identical to the unknown-coach path: same flash, same landing.
+        body = resp.content.decode()
+        assert "find a coach with that email" in body
+
 
 class TestBillingGuards:
     def test_subscribe_is_disabled_for_a_sandbox_coach(self, client, settings):
@@ -556,6 +595,9 @@ class TestSandboxBanner:
         body = client.get(reverse("meso:roster")).content.decode()
         assert "live demo" in body.lower()
         assert reverse("meso:sandbox_signup") in body
+        # Carry-over is deferred (S6): signup starts a FRESH workspace — the
+        # banner must not promise the visitor keeps their sandbox work.
+        assert "keep your work" not in body
 
     def test_roster_shows_no_banner_for_a_real_coach(self, client):
         coach = UserFactory()
