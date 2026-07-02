@@ -80,6 +80,30 @@ class CoachProfile(models.Model):
         return self.display_name or self.user.display_name()
 
 
+class SandboxSession(models.Model):
+    """Marks a throwaway demo-sandbox coach account (issue #389).
+
+    A logged-out visitor to ``/meso/demo/`` gets a real, logged-in throwaway
+    coach ``User`` so every existing login-gated view / CSRF / scoping query
+    just works (``docs/meso/public-sandbox-demo-plan.md``). This row is the
+    marker the view-layer guards and the eventual expiry sweep key off —
+    distinct from ``is_demo`` (relationship/group-scoped demo *data*, not a
+    user-scoped sandbox *account*).
+    """
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="sandbox_session",
+    )
+    created = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(db_index=True)
+    source_ip = models.GenericIPAddressField(null=True, blank=True)
+
+    def __str__(self):
+        return f"Sandbox session for {self.user_id} (expires {self.expires_at})"
+
+
 class AthleteProfile(models.Model):
     """Cross-coach attributes that belong to the athlete, not to any one plan (D-b).
 
