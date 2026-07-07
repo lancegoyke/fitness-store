@@ -4,25 +4,32 @@ import django.db.models.deletion
 from django.db import migrations, models
 
 
-def clear_reshaped_program_data(apps, schema_editor):
-    """Pre-launch reshape (no data to preserve): clear the program/logging/agent/
-    override rows the fixed-lineup cutover reshapes so the schema ops below apply
-    cleanly to a *populated* dev/prod DB — the new NOT NULL ``Session.session_slot``
-    FK and the repointed ``prescription`` FKs would otherwise violate their
-    constraints against pre-existing rows. On a fresh test DB these tables are
-    already empty, so this is a no-op there. The demo is rebuilt post-deploy by
-    ``seed_meso_demo`` (idempotent). Plan/Mesocycle/Week rows are left intact — the
-    reseeder repopulates their slots/cells. Irreversible (reverse = no-op).
+def reset_program_data(apps, schema_editor):
+    """Pre-launch reshape (no data to preserve): delete every ``Plan`` so the
+    fixed-lineup schema ops below apply to empty program tables AND the demo
+    rebuilds cleanly post-deploy.
+
+    Deleting the plans cascades the WHOLE program hierarchy — mesocycles → weeks →
+    sessions → prescriptions/logs/deliveries, agent batches → proposed changes, and
+    the designer undo/redo ``PlanAction`` stacks — while leaving the coach/athlete/
+    group/subscription scaffolding intact (``Plan`` FKs *to* those; they are not
+    cascaded). This matters because:
+
+    - the new NOT NULL ``Session.session_slot`` FK and the repointed ``prescription``
+      FKs would otherwise violate their constraints against pre-existing rows;
+    - ``seed_meso_demo`` early-returns when ``plan.mesocycles.exists()`` and the group
+      path only builds when the shared plan is missing, so leaving empty
+      ``Mesocycle``/``Week`` shells behind would leave delivered-but-empty programs the
+      reseeder never rebuilds — deleting the plans resets to the fresh-DB state the
+      reseeder is built to populate (idempotent), which recreates the new-shape tree;
+    - stale ``PlanAction`` snapshots reference the retired per-week rows, so an undo
+      after the cutover would restore an old-shape snapshot with no slots/cells — the
+      cascade drops those stacks with their plans.
+
+    On a fresh test DB there are no plans, so this is a no-op there. Reseed with
+    ``manage.py seed_meso_demo`` after the deploy. Irreversible (reverse = no-op).
     """
-    for label in (
-        "LoggedSet",
-        "SessionLog",
-        "PrescriptionOverride",
-        "ProposedChange",
-        "ExercisePrescription",
-        "Session",
-    ):
-        apps.get_model("meso", label).objects.all().delete()
+    apps.get_model("meso", "Plan").objects.all().delete()
 
 
 class Migration(migrations.Migration):
@@ -33,9 +40,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunPython(
-            clear_reshaped_program_data, migrations.RunPython.noop
-        ),
+        migrations.RunPython(reset_program_data, migrations.RunPython.noop),
         migrations.RemoveField(
             model_name='exerciseprescription',
             name='exercise',
