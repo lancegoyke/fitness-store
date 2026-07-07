@@ -809,7 +809,8 @@ def sandbox_enter(request):
     messages.success(
         request,
         "You're in a live demo — explore freely. Create a free account any "
-        "time to run the AI agent.",
+        f"time to start a {CoachSubscription.TRIAL_DAYS}-day free trial and "
+        "run the AI agent.",
     )
     return _noindex(redirect("meso:roster"))
 
@@ -3089,7 +3090,11 @@ def agent_propose(request, plan_id):
         return JsonResponse(
             {
                 "ok": False,
-                "error": "Create a free account to run the AI agent.",
+                "error": (
+                    "Create a free account and start a "
+                    f"{CoachSubscription.TRIAL_DAYS}-day free trial to run "
+                    "the AI agent."
+                ),
                 "signup_required": True,
                 "signup_url": reverse("meso:sandbox_signup"),
             },
