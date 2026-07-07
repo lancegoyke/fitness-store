@@ -32,9 +32,11 @@
         {% elif is_empty and not show_meso_tour %}
           <!-- First-run onboarding (first-time-UX Phase 2): teach Invite → Build →
                Deliver and offer the one-click demo. Suppressed while the guided
-               demo tour (issue #430) is active — its own welcome step replaces
-               this card for a sandbox coach; a real coach (show_meso_tour is
-               always False in Phase 2) sees this exactly as before. -->
+               demo tour (issue #430) is actually mounted — its own welcome step
+               replaces this card while touring (sandbox or self). Once the tour
+               is dismissed/completed, ``tour_entry_available`` is False and the
+               CTA block below falls back to the original demo-only card, so
+               nothing is ever a dead end (guided-tour Phase 3). -->
           <div class="meso-card meso-card--pad" style="display:flex;flex-direction:column;gap:15px;">
             <div>
               <p class="meso-eyebrow" style="margin:0 0 4px;">Get started</p>
@@ -55,13 +57,30 @@
                 <div style="min-width:0;"><div class="meso-row-name">Deliver the week</div><div class="meso-row-meta">Push it to their phone; their logged results flow back to you.</div></div>
               </li>
             </ol>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-              <form method="post" action="{% url 'meso:demo_load' %}" style="margin:0;">
-                {% csrf_token %}
-                <button type="submit" class="meso-btn meso-btn--primary">Load a demo athlete &amp; program</button>
-              </form>
-              <span class="meso-sub" style="margin:0;">Not sure yet? Explore a populated workspace first — or invite your first athlete below.</span>
-            </div>
+            {% if tour_entry_available %}
+              <!-- Tour entry (guided-tour Phase 3): the roster's empty-state card
+                   is the on-ramp into the self-coaching tour for a real coach who
+                   hasn't started (or has dismissed/completed) it. -->
+              <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                <form method="post" action="{% url 'meso:tour_state' %}" style="margin:0;">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="restart" />
+                  <button type="submit" class="meso-btn meso-btn--primary">Start the guided tour</button>
+                </form>
+                <form method="post" action="{% url 'meso:demo_load' %}" style="margin:0;">
+                  {% csrf_token %}
+                  <button type="submit" class="meso-btn meso-btn--ghost">Load a demo athlete &amp; program</button>
+                </form>
+              </div>
+            {% else %}
+              <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                <form method="post" action="{% url 'meso:demo_load' %}" style="margin:0;">
+                  {% csrf_token %}
+                  <button type="submit" class="meso-btn meso-btn--primary">Load a demo athlete &amp; program</button>
+                </form>
+                <span class="meso-sub" style="margin:0;">Not sure yet? Explore a populated workspace first — or invite your first athlete below.</span>
+              </div>
+            {% endif %}
           </div>
         {% endif %}
 
@@ -168,7 +187,7 @@
               <span class="meso-row-meta">Inviting real athletes is off in the demo — <a href="{% url 'meso:sandbox_signup' %}" style="color:var(--accent);">create a free account</a>.</span>
             </div>
           {% else %}
-            <details style="border-top:1px solid var(--line-2);">
+            <details data-tour="roster-invite" style="border-top:1px solid var(--line-2);">
               <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent);">+ Invite an athlete</summary>
               <form method="post" action="{% url 'meso:coach_invite' %}" style="display:flex;gap:9px;padding:4px 16px 16px;">
                 {% csrf_token %}

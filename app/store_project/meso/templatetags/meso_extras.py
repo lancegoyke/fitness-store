@@ -36,5 +36,10 @@ def meso_tour_config(context):
     call eagerly here because ``_tour.html`` only calls this tag inside its
     ``{% if show_meso_tour %}`` guard — never on a page where the tour is
     hidden.
+
+    The variant (sandbox vs. self-coaching, Phase 3) is derived here via
+    ``variant_for`` rather than stored — the same user always resolves the
+    same way at any given moment (O7).
     """
-    return meso_tour.build_config(context["request"].user)
+    user = context["request"].user
+    return meso_tour.build_config(user, meso_tour.variant_for(user))

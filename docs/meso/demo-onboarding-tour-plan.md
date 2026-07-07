@@ -119,9 +119,12 @@ from data (O7).
    the tour auto-starts; each step's action posts its segment to `demo_load`
    (returning to the page it came from via a safe `next`); **skip ·
    load-everything** (`tour_skip`) and **dismiss** controls.
-3. **Real-coach tour** — the self-coaching variant of the steps; replace the
-   empty-state "Get started" card (`roster.html:32-63`) with the tour entry; the
-   agent step actually drafts for a trial coach. *(Depends on Phase 0 + 2.)*
+3. **Real-coach tour** — PR [#435](https://github.com/lancegoyke/fitness-store/pull/435) — the self-coaching variant of the steps
+   (variant derived from `is_sandbox`, never stored; typed per-step actions:
+   `roster_add_self`, `plan_create` for yourself, agent draft when
+   `can_use_agent`); the empty-state "Get started" card becomes the tour
+   entry ("Start the guided tour", demo load kept as the secondary; original
+   card returns once dismissed/completed). *(Depended on Phase 0 + 2.)*
 4. **Analytics + polish** — funnel events (start → per-step → finish, per-segment
    opt-in) via the `analytics` app; mobile bottom-sheet steps; keyboard/ARIA a11y;
    `prefers-reduced-motion`.

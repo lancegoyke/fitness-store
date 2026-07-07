@@ -1,19 +1,31 @@
-"""Guided demo onboarding tour — Phase 2 (issue #430).
+"""Guided demo onboarding tour — Phase 2 sandbox + Phase 3 real coach (#430).
 
 Phase 1 (``test_demo_segments.py``) split ``load_demo`` into idempotent
-per-feature segment loaders. This phase drives them from an in-app guided
-tour and flips ``create_sandbox`` to an **empty start** (the tour populates
-the workspace step by step instead). Covers:
+per-feature segment loaders. Phase 2 drove them from an in-app guided tour
+and flipped ``create_sandbox`` to an **empty start** (the tour populates the
+workspace step by step instead). Phase 3 extends the same eight steps to a
+real, authenticated coach: instead of loading fake demo data, the actions
+guide them to add *themselves* as an athlete and program for themselves
+(O5) — a distinct "self" variant of the config, derived per-request
+(``tour.variant_for``) rather than stored. Covers:
 
 - ``tour.STEPS`` data sanity (every ``url_name`` reverses, every named
-  segment exists in ``meso_demo.SEGMENTS``);
+  sandbox segment exists in ``meso_demo.SEGMENTS``, every step carries both
+  variants);
 - the ``tour.py`` helpers directly (``tour_status``/``is_active``/
-  ``start_tour``/``set_step``/``dismiss``/``complete``/``build_config``);
+  ``is_touring``/``variant_for``/``start_tour``/``set_step``/``dismiss``/
+  ``complete``/``build_config``);
 - ``create_sandbox``'s empty-start flip: a fresh sandbox has no demo data and
   an active tour parked at step 0;
 - the roster's tour mount + embedded config JSON — present for an active
-  sandbox coach, absent for a real coach, absent once dismissed/completed,
-  and the static "Get started" card is suppressed while touring;
+  sandbox coach or an explicitly-touring real coach, absent for a real coach
+  who never started (Phase 3's stricter gate) or dismissed/completed either
+  variant, and the static "Get started" card is suppressed while touring;
+- the self variant's build_config resolution: ``welcome``/``designer``/
+  ``agent`` steps' typed ``action``/``loaded`` gating off the coach's
+  self-link, working plan, and agent allowance;
+- the roster's empty-workspace tour-entry card (Phase 3) and its
+  ``tour_state`` "restart" hop into a mounted tour;
 - ``meso:tour_state`` (advance/back/goto clamp + persist, dismiss/complete
   persist, restart resets, anonymous -> login, AJAX vs. plain-POST shape);
 - ``meso:tour_skip`` (the O6 "skip · load everything" shortcut): loads the
@@ -28,7 +40,12 @@ from django.urls import reverse
 from store_project.meso import demo
 from store_project.meso import sandbox
 from store_project.meso import tour
+from store_project.meso.factories import AgentProposalBatchFactory
+from store_project.meso.factories import CoachAthleteFactory
+from store_project.meso.factories import PlanFactory
+from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachProfile
+from store_project.meso.models import CoachSubscription
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -50,10 +67,11 @@ class TestStepsSanity:
         for step in tour.STEPS:
             reverse(step["url_name"])  # raises NoReverseMatch on a typo
 
-    def test_every_named_segment_exists_in_demo_segments(self):
+    def test_every_named_sandbox_segment_exists_in_demo_segments(self):
         for step in tour.STEPS:
-            if step["segment"] is not None:
-                assert step["segment"] in demo.SEGMENTS
+            segment = step["sandbox"].get("segment")
+            if segment is not None:
+                assert segment in demo.SEGMENTS
 
     def test_eight_steps(self):
         assert len(tour.STEPS) == 8
@@ -61,6 +79,16 @@ class TestStepsSanity:
     def test_step_keys_are_unique(self):
         keys = [step["key"] for step in tour.STEPS]
         assert len(keys) == len(set(keys))
+
+    def test_every_step_carries_both_variants(self):
+        # Phase 3: shared key/url_name/anchor, variant-specific title/body/action.
+        for step in tour.STEPS:
+            assert "sandbox" in step
+            assert "self" in step
+            assert step["sandbox"]["title"]
+            assert step["sandbox"]["body"]
+            assert step["self"]["title"]
+            assert step["self"]["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +128,33 @@ class TestIsActive:
         coach.coach_profile.tour_state = {"step": 1, "status": status}
         coach.coach_profile.save(update_fields=["tour_state"])
         assert tour.is_active(coach) is False
+
+
+class TestIsTouring:
+    """The Phase 3 real-coach mount gate — stricter than ``is_active``."""
+
+    def test_never_started_is_not_touring(self):
+        # The one case that differs from is_active: a never-started `{}` is
+        # "active" (not hidden) but not explicitly touring.
+        coach = _coach()
+        assert tour.is_touring(coach) is False
+
+    def test_explicitly_started_is_touring(self):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        assert tour.is_touring(coach) is True
+
+    def test_in_progress_is_touring(self):
+        coach = _coach()
+        tour.set_step(coach.coach_profile, 2)
+        assert tour.is_touring(coach) is True
+
+    @pytest.mark.parametrize("status", ["dismissed", "completed"])
+    def test_hidden_statuses_are_not_touring(self, status):
+        coach = _coach()
+        coach.coach_profile.tour_state = {"step": 1, "status": status}
+        coach.coach_profile.save(update_fields=["tour_state"])
+        assert tour.is_touring(coach) is False
 
 
 class TestStartSetDismissComplete:
@@ -154,13 +209,21 @@ class TestStartSetDismissComplete:
 
 
 class TestBuildConfig:
+    """Exercises the sandbox variant explicitly — the Phase 2 contract, untouched.
+
+    ``build_config`` now takes a required ``variant`` (Phase 3) instead of
+    inferring it, so these calls pass ``"sandbox"`` explicitly; the coach
+    fixture (``_coach()``, no ``SandboxSession``) predates the variant split
+    and was always exercising the segment-based behavior these tests assert.
+    """
+
     def test_none_without_a_coach_profile(self):
         user = UserFactory()
-        assert tour.build_config(user) is None
+        assert tour.build_config(user, "sandbox") is None
 
     def test_carries_all_steps_with_resolved_urls(self):
         coach = _coach()
-        config = tour.build_config(coach)
+        config = tour.build_config(coach, "sandbox")
         assert len(config["steps"]) == len(tour.STEPS)
         for step, spec in zip(config["steps"], tour.STEPS):
             assert step["key"] == spec["key"]
@@ -168,19 +231,19 @@ class TestBuildConfig:
 
     def test_loaded_flags_start_false_and_flip_with_the_segment(self):
         coach = _coach()
-        config = tour.build_config(coach)
+        config = tour.build_config(coach, "sandbox")
         welcome = next(s for s in config["steps"] if s["key"] == "welcome")
         assert welcome["loaded"] is False
 
         demo.load_athletes(coach)
 
-        config = tour.build_config(coach)
+        config = tour.build_config(coach, "sandbox")
         welcome = next(s for s in config["steps"] if s["key"] == "welcome")
         assert welcome["loaded"] is True
 
     def test_steps_with_no_segment_have_no_loaded_flag(self):
         coach = _coach()
-        config = tour.build_config(coach)
+        config = tour.build_config(coach, "sandbox")
         profile_step = next(s for s in config["steps"] if s["key"] == "profile")
         assert profile_step["loaded"] is None
 
@@ -188,7 +251,7 @@ class TestBuildConfig:
         coach = _coach()
         tour.set_step(coach.coach_profile, 2)
 
-        config = tour.build_config(coach)
+        config = tour.build_config(coach, "sandbox")
 
         assert config["step"] == 2
         assert config["status"] == "active"
@@ -196,6 +259,167 @@ class TestBuildConfig:
         assert config["skip_url"] == reverse("meso:tour_skip")
         assert config["demo_load_url"] == reverse("meso:demo_load")
         assert config["signup_url"] == reverse("meso:sandbox_signup")
+
+    def test_sandbox_steps_never_carry_a_generic_action(self):
+        # The additive Phase 3 `action` field must stay null for every sandbox
+        # step — the driver's segment/signup_gate branches are untouched.
+        coach = _coach()
+        config = tour.build_config(coach, "sandbox")
+        for step in config["steps"]:
+            assert step["action"] is None
+
+
+class TestVariantFor:
+    def test_sandbox_coach_is_sandbox(self):
+        user = sandbox.create_sandbox()
+        assert tour.variant_for(user) == "sandbox"
+
+    def test_real_coach_is_self(self):
+        coach = _coach()
+        assert tour.variant_for(coach) == "self"
+
+    def test_anonymous_is_self(self):
+        # Never actually rendered (no CoachProfile, no page reaches this), but
+        # variant_for shouldn't itself blow up on a non-sandbox user.
+        user = UserFactory()
+        assert tour.variant_for(user) == "self"
+
+
+class TestBuildConfigSelfVariant:
+    """The self-coaching variant's data-dependent resolution (Phase 3, O5)."""
+
+    def test_welcome_offers_roster_add_self_and_is_unloaded_at_first(self):
+        coach = _coach()
+        config = tour.build_config(coach, "self")
+        welcome = next(s for s in config["steps"] if s["key"] == "welcome")
+        assert welcome["segment"] is None
+        assert welcome["loaded"] is False
+        assert welcome["action"] == {
+            "url": reverse("meso:roster_add_self"),
+            "label": "Add yourself as your first athlete",
+            "fields": {},
+        }
+
+    def test_welcome_loaded_flips_once_the_self_link_exists(self):
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+
+        config = tour.build_config(coach, "self")
+
+        welcome = next(s for s in config["steps"] if s["key"] == "welcome")
+        assert welcome["loaded"] is True
+        # Still offered (disabled "Done" state is the driver's job, not ours).
+        assert welcome["action"] is not None
+
+    def test_designer_has_no_action_without_a_self_link(self):
+        coach = _coach()
+        config = tour.build_config(coach, "self")
+        designer = next(s for s in config["steps"] if s["key"] == "designer")
+        assert designer["action"] is None
+        assert designer["loaded"] is False
+        assert "welcome step" in designer["body"]
+
+    def test_designer_offers_plan_create_once_the_self_link_exists(self):
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+
+        config = tour.build_config(coach, "self")
+
+        designer = next(s for s in config["steps"] if s["key"] == "designer")
+        assert designer["loaded"] is False
+        assert designer["action"] == {
+            "url": reverse("meso:plan_create", args=[coach.pk]),
+            "label": "Start a program for yourself",
+            "fields": {},
+        }
+
+    def test_designer_loaded_once_the_self_link_has_a_working_plan(self):
+        coach = _coach()
+        link = CoachAthlete.add_self(coach)
+        link.create_plan()
+
+        config = tour.build_config(coach, "self")
+
+        designer = next(s for s in config["steps"] if s["key"] == "designer")
+        assert designer["loaded"] is True
+        assert designer["action"] is not None
+
+    def test_agent_has_no_action_without_a_self_link(self):
+        coach = _coach()
+        config = tour.build_config(coach, "self")
+        agent = next(s for s in config["steps"] if s["key"] == "agent")
+        assert agent["action"] is None
+        assert agent["signup_gate"] is False
+
+    def test_agent_offers_the_draft_action_for_a_fresh_coach_with_a_self_link(self):
+        # A fresh coach has no CoachSubscription row → billing_status FREE,
+        # and FREE_AGENT_ALLOWANCE (5) > 0 runs used → can_use_agent is True.
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+
+        config = tour.build_config(coach, "self")
+
+        agent = next(s for s in config["steps"] if s["key"] == "agent")
+        assert agent["action"] == {
+            "url": reverse("meso:plan_create", args=[coach.pk]),
+            "label": "Draft next block with AI",
+            "fields": {"draft": "agent"},
+        }
+
+    def test_agent_has_no_action_once_the_free_allowance_is_exhausted(self):
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+        # An unrelated plan/relationship just to attribute the batches to this
+        # coach — the self-link's own plan stays empty throughout.
+        other_plan = PlanFactory(relationship=CoachAthleteFactory(coach=coach))
+        for _ in range(CoachSubscription.FREE_AGENT_ALLOWANCE):
+            AgentProposalBatchFactory(plan=other_plan, coach=coach)
+
+        config = tour.build_config(coach, "self")
+
+        agent = next(s for s in config["steps"] if s["key"] == "agent")
+        assert agent["action"] is None
+
+    def test_agent_has_no_action_once_a_working_plan_already_exists(self):
+        coach = _coach()
+        link = CoachAthlete.add_self(coach)
+        link.create_plan()
+
+        config = tour.build_config(coach, "self")
+
+        agent = next(s for s in config["steps"] if s["key"] == "agent")
+        assert agent["action"] is None
+
+    def test_finish_has_no_signup_gate_and_anchors_the_invite_control(self):
+        coach = _coach()
+        config = tour.build_config(coach, "self")
+        finish = next(s for s in config["steps"] if s["key"] == "finish")
+        assert finish["signup_gate"] is False
+        assert finish["anchor"] == "roster-invite"
+        assert "Invite your first real athlete" in finish["body"]
+
+    @pytest.mark.parametrize("key", ["profile", "deliver", "results", "groups"])
+    def test_static_steps_have_no_action_or_loaded_flag(self, key):
+        coach = _coach()
+        config = tour.build_config(coach, "self")
+        step = next(s for s in config["steps"] if s["key"] == key)
+        assert step["action"] is None
+        assert step["loaded"] is None
+        assert step["segment"] is None
+
+    def test_posting_roster_add_self_flips_welcome_and_unlocks_designer(self, client):
+        # An end-to-end version of the two tests above, through the real view.
+        coach = _coach()
+        client.force_login(coach)
+
+        client.post(reverse("meso:roster_add_self"))
+
+        config = tour.build_config(coach, "self")
+        welcome = next(s for s in config["steps"] if s["key"] == "welcome")
+        designer = next(s for s in config["steps"] if s["key"] == "designer")
+        assert welcome["loaded"] is True
+        assert designer["action"] is not None
+        assert designer["action"]["url"] == reverse("meso:plan_create", args=[coach.pk])
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +456,9 @@ class TestRosterTourMount:
         assert 'id="meso-tour-config"' in body
 
     def test_real_coach_never_sees_the_tour(self, client):
+        # A real coach who has never touched the tour: `{}` — not the literal
+        # `"active"` `is_touring` requires — so the tour never self-mounts
+        # (Phase 3's stricter real-coach gate; they opt in via the entry card).
         coach = _coach()
         client.force_login(coach)
 
@@ -239,6 +466,42 @@ class TestRosterTourMount:
 
         assert 'id="meso-tour"' not in body
         assert 'id="meso-tour-config"' not in body
+
+    def test_real_coach_with_an_explicitly_active_tour_sees_the_mount(self, client):
+        # Phase 3: a real coach who opted in (the entry card's "restart" POST,
+        # or here directly via start_tour) does get the mount.
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert 'id="meso-tour"' in body
+        assert 'id="meso-tour-config"' in body
+
+    def test_real_coachs_dismissed_tour_does_not_mount(self, client):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        tour.dismiss(coach.coach_profile)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert 'id="meso-tour"' not in body
+
+    def test_real_coachs_completed_tour_does_not_mount_and_original_card_returns(
+        self, client
+    ):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        tour.complete(coach.coach_profile)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert 'id="meso-tour"' not in body
+        assert "Welcome to your coaching workspace" in body
+        assert "Start the guided tour" not in body
 
     def test_dismissed_sandbox_coach_does_not_see_the_tour(self, client):
         user = sandbox.create_sandbox()
@@ -289,6 +552,88 @@ class TestRosterTourMount:
         assert config["step"] == 0
         assert config["status"] == "active"
         assert len(config["steps"]) == 8
+
+    def test_a_touring_real_coachs_config_uses_the_self_variant(self, client):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        start = body.index('id="meso-tour-config"')
+        script_start = body.index(">", start) + 1
+        script_end = body.index("</script>", script_start)
+        config = json.loads(body[script_start:script_end])
+
+        welcome = next(s for s in config["steps"] if s["key"] == "welcome")
+        assert welcome["segment"] is None
+        assert welcome["action"]["url"] == reverse("meso:roster_add_self")
+
+
+# ---------------------------------------------------------------------------
+# Roster: the empty-workspace tour-entry card (Phase 3) — replaces the static
+# Get-started card's CTA for a real coach who hasn't dismissed/completed the
+# tour, while leaving a dismissed/completed tour's card exactly as before.
+# ---------------------------------------------------------------------------
+
+
+class TestTourEntryCard:
+    def test_fresh_real_coach_sees_the_tour_entry_card(self, client):
+        coach = _coach()
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Welcome to your coaching workspace" in body
+        assert "Start the guided tour" in body
+
+    def test_dismissed_tour_shows_the_original_card_without_the_entry(self, client):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        tour.dismiss(coach.coach_profile)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Welcome to your coaching workspace" in body
+        assert "Start the guided tour" not in body
+
+    def test_completed_tour_shows_the_original_card_without_the_entry(self, client):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        tour.complete(coach.coach_profile)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Welcome to your coaching workspace" in body
+        assert "Start the guided tour" not in body
+
+    def test_a_non_empty_workspace_never_shows_the_get_started_card(self, client):
+        coach = _coach()
+        CoachAthleteFactory(coach=coach)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Welcome to your coaching workspace" not in body
+        assert "Start the guided tour" not in body
+
+    def test_posting_restart_from_the_entry_card_mounts_the_tour(self, client):
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:tour_state"), {"action": "restart"}, follow=True
+        )
+
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert 'id="meso-tour"' in body
+        assert 'id="meso-tour-config"' in body
+        assert CoachProfile.objects.get(user=coach).tour_state == {
+            "step": 0,
+            "status": "active",
+        }
 
 
 # ---------------------------------------------------------------------------

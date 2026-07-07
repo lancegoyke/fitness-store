@@ -1,123 +1,202 @@
-"""Guided demo onboarding tour — Phase 2 (issue #430).
+"""Guided demo onboarding tour — Phase 2 (sandbox) + Phase 3 (real coach), issue #430.
 
 Phase 1 (``docs/meso/demo-onboarding-tour-plan.md``) split ``demo.load_demo``
-into idempotent, per-feature segment loaders. This phase drives them one at a
-time from an in-app guided tour: eight steps, each introducing a feature and
-(where relevant) offering an "add sample data" action tied to one segment.
+into idempotent, per-feature segment loaders. Phase 2 drove them one at a time
+from an in-app guided tour for the anonymous sandbox. Phase 3 extends the same
+eight steps to a real, authenticated coach with an empty workspace: instead of
+loading fake demo athletes, they're guided to add *themselves* as an athlete
+and program for themselves (O5) — the self-coaching variant.
 
-``STEPS`` is the single source of truth — the front-end config
-(``build_config``), the tour-state endpoint, and the tests all read from it.
-Progress persists server-side on ``CoachProfile.tour_state`` (O2): only the
-step index + dismissed/complete flag are stored — whether a step's *data* is
-loaded is always derived (``has_athletes``/``has_program``/... via
-``_segment_loaded``), never stored (O7), mirroring ``demo.has_demo``.
+``STEPS`` is still the single source of truth, but each step now carries two
+sub-dicts, ``"sandbox"`` and ``"self"``, for the copy/action that vary by
+audience; ``key``/``url_name``/``anchor`` stay shared/top-level (a step's
+*page* is the same regardless of who's touring it — anchor overrides only
+where the spotlighted control itself differs, e.g. ``finish``'s
+"roster-invite"). ``build_config(user, variant)`` resolves whichever variant
+into the exact flat step shape the JS driver already consumed in Phase 2, plus
+one additive field (``action``) the self variant uses for its typed
+actions — sandbox steps still produce ``segment``/``action_label``/
+``signup_gate`` exactly as before, so the sandbox contract (front-end and
+tests) is untouched.
 
-Phase 2 is sandbox-only (``is_active``/``build_config`` don't gate on
-audience themselves — the caller, ``context_processors.sandbox_status``,
-combines this module's state check with ``sandbox.is_sandbox`` so a real
-coach's page never even calls into here). This module intentionally has no
-import of ``sandbox`` — ``sandbox.create_sandbox`` imports *this* module to
-seed the initial tour state, and keeping the dependency one-directional avoids
-a circular import.
+The **variant is derived, never stored** (O7 spirit, decision 2): a throwaway
+sandbox coach always gets ``"sandbox"``; every other authenticated coach gets
+``"self"``. ``tour_state`` keeps only the step index + dismissed/complete
+flag, exactly as in Phase 2 — nothing here persists *which* variant a coach
+is on.
+
+This module still has no *top-level* import of ``sandbox`` — ``sandbox.
+create_sandbox`` imports *this* module at the top level to seed the initial
+tour state, and a top-level import back would form a real cycle. ``variant_
+for`` breaks that with a deferred (function-body) import instead, which is
+safe because by the time any request calls it, both modules are fully loaded.
 """
 
 from django.urls import reverse
 
 from . import demo as meso_demo
+from .billing import access as billing_access
+from .models import CoachAthlete
 from .models import CoachProfile
 
-#: The 8-step sandbox tour (O2/O3). ``segment`` names a ``meso_demo.SEGMENTS``
-#: loader (or ``None`` when the step has no data action); ``anchor`` is the
-#: ``data-tour`` value spotlighted on the step's page (``None`` → centered
-#: card, no spotlight). ``url_name`` is reversed server-side into each step's
-#: "Take me there" link — every one of these is a bare, no-argument URL that
-#: already redirects to "the coach's current thing" (working plan / latest
-#: session / roster), so the tour never needs to know *which* athlete/plan.
+#: The 8-step tour (O2/O3), shared across audiences. ``url_name``/``anchor``
+#: are the step's "Take me there" target + spotlighted control — the same
+#: physical page/control regardless of variant (``finish`` is the one
+#: exception: the self variant overrides ``anchor`` in its own sub-dict,
+#: since a real coach spotlights the roster's invite control there instead of
+#: nothing). ``"sandbox"``/``"self"`` carry the varying title/body/action.
 STEPS = [
     {
         "key": "welcome",
-        "title": "Where your clients live",
-        "body": "This is your roster — every athlete you coach, at a glance. "
-        "Add 5 sample athletes to see it in action.",
         "url_name": "meso:roster",
         "anchor": "roster-individuals",
-        "segment": "athletes",
-        "action_label": "Add 5 sample athletes",
+        "sandbox": {
+            "title": "Where your clients live",
+            "body": "This is your roster — every athlete you coach, at a glance. "
+            "Add 5 sample athletes to see it in action.",
+            "segment": "athletes",
+            "action_label": "Add 5 sample athletes",
+        },
+        "self": {
+            "title": "Where your clients live",
+            "body": "This is your roster — every athlete you coach, at a glance. "
+            "Add yourself as your first athlete to see it in action.",
+            "action_label": "Add yourself as your first athlete",
+        },
     },
     {
         "key": "profile",
-        "title": "One athlete, one record",
-        "body": "Click into Maya to see her contraindications, training "
-        "history, and program — everything you need before you build for her.",
         "url_name": "meso:roster",
         "anchor": "roster-athlete-rows",
-        "segment": None,
-        "action_label": None,
+        "sandbox": {
+            "title": "One athlete, one record",
+            "body": "Click into Maya to see her contraindications, training "
+            "history, and program — everything you need before you build for her.",
+        },
+        "self": {
+            "title": "One athlete, one record",
+            "body": "Click into your own profile to see the same contraindications, "
+            "training history, and program view every athlete gets.",
+        },
     },
     {
         "key": "designer",
-        "title": "Program Designer",
-        "body": "The flagship: lay out a mesocycle week by week. Load a "
-        "sample program to see a full block.",
         "url_name": "meso:designer",
         "anchor": "designer-root",
-        "segment": "program",
-        "action_label": "Load a sample mesocycle",
+        "sandbox": {
+            "title": "Program Designer",
+            "body": "The flagship: lay out a mesocycle week by week. Load a "
+            "sample program to see a full block.",
+            "segment": "program",
+            "action_label": "Load a sample mesocycle",
+        },
+        "self": {
+            "title": "Program Designer",
+            "body": "The flagship: lay out a mesocycle week by week. Start a "
+            "program for yourself to see a full block take shape.",
+            "action_label": "Start a program for yourself",
+            # Shown instead of ``body`` when there's no self-link yet (the
+            # action itself is omitted too — step 1 has to come first).
+            "locked_body": "Add yourself as an athlete first (the welcome "
+            "step) — then come back here to build your own program.",
+        },
     },
     {
         "key": "deliver",
-        "title": "Deliver to their phone",
-        "body": "Push the current week straight to the athlete's phone — "
-        "she sees it the moment you send it.",
         "url_name": "meso:deliver",
         "anchor": "deliver-send",
-        "segment": "delivery",
-        "action_label": "Deliver the sample week",
+        "sandbox": {
+            "title": "Deliver to their phone",
+            "body": "Push the current week straight to the athlete's phone — "
+            "she sees it the moment you send it.",
+            "segment": "delivery",
+            "action_label": "Deliver the sample week",
+        },
+        "self": {
+            "title": "Deliver to your phone",
+            "body": "Push the current week straight to your own phone — "
+            "you'll see it the moment you send it, exactly like any athlete would.",
+        },
     },
     {
         "key": "results",
-        "title": "What actually happened",
-        "body": "Logged sets, adherence, and estimated 1RM flow back here "
-        "the moment she logs a session.",
         "url_name": "meso:results",
         "anchor": "results-main",
-        "segment": "log",
-        "action_label": "Log a sample session",
+        "sandbox": {
+            "title": "What actually happened",
+            "body": "Logged sets, adherence, and estimated 1RM flow back here "
+            "the moment she logs a session.",
+            "segment": "log",
+            "action_label": "Log a sample session",
+        },
+        "self": {
+            "title": "What actually happened",
+            "body": "Log your own sets from your phone at /meso/me/ — logged "
+            "sets, adherence, and estimated 1RM flow back here the moment you do.",
+        },
     },
     {
         "key": "groups",
-        "title": "Program a whole group at once",
-        "body": "Groups share one program with per-athlete auto-adjusts — "
-        "build it once, tune it per person.",
         "url_name": "meso:roster",
         "anchor": "roster-groups",
-        "segment": "group",
-        "action_label": "Add a sample group",
+        "sandbox": {
+            "title": "Program a whole group at once",
+            "body": "Groups share one program with per-athlete auto-adjusts — "
+            "build it once, tune it per person.",
+            "segment": "group",
+            "action_label": "Add a sample group",
+        },
+        "self": {
+            "title": "Program a whole group at once",
+            "body": "Groups share one program with per-athlete auto-adjusts — "
+            "built for when you're coaching several athletes together. Coaching "
+            "just yourself for now? Skip this one.",
+        },
     },
     {
         "key": "agent",
-        "title": "Adapt · the AI agent",
-        "body": "The agent reads an athlete's fatigue and adherence and "
-        "proposes next week's adjustments. Create a free account to run it "
-        "for real.",
         "url_name": "meso:designer",
         "anchor": "designer-root",
-        "segment": None,
-        "action_label": None,
-        # Sandbox-only step: no data action, just an explanation + the signup
-        # gate the agent endpoint already enforces (guards in test_sandbox.py).
-        "signup_gate": True,
+        "sandbox": {
+            "title": "Adapt · the AI agent",
+            "body": "The agent reads an athlete's fatigue and adherence and "
+            "proposes next week's adjustments. Create a free account to run it "
+            "for real.",
+            # Sandbox-only: no data action, just an explanation + the signup
+            # gate the agent endpoint already enforces (test_sandbox.py).
+            "signup_gate": True,
+        },
+        "self": {
+            "title": "Adapt · the AI agent",
+            "body": "The agent reads your fatigue and adherence and drafts "
+            "next week's adjustments. Draft your next block with it now.",
+            "action_label": "Draft next block with AI",
+            # Shown when the action isn't offered (no self-link yet, no agent
+            # allowance left, or a working plan already exists) — one generic
+            # explanation rather than three separate reasons (keep it simple).
+            "locked_body": "The agent drafts your next training block once "
+            "you're on your own roster with an active program — start a free "
+            "trial if you're not seeing this yet.",
+        },
     },
     {
         "key": "finish",
-        "title": "You're ready",
-        "body": "Create a free account to keep coaching for real — or "
-        "remove this demo data and start over.",
         "url_name": "meso:roster",
         "anchor": None,
-        "segment": None,
-        "action_label": None,
-        "signup_gate": True,
+        "sandbox": {
+            "title": "You're ready",
+            "body": "Create a free account to keep coaching for real — or "
+            "remove this demo data and start over.",
+            "signup_gate": True,
+        },
+        "self": {
+            "title": "You're ready",
+            "body": "Invite your first real athlete — your roster is yours from here.",
+            # Spotlights the roster's real "+ Invite an athlete" control
+            # (``data-tour="roster-invite"``) instead of the centered,
+            # anchor-less card the sandbox's signup-gated finish step uses.
+            "anchor": "roster-invite",
+        },
     },
 ]
 
@@ -125,7 +204,7 @@ STEPS = [
 _HIDDEN_STATUSES = {"dismissed", "completed"}
 
 #: segment name → the ``demo.has_*`` predicate that derives its loaded-ness
-#: (O7 — never stored, always read off the data).
+#: (O7 — never stored, always read off the data). Sandbox variant only.
 _HAS_PREDICATES = {
     "athletes": meso_demo.has_athletes,
     "program": meso_demo.has_program,
@@ -155,11 +234,48 @@ def tour_status(user):
 def is_active(user):
     """Whether the tour should still render for ``user`` (not dismissed/completed).
 
-    Doesn't check audience (sandbox vs. real coach) itself — Phase 2 callers
-    (``context_processors.sandbox_status``) combine this with
-    ``sandbox.is_sandbox`` before ever rendering anything.
+    Doesn't check audience (sandbox vs. real coach) itself, and doesn't
+    distinguish "never started" from "in progress" — both read as active
+    here. That's exactly right for the sandbox (whose tour is armed at step 0
+    the instant ``create_sandbox`` runs, so "never started" can't happen) and
+    for the roster's tour-entry-card decision (a real coach who never started
+    OR is mid-tour should never see the *original* Get-started card). It is
+    **not** the real-coach *mount* gate, though — a real coach's never-started
+    ``{}`` must not auto-mount the tour (O2); see ``is_touring`` for that
+    stricter check.
     """
     return tour_status(user).get("status") not in _HIDDEN_STATUSES
+
+
+def is_touring(user):
+    """Whether a real coach's tour is *explicitly* active right now (Phase 3 gate).
+
+    Unlike ``is_active`` (which also treats a never-started ``{}`` state as
+    active — fine for the sandbox, which is always armed from creation), a
+    real coach only sees the tour mounted once they've explicitly opted in —
+    the roster's "Start the guided tour" button, which fires ``tour_state``'s
+    ``restart`` action and always writes a literal ``status: "active"``. A
+    coach who has never touched the tour reads ``{}`` here (status ``None``,
+    not the string ``"active"``), so this is False and the tour never
+    self-mounts on them.
+    """
+    return tour_status(user).get("status") == "active"
+
+
+def variant_for(user):
+    """Which step variant applies to ``user`` — sandbox coach vs. real coach (O5).
+
+    Derived, never stored (decision 2): a throwaway sandbox coach gets the
+    fake-data ``"sandbox"`` steps; every other authenticated coach gets the
+    self-coaching ``"self"`` steps. The ``sandbox`` import is deferred to the
+    function body — ``sandbox.create_sandbox`` imports this module at the top
+    level, so importing it back at *this* module's top level would form a
+    real cycle; by the time any caller actually invokes this function both
+    modules are fully loaded, so the deferred import always succeeds.
+    """
+    from . import sandbox as meso_sandbox
+
+    return "sandbox" if meso_sandbox.is_sandbox(user) else "self"
 
 
 def start_tour(profile):
@@ -197,33 +313,151 @@ def _segment_loaded(user, segment):
     return bool(predicate(user)) if predicate else None
 
 
-def build_config(user):
-    """The front-end tour config.
+def _sandbox_step_fields(step, user):
+    """Resolve one step's sandbox-variant fields — byte-identical to Phase 2.
 
-    Every step (with a resolved URL + loaded state) plus the coach's current
-    progress and the endpoints the driver posts to. Returns ``None`` if
-    ``user`` has no ``CoachProfile`` to read progress from (defensive —
-    callers gate on ``is_active``/``is_sandbox`` first, and every sandbox
-    coach has one).
+    Produces the same ``segment``/``action_label``/``signup_gate``/``loaded``
+    keys the JS driver has always read; ``action`` (the Phase 3 generic form
+    action) is always ``None`` here, so ``resolveActionState`` never takes
+    that branch for a sandbox step.
+    """
+    spec = step["sandbox"]
+    segment = spec.get("segment")
+    return {
+        "title": spec["title"],
+        "body": spec["body"],
+        "anchor": step["anchor"],
+        "segment": segment,
+        "action_label": spec.get("action_label"),
+        "signup_gate": spec.get("signup_gate", False),
+        "action": None,
+        "loaded": _segment_loaded(user, segment),
+    }
+
+
+def _self_context(user):
+    """One-shot facts every dynamic self-variant step needs (computed once per call).
+
+    The welcome/designer/agent steps all key off the same self-link / working
+    -plan / agent-allowance state, so this is read once per ``build_config``
+    call rather than re-queried per step.
+    """
+    self_link = (
+        CoachAthlete.objects.for_coach(user).active().filter(is_self=True).first()
+    )
+    return {
+        "has_self_link": self_link is not None,
+        "has_plan": bool(self_link and self_link.working_plan()),
+        "can_use_agent": billing_access.can_use_agent(user),
+        # Cheap to resolve unconditionally (no query) — used only once a
+        # self-link exists, but harmless to compute either way.
+        "plan_create_url": reverse("meso:plan_create", args=[user.pk]),
+    }
+
+
+def _self_step_fields(step, ctx):
+    """Resolve one step's self-variant title/body/action/loaded/anchor (O5).
+
+    Only the three steps with a real data action branch on ``ctx``:
+
+    - ``welcome``: action always offered (``roster_add_self``); ``loaded`` —
+      and the driver's disabled "Done ✓" state — flips once the self-link
+      exists.
+    - ``designer``: action offered only once the self-link exists (posting
+      ``plan_create`` for the coach's own athlete id); ``loaded`` mirrors
+      whether that link already has a working plan. No self-link yet → no
+      action, and the body swaps to ``locked_body`` ("do step 1 first").
+    - ``agent``: action offered only when the self-link exists **and** the
+      coach still has agent allowance **and** there's no working plan yet
+      (mirrors the roster's "Draft with AI" gate); any other combination
+      falls back to the generic ``locked_body``, no ``loaded`` concept.
+
+    Every other step (profile/deliver/results/groups/finish) is static copy
+    with no action at all — the driver already renders an action-less step
+    fine (Next/Back + "Take me there" still work).
+    """
+    spec = step["self"]
+    key = step["key"]
+    title = spec["title"]
+    body = spec["body"]
+    anchor = spec.get("anchor", step["anchor"])
+    action = None
+    loaded = None
+
+    if key == "welcome":
+        loaded = ctx["has_self_link"]
+        action = {
+            "url": reverse("meso:roster_add_self"),
+            "label": spec["action_label"],
+            "fields": {},
+        }
+    elif key == "designer":
+        loaded = ctx["has_plan"]
+        if ctx["has_self_link"]:
+            action = {
+                "url": ctx["plan_create_url"],
+                "label": spec["action_label"],
+                "fields": {},
+            }
+        else:
+            body = spec["locked_body"]
+    elif key == "agent":
+        if ctx["has_self_link"] and ctx["can_use_agent"] and not ctx["has_plan"]:
+            action = {
+                "url": ctx["plan_create_url"],
+                "label": spec["action_label"],
+                "fields": {"draft": "agent"},
+            }
+        else:
+            body = spec["locked_body"]
+
+    return {
+        "title": title,
+        "body": body,
+        "anchor": anchor,
+        "action": action,
+        "loaded": loaded,
+    }
+
+
+def build_config(user, variant):
+    """The front-end tour config for ``user`` under ``variant``.
+
+    ``variant`` — ``"sandbox"`` or ``"self"`` — is resolved by the caller
+    (``variant_for``; O7: derived, never stored), so this stays a pure read
+    given the already-known audience. Every step gets its variant's resolved
+    title/body/action (``_sandbox_step_fields``/``_self_step_fields``) plus
+    the coach's current progress and the endpoints the driver posts to.
+    Returns ``None`` if ``user`` has no ``CoachProfile`` to read progress from
+    (defensive — callers gate on ``is_active``/``is_touring``/``is_sandbox``
+    first, and every sandbox coach has one).
     """
     profile = CoachProfile.objects.filter(user=user).first()
     if profile is None:
         return None
     state = profile.tour_state or {}
-    steps = [
-        {
-            "key": step["key"],
-            "title": step["title"],
-            "body": step["body"],
-            "url": reverse(step["url_name"]),
-            "anchor": step["anchor"],
-            "segment": step["segment"],
-            "action_label": step["action_label"],
-            "signup_gate": step.get("signup_gate", False),
-            "loaded": _segment_loaded(user, step["segment"]),
-        }
-        for step in STEPS
-    ]
+    self_ctx = _self_context(user) if variant == "self" else None
+    steps = []
+    for step in STEPS:
+        fields = (
+            _self_step_fields(step, self_ctx)
+            if variant == "self"
+            else _sandbox_step_fields(step, user)
+        )
+        steps.append(
+            {
+                "key": step["key"],
+                "title": fields["title"],
+                "body": fields["body"],
+                "url": reverse(step["url_name"]),
+                "anchor": fields["anchor"],
+                "segment": fields.get("segment"),
+                "action_label": fields.get("action_label"),
+                "signup_gate": fields.get("signup_gate", False),
+                "action": fields.get("action"),
+                "loaded": fields.get("loaded"),
+            }
+        )
     return {
         "steps": steps,
         "step": _clamp(state.get("step", 0)),

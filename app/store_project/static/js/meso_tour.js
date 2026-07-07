@@ -1,13 +1,16 @@
-/* Meso — guided demo onboarding tour driver (issue #430, Phase 2).
+/* Meso — guided demo onboarding tour driver (issue #430, Phase 2 sandbox +
+ * Phase 3 real-coach self-coaching variant).
  *
  * Hand-rolled vanilla JS (no Alpine, no CDN — mirrors meso_onboarding.js's
  * style): reads its config from a `json_script` element `_tour.html` embeds
  * (`#meso-tour-config`), then renders a spotlight + card overlay into the
  * server-rendered mount (`#meso-tour`) and drives it — Next/Back/dismiss
- * persist server-side via `fetch` to `state_url`; the per-step "add sample
- * data" action and the "skip · load everything" shortcut are real HTML
- * `<form method="post">`s (a full page reload, so Django's flash message +
- * the segment's freshly-true `loaded` flag show up the normal way).
+ * persist server-side via `fetch` to `state_url`; the per-step data action
+ * (sandbox: "add sample data" against a `segment`; self-coaching: a typed
+ * `action` — `roster_add_self`/`plan_create` — Phase 3) and the "skip · load
+ * everything" shortcut are real HTML `<form method="post">`s (a full page
+ * reload, so Django's flash message + the freshly-true `loaded` flag show up
+ * the normal way).
  *
  * The pure decision logic (step clamping/advance, anchor-retry cutoff, config
  * parsing, per-step action state, current-page detection) is unit-tested
@@ -66,9 +69,12 @@
   }
 
   // What the step's action control should look like, given its `segment`
-  // (data-loading action) / `signup_gate` (sandbox agent+finish steps) /
-  // `loaded` (O7 — derived, never stored) fields. Returns null for a step
-  // with no action at all (e.g. the "profile" step).
+  // (sandbox data-loading action) / `action` (Phase 3 self-variant typed
+  // form action — `{url, label, fields}`) / `signup_gate` (sandbox
+  // agent+finish steps) / `loaded` (O7 — derived, never stored) fields.
+  // Returns null for a step with no action at all (e.g. the "profile" step).
+  // `segment` and `action` are mutually exclusive in practice (sandbox steps
+  // carry the former, self-variant steps the latter), checked in that order.
   function resolveActionState(step) {
     if (!step) return null;
     if (step.segment) {
@@ -77,6 +83,15 @@
         : {
             kind: "segment",
             label: step.action_label || "Add sample data",
+            disabled: false,
+          };
+    }
+    if (step.action) {
+      return step.loaded
+        ? { kind: "form", label: "Done ✓", disabled: true }
+        : {
+            kind: "form",
+            label: step.action.label || "Continue",
             disabled: false,
           };
     }
@@ -212,6 +227,38 @@
         '<input type="hidden" name="next" value="' +
         escapeHtml(root.location.pathname + root.location.search) +
         '">' +
+        '<button type="submit" class="meso-btn meso-btn--primary"' +
+        (action.disabled ? " disabled" : "") +
+        ">" +
+        escapeHtml(action.label) +
+        "</button></form>";
+    } else if (action && action.kind === "form") {
+      // Self-variant typed action (Phase 3): a real form POST straight to the
+      // resolved endpoint (`roster_add_self` / `plan_create`) with whatever
+      // hidden fields the step specifies (e.g. `draft=agent`). No `next` field
+      // — unlike the sandbox's segment action, these endpoints already
+      // redirect to the right place (roster / the designer), which the plan
+      // deliberately leans on rather than fighting.
+      var fields = (step.action && step.action.fields) || {};
+      var fieldsHtml = Object.keys(fields)
+        .map(function (name) {
+          return (
+            '<input type="hidden" name="' +
+            escapeHtml(name) +
+            '" value="' +
+            escapeHtml(fields[name]) +
+            '">'
+          );
+        })
+        .join("");
+      actionHtml =
+        '<form method="post" action="' +
+        escapeHtml(step.action.url) +
+        '" class="meso-tour-action-form">' +
+        '<input type="hidden" name="csrfmiddlewaretoken" value="' +
+        csrf +
+        '">' +
+        fieldsHtml +
         '<button type="submit" class="meso-btn meso-btn--primary"' +
         (action.disabled ? " disabled" : "") +
         ">" +
