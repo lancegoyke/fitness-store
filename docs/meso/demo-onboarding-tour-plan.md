@@ -113,10 +113,12 @@ from data (O7).
    `segment` POST field (no URL change). `load_demo` stays the aggregate;
    `create_sandbox` **still eager-loads** so nothing changes for users yet.
    Pure plumbing + tests.
-2. **Sandbox tour** *(the visible change)* — tour engine (coach-mark driver +
-   server-persisted step state); flip `create_sandbox` to **empty-start**;
-   auto-start the tour; wire each step's action to its segment endpoint; add the
-   **skip · load-everything** and **dismiss** controls.
+2. **Sandbox tour** *(the visible change)* — PR [#434](https://github.com/lancegoyke/fitness-store/pull/434) — tour engine
+   (hand-rolled coach-mark driver `meso_tour.js` + step state persisted on
+   `CoachProfile.tour_state`); `create_sandbox` flipped to **empty-start**;
+   the tour auto-starts; each step's action posts its segment to `demo_load`
+   (returning to the page it came from via a safe `next`); **skip ·
+   load-everything** (`tour_skip`) and **dismiss** controls.
 3. **Real-coach tour** — the self-coaching variant of the steps; replace the
    empty-state "Get started" card (`roster.html:32-63`) with the tour entry; the
    agent step actually drafts for a trial coach. *(Depends on Phase 0 + 2.)*

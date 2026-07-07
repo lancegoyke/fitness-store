@@ -100,6 +100,11 @@ urlpatterns = [
     # The sandbox's conversion hop: log a sandbox coach out, then hand off to
     # allauth signup (issue #389, Phase 1).
     path("demo/signup/", views.sandbox_signup, name="sandbox_signup"),
+    # Guided demo onboarding tour (issue #430, Phase 2): advance/back/goto/
+    # dismiss/complete/restart the step index, and the "skip · load
+    # everything" shortcut (O6).
+    path("tour/state/", views.tour_state, name="tour_state"),
+    path("tour/skip/", views.tour_skip, name="tour_skip"),
     path("group/new/", views.group_create, name="group_create"),
     path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
     path("group/<int:pk>/design/", views.group_design, name="group_design"),

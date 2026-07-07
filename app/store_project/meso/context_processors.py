@@ -1,6 +1,7 @@
 from django.utils.functional import SimpleLazyObject
 
 from . import sandbox
+from . import tour
 from .models import CoachSubscription
 
 
@@ -16,10 +17,24 @@ def sandbox_status(request):
 
     Lazy: pages that never reference ``is_sandbox`` in their template pay no
     extra query.
+
+    ``show_meso_tour`` (guided-tour Phase 2, issue #430) is the same kind of
+    cheap gate for ``_tour.html``: *whether* to render the tour at all, not
+    the tour's own content (that's a plain dict built by the
+    ``meso_tour_config`` template tag, called only inside the ``{% if
+    show_meso_tour %}`` guard — a lazy proxy can't be fed straight into
+    ``json_script``, since the C-accelerated JSON encoder only recognizes a
+    real ``dict``, not a ``SimpleLazyObject`` wrapping one). Phase 2 is
+    sandbox-only, so this short-circuits on ``is_sandbox`` before ever
+    touching ``tour_state`` — a real coach's page still does zero extra
+    queries.
     """
+    user = getattr(request, "user", None)
+    is_sandbox_lazy = SimpleLazyObject(lambda: sandbox.is_sandbox(user))
     return {
-        "is_sandbox": SimpleLazyObject(
-            lambda: sandbox.is_sandbox(getattr(request, "user", None))
-        ),
+        "is_sandbox": is_sandbox_lazy,
         "trial_days": CoachSubscription.TRIAL_DAYS,
+        "show_meso_tour": SimpleLazyObject(
+            lambda: bool(is_sandbox_lazy) and tour.is_active(user)
+        ),
     }
