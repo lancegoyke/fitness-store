@@ -27,6 +27,7 @@ from django.urls import reverse
 
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachProfile
+from store_project.meso.models import CoachSubscription
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -104,6 +105,19 @@ class TestLandingContent:
         # The Designer is a coach-only surface; the anonymous landing's topnav
         # must not link to it.
         assert reverse("meso:designer") not in body
+
+    def test_landing_names_the_free_trial(self, client):
+        """The funnel sells the trial, not just the free tier (issue #416).
+
+        Renders from ``CoachSubscription.TRIAL_DAYS`` so a future constant
+        change can't leave the landing copy stale.
+        """
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        assert "free trial" in body.lower()
+        assert f"{CoachSubscription.TRIAL_DAYS} days" in body
+        # The demo card's gate line points the limitation at the trial too.
+        assert "held back" in body.lower()
 
 
 # ---------------------------------------------------------------------------

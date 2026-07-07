@@ -50,6 +50,7 @@ from store_project.meso import sandbox
 from store_project.meso import tasks
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachProfile
+from store_project.meso.models import CoachSubscription
 from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
 from store_project.meso.models import SandboxSession
@@ -656,6 +657,20 @@ class TestSandboxBanner:
         # Carry-over is deferred (S6): signup starts a FRESH workspace — the
         # banner must not promise the visitor keeps their sandbox work.
         assert "keep your work" not in body
+
+    def test_banner_points_at_the_free_trial_not_the_free_tier(self, client):
+        """The banner sells the trial, not the weaker free tier (issue #416).
+
+        Full access lives behind the trial (the free tier caps at 5 agent
+        runs/mo); renders from ``CoachSubscription.TRIAL_DAYS`` so a future
+        constant change can't leave the banner stale.
+        """
+        coach = _sandbox_coach()
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+        assert "free trial" in body.lower()
+        assert f"{CoachSubscription.TRIAL_DAYS}-day free trial" in body
 
     def test_roster_shows_no_banner_for_a_real_coach(self, client):
         coach = UserFactory()

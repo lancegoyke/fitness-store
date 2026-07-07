@@ -311,7 +311,13 @@ class RosterView(TemplateView):
             return render(
                 request,
                 "meso/landing.html",
-                {"athlete_next": reverse("meso:athlete_home")},
+                {
+                    "athlete_next": reverse("meso:athlete_home"),
+                    # Names the trial on the coach card + demo card (issue #416)
+                    # — same value ``become_coach`` exposes, so a future
+                    # ``TRIAL_DAYS`` change can't leave the landing copy stale.
+                    "trial_days": CoachSubscription.TRIAL_DAYS,
+                },
             )
         if not _is_coach(request.user):
             return redirect("meso:athlete_home")
