@@ -81,7 +81,13 @@ def _active_contraindications(user):
 
 
 def roster_athlete(
-    user, *, suspended=False, demo=False, has_working_plan=False, compliance=None
+    user,
+    *,
+    suspended=False,
+    demo=False,
+    self_link=False,
+    has_working_plan=False,
+    compliance=None,
 ):
     """A row in the coach's roster list.
 
@@ -90,6 +96,8 @@ def roster_athlete(
     within the free cap. It surfaces as a warning badge so the coach sees *which*
     athletes are frozen, not just that they're over the limit. ``demo`` marks a
     one-click-demo athlete (first-time-UX Phase 2) so the row is clearly labeled.
+    ``self_link`` marks the coach's own self-coaching row (guided-tour Phase 0) so
+    the coach-as-athlete is legible in the list ("You" badge).
     ``has_working_plan`` lets the roster hide the "Draft with AI" CTA for an
     athlete who already has a program (drafting only runs for a fresh plan).
     ``compliance`` is the athlete's adherence to their latest delivered week
@@ -111,6 +119,7 @@ def roster_athlete(
         "status": "suspended" if suspended else "",
         "status_label": "Suspended" if suspended else "",
         "is_demo": demo,
+        "is_self": self_link,
         "has_working_plan": has_working_plan,
     }
 
@@ -388,11 +397,14 @@ def relationship_history(coach):
       ``pending_coach_invite``, which the athlete sees on their training home and
       which is surfaced nowhere else).
 
-    Demo relationships are excluded — history is about real past clients.
+    Demo relationships are excluded — history is about real past clients. So is
+    an ended self-link: the roster's "Add yourself as an athlete" affordance is
+    its reopen path, not a "re-invite" (you can't re-invite yourself).
     """
     links = (
         CoachAthlete.objects.for_coach(coach)
         .exclude(is_demo=True)
+        .exclude(is_self=True)
         .filter(status__in=list(_HISTORY_STATUS_LABELS))
         .select_related("athlete")
     )

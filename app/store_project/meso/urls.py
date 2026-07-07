@@ -83,6 +83,9 @@ urlpatterns = [
         views.unsubscribe_delivery_email,
         name="unsubscribe_delivery_email",
     ),
+    # Self-coaching (guided-tour Phase 0): put the coach on their own roster
+    # ("self" isn't a UUID, so this never shadows ``athlete/<uuid:pk>/``).
+    path("athlete/self/add/", views.roster_add_self, name="roster_add_self"),
     path("athlete/<uuid:pk>/", AthleteProfileView.as_view(), name="athlete"),
     # Create (or open) an individual program for an athlete (first-time-UX
     # Phase 1) — the "+ New program" / "Build a program" CTAs.

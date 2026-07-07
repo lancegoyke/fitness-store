@@ -362,6 +362,7 @@ class RosterView(TemplateView):
                 link.athlete,
                 suspended=link.pk in suspended,
                 demo=link.is_demo,
+                self_link=link.is_self,
                 has_working_plan=link.pk in have_plan,
                 # Adherence to the athlete's latest delivered week (read-side
                 # aggregation over their done logs); ``None`` hides the meter.
@@ -409,6 +410,9 @@ class RosterView(TemplateView):
         # once demo data is loaded a banner offers to remove it (Q3).
         ctx["has_demo"] = meso_demo.has_demo(self.request.user)
         ctx["is_empty"] = not athletes and not ctx["groups"]
+        # Self-coaching (guided-tour Phase 0): the roster offers "Add yourself as
+        # an athlete" until the coach's one self-link is active.
+        ctx["has_self_link"] = any(link.is_self for link in links)
         return ctx
 
 
@@ -851,6 +855,27 @@ def demo_clear(request):
     """Remove exactly this coach's demo data (never their real data) — the teardown."""
     meso_demo.clear_demo(request.user)
     messages.success(request, "Demo data removed.")
+    return redirect("meso:roster")
+
+
+@login_required
+@require_POST
+def roster_add_self(request):
+    """Put the coach on their own roster as an athlete (guided-tour Phase 0).
+
+    Self-coaching: the link goes straight to ``active`` (no invite dance) and is
+    never a paid seat (``is_self`` is excluded from ``billable()``), so there's
+    no ``can_add_athlete`` gate here — mirroring the demo loader. Idempotent:
+    re-posting reuses the one self-link ``unique(coach, athlete)`` allows.
+    """
+    # Like demo_load: adding yourself is an implicit "I'm coaching now", so make
+    # sure the CoachProfile exists rather than minting a coach via a side door.
+    CoachProfile.objects.get_or_create(user=request.user)
+    CoachAthlete.add_self(request.user)
+    messages.success(
+        request,
+        "You're on your roster — build a program for yourself like any athlete.",
+    )
     return redirect("meso:roster")
 
 
@@ -1533,6 +1558,12 @@ def relationship_reinvite(request, token):
     Locks the row so a re-invite can't race a concurrent claim. The pending peer
     link is then visible on this page's "Reconnecting" list (surfaced nowhere
     else), so the coach can see where the re-invited athlete went.
+
+    Defense-in-depth: an ended self-link is excluded from this page (its reopen
+    path is the roster's "Add yourself as an athlete" affordance), but a
+    hand-crafted POST could still hit its token. ``CoachAthlete.invite`` would
+    raise ``InvalidTransition`` for a coach == athlete pair, so reopen it the
+    same way the roster does instead of 500ing.
     """
     with transaction.atomic():
         link = get_object_or_404(
@@ -1542,6 +1573,10 @@ def relationship_reinvite(request, token):
         )
         if not link.is_closed:
             messages.info(request, "That relationship isn't closed.")
+            return redirect("meso:relationship_history")
+        if link.is_self:
+            CoachAthlete.add_self(request.user)
+            messages.success(request, "You're back on your roster.")
             return redirect("meso:relationship_history")
         # Seat gate (D4): accepting the re-invite would consume a billable seat.
         if not billing_access.can_add_athlete(request.user):
