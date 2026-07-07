@@ -6,8 +6,10 @@
 {% comment %}
 First-time-UX Phase 3: the public front door. ``/meso/`` renders this for an
 anonymous visitor (RosterView splits on auth) instead of bouncing to login.
-Login-free and coach-nav-free — it explains Meso in one screen and offers two
-honest entry actions: log in as an athlete, or become a coach.
+Login-free and coach-nav-free — it explains Meso in one screen and offers
+honest entry actions: try the no-signup demo, start a free trial as a coach,
+or (for existing athletes) log in. Issue #417 re-weights these for the cold
+visitor — demo/trial lead, athlete login is a compact strip, not a card.
 {% endcomment %}
 
 {# Public page — keep the logged-in coach nav (Roster/Designer) out of it. #}
@@ -24,6 +26,12 @@ honest entry actions: log in as an athlete, or become a coach.
         <p class="meso-eyebrow">Coaching, periodized</p>
         <h1 class="meso-h1">Programs that adapt — delivered to the phone.</h1>
         <p class="meso-sub">Meso is where coaches design periodized training and deliver it straight to their athletes' phones. An AI agent drafts the week-to-week adjustments; the coach approves them. Athletes log their sessions and watch their lifts climb.</p>
+        <!-- The hero's own CTA pair (issue #417) — a cold visitor's first click
+             shouldn't require scanning the cards below. -->
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+          <a class="meso-btn meso-btn--primary" href="{% url 'meso:sandbox_enter' %}">Try the demo — no signup</a>
+          <a class="meso-btn meso-btn--ghost" href="{% url 'meso:become_coach' %}">Start your free trial</a>
+        </div>
       </div>
       {% comment %}
       Step 1 of issue #415 — a static screenshot of the Designer (a real,
@@ -42,18 +50,19 @@ honest entry actions: log in as an athlete, or become a coach.
       />
     </div>
 
-    <!-- Three entry actions: athlete (log in), coach (become a coach), and a
-         no-signup demo sandbox (issue #389). -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:18px;">
+    <!-- Two entry actions for the cold visitor, demo first (issue #417): a
+         no-signup demo sandbox (issue #389), then become a coach. Existing
+         athletes get a compact strip below, not a full card — the nav already
+         offers Log in and they don't need selling. -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:14px;">
       <div class="meso-card meso-card--pad">
-        <span class="meso-badge meso-badge--ok"><i></i>Athletes</span>
-        <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:10px 0 4px;">Already training with a coach?</p>
-        <p class="meso-row-meta" style="margin-bottom:14px;">Your coach builds your week and sends it to your phone. Log in to see your training, log every set, and track your 1RMs.</p>
+        <span class="meso-badge meso-badge--muted"><i></i>No signup</span>
+        <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:10px 0 4px;">Try the coach demo</p>
+        <p class="meso-row-meta" style="margin-bottom:14px;">No signup. Land in a populated workspace and build a real program.</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <a class="meso-btn meso-btn--primary" href="{% url 'account_login' %}?next={{ athlete_next|urlencode }}">Log in to your training</a>
-          <a class="meso-btn meso-btn--ghost" href="{% url 'account_signup' %}?next={{ athlete_next|urlencode }}">Create an account</a>
+          <a class="meso-btn meso-btn--primary" href="{% url 'meso:sandbox_enter' %}">Launch the demo</a>
         </div>
-        <p class="meso-row-meta" style="margin-top:12px;">Invited by email? Tap the link in your invite to get started.</p>
+        <p class="meso-row-meta" style="margin-top:12px;">Fully interactive — only the AI agent is held back. That's yours on a free trial.</p>
       </div>
 
       <div class="meso-card meso-card--pad">
@@ -65,16 +74,14 @@ honest entry actions: log in as an athlete, or become a coach.
         </div>
         <p class="meso-row-meta" style="margin-top:12px;">See what Meso does for coaches and pick a plan.</p>
       </div>
+    </div>
 
-      <div class="meso-card meso-card--pad">
-        <span class="meso-badge meso-badge--muted"><i></i>No signup</span>
-        <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:10px 0 4px;">Try the coach demo</p>
-        <p class="meso-row-meta" style="margin-bottom:14px;">No signup. Land in a populated workspace and build a real program.</p>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <a class="meso-btn meso-btn--primary" href="{% url 'meso:sandbox_enter' %}">Try the demo</a>
-        </div>
-        <p class="meso-row-meta" style="margin-top:12px;">Fully interactive — only the AI agent is held back. That's yours on a free trial.</p>
-      </div>
+    <!-- Athletes already have a coach — the nav's Log in link covers them
+         twice over (store nav + Meso topnav), so this is a strip, not a
+         card (issue #417). No signup link: cold athletes without an invite
+         aren't a real entry path, since coaches invite them. -->
+    <div class="meso-card meso-card--pad" style="text-align:center;margin-bottom:18px;">
+      <span class="meso-row-meta">Training with a coach? <a href="{% url 'account_login' %}?next={{ athlete_next|urlencode }}" style="color:var(--accent);font-weight:600;">Log in to your training</a> — or tap the link in your email invite.</span>
     </div>
 
     <!-- How it works, one line each. -->
