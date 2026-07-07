@@ -42,7 +42,7 @@
          reveals it only when the app is installable and not already installed or
          dismissed, and swaps in the native button vs the manual iOS steps. -->
     <div id="meso-install-card" class="meso-card meso-card--pad"
-         style="display:none;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent-ink);">
+         style="display:none;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent);">
       <span style="font-size:18px;line-height:1.3;">📲</span>
       <span style="flex:1;min-width:0;">
         <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Install Meso on your phone</span>
@@ -98,7 +98,7 @@
       {% endfor %}
 
       <details {% if not pending.invites and not pending.requests %}open{% endif %} style="margin-top:6px;">
-        <summary style="list-style:none;cursor:pointer;font-size:12.5px;font-weight:650;color:var(--accent-ink);">+ Request a coach</summary>
+        <summary style="list-style:none;cursor:pointer;font-size:12.5px;font-weight:650;color:var(--accent);">+ Request a coach</summary>
         <form method="post" action="{% url 'meso:athlete_request_coach' %}" style="display:flex;gap:9px;margin-top:10px;">
           {% csrf_token %}
           <input name="email" type="email" required maxlength="254" placeholder="coach@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
@@ -113,7 +113,7 @@
            until the athlete's first log lands), so it's one-time + cross-device;
            meso_onboarding.js persists a manual dismiss across reloads. -->
       <div class="meso-card meso-card--pad" data-coachmark-key="firstlog-home"
-           style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent-ink);">
+           style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent);">
         <span style="font-size:18px;line-height:1.3;">👇</span>
         <span style="flex:1;min-width:0;">
           <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">New here? Log your first workout</span>
