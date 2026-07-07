@@ -10,6 +10,34 @@
     {% endcomment %}
     {% block head_top %}{% endblock %}
     <title>{% block title %}Meso{% endblock %} · Mastering Fitness</title>
+    {% comment %}
+      Search + social metadata (issue #418). ``meta_description`` carries both
+      the plain description and og:description together — one block, so the two
+      can never drift apart — with a sensible sitewide default; ``landing.html``
+      overrides it with marketing copy. ``og:title`` can't literally reuse the
+      ``title`` block above (Django forbids the same block name twice in one
+      template), so pages that customize ``title`` should mirror it here too.
+      ``og:url``/``og:image`` need ``request`` (absent only outside the normal
+      request/response cycle — every Meso page, including the
+      service-worker-precached ``offline.html``, renders through a real Django
+      view, so this is defensive, not load-bearing today).
+    {% endcomment %}
+    {% block meta_description %}
+      <meta name="description" content="Meso is coaching software for building periodized training programs and delivering them to athletes' phones." />
+      <meta property="og:description" content="Meso is coaching software for building periodized training programs and delivering them to athletes' phones." />
+    {% endblock %}
+    <meta property="og:title" content="{% block og_title %}Meso · Mastering Fitness{% endblock %}" />
+    <meta property="og:type" content="website" />
+    {% if request %}<meta property="og:url" content="{{ request.build_absolute_uri }}" />{% endif %}
+    {% block og_image %}
+      {% if request %}
+        {% static 'webp/meso-landing-designer.webp' as og_image_static %}
+        <meta property="og:image" content="{{ og_image_static|absolute_uri:request }}" />
+        <meta property="og:image:width" content="1280" />
+        <meta property="og:image:height" content="800" />
+      {% endif %}
+    {% endblock %}
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="shortcut icon" href="{% static 'png/favicon-black.png' %}" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
