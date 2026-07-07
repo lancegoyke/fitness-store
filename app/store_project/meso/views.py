@@ -815,14 +815,11 @@ def sandbox_enter(request):
     # Two auth backends are configured (ModelBackend + allauth) — login() can't
     # infer which one, so it must be named explicitly.
     login(request, user, backend="django.contrib.auth.backends.ModelBackend")
-    # No "keep your work" promise: carry-over at signup is deferred (S6) — a
-    # new account starts a fresh workspace.
-    messages.success(
-        request,
-        "You're in a live demo — explore freely. Create a free account any "
-        f"time to start a {CoachSubscription.TRIAL_DAYS}-day free trial and "
-        "run the AI agent.",
-    )
+    # No welcome flash: the persistent sandbox banner (_meso_base.html) already
+    # says "You're in a live demo" on every screen, so a flash on entry only
+    # duplicated it on the roster (issue #425). Carry-over at signup is deferred
+    # (S6) — a new account starts a fresh workspace, and neither surface promises
+    # kept work.
     return _noindex(redirect("meso:roster"))
 
 

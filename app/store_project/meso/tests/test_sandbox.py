@@ -209,15 +209,19 @@ class TestSandboxEnterView:
         assert resp.status_code == 200
         assert b"Roster" in resp.content
 
-    def test_welcome_flash_does_not_promise_kept_work(self, client):
-        """No "keep your work" over-promise in the welcome flash.
+    def test_entry_shows_a_single_live_demo_message(self, client):
+        """Landing on the roster shows the "live demo" message exactly once.
+
+        The persistent sandbox banner (_meso_base.html) already carries it on
+        every screen; a welcome flash on entry duplicated it on the roster
+        (issue #425). The banner is the single source of that copy now.
 
         Carry-over is deferred (S6): signup starts a FRESH workspace, so no
         copy may promise the visitor keeps their sandbox work.
         """
         resp = client.get(reverse("meso:sandbox_enter"), follow=True)
         body = resp.content.decode()
-        assert "You&#x27;re in a live demo" in body  # the flash rendered
+        assert body.lower().count("live demo") == 1  # the banner, not also a flash
         assert "keep your work" not in body
 
     def test_expiry_is_about_48_hours_out(self, client):
