@@ -67,7 +67,7 @@
             <p class="meso-eyebrow" style="margin:0;">Individuals</p>
             <div class="meso-spacer"></div>
             <span class="meso-row-meta">{{ athletes|length }} athlete{{ athletes|length|pluralize }}</span>
-            <a href="{% url 'meso:relationship_history' %}" class="meso-row-meta" style="text-decoration:none;color:var(--accent-ink);white-space:nowrap;">· Past athletes →</a>
+            <a href="{% url 'meso:relationship_history' %}" class="meso-row-meta" style="text-decoration:none;color:var(--accent);white-space:nowrap;">· Past athletes →</a>
           </div>
           {% for a in athletes %}
             <a class="meso-row" href="{% url 'meso:athlete' a.id %}">
@@ -157,11 +157,11 @@
                address should ever be entered into a throwaway sandbox account. -->
           {% if is_sandbox %}
             <div style="border-top:1px solid var(--line-2);padding:11px 16px;">
-              <span class="meso-row-meta">Inviting real athletes is off in the demo — <a href="{% url 'meso:sandbox_signup' %}" style="color:var(--accent-ink);">create a free account</a>.</span>
+              <span class="meso-row-meta">Inviting real athletes is off in the demo — <a href="{% url 'meso:sandbox_signup' %}" style="color:var(--accent);">create a free account</a>.</span>
             </div>
           {% else %}
             <details style="border-top:1px solid var(--line-2);">
-              <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent-ink);">+ Invite an athlete</summary>
+              <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent);">+ Invite an athlete</summary>
               <form method="post" action="{% url 'meso:coach_invite' %}" style="display:flex;gap:9px;padding:4px 16px 16px;">
                 {% csrf_token %}
                 <input name="email" type="email" required maxlength="254" placeholder="athlete@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
@@ -174,7 +174,7 @@
                A program is rooted at one athlete, so this picks the athlete then
                creates (or reopens) their plan and lands in the designer. -->
           <details style="border-top:1px solid var(--line-2);">
-            <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent-ink);">+ New program</summary>
+            <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent);">+ New program</summary>
             <div style="display:flex;flex-direction:column;gap:8px;padding:4px 16px 16px;">
               {% if athletes %}
                 <p class="meso-sub" style="margin:0 0 2px;">Pick an athlete to start a program for.</p>
@@ -232,7 +232,7 @@
 
           <!-- Create a brand-new group (Phase 2b): name + focus + pick members. -->
           <details style="border-top:1px solid var(--line-2);">
-            <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent-ink);">+ New group</summary>
+            <summary style="list-style:none;cursor:pointer;padding:11px 16px;font-size:12.5px;font-weight:650;color:var(--accent);">+ New group</summary>
             <form method="post" action="{% url 'meso:group_create' %}" style="display:flex;flex-direction:column;gap:11px;padding:4px 16px 16px;">
               {% csrf_token %}
               <input name="name" required maxlength="255" placeholder="Group name" style="appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
