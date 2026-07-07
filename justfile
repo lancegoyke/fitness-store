@@ -121,11 +121,24 @@ record-demo:
 # Designer, then saves a WebP still instead of a video. Writes
 # app/store_project/static/webp/meso-landing-designer.webp. After a Designer
 # UI change, re-run this and `git add` the new WebP — that's the whole
-# refresh story, nothing else to update.
+# refresh story, nothing else to update. See also `capture-landing-cards`,
+# the per-card sibling of this recipe.
 capture-landing-still:
     docker compose up -d --wait
     just frontend-build
     uv run python scripts/capture_landing_still.py
+
+# Regenerate the Meso landing page's three "how it works" card stills
+# (Design/Deliver/Adapt — issue #415 follow-up), the small sibling of
+# `capture-landing-still`'s hero shot. Drives a real coach into the Designer
+# + review screen and a real athlete into her session view (phone viewport),
+# writing app/store_project/static/webp/meso-card-{design,deliver,adapt}.webp.
+# After a UI change to the Designer, athlete session view, or review screen,
+# re-run this and `git add` the new WebPs.
+capture-landing-cards:
+    docker compose up -d --wait
+    just frontend-build
+    uv run python scripts/capture_landing_still.py --cards
 
 # Publish the walkthrough video (docs/demo/out/meso-walkthrough.mp4) + a poster
 # frame to S3 (issue #415 follow-up) so the Meso landing page has something to

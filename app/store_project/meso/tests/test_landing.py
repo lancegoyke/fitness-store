@@ -200,6 +200,29 @@ class TestLandingDemoVideo:
 
 
 # ---------------------------------------------------------------------------
+# How-it-works card stills (issue #415 follow-up)
+# ---------------------------------------------------------------------------
+
+
+class TestLandingCards:
+    def test_card_images_render_lazily(self, client):
+        """All three Design/Deliver/Adapt stills render, each lazy-loaded.
+
+        Below-the-fold texture (unlike the hero shot above it), so each
+        must carry `loading="lazy"` — not just be present.
+        """
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        for filename in (
+            "meso-card-design.webp",
+            "meso-card-deliver.webp",
+            "meso-card-adapt.webp",
+        ):
+            assert filename in body
+        assert body.count('loading="lazy"') == 3
+
+
+# ---------------------------------------------------------------------------
 # Meta description + Open Graph tags (issue #418)
 # ---------------------------------------------------------------------------
 
