@@ -999,17 +999,27 @@ class CoachSubscription(models.Model):
 
 
 # ---------------------------------------------------------------------------
-# Program schema (Phase 2)
+# Program schema (Phase 2; reshaped to a fixed lineup in the P0 schema cutover)
 #
 # The periodized plan a coach builds for an athlete:
 #
-#   Plan → Mesocycle → Week → Session → ExercisePrescription
+#   Plan → Mesocycle → SessionSlot (fixed day)  ─┐
+#                    → Week ────────────────────┼→ Session (week × day instance)
+#                    → SessionSlot → ExerciseSlot (fixed row) → Prescription (cell = row × week)
 #
-# Owned per coach↔athlete relationship (D-a) so each coach programs
-# independently. ``ExercisePrescription`` links to the catalog ``Exercise`` when
-# one matches and falls back to free text otherwise (the B4 hybrid). The shape is
-# driven by what the designer (``static/js/meso.js``) renders; see
-# ``serializers.serialize_plan`` for the mapping back to that shape.
+# ``SessionSlot``/``ExerciseSlot`` are the mesocycle's fixed lineup — the day and
+# exercise-row *identity*, shared across every week of the block. ``Prescription``
+# is a per-week cell of pure numbers (sets/reps/load/rpe/rest/note) plus a
+# one-week exception (``skipped``/``swap_*``); its resolving properties
+# (``name``/``exercise``/``exercise_id``/``tags``) fall through to the slot
+# unless a one-week swap overrides them, so read sites keep working unchanged.
+# ``ExerciseSlot``/``Prescription`` together replace the old per-week
+# ``ExercisePrescription`` row (retired). ``ExerciseSlot.exercise`` links to the
+# catalog ``Exercise`` when one matches and falls back to free text otherwise
+# (the B4 hybrid). Owned per coach↔athlete relationship (D-a) so each coach
+# programs independently. The shape is driven by what the designer
+# (``static/js/meso.js``) renders; see ``serializers.serialize_plan`` for the
+# mapping back to that shape.
 # ---------------------------------------------------------------------------
 
 
@@ -1075,7 +1085,7 @@ class Plan(models.Model):
     ``MesoGroup``: one shared program several athletes train off, with per-athlete
     auto-adjusts layered on later (Phase 3). Exactly one of ``relationship`` /
     ``group`` is set — a DB ``XOR`` constraint — so the whole program tree
-    (Mesocycle → … → ExercisePrescription) is reused for both, gaining only a root
+    (Mesocycle → … → Prescription) is reused for both, gaining only a root
     and (later) an override overlay, not a second hierarchy.
     """
 
@@ -1198,12 +1208,13 @@ class Plan(models.Model):
     def scaffold(self, *, days=2):
         """Seed a minimal-but-usable starter tree onto this (bare) plan.
 
-        One block, the current week, and ``days`` empty training days each with a
-        starter row — so the designer opens onto an editable, deliverable grid
-        rather than an empty shell (there is no add-mesocycle / add-week UI yet,
-        and a day needs a row to edit). Shared by individual plan creation
-        (``CoachAthlete.create_plan``) and the group's shared program
-        (``MesoGroup.create_shared_plan``). Returns ``self``.
+        One block, the current week, and ``days`` fixed training-day slots each
+        with a starter exercise-row slot and its week-1 cell — so the designer
+        opens onto an editable, deliverable grid rather than an empty shell
+        (there is no add-mesocycle / add-week UI yet, and a day needs a row to
+        edit). Shared by individual plan creation (``CoachAthlete.create_plan``)
+        and the group's shared program (``MesoGroup.create_shared_plan``).
+        Returns ``self``.
         """
         mesocycle = Mesocycle.objects.create(
             plan=self, name="Block 1", order=0, week_count=4
@@ -1217,16 +1228,15 @@ class Plan(models.Model):
             is_current=True,
         )
         for day in range(1, days + 1):
-            session = Session.objects.create(
-                week=week, day_number=day, name=f"Day {day}", order=day - 1
+            slot = SessionSlot.objects.create(
+                mesocycle=mesocycle, day_number=day, name=f"Day {day}", order=day - 1
             )
-            ExercisePrescription.objects.create(
-                session=session,
-                name="New exercise",
-                order=0,
-                sets="3",
-                reps="10",
-                rpe="7",
+            Session.objects.create(week=week, session_slot=slot)
+            exercise_slot = ExerciseSlot.objects.create(
+                session_slot=slot, name="New exercise", order=0
+            )
+            Prescription.objects.create(
+                exercise_slot=exercise_slot, week=week, sets="3", reps="10", rpe="7"
             )
         return self
 
@@ -1259,16 +1269,21 @@ class Mesocycle(models.Model):
         return self.name
 
     def append_week(self):
-        """Materialize the next week in this block, copying the latest week's grid.
+        """Materialize the next week in this block — a new column, not a clone.
 
-        A coach building a multi-week mesocycle progresses from a real template,
-        not a blank slate — so the new week mirrors the latest week's sessions and
-        their prescriptions (loads carried forward as a starting point the coach
-        then tweaks). The new week is a **non-current, undelivered draft**: adding
-        a future week never changes what's live or what delivery targets — making
-        a week the deliver target is the separate ``week_set_current`` action.
-        ``week_count`` grows to stay >= the highest materialized index so the
-        periodization rail stays honest. Returns the new ``Week``.
+        Since the P0 fixed-lineup cutover, ``SessionSlot``/``ExerciseSlot`` are
+        block-level identity **shared** across every week, so a new week never
+        deep-copies sessions/exercise rows — it just adds a ``Session`` instance
+        per live slot and a ``Prescription`` cell per live exercise slot, with the
+        cell's *numbers* (sets/reps/load/load_type/rpe/rest/note) carried forward
+        from the latest live week as a starting point the coach then tweaks. Each
+        new cell starts clean — ``skipped``/``swap_*`` (one-week exceptions) are
+        never carried forward. The new week is a **non-current, undelivered
+        draft**: adding a future week never changes what's live or what delivery
+        targets — making a week the deliver target is the separate
+        ``week_set_current`` action. ``week_count`` grows to stay >= the highest
+        materialized index so the periodization rail stays honest. Returns the
+        new ``Week``.
 
         A degenerate block with no weeks yet seeds one starter day (mirroring
         ``Plan.scaffold``) so the result is immediately editable.
@@ -1278,6 +1293,11 @@ class Mesocycle(models.Model):
         highest index over **all** weeks, deleted included — a soft-deleted
         week keeps its ``(mesocycle, index)`` row, so indexing off only the
         live weeks could collide with it under ``unique_week_index``.
+
+        NOTE (P0 semantics change): the old per-member override carry-forward is
+        dropped here — overrides are per-cell now (``PrescriptionOverride`` still
+        targets a ``Prescription`` cell), and re-diffing them across a whole new
+        week's worth of cells is out of scope for P0 (groups Phase 5 revisits).
         """
         source = self.weeks.filter(deleted_at__isnull=True).order_by("-index").first()
         max_index = self.weeks.aggregate(m=models.Max("index"))["m"] or 0
@@ -1292,69 +1312,169 @@ class Mesocycle(models.Model):
             is_current=False,
         )
         if source is None:
-            session = Session.objects.create(
-                week=week, day_number=1, name="Day 1", order=0
+            slot = SessionSlot.objects.create(
+                mesocycle=self, day_number=1, name="Day 1", order=0
             )
-            ExercisePrescription.objects.create(
-                session=session,
-                name="New exercise",
-                order=0,
-                sets="3",
-                reps="10",
-                rpe="7",
+            Session.objects.create(week=week, session_slot=slot)
+            exercise_slot = ExerciseSlot.objects.create(
+                session_slot=slot, name="New exercise", order=0
+            )
+            Prescription.objects.create(
+                exercise_slot=exercise_slot, week=week, sets="3", reps="10", rpe="7"
             )
         else:
-            carried_overrides = []
-            for src_session in source.sessions.filter(
-                deleted_at__isnull=True
-            ).prefetch_related("prescriptions__overrides"):
-                new_session = Session.objects.create(
-                    week=week,
-                    day_number=src_session.day_number,
-                    name=src_session.name,
-                    bias=src_session.bias,
-                    order=src_session.order,
+            live_slots = list(
+                self.session_slots.filter(deleted_at__isnull=True).order_by(
+                    "order", "day_number"
                 )
-                # Filtered in Python (not `.filter()`) so the loop still reads
-                # from the `prescriptions__overrides` prefetch cache above.
-                for presc in src_session.prescriptions.all():
-                    if presc.deleted_at is not None:
-                        continue
-                    new_presc = ExercisePrescription.objects.create(
-                        session=new_session,
-                        exercise_id=presc.exercise_id,
-                        name=presc.name,
-                        order=presc.order,
-                        sets=presc.sets,
-                        reps=presc.reps,
-                        load=presc.load,
-                        load_type=presc.load_type,
-                        rpe=presc.rpe,
-                        note=presc.note,
-                        tags=list(presc.tags or []),
+            )
+            Session.objects.bulk_create(
+                [Session(week=week, session_slot=slot) for slot in live_slots]
+            )
+            source_cells_by_slot = {
+                cell.exercise_slot_id: cell
+                for cell in Prescription.objects.filter(
+                    week=source, exercise_slot__deleted_at__isnull=True
+                )
+            }
+            live_exercise_slots = ExerciseSlot.objects.filter(
+                session_slot__in=live_slots, deleted_at__isnull=True
+            )
+            new_cells = []
+            for exercise_slot in live_exercise_slots:
+                src_cell = source_cells_by_slot.get(exercise_slot.pk)
+                new_cells.append(
+                    Prescription(
+                        exercise_slot=exercise_slot,
+                        week=week,
+                        sets=src_cell.sets if src_cell else "",
+                        reps=src_cell.reps if src_cell else "",
+                        load=src_cell.load if src_cell else "",
+                        load_type=(
+                            src_cell.load_type if src_cell else LoadType.ABSOLUTE
+                        ),
+                        rpe=src_cell.rpe if src_cell else "",
+                        rest=src_cell.rest if src_cell else "",
+                        note=src_cell.note if src_cell else "",
                     )
-                    # Carry each member's per-athlete adjust forward onto the copied
-                    # row (group plans). Without this the new week resolves the
-                    # unadjusted base and silently drops a member's accommodation —
-                    # a swap or load cut they still need every week.
-                    for override in presc.overrides.all():
-                        carried_overrides.append(
-                            PrescriptionOverride(
-                                membership_id=override.membership_id,
-                                prescription=new_presc,
-                                swap_name=override.swap_name,
-                                load_pct=override.load_pct,
-                                sets=override.sets,
-                                reps=override.reps,
-                                note=override.note,
-                            )
-                        )
-            if carried_overrides:
-                PrescriptionOverride.objects.bulk_create(carried_overrides)
+                )
+            if new_cells:
+                Prescription.objects.bulk_create(new_cells)
         if week.index > self.week_count:
             self.week_count = week.index
             self.save(update_fields=["week_count"])
         return week
+
+
+class SessionSlot(models.Model):
+    """The fixed DAY definition, shared across every week of a mesocycle.
+
+    The P0 fixed-lineup cutover: a training day's identity (name/bias/order)
+    used to live per-week on ``Session`` and get deep-copied on every
+    ``append_week``; it now lives once here, at the block level. A ``Session``
+    is just this slot's per-week instance (a thin join row anchoring logging).
+    """
+
+    mesocycle = models.ForeignKey(
+        Mesocycle,
+        on_delete=models.CASCADE,
+        related_name="session_slots",
+        verbose_name=_("Mesocycle"),
+    )
+    day_number = models.PositiveIntegerField(_("Day number"))
+    name = models.CharField(_("Name"), max_length=255, blank=True)
+    bias = models.CharField(_("Bias"), max_length=255, blank=True)
+    order = models.PositiveIntegerField(_("Order"), default=0)
+    # Soft delete (designer framework Phase 0) — see ``Week.deleted_at``. Because
+    # this row is now the day's *only* identity (shared across weeks), deleting
+    # it removes the day from the whole block at once — see ``soft_delete``.
+    deleted_at = models.DateTimeField(
+        _("Deleted at"), null=True, blank=True, default=None
+    )
+
+    class Meta:
+        ordering = ["order", "day_number"]
+        verbose_name = "Session slot"
+        verbose_name_plural = "Session slots"
+
+    def __str__(self):
+        return f"Day {self.day_number} · {self.name}".rstrip(" ·")
+
+    def soft_delete(self):
+        """Remove this day from the whole block: stamp self + cascade.
+
+        A ``SessionSlot`` is block-wide identity, so deleting it is a
+        block-wide removal (the new fixed-lineup semantics — this is not the
+        same as the old per-week ``Session`` delete). Cascades to this slot's
+        live ``ExerciseSlot`` rows and every week's ``Session`` instance of this
+        day, mirroring ``Week.soft_delete``'s convention. Returns ``self``.
+        """
+        now = timezone.now()
+        self.deleted_at = now
+        self.save(update_fields=["deleted_at"])
+        self.exercise_slots.filter(deleted_at__isnull=True).update(deleted_at=now)
+        self.sessions.filter(deleted_at__isnull=True).update(deleted_at=now)
+        return self
+
+
+class ExerciseSlot(models.Model):
+    """The fixed EXERCISE row, shared across every week of a mesocycle.
+
+    A table row's identity — catalog link/free-text name/tags — used to live
+    per-week on ``ExercisePrescription`` and get deep-copied on every
+    ``append_week``; it now lives once here. The per-week numbers (and rare
+    one-week exceptions) live on the ``Prescription`` cell instead.
+    """
+
+    session_slot = models.ForeignKey(
+        SessionSlot,
+        on_delete=models.CASCADE,
+        related_name="exercise_slots",
+        verbose_name=_("Session slot"),
+    )
+    exercise = models.ForeignKey(
+        "exercises.Exercise",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="meso_exercise_slots",
+        verbose_name=_("Catalog exercise"),
+    )
+    name = models.CharField(_("Name"), max_length=255)
+    order = models.PositiveIntegerField(_("Order"), default=0)
+    # Tags describe identity, so they live here (moved off the old
+    # per-week ``ExercisePrescription.tags``).
+    tags = models.JSONField(_("Tags"), default=list, blank=True)
+    # Soft delete (designer framework Phase 0) — see ``Week.deleted_at``. Removes
+    # this exercise row from the whole block at once (all weeks).
+    deleted_at = models.DateTimeField(
+        _("Deleted at"), null=True, blank=True, default=None
+    )
+
+    class Meta:
+        ordering = ["order"]
+        verbose_name = "Exercise slot"
+        verbose_name_plural = "Exercise slots"
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def is_catalog_linked(self):
+        """True when this row is backed by a catalog ``Exercise`` (B4 hybrid)."""
+        return self.exercise_id is not None
+
+    def soft_delete(self):
+        """Remove this exercise row from the whole block (all weeks at once).
+
+        No cascade needed: a ``Prescription`` cell has no ``deleted_at`` of its
+        own — it is live only while both its slot and its week are live, so
+        hiding this slot hides every week's cell for it via the join. Returns
+        ``self``.
+        """
+        self.deleted_at = timezone.now()
+        self.save(update_fields=["deleted_at"])
+        return self
 
 
 class Week(models.Model):
@@ -1395,9 +1515,30 @@ class Week(models.Model):
     def __str__(self):
         return f"{self.mesocycle.name} · Wk {self.index}"
 
+    def soft_delete(self):
+        """Stamp this week deleted, cascading to its ``Session`` instances.
+
+        A ``Session`` is now a real (week, ``SessionSlot``) join row, so — per
+        the P0 fixed-lineup cascade rules — soft-deleting a week also stamps its
+        sessions (its ``Prescription`` cells carry no ``deleted_at`` of their own
+        and are hidden via the join to this dead week regardless). Returns
+        ``self``.
+        """
+        now = timezone.now()
+        self.deleted_at = now
+        self.save(update_fields=["deleted_at"])
+        self.sessions.filter(deleted_at__isnull=True).update(deleted_at=now)
+        return self
+
 
 class Session(models.Model):
-    """A training day within a week — a column in the designer grid."""
+    """A training day *within a week* — a column in the designer grid.
+
+    THINNED by the P0 fixed-lineup cutover: this is now just a (week ×
+    ``SessionSlot``) instance, anchoring logging (``SessionLog``). Identity
+    (day_number/name/bias/order) delegates to the slot via properties so
+    existing read sites (``session.name`` etc.) keep working unchanged.
+    """
 
     week = models.ForeignKey(
         Week,
@@ -1405,48 +1546,95 @@ class Session(models.Model):
         related_name="sessions",
         verbose_name=_("Week"),
     )
-    day_number = models.PositiveIntegerField(_("Day number"))
-    name = models.CharField(_("Name"), max_length=255, blank=True)
-    bias = models.CharField(_("Bias"), max_length=255, blank=True)
-    order = models.PositiveIntegerField(_("Order"), default=0)
+    session_slot = models.ForeignKey(
+        SessionSlot,
+        on_delete=models.CASCADE,
+        related_name="sessions",
+        verbose_name=_("Session slot"),
+    )
     # Soft delete (designer framework Phase 0) — see ``Week.deleted_at``.
     deleted_at = models.DateTimeField(
         _("Deleted at"), null=True, blank=True, default=None
     )
 
     class Meta:
-        ordering = ["order", "day_number"]
+        ordering = ["session_slot__order", "session_slot__day_number"]
         verbose_name = "Session"
         verbose_name_plural = "Sessions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["week", "session_slot"], name="unique_session_week_slot"
+            ),
+        ]
 
     def __str__(self):
         return f"Day {self.day_number} · {self.name}".rstrip(" ·")
 
+    @property
+    def day_number(self):
+        return self.session_slot.day_number
 
-class ExercisePrescription(models.Model):
-    """A prescribed exercise row. Hybrid: catalog FK when matched, else free text (B4).
+    @property
+    def name(self):
+        return self.session_slot.name
 
-    ``sets``/``reps``/``load``/``rpe`` are free-form text — the prototype grid
-    accepts ``load="BW"``, ``rpe="—"``, and rep ranges. Numeric coercion happens
-    at read time (the designer JS already does this).
+    @property
+    def bias(self):
+        return self.session_slot.bias
+
+    @property
+    def order(self):
+        return self.session_slot.order
+
+    def cells(self):
+        """This week's live exercise-row cells for this day, in row order.
+
+        Replaces the old ``session.prescriptions`` related manager: a cell
+        lives iff its ``ExerciseSlot`` is live (the week is already pinned by
+        ``self.week``, which is assumed live — callers already filter weeks).
+        """
+        return (
+            Prescription.objects.filter(
+                week=self.week,
+                exercise_slot__session_slot=self.session_slot,
+                exercise_slot__deleted_at__isnull=True,
+            )
+            .select_related("exercise_slot")
+            .order_by("exercise_slot__order")
+        )
+
+
+class Prescription(models.Model):
+    """A CELL = one ``ExerciseSlot`` (fixed row) × one ``Week``. Per-week numbers.
+
+    Replaces the old per-week ``ExercisePrescription``: this holds only what
+    varies week to week (``sets``/``reps``/``load``/``rpe``/``rest``/``note``)
+    plus the one-week exceptions — ``skipped`` (the em-dash "not trained this
+    week" cell) and a one-week ``swap_*`` (a substitute lift for just this
+    week). There is deliberately **no** ``deleted_at`` here: a cell lives iff
+    its slot *and* its week are both live — "not trained this week" is
+    ``skipped=True``, not a delete (keeps the grid dense and undo simple).
+
+    The resolving properties below are what keep every existing read site
+    (``serialize_prescription``, ``one_rm`` keying, ``_exercise_key``, …)
+    working unchanged: a cell has no identity of its own — it inherits the
+    slot's, unless a one-week swap overrides it. Any site that *writes*
+    ``.name``/``.exercise`` must instead write the slot (a block-wide identity
+    change) or this cell's ``swap_*`` (a one-week change).
     """
 
-    session = models.ForeignKey(
-        Session,
+    exercise_slot = models.ForeignKey(
+        ExerciseSlot,
         on_delete=models.CASCADE,
-        related_name="prescriptions",
-        verbose_name=_("Session"),
+        related_name="cells",
+        verbose_name=_("Exercise slot"),
     )
-    exercise = models.ForeignKey(
-        "exercises.Exercise",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="meso_prescriptions",
-        verbose_name=_("Catalog exercise"),
+    week = models.ForeignKey(
+        Week,
+        on_delete=models.CASCADE,
+        related_name="cells",
+        verbose_name=_("Week"),
     )
-    name = models.CharField(_("Name"), max_length=255)
-    order = models.PositiveIntegerField(_("Order"), default=0)
     sets = models.CharField(_("Sets"), max_length=32, blank=True)
     reps = models.CharField(_("Reps"), max_length=32, blank=True)
     load = models.CharField(_("Load"), max_length=32, blank=True)
@@ -1455,24 +1643,58 @@ class ExercisePrescription(models.Model):
         _("Load type"), max_length=3, choices=LoadType, default=LoadType.ABSOLUTE
     )
     rpe = models.CharField(_("RPE"), max_length=32, blank=True)
+    rest = models.CharField(_("Rest"), max_length=32, blank=True)
     note = models.CharField(_("Note"), max_length=255, blank=True)
-    tags = models.JSONField(_("Tags"), default=list, blank=True)
-    # Soft delete (designer framework Phase 0) — see ``Week.deleted_at``.
-    deleted_at = models.DateTimeField(
-        _("Deleted at"), null=True, blank=True, default=None
+    # Per-week exception: this week's cell is a deliberate skip (renders as an
+    # em-dash), distinct from the row not existing at all.
+    skipped = models.BooleanField(_("Skipped"), default=False)
+    # Per-week exception: a one-week substitute lift, catalog-linked or free
+    # text — mirrors the slot's ``exercise``/``name`` hybrid (B4).
+    swap_exercise = models.ForeignKey(
+        "exercises.Exercise",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="meso_cell_swaps",
+        verbose_name=_("Swap exercise"),
     )
+    swap_name = models.CharField(_("Swap name"), max_length=255, blank=True)
 
     class Meta:
-        ordering = ["order"]
-        verbose_name = "Exercise prescription"
-        verbose_name_plural = "Exercise prescriptions"
+        ordering = ["exercise_slot__order"]
+        verbose_name = "Prescription"
+        verbose_name_plural = "Prescriptions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["exercise_slot", "week"], name="unique_cell_slot_week"
+            ),
+        ]
 
     def __str__(self):
         return self.name
 
     @property
+    def name(self):
+        """This week's effective name: a one-week swap, else the slot's."""
+        return self.swap_name or self.exercise_slot.name
+
+    @property
+    def exercise(self):
+        """This week's effective catalog exercise: a one-week swap, else the slot's."""
+        return self.swap_exercise or self.exercise_slot.exercise
+
+    @property
+    def exercise_id(self):
+        return self.swap_exercise_id or self.exercise_slot.exercise_id
+
+    @property
+    def tags(self):
+        """Identity tags always come from the slot — never per-week."""
+        return list(self.exercise_slot.tags or [])
+
+    @property
     def is_catalog_linked(self):
-        """True when this row is backed by a catalog ``Exercise`` (B4 hybrid)."""
+        """True when this week's effective exercise is a catalog ``Exercise`` (B4)."""
         return self.exercise_id is not None
 
 
@@ -1708,7 +1930,7 @@ class ProposedChange(models.Model):
         verbose_name=_("Session"),
     )
     prescription = models.ForeignKey(
-        ExercisePrescription,
+        Prescription,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -1764,7 +1986,7 @@ class LoggedSet(models.Model):
         verbose_name=_("Session log"),
     )
     prescription = models.ForeignKey(
-        ExercisePrescription,
+        Prescription,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -2081,7 +2303,10 @@ class GroupMembership(models.Model):
         An override with no remaining diff is meaningless, so it clears any
         existing row and returns ``None`` instead of storing a no-op.
         """
-        if prescription.session.week.mesocycle.plan.group_id != self.group_id:
+        if (
+            prescription.exercise_slot.session_slot.mesocycle.plan.group_id
+            != self.group_id
+        ):
             raise InvalidTransition(
                 "The prescription is not in this group's shared program."
             )
@@ -2111,15 +2336,29 @@ class GroupMembership(models.Model):
     def sync_delivered_plan(self, group_week):
         """Materialize/refresh this member's resolved copy of ``group_week`` (Phase 4).
 
-        Get-or-creates the member's individual plan for this group (rooted at their
-        relationship, tagged ``source_group``) and syncs its current week *in
-        place* to the resolved group week — the shared template **+** this member's
-        override diffs (``resolve_prescription``). Syncing in place (sessions
-        matched by ``day_number``, prescriptions by ``order``) preserves any
-        ``SessionLog`` the athlete already wrote against an unchanged row while
-        propagating the coach's edits; a row dropped from the shared program drops
-        here too. Returns ``(member_plan, member_week)`` — the week is *not* yet
-        stamped delivered (``deliver_current_week`` stamps + snapshots it).
+        Get-or-creates the member's individual plan for this group (rooted at
+        their relationship, tagged ``source_group``) and syncs it *in place* to
+        the resolved group week — the shared lineup (slots + exercise rows)
+        **+** this member's override diffs (``resolve_prescription``), written
+        onto the member's own mirrored ``SessionSlot``/``ExerciseSlot`` rows and
+        this delivery's ``Week``.
+
+        Mirrors the coach's live ``SessionSlot``s onto the member's mesocycle
+        (matched by ``day_number`` — the P0 fixed-lineup's natural key),
+        live ``ExerciseSlot``s onto each (matched by ``(slot, order)``), then
+        upserts a ``Prescription`` cell on the member's slot for this
+        delivery's week — a swap override becomes the cell's ``swap_name``
+        (block identity stays the shared slot's); load/sets/reps/note
+        overrides become the cell's numbers. Syncing in place this way
+        preserves any ``SessionLog`` the athlete already wrote against an
+        unchanged slot while propagating the coach's edits; a slot/row dropped
+        from the shared program is soft-deleted on the member's side too
+        (never hard-deleted: ``SessionLog.session`` cascades, so a hard delete
+        would erase the member's logged history on re-delivery — a dropped
+        source row that comes back, e.g. via undo, revives the member's hidden
+        copy in place via ``deleted_at: None`` in the upsert defaults).
+        Returns ``(member_plan, member_week)`` — the week is *not* yet stamped
+        delivered (``deliver_current_week`` stamps + snapshots it).
         """
         from .serializers import resolve_prescription
 
@@ -2162,62 +2401,89 @@ class GroupMembership(models.Model):
         )
 
         overrides = {o.prescription_id: o for o in self.overrides.all()}
-        # Source-side reads are live-only — a soft-deleted session/prescription
-        # on the shared program must never materialize onto a member's plan.
-        # Member-side rows dropped from the source are *soft*-deleted below
-        # (never hard-deleted: ``SessionLog.session`` cascades, so a hard
-        # delete would erase the member's logged history on re-delivery), and
-        # a source row that comes back (Phase 1 undo) revives the member's
-        # hidden copy in place via ``deleted_at: None`` in the upsert defaults.
-        src_sessions = list(
-            group_week.sessions.filter(deleted_at__isnull=True).prefetch_related(
-                "prescriptions"
-            )
+        # Source-side reads are live-only — a soft-deleted slot/row on the
+        # shared program must never materialize onto a member's plan.
+        src_slots = list(
+            src_meso.session_slots.filter(deleted_at__isnull=True)
+            .prefetch_related("exercise_slots")
+            .order_by("order", "day_number")
         )
-        for src_session in src_sessions:
-            member_session, _ = Session.objects.update_or_create(
-                week=member_week,
-                day_number=src_session.day_number,
+        for src_slot in src_slots:
+            member_slot, _ = SessionSlot.objects.update_or_create(
+                mesocycle=member_meso,
+                day_number=src_slot.day_number,
                 defaults={
-                    "name": src_session.name,
-                    "bias": src_session.bias,
-                    "order": src_session.order,
+                    "name": src_slot.name,
+                    "bias": src_slot.bias,
+                    "order": src_slot.order,
                     "deleted_at": None,
                 },
             )
-            src_orders = []
-            # Filtered in Python so this still reads from the `prescriptions`
-            # prefetch cache above.
-            for src_p in src_session.prescriptions.all():
-                if src_p.deleted_at is not None:
-                    continue
-                resolved = resolve_prescription(src_p, overrides.get(src_p.pk))
-                # A swap means the catalog FK no longer names the lift trained.
-                swapped = resolved["name"] != src_p.name
-                ExercisePrescription.objects.update_or_create(
-                    session=member_session,
-                    order=src_p.order,
+            Session.objects.update_or_create(
+                week=member_week,
+                session_slot=member_slot,
+                defaults={"deleted_at": None},
+            )
+
+            # Filtered in Python so this still reads from the prefetch cache above.
+            src_exercise_slots = [
+                es for es in src_slot.exercise_slots.all() if es.deleted_at is None
+            ]
+            src_cells_by_slot = {
+                c.exercise_slot_id: c
+                for c in Prescription.objects.filter(
+                    exercise_slot__in=src_exercise_slots, week=group_week
+                )
+            }
+            for src_es in src_exercise_slots:
+                member_es, _ = ExerciseSlot.objects.update_or_create(
+                    session_slot=member_slot,
+                    order=src_es.order,
                     defaults={
-                        "name": resolved["name"],
+                        "name": src_es.name,
+                        "exercise": src_es.exercise,
+                        "tags": list(src_es.tags or []),
+                        "deleted_at": None,
+                    },
+                )
+                src_cell = src_cells_by_slot.get(src_es.pk)
+                if src_cell is None:
+                    # No cell for this week yet (shouldn't normally happen —
+                    # every live slot gets a blank cell per live week — but
+                    # skip defensively rather than materialize a bad row).
+                    continue
+                resolved = resolve_prescription(src_cell, overrides.get(src_cell.pk))
+                # A swap means the effective name no longer matches the slot's.
+                swapped = resolved["name"] != src_es.name
+                Prescription.objects.update_or_create(
+                    exercise_slot=member_es,
+                    week=member_week,
+                    defaults={
                         "sets": resolved["sets"],
                         "reps": resolved["reps"],
                         "load": resolved["load"],
                         "load_type": resolved["load_type"],
                         "rpe": resolved["rpe"],
+                        "rest": src_cell.rest,
                         "note": resolved["note"],
-                        "exercise": None if swapped else src_p.exercise,
-                        "tags": src_p.tags,
-                        "deleted_at": None,
+                        "skipped": False,
+                        "swap_name": resolved["name"] if swapped else "",
+                        "swap_exercise": None,
                     },
                 )
-                src_orders.append(src_p.order)
-            member_session.prescriptions.exclude(order__in=src_orders).filter(
-                deleted_at__isnull=True
-            ).update(deleted_at=timezone.now())
-        src_day_numbers = [s.day_number for s in src_sessions]
-        member_week.sessions.exclude(day_number__in=src_day_numbers).filter(
-            deleted_at__isnull=True
-        ).update(deleted_at=timezone.now())
+            # Soft-delete member exercise rows dropped from this day's source
+            # lineup (matched by the same (slot, order) natural key).
+            member_slot.exercise_slots.exclude(
+                order__in=[es.order for es in src_exercise_slots]
+            ).filter(deleted_at__isnull=True).update(deleted_at=timezone.now())
+
+        # Soft-delete member days (session slots) dropped from the source
+        # mesocycle — cascades to that slot's exercise rows and sessions.
+        src_day_numbers = [s.day_number for s in src_slots]
+        for dropped_slot in member_meso.session_slots.exclude(
+            day_number__in=src_day_numbers
+        ).filter(deleted_at__isnull=True):
+            dropped_slot.soft_delete()
         return member_plan, member_week
 
     def clean(self):
@@ -2283,7 +2549,7 @@ class PrescriptionOverride(models.Model):
         verbose_name=_("Membership"),
     )
     prescription = models.ForeignKey(
-        ExercisePrescription,
+        Prescription,
         on_delete=models.CASCADE,
         related_name="overrides",
         verbose_name=_("Prescription"),
@@ -2347,7 +2613,9 @@ class PrescriptionOverride(models.Model):
         """
         if not (self.membership_id and self.prescription_id):
             return
-        plan_group_id = self.prescription.session.week.mesocycle.plan.group_id
+        plan_group_id = (
+            self.prescription.exercise_slot.session_slot.mesocycle.plan.group_id
+        )
         if plan_group_id != self.membership.group_id:
             raise ValidationError(
                 {
@@ -2511,10 +2779,11 @@ class PlanAction(models.Model):
     max-``seq`` ``undo`` row and pushes a ``redo`` row at the *same* seq (redo
     mirrors it back); a fresh mutation always allocates a new, higher seq and
     clears whatever redo rows existed (a fork in history drops the abandoned
-    future). ``snapshot`` is plan-wide — every ``Week``/``Session``/
-    ``ExercisePrescription``/``PrescriptionOverride`` row belonging to the plan,
-    including soft-deleted ones, so an undo can resurrect a delete or retract an
-    add without ever hard-deleting or recreating a row.
+    future). ``snapshot`` is plan-wide — every ``Week``/``SessionSlot``/
+    ``ExerciseSlot``/``Session``/``Prescription``/``PrescriptionOverride`` row
+    belonging to the plan, including soft-deleted ones, so an undo can
+    resurrect a delete or retract an add without ever hard-deleting or
+    recreating a row.
     """
 
     class Stack(models.TextChoices):

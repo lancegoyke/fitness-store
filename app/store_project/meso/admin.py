@@ -8,17 +8,19 @@ from .models import CoachInvite
 from .models import CoachProfile
 from .models import CoachSubscription
 from .models import Contraindication
-from .models import ExercisePrescription
+from .models import ExerciseSlot
 from .models import GroupMembership
 from .models import LoggedSet
 from .models import Mesocycle
 from .models import MesoGroup
 from .models import Plan
+from .models import Prescription
 from .models import PrescriptionOverride
 from .models import ProposedChange
 from .models import PushSubscription
 from .models import Session
 from .models import SessionLog
+from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
 
@@ -142,16 +144,46 @@ class WeekInline(admin.TabularInline):
     extra = 0
 
 
+class SessionSlotInline(admin.TabularInline):
+    model = SessionSlot
+    extra = 0
+
+
 @admin.register(Mesocycle)
 class MesocycleAdmin(admin.ModelAdmin):
     list_display = ("name", "plan", "order", "week_count")
     raw_id_fields = ("plan",)
-    inlines = (WeekInline,)
+    inlines = (SessionSlotInline, WeekInline)
+
+
+class ExerciseSlotInline(admin.TabularInline):
+    model = ExerciseSlot
+    extra = 0
+    raw_id_fields = ("exercise",)
+
+
+@admin.register(SessionSlot)
+class SessionSlotAdmin(admin.ModelAdmin):
+    """The fixed DAY definition (P0 fixed-lineup cutover)."""
+
+    list_display = ("__str__", "mesocycle", "day_number", "name", "bias", "order")
+    raw_id_fields = ("mesocycle",)
+    inlines = (ExerciseSlotInline,)
+
+
+@admin.register(ExerciseSlot)
+class ExerciseSlotAdmin(admin.ModelAdmin):
+    """The fixed EXERCISE row (P0 fixed-lineup cutover)."""
+
+    list_display = ("name", "session_slot", "order", "is_catalog_linked")
+    search_fields = ("name", "session_slot__name")
+    raw_id_fields = ("session_slot", "exercise")
 
 
 class SessionInline(admin.TabularInline):
     model = Session
     extra = 0
+    raw_id_fields = ("session_slot",)
 
 
 class WeekDeliveryInline(admin.TabularInline):
@@ -160,6 +192,18 @@ class WeekDeliveryInline(admin.TabularInline):
     fields = ("delivered_at", "created_at")
     readonly_fields = ("delivered_at", "created_at")
     can_delete = False
+
+
+class PrescriptionInline(admin.TabularInline):
+    """One week's cells — the ``ExercisePrescription`` inline's replacement.
+
+    ``Prescription`` FKs to ``Week`` directly (not ``Session``), so this is a
+    ``WeekAdmin`` inline rather than a ``SessionAdmin`` one.
+    """
+
+    model = Prescription
+    extra = 0
+    raw_id_fields = ("exercise_slot", "swap_exercise")
 
 
 @admin.register(Week)
@@ -175,7 +219,7 @@ class WeekAdmin(admin.ModelAdmin):
     )
     list_filter = ("is_deload", "is_current")
     raw_id_fields = ("mesocycle",)
-    inlines = (SessionInline, WeekDeliveryInline)
+    inlines = (SessionInline, PrescriptionInline, WeekDeliveryInline)
 
 
 @admin.register(WeekDelivery)
@@ -185,34 +229,33 @@ class WeekDeliveryAdmin(admin.ModelAdmin):
     readonly_fields = ("delivered_at", "payload", "created_at")
 
 
-class ExercisePrescriptionInline(admin.TabularInline):
-    model = ExercisePrescription
-    extra = 0
-    raw_id_fields = ("exercise",)
-
-
 @admin.register(Session)
 class SessionAdmin(admin.ModelAdmin):
-    list_display = ("__str__", "week", "day_number", "order")
-    raw_id_fields = ("week",)
-    inlines = (ExercisePrescriptionInline,)
+    list_display = ("__str__", "week", "session_slot", "day_number", "order")
+    raw_id_fields = ("week", "session_slot")
 
 
-@admin.register(ExercisePrescription)
-class ExercisePrescriptionAdmin(admin.ModelAdmin):
+@admin.register(Prescription)
+class PrescriptionAdmin(admin.ModelAdmin):
     list_display = (
         "name",
-        "session",
+        "exercise_slot",
+        "week",
         "sets",
         "reps",
         "load",
         "load_type",
         "rpe",
+        "rest",
+        "skipped",
         "is_catalog_linked",
     )
-    list_filter = ("load_type",)
-    search_fields = ("name",)
-    raw_id_fields = ("session", "exercise")
+    list_filter = ("load_type", "skipped")
+    # ``name``/``is_catalog_linked`` are resolving properties, not DB columns —
+    # search/filter against the real fields instead (``swap_name`` or the
+    # slot's own ``name``).
+    search_fields = ("swap_name", "exercise_slot__name")
+    raw_id_fields = ("exercise_slot", "week", "swap_exercise")
 
 
 class LoggedSetInline(admin.TabularInline):
@@ -320,7 +363,9 @@ class PrescriptionOverrideAdmin(admin.ModelAdmin):
     )
     search_fields = (
         "membership__group__name",
-        "prescription__name",
+        # ``prescription.name`` is a resolving property, not a DB column —
+        # search the real field it falls through to instead.
+        "prescription__exercise_slot__name",
         "swap_name",
     )
     raw_id_fields = ("membership", "prescription")
