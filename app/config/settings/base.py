@@ -344,6 +344,23 @@ MESO_SANDBOX_TTL_HOURS = int(os.environ.get("MESO_SANDBOX_TTL_HOURS", "48"))
 MESO_SANDBOX_PER_IP_PER_HOUR = int(os.environ.get("MESO_SANDBOX_PER_IP_PER_HOUR", "5"))
 MESO_SANDBOX_MAX_CONCURRENT = int(os.environ.get("MESO_SANDBOX_MAX_CONCURRENT", "100"))
 
+# Public walkthrough video (issue #415 follow-up to #388). `just record-demo`
+# regenerates docs/demo/out/meso-walkthrough.mp4 (git-ignored); `just
+# publish-demo-video` (scripts/publish_demo_video.py) uploads it — plus a
+# poster frame — to the `masterfit` S3 bucket at a fixed public key, so these
+# defaults work with zero config in every environment (the bucket serves
+# public-read objects unsigned; see AWS_S3_OBJECT_PARAMETERS above). Override
+# to "" to hide the landing page's video section entirely (e.g. mid-refresh,
+# before a first upload).
+MESO_DEMO_VIDEO_URL = os.environ.get(
+    "MESO_DEMO_VIDEO_URL",
+    "https://masterfit.s3.amazonaws.com/meso/demo/meso-walkthrough.mp4",
+)
+MESO_DEMO_VIDEO_POSTER_URL = os.environ.get(
+    "MESO_DEMO_VIDEO_POSTER_URL",
+    "https://masterfit.s3.amazonaws.com/meso/demo/meso-walkthrough-poster.webp",
+)
+
 # Cache
 
 DEFAULT_CACHE_TIMEOUT = 604800  # one week

@@ -25,6 +25,8 @@ These tests cover:
 import re
 
 import pytest
+from django.conf import settings
+from django.test import override_settings
 from django.urls import reverse
 
 from store_project.meso import presenters
@@ -154,6 +156,47 @@ class TestLandingContent:
         """A pricing signal renders from the shared constant, not a hardcoded string."""
         resp = client.get(reverse("meso:roster"))
         assert presenters.PRICE_SUMMARY in resp.content.decode()
+
+
+# ---------------------------------------------------------------------------
+# Hosted walkthrough video (issue #415 follow-up to #388)
+# ---------------------------------------------------------------------------
+
+
+class TestLandingDemoVideo:
+    def test_video_section_renders_with_settings_url(self, client):
+        """The <video> section renders from settings, not a hardcoded URL."""
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        assert "<video" in body
+        assert f'<source src="{settings.MESO_DEMO_VIDEO_URL}"' in body
+        assert 'type="video/mp4"' in body
+
+    def test_poster_renders_from_settings(self, client):
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        assert f'poster="{settings.MESO_DEMO_VIDEO_POSTER_URL}"' in body
+
+    def test_preload_none_guards_page_weight(self, client):
+        """The page-weight guarantee.
+
+        An anonymous visit must not fetch the video unless the visitor
+        presses play — the only thing that should load unconditionally is
+        the poster.
+        """
+        resp = client.get(reverse("meso:roster"))
+        assert 'preload="none"' in resp.content.decode()
+
+    @override_settings(MESO_DEMO_VIDEO_URL="")
+    def test_hidden_when_url_is_blank(self, client):
+        """An empty override hides the section, not a broken/empty player.
+
+        E.g. mid-refresh, before a first upload.
+        """
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        assert "<video" not in body
+        assert "See it in action" not in body
 
 
 # ---------------------------------------------------------------------------

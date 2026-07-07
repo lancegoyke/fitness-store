@@ -321,6 +321,13 @@ class RosterView(TemplateView):
                     # same constant the roster/billing/designer surfaces render,
                     # so the price can't drift out of sync with the landing page.
                     "price_summary": presenters.PRICE_SUMMARY,
+                    # The hosted walkthrough video (issue #415 follow-up to
+                    # #388) — settings-driven so `just record-demo && just
+                    # publish-demo-video` is the entire refresh story; an empty
+                    # override hides the section (template checks
+                    # `{% if demo_video_url %}`).
+                    "demo_video_url": settings.MESO_DEMO_VIDEO_URL,
+                    "demo_video_poster_url": settings.MESO_DEMO_VIDEO_POSTER_URL,
                 },
             )
         if not _is_coach(request.user):
