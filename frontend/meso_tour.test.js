@@ -5,7 +5,8 @@
 // posting state) is exercised at the render level in the Django template/view
 // tests; what's unit-tested here is the pure logic: step clamping/advance
 // math, the anchor-retry cutoff decision, config parsing, per-step action
-// state, and current-page detection.
+// state, current-page detection, and (Phase 4, analytics + polish) the a11y
+// announcement string and the reduced-motion scroll-behavior decision.
 
 import {
   clampStep,
@@ -16,6 +17,9 @@ import {
   shouldRetryAnchor,
   resolveActionState,
   isCurrentPage,
+  buildStepAnnouncement,
+  prefersReducedMotion,
+  scrollBehaviorFor,
 } from "../app/store_project/static/js/meso_tour.js";
 
 describe("clampStep", () => {
@@ -293,5 +297,68 @@ describe("isCurrentPage", () => {
     // the normal path — this just proves the function never throws even for
     // odd input rather than testing the fallback branch specifically.
     expect(() => isCurrentPage("not a url at all???", "/meso/")).not.toThrow();
+  });
+});
+
+describe("buildStepAnnouncement", () => {
+  it("includes the 1-based step position, total, and title", () => {
+    expect(
+      buildStepAnnouncement({ title: "Program Designer" }, 2, 8),
+    ).toBe("Step 3 of 8: Program Designer");
+  });
+
+  it("is used for both the dialog's aria-label and the aria-live text", () => {
+    // Same string either way — pinning that there's exactly one source of
+    // truth for the announcement, not two copies that could drift apart.
+    const forLabel = buildStepAnnouncement({ title: "Groups" }, 5, 8);
+    const forLive = buildStepAnnouncement({ title: "Groups" }, 5, 8);
+    expect(forLabel).toBe(forLive);
+  });
+
+  it("omits the trailing colon when the step has no title", () => {
+    expect(buildStepAnnouncement({ title: "" }, 0, 8)).toBe("Step 1 of 8");
+    expect(buildStepAnnouncement(null, 0, 8)).toBe("Step 1 of 8");
+  });
+
+  it("is correct on the first and last step", () => {
+    expect(buildStepAnnouncement({ title: "Welcome" }, 0, 8)).toBe(
+      "Step 1 of 8: Welcome",
+    );
+    expect(buildStepAnnouncement({ title: "Finish" }, 7, 8)).toBe(
+      "Step 8 of 8: Finish",
+    );
+  });
+});
+
+describe("prefersReducedMotion", () => {
+  function fakeWin(matches) {
+    return { matchMedia: () => ({ matches }) };
+  }
+
+  it("is true when the media query matches", () => {
+    expect(prefersReducedMotion(fakeWin(true))).toBe(true);
+  });
+
+  it("is false when the media query does not match", () => {
+    expect(prefersReducedMotion(fakeWin(false))).toBe(false);
+  });
+
+  it("is false when matchMedia is unavailable", () => {
+    expect(prefersReducedMotion({})).toBe(false);
+  });
+
+  it("is false for a missing window-like object", () => {
+    expect(prefersReducedMotion(null)).toBe(false);
+    expect(prefersReducedMotion(undefined)).toBe(false);
+  });
+});
+
+describe("scrollBehaviorFor", () => {
+  it("is instant ('auto') under reduced motion", () => {
+    expect(scrollBehaviorFor(true)).toBe("auto");
+  });
+
+  it("is smooth otherwise", () => {
+    expect(scrollBehaviorFor(false)).toBe("smooth");
   });
 });

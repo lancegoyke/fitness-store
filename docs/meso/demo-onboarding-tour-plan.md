@@ -1,6 +1,6 @@
 # Meso — guided demo onboarding tour (opt-in, per-feature sample data)
 
-Status: **PLANNED** — 2026-07-07. Tracking issue: [#430](https://github.com/lancegoyke/fitness-store/issues/430).
+Status: **COMPLETE** — all 5 phases shipped 2026-07-07 (PRs [#432](https://github.com/lancegoyke/fitness-store/pull/432), [#433](https://github.com/lancegoyke/fitness-store/pull/433), [#434](https://github.com/lancegoyke/fitness-store/pull/434), [#435](https://github.com/lancegoyke/fitness-store/pull/435), [#436](https://github.com/lancegoyke/fitness-store/pull/436)). Tracking issue: [#430](https://github.com/lancegoyke/fitness-store/issues/430).
 
 Sibling of the [public sandbox demo](./public-sandbox-demo-plan.md) (which this
 reshapes) and the [walkthrough video](./demo-walkthrough-video-plan.md). The
@@ -125,9 +125,12 @@ from data (O7).
    `can_use_agent`); the empty-state "Get started" card becomes the tour
    entry ("Start the guided tour", demo load kept as the secondary; original
    card returns once dismissed/completed). *(Depended on Phase 0 + 2.)*
-4. **Analytics + polish** — funnel events (start → per-step → finish, per-segment
-   opt-in) via the `analytics` app; mobile bottom-sheet steps; keyboard/ARIA a11y;
-   `prefers-reduced-motion`.
+4. **Analytics + polish** — PR [#436](https://github.com/lancegoyke/fitness-store/pull/436) — funnel events server-side on a meso-local
+   `TourEvent` model (the `analytics` app turned out to be GA-script-only — no
+   event mechanism to reuse; owner reads via admin/shell for now, dashboard is a
+   follow-up); tour-marked (`tour=1`) attribution for self actions; mobile
+   bottom-sheet steps (CSS-only, safe-area insets); aria-live step
+   announcements + heading focus; `prefers-reduced-motion`.
 
 ## Key files & pointers
 

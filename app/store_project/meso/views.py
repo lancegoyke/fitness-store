@@ -733,6 +733,13 @@ def plan_create(request, pk):
     handed to the agent to draft the first week (Q2 fast-follow); the proposal
     lands in the review gate. The draft only fires on a new plan — never
     overwriting an existing program — and is metered like the manual agent run.
+
+    Also the "designer"/"agent" steps' self-variant data action (guided-tour
+    Phase 3) — same ``tour=1``-gated funnel opt-in as ``roster_add_self`` (this
+    endpoint is hit organically far more often, from every real "+ New
+    program"/"Build a program" CTA, so the marker is what keeps those from
+    being miscounted). ``draft`` doubles as which of the two tour steps fired
+    it: the "agent" step always sends ``draft=agent``, "designer" never does.
     """
     draft = bool(request.POST.get("draft"))
     draft_batch = None
@@ -759,6 +766,10 @@ def plan_create(request, pk):
     if draft_batch is not None:
         agent_jobs.dispatch_proposal(draft_batch.pk)
         _touch_plan(plan)
+    if request.POST.get("tour") == "1":
+        meso_tour.record_opt_in(
+            request.user, "self", "agent" if draft else "designer", "plan_create"
+        )
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
@@ -885,6 +896,15 @@ def demo_load(request):
             return HttpResponseBadRequest("Unknown demo segment.")
         loader(request.user)
         messages.success(request, _SEGMENT_MESSAGES[segment])
+        # Phase 4 funnel event (#430): a per-segment opt-in. No ``tour=1``
+        # marker needed here (unlike roster_add_self/plan_create below) — the
+        # ``segment`` field is only ever sent by the sandbox tour's own
+        # per-step forms (``meso_tour.js``'s ``segment`` action branch); no
+        # other UI in the app posts it, so every call here really is the
+        # tour's sandbox variant.
+        meso_tour.record_opt_in(
+            request.user, "sandbox", meso_tour.step_key_for_segment(segment), segment
+        )
     else:
         meso_demo.load_demo(request.user)
         messages.success(
@@ -919,6 +939,13 @@ def roster_add_self(request):
     never a paid seat (``is_self`` is excluded from ``billable()``), so there's
     no ``can_add_athlete`` gate here — mirroring the demo loader. Idempotent:
     re-posting reuses the one self-link ``unique(coach, athlete)`` allows.
+
+    This is also the "welcome" step's self-variant data action (guided-tour
+    Phase 3), but it's hit organically too (roster.html's own standing "Add
+    yourself" affordance) — a Phase 4 funnel opt-in event only fires when the
+    POST carries the tour driver's ``tour=1`` marker field (``meso_tour.js``
+    adds it to every action form it builds), so the organic path isn't
+    miscounted as tour engagement.
     """
     # Like demo_load: adding yourself is an implicit "I'm coaching now", so make
     # sure the CoachProfile exists rather than minting a coach via a side door.
@@ -928,6 +955,8 @@ def roster_add_self(request):
         request,
         "You're on your roster — build a program for yourself like any athlete.",
     )
+    if request.POST.get("tour") == "1":
+        meso_tour.record_opt_in(request.user, "self", "welcome", "roster_add_self")
     return redirect("meso:roster")
 
 
@@ -942,23 +971,50 @@ def tour_state(request):
     this via ``fetch`` and gets the new state back as JSON; a bare form POST
     (no ``X-Requested-With``, e.g. JS-disabled) degrades to a redirect back to
     the roster instead.
+
+    Phase 4 (analytics + polish, #430) records the funnel event alongside each
+    transition: "advance"/"goto" only counts as a step **advanced** when the
+    resulting step is actually further along (the driver posts "goto" for both
+    Back and Next — see ``meso_tour.js``'s ``goTo`` — so a backward jump or an
+    already-clamped no-op records nothing); "dismiss" and "complete" record on
+    the step they fired from/landed on; "restart" records a fresh **started**.
+    The variant is read once via ``variant_for`` since any of these can come
+    from either audience.
     """
     profile, _ = CoachProfile.objects.get_or_create(user=request.user)
     action = request.POST.get("action")
     current_step = (profile.tour_state or {}).get("step", 0)
+    variant = meso_tour.variant_for(request.user)
 
     if action == "advance":
         meso_tour.set_step(profile, current_step + 1)
+        if profile.tour_state["step"] > current_step:
+            meso_tour.record_advanced(
+                request.user,
+                variant,
+                meso_tour.STEPS[profile.tour_state["step"]]["key"],
+            )
     elif action == "back":
         meso_tour.set_step(profile, current_step - 1)
     elif action == "goto":
         meso_tour.set_step(profile, request.POST.get("step", current_step))
+        if profile.tour_state["step"] > current_step:
+            meso_tour.record_advanced(
+                request.user,
+                variant,
+                meso_tour.STEPS[profile.tour_state["step"]]["key"],
+            )
     elif action == "dismiss":
         meso_tour.dismiss(profile)
+        meso_tour.record_dismissed(
+            request.user, variant, meso_tour.STEPS[current_step]["key"]
+        )
     elif action == "complete":
         meso_tour.complete(profile)
+        meso_tour.record_completed(request.user, variant)
     elif action == "restart":
         meso_tour.start_tour(profile)
+        meso_tour.record_started(request.user, variant)
     else:
         return HttpResponseBadRequest("Unknown tour action.")
 
@@ -975,11 +1031,19 @@ def tour_skip(request):
     Reuses the exact pre-tour ``demo_load`` behavior (the whole workspace, one
     shot) and additionally marks the tour ``completed`` so it doesn't
     resurface on the next page load — the tour is meant to be a helpful
-    default, never a wall (O6).
+    default, never a wall (O6). Records a **skipped** funnel event (not
+    **completed** — distinct from actually walking the tour to the end, even
+    though both leave ``tour_state`` parked on the same ``completed`` status),
+    keyed to whichever step the coach skipped from.
     """
     profile, _ = CoachProfile.objects.get_or_create(user=request.user)
+    current_step = (profile.tour_state or {}).get("step", 0)
+    variant = meso_tour.variant_for(request.user)
     meso_demo.load_demo(request.user)
     meso_tour.complete(profile)
+    meso_tour.record_skipped(
+        request.user, variant, meso_tour.STEPS[current_step]["key"]
+    )
     messages.success(
         request,
         "Demo data loaded — explore a populated workspace. Remove it any time.",

@@ -13,9 +13,15 @@
  * the normal way).
  *
  * The pure decision logic (step clamping/advance, anchor-retry cutoff, config
- * parsing, per-step action state, current-page detection) is unit-tested
- * (frontend/meso_tour.test.js); the DOM wiring below is exercised through the
- * Django template/view tests.
+ * parsing, per-step action state, current-page detection, the a11y
+ * announcement string, reduced-motion scroll behavior — Phase 4) is
+ * unit-tested (frontend/meso_tour.test.js); the DOM wiring below is exercised
+ * through the Django template/view tests.
+ *
+ * Mobile (issue #430 Phase 4): the step card becomes a bottom sheet on
+ * narrow viewports via a plain CSS media query in `_tour.html`'s inline
+ * `<style>` block, not a JS branch here — there's no viewport-width decision
+ * to unit-test because the browser makes it.
  */
 (function (root) {
   // ---- pure logic (unit-tested) ----
@@ -130,6 +136,34 @@
     );
   }
 
+  // The card's accessible name (issue #430 Phase 4, a11y): `aria-label` on
+  // the dialog and the text of the `aria-live` announcement on step change
+  // both read "Step 3 of 8: Program Designer" — the step position plus its
+  // title, so a screen-reader user always knows both where they are and what
+  // this step is about without having to find the visible "Step X of Y" text.
+  function buildStepAnnouncement(step, index, total) {
+    var title = (step && step.title) || "";
+    return "Step " + (index + 1) + " of " + total + (title ? ": " + title : "");
+  }
+
+  // Whether the visitor's OS/browser asks for reduced motion — a plain
+  // boolean read from a `window`-like object rather than the global `window`
+  // directly, so it's callable with a fake `{ matchMedia: ... }` in tests.
+  function prefersReducedMotion(win) {
+    return !!(
+      win &&
+      typeof win.matchMedia === "function" &&
+      win.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
+  // The `scrollIntoView`/scroll behavior to use, given whether reduced motion
+  // is requested (issue #430 Phase 4): instant ("auto") under reduced motion,
+  // smooth otherwise.
+  function scrollBehaviorFor(reducedMotion) {
+    return reducedMotion ? "auto" : "smooth";
+  }
+
   // ---- DOM wiring (browser only) ----
 
   var MAX_ANCHOR_ATTEMPTS = 10;
@@ -239,6 +273,11 @@
       // — unlike the sandbox's segment action, these endpoints already
       // redirect to the right place (roster / the designer), which the plan
       // deliberately leans on rather than fighting.
+      //
+      // `tour=1` (Phase 4 analytics): both endpoints are also hit organically
+      // (roster.html's own "Add yourself" row, every "+ New program" CTA) —
+      // this marker is how the server tells a tour-driven opt-in apart from
+      // an organic one, so only forms *this driver* builds carry it.
       var fields = (step.action && step.action.fields) || {};
       var fieldsHtml = Object.keys(fields)
         .map(function (name) {
@@ -258,6 +297,7 @@
         '<input type="hidden" name="csrfmiddlewaretoken" value="' +
         csrf +
         '">' +
+        '<input type="hidden" name="tour" value="1">' +
         fieldsHtml +
         '<button type="submit" class="meso-btn meso-btn--primary"' +
         (action.disabled ? " disabled" : "") +
@@ -279,18 +319,26 @@
         '">Take me there →</a>'
       : "";
 
+    // `aria-label` carries the step position + title (issue #430 Phase 4 a11y)
+    // rather than `aria-modal` — the page behind the card must stay reachable
+    // (the whole point of a spotlight tour is clicking the highlighted live
+    // control), so this deliberately isn't a true modal dialog.
+    var ariaLabel = escapeHtml(buildStepAnnouncement(step, index, total));
+
     return (
       '<div class="meso-tour-spotlight" data-tour-spotlight aria-hidden="true"></div>' +
       '<div class="meso-card meso-card--pad meso-tour-card' +
       (step.anchor ? "" : " meso-tour-card--centered") +
-      '" role="dialog" aria-label="Guided tour" tabindex="-1">' +
+      '" role="dialog" aria-label="' +
+      ariaLabel +
+      '">' +
       '<button type="button" class="meso-tour-close" data-tour-dismiss aria-label="Dismiss tour">×</button>' +
       '<p class="meso-eyebrow">Step ' +
       (index + 1) +
       " of " +
       total +
       "</p>" +
-      '<div class="meso-tour-title">' +
+      '<div class="meso-tour-title" tabindex="-1" data-tour-heading>' +
       escapeHtml(step.title) +
       "</div>" +
       '<p class="meso-sub meso-tour-bodytext">' +
@@ -350,6 +398,26 @@
     spotlight.style.height = rect.height + pad * 2 + "px";
   }
 
+  // Brings the step's spotlighted anchor into view on step change (issue
+  // #430 Phase 4) — a bottom-sheet card on mobile, or a page that's scrolled
+  // away from the control, would otherwise spotlight something off-screen.
+  // A one-shot best-effort lookup (no retry loop like `positionSpotlight`'s —
+  // this only runs once per step change, not on every resize/scroll, so
+  // missing an anchor that mounts asynchronously just means no auto-scroll
+  // for that step; the spotlight box itself still finds it via its own
+  // retries). `prefers-reduced-motion` picks an instant jump over a smooth
+  // scroll.
+  function scrollAnchorIntoView(doc, win, anchorValue) {
+    if (!anchorValue) return;
+    var selector = '[data-tour="' + anchorValue.replace(/"/g, '\\"') + '"]';
+    var el = doc.querySelector(selector);
+    if (!el || typeof el.scrollIntoView !== "function") return;
+    el.scrollIntoView({
+      behavior: scrollBehaviorFor(prefersReducedMotion(win)),
+      block: "center",
+    });
+  }
+
   // Wires one render of the card: back/next/dismiss buttons. The per-step
   // action and skip forms, and the "Take me there" link, are real
   // form/anchor markup (a genuine page navigation) — no JS wiring needed.
@@ -362,6 +430,19 @@
 
     var index = clampStep(config.step, config.steps.length);
     var reposition = null;
+
+    // A persistent `aria-live` region (issue #430 Phase 4 a11y) — created
+    // once and only ever text-updated, never recreated, unlike the card
+    // itself (`render()` replaces `mount`'s entire subtree each step via
+    // `innerHTML`). Screen readers reliably announce a *mutation* to an
+    // existing live region; inserting a brand-new node that already has
+    // `aria-live` set is announced less consistently across engines, so this
+    // lives outside `mount` entirely and just has its text swapped.
+    var liveRegion = doc.createElement("div");
+    liveRegion.className = "meso-tour-sr-only";
+    liveRegion.setAttribute("aria-live", "polite");
+    liveRegion.setAttribute("role", "status");
+    doc.body.appendChild(liveRegion);
 
     function wireCard() {
       var back = mount.querySelector("[data-tour-back]");
@@ -384,10 +465,25 @@
 
     function render() {
       mount.innerHTML = buildCardMarkup(config, index);
+      // The mount starts `aria-hidden="true"` in `_tour.html` (nothing to
+      // read before JS ever mounts a card) — flip it open now that it holds
+      // real, interactive content, or a screen reader can never reach it at
+      // all despite it being keyboard-focusable (an axe-flagged anti-pattern:
+      // aria-hidden on a focusable element/ancestor).
+      mount.setAttribute("aria-hidden", "false");
       positionSpotlight(mount, config.steps[index].anchor, 0);
+      scrollAnchorIntoView(doc, win, config.steps[index].anchor);
       wireCard();
-      var card = mount.querySelector(".meso-tour-card");
-      if (card && card.focus) card.focus();
+      // Focus the heading, not the whole card (issue #430 Phase 4 a11y) —
+      // `preventScroll` so moving focus never fights the anchor scroll above
+      // or jerks the page around on every step.
+      var heading = mount.querySelector("[data-tour-heading]");
+      if (heading && heading.focus) heading.focus({ preventScroll: true });
+      liveRegion.textContent = buildStepAnnouncement(
+        config.steps[index],
+        index,
+        config.steps.length
+      );
     }
 
     function goTo(newIndex) {
@@ -421,6 +517,8 @@
       }
       doc.removeEventListener("keydown", onKeydown);
       mount.innerHTML = "";
+      mount.setAttribute("aria-hidden", "true");
+      if (liveRegion.parentNode) liveRegion.parentNode.removeChild(liveRegion);
     }
 
     reposition = throttle(function () {
@@ -458,6 +556,9 @@
       shouldRetryAnchor: shouldRetryAnchor,
       resolveActionState: resolveActionState,
       isCurrentPage: isCurrentPage,
+      buildStepAnnouncement: buildStepAnnouncement,
+      prefersReducedMotion: prefersReducedMotion,
+      scrollBehaviorFor: scrollBehaviorFor,
     };
   }
 })(typeof window !== "undefined" ? window : this);

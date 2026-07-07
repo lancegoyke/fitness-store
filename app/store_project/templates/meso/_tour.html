@@ -127,13 +127,56 @@
         cursor: pointer;
         padding: 4px;
       }
+      /* Visually-hidden `aria-live` announcer (meso_tour.js) — present for
+         screen readers only, never for sighted users (the visible "Step X of
+         Y" eyebrow already says the same thing on screen). */
+      .meso-tour-sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      /* Mobile bottom sheet (issue #430 Phase 4): every step card — anchored
+         or the anchor-less `--centered` variant alike — pins full-width to
+         the bottom of the viewport instead of floating as a corner/centered
+         card, with safe-area padding for the home-indicator/notch. No JS
+         branch decides this; the browser does, via the media query alone.
+         The spotlight itself is unaffected — it still highlights the anchor
+         wherever that control lives on the page. */
       @media (max-width: 640px) {
-        .meso-tour-card {
-          left: 12px;
-          right: 12px;
-          bottom: 12px;
+        .meso-tour-card,
+        .meso-tour-card--centered {
+          left: 0;
+          right: 0;
+          bottom: 0;
+          top: auto;
+          transform: none;
           width: auto;
           max-width: none;
+          max-height: min(75vh, 520px);
+          overflow-y: auto;
+          border-radius: 14px 14px 0 0;
+          padding-bottom: calc(18px + env(safe-area-inset-bottom));
+          padding-left: calc(20px + env(safe-area-inset-left));
+          padding-right: calc(20px + env(safe-area-inset-right));
+        }
+      }
+      /* prefers-reduced-motion (issue #430 Phase 4): the only animated
+         properties in this file are the spotlight's position/size tween and
+         the step dots' active-state grow — both go instant. Smooth-scrolling
+         to the step's anchor is handled in meso_tour.js (behavior: "auto"
+         under reduced motion), not here. */
+      @media (prefers-reduced-motion: reduce) {
+        .meso-tour-spotlight {
+          transition: none;
+        }
+        .meso-tour-dots span {
+          transition: none;
         }
       }
     </style>
