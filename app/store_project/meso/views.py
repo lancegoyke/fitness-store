@@ -34,6 +34,7 @@ from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 from django.views.decorators.http import require_POST
@@ -49,6 +50,7 @@ from . import one_rm as meso_one_rm
 from . import presenters
 from . import push as meso_push
 from . import sandbox as meso_sandbox
+from . import tour as meso_tour
 from .agent import apply as agent_apply
 from .agent import client as agent_client
 from .agent import jobs as agent_jobs
@@ -852,7 +854,16 @@ def demo_load(request):
     instead of the full aggregate; an unrecognized name loads nothing and 400s.
     No URL changes: this stays the one ``meso:demo_load`` endpoint for both the
     full load and (guided-tour Phase 2) each step's per-segment "add sample data"
-    action — the tour will start passing ``segment`` here.
+    action — the tour passes ``segment`` here.
+
+    An optional ``next`` POST field sends the user back where they came from
+    (guided-tour Phase 2): the tour's segment forms fire from mid-tour pages
+    (designer, deliver, ...) and always landing on the roster would teleport
+    the user away from the step they're on. Only a safe local path is honored
+    (leading ``/``, not scheme-relative ``//``, and passing Django's
+    ``url_has_allowed_host_and_scheme``); anything else — including the
+    existing roster/tour-skip callers, which don't send ``next`` at all —
+    falls back to the roster exactly as before.
     """
     # Loading a demo is an implicit "I'm coaching now": ensure the CoachProfile
     # exists (mirrors start_coaching's free path) so demo links never make a user a
@@ -872,6 +883,13 @@ def demo_load(request):
             request,
             "Demo data loaded — explore a populated workspace. Remove it any time.",
         )
+    next_path = request.POST.get("next", "")
+    if (
+        next_path.startswith("/")
+        and not next_path.startswith("//")
+        and url_has_allowed_host_and_scheme(next_path, allowed_hosts=None)
+    ):
+        return redirect(next_path)
     return redirect("meso:roster")
 
 
@@ -901,6 +919,62 @@ def roster_add_self(request):
     messages.success(
         request,
         "You're on your roster — build a program for yourself like any athlete.",
+    )
+    return redirect("meso:roster")
+
+
+@login_required
+@require_POST
+def tour_state(request):
+    """Advance/back/goto/dismiss/complete/restart the guided demo tour (#430, Phase 2).
+
+    Persists on the requesting coach's ``CoachProfile.tour_state``
+    (get_or_create, mirroring ``demo_load``/``roster_add_self`` — driving the
+    tour is itself an implicit "I'm coaching now"). The front-end driver calls
+    this via ``fetch`` and gets the new state back as JSON; a bare form POST
+    (no ``X-Requested-With``, e.g. JS-disabled) degrades to a redirect back to
+    the roster instead.
+    """
+    profile, _ = CoachProfile.objects.get_or_create(user=request.user)
+    action = request.POST.get("action")
+    current_step = (profile.tour_state or {}).get("step", 0)
+
+    if action == "advance":
+        meso_tour.set_step(profile, current_step + 1)
+    elif action == "back":
+        meso_tour.set_step(profile, current_step - 1)
+    elif action == "goto":
+        meso_tour.set_step(profile, request.POST.get("step", current_step))
+    elif action == "dismiss":
+        meso_tour.dismiss(profile)
+    elif action == "complete":
+        meso_tour.complete(profile)
+    elif action == "restart":
+        meso_tour.start_tour(profile)
+    else:
+        return HttpResponseBadRequest("Unknown tour action.")
+
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        return JsonResponse(profile.tour_state)
+    return redirect("meso:roster")
+
+
+@login_required
+@require_POST
+def tour_skip(request):
+    """The O6 "skip · load everything" shortcut: the full aggregate demo, tour marked done.
+
+    Reuses the exact pre-tour ``demo_load`` behavior (the whole workspace, one
+    shot) and additionally marks the tour ``completed`` so it doesn't
+    resurface on the next page load — the tour is meant to be a helpful
+    default, never a wall (O6).
+    """
+    profile, _ = CoachProfile.objects.get_or_create(user=request.user)
+    meso_demo.load_demo(request.user)
+    meso_tour.complete(profile)
+    messages.success(
+        request,
+        "Demo data loaded — explore a populated workspace. Remove it any time.",
     )
     return redirect("meso:roster")
 

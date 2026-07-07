@@ -375,3 +375,105 @@ class TestDemoLoadEndpointSegments:
         client.force_login(coach)
         client.post(reverse("meso:demo_load"), {"segment": "group"})
         assert mailoutbox == []
+
+
+# ---------------------------------------------------------------------------
+# The demo_load endpoint's optional ``next`` field (guided-tour Phase 2):
+# the tour's segment forms fire from mid-tour pages (designer, deliver, ...),
+# and always redirecting to the roster would teleport the user away from the
+# step they're on. Only a safe local path is honored.
+# ---------------------------------------------------------------------------
+
+
+class TestDemoLoadNextRedirect:
+    def test_valid_relative_next_is_honored(self, client):
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:demo_load"),
+            {"segment": "delivery", "next": "/meso/deliver/5/"},
+        )
+
+        assert resp.status_code == 302
+        assert resp.url == "/meso/deliver/5/"
+        assert demo.has_delivery(coach) is True
+
+    def test_next_with_a_querystring_is_honored(self, client):
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:demo_load"),
+            {"segment": "athletes", "next": "/meso/deliver/5/?week=9"},
+        )
+
+        assert resp.status_code == 302
+        assert resp.url == "/meso/deliver/5/?week=9"
+
+    def test_absent_next_falls_back_to_the_roster(self, client):
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(reverse("meso:demo_load"), {"segment": "athletes"})
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+
+    def test_absolute_external_next_is_rejected(self, client):
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:demo_load"),
+            {"segment": "athletes", "next": "https://evil.example/phish"},
+        )
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        assert demo.has_athletes(coach) is True  # the load itself still ran
+
+    def test_scheme_relative_next_is_rejected(self, client):
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:demo_load"),
+            {"segment": "athletes", "next": "//evil.example/phish"},
+        )
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+
+    def test_non_rooted_next_is_rejected(self, client):
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(
+            reverse("meso:demo_load"),
+            {"segment": "athletes", "next": "meso/deliver/5/"},
+        )
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+
+    def test_aggregate_load_without_next_behaves_exactly_as_today(self, client):
+        """The pre-tour callers (roster card, tour_skip) send no ``next``."""
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(reverse("meso:demo_load"))
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        assert demo.has_demo(coach) is True
+
+    def test_aggregate_load_honors_a_safe_next_too(self, client):
+        """``next`` isn't segment-only — but no existing caller sends it."""
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(reverse("meso:demo_load"), {"next": "/meso/designer/"})
+
+        assert resp.status_code == 302
+        assert resp.url == "/meso/designer/"

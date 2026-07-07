@@ -69,6 +69,16 @@ class CoachProfile(models.Model):
     default_unit = models.CharField(
         _("Default unit"), max_length=2, choices=Unit, default=Unit.KILOGRAMS
     )
+    tour_state = models.JSONField(
+        _("Guided tour state"),
+        default=dict,
+        blank=True,
+        help_text=_(
+            "Guided demo onboarding tour progress (issue #430): "
+            "{'step': <int>, 'status': 'active'|'dismissed'|'completed'}. "
+            "An empty dict means the tour has never started."
+        ),
+    )
     created = models.DateTimeField(_("Time created"), auto_now_add=True)
     modified = models.DateTimeField(_("Time last modified"), auto_now=True)
 

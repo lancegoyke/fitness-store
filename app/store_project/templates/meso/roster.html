@@ -29,9 +29,12 @@
               <button type="submit" class="meso-btn meso-btn--ghost">Remove demo data</button>
             </form>
           </div>
-        {% elif is_empty %}
+        {% elif is_empty and not show_meso_tour %}
           <!-- First-run onboarding (first-time-UX Phase 2): teach Invite → Build →
-               Deliver and offer the one-click demo. -->
+               Deliver and offer the one-click demo. Suppressed while the guided
+               demo tour (issue #430) is active — its own welcome step replaces
+               this card for a sandbox coach; a real coach (show_meso_tour is
+               always False in Phase 2) sees this exactly as before. -->
           <div class="meso-card meso-card--pad" style="display:flex;flex-direction:column;gap:15px;">
             <div>
               <p class="meso-eyebrow" style="margin:0 0 4px;">Get started</p>
@@ -62,49 +65,51 @@
           </div>
         {% endif %}
 
-        <div class="meso-card">
+        <div class="meso-card" data-tour="roster-individuals">
           <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
             <p class="meso-eyebrow" style="margin:0;">Individuals</p>
             <div class="meso-spacer"></div>
             <span class="meso-row-meta">{{ athletes|length }} athlete{{ athletes|length|pluralize }}</span>
             <a href="{% url 'meso:relationship_history' %}" class="meso-row-meta" style="text-decoration:none;color:var(--accent);white-space:nowrap;">· Past athletes →</a>
           </div>
-          {% for a in athletes %}
-            <a class="meso-row" href="{% url 'meso:athlete' a.id %}">
-              <div class="meso-avatar {% if a.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ a.initials }}</div>
-              <div style="min-width:0;">
-                <div class="meso-row-name">{{ a.name }}</div>
-                <div class="meso-row-meta">{{ a.meta }}</div>
-              </div>
-              <div class="meso-spacer"></div>
-              {% if a.is_demo %}
-                <span class="meso-badge meso-badge--muted"><i></i>Demo</span>
-              {% endif %}
-              {% if a.is_self %}
-                <span class="meso-badge meso-badge--muted"><i></i>You</span>
-              {% endif %}
-              {% if a.compliance is not None %}
-                <div style="width:108px;display:flex;align-items:center;gap:8px;">
-                  <div class="meso-meter"><span style="width:{{ a.compliance }}%;"></span></div>
-                  <span class="meso-row-meta meso-mono">{{ a.compliance }}%</span>
+          <div data-tour="roster-athlete-rows">
+            {% for a in athletes %}
+              <a class="meso-row" href="{% url 'meso:athlete' a.id %}">
+                <div class="meso-avatar {% if a.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ a.initials }}</div>
+                <div style="min-width:0;">
+                  <div class="meso-row-name">{{ a.name }}</div>
+                  <div class="meso-row-meta">{{ a.meta }}</div>
                 </div>
-              {% endif %}
-              {% if a.status == 'suspended' %}
-                <span class="meso-badge meso-badge--warn"><i></i>{{ a.status_label }}</span>
-              {% elif a.status == 'needs_review' %}
-                <span class="meso-badge meso-badge--accent"><i></i>{{ a.status_label }}</span>
-              {% elif a.status == 'delivered' %}
-                <span class="meso-badge meso-badge--ok"><i></i>{{ a.status_label }}</span>
-              {% elif a.status == 'drafting' %}
-                <span class="meso-badge meso-badge--accent"><i></i>{{ a.status_label }}</span>
-              {% endif %}
-              <span class="meso-muted" style="font-size:16px;">›</span>
-            </a>
-          {% empty %}
-            <div class="meso-row" style="color:var(--dim);">
-              No athletes yet. Invite one to get started.
-            </div>
-          {% endfor %}
+                <div class="meso-spacer"></div>
+                {% if a.is_demo %}
+                  <span class="meso-badge meso-badge--muted"><i></i>Demo</span>
+                {% endif %}
+                {% if a.is_self %}
+                  <span class="meso-badge meso-badge--muted"><i></i>You</span>
+                {% endif %}
+                {% if a.compliance is not None %}
+                  <div style="width:108px;display:flex;align-items:center;gap:8px;">
+                    <div class="meso-meter"><span style="width:{{ a.compliance }}%;"></span></div>
+                    <span class="meso-row-meta meso-mono">{{ a.compliance }}%</span>
+                  </div>
+                {% endif %}
+                {% if a.status == 'suspended' %}
+                  <span class="meso-badge meso-badge--warn"><i></i>{{ a.status_label }}</span>
+                {% elif a.status == 'needs_review' %}
+                  <span class="meso-badge meso-badge--accent"><i></i>{{ a.status_label }}</span>
+                {% elif a.status == 'delivered' %}
+                  <span class="meso-badge meso-badge--ok"><i></i>{{ a.status_label }}</span>
+                {% elif a.status == 'drafting' %}
+                  <span class="meso-badge meso-badge--accent"><i></i>{{ a.status_label }}</span>
+                {% endif %}
+                <span class="meso-muted" style="font-size:16px;">›</span>
+              </a>
+            {% empty %}
+              <div class="meso-row" style="color:var(--dim);">
+                No athletes yet. Invite one to get started.
+              </div>
+            {% endfor %}
+          </div>
 
           <!-- Outstanding email invites (N4): sent but not yet claimed; an expired
                one shows so the coach can Resend it (Phase 3 TTL). -->
@@ -211,7 +216,7 @@
           </details>
         </div>
 
-        <div class="meso-card">
+        <div class="meso-card" data-tour="roster-groups">
           <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
             <p class="meso-eyebrow" style="margin:0;">Groups</p>
             <div class="meso-spacer"></div>

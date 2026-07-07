@@ -34,9 +34,21 @@
          Alpine root div's inline style. -->
     <div
       id="meso-designer-root"
+      data-tour="designer-root"
       style="--bg:#f4f4f5;--surface:#ffffff;--rail:#fbfbfc;--ink:#0a0a0a;--dim:#6b7280;--line:#e4e4e7;--line-2:#f1f3f5;--radius:8px;--pad:14px;--accent:#31759d;--accent-ink:#ffffff;--soft:#eaf2f7;--soft-line:#bcd6e4;--accent-deep:#1f516b;--warn:#b4541f;--warn-soft:#fbefe8;--ok:#2f8f56;display:flex;flex-direction:column;height:100vh;min-width:1240px;overflow:hidden;background:var(--bg);color:var(--ink);font-family:'Hanken Grotesk',system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;"
     ></div>
 
     <script type="module" src="{% static 'js/dist/designer.js' %}"></script>
+
+    {% comment %}
+      designer.html is a standalone document (not extending _meso_base.html —
+      it's a self-contained full-screen tool), so the guided demo tour
+      (issue #430) isn't picked up by _meso_base.html's include for this page;
+      it's wired in separately here, right before </body>. ``is_sandbox`` /
+      ``show_meso_tour`` still reach this template the same way regardless —
+      ``sandbox_status`` is a sitewide context processor, not something
+      MesoDesignerView's own context has to opt into.
+    {% endcomment %}
+    {% include "meso/_tour.html" %}
   </body>
 </html>

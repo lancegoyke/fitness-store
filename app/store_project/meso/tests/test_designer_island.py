@@ -17,6 +17,7 @@ island's own rendering behavior is covered by the vitest suite under
 import pytest
 from django.urls import reverse
 
+from store_project.meso import demo as meso_demo
 from store_project.meso import sandbox as meso_sandbox
 from store_project.meso.tests.test_designer_save import seed_plan
 
@@ -106,6 +107,10 @@ class TestDesignerFlagsPayload:
 
     def test_sandbox_coach_gets_is_sandbox_true(self, client):
         user = meso_sandbox.create_sandbox()
+        # A fresh sandbox starts empty (#430 Phase 2) — the bare designer URL
+        # redirects to the roster with no working plan to open. Load the
+        # ``program`` segment so it has one to land on.
+        meso_demo.load_program(user)
         client.force_login(user)
         resp = client.get(reverse("meso:designer"), follow=True)
         assert resp.status_code == 200

@@ -1,10 +1,14 @@
 """Public, no-signup ephemeral coach sandbox (issue #389).
 
 A logged-out visitor to ``/meso/demo/`` gets a real, throwaway coach ``User`` —
-seeded via ``demo.load_demo`` and marked with a ``SandboxSession`` — logged in
-for the length of their visit, so every existing login-gated view / CSRF /
-scoping query just works. Phase 2 adds the expiry sweep that reaps a sandbox
-after its TTL. See ``docs/meso/public-sandbox-demo-plan.md``.
+marked with a ``SandboxSession`` — logged in for the length of their visit, so
+every existing login-gated view / CSRF / scoping query just works. The
+workspace starts **empty**; the guided demo onboarding tour (``tour.py``,
+issue #430 Phase 2) walks the visitor into loading each feature's sample data
+themselves via ``demo``'s per-segment loaders. Phase 2 (of *this* module) adds
+the expiry sweep that reaps a sandbox after its TTL. See
+``docs/meso/public-sandbox-demo-plan.md`` and
+``docs/meso/demo-onboarding-tour-plan.md``.
 """
 
 import logging
@@ -18,6 +22,7 @@ from django.utils import timezone
 from store_project.users.models import User
 
 from . import demo
+from . import tour
 from .models import CoachProfile
 from .models import SandboxSession
 
@@ -36,24 +41,28 @@ def is_sandbox(user):
 
 @transaction.atomic
 def create_sandbox(*, source_ip=None):
-    """Mint a throwaway coach: ``User`` + ``CoachProfile`` + seeded demo data.
+    """Mint a throwaway coach: ``User`` + ``CoachProfile`` + a started tour.
 
     Unusable password (never a real login credential) and a non-routable,
-    per-visitor email (never real mail) mark the account as disposable; the
-    workspace is populated immediately via ``demo.load_demo`` so the visitor has
-    something to explore. Returns the new user.
+    per-visitor email (never real mail) mark the account as disposable. The
+    workspace starts **empty** (guided-tour Phase 2, the empty-start flip) —
+    no eager ``demo.load_demo`` — and the guided tour is armed at step 0 so
+    the visitor is walked feature-by-feature into loading each segment of
+    sample data themselves (``docs/meso/demo-onboarding-tour-plan.md``,
+    landmine table: the empty start only ships *with* the tour, never
+    before it). Returns the new user.
     """
     email = f"{uuid4().hex}@{SANDBOX_EMAIL_DOMAIN}"
     user = User.objects.create(email=email, username=email, name="Demo Coach")
     user.set_unusable_password()
     user.save(update_fields=["password"])
-    CoachProfile.objects.get_or_create(user=user)
+    profile, _ = CoachProfile.objects.get_or_create(user=user)
     SandboxSession.objects.create(
         user=user,
         expires_at=timezone.now() + timedelta(hours=settings.MESO_SANDBOX_TTL_HOURS),
         source_ip=source_ip,
     )
-    demo.load_demo(user)
+    tour.start_tour(profile)
     return user
 
 
