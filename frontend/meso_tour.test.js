@@ -185,6 +185,66 @@ describe("resolveActionState", () => {
       }).kind,
     ).toBe("segment");
   });
+
+  // Phase 3 — self-coaching variant's generic form action (roster_add_self /
+  // plan_create), distinct from the sandbox's segment action.
+  it("offers the self-variant form action when not yet loaded", () => {
+    expect(
+      resolveActionState({
+        segment: null,
+        action: { url: "/meso/athlete/self/add/", label: "Add yourself as your first athlete", fields: {} },
+        loaded: false,
+      }),
+    ).toEqual({
+      kind: "form",
+      label: "Add yourself as your first athlete",
+      disabled: false,
+    });
+  });
+
+  it("shows a disabled done-state once the self-variant action's step is loaded", () => {
+    expect(
+      resolveActionState({
+        segment: null,
+        action: { url: "/meso/athlete/self/add/", label: "Add yourself as your first athlete", fields: {} },
+        loaded: true,
+      }),
+    ).toEqual({ kind: "form", label: "Done ✓", disabled: true });
+  });
+
+  it("falls back to a generic label when the form action has none", () => {
+    expect(
+      resolveActionState({
+        segment: null,
+        action: { url: "/meso/athlete/1/plan/new/", fields: {} },
+        loaded: false,
+      }),
+    ).toEqual({ kind: "form", label: "Continue", disabled: false });
+  });
+
+  it("prefers the segment action over a form action when both are set", () => {
+    // Not a real server-produced shape (sandbox and self-variant steps are
+    // mutually exclusive), but pins the precedence order defensively.
+    expect(
+      resolveActionState({
+        segment: "athletes",
+        action_label: "Add 5 sample athletes",
+        action: { url: "/meso/athlete/self/add/", label: "Add yourself" },
+        loaded: false,
+      }).kind,
+    ).toBe("segment");
+  });
+
+  it("prefers a form action over signup_gate when both are set", () => {
+    expect(
+      resolveActionState({
+        segment: null,
+        action: { url: "/meso/athlete/1/plan/new/", label: "Start a program for yourself" },
+        signup_gate: true,
+        loaded: false,
+      }).kind,
+    ).toBe("form");
+  });
 });
 
 describe("isCurrentPage", () => {

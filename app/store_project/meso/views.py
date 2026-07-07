@@ -415,6 +415,14 @@ class RosterView(TemplateView):
         # Self-coaching (guided-tour Phase 0): the roster offers "Add yourself as
         # an athlete" until the coach's one self-link is active.
         ctx["has_self_link"] = any(link.is_self for link in links)
+        # Guided-tour Phase 3: an empty workspace's Get-started card becomes the
+        # tour entry point for anyone whose tour hasn't been dismissed/completed
+        # (covers "never started" — the common real-coach case — and, harmlessly,
+        # an in-progress tour, though that branch never renders since the tour
+        # itself is mounted instead whenever ``show_meso_tour`` is true). Once
+        # dismissed/completed, this reads False and the original card returns —
+        # nothing is ever a dead end.
+        ctx["tour_entry_available"] = meso_tour.is_active(self.request.user)
         return ctx
 
 
