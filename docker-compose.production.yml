@@ -45,6 +45,10 @@ services:
       context: .
     image: fitness-store-app # shared by the qcluster worker (same code, diff command)
     restart: unless-stopped
+    # During a rolling deploy the old container is `docker stop`ped once the new
+    # one is healthy; this gives gunicorn up to 30s (its default graceful-timeout)
+    # to finish in-flight requests on SIGTERM before SIGKILL, so no request is cut.
+    stop_grace_period: 30s
     env_file:
       - .env
     environment:

@@ -16,7 +16,22 @@ yourdomain.com {
         Referrer-Policy strict-origin-when-cross-origin
     }
 
-    reverse_proxy fitness-store-web:8000 {
+    reverse_proxy {
+        # Dynamic upstreams: re-resolve the proxy-network alias every few seconds
+        # instead of pinning one IP at config load. During a rolling deploy both
+        # the old and new container share the `fitness-store-web` alias, so Caddy
+        # load-balances across both; when the old one is removed it drops out of
+        # the pool on the next refresh. Paired with lb_retries + fail_duration
+        # this makes the container swap seamless (no 502 on teardown).
+        dynamic a {
+            name fitness-store-web
+            port 8000
+            refresh 3s
+        }
+        lb_policy round_robin
+        lb_retries 2
+        fail_duration 10s
+
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-Proto {scheme}
         header_up X-Forwarded-Host {host}
