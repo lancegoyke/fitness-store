@@ -98,6 +98,41 @@ visitor — demo/trial lead, athlete login is a compact strip, not a card.
       <span class="meso-row-meta">Training with a coach? <a href="{% url 'account_login' %}?next={{ athlete_next|urlencode }}" style="color:var(--accent);font-weight:600;">Log in to your training</a> — or tap the link in your email invite.</span>
     </div>
 
+    {% comment %}
+      Hosted walkthrough video (issue #415 follow-up to #388) — the real coach
+      flow (roster -> athlete -> designer -> agent proposal -> review ->
+      deliver), captured by `just record-demo` and hosted on S3 by
+      `just publish-demo-video` (scripts/publish_demo_video.py). Both write to
+      fixed keys, so refreshing after a UI change is just re-running those two
+      commands — nothing here or in settings needs to change.
+
+      `preload="none"` + this `{% if %}` guard are the page-weight guarantee:
+      an anonymous visit that never presses play costs nothing beyond the
+      ~50KB poster image, and the whole section (including that image) simply
+      isn't in the page when the setting is blanked (e.g. mid-refresh, before
+      a first upload). Framed with `.meso-hero-shot` (meso.css) — the same
+      card chrome as the hero screenshot above, so the two product visuals on
+      this page read as one system.
+    {% endcomment %}
+    {% if demo_video_url %}
+      <div class="meso-card meso-card--pad" style="text-align:center;margin-bottom:18px;">
+        <p class="meso-eyebrow">See it in action</p>
+        <p style="font-size:18px;font-weight:800;letter-spacing:-0.02em;margin:6px 0 16px;">The coach flow, start to finish — about a minute</p>
+        <video
+          class="meso-hero-shot"
+          controls
+          preload="none"
+          {% if demo_video_poster_url %}poster="{{ demo_video_poster_url }}"{% endif %}
+          width="1280"
+          height="720"
+          aria-label="Walkthrough of the Meso coach flow: roster, athlete profile, designer, AI agent proposal, review, and delivery."
+        >
+          <source src="{{ demo_video_url }}" type="video/mp4" />
+          <p class="meso-row-meta">Your browser doesn't support embedded video. <a href="{{ demo_video_url }}" style="color:var(--accent);font-weight:600;">Download the video</a> instead.</p>
+        </video>
+      </div>
+    {% endif %}
+
     <!-- How it works, one line each. -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
       <div class="meso-card meso-card--pad">

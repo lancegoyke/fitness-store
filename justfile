@@ -126,3 +126,13 @@ capture-landing-still:
     docker compose up -d --wait
     just frontend-build
     uv run python scripts/capture_landing_still.py
+
+# Publish the walkthrough video (docs/demo/out/meso-walkthrough.mp4) + a poster
+# frame to S3 (issue #415 follow-up) so the Meso landing page has something to
+# embed. Needs a video to already exist — this doesn't record one. No docker
+# services required (it's just an upload). The full refresh loop, after any UI
+# change, is:
+#
+#     just record-demo && just publish-demo-video
+publish-demo-video:
+    uv run python scripts/publish_demo_video.py
