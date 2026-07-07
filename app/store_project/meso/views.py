@@ -2041,12 +2041,30 @@ def prescription_patch(request, plan_id, pk):
             return HttpResponseBadRequest("Invalid load_type.")
         updates["load_type"] = load_type
 
-    if updates:
+    # ``name`` is the row's identity, which now lives on the block-shared
+    # ``ExerciseSlot`` (not the per-week cell). Editing it renames the exercise for
+    # the WHOLE block — the fixed-lineup semantics — and keeps the unchanged P0
+    # designer's inline name autosave (which posts ``name`` through this patch)
+    # working. It writes the slot, not a per-week swap.
+    slot_name = None
+    if "name" in payload:
+        value = payload["name"]
+        if not isinstance(value, str):
+            return HttpResponseBadRequest("name must be a string.")
+        if len(value) > 255:
+            return HttpResponseBadRequest("name is too long.")
+        slot_name = value
+
+    if updates or slot_name is not None:
         with transaction.atomic():
             record_plan_action(plan, f"Edited {cell.name or 'exercise'}")
-            for field, value in updates.items():
-                setattr(cell, field, value)
-            cell.save(update_fields=list(updates))
+            if updates:
+                for field, value in updates.items():
+                    setattr(cell, field, value)
+                cell.save(update_fields=list(updates))
+            if slot_name is not None:
+                cell.exercise_slot.name = slot_name
+                cell.exercise_slot.save(update_fields=["name"])
             _touch_plan(plan)
     # Row-level reply + refreshed history: this endpoint records an undo action
     # but doesn't re-serialize the plan, so without `history` the client's undo
