@@ -80,6 +80,9 @@
               {% if a.is_demo %}
                 <span class="meso-badge meso-badge--muted"><i></i>Demo</span>
               {% endif %}
+              {% if a.is_self %}
+                <span class="meso-badge meso-badge--muted"><i></i>You</span>
+              {% endif %}
               {% if a.compliance is not None %}
                 <div style="width:108px;display:flex;align-items:center;gap:8px;">
                   <div class="meso-meter"><span style="width:{{ a.compliance }}%;"></span></div>
@@ -168,6 +171,14 @@
                 <button type="submit" class="meso-btn meso-btn--primary">Send invite</button>
               </form>
             </details>
+            <!-- Self-coaching (guided-tour Phase 0): one click puts the coach on
+                 their own roster — active immediately, never a paid seat. -->
+            {% if not has_self_link %}
+              <form method="post" action="{% url 'meso:roster_add_self' %}" style="margin:0;border-top:1px solid var(--line-2);">
+                {% csrf_token %}
+                <button type="submit" style="appearance:none;background:none;border:none;width:100%;text-align:left;cursor:pointer;padding:11px 16px;font:inherit;font-size:12.5px;font-weight:650;color:var(--accent);">+ Add yourself as an athlete <span class="meso-row-meta" style="font-weight:400;">— program for yourself, free</span></button>
+              </form>
+            {% endif %}
           {% endif %}
 
           <!-- Build an individual program for an athlete (first-time-UX Phase 1).
