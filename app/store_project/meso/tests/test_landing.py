@@ -119,6 +119,29 @@ class TestLandingContent:
         # The demo card's gate line points the limitation at the trial too.
         assert "held back" in body.lower()
 
+    def test_landing_hero_has_demo_and_trial_ctas(self, client):
+        """The hero carries its own CTA pair (issue #417).
+
+        A cold visitor's first click shouldn't require scanning the cards
+        below it.
+        """
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        assert "Try the demo — no signup" in body
+        assert "Start your free trial" in body
+
+    def test_landing_orders_demo_before_athlete_login(self, client):
+        """The cold visitor's entries lead; athlete login trails (issue #417).
+
+        Ordering is the point of the issue, so assert it directly rather than
+        just presence.
+        """
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        demo_entry = body.index("Try the coach demo")
+        athlete_entry = body.index("Training with a coach?")
+        assert demo_entry < athlete_entry
+
 
 # ---------------------------------------------------------------------------
 # Discoverability — the main-site nav links into Meso
