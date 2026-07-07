@@ -4,6 +4,18 @@
 {% block title %}Meso — coaching, periodized{% endblock %}
 
 {% comment %}
+  Marketing copy for search + social shares (issue #418) — mirrors the <title>
+  block above (Django can't reuse a block by name twice in one template, see
+  _meso_base.html). og:description shares this block with the plain
+  description tag so they can't drift.
+{% endcomment %}
+{% block meta_description %}
+  <meta name="description" content="Meso is where coaches build periodized training programs, deliver them to athletes' phones, and let an AI agent draft the week-to-week adjustments." />
+  <meta property="og:description" content="Meso is where coaches build periodized training programs, deliver them to athletes' phones, and let an AI agent draft the week-to-week adjustments." />
+{% endblock %}
+{% block og_title %}Meso — coaching, periodized · Mastering Fitness{% endblock %}
+
+{% comment %}
 First-time-UX Phase 3: the public front door. ``/meso/`` renders this for an
 anonymous visitor (RosterView splits on auth) instead of bouncing to login.
 Login-free and coach-nav-free — it explains Meso in one screen and offers
@@ -58,7 +70,7 @@ visitor — demo/trial lead, athlete login is a compact strip, not a card.
       <div class="meso-card meso-card--pad">
         <span class="meso-badge meso-badge--muted"><i></i>No signup</span>
         <p style="font-size:16px;font-weight:800;letter-spacing:-0.02em;margin:10px 0 4px;">Try the coach demo</p>
-        <p class="meso-row-meta" style="margin-bottom:14px;">No signup. Land in a populated workspace and build a real program.</p>
+        <p class="meso-row-meta" style="margin-bottom:14px;">Land in a populated workspace and build a real program.</p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <a class="meso-btn meso-btn--primary" href="{% url 'meso:sandbox_enter' %}">Launch the demo</a>
         </div>
@@ -73,13 +85,15 @@ visitor — demo/trial lead, athlete login is a compact strip, not a card.
           <a class="meso-btn meso-btn--primary" href="{% url 'meso:become_coach' %}">Get started as a coach</a>
         </div>
         <p class="meso-row-meta" style="margin-top:12px;">See what Meso does for coaches and pick a plan.</p>
+        <p class="meso-row-meta" style="margin-top:4px;">One flat price when you're ready — {{ price_summary }}.</p>
       </div>
     </div>
 
     <!-- Athletes already have a coach — the nav's Log in link covers them
          twice over (store nav + Meso topnav), so this is a strip, not a
-         card (issue #417). No signup link: cold athletes without an invite
-         aren't a real entry path, since coaches invite them. -->
+         card (issue #417). Deliberately carries no open-signup link: cold
+         athletes without an invite aren't a real entry path, since coaches
+         invite them. -->
     <div class="meso-card meso-card--pad" style="text-align:center;margin-bottom:18px;">
       <span class="meso-row-meta">Training with a coach? <a href="{% url 'account_login' %}?next={{ athlete_next|urlencode }}" style="color:var(--accent);font-weight:600;">Log in to your training</a> — or tap the link in your email invite.</span>
     </div>

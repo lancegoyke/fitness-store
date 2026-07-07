@@ -22,9 +22,12 @@ These tests cover:
   front door is reachable without already knowing the URL.
 """
 
+import re
+
 import pytest
 from django.urls import reverse
 
+from store_project.meso import presenters
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import CoachSubscription
@@ -141,6 +144,59 @@ class TestLandingContent:
         demo_entry = body.index("Try the coach demo")
         athlete_entry = body.index("Training with a coach?")
         assert demo_entry < athlete_entry
+
+    def test_landing_demo_card_no_signup_is_not_repeated(self, client):
+        """The badge says "No signup"; the body used to repeat it (issue #418)."""
+        resp = client.get(reverse("meso:roster"))
+        assert resp.content.decode().count("No signup") == 1
+
+    def test_landing_shows_the_flat_price(self, client):
+        """A pricing signal renders from the shared constant, not a hardcoded string."""
+        resp = client.get(reverse("meso:roster"))
+        assert presenters.PRICE_SUMMARY in resp.content.decode()
+
+
+# ---------------------------------------------------------------------------
+# Meta description + Open Graph tags (issue #418)
+# ---------------------------------------------------------------------------
+
+
+class TestLandingMeta:
+    def test_meta_description_renders(self, client):
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        assert '<meta name="description" content="' in body
+        assert "coaches" in body.lower()
+
+    def test_og_description_matches_meta_description_block(self, client):
+        """og:description shares its block with the plain description tag."""
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        assert 'property="og:description"' in body
+
+    def test_og_image_is_absolute_and_points_at_the_hero_shot(self, client):
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        match = re.search(r'property="og:image" content="([^"]+)"', body)
+        assert match is not None
+        url = match.group(1)
+        assert url.startswith("http://") or url.startswith("https://")
+        assert url.endswith("meso-landing-designer.webp")
+
+    def test_og_image_dimensions_and_twitter_card(self, client):
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        assert '<meta property="og:image:width" content="1280" />' in body
+        assert '<meta property="og:image:height" content="800" />' in body
+        assert '<meta name="twitter:card" content="summary_large_image" />' in body
+
+    def test_og_type_and_url(self, client):
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        assert '<meta property="og:type" content="website" />' in body
+        match = re.search(r'property="og:url" content="([^"]+)"', body)
+        assert match is not None
+        assert match.group(1).startswith("http")
 
 
 # ---------------------------------------------------------------------------

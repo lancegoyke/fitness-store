@@ -317,6 +317,10 @@ class RosterView(TemplateView):
                     # — same value ``become_coach`` exposes, so a future
                     # ``TRIAL_DAYS`` change can't leave the landing copy stale.
                     "trial_days": CoachSubscription.TRIAL_DAYS,
+                    # The flat-price line on the coach card (issue #418) — the
+                    # same constant the roster/billing/designer surfaces render,
+                    # so the price can't drift out of sync with the landing page.
+                    "price_summary": presenters.PRICE_SUMMARY,
                 },
             )
         if not _is_coach(request.user):
