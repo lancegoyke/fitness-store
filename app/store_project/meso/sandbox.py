@@ -63,6 +63,7 @@ def create_sandbox(*, source_ip=None):
         source_ip=source_ip,
     )
     tour.start_tour(profile)
+    tour.record_started(user, "sandbox")
     return user
 
 

@@ -30,14 +30,25 @@ create_sandbox`` imports *this* module at the top level to seed the initial
 tour state, and a top-level import back would form a real cycle. ``variant_
 for`` breaks that with a deferred (function-body) import instead, which is
 safe because by the time any request calls it, both modules are fully loaded.
+
+Phase 4 (analytics + polish) adds the funnel-event recording at the bottom of
+this module (``record_started``/``record_advanced``/``record_dismissed``/
+``record_completed``/``record_skipped``/``record_opt_in``) — see ``TourEvent``
+in ``models.py`` for why a meso-local table rather than the ``analytics`` app.
 """
 
+import logging
+
+from django.db import transaction
 from django.urls import reverse
 
 from . import demo as meso_demo
 from .billing import access as billing_access
 from .models import CoachAthlete
 from .models import CoachProfile
+from .models import TourEvent
+
+logger = logging.getLogger(__name__)
 
 #: The 8-step tour (O2/O3), shared across audiences. ``url_name``/``anchor``
 #: are the step's "Take me there" target + spotlighted control — the same
@@ -212,6 +223,20 @@ _HAS_PREDICATES = {
     "log": meso_demo.has_log,
     "group": meso_demo.has_group,
 }
+
+#: sandbox segment name → the step ``key`` that offers it (Phase 4 funnel
+#: events: ``demo_load``'s segment POST field doesn't otherwise carry which
+#: step fired it). Built from ``STEPS`` so it can't drift out of sync.
+_STEP_KEY_BY_SEGMENT = {
+    step["sandbox"]["segment"]: step["key"]
+    for step in STEPS
+    if step["sandbox"].get("segment")
+}
+
+
+def step_key_for_segment(segment):
+    """The tour step ``key`` that offers ``segment``, or ``""`` if unknown."""
+    return _STEP_KEY_BY_SEGMENT.get(segment, "")
 
 
 def _clamp(step):
@@ -467,3 +492,76 @@ def build_config(user, variant):
         "demo_load_url": reverse("meso:demo_load"),
         "signup_url": reverse("meso:sandbox_signup"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Funnel events (Phase 4, issue #430) — recorded server-side at the tour's own
+# endpoints (views.py), never from client-side JS, so an ad blocker can't drop
+# them. Deliberately thin wrappers around one shared ``record_event`` rather
+# than a generic "record(kind, **kwargs)" call at every call site — each
+# wrapper only takes the arguments that event actually has, so a call site
+# can't accidentally omit a ``step_key`` a "dismissed" row needs, say.
+# ---------------------------------------------------------------------------
+
+
+def record_event(user, kind, *, variant, step_key="", segment=""):
+    """Best-effort funnel-event insert. Cheap (one insert, no reads) and safe.
+
+    Must never break the real action it rides along with (a coach adding
+    themselves as an athlete, or a tour step advancing, has to succeed even if
+    this write fails). Two layers of protection: the ``transaction.atomic()``
+    wraps the insert in its own savepoint, so if it's called from inside a
+    caller's own ``atomic()`` block (``plan_create`` wraps its work in one), a
+    DB-level failure here only unwinds to that savepoint rather than poisoning
+    the caller's outer transaction; the ``except`` around it then swallows
+    that (or any other) failure entirely rather than propagating into the
+    view. A user with no usable pk (``AnonymousUser``) records with a null
+    ``coach`` rather than erroring.
+    """
+    try:
+        with transaction.atomic():
+            TourEvent.objects.create(
+                coach=user if getattr(user, "pk", None) else None,
+                kind=kind,
+                variant=variant,
+                step_key=step_key,
+                segment=segment,
+            )
+    except Exception:
+        logger.warning("Failed to record tour event %r", kind, exc_info=True)
+
+
+def record_started(user, variant):
+    """Tour (re)started — sandbox auto-start, or a real coach's explicit restart."""
+    record_event(
+        user, TourEvent.Kind.STARTED, variant=variant, step_key=STEPS[0]["key"]
+    )
+
+
+def record_advanced(user, variant, step_key):
+    """The tour moved forward onto ``step_key`` (never fired for going back)."""
+    record_event(user, TourEvent.Kind.ADVANCED, variant=variant, step_key=step_key)
+
+
+def record_dismissed(user, variant, step_key):
+    """The tour was dismissed while parked on ``step_key``."""
+    record_event(user, TourEvent.Kind.DISMISSED, variant=variant, step_key=step_key)
+
+
+def record_completed(user, variant):
+    """The tour was walked to the end and finished (distinct from ``skipped``)."""
+    record_event(
+        user, TourEvent.Kind.COMPLETED, variant=variant, step_key=STEPS[-1]["key"]
+    )
+
+
+def record_skipped(user, variant, step_key):
+    """The O6 "skip · load everything" shortcut fired from ``step_key``."""
+    record_event(user, TourEvent.Kind.SKIPPED, variant=variant, step_key=step_key)
+
+
+def record_opt_in(user, variant, step_key, segment):
+    """A step's data action was taken — a sandbox segment load or a self-variant action."""
+    record_event(
+        user, TourEvent.Kind.OPT_IN, variant=variant, step_key=step_key, segment=segment
+    )
