@@ -97,10 +97,18 @@ SERVER_ENV_OVERRIDES = {
 # cosmetic. Deferred to DOMContentLoaded: an init script runs *before* the
 # HTML parser creates `document.documentElement`, so appending to it (or
 # `document.head`) any earlier throws (caught, but the style never lands).
+#
+# Targets #djDebugRoot (the toolbar's light-DOM host element), not just the
+# inner #djDebug — django-debug-toolbar defaults to USE_SHADOW_DOM=True, which
+# renders the actual toolbar markup inside a shadow root that a page-level
+# `#djDebug{...}` rule can't pierce (so djDebugRoot stayed on-screen and kept
+# eating clicks even with that rule installed). A style targeting the host
+# element itself is always effective — it never needs to cross the shadow
+# boundary — and collapses whatever's inside it either way.
 HIDE_DEBUG_TOOLBAR_CSS = """
 document.addEventListener("DOMContentLoaded", () => {
   const style = document.createElement("style");
-  style.textContent = "#djDebug{display:none !important;}";
+  style.textContent = "#djDebugRoot,#djDebug{display:none !important;}";
   document.head.appendChild(style);
 });
 """
