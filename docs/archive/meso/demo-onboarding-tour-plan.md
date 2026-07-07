@@ -2,10 +2,10 @@
 
 Status: **COMPLETE** — all 5 phases shipped 2026-07-07 (PRs [#432](https://github.com/lancegoyke/fitness-store/pull/432), [#433](https://github.com/lancegoyke/fitness-store/pull/433), [#434](https://github.com/lancegoyke/fitness-store/pull/434), [#435](https://github.com/lancegoyke/fitness-store/pull/435), [#436](https://github.com/lancegoyke/fitness-store/pull/436)). Tracking issue: [#430](https://github.com/lancegoyke/fitness-store/issues/430).
 
-Sibling of the [public sandbox demo](./public-sandbox-demo-plan.md) (which this
-reshapes) and the [walkthrough video](./demo-walkthrough-video-plan.md). The
+Sibling of the [public sandbox demo](../../meso/public-sandbox-demo-plan.md) (which this
+reshapes) and the [walkthrough video](../../meso/demo-walkthrough-video-plan.md). The
 real-coach half extends the one-click demo from the
-[first-time-UX plan](../archive/meso/first-time-ux-plan.md).
+[first-time-UX plan](./first-time-ux-plan.md).
 
 ## Why
 
