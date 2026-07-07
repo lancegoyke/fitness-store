@@ -388,6 +388,34 @@ button.meso-card,
   gap: 16px;
   margin-bottom: 22px;
 }
+/* Landing-page hero (issue #415) — a modifier, not a change to .meso-pagehead
+   itself, since that shared class is also every other page's plain title+actions
+   header. Copy left, product screenshot right; one column once the two can no
+   longer sit comfortably side by side (760px matches nav.css's own burger-menu
+   breakpoint). */
+.meso-pagehead--hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 460px);
+  align-items: center;
+  gap: 36px;
+}
+@media (max-width: 760px) {
+  .meso-pagehead--hero {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+}
+.meso-hero-shot {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  /* Product-chrome framing consistent with .meso-card, just a bit more lift
+     since this is the hero rather than resting page content. */
+  box-shadow: 0 10px 28px rgba(16, 18, 22, 0.12);
+}
 .meso-crumbs {
   display: flex;
   align-items: center;
