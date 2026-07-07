@@ -18,19 +18,20 @@ import pytest
 from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc
 
 pytestmark = pytest.mark.django_db
 
 
 def seed_plan(coach=None, athlete=None):
-    """A minimal owned plan with one current week → session → prescription."""
+    """A minimal owned plan with one current week → session → prescription cell."""
     rel = CoachAthleteFactory(
         coach=coach or UserFactory(), athlete=athlete or UserFactory()
     )
@@ -39,11 +40,9 @@ def seed_plan(coach=None, athlete=None):
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(
-        session=session, name="Box Squat", sets="4", reps="6", load="70", rpe="7"
-    )
-    return plan, session, presc
+    session = day(week, day_number=1, name="Lower")
+    cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
+    return plan, session, cell
 
 
 class TestDesignerLoad:
@@ -213,26 +212,26 @@ class TestAddExercise:
         )
 
     def test_add_exercise_persists(self, client):
-        plan, session, presc = seed_plan()
+        plan, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        before = session.prescriptions.count()
+        before = session.cells().count()
         resp = client.post(self._url(plan, session))
         assert resp.status_code == 201
-        assert session.prescriptions.count() == before + 1
+        assert session.cells().count() == before + 1
         payload = resp.json()["prescription"]
         assert isinstance(payload["id"], int)
         assert payload["name"] == "New exercise"
         # The new row lands after the existing ones (max order + 1).
-        added = session.prescriptions.order_by("order").last()
+        added = session.cells().last()
         assert added.pk == payload["id"]
-        assert added.order == presc.order + 1
+        assert added.exercise_slot.order == cell.exercise_slot.order + 1
 
     def test_non_owner_add_forbidden(self, client):
         plan, session, _ = seed_plan()
         client.force_login(UserFactory())
         resp = client.post(self._url(plan, session))
         assert resp.status_code == 403
-        assert session.prescriptions.count() == 1
+        assert session.cells().count() == 1
 
     def test_add_rejects_foreign_session(self, client):
         plan, _, _ = seed_plan()

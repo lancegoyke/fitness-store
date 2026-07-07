@@ -28,7 +28,6 @@ from store_project.meso.factories import GroupMembershipFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
-from store_project.meso.models import ExercisePrescription
 from store_project.meso.models import LoadType
 from store_project.meso.models import PrescriptionOverride
 from store_project.meso.models import Session
@@ -64,7 +63,14 @@ def _latest_week(plan):
 
 
 class TestAppendWeek:
-    def test_copies_latest_weeks_structure(self):
+    def test_reuses_the_blocks_shared_day_and_row_identity(self):
+        """P0: a new week never deep-copies identity.
+
+        The SessionSlot/ExerciseSlot rows are shared block-wide, so
+        ``append_week`` reuses the SAME day/row pks and only adds a fresh
+        per-week cell whose numbers are carried forward from the latest
+        live week.
+        """
         link = CoachAthleteFactory()
         plan = link.create_plan()  # scaffold: 1 block, 1 week, 2 days, 1 row each
         meso = plan.mesocycles.get()
@@ -74,13 +80,14 @@ class TestAppendWeek:
         source.volume = 88
         source.is_deload = False
         source.save()
-        first_day = source.sessions.order_by("order").first()
-        first_row = first_day.prescriptions.first()
-        first_row.name = "Back Squat"
-        first_row.load = "100"
-        first_row.load_type = LoadType.PERCENT
-        first_row.tags = ["main"]
-        first_row.save()
+        first_day = source.sessions.order_by("session_slot__order").first()
+        first_cell = list(first_day.cells())[0]
+        first_cell.exercise_slot.name = "Back Squat"
+        first_cell.exercise_slot.tags = ["main"]
+        first_cell.exercise_slot.save()
+        first_cell.load = "100"
+        first_cell.load_type = LoadType.PERCENT
+        first_cell.save()
 
         new_week = meso.append_week()
 
@@ -90,14 +97,19 @@ class TestAppendWeek:
         # Meta carried forward as a starting point.
         assert new_week.phase == "Accum"
         assert new_week.volume == 88
-        # Same day structure (count + names + day numbers), fresh rows.
-        src_days = list(source.sessions.order_by("order"))
-        new_days = list(new_week.sessions.order_by("order"))
+        # Same day IDENTITY (the SessionSlot rows are block-shared, not copied).
+        src_days = list(source.sessions.order_by("session_slot__order"))
+        new_days = list(new_week.sessions.order_by("session_slot__order"))
+        assert [d.session_slot_id for d in new_days] == [
+            d.session_slot_id for d in src_days
+        ]
         assert [d.name for d in new_days] == [d.name for d in src_days]
         assert [d.day_number for d in new_days] == [d.day_number for d in src_days]
-        # The copied prescription mirrors the source's fields but is a new row.
-        copied = new_days[0].prescriptions.first()
-        assert copied.pk != first_row.pk
+        # The new week's cell shares the SAME row identity (ExerciseSlot) but is
+        # a fresh per-week cell whose numbers were carried forward.
+        copied = list(new_days[0].cells())[0]
+        assert copied.pk != first_cell.pk
+        assert copied.exercise_slot_id == first_cell.exercise_slot_id
         assert copied.name == "Back Squat"
         assert copied.load == "100"
         assert copied.load_type == LoadType.PERCENT
@@ -136,7 +148,7 @@ class TestAppendWeek:
         new_week = meso.append_week()
         assert new_week.index == 1
         assert new_week.sessions.count() == 1
-        assert new_week.sessions.get().prescriptions.count() == 1
+        assert new_week.sessions.get().cells().count() == 1
 
 
 # ---------------------------------------------------------------------------
@@ -247,14 +259,16 @@ class TestWeekViewEndpoint:
         plan = link.create_plan()
         meso = plan.mesocycles.get()
         week1 = meso.weeks.get(index=1)
-        # Rename week 1's first day so we can tell the weeks apart in the program.
-        day = week1.sessions.order_by("order").first()
-        day.name = "Week-One Lower"
-        day.save()
         week2 = meso.append_week()
-        day2 = week2.sessions.order_by("order").first()
-        day2.name = "Week-Two Lower"
-        day2.save()
+        # Day/row identity (``SessionSlot``/``ExerciseSlot``) is block-shared
+        # now, so the only P0-correct way to tell week1's and week2's *served
+        # program* apart is by their per-week cell numbers, not a name.
+        cell1 = list(week1.sessions.order_by("session_slot__order").first().cells())[0]
+        cell1.load = "101"
+        cell1.save()
+        cell2 = list(week2.sessions.order_by("session_slot__order").first().cells())[0]
+        cell2.load = "202"
+        cell2.save()
         return link, plan, week1, week2
 
     def test_returns_the_target_weeks_program(self, client):
@@ -264,8 +278,12 @@ class TestWeekViewEndpoint:
         assert resp.status_code == 200
         body = resp.json()
         assert body["viewing"] == week2.pk
-        assert "Week-Two Lower" in [d["name"] for d in body["program"]]
-        assert "Week-One Lower" not in [d["name"] for d in body["program"]]
+        loads = [ex["load"] for d in body["program"] for ex in d["exercises"]]
+        assert "202" in loads
+        assert "101" not in loads
+        # Both days are still block-shared, so the same two day slots show up
+        # for either week — this is the P0 semantics, not a stale assertion.
+        assert len(body["program"]) == 2
         assert len(body["weeks"]) == 2
 
     def test_view_does_not_change_the_current_week(self, client):
@@ -400,36 +418,38 @@ class TestGroupWeekManagement:
         # The shared structure is copied so the new week is immediately editable.
         assert new_week.sessions.count() >= 1
 
-    def test_append_week_carries_per_athlete_overrides_forward(self):
-        # A member's per-athlete adjust must survive week duplication — else the
-        # new week resolves the unadjusted base and silently drops it on delivery.
+    def test_append_week_does_not_carry_per_athlete_overrides_forward(self):
+        # P0 semantics change: the old per-member override carry-forward is
+        # dropped — overrides are per-cell now, and re-diffing them across a
+        # whole new week's worth of cells is out of scope for P0 (groups
+        # Phase 5 revisits). The new week's cell (same row identity, fresh
+        # per-week cell) starts with no override; the source cell's override
+        # is untouched.
         group = MesoGroupFactory()
         membership = GroupMembershipFactory(group=group)
         plan = group.create_shared_plan()
         meso = plan.mesocycles.get()
         week1 = meso.weeks.get()
-        presc = (
-            ExercisePrescription.objects.filter(session__week=week1)
-            .order_by("session__day_number", "order")
-            .first()
-        )
-        presc.name = "Back Squat"  # make the copied row unambiguous
-        presc.save()
+        first_session = week1.sessions.order_by("session_slot__order").first()
+        cell = list(first_session.cells())[0]
+        cell.exercise_slot.name = "Back Squat"  # make the row unambiguous
+        cell.exercise_slot.save()
         PrescriptionOverride.objects.create(
-            membership=membership, prescription=presc, load_pct=90, note="knee"
+            membership=membership, prescription=cell, load_pct=90, note="knee"
         )
 
         new_week = meso.append_week()
 
-        copied = ExercisePrescription.objects.get(
-            session__week=new_week, name="Back Squat"
-        )
-        carried = copied.overrides.get()
-        assert carried.membership_id == membership.pk
-        assert carried.load_pct == 90
-        assert carried.note == "knee"
-        # The source override is untouched (a copy, not a move).
-        assert presc.overrides.count() == 1
+        new_session = new_week.sessions.order_by("session_slot__order").first()
+        new_cell = list(new_session.cells())[0]
+        # SAME row identity as the source (block-shared ExerciseSlot) …
+        assert new_cell.exercise_slot_id == cell.exercise_slot_id
+        assert new_cell.name == "Back Squat"
+        # … but a fresh per-week cell with no carried-forward override.
+        assert new_cell.pk != cell.pk
+        assert not new_cell.overrides.exists()
+        # The source cell's override is untouched.
+        assert cell.overrides.count() == 1
 
 
 # ---------------------------------------------------------------------------

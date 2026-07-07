@@ -51,11 +51,7 @@ def backfill(apps, schema_editor):
             session_log__status="done",
             prescription__isnull=False,
         )
-        .select_related(
-            "session_log",
-            "prescription",
-            "prescription__session__week__mesocycle__plan",
-        )
+        .select_related("session_log", "prescription")
         .order_by("-session_log__date", "-session_log__created_at")
     )
 
@@ -64,7 +60,13 @@ def backfill(apps, schema_editor):
     for ls in logged_sets:
         presc = ls.prescription
         identity = (ls.session_log.athlete_id, _key_str(presc.exercise_id, presc.name))
-        plan = presc.session.week.mesocycle.plan
+        # Reach the plan's unit. The prescription's path to its week changed with
+        # the fixed-lineup reshape (a per-week ``ExercisePrescription.session`` →
+        # a ``Prescription`` cell with a direct ``.week``); resolve both so this
+        # historical pass works against its own model state (a fresh DB migrating
+        # up) and against the current schema (this codebase tests it live).
+        week = getattr(presc, "week", None) or presc.session.week
+        plan = week.mesocycle.plan
         entry = best.get(identity)
         if entry is None:
             # First (most recent) sighting fixes the unit + display name.

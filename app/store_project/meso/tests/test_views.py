@@ -5,15 +5,16 @@ from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import ContraindicationFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachSubscription
 from store_project.meso.models import Plan
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc
 
 pytestmark = pytest.mark.django_db
 
@@ -203,12 +204,9 @@ class TestBareDesignerDeliver:
 
     def _plan_with_prescription(self, coach):
         plan = self._working_plan(coach)
-        presc = ExercisePrescriptionFactory(
-            session=SessionFactory(
-                week=WeekFactory(mesocycle=MesocycleFactory(plan=plan))
-            )
-        )
-        return plan, presc
+        session = day(WeekFactory(mesocycle=MesocycleFactory(plan=plan)))
+        cell = presc(session)
+        return plan, cell
 
     def test_redirect_follows_the_last_edited_plan(self, client):
         # Grid autosaves write child rows; _touch_plan keeps Plan.modified in

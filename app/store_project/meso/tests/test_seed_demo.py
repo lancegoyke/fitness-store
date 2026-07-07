@@ -309,7 +309,7 @@ class TestSeedLogsASession:
             week__mesocycle__plan=plan,
             week__mesocycle__name="Hypertrophy",
             week__index=2,
-            day_number=1,
+            session_slot__day_number=1,
         )
 
     def test_delivers_and_logs_the_lower_session(self):

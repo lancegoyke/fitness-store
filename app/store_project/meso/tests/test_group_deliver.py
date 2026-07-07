@@ -30,9 +30,9 @@ from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachSubscription
-from store_project.meso.models import ExercisePrescription
 from store_project.meso.models import InvalidTransition
 from store_project.meso.models import Plan
+from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.models import WeekDelivery
@@ -65,11 +65,12 @@ def seed_group(coach=None, *, member_count=2, focus="Strength"):
 
 
 def shared_prescriptions(plan):
-    """The shared program's prescriptions, in (session, row) order."""
+    """The shared program's current-week prescription cells, in (day, row) order."""
+    week = plan.mesocycles.get().weeks.get()
     return list(
-        ExercisePrescription.objects.filter(
-            session__week__mesocycle__plan=plan
-        ).order_by("session__order", "order")
+        Prescription.objects.filter(week=week)
+        .select_related("exercise_slot", "exercise_slot__session_slot")
+        .order_by("exercise_slot__session_slot__order", "exercise_slot__order")
     )
 
 
@@ -102,11 +103,15 @@ class TestSyncDeliveredPlan:
         first.save(update_fields=["load"])
         m.set_override(first, load_pct=90, swap_name="Box Squat")
 
-        _, member_week = m.sync_delivered_plan(first.session.week)
+        _, member_week = m.sync_delivered_plan(first.week)
 
-        materialized = member_week.sessions.get(
-            day_number=first.session.day_number
-        ).prescriptions.get(order=first.order)
+        materialized = (
+            member_week.sessions.get(
+                session_slot__day_number=first.exercise_slot.session_slot.day_number
+            )
+            .cells()
+            .get(exercise_slot__order=first.exercise_slot.order)
+        )
         assert materialized.name == "Box Squat"
         assert materialized.load == "90"  # 90% of 100, round-to-2.5
 
@@ -117,11 +122,15 @@ class TestSyncDeliveredPlan:
         first.save(update_fields=["load"])
         adjusted.set_override(first, load_pct=80)
 
-        _, plain_week = plain.sync_delivered_plan(first.session.week)
+        _, plain_week = plain.sync_delivered_plan(first.week)
 
-        row = plain_week.sessions.get(
-            day_number=first.session.day_number
-        ).prescriptions.get(order=first.order)
+        row = (
+            plain_week.sessions.get(
+                session_slot__day_number=first.exercise_slot.session_slot.day_number
+            )
+            .cells()
+            .get(exercise_slot__order=first.exercise_slot.order)
+        )
         assert row.name == first.name
         assert row.load == "100"
 
@@ -158,15 +167,19 @@ class TestSyncDeliveredPlan:
         first = shared_prescriptions(plan)[0]
         first.load = "100"
         first.save(update_fields=["load"])
-        group_week = first.session.week
+        group_week = first.week
 
         m.sync_delivered_plan(group_week)
         m.set_override(first, load_pct=50)
         _, member_week = m.sync_delivered_plan(group_week)
 
-        row = member_week.sessions.get(
-            day_number=first.session.day_number
-        ).prescriptions.get(order=first.order)
+        row = (
+            member_week.sessions.get(
+                session_slot__day_number=first.exercise_slot.session_slot.day_number
+            )
+            .cells()
+            .get(exercise_slot__order=first.exercise_slot.order)
+        )
         assert row.load == "50"
 
     def test_dropped_shared_prescription_hides_on_member_week(self):
@@ -175,21 +188,22 @@ class TestSyncDeliveredPlan:
         m.sync_delivered_plan(group_week)
         # Drop a row from the shared program, then re-deliver.
         first = shared_prescriptions(plan)[0]
-        day = first.session.day_number
-        order = first.order
-        first.delete()
+        day_number = first.exercise_slot.session_slot.day_number
+        order = first.exercise_slot.order
+        first.exercise_slot.soft_delete()
 
         _, member_week = m.sync_delivered_plan(group_week)
 
-        member_session = member_week.sessions.get(day_number=day)
+        member_slot = member_week.mesocycle.session_slots.get(day_number=day_number)
         # The member's copy is *hidden*, never hard-deleted (soft delete,
         # designer framework Phase 0): the member's LoggedSets may reference
         # it, and a source row that returns revives it in place.
-        dropped = member_session.prescriptions.get(order=order)
+        dropped = member_slot.exercise_slots.get(order=order)
         assert dropped.deleted_at is not None
+        live_group_day = group_week.sessions.get(session_slot__day_number=day_number)
         assert (
-            member_session.prescriptions.filter(deleted_at__isnull=True).count()
-            == group_week.sessions.get(day_number=day).prescriptions.count()
+            member_slot.exercise_slots.filter(deleted_at__isnull=True).count()
+            == live_group_day.cells().count()
         )
 
 
@@ -276,7 +290,9 @@ class TestMaterializedPlanScoping:
         group, plan, [m] = seed_group(member_count=1)
         group.deliver_current_week()
         member_plan = Plan.objects.get(source_group=group)
-        session = Session.objects.get(week__mesocycle__plan=member_plan, day_number=1)
+        session = Session.objects.get(
+            week__mesocycle__plan=member_plan, session_slot__day_number=1
+        )
         client.force_login(m.relationship.athlete)
 
         resp = client.get(reverse("meso:athlete_session", kwargs={"pk": session.pk}))

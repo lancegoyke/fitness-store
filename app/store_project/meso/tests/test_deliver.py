@@ -22,14 +22,15 @@ import pytest
 from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
 from store_project.meso.models import WeekDelivery
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc as presc_
 
 pytestmark = pytest.mark.django_db
 
@@ -44,18 +45,16 @@ def seed_plan(coach=None, athlete=None):
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(
-        session=session, name="Box Squat", sets="4", reps="6", load="70", rpe="7"
-    )
+    session = day(week, day_number=1, name="Lower")
+    presc = presc_(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return plan, week, session, presc
 
 
 def add_week(plan, *, index, is_current=False):
-    """Append another week (with one session) to the plan's first block."""
+    """Append another week (with one new day) to the plan's first block."""
     meso = plan.mesocycles.order_by("order").first()
     week = WeekFactory(mesocycle=meso, index=index, is_current=is_current)
-    SessionFactory(week=week, day_number=1, name=f"Day {index}")
+    day(week, day_number=index, name=f"Day {index}")
     return week
 
 
@@ -106,7 +105,7 @@ class TestDeliver:
         week1.is_current = False
         week1.save(update_fields=["is_current"])
         week2 = WeekFactory(mesocycle=week1.mesocycle, index=2, is_current=True)
-        SessionFactory(week=week2, day_number=1, name="Upper")
+        day(week2, day_number=2, name="Upper")
         client.force_login(plan.relationship.coach)
 
         resp = client.post(deliver_url(plan))

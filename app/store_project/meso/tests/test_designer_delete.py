@@ -37,17 +37,15 @@ from django.utils import timezone
 
 from store_project.meso import presenters
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import GroupMembershipFactory
 from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
-from store_project.meso.models import ExercisePrescription
+from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
 from store_project.meso.models import Session
@@ -57,11 +55,14 @@ from store_project.meso.serializers import serialize_plan
 from store_project.meso.serializers import serialize_week_snapshot
 from store_project.users.factories import UserFactory
 
+from ._helpers import day
+from ._helpers import presc
+
 pytestmark = pytest.mark.django_db
 
 
 def seed_plan(coach=None, athlete=None):
-    """A minimal owned plan with one current week → session → prescription."""
+    """A minimal owned plan with one current week → session → prescription cell."""
     rel = CoachAthleteFactory(
         coach=coach or UserFactory(), athlete=athlete or UserFactory()
     )
@@ -70,22 +71,20 @@ def seed_plan(coach=None, athlete=None):
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(
-        session=session, name="Box Squat", sets="4", reps="6", load="70", rpe="7"
-    )
-    return plan, week, session, presc
+    session = day(week, day_number=1, name="Lower")
+    cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
+    return plan, week, session, cell
 
 
 def seed_group_plan():
-    """A minimal owned group plan with one current week → session → prescription."""
+    """A minimal owned group plan with one current week → session → prescription cell."""
     group = MesoGroupFactory()
     plan = GroupPlanFactory(group=group, title="Squad Block", status=Plan.Status.ACTIVE)
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(session=session, name="Box Squat")
-    return group, plan, week, session, presc
+    session = day(week, day_number=1, name="Lower")
+    cell = presc(session, name="Box Squat")
+    return group, plan, week, session, cell
 
 
 def _two_week_plan():
@@ -108,29 +107,30 @@ def _envelope_keys(body):
 
 
 class TestPrescriptionDeleteEndpoint:
-    def _url(self, plan, presc):
+    def _url(self, plan, cell):
         return reverse(
             "meso:api_prescription_delete",
-            kwargs={"plan_id": plan.pk, "pk": presc.pk},
+            kwargs={"plan_id": plan.pk, "pk": cell.pk},
         )
 
     def test_soft_deletes_and_returns_plan_envelope(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         before = plan.modified
-        resp = client.post(self._url(plan, presc))
+        resp = client.post(self._url(plan, cell))
         assert resp.status_code == 200
         body = resp.json()
         assert body["ok"] is True
         assert _envelope_keys(body)
-        # Soft delete — the row survives with the flag set, not hard-deleted.
-        assert ExercisePrescription.objects.filter(pk=presc.pk).exists()
-        presc.refresh_from_db()
-        assert presc.deleted_at is not None
+        # Soft delete — the row's ExerciseSlot survives with the flag set
+        # (block-wide identity), not hard-deleted.
+        assert ExerciseSlot.objects.filter(pk=cell.exercise_slot_id).exists()
+        cell.exercise_slot.refresh_from_db()
+        assert cell.exercise_slot.deleted_at is not None
         # It no longer surfaces in the serialized plan.
         data = serialize_plan(plan)
         ex_ids = [e["id"] for day in data["program"] for e in day["exercises"]]
-        assert presc.pk not in ex_ids
+        assert cell.pk not in ex_ids
         plan.refresh_from_db()
         assert plan.modified > before
 
@@ -139,34 +139,55 @@ class TestPrescriptionDeleteEndpoint:
         # the plan's current week.
         link, plan, week1, week2 = _two_week_plan()
         session2 = week2.sessions.first()
-        presc2 = session2.prescriptions.first()
+        cell2 = list(session2.cells())[0]
         client.force_login(link.coach)
-        resp = client.post(self._url(plan, presc2))
+        resp = client.post(self._url(plan, cell2))
         assert resp.status_code == 200
         assert resp.json()["viewing"] == week2.pk
 
+    def test_delete_removes_the_row_from_every_week_block_wide(self, client):
+        # P0 fixed-lineup semantics: a row's identity (ExerciseSlot) is shared
+        # across every week of the block, so deleting it via one week's cell
+        # removes the row from ALL weeks, not just the one being viewed.
+        link, plan, week1, week2 = _two_week_plan()
+        session1 = week1.sessions.first()
+        cell1 = list(session1.cells())[0]
+        session2 = week2.sessions.first()
+        cell2 = list(session2.cells())[0]
+        assert cell1.exercise_slot_id == cell2.exercise_slot_id
+        client.force_login(link.coach)
+        resp = client.post(self._url(plan, cell1))
+        assert resp.status_code == 200
+        # Both weeks' cells for this row are now hidden — not just week1's.
+        data1 = serialize_plan(plan, week=week1)
+        data2 = serialize_plan(plan, week=week2)
+        ex_ids_1 = [e["id"] for d in data1["program"] for e in d["exercises"]]
+        ex_ids_2 = [e["id"] for d in data2["program"] for e in d["exercises"]]
+        assert cell1.pk not in ex_ids_1
+        assert cell2.pk not in ex_ids_2
+
     def test_requires_login(self, client):
-        plan, week, session, presc = seed_plan()
-        resp = client.post(self._url(plan, presc))
+        plan, week, session, cell = seed_plan()
+        resp = client.post(self._url(plan, cell))
         assert resp.status_code == 302
         assert "/accounts/login/" in resp.url
 
     def test_get_not_allowed(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        resp = client.get(self._url(plan, presc))
+        resp = client.get(self._url(plan, cell))
         assert resp.status_code == 405
 
     def test_non_owner_forbidden(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(UserFactory())
-        resp = client.post(self._url(plan, presc))
+        resp = client.post(self._url(plan, cell))
         assert resp.status_code == 403
-        presc.refresh_from_db()
-        assert presc.deleted_at is None
+        cell.exercise_slot.refresh_from_db()
+        assert cell.exercise_slot.deleted_at is None
 
     def test_unknown_pk_404(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.post(
             reverse(
@@ -178,17 +199,17 @@ class TestPrescriptionDeleteEndpoint:
 
     def test_prescription_under_someone_elses_plan_404(self, client):
         plan, _, _, _ = seed_plan()
-        _, _, _, other_presc = seed_plan()  # a different coach's plan
+        _, _, _, other_cell = seed_plan()  # a different coach's plan
         client.force_login(plan.relationship.coach)
-        resp = client.post(self._url(plan, other_presc))
+        resp = client.post(self._url(plan, other_cell))
         assert resp.status_code == 404
 
     def test_double_delete_404(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        first = client.post(self._url(plan, presc))
+        first = client.post(self._url(plan, cell))
         assert first.status_code == 200
-        second = client.post(self._url(plan, presc))
+        second = client.post(self._url(plan, cell))
         assert second.status_code == 404
 
 
@@ -205,7 +226,7 @@ class TestSessionDeleteEndpoint:
         )
 
     def test_soft_deletes_and_returns_plan_envelope(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         before = plan.modified
         resp = client.post(self._url(plan, session))
@@ -230,10 +251,26 @@ class TestSessionDeleteEndpoint:
         assert resp.status_code == 200
         assert resp.json()["viewing"] == week2.pk
 
+    def test_delete_removes_the_day_from_every_week_block_wide(self, client):
+        # P0 fixed-lineup semantics: a day's identity (SessionSlot) is shared
+        # across every week of the block, so deleting it via one week's
+        # session removes the day from ALL weeks, not just the one viewed.
+        link, plan, week1, week2 = _two_week_plan()
+        session1 = week1.sessions.first()
+        session2 = week2.sessions.first()
+        assert session1.session_slot_id == session2.session_slot_id
+        client.force_login(link.coach)
+        resp = client.post(self._url(plan, session1))
+        assert resp.status_code == 200
+        session1.refresh_from_db()
+        session2.refresh_from_db()
+        assert session1.deleted_at is not None
+        assert session2.deleted_at is not None
+
     def test_preserves_session_logs_and_logged_sets(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         log = SessionLogFactory(session=session, athlete=plan.athlete)
-        logged_set = LoggedSetFactory(session_log=log, prescription=presc)
+        logged_set = LoggedSetFactory(session_log=log, prescription=cell)
         client.force_login(plan.relationship.coach)
         resp = client.post(self._url(plan, session))
         assert resp.status_code == 200
@@ -241,19 +278,19 @@ class TestSessionDeleteEndpoint:
         assert LoggedSet.objects.filter(pk=logged_set.pk).exists()
 
     def test_requires_login(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         resp = client.post(self._url(plan, session))
         assert resp.status_code == 302
         assert "/accounts/login/" in resp.url
 
     def test_get_not_allowed(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.get(self._url(plan, session))
         assert resp.status_code == 405
 
     def test_non_owner_forbidden(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(UserFactory())
         resp = client.post(self._url(plan, session))
         assert resp.status_code == 403
@@ -261,7 +298,7 @@ class TestSessionDeleteEndpoint:
         assert session.deleted_at is None
 
     def test_unknown_pk_404(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.post(
             reverse(
@@ -278,7 +315,7 @@ class TestSessionDeleteEndpoint:
         assert resp.status_code == 404
 
     def test_double_delete_404(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         first = client.post(self._url(plan, session))
         assert first.status_code == 200
@@ -505,10 +542,10 @@ class TestAppendWeekSoftDelete:
         plan = link.create_plan()  # scaffold: 2 days, 1 row each
         meso = plan.mesocycles.get()
         week1 = meso.weeks.get(index=1)
-        sessions = list(week1.sessions.order_by("order"))
+        sessions = list(week1.sessions.order_by("session_slot__order"))
         assert len(sessions) == 2
         doomed_session, survivor = sessions[0], sessions[1]
-        doomed_presc = ExercisePrescriptionFactory(session=survivor, name="Doomed Row")
+        doomed_cell = presc(survivor, name="Doomed Row")
 
         client.force_login(link.coach)
         del_session_url = reverse(
@@ -518,7 +555,7 @@ class TestAppendWeekSoftDelete:
         assert client.post(del_session_url).status_code == 200
         del_presc_url = reverse(
             "meso:api_prescription_delete",
-            kwargs={"plan_id": plan.pk, "pk": doomed_presc.pk},
+            kwargs={"plan_id": plan.pk, "pk": doomed_cell.pk},
         )
         assert client.post(del_presc_url).status_code == 200
 
@@ -527,17 +564,15 @@ class TestAppendWeekSoftDelete:
         assert new_week.sessions.count() == 1
         copied_session = new_week.sessions.get()
         assert copied_session.day_number == survivor.day_number
-        assert "Doomed Row" not in [p.name for p in copied_session.prescriptions.all()]
+        assert "Doomed Row" not in [c.name for c in copied_session.cells()]
 
 
 class TestSerializeWeekSnapshotSoftDelete:
     def test_excludes_soft_deleted_sessions_and_prescriptions(self, client):
-        plan, week, session, presc = seed_plan()
-        other_session = SessionFactory(week=week, day_number=2, name="Upper")
-        keep_presc = ExercisePrescriptionFactory(session=other_session, name="Bench")
-        doomed_presc = ExercisePrescriptionFactory(
-            session=other_session, name="Doomed Row"
-        )
+        plan, week, session, cell = seed_plan()
+        other_session = day(week, day_number=2, name="Upper")
+        keep_cell = presc(other_session, name="Bench")
+        doomed_cell = presc(other_session, name="Doomed Row")
 
         client.force_login(plan.relationship.coach)
         del_session_url = reverse(
@@ -546,7 +581,7 @@ class TestSerializeWeekSnapshotSoftDelete:
         assert client.post(del_session_url).status_code == 200
         del_presc_url = reverse(
             "meso:api_prescription_delete",
-            kwargs={"plan_id": plan.pk, "pk": doomed_presc.pk},
+            kwargs={"plan_id": plan.pk, "pk": doomed_cell.pk},
         )
         assert client.post(del_presc_url).status_code == 200
 
@@ -555,8 +590,8 @@ class TestSerializeWeekSnapshotSoftDelete:
         assert session.pk not in session_ids
         assert other_session.pk in session_ids
         ex_ids = [e["id"] for s in snapshot["sessions"] for e in s["exercises"]]
-        assert doomed_presc.pk not in ex_ids
-        assert keep_presc.pk in ex_ids
+        assert doomed_cell.pk not in ex_ids
+        assert keep_cell.pk in ex_ids
 
 
 # ---------------------------------------------------------------------------
@@ -566,18 +601,18 @@ class TestSerializeWeekSnapshotSoftDelete:
 
 class TestGroupPlanDelete:
     def test_group_coach_can_delete_prescription_and_session(self, client):
-        group, plan, week, session, presc = seed_group_plan()
+        group, plan, week, session, cell = seed_group_plan()
         client.force_login(group.coach)
 
         presc_resp = client.post(
             reverse(
                 "meso:api_prescription_delete",
-                kwargs={"plan_id": plan.pk, "pk": presc.pk},
+                kwargs={"plan_id": plan.pk, "pk": cell.pk},
             )
         )
         assert presc_resp.status_code == 200
-        presc.refresh_from_db()
-        assert presc.deleted_at is not None
+        cell.exercise_slot.refresh_from_db()
+        assert cell.exercise_slot.deleted_at is not None
 
         session_resp = client.post(
             reverse(
@@ -589,9 +624,9 @@ class TestGroupPlanDelete:
         assert session.deleted_at is not None
 
     def test_sync_delivered_plan_skips_soft_deleted_source_rows(self, client):
-        group, plan, week, session, presc = seed_group_plan()
-        survivor = SessionFactory(week=week, day_number=2, name="Upper")
-        ExercisePrescriptionFactory(session=survivor, name="Bench")
+        group, plan, week, session, cell = seed_group_plan()
+        survivor = day(week, day_number=2, name="Upper")
+        presc(survivor, name="Bench")
         membership = GroupMembershipFactory(group=group)
 
         client.force_login(group.coach)
@@ -620,14 +655,16 @@ class TestGroupRedeliverySoftDelete:
     """
 
     def test_redelivery_hides_member_session_and_keeps_its_logs(self, client):
-        group, plan, week, session, presc = seed_group_plan()
+        group, plan, week, session, cell = seed_group_plan()
         membership = GroupMembershipFactory(group=group)
         _, member_week = membership.sync_delivered_plan(week)
-        member_session = member_week.sessions.get(day_number=session.day_number)
-        member_presc = member_session.prescriptions.get()
+        member_session = member_week.sessions.get(
+            session_slot__day_number=session.day_number
+        )
+        member_cell = list(member_session.cells())[0]
         athlete = membership.relationship.athlete
         log = SessionLogFactory(session=member_session, athlete=athlete)
-        logged_set = LoggedSetFactory(session_log=log, prescription=member_presc)
+        logged_set = LoggedSetFactory(session_log=log, prescription=member_cell)
 
         client.force_login(group.coach)
         resp = client.post(
@@ -645,22 +682,34 @@ class TestGroupRedeliverySoftDelete:
         logged_set.refresh_from_db()
         assert logged_set.session_log_id == log.pk
 
-        # Simulate Phase 1 undo: the source day returns → the member's hidden
-        # copy is revived in place (same pk, flag cleared), not recreated.
-        session.deleted_at = None
-        session.save(update_fields=["deleted_at"])
+        # Simulate Phase 1 undo: the source day returns (its identity is the
+        # block-shared SessionSlot, cascaded onto its rows/sessions by
+        # ``session_delete``) → the member's hidden copy is revived in place
+        # (same pk, flag cleared), not recreated.
+        source_slot = session.session_slot
+        source_slot.deleted_at = None
+        source_slot.save(update_fields=["deleted_at"])
+        source_slot.exercise_slots.update(deleted_at=None)
+        source_slot.sessions.update(deleted_at=None)
         membership.sync_delivered_plan(week)
         member_session.refresh_from_db()
         assert member_session.deleted_at is None
-        assert member_week.sessions.filter(day_number=session.day_number).count() == 1
+        assert (
+            member_week.sessions.filter(
+                session_slot__day_number=session.day_number
+            ).count()
+            == 1
+        )
 
     def test_redelivery_hides_member_prescription_rows(self, client):
-        group, plan, week, session, presc = seed_group_plan()
-        extra = ExercisePrescriptionFactory(session=session, name="Curl", order=7)
+        group, plan, week, session, cell = seed_group_plan()
+        extra = presc(session, name="Curl", order=7)
         membership = GroupMembershipFactory(group=group)
         _, member_week = membership.sync_delivered_plan(week)
-        member_session = member_week.sessions.get(day_number=session.day_number)
-        member_extra = member_session.prescriptions.get(order=extra.order)
+        member_session = member_week.sessions.get(
+            session_slot__day_number=session.day_number
+        )
+        member_extra = next(c for c in member_session.cells() if c.name == "Curl")
 
         client.force_login(group.coach)
         resp = client.post(
@@ -672,8 +721,8 @@ class TestGroupRedeliverySoftDelete:
         assert resp.status_code == 200
         membership.sync_delivered_plan(week)
 
-        member_extra.refresh_from_db()
-        assert member_extra.deleted_at is not None
+        member_extra.exercise_slot.refresh_from_db()
+        assert member_extra.exercise_slot.deleted_at is not None
 
 
 class TestDeliverScreenSoftDelete:
@@ -705,7 +754,9 @@ class TestDeliverScreenSoftDelete:
         assert resp.context["deliver"]["week_id"] == week1.pk
 
     def test_session_count_ignores_removed_days(self):
-        plan, week, session, presc = seed_plan()
-        SessionFactory(week=week, day_number=2, name="Upper", deleted_at=timezone.now())
+        plan, week, session, cell = seed_plan()
+        extra_session = day(week, day_number=2, name="Upper")
+        extra_session.deleted_at = timezone.now()
+        extra_session.save(update_fields=["deleted_at"])
         deliver = presenters.deliver_screen(plan)["deliver"]
         assert deliver["sessions"] == 1

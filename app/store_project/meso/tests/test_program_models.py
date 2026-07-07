@@ -9,16 +9,17 @@ hierarchy, the hybrid catalog FK (B4), the per-relationship scoped managers
 import pytest
 
 from store_project.exercises.factories import ExerciseFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import Plan
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc
 
 pytestmark = pytest.mark.django_db
 
@@ -39,10 +40,10 @@ class TestHierarchy:
         assert plan.athlete == rel.athlete
 
     def test_full_chain_relates_back_to_plan(self):
-        presc = ExercisePrescriptionFactory()
-        session = presc.session
+        session = day(WeekFactory())
+        cell = presc(session)
         assert session.week.mesocycle.plan == session.week.mesocycle.plan
-        assert presc in session.prescriptions.all()
+        assert cell in session.cells()
         assert session in session.week.sessions.all()
 
     def test_weeks_ordered_by_index(self):
@@ -53,25 +54,25 @@ class TestHierarchy:
         assert [w.index for w in meso.weeks.all()] == [1, 2, 3]
 
     def test_prescriptions_ordered_by_order(self):
-        session = SessionFactory()
-        ExercisePrescriptionFactory(session=session, order=2, name="b")
-        ExercisePrescriptionFactory(session=session, order=0, name="a")
-        ExercisePrescriptionFactory(session=session, order=1, name="ab")
-        assert [p.name for p in session.prescriptions.all()] == ["a", "ab", "b"]
+        session = day(WeekFactory())
+        presc(session, order=2, name="b")
+        presc(session, order=0, name="a")
+        presc(session, order=1, name="ab")
+        assert [p.name for p in session.cells()] == ["a", "ab", "b"]
 
 
 class TestHybridExercise:
     def test_links_to_catalog_exercise(self):
         ex = ExerciseFactory(name="Back Squat")
-        presc = ExercisePrescriptionFactory(exercise=ex, name="Back Squat")
-        assert presc.exercise == ex
-        assert presc.is_catalog_linked
+        cell = presc(day(WeekFactory()), exercise=ex, name="Back Squat")
+        assert cell.exercise == ex
+        assert cell.is_catalog_linked
 
     def test_free_text_when_unlinked(self):
-        presc = ExercisePrescriptionFactory(exercise=None, name="Sled Push")
-        assert presc.exercise is None
-        assert not presc.is_catalog_linked
-        assert presc.name == "Sled Push"
+        cell = presc(day(WeekFactory()), exercise=None, name="Sled Push")
+        assert cell.exercise is None
+        assert not cell.is_catalog_linked
+        assert cell.name == "Sled Push"
 
 
 class TestPlanScoping:
@@ -124,9 +125,10 @@ class TestArchiveOnEnd:
 
 class TestLogging:
     def test_session_log_holds_logged_sets(self):
-        presc = ExercisePrescriptionFactory()
-        log = SessionLogFactory(session=presc.session)
-        logged = LoggedSetFactory(session_log=log, prescription=presc, set_number=1)
+        session = day(WeekFactory())
+        cell = presc(session)
+        log = SessionLogFactory(session=session)
+        logged = LoggedSetFactory(session_log=log, prescription=cell, set_number=1)
         assert logged.session_log == log
-        assert log.session == presc.session
+        assert log.session == session
         assert logged in log.sets.all()

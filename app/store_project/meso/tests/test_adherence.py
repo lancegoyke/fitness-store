@@ -26,13 +26,14 @@ from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.factories import ContraindicationFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
 
 pytestmark = pytest.mark.django_db
 
@@ -57,7 +58,7 @@ def delivered_week(
         delivered_at=delivered_at or timezone.now(),
     )
     for n in range(sessions):
-        session = SessionFactory(week=week, day_number=n + 1, name=f"Day {n + 1}")
+        session = day(week, day_number=n + 1, name=f"Day {n + 1}")
         if n < done:
             SessionLogFactory(
                 session=session,
@@ -120,7 +121,7 @@ class TestLinkCompliance:
         rel = CoachAthleteFactory()
         week = delivered_week(rel, sessions=2, done=1)
         # A *pending* log on the second session must not count as done.
-        other = week.sessions.order_by("day_number").last()
+        other = week.sessions.order_by("session_slot__day_number").last()
         SessionLogFactory(
             session=other, athlete=rel.athlete, status=SessionLog.Status.PENDING
         )
@@ -166,7 +167,7 @@ class TestLinkCompliance:
     def test_duplicate_done_logs_count_the_session_once(self):
         rel = CoachAthleteFactory()
         week = delivered_week(rel, sessions=2, done=0)
-        session = week.sessions.order_by("day_number").first()
+        session = week.sessions.order_by("session_slot__day_number").first()
         # Two done logs for the *same* session (the model allows dated history)
         # must count that session once, never push compliance past 100.
         SessionLogFactory(
@@ -186,7 +187,7 @@ class TestRecentLogs:
         rel = CoachAthleteFactory()
         week = delivered_week(rel, sessions=2, done=1)
         # The second session has only a pending log.
-        pending_session = week.sessions.order_by("day_number").last()
+        pending_session = week.sessions.order_by("session_slot__day_number").last()
         SessionLogFactory(
             session=pending_session,
             athlete=rel.athlete,
@@ -280,8 +281,8 @@ class TestRosterPresenters:
         rel.athlete.save(update_fields=["name"])
         week = delivered_week(rel, sessions=1, done=0)
         session = week.sessions.first()
-        session.name = "Lower"
-        session.save(update_fields=["name"])
+        session.session_slot.name = "Lower"
+        session.session_slot.save(update_fields=["name"])
         SessionLogFactory(
             session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
         )
@@ -298,8 +299,8 @@ class TestRosterPresenters:
         rel = CoachAthleteFactory()
         week = delivered_week(rel, sessions=1, done=0)
         session = week.sessions.first()
-        session.name = ""  # a blank session name
-        session.save(update_fields=["name"])
+        session.session_slot.name = ""  # a blank session name
+        session.session_slot.save(update_fields=["name"])
         SessionLogFactory(
             session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
         )
@@ -318,9 +319,9 @@ class TestRosterViewAdherence:
         rel.athlete.name = "Maya Okonkwo"
         rel.athlete.save(update_fields=["name"])
         week = delivered_week(rel, sessions=2, done=1)
-        session = week.sessions.order_by("day_number").first()
-        session.name = "Lower"
-        session.save(update_fields=["name"])
+        session = week.sessions.order_by("session_slot__day_number").first()
+        session.session_slot.name = "Lower"
+        session.session_slot.save(update_fields=["name"])
         # Re-log so the activity text picks up the renamed session.
         SessionLog.objects.filter(session=session, athlete=rel.athlete).delete()
         SessionLogFactory(

@@ -26,16 +26,16 @@ from django.utils import timezone
 
 from store_project.meso.agent import service
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.meso.serializers import serialize_recent_logs
+from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import presc
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -61,9 +61,9 @@ def seed(
         is_current=True,
         delivered_at=timezone.now() if delivered else None,
     )
-    session = SessionFactory(week=week, day_number=1, name="Lower", bias="Quad")
-    squat = ExercisePrescriptionFactory(
-        session=session,
+    session = day(week, day_number=1, name="Lower", bias="Quad")
+    squat = presc(
+        session,
         name="Box Squat",
         order=0,
         sets="3",
@@ -71,9 +71,7 @@ def seed(
         load="70",
         rpe="7",
     )
-    rdl = ExercisePrescriptionFactory(
-        session=session, name="RDL", order=1, sets="3", reps="8", load="80", rpe="8"
-    )
+    rdl = presc(session, name="RDL", order=1, sets="3", reps="8", load="80", rpe="8")
     return SimpleNamespace(
         coach=coach,
         athlete=athlete,

@@ -21,11 +21,9 @@ from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
@@ -33,6 +31,9 @@ from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.meso.presenters import session_results
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc as make_presc
 
 pytestmark = pytest.mark.django_db
 
@@ -49,9 +50,9 @@ def seed(*, coach=None, athlete=None):
     week = WeekFactory(
         mesocycle=meso, index=2, is_current=True, delivered_at=timezone.now()
     )
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    squat = ExercisePrescriptionFactory(
-        session=session,
+    session = day(week, day_number=1, name="Lower")
+    squat = make_presc(
+        session,
         name="Box Squat",
         order=0,
         sets="3",
@@ -59,8 +60,8 @@ def seed(*, coach=None, athlete=None):
         load="70",
         rpe="7",
     )
-    rdl = ExercisePrescriptionFactory(
-        session=session,
+    rdl = make_presc(
+        session,
         name="RDL",
         order=1,
         sets="3",
@@ -161,7 +162,7 @@ class TestResultsBareRedirect:
     def test_redirects_to_latest_logged_session(self, client):
         s = seed()
         # An older logged session on another day; the newest log wins.
-        older = SessionFactory(week=s.week, day_number=2, name="Upper", order=2)
+        older = day(s.week, day_number=2, name="Upper", order=2)
         SessionLogFactory(
             session=older,
             athlete=s.athlete,

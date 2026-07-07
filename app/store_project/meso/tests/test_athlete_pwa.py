@@ -30,14 +30,14 @@ from django.utils import timezone
 
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachProfileFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
+from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import presc
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -57,11 +57,9 @@ def seed(*, athlete=None, coach=None):
     week = WeekFactory(
         mesocycle=meso, index=2, is_current=True, delivered_at=timezone.now()
     )
-    session = SessionFactory(week=week, day_number=1, name="Lower", bias="Quad")
-    presc = ExercisePrescriptionFactory(
-        session=session, name="Box Squat", sets="4", reps="6", load="70", rpe="7"
-    )
-    return athlete, coach, session, presc
+    session = day(week, day_number=1, name="Lower", bias="Quad")
+    cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
+    return athlete, coach, session, cell
 
 
 MANIFEST = reverse("meso:manifest")

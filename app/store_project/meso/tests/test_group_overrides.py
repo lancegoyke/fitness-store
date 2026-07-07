@@ -22,13 +22,13 @@ from django.urls import reverse
 
 from store_project.meso import serializers
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
+from store_project.meso.factories import PrescriptionFactory
 from store_project.meso.factories import PrescriptionOverrideFactory
 from store_project.meso.models import CoachAthlete
-from store_project.meso.models import ExercisePrescription
 from store_project.meso.models import InvalidTransition
+from store_project.meso.models import Prescription
 from store_project.meso.models import PrescriptionOverride
 from store_project.users.factories import UserFactory
 
@@ -45,10 +45,13 @@ def make_member(group, *, name="Member One"):
 
 
 def first_prescription(plan):
-    """The first prescription on a (shared) plan's scaffold."""
-    return ExercisePrescription.objects.filter(
-        session__week__mesocycle__plan=plan
-    ).first()
+    """The first prescription cell on a (shared) plan's scaffold current week."""
+    week = plan.mesocycles.get().weeks.get()
+    return (
+        Prescription.objects.filter(week=week)
+        .order_by("exercise_slot__session_slot__order", "exercise_slot__order")
+        .first()
+    )
 
 
 # -- model: shape + tenancy -------------------------------------------------
@@ -89,8 +92,8 @@ class TestPrescriptionOverrideModel:
         group_a = MesoGroupFactory()
         membership_a = make_member(group_a)
         other_plan = PlanFactory(group=MesoGroupFactory(), relationship=None)
-        foreign_presc = ExercisePrescriptionFactory(
-            session__week__mesocycle__plan=other_plan
+        foreign_presc = PrescriptionFactory(
+            exercise_slot__session_slot__mesocycle__plan=other_plan
         )
         override = PrescriptionOverride(
             membership=membership_a, prescription=foreign_presc, load_pct=90
@@ -155,8 +158,8 @@ class TestSetOverride:
         group = MesoGroupFactory()
         membership = make_member(group)
         other_plan = PlanFactory(group=MesoGroupFactory(), relationship=None)
-        foreign_presc = ExercisePrescriptionFactory(
-            session__week__mesocycle__plan=other_plan
+        foreign_presc = PrescriptionFactory(
+            exercise_slot__session_slot__mesocycle__plan=other_plan
         )
         with pytest.raises(InvalidTransition):
             membership.set_override(foreign_presc, load_pct=90)
@@ -184,20 +187,20 @@ class TestSetOverride:
 
 class TestResolvePrescription:
     def test_none_override_yields_base(self):
-        presc = ExercisePrescriptionFactory(
-            name="Back Squat", sets="3", reps="10", load="100", rpe="7"
+        presc = PrescriptionFactory(
+            exercise_slot__name="Back Squat", sets="3", reps="10", load="100", rpe="7"
         )
         resolved = serializers.resolve_prescription(presc, None)
         assert resolved["name"] == "Back Squat"
         assert resolved["load"] == "100"
 
     def test_swap_replaces_name(self):
-        presc = ExercisePrescriptionFactory(name="Back Squat")
+        presc = PrescriptionFactory(exercise_slot__name="Back Squat")
         override = PrescriptionOverride(swap_name="Box Squat")
         assert serializers.resolve_prescription(presc, override)["name"] == "Box Squat"
 
     def test_load_pct_scales_numeric_load_rounded_to_2_5(self):
-        presc = ExercisePrescriptionFactory(load="100")
+        presc = PrescriptionFactory(load="100")
         override = PrescriptionOverride(load_pct=90)
         assert serializers.resolve_prescription(presc, override)["load"] == "90"
 
@@ -205,17 +208,17 @@ class TestResolvePrescription:
         # 112.5 @ 90% = 101.25 → 40.5 half-steps. The designer's Math.round rounds
         # the half up to 102.5; Python's banker's round would give 100, so the
         # resolver must match the UI here.
-        presc = ExercisePrescriptionFactory(load="112.5")
+        presc = PrescriptionFactory(load="112.5")
         override = PrescriptionOverride(load_pct=90)
         assert serializers.resolve_prescription(presc, override)["load"] == "102.5"
 
     def test_load_pct_leaves_non_numeric_load_unchanged(self):
-        presc = ExercisePrescriptionFactory(load="BW")
+        presc = PrescriptionFactory(load="BW")
         override = PrescriptionOverride(load_pct=90)
         assert serializers.resolve_prescription(presc, override)["load"] == "BW"
 
     def test_volume_overrides_sets_and_reps(self):
-        presc = ExercisePrescriptionFactory(sets="3", reps="10")
+        presc = PrescriptionFactory(sets="3", reps="10")
         override = PrescriptionOverride(sets="2", reps="8")
         resolved = serializers.resolve_prescription(presc, override)
         assert resolved["sets"] == "2"
@@ -358,8 +361,8 @@ class TestSerializeAdjOverlay:
 
     def test_individual_plan_never_emits_adj(self):
         plan = PlanFactory()
-        ExercisePrescriptionFactory(
-            session__week__mesocycle__plan=plan,
+        PrescriptionFactory(
+            exercise_slot__session_slot__mesocycle__plan=plan,
         )
         # individual plan: even with a session it carries no adj overlay
         data = serializers.serialize_plan(plan)
@@ -494,7 +497,7 @@ class TestOverrideEndpoint:
 
     def test_individual_plan_rejected(self, client):
         plan = PlanFactory()
-        presc = ExercisePrescriptionFactory(session__week__mesocycle__plan=plan)
+        presc = PrescriptionFactory(exercise_slot__session_slot__mesocycle__plan=plan)
         client.force_login(plan.coach)
         resp = client.post(
             self._url(plan, presc),

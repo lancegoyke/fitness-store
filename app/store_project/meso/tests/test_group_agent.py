@@ -61,9 +61,9 @@ def make_group_plan(*, coach=None, members=2):
 
 
 def first_presc(plan):
-    """A shared prescription in the group plan's current week."""
+    """A shared prescription cell in the group plan's current week."""
     week = current_week(plan)
-    return week.sessions.first().prescriptions.first()
+    return week.sessions.first().cells().first()
 
 
 def swap_result(presc, *, introduces, title="New exercise → swap"):

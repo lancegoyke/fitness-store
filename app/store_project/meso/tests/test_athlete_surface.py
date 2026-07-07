@@ -23,15 +23,15 @@ from django.utils import timezone
 
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachProfileFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
+from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import presc as make_presc
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -58,9 +58,9 @@ def seed(
         is_current=True,
         delivered_at=timezone.now() if delivered else None,
     )
-    session = SessionFactory(week=week, day_number=1, name=session_name, bias="Quad")
-    presc = ExercisePrescriptionFactory(
-        session=session, name="Box Squat", sets="4", reps="6", load="70", rpe="7"
+    session = day(week, day_number=1, name=session_name, bias="Quad")
+    presc = make_presc(
+        session, name="Box Squat", sets="4", reps="6", load="70", rpe="7"
     )
     return SimpleNamespace(
         coach=coach,
@@ -297,9 +297,8 @@ class TestSoftDeletedRowsHidden:
 
     def test_logger_hides_soft_deleted_prescription(self, client):
         s = seed()
-        ExercisePrescriptionFactory(
-            session=s.session, name="Ghost Curl", deleted_at=timezone.now()
-        )
+        ghost = make_presc(s.session, name="Ghost Curl")
+        ghost.exercise_slot.soft_delete()
         client.force_login(s.athlete)
         body = client.get(session_url(s.session)).content.decode()
         assert "Ghost Curl" not in body
@@ -307,9 +306,8 @@ class TestSoftDeletedRowsHidden:
 
     def test_logging_a_soft_deleted_prescription_is_rejected(self, client):
         s = seed()
-        ghost = ExercisePrescriptionFactory(
-            session=s.session, name="Ghost Curl", deleted_at=timezone.now()
-        )
+        ghost = make_presc(s.session, name="Ghost Curl")
+        ghost.exercise_slot.soft_delete()
         client.force_login(s.athlete)
         resp = self._log_post(
             client,
@@ -321,9 +319,8 @@ class TestSoftDeletedRowsHidden:
 
     def test_one_rm_on_a_soft_deleted_prescription_is_rejected(self, client):
         s = seed()
-        ghost = ExercisePrescriptionFactory(
-            session=s.session, name="Ghost Curl", deleted_at=timezone.now()
-        )
+        ghost = make_presc(s.session, name="Ghost Curl")
+        ghost.exercise_slot.soft_delete()
         client.force_login(s.athlete)
         import json
 
@@ -336,7 +333,7 @@ class TestSoftDeletedRowsHidden:
 
     def test_resave_preserves_a_hidden_prescriptions_logged_sets(self, client):
         s = seed()
-        ghost = ExercisePrescriptionFactory(session=s.session, name="Ghost Curl")
+        ghost = make_presc(s.session, name="Ghost Curl")
         client.force_login(s.athlete)
         resp = self._log_post(
             client,
@@ -353,8 +350,7 @@ class TestSoftDeletedRowsHidden:
         # The coach removes Ghost Curl; the logger no longer shows it, so the
         # athlete's next save posts only the surviving lift. The hidden row's
         # already-logged set must NOT be wiped by the save's replace step.
-        ghost.deleted_at = timezone.now()
-        ghost.save(update_fields=["deleted_at"])
+        ghost.exercise_slot.soft_delete()
         resp = self._log_post(
             client,
             s.session,
