@@ -160,6 +160,9 @@ def resolve_aws_credentials():
     from_env = {
         "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID"),
         "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        # Temporary STS/SSO credentials are only valid with their session
+        # token; long-lived IAM user keys have none, so this stays optional.
+        "aws_session_token": os.environ.get("AWS_SESSION_TOKEN"),
     }
     if from_env["aws_access_key_id"] and from_env["aws_secret_access_key"]:
         return from_env
@@ -168,6 +171,7 @@ def resolve_aws_credentials():
     from_dotenv = {
         "aws_access_key_id": dotenv.get("AWS_ACCESS_KEY_ID"),
         "aws_secret_access_key": dotenv.get("AWS_SECRET_ACCESS_KEY"),
+        "aws_session_token": dotenv.get("AWS_SESSION_TOKEN"),
     }
     if from_dotenv["aws_access_key_id"] and from_dotenv["aws_secret_access_key"]:
         return from_dotenv
@@ -186,6 +190,7 @@ def s3_client():
         region_name=region,
         aws_access_key_id=creds["aws_access_key_id"],
         aws_secret_access_key=creds["aws_secret_access_key"],
+        aws_session_token=creds["aws_session_token"],
     )
 
 
@@ -193,7 +198,10 @@ def upload(s3, path_or_bytes, key, content_type, *, is_path):
     extra_args = {
         "ACL": "public-read",
         "ContentType": content_type,
-        "CacheControl": "max-age=86400",
+        # These keys are fixed and overwritten on every publish — "no-cache"
+        # makes browsers revalidate (ETag 304 when unchanged) instead of
+        # serving a stale walkthrough for up to a day after a refresh.
+        "CacheControl": "no-cache",
     }
     try:
         if is_path:
