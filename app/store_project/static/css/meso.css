@@ -416,6 +416,25 @@ button.meso-card,
      since this is the hero rather than resting page content. */
   box-shadow: 0 10px 28px rgba(16, 18, 22, 0.12);
 }
+/* How-it-works card stills (issue #415 follow-up) — a lighter variant of
+   .meso-hero-shot: smaller radius/shadow, since these are supporting
+   texture below the hero + video, not the main event. A single fixed
+   max-height (rather than width:100%) keeps the three cards' images the
+   same visual weight even though their intrinsic aspect ratios differ (the
+   deliver shot is a phone portrait, design/adapt are landscape) — each is
+   centered at that shared height so the row of three cards still lines up. */
+.meso-card-shot {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 168px;
+  margin: 0 auto 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 4px 10px rgba(16, 18, 22, 0.08);
+}
 .meso-crumbs {
   display: flex;
   align-items: center;
