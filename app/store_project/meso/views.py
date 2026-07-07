@@ -21,7 +21,6 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
 from django.db.models import Max
-from django.db.models import Prefetch
 from django.http import Http404
 from django.http import HttpResponse
 from django.http import HttpResponseBadRequest
@@ -66,7 +65,7 @@ from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachProfile
 from .models import CoachSubscription
-from .models import ExercisePrescription
+from .models import ExerciseSlot
 from .models import GroupMembership
 from .models import InvalidTransition
 from .models import LoadType
@@ -75,12 +74,14 @@ from .models import Mesocycle
 from .models import MesoGroup
 from .models import Plan
 from .models import PlanAction
+from .models import Prescription
 from .models import PrescriptionOverride
 from .models import ProposedChange
 from .models import PushSubscription
 from .models import SandboxSession
 from .models import Session
 from .models import SessionLog
+from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
 from .serializers import current_week
@@ -186,7 +187,6 @@ def _coach_session_or_404(user, pk):
             pk=pk, week__mesocycle__plan__in=Plan.objects.for_coach(user)
         )
         .select_related("week__mesocycle__plan__relationship")
-        .prefetch_related("prescriptions")
         .first()
     )
     if session is None:
@@ -966,11 +966,11 @@ def _athlete_session_or_404(user, pk):
 
     Soft delete (designer framework Phase 0): a session the coach removed —
     or one under a removed week — is gone from the athlete's surface too, even
-    if it was already delivered. The prescriptions prefetch is likewise
-    live-only, so every downstream ``session.prescriptions.all()`` (the logger
-    grid, ``_clean_logged_sets``'s allowed ids, ``athlete_set_one_rm``) reads
-    only live rows from the cache. Already-logged history is untouched — those
-    reads go through ``SessionLog``/``LoggedSet``, never this lookup.
+    if it was already delivered. Cells are read live via ``session.cells()``
+    (P0 fixed-lineup cutover), so every downstream call (the logger grid,
+    ``_clean_logged_sets``'s allowed ids, ``athlete_set_one_rm``) sees only
+    live rows. Already-logged history is untouched — those reads go through
+    ``SessionLog``/``LoggedSet``, never this lookup.
     """
     session = (
         Session.objects.filter(
@@ -981,12 +981,6 @@ def _athlete_session_or_404(user, pk):
             week__deleted_at__isnull=True,
         )
         .select_related("week__mesocycle__plan__relationship")
-        .prefetch_related(
-            Prefetch(
-                "prescriptions",
-                queryset=ExercisePrescription.objects.filter(deleted_at__isnull=True),
-            )
-        )
         .first()
     )
     if session is None:
@@ -1120,14 +1114,13 @@ def athlete_log_session(request, pk):
         log.notes = notes
         log.save()
         # Replace only the rows the logger can re-post: sets whose prescription
-        # is still live in this session (``session.prescriptions`` arrives as
-        # the live-only prefetch). A set logged against a since-deleted, hidden
-        # prescription — or one orphaned by an old hard delete — is history,
-        # not draft state; wiping it here would silently destroy the athlete's
-        # record on their next save (soft delete, designer framework Phase 0).
-        log.sets.filter(
-            prescription_id__in=[p.pk for p in session.prescriptions.all()]
-        ).delete()
+        # cell is still live in this session (``session.cells()`` — P0
+        # fixed-lineup cutover — is already live-only). A set logged against a
+        # since-deleted, hidden prescription — or one orphaned by an old hard
+        # delete — is history, not draft state; wiping it here would silently
+        # destroy the athlete's record on their next save (soft delete,
+        # designer framework Phase 0).
+        log.sets.filter(prescription_id__in=[p.pk for p in session.cells()]).delete()
         LoggedSet.objects.bulk_create(
             [
                 LoggedSet(
@@ -1149,7 +1142,7 @@ def athlete_log_session(request, pk):
         # edit that drops the PR lowers it, a removed basis clears it.
         meso_one_rm.refresh_one_rms(
             request.user,
-            list(session.prescriptions.all()),
+            list(session.cells()),
             session.week.mesocycle.plan.unit,
         )
     return JsonResponse({"ok": True, "log": serialize_session_log(log)})
@@ -1179,7 +1172,7 @@ def athlete_set_one_rm(request, pk):
         return HttpResponseBadRequest("Expected a JSON object.")
 
     presc_id = payload.get("prescription")
-    prescriptions = {p.pk: p for p in session.prescriptions.all()}
+    prescriptions = {p.pk: p for p in session.cells()}
     # ``bool`` is an ``int`` subclass — reject it explicitly so ``true`` isn't an id.
     if (
         not isinstance(presc_id, int)
@@ -1217,7 +1210,7 @@ def _clean_logged_sets(raw_sets, session):
     """
     if not isinstance(raw_sets, list):
         return None, HttpResponseBadRequest("sets must be a list.")
-    allowed_ids = {p.pk for p in session.prescriptions.all()}
+    allowed_ids = {p.pk for p in session.cells()}
     cleaned = []
     seen = set()
     for position, raw in enumerate(raw_sets, start=1):
@@ -1896,12 +1889,15 @@ def invite_claim(request, token):
 # plan, or it's a 404.
 
 # Free-form text cells the grid edits, mapped to their model ``max_length``.
+# ``name``/``exercise`` are NOT here (P0 fixed-lineup cutover): a cell's name
+# resolves from its ``ExerciseSlot`` (block-wide identity) or a one-week
+# ``swap_name`` — neither is writable through this per-cell numbers patch.
 PATCHABLE_FIELDS = {
-    "name": 255,
     "sets": 32,
     "reps": 32,
     "load": 32,
     "rpe": 32,
+    "rest": 32,
     "note": 255,
 }
 
@@ -1982,6 +1978,35 @@ def _touch_plan(plan):
     plan.save(update_fields=["modified"])
 
 
+def _cell_or_404(plan, pk):
+    """A live ``Prescription`` cell of ``plan`` by pk, or ``Http404`` (P0).
+
+    The fixed-lineup analogue of the old flat per-week prescription lookup: a
+    cell is live iff its ``ExerciseSlot``, that slot's ``SessionSlot``, and
+    its own ``Week`` are all live, and the slot's mesocycle belongs to ``plan``.
+    """
+    return get_object_or_404(
+        Prescription,
+        pk=pk,
+        exercise_slot__session_slot__mesocycle__plan=plan,
+        exercise_slot__deleted_at__isnull=True,
+        exercise_slot__session_slot__deleted_at__isnull=True,
+        week__deleted_at__isnull=True,
+    )
+
+
+def _session_for_cell(cell):
+    """The live (week × day) ``Session`` a cell belongs to (P0).
+
+    A cell has no ``.session`` of its own anymore — its day is the live
+    ``Session`` joining its own ``.week`` to its ``ExerciseSlot``'s
+    ``SessionSlot``.
+    """
+    return Session.objects.get(
+        week=cell.week, session_slot=cell.exercise_slot.session_slot
+    )
+
+
 @login_required
 @require_POST
 def prescription_patch(request, plan_id, pk):
@@ -1989,14 +2014,7 @@ def prescription_patch(request, plan_id, pk):
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    prescription = get_object_or_404(
-        ExercisePrescription,
-        pk=pk,
-        session__week__mesocycle__plan=plan,
-        deleted_at__isnull=True,
-        session__deleted_at__isnull=True,
-        session__week__deleted_at__isnull=True,
-    )
+    cell = _cell_or_404(plan, pk)
     try:
         payload = json.loads(request.body or "{}")
     except json.JSONDecodeError:
@@ -2025,10 +2043,10 @@ def prescription_patch(request, plan_id, pk):
 
     if updates:
         with transaction.atomic():
-            record_plan_action(plan, f"Edited {prescription.name or 'exercise'}")
+            record_plan_action(plan, f"Edited {cell.name or 'exercise'}")
             for field, value in updates.items():
-                setattr(prescription, field, value)
-            prescription.save(update_fields=list(updates))
+                setattr(cell, field, value)
+            cell.save(update_fields=list(updates))
             _touch_plan(plan)
     # Row-level reply + refreshed history: this endpoint records an undo action
     # but doesn't re-serialize the plan, so without `history` the client's undo
@@ -2036,7 +2054,7 @@ def prescription_patch(request, plan_id, pk):
     return JsonResponse(
         {
             "ok": True,
-            "prescription": serialize_prescription(prescription),
+            "prescription": serialize_prescription(cell),
             "history": serialize_plan_history(plan),
         }
     )
@@ -2045,31 +2063,23 @@ def prescription_patch(request, plan_id, pk):
 @login_required
 @require_POST
 def prescription_delete(request, plan_id, pk):
-    """Soft-delete one exercise row (designer framework Phase 0, issue #401).
+    """Soft-delete one exercise row — block-wide (P0 fixed-lineup cutover).
 
-    Stamps ``deleted_at`` on the target row only — never its ancestors — so
-    ``serialize_plan``/lookups hide it by filtering live rows at each level of
-    the walk rather than by a cascading write. The row (and its session and
-    week) must be live, or this 404s — including a double-delete of the same
-    row. Response is pinned to the prescription's own week, not necessarily the
-    plan's current one, so the client reopens onto the grid it was editing.
+    A row's identity is now the ``ExerciseSlot`` shared across every week, so
+    removing it removes the row from the **whole block**, not just the viewed
+    week (the old per-week semantics). The cell (and its slot/week) must be
+    live, or this 404s — including a double-delete of the same row. Response
+    is pinned to the cell's own week, not necessarily the plan's current one,
+    so the client reopens onto the grid it was editing.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    prescription = get_object_or_404(
-        ExercisePrescription,
-        pk=pk,
-        session__week__mesocycle__plan=plan,
-        deleted_at__isnull=True,
-        session__deleted_at__isnull=True,
-        session__week__deleted_at__isnull=True,
-    )
-    week = prescription.session.week
+    cell = _cell_or_404(plan, pk)
+    week = cell.week
     with transaction.atomic():
-        record_plan_action(plan, f"Deleted {prescription.name or 'exercise'}")
-        prescription.deleted_at = timezone.now()
-        prescription.save(update_fields=["deleted_at"])
+        record_plan_action(plan, f"Deleted {cell.name or 'exercise'}")
+        cell.exercise_slot.soft_delete()
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
@@ -2077,7 +2087,14 @@ def prescription_delete(request, plan_id, pk):
 @login_required
 @require_POST
 def session_add_exercise(request, plan_id, pk):
-    """Append a blank prescription row to a session."""
+    """Append a blank exercise row to a session — block-wide (P0 fixed-lineup cutover).
+
+    Adding a row is now block-wide: creates one ``ExerciseSlot`` on the day's
+    ``SessionSlot`` (shared block identity) plus a starter ``Prescription``
+    cell on it for EVERY live week of the mesocycle — the new row appears as
+    a blank cell across the whole block, not just the viewed week. The reply
+    serializes the new slot's cell for the viewed session's own week.
+    """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
@@ -2089,24 +2106,32 @@ def session_add_exercise(request, plan_id, pk):
         week__deleted_at__isnull=True,
     )
     with transaction.atomic():
-        next_order = (session.prescriptions.aggregate(m=Max("order"))["m"] or 0) + 1
+        slot = session.session_slot
+        next_order = (
+            slot.exercise_slots.filter(deleted_at__isnull=True).aggregate(
+                m=Max("order")
+            )["m"]
+            or 0
+        ) + 1
         record_plan_action(plan, "Added exercise")
-        prescription = ExercisePrescription.objects.create(
-            session=session,
-            name="New exercise",
-            order=next_order,
-            sets="3",
-            reps="10",
-            load="",
-            rpe="7",
-            note="",
+        exercise_slot = ExerciseSlot.objects.create(
+            session_slot=slot, name="New exercise", order=next_order
         )
+        cell = None
+        for week in Week.objects.filter(
+            mesocycle=session.week.mesocycle, deleted_at__isnull=True
+        ):
+            new_cell = Prescription.objects.create(
+                exercise_slot=exercise_slot, week=week, sets="3", reps="10", rpe="7"
+            )
+            if week.pk == session.week_id:
+                cell = new_cell
         _touch_plan(plan)
     # Row-level reply + refreshed history (see prescription_patch).
     return JsonResponse(
         {
             "ok": True,
-            "prescription": serialize_prescription(prescription),
+            "prescription": serialize_prescription(cell),
             "history": serialize_plan_history(plan),
         },
         status=201,
@@ -2116,16 +2141,21 @@ def session_add_exercise(request, plan_id, pk):
 @login_required
 @require_POST
 def session_add(request, plan_id):
-    """Append a blank training day (with a starter row) to a week of the plan.
+    """Append a blank training day (with a starter row) to the plan — block-wide.
 
-    "Add a day" adds a ``Session`` to the week the designer is showing. An optional
-    ``week_id`` in the body pins that week — the multi-week switcher can open a week
-    other than the live one, and the day must land where the coach is looking (else
-    a reload shows it on the wrong week). It defaults to ``current_week`` for the
-    first-time-UX caller that predates the switcher. The week is scoped to the plan
-    (a foreign week is a 404). Scoped + edit-gated like the other designer writes via
-    ``_editable_plan_or_response`` (403 foreign, 402 over-limit). Returns the new day
-    in the grid's day shape so the client can append it without a reload.
+    "Add a day" is now block-wide (P0 fixed-lineup cutover): it creates one
+    ``SessionSlot`` (the day's shared identity) plus a ``Session`` instance and
+    a starter ``ExerciseSlot``+cell for EVERY live week of the mesocycle — the
+    new day appears in every week's grid, not just the one being viewed. An
+    optional ``week_id`` in the body pins which week's ``Session`` is returned
+    — the multi-week switcher can open a week other than the live one, and the
+    reply must reflect where the coach is looking (else a reload shows it on
+    the wrong week). It defaults to ``current_week`` for the first-time-UX
+    caller that predates the switcher. The week is scoped to the plan (a
+    foreign week is a 404). Scoped + edit-gated like the other designer writes
+    via ``_editable_plan_or_response`` (403 foreign, 402 over-limit). Returns
+    the viewed week's new day in the grid's day shape so the client can append
+    it without a reload.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -2143,26 +2173,46 @@ def session_add(request, plan_id):
         week = current_week(plan)
     if week is None:
         return HttpResponseBadRequest("This plan has no week to add a day to.")
-    # Allocate the next day_number/order under a row lock on the week so a
-    # double-click or two concurrent submits can't read the same max and create
-    # duplicate "Day N" rows (Session has no uniqueness on these). The explicit
-    # transaction is required: prod views run in autocommit (ATOMIC_REQUESTS is
-    # inert here), so the lock must own its own transaction to be held.
+    meso = week.mesocycle
+    # Allocate the next day_number/order under a row lock on the mesocycle (the
+    # SessionSlot is block-wide, not per-week) so a double-click or two
+    # concurrent submits can't read the same max and create duplicate "Day N"
+    # slots. The explicit transaction is required: prod views run in
+    # autocommit (ATOMIC_REQUESTS is inert here), so the lock must own its own
+    # transaction to be held.
     with transaction.atomic():
         # Lock ordering: plan BEFORE any child row (undo/redo, the deletes, and
         # week_set_current all lock the plan first, then touch weeks) — taking
-        # the week lock first here could deadlock against them.
+        # the mesocycle lock first here could deadlock against them.
         Plan.objects.select_for_update().filter(pk=plan.pk).first()
-        Week.objects.select_for_update().filter(pk=week.pk).first()
-        next_order = (week.sessions.aggregate(m=Max("order"))["m"] or 0) + 1
-        next_day = (week.sessions.aggregate(m=Max("day_number"))["m"] or 0) + 1
+        Mesocycle.objects.select_for_update().filter(pk=meso.pk).first()
+        # Mirrors ``week_add``'s own indexing (over ALL slots, deleted
+        # included) so a soft-deleted day's number/order is never reused.
+        agg = meso.session_slots.aggregate(
+            max_order=Max("order"), max_day=Max("day_number")
+        )
+        next_order = (agg["max_order"] or 0) + 1
+        next_day = (agg["max_day"] or 0) + 1
         record_plan_action(plan, f"Added Day {next_day}")
-        session = Session.objects.create(
-            week=week, day_number=next_day, name=f"Day {next_day}", order=next_order
+        slot = SessionSlot.objects.create(
+            mesocycle=meso,
+            day_number=next_day,
+            name=f"Day {next_day}",
+            order=next_order,
         )
-        ExercisePrescription.objects.create(
-            session=session, name="New exercise", order=0, sets="3", reps="10", rpe="7"
+        live_weeks = list(Week.objects.filter(mesocycle=meso, deleted_at__isnull=True))
+        session = None
+        for w in live_weeks:
+            new_session = Session.objects.create(week=w, session_slot=slot)
+            if w.pk == week.pk:
+                session = new_session
+        exercise_slot = ExerciseSlot.objects.create(
+            session_slot=slot, name="New exercise", order=0
         )
+        for w in live_weeks:
+            Prescription.objects.create(
+                exercise_slot=exercise_slot, week=w, sets="3", reps="10", rpe="7"
+            )
         _touch_plan(plan)
     # Row-level reply + refreshed history (see prescription_patch).
     return JsonResponse(
@@ -2178,13 +2228,13 @@ def session_add(request, plan_id):
 @login_required
 @require_POST
 def session_delete(request, plan_id, pk):
-    """Soft-delete one training day (designer framework Phase 0, issue #401).
+    """Soft-delete one training day — block-wide (P0 fixed-lineup cutover).
 
-    Stamps ``deleted_at`` on the target ``Session`` only — its prescriptions
-    aren't touched; they're simply hidden underneath a parent that no longer
-    surfaces (serialization filters live rows at each level of the walk, not a
-    cascading write). Any ``SessionLog``/``LoggedSet`` the athlete already
-    logged against this session are untouched — preserving them is the point.
+    A day's identity is now the ``SessionSlot`` shared across every week, so
+    removing it removes the day from the **whole block** (cascading to its
+    ``ExerciseSlot``s and every week's ``Session`` instance), not just the
+    viewed week (the old per-week semantics). Any ``SessionLog``/``LoggedSet``
+    the athlete already logged are untouched — preserving them is the point.
     The row (and its week) must be live, or this 404s. Response is pinned to
     the session's own week.
     """
@@ -2201,8 +2251,7 @@ def session_delete(request, plan_id, pk):
     week = session.week
     with transaction.atomic():
         record_plan_action(plan, f"Deleted Day {session.day_number}")
-        session.deleted_at = timezone.now()
-        session.save(update_fields=["deleted_at"])
+        session.session_slot.soft_delete()
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
@@ -2237,14 +2286,18 @@ def _parse_id_list(request):
 def session_reorder(request, plan_id, pk):
     """Reorder one session's exercise rows (dnd-kit designer, Phase 4, #403).
 
-    Body ``{"order": [<prescription ids>]}`` must be EXACTLY the session's live
-    prescription id set — one entry per live row, no missing/extra/duplicate/
-    foreign/soft-deleted id — in the new order; any mismatch is a 400
+    Body ``{"order": [<cell ids>]}`` must be EXACTLY the viewed week's live row
+    cells (``session.cells()``) — one entry per live row, no missing/extra/
+    duplicate/foreign/soft-deleted id — in the new order; any mismatch is a 400
     ``{"ok": false, "error": ...}`` (see ``_parse_id_list`` for the structural-
-    vs-semantic 400 split). Writes dense 0-based ``ExercisePrescription.order``
-    values matching the posted order. Idempotent: posting the current order is
-    a 200 no-op that still records one action (the client never sends a no-op
-    post, so this is the simplest contract rather than a special case).
+    vs-semantic 400 split). P0 fixed-lineup cutover: row order lives on the
+    ``ExerciseSlot`` (block-wide identity), so each posted cell id is mapped to
+    its slot and the write reorders the row block-wide, not just this week —
+    consistent, since a row's position was always shared block identity, never
+    a per-week fact. Writes dense 0-based ``ExerciseSlot.order`` values
+    matching the posted order. Idempotent: posting the current order is a 200
+    no-op that still records one action (the client never sends a no-op post,
+    so this is the simplest contract rather than a special case).
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -2266,11 +2319,8 @@ def session_reorder(request, plan_id, pk):
         # under this lock so a concurrent write to the same session's rows
         # can't slip in between the read and this reorder's write.
         Plan.objects.select_for_update().filter(pk=plan.pk).first()
-        live_ids = list(
-            session.prescriptions.filter(deleted_at__isnull=True).values_list(
-                "pk", flat=True
-            )
-        )
+        live = list(session.cells())
+        live_ids = [c.pk for c in live]
         if len(order) != len(live_ids) or set(order) != set(live_ids):
             return JsonResponse(
                 {
@@ -2280,8 +2330,9 @@ def session_reorder(request, plan_id, pk):
                 status=400,
             )
         record_plan_action(plan, "Reordered exercises")
-        for index, prescription_id in enumerate(order):
-            ExercisePrescription.objects.filter(pk=prescription_id).update(order=index)
+        slot_id_by_cell = {c.pk: c.exercise_slot_id for c in live}
+        for index, cell_id in enumerate(order):
+            ExerciseSlot.objects.filter(pk=slot_id_by_cell[cell_id]).update(order=index)
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
@@ -2391,11 +2442,12 @@ def week_set_current(request, plan_id, week_id):
 def week_delete(request, plan_id, week_id):
     """Soft-delete one week (designer framework Phase 0, issue #401).
 
-    Stamps ``deleted_at`` on the target ``Week`` only — its sessions and their
-    prescriptions aren't touched; they're hidden underneath a parent that no
-    longer surfaces (serialization filters live rows at each level of the
-    walk, not a cascading write — so a session independently soft-deleted
-    earlier stays deleted if a later undo restores this week).
+    ``week.soft_delete()`` stamps ``deleted_at`` on the target ``Week`` and
+    cascades to its ``Session`` instances (P0 fixed-lineup cutover) — a
+    session independently soft-deleted earlier stays deleted if a later undo
+    restores this week, since the cascade only ever stamps still-live rows.
+    Cells carry no ``deleted_at`` of their own; they're hidden via the join to
+    this dead week regardless.
 
     Two rules gate the action itself (400, not the row's own 404 — it exists
     and is live): the **current** (deliver-target) week can't be deleted — the
@@ -2436,8 +2488,7 @@ def week_delete(request, plan_id, week_id):
                 status=400,
             )
         record_plan_action(plan, f"Deleted Week {week.index}")
-        week.deleted_at = timezone.now()
-        week.save(update_fields=["deleted_at"])
+        week.soft_delete()
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan)})
 
@@ -2449,10 +2500,15 @@ def week_reorder_sessions(request, plan_id, week_id):
 
     Body ``{"order": [<session ids>]}`` must be EXACTLY the week's live session
     id set, in the new order — validation mirrors ``session_reorder`` (see
-    ``_parse_id_list`` for the structural-vs-semantic 400 split). Writes dense
-    0-based ``Session.order`` values only; ``day_number``/``name`` stay
-    untouched — "Day 1" keeps its label, since ``order`` is presentation order,
-    not the day's identity (``Session.Meta.ordering = ["order", "day_number"]``).
+    ``_parse_id_list`` for the structural-vs-semantic 400 split). P0
+    fixed-lineup cutover: a day's order lives on the ``SessionSlot``
+    (block-wide identity, ``Session.order`` is now just a delegating
+    property), so each posted session id is mapped to its slot and the write
+    reorders the day block-wide, not just this week — consistent, since a
+    day's position was always shared block identity. Writes dense 0-based
+    ``SessionSlot.order`` values only; ``day_number``/``name`` stay untouched —
+    "Day 1" keeps its label, since ``order`` is presentation order, not the
+    day's identity.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -2467,17 +2523,19 @@ def week_reorder_sessions(request, plan_id, week_id):
     with transaction.atomic():
         # Lock ordering: plan first (see session_add).
         Plan.objects.select_for_update().filter(pk=plan.pk).first()
-        live_ids = list(
-            week.sessions.filter(deleted_at__isnull=True).values_list("pk", flat=True)
-        )
+        live = list(week.sessions.filter(deleted_at__isnull=True))
+        live_ids = [s.pk for s in live]
         if len(order) != len(live_ids) or set(order) != set(live_ids):
             return JsonResponse(
                 {"ok": False, "error": "order must be exactly the week's days."},
                 status=400,
             )
         record_plan_action(plan, "Reordered days")
+        slot_id_by_session = {s.pk: s.session_slot_id for s in live}
         for index, session_id in enumerate(order):
-            Session.objects.filter(pk=session_id).update(order=index)
+            SessionSlot.objects.filter(pk=slot_id_by_session[session_id]).update(
+                order=index
+            )
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
@@ -2706,14 +2764,7 @@ def prescription_override(request, plan_id, pk):
         return forbidden
     if not plan.is_group:
         return HttpResponseBadRequest("Overrides apply to a group's shared program.")
-    prescription = get_object_or_404(
-        ExercisePrescription,
-        pk=pk,
-        session__week__mesocycle__plan=plan,
-        deleted_at__isnull=True,
-        session__deleted_at__isnull=True,
-        session__week__deleted_at__isnull=True,
-    )
+    prescription = _cell_or_404(plan, pk)
     try:
         payload = json.loads(request.body or "{}")
     except json.JSONDecodeError:
@@ -2768,18 +2819,22 @@ def _live_session_in_plan_or_none(plan, session_id):
 def prescription_move(request, plan_id, pk):
     """Move one exercise row to a different session, within the same week (Phase 4, #403).
 
-    The designer's cross-day drag: re-points ``prescription.session`` to the
-    posted ``session_id`` and densely renumbers (0-based) BOTH the source and
-    target session's live rows, with the moved row landing at the posted
-    ``index`` (clamped into ``[0, len(target's live rows)]`` — a drop past
-    either end just lands at that end). A target session equal to the source
-    behaves like a plain within-day reorder (the row never leaves, only the
-    one session's rows are renumbered). Cross-*week* moves — a target session
-    in a different week than the source — are a 400
+    The designer's cross-day drag. P0 fixed-lineup cutover: a row's identity
+    is the ``ExerciseSlot`` (block-wide, shared across every week), so this
+    re-points the cell's ``exercise_slot.session_slot`` to the target day's
+    ``SessionSlot`` — a **block-wide** move, not just this week's — and
+    densely renumbers (0-based) BOTH the source and target slot's live
+    exercise slots, with the moved row landing at the posted ``index``
+    (clamped into ``[0, len(target's live rows)]`` — a drop past either end
+    just lands at that end). A target session equal to the source behaves
+    like a plain within-day reorder (the row never leaves, only the one day's
+    rows are renumbered). Cross-*week* moves — a target session in a
+    different week than the source — are a 400
     ``{"ok": false, "error": "Move within one week."}``; the designer's grid
     has no cross-week drag gesture. ``LoggedSet.prescription`` rows are left
-    untouched — a move only ever changes ``session``/``order``, never touches
-    an athlete's logged history, so it keeps pointing at the same pk.
+    untouched — a move only ever changes the slot's ``session_slot``/``order``,
+    never touches an athlete's logged history, so it keeps pointing at the
+    same cell pk.
 
     Body ``{"session_id": <int>, "index": <int>}``; malformed JSON, a non-object
     body, or a missing/non-int field is a bare 400 (mirrors ``prescription_patch``).
@@ -2791,14 +2846,7 @@ def prescription_move(request, plan_id, pk):
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    prescription = get_object_or_404(
-        ExercisePrescription,
-        pk=pk,
-        session__week__mesocycle__plan=plan,
-        deleted_at__isnull=True,
-        session__deleted_at__isnull=True,
-        session__week__deleted_at__isnull=True,
-    )
+    cell = _cell_or_404(plan, pk)
     try:
         payload = json.loads(request.body or "{}")
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -2816,44 +2864,51 @@ def prescription_move(request, plan_id, pk):
     target_session = _live_session_in_plan_or_none(plan, session_id)
     if target_session is None:
         return HttpResponseBadRequest("session_id must be a live session of this plan.")
-    source_session = prescription.session
-    if target_session.week_id != source_session.week_id:
+    if target_session.week_id != cell.week_id:
         return JsonResponse({"ok": False, "error": "Move within one week."}, status=400)
 
+    source_session = _session_for_cell(cell)
     week = source_session.week
+    source_slot = source_session.session_slot
+    target_slot = target_session.session_slot
     with transaction.atomic():
         # Lock ordering: plan first (see session_add).
         Plan.objects.select_for_update().filter(pk=plan.pk).first()
-        record_plan_action(plan, f"Moved {prescription.name or 'exercise'}")
-        if target_session.pk == source_session.pk:
+        record_plan_action(plan, f"Moved {cell.name or 'exercise'}")
+        es = cell.exercise_slot
+        if target_slot.pk == source_slot.pk:
             siblings = list(
-                source_session.prescriptions.filter(deleted_at__isnull=True)
-                .exclude(pk=prescription.pk)
+                ExerciseSlot.objects.filter(
+                    session_slot=source_slot, deleted_at__isnull=True
+                )
+                .exclude(pk=es.pk)
                 .order_by("order")
             )
             clamped = max(0, min(index, len(siblings)))
-            siblings.insert(clamped, prescription)
+            siblings.insert(clamped, es)
             for new_order, row in enumerate(siblings):
-                ExercisePrescription.objects.filter(pk=row.pk).update(order=new_order)
+                ExerciseSlot.objects.filter(pk=row.pk).update(order=new_order)
         else:
             target_rows = list(
-                target_session.prescriptions.filter(deleted_at__isnull=True).order_by(
-                    "order"
-                )
+                ExerciseSlot.objects.filter(
+                    session_slot=target_slot, deleted_at__isnull=True
+                ).order_by("order")
             )
             clamped = max(0, min(index, len(target_rows)))
-            target_rows.insert(clamped, prescription)
+            target_rows.insert(clamped, es)
             for new_order, row in enumerate(target_rows):
-                ExercisePrescription.objects.filter(pk=row.pk).update(
-                    order=new_order, session_id=target_session.pk
+                ExerciseSlot.objects.filter(pk=row.pk).update(
+                    order=new_order, session_slot_id=target_slot.pk
                 )
             source_rows = list(
-                source_session.prescriptions.filter(deleted_at__isnull=True)
-                .exclude(pk=prescription.pk)
+                ExerciseSlot.objects.filter(
+                    session_slot=source_slot, deleted_at__isnull=True
+                )
+                .exclude(pk=es.pk)
                 .order_by("order")
             )
             for new_order, row in enumerate(source_rows):
-                ExercisePrescription.objects.filter(pk=row.pk).update(order=new_order)
+                ExerciseSlot.objects.filter(pk=row.pk).update(order=new_order)
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
@@ -2879,14 +2934,7 @@ def coach_set_one_rm(request, plan_id, pk):
         return forbidden
     if plan.is_group:
         return HttpResponseBadRequest("A 1RM belongs to a single athlete, not a group.")
-    prescription = get_object_or_404(
-        ExercisePrescription,
-        pk=pk,
-        session__week__mesocycle__plan=plan,
-        deleted_at__isnull=True,
-        session__deleted_at__isnull=True,
-        session__week__deleted_at__isnull=True,
-    )
+    prescription = _cell_or_404(plan, pk)
     try:
         payload = json.loads(request.body or "{}")
     except json.JSONDecodeError:

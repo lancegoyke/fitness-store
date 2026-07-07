@@ -9,9 +9,10 @@ database renders the roster, athlete profile, and designer from actual data:
 - five demo **athletes** (the prototype's Maya / Devon / Priya / Marcus / Lena)
   as ``User`` rows with ``AthleteProfile`` + global ``Contraindication`` rows;
 - an **active** ``CoachAthlete`` link per athlete (coach-invited, accepted);
-- one sample **Plan** for Maya — the full ``Mesocycle → Week → Session →
-  ExercisePrescription`` hierarchy reproducing the designer's fixture grid, so
-  ``serialize_plan`` round-trips it straight into the designer;
+- one sample **Plan** for Maya — the full fixed-lineup hierarchy
+  (``Mesocycle → SessionSlot → ExerciseSlot`` identity + ``Week → Prescription``
+  per-week cells) reproducing the designer's fixture grid, so ``serialize_plan``
+  round-trips it straight into the designer;
 - one demo **MesoGroup** (groups slice S1) with three of the athletes as
   members + a **shared program** rooted at the group (Phase 2a) carrying a couple
   of per-athlete **auto-adjusts** (Phase 3), so the roster's *Groups* card and the
@@ -40,14 +41,16 @@ from store_project.meso.models import CoachInvite
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import CoachSubscription
 from store_project.meso.models import Contraindication
-from store_project.meso.models import ExercisePrescription
+from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import LoadType
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
+from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
+from store_project.meso.models import SessionSlot
 from store_project.meso.models import Unit
 from store_project.meso.models import Week
 from store_project.meso.one_rm import refresh_one_rms
@@ -118,19 +121,68 @@ ATHLETES = [
     },
 ]
 
-# Maya's sample plan — the designer's fixture grid, as real rows. Only the
-# current block ("Hypertrophy") materializes Week rows, and only the current
-# week (Wk 2) materializes sessions, mirroring how the designer renders one
-# week at a time; the other blocks are planned-length-only (week_count).
+# Maya's sample plan — the designer's fixture grid, as real rows. P0
+# fixed-lineup shape: each mesocycle's ``"days"`` is the block's fixed
+# lineup — a ``SessionSlot`` (day) per entry, each with an ordered
+# ``"exercises"`` list — an ``ExerciseSlot`` (row) per entry — expressed
+# **once per block**, since identity (name/bias/tags/catalog link/order) is
+# now shared across every week. ``"weeks"`` are the block's ``Week`` columns;
+# only a week that carries a ``"cells"`` dict materializes ``Session`` +
+# ``Prescription`` rows — ``{day_number: [<row-numbers>, ...]}``, one dict of
+# per-week numbers (sets/reps/load/rpe/rest/note + the rare skip/swap
+# exception) per row, in the same order as that day's ``"exercises"`` — so
+# only the current week (Wk 2) materializes sessions, mirroring how the
+# designer renders one week at a time; the other blocks are
+# planned-length-only (week_count, no ``"days"``/``"weeks"``).
 SAMPLE_PLAN = {
     "title": "Hypertrophy Block",
     "goal": "Hypertrophy",
     "mesocycles": [
-        {"name": "Base / GPP", "order": 0, "week_count": 4, "weeks": []},
+        {"name": "Base / GPP", "order": 0, "week_count": 4},
         {
             "name": "Hypertrophy",
             "order": 1,
             "week_count": 4,
+            "days": [
+                {
+                    "day_number": 1,
+                    "name": "Lower",
+                    "bias": "Quad bias · knee-safe",
+                    "exercises": [
+                        # Prescribed as a % of 1RM (S2) — the demo row that
+                        # shows the %-vs-unit Load typing.
+                        {"name": "Box Squat (to parallel)", "tags": ["knee-safe"]},
+                        {"name": "Bulgarian Split Squat (DB)"},
+                        {"name": "Leg Press (controlled ROM)"},
+                        {"name": "Seated Leg Curl"},
+                        {"name": "Standing Calf Raise"},
+                    ],
+                },
+                {
+                    "day_number": 2,
+                    "name": "Upper",
+                    "bias": "Push / pull",
+                    "exercises": [
+                        {"name": "Incline DB Press"},
+                        {"name": "Chest-Supported Row"},
+                        {"name": "Lat Pulldown"},
+                        {"name": "DB Shoulder Press"},
+                        {"name": "Cable Lateral Raise"},
+                    ],
+                },
+                {
+                    "day_number": 3,
+                    "name": "Posterior",
+                    "bias": "Hinge",
+                    "exercises": [
+                        {"name": "Trap-Bar Deadlift"},
+                        {"name": "Hip Thrust"},
+                        {"name": "Romanian Deadlift (3-1-1)"},
+                        {"name": "Reverse Lunge (DB)", "tags": ["knee-safe"]},
+                        {"name": "Hanging Knee Raise"},
+                    ],
+                },
+            ],
             "weeks": [
                 {
                     "index": 1,
@@ -139,7 +191,6 @@ SAMPLE_PLAN = {
                     "intensity": 62,
                     "is_deload": False,
                     "is_current": False,
-                    "sessions": [],
                 },
                 {
                     "index": 2,
@@ -148,143 +199,124 @@ SAMPLE_PLAN = {
                     "intensity": 68,
                     "is_deload": False,
                     "is_current": True,
-                    "sessions": [
-                        {
-                            "day_number": 1,
-                            "name": "Lower",
-                            "bias": "Quad bias · knee-safe",
-                            "exercises": [
-                                {
-                                    # Prescribed as a % of 1RM (S2) — the demo row
-                                    # that shows the %-vs-unit Load typing.
-                                    "name": "Box Squat (to parallel)",
-                                    "sets": "4",
-                                    "reps": "6",
-                                    "load": "72",
-                                    "load_type": LoadType.PERCENT,
-                                    "rpe": "7",
-                                    "tags": ["knee-safe"],
-                                },
-                                {
-                                    "name": "Bulgarian Split Squat (DB)",
-                                    "sets": "3",
-                                    "reps": "10",
-                                    "load": "18",
-                                    "rpe": "7",
-                                },
-                                {
-                                    "name": "Leg Press (controlled ROM)",
-                                    "sets": "3",
-                                    "reps": "12",
-                                    "load": "110",
-                                    "rpe": "8",
-                                },
-                                {
-                                    "name": "Seated Leg Curl",
-                                    "sets": "3",
-                                    "reps": "12",
-                                    "load": "41",
-                                    "rpe": "8",
-                                },
-                                {
-                                    "name": "Standing Calf Raise",
-                                    "sets": "4",
-                                    "reps": "15",
-                                    "load": "60",
-                                    "rpe": "—",
-                                },
-                            ],
-                        },
-                        {
-                            "day_number": 2,
-                            "name": "Upper",
-                            "bias": "Push / pull",
-                            "exercises": [
-                                {
-                                    "name": "Incline DB Press",
-                                    "sets": "4",
-                                    "reps": "8",
-                                    "load": "24",
-                                    "rpe": "7",
-                                    "note": "monitor shoulder",
-                                },
-                                {
-                                    "name": "Chest-Supported Row",
-                                    "sets": "4",
-                                    "reps": "10",
-                                    "load": "27",
-                                    "rpe": "7",
-                                },
-                                {
-                                    "name": "Lat Pulldown",
-                                    "sets": "3",
-                                    "reps": "12",
-                                    "load": "52",
-                                    "rpe": "8",
-                                },
-                                {
-                                    "name": "DB Shoulder Press",
-                                    "sets": "3",
-                                    "reps": "10",
-                                    "load": "16",
-                                    "rpe": "7",
-                                    "note": "neutral grip",
-                                },
-                                {
-                                    "name": "Cable Lateral Raise",
-                                    "sets": "3",
-                                    "reps": "15",
-                                    "load": "9",
-                                    "rpe": "—",
-                                },
-                            ],
-                        },
-                        {
-                            "day_number": 3,
-                            "name": "Posterior",
-                            "bias": "Hinge",
-                            "exercises": [
-                                {
-                                    "name": "Trap-Bar Deadlift",
-                                    "sets": "4",
-                                    "reps": "6",
-                                    "load": "92.5",
-                                    "rpe": "7",
-                                },
-                                {
-                                    "name": "Hip Thrust",
-                                    "sets": "3",
-                                    "reps": "10",
-                                    "load": "80",
-                                    "rpe": "8",
-                                },
-                                {
-                                    "name": "Romanian Deadlift (3-1-1)",
-                                    "sets": "3",
-                                    "reps": "8",
-                                    "load": "60",
-                                    "rpe": "7",
-                                    "note": "tempo eccentric",
-                                },
-                                {
-                                    "name": "Reverse Lunge (DB)",
-                                    "sets": "3",
-                                    "reps": "12",
-                                    "load": "14",
-                                    "rpe": "—",
-                                    "note": "knee-monitored",
-                                    "tags": ["knee-safe"],
-                                },
-                                {
-                                    "name": "Hanging Knee Raise",
-                                    "sets": "3",
-                                    "reps": "12",
-                                    "load": "BW",
-                                    "rpe": "—",
-                                },
-                            ],
-                        },
-                    ],
+                    "cells": {
+                        1: [
+                            {
+                                "sets": "4",
+                                "reps": "6",
+                                "load": "72",
+                                "load_type": LoadType.PERCENT,
+                                "rpe": "7",
+                                "rest": "2 min",
+                            },
+                            {
+                                "sets": "3",
+                                "reps": "10",
+                                "load": "18",
+                                "rpe": "7",
+                                "rest": "90s",
+                            },
+                            {
+                                "sets": "3",
+                                "reps": "12",
+                                "load": "110",
+                                "rpe": "8",
+                                "rest": "90s",
+                            },
+                            {
+                                "sets": "3",
+                                "reps": "12",
+                                "load": "41",
+                                "rpe": "8",
+                                "rest": "60s",
+                            },
+                            {
+                                "sets": "4",
+                                "reps": "15",
+                                "load": "60",
+                                "rpe": "—",
+                                "rest": "45s",
+                            },
+                        ],
+                        2: [
+                            {
+                                "sets": "4",
+                                "reps": "8",
+                                "load": "24",
+                                "rpe": "7",
+                                "rest": "2 min",
+                                "note": "monitor shoulder",
+                            },
+                            {
+                                "sets": "4",
+                                "reps": "10",
+                                "load": "27",
+                                "rpe": "7",
+                                "rest": "90s",
+                            },
+                            {
+                                "sets": "3",
+                                "reps": "12",
+                                "load": "52",
+                                "rpe": "8",
+                                "rest": "75s",
+                            },
+                            {
+                                "sets": "3",
+                                "reps": "10",
+                                "load": "16",
+                                "rpe": "7",
+                                "rest": "90s",
+                                "note": "neutral grip",
+                            },
+                            # A one-week exception: shoulder felt off, so this
+                            # row is skipped for Wk 2 only (the em-dash cell) —
+                            # not logged, so it's safe to demo here.
+                            {"skipped": True},
+                        ],
+                        3: [
+                            {
+                                "sets": "4",
+                                "reps": "6",
+                                "load": "92.5",
+                                "rpe": "7",
+                                "rest": "3 min",
+                            },
+                            {
+                                "sets": "3",
+                                "reps": "10",
+                                "load": "80",
+                                "rpe": "8",
+                                "rest": "2 min",
+                            },
+                            {
+                                "sets": "3",
+                                "reps": "8",
+                                "load": "60",
+                                "rpe": "7",
+                                "rest": "90s",
+                                "note": "tempo eccentric",
+                            },
+                            {
+                                "sets": "3",
+                                "reps": "12",
+                                "load": "14",
+                                "rpe": "—",
+                                "rest": "60s",
+                                "note": "knee-monitored",
+                            },
+                            # A one-week swap: a substitute lift for Wk 2 only
+                            # (block identity stays "Hanging Knee Raise").
+                            {
+                                "sets": "3",
+                                "reps": "12",
+                                "load": "BW",
+                                "rpe": "—",
+                                "rest": "45s",
+                                "swap_name": "Cable Crunch",
+                            },
+                        ],
+                    },
                 },
                 {
                     "index": 3,
@@ -293,7 +325,6 @@ SAMPLE_PLAN = {
                     "intensity": 73,
                     "is_deload": False,
                     "is_current": False,
-                    "sessions": [],
                 },
                 {
                     "index": 4,
@@ -302,12 +333,11 @@ SAMPLE_PLAN = {
                     "intensity": 70,
                     "is_deload": True,
                     "is_current": False,
-                    "sessions": [],
                 },
             ],
         },
-        {"name": "Strength", "order": 2, "week_count": 4, "weeks": []},
-        {"name": "Peak / Test", "order": 3, "week_count": 2, "weeks": []},
+        {"name": "Strength", "order": 2, "week_count": 4},
+        {"name": "Peak / Test", "order": 3, "week_count": 2},
     ],
 }
 
@@ -370,6 +400,104 @@ def _months_before(today, months):
 def _years_before(today, years):
     """The date ``years`` years before ``today`` (day clamped to ≤28)."""
     return date(today.year - years, today.month, min(today.day, 28))
+
+
+def build_block(mesocycle, block_spec):
+    """Materialize one mesocycle's fixed lineup + weeks + per-week cells.
+
+    The shared tree-builder behind both demo seeders (``seed_meso_demo`` and
+    ``demo.py``'s coach-scoped one-click demo) — collapses what used to be two
+    near-identical ``Mesocycle → Week → Session → ExercisePrescription``
+    builders into one, for the P0 fixed-lineup shape.
+
+    ``block_spec`` is a ``SAMPLE_PLAN``-mesocycle-shaped dict:
+
+    - ``"days"``: the block's fixed lineup, expressed **once** — each entry is
+      a ``SessionSlot`` (``day_number``/``name``/``bias``/``order``) with an
+      ordered ``"exercises"`` list, each an ``ExerciseSlot`` row
+      (``name``/``exercise``/``tags``, identity only — no numbers);
+    - ``"weeks"``: the block's ``Week`` columns (``index``/``phase``/``volume``/
+      ``intensity``/``is_deload``/``is_current``); a week that also carries a
+      ``"cells"`` dict (``{day_number: [<row-numbers>, ...]}``, one numbers-dict
+      per row in the same order as that day's ``"exercises"``) materializes a
+      ``Session`` per day plus a ``Prescription`` cell per row for that week —
+      a week with no ``"cells"`` stays planned-length-only (no sessions), same
+      as the old "only the current week materializes" demo convention. Each
+      row-numbers dict may carry ``sets``/``reps``/``load``/``load_type``/
+      ``rpe``/``rest``/``note`` and the rare per-week exceptions
+      ``skipped``/``swap_name``.
+
+    Idempotent on the P0 natural keys — ``SessionSlot`` by ``(mesocycle,
+    day_number)``, ``ExerciseSlot`` by ``(session_slot, order)``, ``Week`` by
+    ``(mesocycle, index)``, ``Prescription`` cell by ``(exercise_slot, week)`` —
+    so re-running a seeder never duplicates rows even if called more than once.
+    Returns ``{index: Week}`` so a caller (e.g. the sample-log step) can look a
+    materialized week back up without re-querying.
+    """
+    slots_by_day = {}
+    rows_by_day = {}
+    for day_spec in block_spec.get("days", []):
+        day_number = day_spec["day_number"]
+        slot, _ = SessionSlot.objects.update_or_create(
+            mesocycle=mesocycle,
+            day_number=day_number,
+            defaults={
+                "name": day_spec.get("name", ""),
+                "bias": day_spec.get("bias", ""),
+                "order": day_spec.get("order", day_number - 1),
+            },
+        )
+        slots_by_day[day_number] = slot
+        rows = []
+        for order, ex in enumerate(day_spec.get("exercises", [])):
+            row, _ = ExerciseSlot.objects.update_or_create(
+                session_slot=slot,
+                order=order,
+                defaults={
+                    "name": ex["name"],
+                    "exercise": ex.get("exercise"),
+                    "tags": ex.get("tags", []),
+                },
+            )
+            rows.append(row)
+        rows_by_day[day_number] = rows
+
+    weeks_by_index = {}
+    for week_spec in block_spec.get("weeks", []):
+        week, _ = Week.objects.update_or_create(
+            mesocycle=mesocycle,
+            index=week_spec["index"],
+            defaults={
+                "phase": week_spec.get("phase", ""),
+                "volume": week_spec.get("volume", 0),
+                "intensity": week_spec.get("intensity", 0),
+                "is_deload": week_spec.get("is_deload", False),
+                "is_current": week_spec.get("is_current", False),
+            },
+        )
+        weeks_by_index[week_spec["index"]] = week
+        for day_number, row_numbers in week_spec.get("cells", {}).items():
+            slot = slots_by_day.get(day_number)
+            if slot is None:
+                continue
+            Session.objects.update_or_create(week=week, session_slot=slot)
+            for row, numbers in zip(rows_by_day.get(day_number, []), row_numbers):
+                Prescription.objects.update_or_create(
+                    exercise_slot=row,
+                    week=week,
+                    defaults={
+                        "sets": numbers.get("sets", ""),
+                        "reps": numbers.get("reps", ""),
+                        "load": numbers.get("load", ""),
+                        "load_type": numbers.get("load_type", LoadType.ABSOLUTE),
+                        "rpe": numbers.get("rpe", ""),
+                        "rest": numbers.get("rest", ""),
+                        "note": numbers.get("note", ""),
+                        "skipped": numbers.get("skipped", False),
+                        "swap_name": numbers.get("swap_name", ""),
+                    },
+                )
+    return weeks_by_index
 
 
 class Command(BaseCommand):
@@ -623,14 +751,25 @@ class Command(BaseCommand):
         members adjust the first shared lift (a load % + a contraindication swap →
         a "2 adjusts" badge) and a third tweaks the second lift's volume. Idempotent
         — ``set_override`` upserts, so a reseed never piles up extra overrides.
+
+        Overrides target a ``Prescription`` **cell** (P0), so "first"/"second
+        shared lift" is the first two rows of the shared program's *current*
+        week, ordered by day then row (``exercise_slot__session_slot__order``,
+        ``exercise_slot__order``) — the same two rows the old per-week
+        ``ExercisePrescription`` ordering picked.
         """
+        from store_project.meso.serializers import current_week
+
         plan = group.shared_plan()
         if plan is None:
             return
+        week = current_week(plan)
+        if week is None:
+            return
         prescriptions = list(
-            ExercisePrescription.objects.filter(
-                session__week__mesocycle__plan=plan
-            ).order_by("session__order", "order")
+            Prescription.objects.filter(week=week)
+            .select_related("exercise_slot__session_slot")
+            .order_by("exercise_slot__session_slot__order", "exercise_slot__order")
         )
         if len(prescriptions) < 2:
             return
@@ -691,37 +830,7 @@ class Command(BaseCommand):
                 order=meso_spec["order"],
                 week_count=meso_spec["week_count"],
             )
-            for week_spec in meso_spec["weeks"]:
-                week = Week.objects.create(
-                    mesocycle=mesocycle,
-                    index=week_spec["index"],
-                    phase=week_spec["phase"],
-                    volume=week_spec["volume"],
-                    intensity=week_spec["intensity"],
-                    is_deload=week_spec["is_deload"],
-                    is_current=week_spec["is_current"],
-                )
-                for order, sess_spec in enumerate(week_spec["sessions"]):
-                    session = Session.objects.create(
-                        week=week,
-                        day_number=sess_spec["day_number"],
-                        name=sess_spec["name"],
-                        bias=sess_spec["bias"],
-                        order=order,
-                    )
-                    for ex_order, ex in enumerate(sess_spec["exercises"]):
-                        ExercisePrescription.objects.create(
-                            session=session,
-                            name=ex["name"],
-                            order=ex_order,
-                            sets=ex.get("sets", ""),
-                            reps=ex.get("reps", ""),
-                            load=ex.get("load", ""),
-                            load_type=ex.get("load_type", LoadType.ABSOLUTE),
-                            rpe=ex.get("rpe", ""),
-                            note=ex.get("note", ""),
-                            tags=ex.get("tags", []),
-                        )
+            build_block(mesocycle, meso_spec)
         self.stdout.write(f"  - built sample plan '{plan.title}' for {athlete.name}")
         return plan
 
@@ -740,9 +849,9 @@ class Command(BaseCommand):
                 week__mesocycle__plan=plan,
                 week__mesocycle__name=SAMPLE_LOG["mesocycle"],
                 week__index=SAMPLE_LOG["week_index"],
-                day_number=SAMPLE_LOG["day_number"],
+                session_slot__day_number=SAMPLE_LOG["day_number"],
             )
-            .select_related("week")
+            .select_related("week", "session_slot")
             .first()
         )
         if session is None:
@@ -761,9 +870,9 @@ class Command(BaseCommand):
                 "date": today - timedelta(days=SAMPLE_LOG["logged_days_ago"]),
             },
         )
-        prescriptions = {
-            p.name: p for p in ExercisePrescription.objects.filter(session=session)
-        }
+        # ``session.cells()`` = this week's live Prescription cells for this
+        # day's ExerciseSlot rows (replaces the old ``session.prescriptions``).
+        prescriptions = {p.name: p for p in session.cells()}
         if not created and log.sets.exists():
             self.stdout.write("  - sample logged session present; left intact")
         else:

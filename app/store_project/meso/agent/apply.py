@@ -3,7 +3,8 @@
 The review screen is the human gate; once a coach approves changes, this module
 performs the structured edit each ``ProposedChange`` describes:
 
-- **swap**     → set the prescription's ``name`` to the introduced exercise;
+- **swap**     → set the prescription cell's one-week ``swap_name`` to the
+  introduced exercise (this week only; a block-wide rename is a later phase);
 - **progress** → set the prescription's ``load``;
 - **volume**   → set the prescription's set count (``sets``);
 - **deload**   → flag the target week (``is_deload``);
@@ -20,13 +21,20 @@ and is reported as skipped, never an error.
 from django.db import transaction
 
 from ..models import AgentProposalBatch
-from ..models import ExercisePrescription
+from ..models import ExerciseSlot
+from ..models import Prescription
 from ..models import ProposedChange
 from ..serializers import current_week
 
 
 def _apply_prescription_field(change, field, value):
-    """Write ``value`` onto ``field`` of the change's prescription."""
+    """Write ``value`` onto ``field`` of the change's prescription cell.
+
+    Only for REAL per-week cell fields (``load``/``sets``/``reps``/``rpe``/
+    ``rest``/``note``) — ``name`` is a read-only resolving property now, so it
+    must never be passed here (a swap writes the cell's ``swap_*`` fields via
+    ``_apply_swap`` instead).
+    """
     presc = change.prescription
     if presc is None or not value:
         return None
@@ -49,18 +57,18 @@ def _apply_volume(change):
         return _apply_prescription_field(change, "sets", sets)
     if change.session_id is None:
         return None
-    prescriptions = list(change.session.prescriptions.all())
-    if not prescriptions:
+    cells = list(change.session.cells())
+    if not cells:
         return None
-    for presc in prescriptions:
-        presc.sets = sets
-        presc.save(update_fields=["sets"])
+    for cell in cells:
+        cell.sets = sets
+        cell.save(update_fields=["sets"])
     return {
         "id": change.pk,
         "kind": change.kind,
         "field": "sets",
         "value": sets,
-        "count": len(prescriptions),
+        "count": len(cells),
     }
 
 
@@ -68,7 +76,12 @@ def _apply_add(change):
     """Create a new exercise row on the change's target session (the draft verb).
 
     An ``add`` has no prescription to edit — it appends a brand-new row to the
-    day, ordered after the existing rows. A missing session or name is a safe
+    day. Since the fixed-lineup cutover, a "row" is an ``ExerciseSlot`` shared
+    across the whole block, so creating one must keep the dense-grid invariant:
+    a ``Prescription`` cell is created for EVERY live week of the mesocycle, not
+    just the change's target week. The payload's numbers (sets/reps/load/rpe)
+    land on the target week's cell only; every other week's cell starts blank,
+    same as a coach adding a row by hand. A missing session or name is a safe
     no-op (reported as skipped), mirroring the other kinds.
     """
     payload = change.payload or {}
@@ -76,22 +89,40 @@ def _apply_add(change):
     session = change.session
     if session is None or not name:
         return None
-    last = session.prescriptions.order_by("-order").first()
+    session_slot = session.session_slot
+    last = (
+        session_slot.exercise_slots.filter(deleted_at__isnull=True)
+        .order_by("-order")
+        .first()
+    )
     order = (last.order + 1) if last is not None else 0
-    presc = ExercisePrescription.objects.create(
-        session=session,
+    exercise_slot = ExerciseSlot.objects.create(
+        session_slot=session_slot,
         name=name,
         order=order,
-        sets=payload.get("sets", ""),
-        reps=payload.get("reps", ""),
-        load=payload.get("load", ""),
-        rpe=payload.get("rpe", ""),
     )
+    cells = []
+    for week in session_slot.mesocycle.weeks.filter(deleted_at__isnull=True):
+        if week.pk == session.week_id:
+            cells.append(
+                Prescription(
+                    exercise_slot=exercise_slot,
+                    week=week,
+                    sets=payload.get("sets", ""),
+                    reps=payload.get("reps", ""),
+                    load=payload.get("load", ""),
+                    rpe=payload.get("rpe", ""),
+                )
+            )
+        else:
+            cells.append(Prescription(exercise_slot=exercise_slot, week=week))
+    if cells:
+        Prescription.objects.bulk_create(cells)
     return {
         "id": change.pk,
         "kind": change.kind,
         "field": "added",
-        "value": presc.pk,
+        "value": exercise_slot.pk,
     }
 
 
@@ -153,6 +184,25 @@ def _apply_deload(change):
     return {"id": change.pk, "kind": change.kind, "field": "is_deload", "value": True}
 
 
+def _apply_swap(change, name):
+    """Write a one-week swap onto the change's prescription cell.
+
+    A cell's effective name delegates to its ``ExerciseSlot`` (block-wide
+    identity) unless this week carries its own ``swap_name`` — a swap change is
+    scoped to *this week only* (the same scope the old per-week
+    ``ExercisePrescription.name`` write had), so it sets the cell's ``swap_*``
+    fields rather than the (now read-only) ``name`` property. A block-wide
+    rename of the slot itself is a later phase (P4).
+    """
+    presc = change.prescription
+    if presc is None or not name:
+        return None
+    presc.swap_name = name
+    presc.swap_exercise = None
+    presc.save(update_fields=["swap_name", "swap_exercise"])
+    return {"id": change.pk, "kind": change.kind, "field": "name", "value": name}
+
+
 def apply_change(change):
     """Apply one change to the program. Returns a describing dict, or None (no-op)."""
     payload = change.payload or {}
@@ -160,7 +210,7 @@ def apply_change(change):
         # A swap may carry its new name in the payload or only in the
         # contraindication-checked introduces_exercise field.
         name = payload.get("name") or change.introduces_exercise
-        return _apply_prescription_field(change, "name", name)
+        return _apply_swap(change, name)
     if change.kind == ProposedChange.Kind.PROGRESS:
         return _apply_prescription_field(change, "load", payload.get("load"))
     if change.kind == ProposedChange.Kind.VOLUME:

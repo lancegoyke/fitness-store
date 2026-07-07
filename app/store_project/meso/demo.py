@@ -37,19 +37,18 @@ from .management.commands.seed_meso_demo import SAMPLE_LOG
 from .management.commands.seed_meso_demo import SAMPLE_PLAN
 from .management.commands.seed_meso_demo import _months_before
 from .management.commands.seed_meso_demo import _years_before
+from .management.commands.seed_meso_demo import build_block
 from .models import AthleteProfile
 from .models import CoachAthlete
 from .models import Contraindication
-from .models import ExercisePrescription
-from .models import LoadType
 from .models import LoggedSet
 from .models import Mesocycle
 from .models import MesoGroup
 from .models import Plan
+from .models import Prescription
 from .models import Session
 from .models import SessionLog
 from .models import Unit
-from .models import Week
 from .one_rm import refresh_one_rms
 
 #: Non-routable (RFC 6761 ``.invalid``) demo-athlete domain — guaranteed never to
@@ -184,10 +183,14 @@ def _ensure_demo_plan(link):
 
 
 def _build_plan_tree(plan, spec):
-    """Materialize a ``Mesocycle → Week → Session → ExercisePrescription`` tree.
+    """Materialize a fixed-lineup plan tree (P0) from a ``SAMPLE_PLAN``-shaped spec.
 
-    The same shape ``seed_meso_demo`` builds for the owner demo, applied to a
-    coach-scoped plan. Only blocks with ``weeks`` materialize rows (the others are
+    A thin coach-scoped wrapper over ``seed_meso_demo.build_block`` — the same
+    shared builder the owner demo uses — applied to a coach-scoped plan: for
+    each mesocycle spec, create the ``Mesocycle`` then hand it to
+    ``build_block`` to materialize the block's fixed lineup (``SessionSlot`` +
+    ``ExerciseSlot``, once per block) and its ``Week``/``Prescription`` cells
+    (only blocks with ``"days"``/``"weeks"`` materialize rows; the others are
     planned-length-only), mirroring how the designer renders one week at a time.
     """
     for meso_spec in spec["mesocycles"]:
@@ -197,37 +200,7 @@ def _build_plan_tree(plan, spec):
             order=meso_spec["order"],
             week_count=meso_spec["week_count"],
         )
-        for week_spec in meso_spec["weeks"]:
-            week = Week.objects.create(
-                mesocycle=mesocycle,
-                index=week_spec["index"],
-                phase=week_spec["phase"],
-                volume=week_spec["volume"],
-                intensity=week_spec["intensity"],
-                is_deload=week_spec["is_deload"],
-                is_current=week_spec["is_current"],
-            )
-            for order, sess_spec in enumerate(week_spec["sessions"]):
-                session = Session.objects.create(
-                    week=week,
-                    day_number=sess_spec["day_number"],
-                    name=sess_spec["name"],
-                    bias=sess_spec["bias"],
-                    order=order,
-                )
-                for ex_order, ex in enumerate(sess_spec["exercises"]):
-                    ExercisePrescription.objects.create(
-                        session=session,
-                        name=ex["name"],
-                        order=ex_order,
-                        sets=ex.get("sets", ""),
-                        reps=ex.get("reps", ""),
-                        load=ex.get("load", ""),
-                        load_type=ex.get("load_type", LoadType.ABSOLUTE),
-                        rpe=ex.get("rpe", ""),
-                        note=ex.get("note", ""),
-                        tags=ex.get("tags", []),
-                    )
+        build_block(mesocycle, meso_spec)
 
 
 def _ensure_demo_log(athlete, plan, today):
@@ -241,9 +214,9 @@ def _ensure_demo_log(athlete, plan, today):
             week__mesocycle__plan=plan,
             week__mesocycle__name=SAMPLE_LOG["mesocycle"],
             week__index=SAMPLE_LOG["week_index"],
-            day_number=SAMPLE_LOG["day_number"],
+            session_slot__day_number=SAMPLE_LOG["day_number"],
         )
-        .select_related("week")
+        .select_related("week", "session_slot")
         .first()
     )
     if session is None:
@@ -262,9 +235,9 @@ def _ensure_demo_log(athlete, plan, today):
             "date": today - timedelta(days=SAMPLE_LOG["logged_days_ago"]),
         },
     )
-    prescriptions = {
-        p.name: p for p in ExercisePrescription.objects.filter(session=session)
-    }
+    # ``session.cells()`` = this week's live Prescription cells for this day's
+    # ExerciseSlot rows (replaces the old ``session.prescriptions``).
+    prescriptions = {p.name: p for p in session.cells()}
     if not (not created and log.sets.exists()):
         log.sets.all().delete()
         rows = []
@@ -321,14 +294,24 @@ def _ensure_demo_group(coach, athletes):
 
 
 def _ensure_demo_overrides(group, memberships):
-    """A couple of per-athlete auto-adjusts so the designer's ``adj`` badge shows."""
+    """A couple of per-athlete auto-adjusts so the designer's ``adj`` badge shows.
+
+    Overrides target a ``Prescription`` **cell** (P0), so "first"/"second
+    shared lift" is the first two rows of the shared program's *current* week,
+    ordered by day then row.
+    """
+    from .serializers import current_week
+
     plan = group.shared_plan()
     if plan is None:
         return
+    week = current_week(plan)
+    if week is None:
+        return
     prescriptions = list(
-        ExercisePrescription.objects.filter(
-            session__week__mesocycle__plan=plan
-        ).order_by("session__order", "order")
+        Prescription.objects.filter(week=week)
+        .select_related("exercise_slot__session_slot")
+        .order_by("exercise_slot__session_slot__order", "exercise_slot__order")
     )
     if len(prescriptions) < 2:
         return

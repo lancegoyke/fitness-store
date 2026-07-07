@@ -18,9 +18,9 @@ screen. Two layers:
 import re
 
 from ..models import CoachAthlete
-from ..models import ExercisePrescription
 from ..models import GroupMembership
 from ..models import LoadType
+from ..models import Prescription
 from ..models import PrescriptionOverride
 from ..models import Session
 from ..serializers import current_week
@@ -301,11 +301,11 @@ def clean_change(raw, plan, *, forbidden=None):
     # of contract even if it belongs to the same plan.
     week = current_week(plan)
     presc = _resolve(
-        ExercisePrescription,
+        Prescription,
         raw.get("prescription_id"),
         "prescription",
         errors,
-        session__week=week,
+        week=week,
     )
     session = _resolve(
         Session,
@@ -316,11 +316,21 @@ def clean_change(raw, plan, *, forbidden=None):
     )
     # A prescription's own session is authoritative: backfill it when no session
     # was given, and reject a session_id that points at a different day (the
-    # model supplied contradictory targets).
+    # model supplied contradictory targets). A cell has no ``session`` FK of its
+    # own (it's an ExerciseSlot × Week join) — its session is derived from the
+    # slot's day within the cell's own week.
     if presc is not None:
-        if session is not None and session.pk != presc.session_id:
+        presc_session = Session.objects.filter(
+            week_id=presc.week_id,
+            session_slot_id=presc.exercise_slot.session_slot_id,
+        ).first()
+        if (
+            session is not None
+            and presc_session is not None
+            and session.pk != presc_session.pk
+        ):
             errors.append("prescription is not in the given session")
-        session = presc.session
+        session = presc_session
     cleaned["prescription"] = presc
     cleaned["session"] = session
 
