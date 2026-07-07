@@ -89,6 +89,17 @@ def check_video():
             f"FAILED: {VIDEO_PATH.relative_to(REPO_ROOT)} doesn't exist — run "
             "`just record-demo` first."
         )
+    # A successful record-demo run deletes its intermediate .webm after mp4
+    # conversion — one left behind means the LATEST run fell back to WebM
+    # (e.g. ffmpeg without libx264) and this .mp4 is a stale earlier take.
+    fallback_webm = VIDEO_PATH.with_suffix(".webm")
+    if fallback_webm.exists():
+        sys.exit(
+            f"FAILED: {fallback_webm.relative_to(REPO_ROOT)} exists, so the "
+            "last `just record-demo` run fell back to WebM and the .mp4 here "
+            "is from an older take. Fix the mp4 conversion (ffmpeg with "
+            "libx264), re-run `just record-demo`, then publish."
+        )
     size = VIDEO_PATH.stat().st_size
     if size < MIN_VIDEO_BYTES:
         sys.exit(
