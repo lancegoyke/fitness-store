@@ -101,16 +101,18 @@ from data (O7).
 
 ## Phases (PR-sized)
 
-0. **Self-athlete + non-billable seat** *(standalone, shippable alone)* —
+0. **Self-athlete + non-billable seat** *(standalone, shippable alone)* — ✅
+   shipped, PR [#432](https://github.com/lancegoyke/fitness-store/pull/432) —
    `is_self` on `CoachAthlete` + migration; `billable()` exclusion; allow/validate
    `coach == athlete` (single self-link); minimal "Add yourself as an athlete"
    affordance on the roster; audit roster/profile/deliver rendering. Tests:
    self-link doesn't move `active_seat_count`; over-limit freeze ignores it.
-1. **Segment the demo loaders** *(behavior-preserving refactor)* — split
-   `load_demo` into `athletes`/`program`/`delivery`/`log`/`group` loaders +
-   `has_*` predicates; add per-segment load endpoints (or `demo/load/?segment=`).
-   `load_demo` stays the aggregate; `create_sandbox` **still eager-loads** so
-   nothing changes for users yet. Pure plumbing + tests.
+1. **Segment the demo loaders** *(behavior-preserving refactor)* — PR [#433](https://github.com/lancegoyke/fitness-store/pull/433) —
+   split `load_demo` into `athletes`/`program`/`delivery`/`log`/`group` loaders +
+   `has_*` predicates; the existing `demo_load` view now accepts an optional
+   `segment` POST field (no URL change). `load_demo` stays the aggregate;
+   `create_sandbox` **still eager-loads** so nothing changes for users yet.
+   Pure plumbing + tests.
 2. **Sandbox tour** *(the visible change)* — tour engine (coach-mark driver +
    server-persisted step state); flip `create_sandbox` to **empty-start**;
    auto-start the tour; wire each step's action to its segment endpoint; add the

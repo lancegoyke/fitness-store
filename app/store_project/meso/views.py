@@ -827,6 +827,16 @@ def sandbox_enter(request):
     return _noindex(redirect("meso:roster"))
 
 
+#: Per-segment success flash, keyed the same as ``meso_demo.SEGMENTS``.
+_SEGMENT_MESSAGES = {
+    "athletes": "Sample athletes added — meet your new roster.",
+    "program": "Sample program built — a full mesocycle, ready to explore.",
+    "delivery": "This week delivered to Maya's phone.",
+    "log": "Session logged — Maya's results are in.",
+    "group": "Sample group added — shared programming + per-athlete overrides.",
+}
+
+
 @login_required
 @require_POST
 def demo_load(request):
@@ -836,16 +846,32 @@ def demo_load(request):
     built/delivered/logged program, and a group — scoped to this coach, idempotent,
     billing-neutral, and silent (no demo-athlete email/push). Lands on the roster
     where the data now shows, with a "Remove demo data" affordance.
+
+    An optional ``segment`` POST field narrows the load to one slice of the demo
+    (``meso_demo.SEGMENTS`` — ``athletes``/``program``/``delivery``/``log``/``group``)
+    instead of the full aggregate; an unrecognized name loads nothing and 400s.
+    No URL changes: this stays the one ``meso:demo_load`` endpoint for both the
+    full load and (guided-tour Phase 2) each step's per-segment "add sample data"
+    action — the tour will start passing ``segment`` here.
     """
     # Loading a demo is an implicit "I'm coaching now": ensure the CoachProfile
     # exists (mirrors start_coaching's free path) so demo links never make a user a
-    # coach via a side door without one — keeping coach state consistent.
+    # coach via a side door without one — keeping coach state consistent, for both
+    # the aggregate and per-segment paths.
     CoachProfile.objects.get_or_create(user=request.user)
-    meso_demo.load_demo(request.user)
-    messages.success(
-        request,
-        "Demo data loaded — explore a populated workspace. Remove it any time.",
-    )
+    segment = request.POST.get("segment")
+    if segment:
+        loader = meso_demo.SEGMENTS.get(segment)
+        if loader is None:
+            return HttpResponseBadRequest("Unknown demo segment.")
+        loader(request.user)
+        messages.success(request, _SEGMENT_MESSAGES[segment])
+    else:
+        meso_demo.load_demo(request.user)
+        messages.success(
+            request,
+            "Demo data loaded — explore a populated workspace. Remove it any time.",
+        )
     return redirect("meso:roster")
 
 
