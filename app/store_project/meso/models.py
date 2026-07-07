@@ -1676,16 +1676,36 @@ class Prescription(models.Model):
     @property
     def name(self):
         """This week's effective name: a one-week swap, else the slot's."""
-        return self.swap_name or self.exercise_slot.name
+        if self.swap_name:
+            return self.swap_name
+        if self.swap_exercise_id:
+            return self.swap_exercise.name
+        return self.exercise_slot.name
 
     @property
     def exercise(self):
-        """This week's effective catalog exercise: a one-week swap, else the slot's."""
-        return self.swap_exercise or self.exercise_slot.exercise
+        """This week's effective catalog exercise.
+
+        A one-week swap replaces identity WHOLESALE — it never falls back to the
+        slot's catalog exercise. A catalog swap resolves to its own exercise; a
+        free-text swap (``swap_name`` with no ``swap_exercise``) has no catalog
+        link at all, so this returns ``None`` rather than the original lift.
+        Falling back to the slot here would mis-key logs/1RM and mis-flag the
+        substituted week as catalog-linked.
+        """
+        if self.swap_exercise_id:
+            return self.swap_exercise
+        if self.swap_name:
+            return None
+        return self.exercise_slot.exercise
 
     @property
     def exercise_id(self):
-        return self.swap_exercise_id or self.exercise_slot.exercise_id
+        if self.swap_exercise_id:
+            return self.swap_exercise_id
+        if self.swap_name:
+            return None
+        return self.exercise_slot.exercise_id
 
     @property
     def tags(self):
@@ -2466,7 +2486,9 @@ class GroupMembership(models.Model):
                         "rpe": resolved["rpe"],
                         "rest": src_cell.rest,
                         "note": resolved["note"],
-                        "skipped": False,
+                        # A week the coach skipped for the shared lineup stays
+                        # skipped for every member — don't resurrect it per athlete.
+                        "skipped": src_cell.skipped,
                         "swap_name": resolved["name"] if swapped else "",
                         "swap_exercise": None,
                     },

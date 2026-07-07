@@ -134,6 +134,25 @@ class TestSyncDeliveredPlan:
         assert row.name == first.name
         assert row.load == "100"
 
+    def test_skipped_shared_cell_stays_skipped_for_the_member(self):
+        # A week the coach skipped for the shared lineup must not resurface in an
+        # athlete's delivered plan (one-week exceptions + groups).
+        group, plan, [m] = seed_group(member_count=1)
+        first = shared_prescriptions(plan)[0]
+        first.skipped = True
+        first.save(update_fields=["skipped"])
+
+        _, member_week = m.sync_delivered_plan(first.week)
+
+        materialized = (
+            member_week.sessions.get(
+                session_slot__day_number=first.exercise_slot.session_slot.day_number
+            )
+            .cells()
+            .get(exercise_slot__order=first.exercise_slot.order)
+        )
+        assert materialized.skipped is True
+
     def test_redelivery_reuses_the_same_plan(self):
         group, plan, [m] = seed_group(member_count=1)
         group_week = plan.mesocycles.get().weeks.get()
