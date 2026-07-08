@@ -1114,13 +1114,15 @@ def athlete_log_session(request, pk):
         log.notes = notes
         log.save()
         # Replace only the rows the logger can re-post: sets whose prescription
-        # cell is still live in this session (``session.cells()`` — P0
-        # fixed-lineup cutover — is already live-only). A set logged against a
-        # since-deleted, hidden prescription — or one orphaned by an old hard
+        # cell is TRAINABLE in this session (``session.trainable_cells()`` — live
+        # and non-skipped, the exact set the logger renders). A set logged against
+        # a since-deleted/hidden/skipped cell — or one orphaned by an old hard
         # delete — is history, not draft state; wiping it here would silently
-        # destroy the athlete's record on their next save (soft delete,
-        # designer framework Phase 0).
-        log.sets.filter(prescription_id__in=[p.pk for p in session.cells()]).delete()
+        # destroy the athlete's record on their next save (e.g. a row the coach
+        # marked skipped after the athlete already logged it).
+        log.sets.filter(
+            prescription_id__in=[p.pk for p in session.trainable_cells()]
+        ).delete()
         LoggedSet.objects.bulk_create(
             [
                 LoggedSet(
@@ -1142,7 +1144,7 @@ def athlete_log_session(request, pk):
         # edit that drops the PR lowers it, a removed basis clears it.
         meso_one_rm.refresh_one_rms(
             request.user,
-            list(session.cells()),
+            list(session.trainable_cells()),
             session.week.mesocycle.plan.unit,
         )
     return JsonResponse({"ok": True, "log": serialize_session_log(log)})
@@ -1172,7 +1174,7 @@ def athlete_set_one_rm(request, pk):
         return HttpResponseBadRequest("Expected a JSON object.")
 
     presc_id = payload.get("prescription")
-    prescriptions = {p.pk: p for p in session.cells()}
+    prescriptions = {p.pk: p for p in session.trainable_cells()}
     # ``bool`` is an ``int`` subclass — reject it explicitly so ``true`` isn't an id.
     if (
         not isinstance(presc_id, int)
@@ -1210,7 +1212,8 @@ def _clean_logged_sets(raw_sets, session):
     """
     if not isinstance(raw_sets, list):
         return None, HttpResponseBadRequest("sets must be a list.")
-    allowed_ids = {p.pk for p in session.cells()}
+    # Only trainable rows are postable — the logger never renders a skipped cell.
+    allowed_ids = {p.pk for p in session.trainable_cells()}
     cleaned = []
     seen = set()
     for position, raw in enumerate(raw_sets, start=1):

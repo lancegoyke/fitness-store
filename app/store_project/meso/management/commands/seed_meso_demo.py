@@ -417,15 +417,16 @@ def build_block(mesocycle, block_spec):
       ordered ``"exercises"`` list, each an ``ExerciseSlot`` row
       (``name``/``exercise``/``tags``, identity only — no numbers);
     - ``"weeks"``: the block's ``Week`` columns (``index``/``phase``/``volume``/
-      ``intensity``/``is_deload``/``is_current``); a week that also carries a
-      ``"cells"`` dict (``{day_number: [<row-numbers>, ...]}``, one numbers-dict
-      per row in the same order as that day's ``"exercises"``) materializes a
-      ``Session`` per day plus a ``Prescription`` cell per row for that week —
-      a week with no ``"cells"`` stays planned-length-only (no sessions), same
-      as the old "only the current week materializes" demo convention. Each
-      row-numbers dict may carry ``sets``/``reps``/``load``/``load_type``/
-      ``rpe``/``rest``/``note`` and the rare per-week exceptions
-      ``skipped``/``swap_name``.
+      ``intensity``/``is_deload``/``is_current``). EVERY listed week materializes
+      the full fixed lineup — a ``Session`` per day and a ``Prescription`` cell
+      per row (invariant: every slot × live-week has a cell) — so the block is
+      dense. A week may carry a ``"cells"`` dict (``{day_number: [<row-numbers>,
+      ...]}``, one numbers-dict per row in that day's ``"exercises"`` order) to
+      set its numbers; a week without one gets blank cells (the lineup, no
+      numbers). Each row-numbers dict may carry ``sets``/``reps``/``load``/
+      ``load_type``/``rpe``/``rest``/``note`` and the rare per-week exceptions
+      ``skipped``/``swap_name``. Blocks with no ``"weeks"`` stay
+      planned-length-only (``week_count``, no ``Week`` rows).
 
     Idempotent on the P0 natural keys — ``SessionSlot`` by ``(mesocycle,
     day_number)``, ``ExerciseSlot`` by ``(session_slot, order)``, ``Week`` by
@@ -476,12 +477,18 @@ def build_block(mesocycle, block_spec):
             },
         )
         weeks_by_index[week_spec["index"]] = week
-        for day_number, row_numbers in week_spec.get("cells", {}).items():
-            slot = slots_by_day.get(day_number)
-            if slot is None:
-                continue
+        # Every live week gets the FULL fixed lineup (invariant: every slot ×
+        # live-week has a cell) — a week without explicit ``"cells"`` numbers
+        # still materializes the lineup with BLANK cells, not an empty grid, so
+        # the block is dense: switching to any week shows the same exercises, and
+        # block-wide writes (add day/row) never leave a half-materialized week.
+        # Explicit ``"cells"`` numbers apply for the week that specifies them.
+        cells_spec = week_spec.get("cells", {})
+        for day_number, slot in slots_by_day.items():
             Session.objects.update_or_create(week=week, session_slot=slot)
-            for row, numbers in zip(rows_by_day.get(day_number, []), row_numbers):
+            row_numbers = cells_spec.get(day_number, [])
+            for order, row in enumerate(rows_by_day.get(day_number, [])):
+                numbers = row_numbers[order] if order < len(row_numbers) else {}
                 Prescription.objects.update_or_create(
                     exercise_slot=row,
                     week=week,

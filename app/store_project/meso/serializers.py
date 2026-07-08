@@ -154,19 +154,21 @@ def serialize_chat_thread(plan):
 
 
 def serialize_session(session):
-    """One training day (a column in the designer grid).
+    """One training day (a column in the coach designer grid).
 
-    ``session.trainable_cells()`` (the P0 fixed-lineup cutover) returns this
-    week's live, non-skipped cells — live ``ExerciseSlot`` rows, row-ordered — so
-    a one-week ``skipped`` exception doesn't render as a loggable blank row (the
-    P1 multi-week table shows it as an em-dash instead).
+    Returns every live cell (``session.cells()``, the P0 fixed-lineup cutover) —
+    including one-week ``skipped`` exceptions, which carry a ``skipped`` flag so
+    the grid can mark them (the P1 table renders an em-dash). Keeping them here
+    means the row/day id-sets the designer renders match the reorder/move
+    endpoints exactly. Athlete-facing surfaces use ``trainable_cells()`` instead,
+    so a skipped lift is never presented as loggable.
     """
     return {
         "id": session.pk,
         "n": session.day_number,
         "name": session.name,
         "bias": session.bias,
-        "exercises": [serialize_prescription(c) for c in session.trainable_cells()],
+        "exercises": [serialize_prescription(c) for c in session.cells()],
     }
 
 

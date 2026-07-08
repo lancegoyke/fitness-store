@@ -82,8 +82,11 @@ class TestSkippedCellsAreNotTrainable:
         assert session.cells().count() == 2
         assert session.trainable_cells().count() == 1
 
-    def test_serialize_session_omits_skipped_rows(self):
+    def test_serialize_session_keeps_skipped_with_a_flag_for_the_coach(self):
+        # The coach designer shows the whole block lineup (the P1 table em-dashes a
+        # skip); it's the athlete surfaces that drop skipped cells (trainable_cells).
         session = self._day_with_a_skip()
         data = serializers.serialize_session(session)
-        assert [e["name"] for e in data["exercises"]] == ["Squat"]
-        assert all(e["skipped"] is False for e in data["exercises"])
+        assert [e["name"] for e in data["exercises"]] == ["Squat", "Skipped Curl"]
+        skipped_row = next(e for e in data["exercises"] if e["name"] == "Skipped Curl")
+        assert skipped_row["skipped"] is True
