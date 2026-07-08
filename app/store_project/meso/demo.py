@@ -49,6 +49,7 @@ from .models import Prescription
 from .models import Session
 from .models import SessionLog
 from .models import Unit
+from .models import Week
 from .one_rm import refresh_one_rms
 
 #: Non-routable (RFC 6761 ``.invalid``) demo-athlete domain — guaranteed never to
@@ -70,33 +71,186 @@ def _demo_athletes(coach):
 
 def has_demo(coach):
     """Whether this coach currently has demo data loaded."""
-    return CoachAthlete.objects.for_coach(coach).filter(is_demo=True).exists()
+    return has_athletes(coach)
+
+
+def _lock(coach):
+    """Serialize concurrent loads for this coach (double-submit protection).
+
+    A per-coach row lock — real only inside a transaction, on a backend that
+    supports it (Postgres); a no-op on the SQLite test DB, where requests
+    don't race anyway. Called at the top of **every** segment loader, not just
+    the aggregate: once the guided tour (Phase 2) wires each segment to its own
+    POST endpoint, a segment can be loaded on its own — with no ``load_demo``
+    call wrapping it — so it needs the same double-submit protection ``load_demo``
+    always had. Re-acquiring the same row lock from nested segment calls within
+    one transaction (e.g. ``load_log`` → ``load_delivery`` → ``load_program`` →
+    ``load_athletes``) is harmless — it's the same connection re-affirming a
+    lock it already holds, not a new wait.
+    """
+    User.objects.select_for_update().get(pk=coach.pk)
+
+
+def _demo_athlete_and_link(coach, slug):
+    """The demo athlete + link for ``slug``, assuming ``load_athletes`` already ran."""
+    athlete = User.objects.get(email=demo_email(coach, slug))
+    link = CoachAthlete.objects.get(coach=coach, athlete=athlete)
+    return athlete, link
+
+
+# -- segment loaders ----------------------------------------------------------
+#
+# Per-feature slices of ``load_demo`` (guided-tour Phase 1, decision O3): each
+# is idempotent and ensures its own prerequisites, so the tour (Phase 2) can
+# fire any one of them, in any order, from its own step/endpoint. ``load_demo``
+# below is the thin aggregate that runs all five — the O6 "skip · load
+# everything" path and the pre-tour ``demo_load`` view behavior.
+
+
+@transaction.atomic
+def load_athletes(coach):
+    """Segment: the 5 demo athlete users + active demo links. No prerequisites."""
+    _lock(coach)
+    today = date.today()
+    for spec in ATHLETES:
+        athlete = _ensure_demo_athlete(coach, spec, today)
+        _ensure_demo_link(coach, athlete)
+
+
+@transaction.atomic
+def load_program(coach):
+    """Segment: Maya's "Hypertrophy Block" plan tree. Depends on ``athletes``."""
+    _lock(coach)
+    load_athletes(coach)
+    _, maya_link = _demo_athlete_and_link(coach, "maya")
+    _ensure_demo_plan(maya_link)
+
+
+@transaction.atomic
+def load_delivery(coach):
+    """Segment: deliver Maya's current week. Depends on ``program``."""
+    _lock(coach)
+    load_program(coach)
+    _, maya_link = _demo_athlete_and_link(coach, "maya")
+    plan = _ensure_demo_plan(maya_link)
+    _ensure_demo_delivery(plan)
+
+
+@transaction.atomic
+def load_log(coach):
+    """Segment: log Maya's Lower session + refresh her 1RM.
+
+    Depends on ``delivery`` (in the real workflow an athlete can't log a
+    session that was never delivered to them), which in turn pulls in
+    ``program``/``athletes``.
+    """
+    _lock(coach)
+    load_delivery(coach)
+    maya, maya_link = _demo_athlete_and_link(coach, "maya")
+    plan = _ensure_demo_plan(maya_link)
+    _ensure_demo_log(maya, plan, date.today())
+
+
+@transaction.atomic
+def load_group(coach):
+    """Segment: Strength Squad + shared plan + per-athlete overrides.
+
+    Depends on ``athletes`` only — the group has its own shared plan, separate
+    from Maya's individual one, so it never needs ``program``/``delivery``/``log``.
+    """
+    _lock(coach)
+    load_athletes(coach)
+    athletes = {
+        slug: _demo_athlete_and_link(coach, slug) for slug in GROUP["member_slugs"]
+    }
+    _ensure_demo_group(coach, athletes)
+
+
+#: Segment name → loader, for views to dispatch a per-segment load by POST field.
+SEGMENTS = {
+    "athletes": load_athletes,
+    "program": load_program,
+    "delivery": load_delivery,
+    "log": load_log,
+    "group": load_group,
+}
 
 
 @transaction.atomic
 def load_demo(coach):
-    """Stand up (or top up) this coach's demo workspace. Idempotent.
+    """Stand up (or top up) this coach's whole demo workspace. Idempotent.
 
-    Re-running never duplicates: every row is upserted by its natural key, the
-    plan tree is only built when absent, and the demo week is delivered only once.
+    A thin aggregate over the segment loaders above — the O6 "skip · load
+    everything" path and the pre-tour behavior of the ``demo_load`` view keep
+    working exactly as before the split. Re-running never duplicates: every
+    row is upserted by its natural key, the plan tree is only built when
+    absent, and the demo week is delivered only once.
 
-    Concurrency: a per-coach row lock serializes two concurrent loads (a
-    double-submit / retry) so the second waits and then reuses what the first
-    created, rather than both seeing "no plan" and each building one. (The
-    decorator's ``atomic`` makes the lock real on Postgres; it's a no-op on the
-    SQLite test DB, where requests don't race anyway.)
+    Concurrency: see ``_lock`` — every segment loader locks the coach row
+    itself, so this aggregate doesn't need to *also* hold its own lock for
+    correctness. It still takes one anyway: a single lock acquisition up front
+    means a concurrent ``load_demo`` retry blocks for the whole aggregate
+    rather than interleaving segment-by-segment with another in-flight call.
     """
-    User.objects.select_for_update().get(pk=coach.pk)
-    today = date.today()
-    athletes = {}
-    for spec in ATHLETES:
-        athlete = _ensure_demo_athlete(coach, spec, today)
-        link = _ensure_demo_link(coach, athlete)
-        athletes[spec["slug"]] = (athlete, link)
-    maya, maya_link = athletes["maya"]
-    plan = _ensure_demo_plan(maya_link)
-    _ensure_demo_log(maya, plan, today)
-    _ensure_demo_group(coach, athletes)
+    _lock(coach)
+    load_athletes(coach)
+    load_program(coach)
+    load_delivery(coach)
+    load_log(coach)
+    load_group(coach)
+
+
+# -- per-segment "is it loaded?" predicates ------------------------------------
+#
+# Mirrors ``has_demo``: loaded-ness is derived from data, never stored (O7), so
+# the tour can ask "has this step's data already been added?" without its own
+# state. Kept cheap (``exists()``), ``is_demo``-scoped.
+
+
+def has_athletes(coach):
+    """Whether this coach's demo athlete links are loaded."""
+    return CoachAthlete.objects.for_coach(coach).filter(is_demo=True).exists()
+
+
+def has_program(coach):
+    """Whether Maya's demo plan tree has been built.
+
+    Scoped to the *individual* tree (``source_group`` excluded, mirroring
+    ``CoachAthlete.working_plan``): the ``group`` segment's delivery
+    materializes its own per-member ``Mesocycle``/``Week`` rows onto group
+    members' individual relationships (``sync_delivered_plan``) — those must
+    not be mistaken for the ``program`` segment.
+    """
+    return Mesocycle.objects.filter(
+        plan__relationship__coach=coach,
+        plan__relationship__is_demo=True,
+        plan__source_group__isnull=True,
+    ).exists()
+
+
+def has_delivery(coach):
+    """Whether Maya's demo current week has been delivered.
+
+    Same ``source_group`` exclusion as ``has_program`` — a materialized
+    group-member week being delivered (part of the ``group`` segment) must not
+    read as the ``delivery`` segment.
+    """
+    return Week.objects.filter(
+        mesocycle__plan__relationship__coach=coach,
+        mesocycle__plan__relationship__is_demo=True,
+        mesocycle__plan__source_group__isnull=True,
+        delivered_at__isnull=False,
+    ).exists()
+
+
+def has_log(coach):
+    """Whether Maya's demo session has been logged."""
+    return SessionLog.objects.filter(athlete__in=_demo_athletes(coach)).exists()
+
+
+def has_group(coach):
+    """Whether the demo group has been created."""
+    return MesoGroup.objects.filter(coach=coach, is_demo=True).exists()
 
 
 @transaction.atomic
@@ -203,13 +357,16 @@ def _build_plan_tree(plan, spec):
         build_block(mesocycle, meso_spec)
 
 
-def _ensure_demo_log(athlete, plan, today):
-    """Deliver + log Maya's current-week session at the model layer (no notify).
+def _demo_log_session(plan):
+    """The ``Session`` ``SAMPLE_LOG`` describes (Maya's current-week "Lower" day).
 
-    Idempotent: the week is delivered once and the log rows are created only when
-    absent. Refreshes the athlete's derived 1RM so the demo's %1RM lift shows one.
+    Shared by ``_ensure_demo_delivery`` and ``_ensure_demo_log`` — split out of
+    the old combined ``_ensure_demo_log`` (guided-tour Phase 1) so "deliver the
+    week" and "log the session" can be separate segment loaders. ``None`` only
+    if the plan tree hasn't been built yet (the ``program`` segment never
+    skipped in practice — every caller here ensures it first).
     """
-    session = (
+    return (
         Session.objects.filter(
             week__mesocycle__plan=plan,
             week__mesocycle__name=SAMPLE_LOG["mesocycle"],
@@ -219,13 +376,36 @@ def _ensure_demo_log(athlete, plan, today):
         .select_related("week", "session_slot")
         .first()
     )
+
+
+def _ensure_demo_delivery(plan):
+    """Deliver Maya's current-week session at the model layer (no notify).
+
+    Idempotent: the week is delivered once. Stamps only ``Week.delivered_at``
+    (no ``WeekDelivery`` snapshot) — matching the pre-split behavior; a full
+    snapshot is the deliver *view*'s job, not the demo's.
+    """
+    session = _demo_log_session(plan)
     if session is None:
         return None
-
     week = session.week
     if week.delivered_at is None:
         week.delivered_at = timezone.now()
         week.save(update_fields=["delivered_at"])
+    return week
+
+
+def _ensure_demo_log(athlete, plan, today):
+    """Log Maya's current-week session + refresh her derived 1RM (no notify).
+
+    Idempotent: the log rows are created only when absent. Assumes the week is
+    already delivered — the ``log`` segment loader ensures that itself via
+    ``load_delivery`` before calling this; logging against an undelivered week
+    doesn't error, it just wouldn't reflect the demo's real step order.
+    """
+    session = _demo_log_session(plan)
+    if session is None:
+        return None
 
     log, created = SessionLog.objects.get_or_create(
         session=session,

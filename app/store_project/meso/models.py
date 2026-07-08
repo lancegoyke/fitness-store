@@ -69,6 +69,16 @@ class CoachProfile(models.Model):
     default_unit = models.CharField(
         _("Default unit"), max_length=2, choices=Unit, default=Unit.KILOGRAMS
     )
+    tour_state = models.JSONField(
+        _("Guided tour state"),
+        default=dict,
+        blank=True,
+        help_text=_(
+            "Guided demo onboarding tour progress (issue #430): "
+            "{'step': <int>, 'status': 'active'|'dismissed'|'completed'}. "
+            "An empty dict means the tour has never started."
+        ),
+    )
     created = models.DateTimeField(_("Time created"), auto_now_add=True)
     modified = models.DateTimeField(_("Time last modified"), auto_now=True)
 
@@ -102,6 +112,80 @@ class SandboxSession(models.Model):
 
     def __str__(self):
         return f"Sandbox session for {self.user_id} (expires {self.expires_at})"
+
+
+class TourEvent(models.Model):
+    """One row per guided-tour funnel moment (issue #430 Phase 4 — analytics + polish).
+
+    The ``analytics`` app is Google-Analytics-script-only — a context
+    processor handing a GA property id to the template, no server-side event
+    model at all (``store_project/analytics/context_processors.py``). A
+    client-side GA/JS beacon would also fail the plan's own requirement that
+    the funnel "can't be ad-blocked away". So this is a minimal, meso-local
+    events table instead, recorded server-side at the tour's own endpoints
+    (``tour.py``'s ``record_*`` helpers): one insert per event, no reads in
+    the hot path. There's no dashboard yet — the owner reads this via the
+    Django admin or a shell query for now (a follow-up).
+
+    ``coach`` is ``SET_NULL`` (mirrors e.g. ``ExercisePrescription.exercise``):
+    most tour activity happens on throwaway sandbox coaches the hourly expiry
+    sweep deletes (``sandbox.expire_sandboxes``), and the funnel counts must
+    survive that reap rather than vanishing with the row — a cascade here
+    would silently erase most of the data this table exists to keep.
+    """
+
+    class Kind(models.TextChoices):
+        STARTED = "started", _("Started")
+        ADVANCED = "advanced", _("Step advanced")
+        OPT_IN = "opt_in", _("Segment/self-action opt-in")
+        DISMISSED = "dismissed", _("Dismissed")
+        COMPLETED = "completed", _("Completed")
+        SKIPPED = "skipped", _("Skipped (load everything)")
+
+    class Variant(models.TextChoices):
+        SANDBOX = "sandbox", _("Sandbox")
+        SELF = "self", _("Real coach (self-coaching)")
+
+    coach = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="tour_events",
+        verbose_name=_("Coach"),
+    )
+    kind = models.CharField(_("Kind"), max_length=16, choices=Kind)
+    variant = models.CharField(_("Variant"), max_length=8, choices=Variant)
+    step_key = models.CharField(
+        _("Step key"),
+        max_length=32,
+        blank=True,
+        help_text=_("The tour.STEPS key this event happened at/for, e.g. 'designer'."),
+    )
+    segment = models.CharField(
+        _("Segment / action"),
+        max_length=32,
+        blank=True,
+        help_text=_(
+            "For opt_in events only: the demo segment (athletes/program/"
+            "delivery/log/group) or self-variant action (roster_add_self/"
+            "plan_create) that was opted into."
+        ),
+    )
+    created = models.DateTimeField(_("Time created"), auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Tour event"
+        verbose_name_plural = "Tour events"
+        ordering = ["-created"]
+        indexes = [
+            models.Index(fields=["kind", "created"]),
+            models.Index(fields=["coach", "created"]),
+        ]
+
+    def __str__(self):
+        detail = self.step_key or self.segment or "—"
+        return f"{self.get_kind_display()} ({self.variant}) · {detail}"
 
 
 class AthleteProfile(models.Model):
@@ -183,14 +267,16 @@ class CoachAthleteQuerySet(models.QuerySet):
         return self.filter(status=CoachAthlete.Status.ACTIVE)
 
     def billable(self):
-        """Active links that count as a paid **seat** — i.e. excluding demo ones.
+        """Active links that count as a paid **seat** — excluding demo and self ones.
 
         A demo athlete (the one-click first-run demo, ``meso/demo.py``) is a real
         active link the coach manages on their roster, but it must not consume a
         paid seat or trip the paywall — so the billing accessors count seats off
-        this, not ``active``.
+        this, not ``active``. A coach's **self-link** (``is_self`` — programming
+        for themselves, guided-tour Phase 0) is free for the same reason: it must
+        never be what pushes them onto a paid plan.
         """
-        return self.active().exclude(is_demo=True)
+        return self.active().exclude(is_demo=True).exclude(is_self=True)
 
     def pending(self):
         return self.filter(status__in=CoachAthlete.PENDING_STATUSES)
@@ -261,6 +347,12 @@ class CoachAthlete(models.Model):
     # shown on the roster like any athlete, but not a billable seat and removable
     # in one click. Real relationships are never demo.
     is_demo = models.BooleanField(_("Demo relationship"), default=False)
+    # A self-coaching relationship (guided-tour Phase 0): the coach on their own
+    # roster, programming for themselves. A real link — plans, delivery, and
+    # logging all work against the coach's real account — but never a billable
+    # seat (mirroring ``is_demo``). The only row allowed with coach == athlete,
+    # and ``unique(coach, athlete)`` caps a user at one.
+    is_self = models.BooleanField(_("Self-coaching relationship"), default=False)
     created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
     responded_at = models.DateTimeField(_("Time responded"), null=True, blank=True)
     ended_at = models.DateTimeField(_("Time ended"), null=True, blank=True)
@@ -275,9 +367,15 @@ class CoachAthlete(models.Model):
             models.UniqueConstraint(
                 fields=["coach", "athlete"], name="unique_coach_athlete"
             ),
+            # coach == athlete iff ``is_self`` — a self-link is the one sanctioned
+            # same-user row (guided-tour Phase 0), and ``is_self`` can never be
+            # smuggled onto a two-party relationship.
             models.CheckConstraint(
-                condition=~models.Q(coach=models.F("athlete")),
-                name="coach_athlete_distinct",
+                condition=(
+                    models.Q(coach=models.F("athlete"), is_self=True)
+                    | (~models.Q(coach=models.F("athlete")) & models.Q(is_self=False))
+                ),
+                name="coach_athlete_distinct_unless_self",
             ),
         ]
 
@@ -305,6 +403,35 @@ class CoachAthlete(models.Model):
             status=cls.Status.PENDING_ATHLETE_REQUEST,
             invited_by=cls.InvitedBy.ATHLETE,
         )
+
+    @classmethod
+    def add_self(cls, user):
+        """The coach adds *themselves* as an athlete → immediately ``active``.
+
+        Self-coaching (guided-tour Phase 0): there's no consent to gather from
+        yourself, so the link skips the invite dance and lands straight on
+        ``active`` with ``is_self`` set — the one row the same-user check
+        constraint sanctions. Idempotent: ``unique(coach, athlete)`` caps a user
+        at one self-link, an open one is returned unchanged, and a previously
+        ended one reopens (its archived plans stay archived, like any re-invite).
+        Never a billable seat (``billable()`` excludes ``is_self``).
+        """
+        link, created = cls.objects.get_or_create(
+            coach=user,
+            athlete=user,
+            defaults={
+                "status": cls.Status.ACTIVE,
+                "invited_by": cls.InvitedBy.COACH,
+                "is_self": True,
+                "responded_at": timezone.now(),
+            },
+        )
+        if not created and link.status != cls.Status.ACTIVE:
+            link.status = cls.Status.ACTIVE
+            link.responded_at = timezone.now()
+            link.ended_at = None
+            link.save(update_fields=["status", "responded_at", "ended_at"])
+        return link
 
     @classmethod
     def _open(cls, *, coach, athlete, status, invited_by):

@@ -36,7 +36,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('exercises', '0002_auto_20201204_2000'),
-        ('meso', '0032_planaction'),
+        ('meso', '0035_tourevent'),
     ]
 
     operations = [

@@ -1,11 +1,11 @@
 # Meso — guided demo onboarding tour (opt-in, per-feature sample data)
 
-Status: **PLANNED** — 2026-07-07. Tracking issue: [#430](https://github.com/lancegoyke/fitness-store/issues/430).
+Status: **COMPLETE** — all 5 phases shipped 2026-07-07 (PRs [#432](https://github.com/lancegoyke/fitness-store/pull/432), [#433](https://github.com/lancegoyke/fitness-store/pull/433), [#434](https://github.com/lancegoyke/fitness-store/pull/434), [#435](https://github.com/lancegoyke/fitness-store/pull/435), [#436](https://github.com/lancegoyke/fitness-store/pull/436)). Tracking issue: [#430](https://github.com/lancegoyke/fitness-store/issues/430).
 
-Sibling of the [public sandbox demo](./public-sandbox-demo-plan.md) (which this
-reshapes) and the [walkthrough video](./demo-walkthrough-video-plan.md). The
+Sibling of the [public sandbox demo](../../meso/public-sandbox-demo-plan.md) (which this
+reshapes) and the [walkthrough video](../../meso/demo-walkthrough-video-plan.md). The
 real-coach half extends the one-click demo from the
-[first-time-UX plan](../archive/meso/first-time-ux-plan.md).
+[first-time-UX plan](./first-time-ux-plan.md).
 
 ## Why
 
@@ -101,26 +101,36 @@ from data (O7).
 
 ## Phases (PR-sized)
 
-0. **Self-athlete + non-billable seat** *(standalone, shippable alone)* —
+0. **Self-athlete + non-billable seat** *(standalone, shippable alone)* — ✅
+   shipped, PR [#432](https://github.com/lancegoyke/fitness-store/pull/432) —
    `is_self` on `CoachAthlete` + migration; `billable()` exclusion; allow/validate
    `coach == athlete` (single self-link); minimal "Add yourself as an athlete"
    affordance on the roster; audit roster/profile/deliver rendering. Tests:
    self-link doesn't move `active_seat_count`; over-limit freeze ignores it.
-1. **Segment the demo loaders** *(behavior-preserving refactor)* — split
-   `load_demo` into `athletes`/`program`/`delivery`/`log`/`group` loaders +
-   `has_*` predicates; add per-segment load endpoints (or `demo/load/?segment=`).
-   `load_demo` stays the aggregate; `create_sandbox` **still eager-loads** so
-   nothing changes for users yet. Pure plumbing + tests.
-2. **Sandbox tour** *(the visible change)* — tour engine (coach-mark driver +
-   server-persisted step state); flip `create_sandbox` to **empty-start**;
-   auto-start the tour; wire each step's action to its segment endpoint; add the
-   **skip · load-everything** and **dismiss** controls.
-3. **Real-coach tour** — the self-coaching variant of the steps; replace the
-   empty-state "Get started" card (`roster.html:32-63`) with the tour entry; the
-   agent step actually drafts for a trial coach. *(Depends on Phase 0 + 2.)*
-4. **Analytics + polish** — funnel events (start → per-step → finish, per-segment
-   opt-in) via the `analytics` app; mobile bottom-sheet steps; keyboard/ARIA a11y;
-   `prefers-reduced-motion`.
+1. **Segment the demo loaders** *(behavior-preserving refactor)* — PR [#433](https://github.com/lancegoyke/fitness-store/pull/433) —
+   split `load_demo` into `athletes`/`program`/`delivery`/`log`/`group` loaders +
+   `has_*` predicates; the existing `demo_load` view now accepts an optional
+   `segment` POST field (no URL change). `load_demo` stays the aggregate;
+   `create_sandbox` **still eager-loads** so nothing changes for users yet.
+   Pure plumbing + tests.
+2. **Sandbox tour** *(the visible change)* — PR [#434](https://github.com/lancegoyke/fitness-store/pull/434) — tour engine
+   (hand-rolled coach-mark driver `meso_tour.js` + step state persisted on
+   `CoachProfile.tour_state`); `create_sandbox` flipped to **empty-start**;
+   the tour auto-starts; each step's action posts its segment to `demo_load`
+   (returning to the page it came from via a safe `next`); **skip ·
+   load-everything** (`tour_skip`) and **dismiss** controls.
+3. **Real-coach tour** — PR [#435](https://github.com/lancegoyke/fitness-store/pull/435) — the self-coaching variant of the steps
+   (variant derived from `is_sandbox`, never stored; typed per-step actions:
+   `roster_add_self`, `plan_create` for yourself, agent draft when
+   `can_use_agent`); the empty-state "Get started" card becomes the tour
+   entry ("Start the guided tour", demo load kept as the secondary; original
+   card returns once dismissed/completed). *(Depended on Phase 0 + 2.)*
+4. **Analytics + polish** — PR [#436](https://github.com/lancegoyke/fitness-store/pull/436) — funnel events server-side on a meso-local
+   `TourEvent` model (the `analytics` app turned out to be GA-script-only — no
+   event mechanism to reuse; owner reads via admin/shell for now, dashboard is a
+   follow-up); tour-marked (`tour=1`) attribution for self actions; mobile
+   bottom-sheet steps (CSS-only, safe-area insets); aria-live step
+   announcements + heading focus; `prefers-reduced-motion`.
 
 ## Key files & pointers
 

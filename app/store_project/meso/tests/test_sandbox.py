@@ -48,6 +48,7 @@ from django.utils import timezone
 from store_project.meso import demo
 from store_project.meso import sandbox
 from store_project.meso import tasks
+from store_project.meso import tour
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import CoachSubscription
@@ -158,14 +159,26 @@ class TestCreateSandbox:
         user = sandbox.create_sandbox(source_ip="203.0.113.9")
         assert SandboxSession.objects.get(user=user).source_ip == "203.0.113.9"
 
-    def test_seeds_demo_data(self):
+    def test_starts_with_an_empty_workspace(self):
+        """The empty-start flip (guided-tour Phase 2, #430) — no eager load_demo."""
         user = sandbox.create_sandbox()
-        assert demo.has_demo(user) is True
+        assert demo.has_demo(user) is False
+
+    def test_arms_the_guided_tour_at_step_zero(self):
+        """The tour populates the workspace instead of an eager load (#430 Phase 2)."""
+        user = sandbox.create_sandbox()
+        assert CoachProfile.objects.get(user=user).tour_state == {
+            "step": 0,
+            "status": "active",
+        }
 
     def test_two_sandboxes_are_distinct_and_isolated(self):
+        """Loading the same segment for two sandboxes never lets rows collide."""
         a = sandbox.create_sandbox()
         b = sandbox.create_sandbox()
         assert a.pk != b.pk
+        demo.load_athletes(a)
+        demo.load_athletes(b)
         a_athletes = {u.pk for u in demo._demo_athletes(a)}
         b_athletes = {u.pk for u in demo._demo_athletes(b)}
         assert a_athletes.isdisjoint(b_athletes)
@@ -181,8 +194,21 @@ class TestCreateSandbox:
 
 
 def _sandbox_coach():
-    """A sandbox coach for guard/view tests below."""
-    return sandbox.create_sandbox()
+    """A sandbox coach for guard/view tests below.
+
+    ``create_sandbox`` itself starts empty (#430 Phase 2 — the guided tour
+    populates it step by step); the tests below are about guard/UI behavior
+    *on top of* a populated demo workspace (Maya's plan, the group, ...), not
+    about the empty-start/tour behavior itself, so this loads the full demo
+    explicitly (mirroring the pre-Phase-2 fixture these tests were written
+    against) and marks the tour complete — exactly what the real ``tour_skip``
+    endpoint does — so these tests' rendered pages don't also carry an active
+    tour mount alongside whatever they're actually asserting on.
+    """
+    coach = sandbox.create_sandbox()
+    demo.load_demo(coach)
+    tour.complete(CoachProfile.objects.get(user=coach))
+    return coach
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +217,7 @@ def _sandbox_coach():
 
 
 class TestSandboxEnterView:
-    def test_anonymous_visitor_gets_a_seeded_sandbox_and_is_logged_in(self, client):
+    def test_anonymous_visitor_gets_an_empty_sandbox_with_an_active_tour(self, client):
         resp = client.get(reverse("meso:sandbox_enter"))
         assert resp.status_code == 302
         assert resp.url == reverse("meso:roster")
@@ -202,7 +228,13 @@ class TestSandboxEnterView:
         user = User.objects.get(pk=client.session["_auth_user_id"])
         assert CoachProfile.objects.filter(user=user).exists()
         assert SandboxSession.objects.filter(user=user).exists()
-        assert demo.has_demo(user) is True
+        # Empty-start flip (#430 Phase 2): no eager demo.load_demo — the
+        # guided tour (armed at step 0) populates the workspace instead.
+        assert demo.has_demo(user) is False
+        assert CoachProfile.objects.get(user=user).tour_state == {
+            "step": 0,
+            "status": "active",
+        }
 
     def test_follow_redirect_renders_roster_as_coach(self, client):
         resp = client.get(reverse("meso:sandbox_enter"), follow=True)
@@ -243,6 +275,10 @@ class TestSandboxEnterView:
 
         user_a = User.objects.get(pk=user_a_id)
         user_b = User.objects.get(pk=user_b_id)
+        # Loading the same segment for both proves rows never collide even
+        # though both sandboxes start empty (#430 Phase 2).
+        demo.load_athletes(user_a)
+        demo.load_athletes(user_b)
         a_athletes = {u.pk for u in demo._demo_athletes(user_a)}
         b_athletes = {u.pk for u in demo._demo_athletes(user_b)}
         assert a_athletes.isdisjoint(b_athletes)
@@ -858,6 +894,11 @@ def _expire(user, hours_ago=1):
 class TestExpireSandboxes:
     def test_expired_sandbox_is_fully_reaped_including_demo_athletes(self):
         user = sandbox.create_sandbox()
+        # A fresh sandbox starts empty (#430 Phase 2) — load the ``athletes``
+        # segment explicitly so this test still covers the leak trap below
+        # (the demo athletes are separate User rows the coach delete doesn't
+        # cascade to).
+        demo.load_athletes(user)
         athlete_ids = [u.pk for u in demo._demo_athletes(user)]
         assert len(athlete_ids) == 5
         _expire(user)
@@ -881,7 +922,10 @@ class TestExpireSandboxes:
         assert reaped == 0
         assert User.objects.filter(pk=user.pk).exists()
         assert SandboxSession.objects.filter(user=user).exists()
-        assert demo.has_demo(user) is True
+        # Empty-start (#430 Phase 2): nothing to preserve here but the row +
+        # its (untouched) tour progress.
+        assert demo.has_demo(user) is False
+        assert CoachProfile.objects.get(user=user).tour_state["status"] == "active"
 
     def test_regular_coach_with_demo_data_is_never_touched(self):
         coach = UserFactory()

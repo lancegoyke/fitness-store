@@ -33,6 +33,7 @@ from django.template.loader import render_to_string
 from django.templatetags.static import static
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 from django.views.decorators.http import require_POST
@@ -48,6 +49,7 @@ from . import one_rm as meso_one_rm
 from . import presenters
 from . import push as meso_push
 from . import sandbox as meso_sandbox
+from . import tour as meso_tour
 from .agent import apply as agent_apply
 from .agent import client as agent_client
 from .agent import jobs as agent_jobs
@@ -362,6 +364,7 @@ class RosterView(TemplateView):
                 link.athlete,
                 suspended=link.pk in suspended,
                 demo=link.is_demo,
+                self_link=link.is_self,
                 has_working_plan=link.pk in have_plan,
                 # Adherence to the athlete's latest delivered week (read-side
                 # aggregation over their done logs); ``None`` hides the meter.
@@ -409,6 +412,17 @@ class RosterView(TemplateView):
         # once demo data is loaded a banner offers to remove it (Q3).
         ctx["has_demo"] = meso_demo.has_demo(self.request.user)
         ctx["is_empty"] = not athletes and not ctx["groups"]
+        # Self-coaching (guided-tour Phase 0): the roster offers "Add yourself as
+        # an athlete" until the coach's one self-link is active.
+        ctx["has_self_link"] = any(link.is_self for link in links)
+        # Guided-tour Phase 3: an empty workspace's Get-started card becomes the
+        # tour entry point for anyone whose tour hasn't been dismissed/completed
+        # (covers "never started" — the common real-coach case — and, harmlessly,
+        # an in-progress tour, though that branch never renders since the tour
+        # itself is mounted instead whenever ``show_meso_tour`` is true). Once
+        # dismissed/completed, this reads False and the original card returns —
+        # nothing is ever a dead end.
+        ctx["tour_entry_available"] = meso_tour.is_active(self.request.user)
         return ctx
 
 
@@ -719,6 +733,13 @@ def plan_create(request, pk):
     handed to the agent to draft the first week (Q2 fast-follow); the proposal
     lands in the review gate. The draft only fires on a new plan — never
     overwriting an existing program — and is metered like the manual agent run.
+
+    Also the "designer"/"agent" steps' self-variant data action (guided-tour
+    Phase 3) — same ``tour=1``-gated funnel opt-in as ``roster_add_self`` (this
+    endpoint is hit organically far more often, from every real "+ New
+    program"/"Build a program" CTA, so the marker is what keeps those from
+    being miscounted). ``draft`` doubles as which of the two tour steps fired
+    it: the "agent" step always sends ``draft=agent``, "designer" never does.
     """
     draft = bool(request.POST.get("draft"))
     draft_batch = None
@@ -745,6 +766,10 @@ def plan_create(request, pk):
     if draft_batch is not None:
         agent_jobs.dispatch_proposal(draft_batch.pk)
         _touch_plan(plan)
+    if request.POST.get("tour") == "1":
+        meso_tour.record_opt_in(
+            request.user, "self", "agent" if draft else "designer", "plan_create"
+        )
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
@@ -823,6 +848,16 @@ def sandbox_enter(request):
     return _noindex(redirect("meso:roster"))
 
 
+#: Per-segment success flash, keyed the same as ``meso_demo.SEGMENTS``.
+_SEGMENT_MESSAGES = {
+    "athletes": "Sample athletes added — meet your new roster.",
+    "program": "Sample program built — a full mesocycle, ready to explore.",
+    "delivery": "This week delivered to Maya's phone.",
+    "log": "Session logged — Maya's results are in.",
+    "group": "Sample group added — shared programming + per-athlete overrides.",
+}
+
+
 @login_required
 @require_POST
 def demo_load(request):
@@ -832,16 +867,57 @@ def demo_load(request):
     built/delivered/logged program, and a group — scoped to this coach, idempotent,
     billing-neutral, and silent (no demo-athlete email/push). Lands on the roster
     where the data now shows, with a "Remove demo data" affordance.
+
+    An optional ``segment`` POST field narrows the load to one slice of the demo
+    (``meso_demo.SEGMENTS`` — ``athletes``/``program``/``delivery``/``log``/``group``)
+    instead of the full aggregate; an unrecognized name loads nothing and 400s.
+    No URL changes: this stays the one ``meso:demo_load`` endpoint for both the
+    full load and (guided-tour Phase 2) each step's per-segment "add sample data"
+    action — the tour passes ``segment`` here.
+
+    An optional ``next`` POST field sends the user back where they came from
+    (guided-tour Phase 2): the tour's segment forms fire from mid-tour pages
+    (designer, deliver, ...) and always landing on the roster would teleport
+    the user away from the step they're on. Only a safe local path is honored
+    (leading ``/``, not scheme-relative ``//``, and passing Django's
+    ``url_has_allowed_host_and_scheme``); anything else — including the
+    existing roster/tour-skip callers, which don't send ``next`` at all —
+    falls back to the roster exactly as before.
     """
     # Loading a demo is an implicit "I'm coaching now": ensure the CoachProfile
     # exists (mirrors start_coaching's free path) so demo links never make a user a
-    # coach via a side door without one — keeping coach state consistent.
+    # coach via a side door without one — keeping coach state consistent, for both
+    # the aggregate and per-segment paths.
     CoachProfile.objects.get_or_create(user=request.user)
-    meso_demo.load_demo(request.user)
-    messages.success(
-        request,
-        "Demo data loaded — explore a populated workspace. Remove it any time.",
-    )
+    segment = request.POST.get("segment")
+    if segment:
+        loader = meso_demo.SEGMENTS.get(segment)
+        if loader is None:
+            return HttpResponseBadRequest("Unknown demo segment.")
+        loader(request.user)
+        messages.success(request, _SEGMENT_MESSAGES[segment])
+        # Phase 4 funnel event (#430): a per-segment opt-in. No ``tour=1``
+        # marker needed here (unlike roster_add_self/plan_create below) — the
+        # ``segment`` field is only ever sent by the sandbox tour's own
+        # per-step forms (``meso_tour.js``'s ``segment`` action branch); no
+        # other UI in the app posts it, so every call here really is the
+        # tour's sandbox variant.
+        meso_tour.record_opt_in(
+            request.user, "sandbox", meso_tour.step_key_for_segment(segment), segment
+        )
+    else:
+        meso_demo.load_demo(request.user)
+        messages.success(
+            request,
+            "Demo data loaded — explore a populated workspace. Remove it any time.",
+        )
+    next_path = request.POST.get("next", "")
+    if (
+        next_path.startswith("/")
+        and not next_path.startswith("//")
+        and url_has_allowed_host_and_scheme(next_path, allowed_hosts=None)
+    ):
+        return redirect(next_path)
     return redirect("meso:roster")
 
 
@@ -851,6 +927,127 @@ def demo_clear(request):
     """Remove exactly this coach's demo data (never their real data) — the teardown."""
     meso_demo.clear_demo(request.user)
     messages.success(request, "Demo data removed.")
+    return redirect("meso:roster")
+
+
+@login_required
+@require_POST
+def roster_add_self(request):
+    """Put the coach on their own roster as an athlete (guided-tour Phase 0).
+
+    Self-coaching: the link goes straight to ``active`` (no invite dance) and is
+    never a paid seat (``is_self`` is excluded from ``billable()``), so there's
+    no ``can_add_athlete`` gate here — mirroring the demo loader. Idempotent:
+    re-posting reuses the one self-link ``unique(coach, athlete)`` allows.
+
+    This is also the "welcome" step's self-variant data action (guided-tour
+    Phase 3), but it's hit organically too (roster.html's own standing "Add
+    yourself" affordance) — a Phase 4 funnel opt-in event only fires when the
+    POST carries the tour driver's ``tour=1`` marker field (``meso_tour.js``
+    adds it to every action form it builds), so the organic path isn't
+    miscounted as tour engagement.
+    """
+    # Like demo_load: adding yourself is an implicit "I'm coaching now", so make
+    # sure the CoachProfile exists rather than minting a coach via a side door.
+    CoachProfile.objects.get_or_create(user=request.user)
+    CoachAthlete.add_self(request.user)
+    messages.success(
+        request,
+        "You're on your roster — build a program for yourself like any athlete.",
+    )
+    if request.POST.get("tour") == "1":
+        meso_tour.record_opt_in(request.user, "self", "welcome", "roster_add_self")
+    return redirect("meso:roster")
+
+
+@login_required
+@require_POST
+def tour_state(request):
+    """Advance/back/goto/dismiss/complete/restart the guided demo tour (#430, Phase 2).
+
+    Persists on the requesting coach's ``CoachProfile.tour_state``
+    (get_or_create, mirroring ``demo_load``/``roster_add_self`` — driving the
+    tour is itself an implicit "I'm coaching now"). The front-end driver calls
+    this via ``fetch`` and gets the new state back as JSON; a bare form POST
+    (no ``X-Requested-With``, e.g. JS-disabled) degrades to a redirect back to
+    the roster instead.
+
+    Phase 4 (analytics + polish, #430) records the funnel event alongside each
+    transition: "advance"/"goto" only counts as a step **advanced** when the
+    resulting step is actually further along (the driver posts "goto" for both
+    Back and Next — see ``meso_tour.js``'s ``goTo`` — so a backward jump or an
+    already-clamped no-op records nothing); "dismiss" and "complete" record on
+    the step they fired from/landed on; "restart" records a fresh **started**.
+    The variant is read once via ``variant_for`` since any of these can come
+    from either audience.
+    """
+    profile, _ = CoachProfile.objects.get_or_create(user=request.user)
+    action = request.POST.get("action")
+    current_step = (profile.tour_state or {}).get("step", 0)
+    variant = meso_tour.variant_for(request.user)
+
+    if action == "advance":
+        meso_tour.set_step(profile, current_step + 1)
+        if profile.tour_state["step"] > current_step:
+            meso_tour.record_advanced(
+                request.user,
+                variant,
+                meso_tour.STEPS[profile.tour_state["step"]]["key"],
+            )
+    elif action == "back":
+        meso_tour.set_step(profile, current_step - 1)
+    elif action == "goto":
+        meso_tour.set_step(profile, request.POST.get("step", current_step))
+        if profile.tour_state["step"] > current_step:
+            meso_tour.record_advanced(
+                request.user,
+                variant,
+                meso_tour.STEPS[profile.tour_state["step"]]["key"],
+            )
+    elif action == "dismiss":
+        meso_tour.dismiss(profile)
+        meso_tour.record_dismissed(
+            request.user, variant, meso_tour.STEPS[current_step]["key"]
+        )
+    elif action == "complete":
+        meso_tour.complete(profile)
+        meso_tour.record_completed(request.user, variant)
+    elif action == "restart":
+        meso_tour.start_tour(profile)
+        meso_tour.record_started(request.user, variant)
+    else:
+        return HttpResponseBadRequest("Unknown tour action.")
+
+    if request.headers.get("x-requested-with") == "XMLHttpRequest":
+        return JsonResponse(profile.tour_state)
+    return redirect("meso:roster")
+
+
+@login_required
+@require_POST
+def tour_skip(request):
+    """The O6 "skip · load everything" shortcut: the full aggregate demo, tour marked done.
+
+    Reuses the exact pre-tour ``demo_load`` behavior (the whole workspace, one
+    shot) and additionally marks the tour ``completed`` so it doesn't
+    resurface on the next page load — the tour is meant to be a helpful
+    default, never a wall (O6). Records a **skipped** funnel event (not
+    **completed** — distinct from actually walking the tour to the end, even
+    though both leave ``tour_state`` parked on the same ``completed`` status),
+    keyed to whichever step the coach skipped from.
+    """
+    profile, _ = CoachProfile.objects.get_or_create(user=request.user)
+    current_step = (profile.tour_state or {}).get("step", 0)
+    variant = meso_tour.variant_for(request.user)
+    meso_demo.load_demo(request.user)
+    meso_tour.complete(profile)
+    meso_tour.record_skipped(
+        request.user, variant, meso_tour.STEPS[current_step]["key"]
+    )
+    messages.success(
+        request,
+        "Demo data loaded — explore a populated workspace. Remove it any time.",
+    )
     return redirect("meso:roster")
 
 
@@ -1529,6 +1726,12 @@ def relationship_reinvite(request, token):
     Locks the row so a re-invite can't race a concurrent claim. The pending peer
     link is then visible on this page's "Reconnecting" list (surfaced nowhere
     else), so the coach can see where the re-invited athlete went.
+
+    Defense-in-depth: an ended self-link is excluded from this page (its reopen
+    path is the roster's "Add yourself as an athlete" affordance), but a
+    hand-crafted POST could still hit its token. ``CoachAthlete.invite`` would
+    raise ``InvalidTransition`` for a coach == athlete pair, so reopen it the
+    same way the roster does instead of 500ing.
     """
     with transaction.atomic():
         link = get_object_or_404(
@@ -1538,6 +1741,10 @@ def relationship_reinvite(request, token):
         )
         if not link.is_closed:
             messages.info(request, "That relationship isn't closed.")
+            return redirect("meso:relationship_history")
+        if link.is_self:
+            CoachAthlete.add_self(request.user)
+            messages.success(request, "You're back on your roster.")
             return redirect("meso:relationship_history")
         # Seat gate (D4): accepting the re-invite would consume a billable seat.
         if not billing_access.can_add_athlete(request.user):

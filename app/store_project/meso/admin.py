@@ -21,6 +21,7 @@ from .models import PushSubscription
 from .models import Session
 from .models import SessionLog
 from .models import SessionSlot
+from .models import TourEvent
 from .models import Week
 from .models import WeekDelivery
 
@@ -381,6 +382,29 @@ class PushSubscriptionAdmin(admin.ModelAdmin):
     search_fields = ("athlete__email", "athlete__name", "endpoint")
     raw_id_fields = ("athlete",)
     readonly_fields = ("created_at",)
+
+
+# -- guided demo onboarding tour funnel events (#430 Phase 4) --------------
+# No dashboard yet (a follow-up) — the owner reads the funnel here or via a
+# shell query (e.g. `TourEvent.objects.values("kind").annotate(Count("id"))`).
+
+
+@admin.register(TourEvent)
+class TourEventAdmin(admin.ModelAdmin):
+    list_display = (
+        "__str__",
+        "kind",
+        "variant",
+        "step_key",
+        "segment",
+        "coach",
+        "created",
+    )
+    list_filter = ("kind", "variant", "step_key")
+    search_fields = ("coach__email", "coach__name", "step_key", "segment")
+    raw_id_fields = ("coach",)
+    readonly_fields = ("created",)
+    date_hierarchy = "created"
 
 
 # -- persisted estimated 1RM (S2 follow-up) --------------------------------
