@@ -59,6 +59,20 @@ function firstWeekCellId(grid: MesoGrid | null, row: GridRow | undefined): Id | 
   return row.cells[String(firstWeek.id)]?.prescription_id;
 }
 
+/** The row's rename target: the first live week's cell that is NOT a one-week
+ * swap (prescription_patch only rewrites the block ExerciseSlot.name for an
+ * unswapped cell). Falls back to the first week's cell if every week is
+ * swapped (rare) — best-effort. */
+function renameTargetCellId(grid: MesoGrid | null, row: GridRow | undefined): Id | undefined {
+  if (!grid || !row) return undefined;
+  for (const week of grid.weeks) {
+    const c = row.cells[String(week.id)];
+    if (c && c.swap_name === "" && c.swap_exercise_id == null) return c.prescription_id;
+  }
+  const first = grid.weeks[0];
+  return first ? row.cells[String(first.id)]?.prescription_id : undefined;
+}
+
 function currentWeekId(grid: MesoGrid | null): Id | undefined {
   if (!grid) return undefined;
   return (grid.weeks.find((w) => w.current) ?? grid.weeks[0])?.id;
@@ -151,7 +165,7 @@ export function useGrid(options: UseGridOptions) {
   const renameExercise = useCallback(
     (exerciseSlotId: Id, name: string) => {
       const row = findRow(grid, exerciseSlotId);
-      const cellId = firstWeekCellId(grid, row);
+      const cellId = renameTargetCellId(grid, row);
       if (cellId == null) return;
       setGrid((prev) => (prev ? updateRowNameInGrid(prev, exerciseSlotId, name) : prev));
       apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, { name }, csrf)

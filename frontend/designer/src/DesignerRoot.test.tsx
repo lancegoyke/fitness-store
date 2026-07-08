@@ -214,6 +214,70 @@ describe("hydration: #meso-grid-data / P1 table view default", () => {
     expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
   });
 
+  it("switching the main view refetches the newly-activated view's data source, so neither view shows stale state", async () => {
+    // The table (gridState) and "This week" (planData) are two sibling data
+    // owners — an edit made in one must not leave the other showing stale
+    // server state after the coach switches back to it.
+    const user = userEvent.setup();
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript("meso-grid-data", gridPayload());
+
+    const weekReply = {
+      ok: true,
+      program: [
+        {
+          id: 1,
+          n: 1,
+          name: "Lower",
+          exercises: [{ id: 9, name: "Squat", sets: "3", reps: "5", load: "100", load_type: "abs" }],
+        },
+      ],
+      weeks: [{ id: 1, index: 1, label: "Wk 1", current: true }],
+      phases: [{ name: "Hypertrophy", weeks: "4 wk", state: "current" }],
+      viewing: 1,
+    };
+    const gridReply = { ok: true, ...gridPayload() };
+    const fetchMock = vi.fn((url: string) => {
+      const body = url.includes("/grid/") ? gridReply : weekReply;
+      return Promise.resolve({ ok: true, status: 200, json: async () => body });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DesignerRoot />);
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled(); // no refetch on initial mount
+
+    await user.click(screen.getByText("This week"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/week/1/"));
+
+    await user.click(screen.getByText("Table"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/"));
+  });
+
+  it("targets the deliver link at the grid's CURRENT week while the table view is active, not planData's viewedWeekId", () => {
+    jsonScript("meso-plan-data", planPayload()); // viewing: 1 (planData's viewed week)
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript(
+      "meso-grid-data",
+      gridPayload({
+        weeks: [
+          { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, current: false, delivered_at: null },
+          { id: 2, index: 1, label: "Wk 2", phase: "Accum", deload: false, current: true, delivered_at: null },
+        ],
+      }),
+    );
+
+    render(<DesignerRoot />);
+
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+    expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=2");
+  });
+
   it("console.errors and does not crash on malformed grid JSON, still rendering the week view", () => {
     jsonScript("meso-plan-data", planPayload());
     jsonScript("meso-chat-thread", []);

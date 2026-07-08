@@ -202,6 +202,44 @@ describe("renameExercise", () => {
     expect(JSON.parse(opts.body as string)).toEqual({ name: "Front Squat" });
     await waitFor(() => expect(result.current.history.undo_label).toBe("Renamed Squat"));
   });
+
+  it("retargets to the first NON-swapped cell when week[0]'s cell is itself the swap", async () => {
+    // prescription_patch treats a `name` edit on a swapped cell as editing
+    // the one-week swap, not the block ExerciseSlot.name — so renaming must
+    // never target week[0]'s cell when THAT week is the swapped one.
+    const { result } = setup(
+      grid({
+        weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
+        days: [
+          day({
+            rows: [
+              row({
+                exercise_slot_id: 9,
+                name: "Squat",
+                cells: {
+                  "1": cell({ prescription_id: 100, swap_name: "Leg Press", swap_exercise_id: 77 }),
+                  "2": cell({ prescription_id: 101 }),
+                },
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res({ ok: true, history: { can_undo: true, can_redo: false, undo_label: "Renamed Squat", redo_label: "" } }),
+    ) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.renameExercise(9, "Front Squat");
+    });
+
+    expect(result.current.grid?.days[0]?.rows[0]?.name).toBe("Front Squat");
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(url).toBe("/meso/api/plan/7/prescription/101/"); // week[1]'s (unswapped) cell, not the swapped week[0] one
+    expect(JSON.parse(opts.body as string)).toEqual({ name: "Front Squat" });
+    await waitFor(() => expect(result.current.history.undo_label).toBe("Renamed Squat"));
+  });
 });
 
 describe("addExercise", () => {

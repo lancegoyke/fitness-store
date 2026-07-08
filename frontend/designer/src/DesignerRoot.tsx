@@ -2,7 +2,7 @@
 // Hydrates once from the #meso-plan-data / #meso-chat-thread / #meso-csrf /
 // #meso-designer-flags json_script elements the same way designer.html's
 // init()/hydrateThread() did, composes every hook, and renders the tree.
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import "./designer.css";
 
 import { TopBar } from "./components/TopBar";
@@ -40,6 +40,7 @@ import type {
   PlanSummary,
   Week,
 } from "./lib/api";
+import { deliverHref as buildDeliverHref } from "./lib/deliver";
 
 // P1 (multi-week table) adds "table" as the DEFAULT view when a mesocycle
 // grid is hydrated — see readHydration()'s gridData/initialView below. The
@@ -272,9 +273,38 @@ export function DesignerRoot() {
   // usePlanData's program/weeks/phases.
   const gridState = useGrid({ planId, csrf, initialGrid: hydrated?.gridData ?? null });
 
+  // P1: the table and the one-week view are two sibling data owners
+  // (gridState vs planData) — switching the primary canvas view between them
+  // must refetch whichever one is being activated, so neither view can show
+  // state left stale by an edit made in the OTHER view. Never fires on
+  // initial mount (only from user action, below).
+  const selectView = useCallback(
+    (v: ViewMode) => {
+      if (v === view) return;
+      if (v === "table") {
+        void gridState.refetchGrid();
+      } else {
+        void planData.reloadWeek();
+      }
+      setView(v);
+    },
+    [view, gridState, planData],
+  );
+
   if (!hydrated) return null;
 
   const flags = hydrated.flags;
+
+  // P1: the table view can move the "current" week without planData ever
+  // hearing about it ("Make current" in MesoTable calls gridState.
+  // setCurrentWeek, not planData.setCurrentWeek) — so while the table is the
+  // active view, Deliver must target the GRID's current week, not planData's
+  // (possibly stale) viewedWeekId.
+  const gridCurrentWeekId = gridState.grid
+    ? gridState.grid.weeks.find((w) => w.current)?.id ?? gridState.grid.weeks[0]?.id ?? null
+    : null;
+  const effectiveDeliverHref =
+    view === "table" && gridState.grid ? buildDeliverHref(planId, gridCurrentWeekId) : planData.deliverHref;
 
   return (
     <div className="meso-designer-root">
@@ -286,8 +316,8 @@ export function DesignerRoot() {
         athlete={planData.athlete}
         group={planData.group}
         cycleLabel={planData.cycleLabel}
-        onPreviewAsAthlete={() => setView("athlete")}
-        deliverHref={planData.deliverHref}
+        onPreviewAsAthlete={() => selectView("athlete")}
+        deliverHref={effectiveDeliverHref}
       />
 
       <div className="meso-designer-body">
@@ -297,7 +327,7 @@ export function DesignerRoot() {
           athlete={planData.athlete}
           group={planData.group}
           phases={planData.phases}
-          onOpenBlockView={() => setView("block")}
+          onOpenBlockView={() => selectView("block")}
         />
 
         <ChatPanel
@@ -316,19 +346,19 @@ export function DesignerRoot() {
         <div className="meso-canvas">
           <div className="meso-canvas-header">
             <div className="meso-seg">
-              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "table" ? " is-on" : ""}`} onClick={() => setView("table")}>
+              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "table" ? " is-on" : ""}`} onClick={() => selectView("table")}>
                 Table
               </button>
-              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "week" ? " is-on" : ""}`} onClick={() => setView("week")}>
+              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "week" ? " is-on" : ""}`} onClick={() => selectView("week")}>
                 This week
               </button>
-              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "block" ? " is-on" : ""}`} onClick={() => setView("block")}>
+              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "block" ? " is-on" : ""}`} onClick={() => selectView("block")}>
                 Periodization
               </button>
               <button
                 type="button"
                 className={`meso-seg-btn meso-seg-btn--v${view === "athlete" ? " is-on" : ""}`}
-                onClick={() => setView("athlete")}
+                onClick={() => selectView("athlete")}
               >
                 Athlete view
               </button>
