@@ -189,6 +189,13 @@ urlpatterns = [
         views.week_view,
         name="api_week_view",
     ),
+    # P1 multi-week table (backend): the current (or ``?mesocycle=``) block's
+    # dense day × row × week grid — read-only, mirrors ``week_view``.
+    path(
+        "api/plan/<int:plan_id>/grid/",
+        views.api_mesocycle_grid,
+        name="api_mesocycle_grid",
+    ),
     path(
         "api/plan/<int:plan_id>/week/<int:week_id>/current/",
         views.week_set_current,

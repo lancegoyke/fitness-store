@@ -205,4 +205,67 @@ describe("keyboard wiring (window keydown, registered for the hook's lifetime)",
     });
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
+
+  // P1 (multi-week table): the table view's undo/redo lives in a sibling
+  // hook (useGrid), but the window keydown listener lives here — so
+  // DesignerRoot overrides what the shortcut invokes via keyboardUndo/
+  // keyboardRedo, letting the shortcut follow whichever view is active
+  // instead of always hitting this hook's own planData undo/redo.
+  it("routes Ctrl/Cmd+Z to keyboardUndo when provided, and does not hit the internal planData undo", async () => {
+    const applyPlanData = vi.fn();
+    const keyboardUndo = vi.fn();
+    const keyboardRedo = vi.fn();
+    renderHook(() =>
+      useUndoRedo({
+        planId: 7,
+        csrf: "tok",
+        viewedWeekId: 5,
+        history: HISTORY_BOTH,
+        applyPlanData,
+        keyboardUndo,
+        keyboardRedo,
+      }),
+    );
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+    await act(async () => {
+      dispatch({ ctrlKey: true });
+      await Promise.resolve();
+    });
+    expect(keyboardUndo).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("routes Shift+Ctrl/Cmd+Z to keyboardRedo when provided, and does not hit the internal planData redo", async () => {
+    const applyPlanData = vi.fn();
+    const keyboardUndo = vi.fn();
+    const keyboardRedo = vi.fn();
+    renderHook(() =>
+      useUndoRedo({
+        planId: 7,
+        csrf: "tok",
+        viewedWeekId: 5,
+        history: HISTORY_BOTH,
+        applyPlanData,
+        keyboardUndo,
+        keyboardRedo,
+      }),
+    );
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+    await act(async () => {
+      dispatch({ key: "Z", ctrlKey: true, shiftKey: true });
+      await Promise.resolve();
+    });
+    expect(keyboardRedo).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the internal planData undo when keyboardUndo/keyboardRedo are absent (unchanged behavior)", async () => {
+    setup(HISTORY_BOTH, 5);
+    globalThis.fetch = vi.fn().mockResolvedValue(res(planData())) as unknown as typeof fetch;
+    await act(async () => {
+      dispatch({ ctrlKey: true });
+      await Promise.resolve();
+    });
+    expect(globalThis.fetch).toHaveBeenCalledWith("/meso/api/plan/7/undo/", expect.anything());
+  });
 });

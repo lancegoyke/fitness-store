@@ -1,0 +1,152 @@
+/* MesoTable (P1 multi-week table) — one <table> per training day, week
+   columns across the top. Reuses several classes/tokens from
+   designer-grid.css / designer-weekstrip.css (.meso-cell, .meso-num-input,
+   .meso-note, .meso-remove-x, .meso-confirm-btn/.meso-cancel-btn,
+   .meso-week-strip-btn variants, .meso-add-row/.meso-add-day-btn) so the
+   table's controls read as the same design language as the week view. */
+
+.meso-table-view {
+  padding-bottom: 8px;
+}
+
+.meso-table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 16px;
+}
+
+.meso-table-day {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 15px;
+  box-shadow: 0 1px 2px rgba(16, 18, 22, 0.03);
+}
+
+.meso-table-day-header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 15px;
+  border-bottom: 1px solid var(--line-2);
+}
+
+/* Horizontally scrollable inside its own container — a mesocycle can have
+   many week columns, but the page body must never scroll sideways. */
+.meso-table-scroll {
+  overflow-x: auto;
+}
+
+.meso-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.meso-table-exercise-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--rail);
+  text-align: left;
+}
+
+.meso-table thead th {
+  padding: 7px 12px;
+  background: var(--rail);
+  border-bottom: 1px solid var(--line-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.meso-table-week-col--current {
+  color: var(--accent-deep);
+}
+
+.meso-table-week-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.meso-table-week-col--current .meso-table-week-label {
+  color: var(--accent-deep);
+}
+
+.meso-table-deload-marker {
+  color: var(--dim);
+}
+
+.meso-table-week-controls {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.meso-table tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-2);
+  vertical-align: top;
+}
+
+.meso-table-row-name-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 160px;
+}
+
+.meso-table-cell {
+  min-width: 190px;
+}
+
+.meso-table-cell-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.meso-table-cell-setsreps,
+.meso-table-cell-load {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.meso-table-skipped {
+  display: inline-block;
+  color: var(--dim);
+  font-family: "IBM Plex Mono", monospace;
+  padding: 4px 2px;
+}
+
+.meso-table-swap-badge {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-deep);
+  background: var(--soft);
+  border: 1px solid var(--soft-line);
+  border-radius: 4px;
+  padding: 0 5px;
+}

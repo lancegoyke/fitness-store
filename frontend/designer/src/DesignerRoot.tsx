@@ -2,7 +2,7 @@
 // Hydrates once from the #meso-plan-data / #meso-chat-thread / #meso-csrf /
 // #meso-designer-flags json_script elements the same way designer.html's
 // init()/hydrateThread() did, composes every hook, and renders the tree.
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import "./designer.css";
 
 import { TopBar } from "./components/TopBar";
@@ -11,6 +11,7 @@ import { LeftRail } from "./components/LeftRail";
 import { ChatPanel } from "./components/ChatPanel";
 import type { DesignerFlags } from "./components/ChatPanel";
 import { WeekGrid } from "./components/WeekGrid";
+import { MesoTable } from "./components/MesoTable";
 import { BlockView } from "./components/BlockView";
 import type { PeriodStyle } from "./components/BlockView";
 import { AthletePreview } from "./components/AthletePreview";
@@ -24,13 +25,28 @@ import { useUndoRedo } from "./hooks/useUndoRedo";
 import { useOverrideEditor } from "./hooks/useOverrideEditor";
 import { useOneRmEditor } from "./hooks/useOneRmEditor";
 import { useReorder } from "./hooks/useReorder";
+import { useGrid } from "./hooks/useGrid";
 import { useAgentChat } from "./hooks/useAgentChat";
 import type { ChatMessage } from "./hooks/useAgentChat";
 import { useCoachmarks } from "./hooks/useCoachmarks";
 
-import type { AthleteIdentity, Day, GroupIdentity, HistoryState, Phase, PlanSummary, Week } from "./lib/api";
+import type {
+  AthleteIdentity,
+  Day,
+  GroupIdentity,
+  HistoryState,
+  MesoGrid,
+  Phase,
+  PlanSummary,
+  Week,
+} from "./lib/api";
+import { deliverHref as buildDeliverHref } from "./lib/deliver";
 
-type ViewMode = "week" | "block" | "athlete";
+// P1 (multi-week table) adds "table" as the DEFAULT view when a mesocycle
+// grid is hydrated — see readHydration()'s gridData/initialView below. The
+// pre-existing "week"/"block"/"athlete" branches are untouched (transitional
+// fallback — see MesoTable.tsx's header).
+type ViewMode = "week" | "block" | "athlete" | "table";
 
 interface HydratedPlanPayload {
   plan: PlanSummary;
@@ -58,6 +74,7 @@ interface Hydrated {
   initialMessages: ChatMessage[];
   initialResumeUrl: string | null;
   flags: DesignerFlags;
+  gridData: MesoGrid | null;
 }
 
 // The thread starts with a single orienting greeting — a group-aware opening
@@ -136,6 +153,19 @@ function readHydration(): Hydrated | null {
     }
   }
 
+  // P1 (multi-week table): optional — absent on plans without a mesocycle
+  // grid yet, same tolerate-absence/parse-error handling as every other
+  // hydration element above.
+  let gridData: MesoGrid | null = null;
+  const gridEl = document.getElementById("meso-grid-data");
+  if (gridEl) {
+    try {
+      gridData = JSON.parse(gridEl.textContent || "") as MesoGrid;
+    } catch (err) {
+      console.error("Could not parse grid data", err);
+    }
+  }
+
   return {
     planId: data.plan.id,
     unit: data.plan.unit || "kg",
@@ -151,13 +181,17 @@ function readHydration(): Hydrated | null {
     initialMessages,
     initialResumeUrl,
     flags,
+    gridData,
   };
 }
 
 export function DesignerRoot() {
   const [hydrated] = useState<Hydrated | null>(() => readHydration());
   const [mode, setMode] = useState<DesignerMode>(hydrated?.initialMode ?? "individual");
-  const [view, setView] = useState<ViewMode>("week");
+  // P1: default to the table view once a mesocycle grid is hydrated (it
+  // becomes the coach's primary editing surface); falls back to today's
+  // "week" default on plans with no grid yet.
+  const [view, setView] = useState<ViewMode>(hydrated?.gridData ? "table" : "week");
   const [periodStyle, setPeriodStyle] = useState<PeriodStyle>("timeline");
   const [checks, setChecks] = useState<Record<string, boolean>>({});
 
@@ -196,12 +230,25 @@ export function DesignerRoot() {
     setPendingDelete: planData.setPendingDelete,
     applyPlanData: planData.applyPlanData,
   });
+  // P1 (multi-week table): a self-contained sibling data owner — the grid is
+  // its own server contract (serialize_mesocycle_grid), not a slice of
+  // usePlanData's program/weeks/phases. Defined here (before useUndoRedo) so
+  // its undo/redo are in scope to override the keyboard shortcut below.
+  const gridState = useGrid({ planId, csrf, initialGrid: hydrated?.gridData ?? null });
+
   const undoRedo = useUndoRedo({
     planId,
     csrf,
     viewedWeekId: planData.viewedWeekId,
     history: planData.history,
     applyPlanData: planData.applyPlanData,
+    // P1: the table is a sibling data owner (gridState), not a slice of
+    // planData — the global Ctrl/Cmd+Z shortcut must follow whichever view
+    // is actually on screen, so route it to the grid's own undo/redo while
+    // the table view is active. Falls back to planData's undo/redo
+    // otherwise (unchanged behavior).
+    keyboardUndo: view === "table" ? gridState.undo : undefined,
+    keyboardRedo: view === "table" ? gridState.redo : undefined,
   });
   const overrideEditor = useOverrideEditor({
     planId,
@@ -234,9 +281,45 @@ export function DesignerRoot() {
   });
   const coachmarks = useCoachmarks();
 
+  // P1: the table and the one-week view are two sibling data owners
+  // (gridState vs planData) — switching the primary canvas view between them
+  // must refetch whichever one is being activated, so neither view can show
+  // state left stale by an edit made in the OTHER view. Never fires on
+  // initial mount (only from user action, below).
+  const selectView = useCallback(
+    (v: ViewMode) => {
+      if (v === view) return;
+      if (v === "table") {
+        void gridState.refetchGrid();
+      } else {
+        // Reactivate on the grid's current week — the week planData last
+        // viewed may have been removed in the table (reloadWeek(viewedWeekId)
+        // would 404 and strand a deleted week). Falls back to planData's own
+        // viewed week when there's no grid.
+        const target = gridState.grid
+          ? gridState.grid.weeks.find((w) => w.current)?.id ?? gridState.grid.weeks[0]?.id ?? null
+          : null;
+        void planData.reloadWeek(target ?? undefined);
+      }
+      setView(v);
+    },
+    [view, gridState, planData],
+  );
+
   if (!hydrated) return null;
 
   const flags = hydrated.flags;
+
+  // P1: the table view can move the "current" week without planData ever
+  // hearing about it ("Make current" in MesoTable calls gridState.
+  // setCurrentWeek, not planData.setCurrentWeek) — so while the table is the
+  // active view, Deliver must target the GRID's current week, not planData's
+  // (possibly stale) viewedWeekId.
+  const gridCurrentWeekId = gridState.grid
+    ? gridState.grid.weeks.find((w) => w.current)?.id ?? gridState.grid.weeks[0]?.id ?? null
+    : null;
+  const effectiveDeliverHref =
+    view === "table" && gridState.grid ? buildDeliverHref(planId, gridCurrentWeekId) : planData.deliverHref;
 
   return (
     <div className="meso-designer-root">
@@ -248,8 +331,8 @@ export function DesignerRoot() {
         athlete={planData.athlete}
         group={planData.group}
         cycleLabel={planData.cycleLabel}
-        onPreviewAsAthlete={() => setView("athlete")}
-        deliverHref={planData.deliverHref}
+        onPreviewAsAthlete={() => selectView("athlete")}
+        deliverHref={effectiveDeliverHref}
       />
 
       <div className="meso-designer-body">
@@ -259,7 +342,7 @@ export function DesignerRoot() {
           athlete={planData.athlete}
           group={planData.group}
           phases={planData.phases}
-          onOpenBlockView={() => setView("block")}
+          onOpenBlockView={() => selectView("block")}
         />
 
         <ChatPanel
@@ -278,16 +361,19 @@ export function DesignerRoot() {
         <div className="meso-canvas">
           <div className="meso-canvas-header">
             <div className="meso-seg">
-              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "week" ? " is-on" : ""}`} onClick={() => setView("week")}>
+              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "table" ? " is-on" : ""}`} onClick={() => selectView("table")}>
+                Table
+              </button>
+              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "week" ? " is-on" : ""}`} onClick={() => selectView("week")}>
                 This week
               </button>
-              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "block" ? " is-on" : ""}`} onClick={() => setView("block")}>
+              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "block" ? " is-on" : ""}`} onClick={() => selectView("block")}>
                 Periodization
               </button>
               <button
                 type="button"
                 className={`meso-seg-btn meso-seg-btn--v${view === "athlete" ? " is-on" : ""}`}
-                onClick={() => setView("athlete")}
+                onClick={() => selectView("athlete")}
               >
                 Athlete view
               </button>
@@ -302,6 +388,26 @@ export function DesignerRoot() {
           </div>
 
           <div className="meso-canvas-body">
+            {view === "table" && (
+              <MesoTable
+                grid={gridState.grid}
+                history={gridState.history}
+                busy={gridState.busy}
+                unit={unit}
+                onPatchCell={gridState.patchCell}
+                onRenameExercise={gridState.renameExercise}
+                onAddExercise={gridState.addExercise}
+                onRemoveExercise={gridState.removeExercise}
+                onAddDay={gridState.addDay}
+                onRemoveDay={gridState.removeDay}
+                onAddWeek={gridState.addWeek}
+                onRemoveWeek={gridState.removeWeek}
+                onSetCurrentWeek={gridState.setCurrentWeek}
+                onUndo={gridState.undo}
+                onRedo={gridState.redo}
+              />
+            )}
+
             {view === "week" && (
               <div className="meso-week-view">
                 <div className="meso-week-view-head">

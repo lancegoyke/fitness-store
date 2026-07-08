@@ -14,6 +14,12 @@ export interface UseUndoRedoOptions {
   viewedWeekId: Id | null;
   history: HistoryState;
   applyPlanData: (data: PlanEnvelope) => void;
+  /** What the Ctrl/Cmd+Z window shortcut invokes; defaults to this hook's
+   * own planData undo/redo. DesignerRoot overrides these to the active
+   * view's handlers (e.g. the grid table's) so the keyboard shortcut
+   * follows the visible canvas. */
+  keyboardUndo?: () => void;
+  keyboardRedo?: () => void;
 }
 
 export function useUndoRedo(options: UseUndoRedoOptions) {
@@ -61,10 +67,10 @@ export function useUndoRedo(options: UseUndoRedoOptions) {
     }
   }, [history.can_redo, planId, viewedWeekId, csrf, applyPlanData, setUndoingBoth]);
 
-  const undoRef = useRef(undo);
-  undoRef.current = undo;
-  const redoRef = useRef(redo);
-  redoRef.current = redo;
+  const undoRef = useRef<() => void | Promise<void>>(options.keyboardUndo ?? undo);
+  undoRef.current = options.keyboardUndo ?? undo;
+  const redoRef = useRef<() => void | Promise<void>>(options.keyboardRedo ?? redo);
+  redoRef.current = options.keyboardRedo ?? redo;
 
   useEffect(() => {
     function handler(event: KeyboardEvent) {

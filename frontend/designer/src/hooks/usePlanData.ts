@@ -163,6 +163,30 @@ export function usePlanData(
     [planId, viewedWeekId, applyPlanData],
   );
 
+  // Unlike switchWeek, reloadWeek ALWAYS refetches (never no-ops on a
+  // same-id target) — used when re-activating the "week" view after another
+  // view (the P1 table) may have mutated the same week server-side, so
+  // switchWeek's same-id-is-a-no-op guard would otherwise leave it stale.
+  // Defaults to the currently-viewed week, but accepts an explicit
+  // `targetWeekId` override: the caller (DesignerRoot.selectView) may need to
+  // reactivate on the GRID's current week instead, since planData's own
+  // viewedWeekId can point at a week the table has since deleted (a GET to a
+  // deleted week 404s and would otherwise strand a stale render).
+  const reloadWeek = useCallback(
+    async (targetWeekId?: Id) => {
+      const target = targetWeekId ?? viewedWeekIdRef.current;
+      if (target == null) return;
+      try {
+        const res = await fetch(`/meso/api/plan/${planId}/week/${target}/`);
+        if (!res.ok) throw new Error("Request failed: " + res.status);
+        applyPlanData((await res.json()) as PlanEnvelope);
+      } catch (err) {
+        console.error("Reload week failed", err);
+      }
+    },
+    [planId, applyPlanData],
+  );
+
   const addWeek = useCallback(async () => {
     try {
       const data = await apiPost<PlanEnvelope>(`/meso/api/plan/${planId}/week/`, null, csrf);
@@ -254,6 +278,7 @@ export function usePlanData(
     addExercise,
     addDay,
     switchWeek,
+    reloadWeek,
     addWeek,
     setCurrentWeek,
 

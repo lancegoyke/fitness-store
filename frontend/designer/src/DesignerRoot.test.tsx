@@ -120,6 +120,248 @@ describe("hydration: full payload", () => {
   });
 });
 
+// === P1 (multi-week table): #meso-grid-data hydration + the new default
+// view. `view` gains a "table" member (frontend/designer/CONTRACT.md predates
+// this — see the P1 spec instead); the default `view` becomes "table" when
+// grid data is hydrated, falling back to today's "week" default otherwise —
+// every OTHER describe block in this file never hydrates #meso-grid-data, so
+// none of them needed touching.
+function gridPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    mesocycle: { id: 1, plan_id: 7, name: "Block 1", week_count: 1 },
+    weeks: [{ id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, current: true, delivered_at: null }],
+    days: [
+      {
+        session_slot_id: 1,
+        session_id: 11,
+        day_number: 1,
+        name: "Lower",
+        bias: "Quad bias",
+        order: 0,
+        rows: [
+          {
+            exercise_slot_id: 9,
+            name: "Squat",
+            exercise_id: 55,
+            order: 0,
+            tags: [],
+            cells: {
+              "1": {
+                prescription_id: 100,
+                sets: "3",
+                reps: "5",
+                load: "100",
+                load_type: "abs",
+                rpe: "8",
+                rest: "90",
+                note: "",
+                skipped: false,
+                swap_name: "",
+                swap_exercise_id: null,
+                swap_display: "",
+              },
+            },
+          },
+        ],
+      },
+    ],
+    history: { can_undo: false, can_redo: false, undo_label: "", redo_label: "" },
+    ...overrides,
+  };
+}
+
+describe("hydration: #meso-grid-data / P1 table view default", () => {
+  it("defaults to the table view when #meso-grid-data is present", () => {
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript("meso-grid-data", gridPayload());
+
+    render(<DesignerRoot />);
+
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+    expect(screen.getByTestId("meso-day-table-1")).toBeInTheDocument();
+  });
+
+  it("falls back to the week view when #meso-grid-data is absent", () => {
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+
+    render(<DesignerRoot />);
+
+    expect(screen.queryByTestId("meso-table-view")).not.toBeInTheDocument();
+    expect(screen.getByTestId("exercise-name-9")).toBeInTheDocument();
+  });
+
+  it("can switch from the table view to the week view and back via the segmented control", async () => {
+    const user = userEvent.setup();
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript("meso-grid-data", gridPayload());
+
+    render(<DesignerRoot />);
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+
+    await user.click(screen.getByText("This week"));
+    expect(screen.queryByTestId("meso-table-view")).not.toBeInTheDocument();
+    expect(screen.getByTestId("exercise-name-9")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Table"));
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+  });
+
+  it("switching the main view refetches the newly-activated view's data source, so neither view shows stale state", async () => {
+    // The table (gridState) and "This week" (planData) are two sibling data
+    // owners — an edit made in one must not leave the other showing stale
+    // server state after the coach switches back to it. The grid's CURRENT
+    // week (id 2) is deliberately different from planData's own viewedWeekId
+    // (id 1, from planPayload's `viewing: 1`) — reactivating "This week" must
+    // target the GRID's current week (the table may have removed the week
+    // planData last viewed), not planData's possibly-stale/deleted one.
+    const user = userEvent.setup();
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript(
+      "meso-grid-data",
+      gridPayload({
+        weeks: [
+          { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, current: false, delivered_at: null },
+          { id: 2, index: 1, label: "Wk 2", phase: "Accum", deload: false, current: true, delivered_at: null },
+        ],
+      }),
+    );
+
+    const weekReply = {
+      ok: true,
+      program: [
+        {
+          id: 1,
+          n: 1,
+          name: "Lower",
+          exercises: [{ id: 9, name: "Squat", sets: "3", reps: "5", load: "100", load_type: "abs" }],
+        },
+      ],
+      weeks: [{ id: 2, index: 2, label: "Wk 2", current: true }],
+      phases: [{ name: "Hypertrophy", weeks: "4 wk", state: "current" }],
+      viewing: 2,
+    };
+    const gridReply = {
+      ok: true,
+      ...gridPayload({
+        weeks: [
+          { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, current: false, delivered_at: null },
+          { id: 2, index: 1, label: "Wk 2", phase: "Accum", deload: false, current: true, delivered_at: null },
+        ],
+      }),
+    };
+    const fetchMock = vi.fn((url: string) => {
+      const body = url.includes("/grid/") ? gridReply : weekReply;
+      return Promise.resolve({ ok: true, status: 200, json: async () => body });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DesignerRoot />);
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled(); // no refetch on initial mount
+
+    await user.click(screen.getByText("This week"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/week/2/"));
+    expect(fetchMock).not.toHaveBeenCalledWith("/meso/api/plan/7/week/1/");
+
+    await user.click(screen.getByText("Table"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/"));
+  });
+
+  it("targets the deliver link at the grid's CURRENT week while the table view is active, not planData's viewedWeekId", () => {
+    jsonScript("meso-plan-data", planPayload()); // viewing: 1 (planData's viewed week)
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript(
+      "meso-grid-data",
+      gridPayload({
+        weeks: [
+          { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, current: false, delivered_at: null },
+          { id: 2, index: 1, label: "Wk 2", phase: "Accum", deload: false, current: true, delivered_at: null },
+        ],
+      }),
+    );
+
+    render(<DesignerRoot />);
+
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+    expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=2");
+  });
+
+  // Code-review nit: the global Ctrl/Cmd+Z window listener lives inside
+  // useUndoRedo and always called ITS OWN planData undo/redo — even while
+  // the table (gridState) is the active view, leaving the visible table
+  // stale after an undo. DesignerRoot now overrides useUndoRedo's keyboard
+  // handlers to the grid's own undo/redo while view === "table". Both
+  // planData.undo and gridState.undo POST to the same `/undo/` endpoint, so
+  // the distinguishing signal that the GRID path ran is the follow-up GET
+  // to `/grid/` (gridState.undo refetches the grid; planData's undo does
+  // not).
+  it("routes a Ctrl/Cmd+Z keyboard shortcut to the grid's own undo while the table view is active", async () => {
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript(
+      "meso-grid-data",
+      gridPayload({
+        history: { can_undo: true, can_redo: false, undo_label: "Edited Squat", redo_label: null },
+      }),
+    );
+
+    const gridReply = {
+      ok: true,
+      ...gridPayload({
+        history: { can_undo: false, can_redo: true, undo_label: null, redo_label: "Edited Squat" },
+      }),
+    };
+    const fetchMock = vi.fn(() => {
+      return Promise.resolve({ ok: true, status: 200, json: async () => gridReply });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DesignerRoot />);
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/undo/", expect.anything()),
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/"));
+  });
+
+  it("console.errors and does not crash on malformed grid JSON, still rendering the week view", () => {
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    const el = document.createElement("script");
+    el.type = "application/json";
+    el.id = "meso-grid-data";
+    el.textContent = "{not valid json";
+    document.body.appendChild(el);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    render(<DesignerRoot />);
+
+    expect(spy).toHaveBeenCalled();
+    expect(screen.getByTestId("exercise-name-9")).toBeInTheDocument();
+  });
+});
+
 describe("hydration: missing or malformed payload", () => {
   it("renders nothing when #meso-plan-data is absent", () => {
     const { container } = render(<DesignerRoot />);

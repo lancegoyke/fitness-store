@@ -17,7 +17,9 @@ from datetime import date
 from types import SimpleNamespace
 
 import pytest
+from django.utils import timezone
 
+from store_project.exercises.factories import ExerciseFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
@@ -25,10 +27,13 @@ from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
+from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
 from store_project.meso.models import Week
+from store_project.meso.serializers import serialize_mesocycle_grid
 from store_project.meso.serializers import serialize_plan
+from store_project.meso.serializers import serialize_plan_history
 
 from ._helpers import day
 from ._helpers import presc
@@ -473,3 +478,275 @@ class TestLastLoggedColumn:
             sets=[("6", "200", "9")],
         )
         assert "last" not in self._box_squat(s.plan)
+
+
+# ---------------------------------------------------------------------------
+# serialize_mesocycle_grid — the P1 multi-week table (backend, dense grid)
+# ---------------------------------------------------------------------------
+
+
+def _build_grid_meso():
+    """A 2-day, 3-row, 2-week block, fully wired for the P1 grid serializer.
+
+    Day 1 (order 0): Back Squat (order 0, catalog-linked, tagged) + Leg Press
+    (order 1). Day 2 (order 1): Bench Press (order 0). Every row carries a
+    real cell in both weeks so density can be asserted directly.
+    """
+    rel = CoachAthleteFactory()
+    plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE)
+    meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0, week_count=4)
+    week1 = WeekFactory(mesocycle=meso, index=1, phase="Accum", is_current=True)
+    week2 = WeekFactory(
+        mesocycle=meso,
+        index=2,
+        phase="Accum",
+        is_current=False,
+        delivered_at=timezone.now(),
+    )
+
+    day1 = day(week1, day_number=1, name="Lower", bias="Quad bias", order=0)
+    day2 = day(week1, day_number=2, name="Upper", bias="Push/pull", order=1)
+    # Block-shared identity (P0): week 2's days reuse the SAME SessionSlot.
+    day1_wk2 = day(week2, session_slot=day1.session_slot)
+    day2_wk2 = day(week2, session_slot=day2.session_slot)
+
+    catalog = ExerciseFactory()
+    squat_cell1 = presc(
+        day1,
+        name="Back Squat",
+        order=0,
+        exercise=catalog,
+        tags=["main"],
+        sets="4",
+        reps="6",
+        load="100",
+        rpe="7",
+        rest="120",
+        note="tempo",
+    )
+    squat_row = squat_cell1.exercise_slot
+    squat_cell2 = presc(
+        exercise_slot=squat_row, week=week2, sets="4", reps="5", load="105", rpe="8"
+    )
+
+    press_cell1 = presc(day1, name="Leg Press", order=1, sets="3", reps="12", load="80")
+    press_row = press_cell1.exercise_slot
+    press_cell2 = presc(
+        exercise_slot=press_row, week=week2, sets="3", reps="10", load="85"
+    )
+
+    bench_cell1 = presc(
+        day2, name="Bench Press", order=0, sets="4", reps="8", load="60"
+    )
+    bench_row = bench_cell1.exercise_slot
+    bench_cell2 = presc(
+        exercise_slot=bench_row, week=week2, sets="4", reps="8", load="65"
+    )
+
+    return SimpleNamespace(
+        plan=plan,
+        meso=meso,
+        week1=week1,
+        week2=week2,
+        day1=day1,
+        day2=day2,
+        day1_wk2=day1_wk2,
+        day2_wk2=day2_wk2,
+        squat_row=squat_row,
+        press_row=press_row,
+        bench_row=bench_row,
+        squat_cell1=squat_cell1,
+        squat_cell2=squat_cell2,
+        press_cell1=press_cell1,
+        press_cell2=press_cell2,
+        bench_cell1=bench_cell1,
+        bench_cell2=bench_cell2,
+        catalog=catalog,
+    )
+
+
+class TestSerializeMesocycleGrid:
+    def test_top_level_keys(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        assert set(result.keys()) == {"mesocycle", "weeks", "days", "history"}
+
+    def test_mesocycle_envelope(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        assert result["mesocycle"] == {
+            "id": f.meso.pk,
+            "plan_id": f.plan.pk,
+            "name": "Hypertrophy",
+            "week_count": 4,
+        }
+
+    def test_weeks_ordered_by_index_with_full_meta(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        assert [w["id"] for w in result["weeks"]] == [f.week1.pk, f.week2.pk]
+        assert result["weeks"][0] == {
+            "id": f.week1.pk,
+            "index": 1,
+            "label": "Wk 1",
+            "phase": "Accum",
+            "deload": False,
+            "current": True,
+            "delivered_at": None,
+        }
+        wk2 = result["weeks"][1]
+        assert wk2["id"] == f.week2.pk
+        assert wk2["index"] == 2
+        assert wk2["label"] == "Wk 2"
+        assert wk2["current"] is False
+        assert wk2["delivered_at"] == f.week2.delivered_at.isoformat()
+
+    def test_days_ordered_with_session_id_and_identity(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        assert [d["session_slot_id"] for d in result["days"]] == [
+            f.day1.session_slot_id,
+            f.day2.session_slot_id,
+        ]
+        day1_data = result["days"][0]
+        assert day1_data["day_number"] == 1
+        assert day1_data["name"] == "Lower"
+        assert day1_data["bias"] == "Quad bias"
+        assert day1_data["order"] == 0
+        # Current week (week1) wins the session_id.
+        assert day1_data["session_id"] == f.day1.pk
+
+    def test_rows_ordered_by_order_with_block_identity(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        day1_rows = result["days"][0]["rows"]
+        assert [r["exercise_slot_id"] for r in day1_rows] == [
+            f.squat_row.pk,
+            f.press_row.pk,
+        ]
+        squat = day1_rows[0]
+        assert squat["name"] == "Back Squat"
+        assert squat["exercise_id"] == f.catalog.pk
+        assert squat["order"] == 0
+        assert squat["tags"] == ["main"]
+
+    def test_cells_are_dense_one_per_live_week(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        squat = result["days"][0]["rows"][0]
+        assert set(squat["cells"].keys()) == {str(f.week1.pk), str(f.week2.pk)}
+
+    def test_cell_carries_all_numeric_fields(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        squat = result["days"][0]["rows"][0]
+        cell = squat["cells"][str(f.week1.pk)]
+        assert cell == {
+            "prescription_id": f.squat_cell1.pk,
+            "sets": "4",
+            "reps": "6",
+            "load": "100",
+            "load_type": f.squat_cell1.load_type,
+            "rpe": "7",
+            "rest": "120",
+            "note": "tempo",
+            "skipped": False,
+            "swap_name": "",
+            "swap_exercise_id": None,
+            "swap_display": "",
+        }
+
+    def test_deleted_week_is_excluded(self):
+        f = _build_grid_meso()
+        f.week2.soft_delete()
+        result = serialize_mesocycle_grid(f.meso)
+        assert [w["id"] for w in result["weeks"]] == [f.week1.pk]
+        squat = result["days"][0]["rows"][0]
+        assert set(squat["cells"].keys()) == {str(f.week1.pk)}
+
+    def test_deleted_session_slot_is_excluded(self):
+        f = _build_grid_meso()
+        f.day2.session_slot.soft_delete()
+        result = serialize_mesocycle_grid(f.meso)
+        assert [d["session_slot_id"] for d in result["days"]] == [
+            f.day1.session_slot_id
+        ]
+
+    def test_deleted_exercise_slot_is_excluded(self):
+        f = _build_grid_meso()
+        f.press_row.soft_delete()
+        result = serialize_mesocycle_grid(f.meso)
+        day1_rows = result["days"][0]["rows"]
+        assert [r["exercise_slot_id"] for r in day1_rows] == [f.squat_row.pk]
+
+    def test_skipped_cell_still_appears_flagged(self):
+        f = _build_grid_meso()
+        f.squat_cell2.skipped = True
+        f.squat_cell2.save(update_fields=["skipped"])
+        result = serialize_mesocycle_grid(f.meso)
+        squat = result["days"][0]["rows"][0]
+        cell = squat["cells"][str(f.week2.pk)]
+        assert cell["skipped"] is True
+
+    def test_swap_surfaces_on_the_cell_but_row_name_stays_block_identity(self):
+        f = _build_grid_meso()
+        substitute = ExerciseFactory()
+        f.squat_cell2.swap_exercise = substitute
+        f.squat_cell2.swap_name = "Front Squat"
+        f.squat_cell2.save(update_fields=["swap_exercise", "swap_name"])
+        result = serialize_mesocycle_grid(f.meso)
+        squat = result["days"][0]["rows"][0]
+        # The ROW identity is unchanged — a swap is a one-week cell exception.
+        assert squat["name"] == "Back Squat"
+        swapped_cell = squat["cells"][str(f.week2.pk)]
+        assert swapped_cell["swap_name"] == "Front Squat"
+        assert swapped_cell["swap_exercise_id"] == substitute.pk
+        # Free-text swap_name wins over the catalog swap_exercise for display.
+        assert swapped_cell["swap_display"] == "Front Squat"
+        # The untouched week still reads no swap.
+        assert squat["cells"][str(f.week1.pk)]["swap_name"] == ""
+        assert squat["cells"][str(f.week1.pk)]["swap_exercise_id"] is None
+        assert squat["cells"][str(f.week1.pk)]["swap_display"] == ""
+
+    def test_swap_display_is_free_text_swap_name_when_set(self):
+        f = _build_grid_meso()
+        f.squat_cell2.swap_name = "Front Squat"
+        f.squat_cell2.save(update_fields=["swap_name"])
+        result = serialize_mesocycle_grid(f.meso)
+        squat = result["days"][0]["rows"][0]
+        cell = squat["cells"][str(f.week2.pk)]
+        assert cell["swap_display"] == "Front Squat"
+
+    def test_swap_display_falls_back_to_swap_exercise_name_for_a_catalog_only_swap(
+        self,
+    ):
+        f = _build_grid_meso()
+        substitute = ExerciseFactory(name="Hack Squat")
+        f.squat_cell2.swap_exercise = substitute
+        f.squat_cell2.swap_name = ""
+        f.squat_cell2.save(update_fields=["swap_exercise", "swap_name"])
+        result = serialize_mesocycle_grid(f.meso)
+        squat = result["days"][0]["rows"][0]
+        cell = squat["cells"][str(f.week2.pk)]
+        # A catalog-only swap (no free-text swap_name) must still surface a
+        # display name — this is the P1 table's "no visible badge" gap: the
+        # coach couldn't tell a catalog swap was active.
+        assert cell["swap_display"] == "Hack Squat"
+        assert cell["swap_exercise_id"] == substitute.pk
+        assert cell["swap_name"] == ""
+        # The ROW identity is still block-wide, unaffected by the swap.
+        assert squat["name"] == "Back Squat"
+
+    def test_history_reuses_serialize_plan_history(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        assert result["history"] == serialize_plan_history(f.plan)
+
+    def test_session_id_falls_back_to_first_live_week_when_current_lacks_one(self):
+        f = _build_grid_meso()
+        # Simulate the current week's session for day1 having been individually
+        # removed while the day (SessionSlot) itself stays live.
+        Session.objects.filter(pk=f.day1.pk).update(deleted_at=timezone.now())
+        result = serialize_mesocycle_grid(f.meso)
+        day1_data = result["days"][0]
+        assert day1_data["session_id"] == f.day1_wk2.pk
