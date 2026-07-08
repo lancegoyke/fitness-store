@@ -862,7 +862,7 @@ def session_results(session):
     """
     plan = session.week.mesocycle.plan
     athlete = plan.athlete
-    prescriptions = list(session.cells())
+    prescriptions = list(session.trainable_cells())
     log = (
         SessionLog.objects.filter(
             session=session, athlete=athlete, status=SessionLog.Status.DONE
@@ -953,8 +953,9 @@ def _athlete_session_row(session, *, done):
         "n": session.day_number,
         "name": session.name,
         "bias": session.bias,
-        # ``session.cells()`` (P0 fixed-lineup cutover) is already live-filtered.
-        "exercise_count": session.cells().count(),
+        # Trainable rows only — live + non-skipped (P0 fixed-lineup cutover); a
+        # week-skipped exercise doesn't count toward the day's "N exercises" chip.
+        "exercise_count": session.trainable_cells().count(),
         "status": status,
         "status_label": "Logged" if done else "To do",
         "url": reverse("meso:athlete_session", kwargs={"pk": session.pk}),
@@ -1081,7 +1082,7 @@ def athlete_session(session, athlete):
     )
     done = log is not None and log.status == SessionLog.Status.DONE
     week = session.week
-    prescriptions = list(session.cells())
+    prescriptions = list(session.trainable_cells())
     # The athlete's persisted, log-derived 1RM per lift (in this plan's unit) — the
     # %1RM logger seeds its suggested bar load from it (no manual estimate needed).
     one_rm_map = one_rm_values(athlete, prescriptions, week.mesocycle.plan.unit)

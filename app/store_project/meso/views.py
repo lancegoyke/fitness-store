@@ -2041,30 +2041,41 @@ def prescription_patch(request, plan_id, pk):
             return HttpResponseBadRequest("Invalid load_type.")
         updates["load_type"] = load_type
 
-    # ``name`` is the row's identity, which now lives on the block-shared
-    # ``ExerciseSlot`` (not the per-week cell). Editing it renames the exercise for
-    # the WHOLE block — the fixed-lineup semantics — and keeps the unchanged P0
-    # designer's inline name autosave (which posts ``name`` through this patch)
-    # working. It writes the slot, not a per-week swap.
-    slot_name = None
+    # ``name`` is identity. The row renders the cell's EFFECTIVE name (a one-week
+    # swap, else the block-shared slot's), and the React client echoes it on every
+    # blur — even for a sets/load edit — so treat it as an edit only when it
+    # actually differs from the current effective name. A real rename of a SWAPPED
+    # cell retargets that week's swap; of a normal cell, the block-shared
+    # ``ExerciseSlot`` (the fixed-lineup rename, keeping the P0 designer's inline
+    # name autosave working). This guard is what stops a swapped cell's routine
+    # autosave from renaming the base row for the whole block.
+    name_edit = None
     if "name" in payload:
         value = payload["name"]
         if not isinstance(value, str):
             return HttpResponseBadRequest("name must be a string.")
         if len(value) > 255:
             return HttpResponseBadRequest("name is too long.")
-        slot_name = value
+        if value != cell.name:
+            name_edit = value
 
-    if updates or slot_name is not None:
+    if updates or name_edit is not None:
         with transaction.atomic():
             record_plan_action(plan, f"Edited {cell.name or 'exercise'}")
             if updates:
                 for field, value in updates.items():
                     setattr(cell, field, value)
                 cell.save(update_fields=list(updates))
-            if slot_name is not None:
-                cell.exercise_slot.name = slot_name
-                cell.exercise_slot.save(update_fields=["name"])
+            if name_edit is not None:
+                if cell.swap_name or cell.swap_exercise_id:
+                    # Editing the shown name of a swapped week edits that week's
+                    # swap only — never the block-shared slot.
+                    cell.swap_name = name_edit
+                    cell.swap_exercise = None
+                    cell.save(update_fields=["swap_name", "swap_exercise"])
+                else:
+                    cell.exercise_slot.name = name_edit
+                    cell.exercise_slot.save(update_fields=["name"])
             _touch_plan(plan)
     # Row-level reply + refreshed history: this endpoint records an undo action
     # but doesn't re-serialize the plan, so without `history` the client's undo

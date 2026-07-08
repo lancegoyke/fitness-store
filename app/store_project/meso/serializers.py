@@ -51,6 +51,7 @@ def serialize_prescription(cell):
         "rpe": cell.rpe,
         "rest": cell.rest,
         "note": cell.note,
+        "skipped": cell.skipped,
     }
     # The designer renders a single `tag`; the model stores a list.
     if cell.tags:
@@ -155,16 +156,17 @@ def serialize_chat_thread(plan):
 def serialize_session(session):
     """One training day (a column in the designer grid).
 
-    ``session.cells()`` (the P0 fixed-lineup cutover) already returns only
-    this week's live cells — live ``ExerciseSlot`` rows, row-ordered — so no
-    extra filtering is needed here.
+    ``session.trainable_cells()`` (the P0 fixed-lineup cutover) returns this
+    week's live, non-skipped cells — live ``ExerciseSlot`` rows, row-ordered — so
+    a one-week ``skipped`` exception doesn't render as a loggable blank row (the
+    P1 multi-week table shows it as an em-dash instead).
     """
     return {
         "id": session.pk,
         "n": session.day_number,
         "name": session.name,
         "bias": session.bias,
-        "exercises": [serialize_prescription(c) for c in session.cells()],
+        "exercises": [serialize_prescription(c) for c in session.trainable_cells()],
     }
 
 

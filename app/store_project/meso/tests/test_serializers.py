@@ -268,10 +268,12 @@ class TestSerializePlan:
                     "rpe",
                     "rest",
                     "note",
+                    "skipped",
                 }
                 if tags:
                     expected_keys.add("tag")
                 assert set(ex.keys()) == expected_keys
+                assert ex["skipped"] is False
                 assert isinstance(ex["id"], int)
                 assert ex["name"] == name
                 assert ex["sets"] == sets

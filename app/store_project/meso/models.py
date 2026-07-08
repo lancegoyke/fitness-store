@@ -1603,6 +1603,17 @@ class Session(models.Model):
             .order_by("exercise_slot__order")
         )
 
+    def trainable_cells(self):
+        """This week's cells the athlete actually trains — excludes one-week skips.
+
+        The week-at-a-time display/logging surfaces (the designer program grid, the
+        athlete session + logger, results) render only trainable rows: a ``skipped``
+        cell is "not trained this week" and must not appear as a loggable blank row
+        (the P1 multi-week table renders it as an em-dash instead). ``cells()`` still
+        returns every cell for structure-preserving logic (group sync, snapshots).
+        """
+        return self.cells().filter(skipped=False)
+
 
 class Prescription(models.Model):
     """A CELL = one ``ExerciseSlot`` (fixed row) × one ``Week``. Per-week numbers.

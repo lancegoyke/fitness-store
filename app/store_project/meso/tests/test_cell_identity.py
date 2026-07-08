@@ -9,6 +9,7 @@ logs/1RM keying and catalog-linked checks would mis-attribute the substituted we
 import pytest
 
 from store_project.exercises.factories import ExerciseFactory
+from store_project.meso import serializers
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import WeekFactory
 
@@ -58,3 +59,31 @@ class TestCellSwapIdentity:
         assert cell.exercise_id == substitute.pk
         assert cell.name == substitute.name
         assert cell.is_catalog_linked is True
+
+
+class TestSkippedCellsAreNotTrainable:
+    """A one-week ``skipped`` cell must not render as a loggable blank row.
+
+    "Not trained this week" is hidden from the P0 week-at-a-time surfaces (the P1
+    multi-week table renders it as an em-dash instead), while structure-preserving
+    logic (group sync, snapshots) still sees every cell via ``cells()``.
+    """
+
+    def _day_with_a_skip(self):
+        plan = PlanFactory()
+        week = WeekFactory(mesocycle__plan=plan, index=1, is_current=True)
+        session = day(week, day_number=1, name="Lower")
+        presc(session, name="Squat")
+        presc(session, name="Skipped Curl", skipped=True)
+        return session
+
+    def test_trainable_cells_excludes_skipped_but_cells_keeps_it(self):
+        session = self._day_with_a_skip()
+        assert session.cells().count() == 2
+        assert session.trainable_cells().count() == 1
+
+    def test_serialize_session_omits_skipped_rows(self):
+        session = self._day_with_a_skip()
+        data = serializers.serialize_session(session)
+        assert [e["name"] for e in data["exercises"]] == ["Squat"]
+        assert all(e["skipped"] is False for e in data["exercises"])
