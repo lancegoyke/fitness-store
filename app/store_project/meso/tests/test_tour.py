@@ -268,6 +268,63 @@ class TestBuildConfig:
         for step in config["steps"]:
             assert step["action"] is None
 
+    def test_config_carries_the_variant(self):
+        # #441 P1-1: the driver needs to know which audience it's rendering for
+        # so it can hide the sandbox-only "load everything" skip in the self
+        # variant (a real coach must never load fake demo athletes).
+        coach = _coach()
+        assert tour.build_config(coach, "sandbox")["variant"] == "sandbox"
+        assert tour.build_config(coach, "self")["variant"] == "self"
+
+
+class TestBuildConfigGotoReady:
+    """#441 P1-3: "Take me there" must not point at a page that'll bounce.
+
+    designer/deliver/results redirect back to the roster (an uncorrelated
+    flash + an infinite retry loop) when the coach has no plan / no logged
+    session yet. ``goto_ready`` mirrors the view's own redirect predicate — and
+    those view helpers are identity-blind, so the same flag works for both
+    variants. Steps that target the roster (welcome/profile/groups/finish)
+    never dead-end, so they're always ready.
+    """
+
+    def _goto(self, config, key):
+        return next(s for s in config["steps"] if s["key"] == key)["goto_ready"]
+
+    def test_sandbox_fresh_gates_the_data_dependent_gotos(self):
+        user = sandbox.create_sandbox()
+        config = tour.build_config(user, "sandbox")
+        assert self._goto(config, "designer") is False
+        assert self._goto(config, "deliver") is False
+        assert self._goto(config, "results") is False
+        assert self._goto(config, "agent") is False
+
+    def test_sandbox_full_demo_opens_the_gotos(self):
+        user = sandbox.create_sandbox()
+        demo.load_demo(user)
+        config = tour.build_config(user, "sandbox")
+        assert self._goto(config, "designer") is True
+        assert self._goto(config, "deliver") is True
+        assert self._goto(config, "results") is True
+        assert self._goto(config, "agent") is True
+
+    def test_roster_targeted_steps_are_always_ready(self):
+        user = sandbox.create_sandbox()
+        config = tour.build_config(user, "sandbox")
+        for key in ("welcome", "profile", "groups", "finish"):
+            assert self._goto(config, key) is True
+
+    def test_self_plan_opens_designer_deliver_agent_but_not_results(self):
+        coach = _coach()
+        link = CoachAthlete.add_self(coach)
+        link.create_plan()
+        config = tour.build_config(coach, "self")
+        assert self._goto(config, "designer") is True
+        assert self._goto(config, "deliver") is True
+        assert self._goto(config, "agent") is True
+        # No logged session yet → results still bounces.
+        assert self._goto(config, "results") is False
+
 
 class TestVariantFor:
     def test_sandbox_coach_is_sandbox(self):
@@ -389,6 +446,41 @@ class TestBuildConfigSelfVariant:
 
         agent = next(s for s in config["steps"] if s["key"] == "agent")
         assert agent["action"] is None
+
+    def test_agent_locked_copy_without_a_self_link_points_at_welcome(self):
+        # #441 P1-5: the locked copy must name the actual blocker. No self-link
+        # yet → do the welcome step first (mirrors the designer step).
+        coach = _coach()
+        config = tour.build_config(coach, "self")
+        agent = next(s for s in config["steps"] if s["key"] == "agent")
+        assert agent["action"] is None
+        assert "welcome step" in agent["body"]
+
+    def test_agent_locked_copy_when_a_plan_exists_points_at_the_designer(self):
+        # #441 P1-5: step 3 already created this plan, so the old copy ("start a
+        # free trial ... once you have an active program") told the coach to go
+        # acquire what they already have. Point them at the block instead.
+        coach = _coach()
+        link = CoachAthlete.add_self(coach)
+        link.create_plan()
+        config = tour.build_config(coach, "self")
+        agent = next(s for s in config["steps"] if s["key"] == "agent")
+        assert agent["action"] is None
+        assert "Designer" in agent["body"]
+        assert "trial" not in agent["body"].lower()
+
+    def test_agent_locked_copy_when_out_of_allowance_mentions_a_trial(self):
+        # #441 P1-5: a self-link + no plan + exhausted free allowance is the one
+        # case where "start a trial" is the right advice.
+        coach = _coach()
+        CoachAthlete.add_self(coach)  # link, but its own plan stays empty
+        other_plan = PlanFactory(relationship=CoachAthleteFactory(coach=coach))
+        for _ in range(CoachSubscription.FREE_AGENT_ALLOWANCE):
+            AgentProposalBatchFactory(plan=other_plan, coach=coach)
+        config = tour.build_config(coach, "self")
+        agent = next(s for s in config["steps"] if s["key"] == "agent")
+        assert agent["action"] is None
+        assert "trial" in agent["body"].lower()
 
     def test_finish_has_no_signup_gate_and_anchors_the_invite_control(self):
         coach = _coach()
@@ -880,3 +972,117 @@ class TestTourSkipEndpoint:
         client.post(reverse("meso:tour_skip"))
 
         assert CoachProfile.objects.filter(user=user).exists()
+
+    def test_self_variant_completes_without_loading_demo(self, client):
+        # #441 P1-1: a real (self-variant) coach must never get the 5 fake demo
+        # athletes on their live roster from the skip shortcut (O5). The skip
+        # form is hidden in the self variant, but the endpoint guards it too.
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(reverse("meso:tour_skip"))
+
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:roster")
+        assert demo.has_demo(coach) is False
+        assert CoachProfile.objects.get(user=coach).tour_state["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# #441 P1-2: step 2 ("click into your profile") completion detection
+# ---------------------------------------------------------------------------
+
+
+class TestProfileStepAnchor:
+    def test_sandbox_profile_keeps_the_whole_list_spotlight(self):
+        # Maya (the athlete the copy names) can't be identified row-by-row at
+        # this step — the roster sorts by name so the first row is Devon, and
+        # her demo program only loads later — so the sandbox spotlights the
+        # whole list rather than mis-targeting a row.
+        coach = _coach()
+        config = tour.build_config(coach, "sandbox")
+        profile = next(s for s in config["steps"] if s["key"] == "profile")
+        assert profile["anchor"] == "roster-athlete-rows"
+
+    def test_self_profile_anchors_the_coachs_own_row(self):
+        # The self variant has exactly one row (the coach) — spotlight it.
+        coach = _coach()
+        config = tour.build_config(coach, "self")
+        profile = next(s for s in config["steps"] if s["key"] == "profile")
+        assert profile["anchor"] == "roster-athlete-row-first"
+
+    def test_roster_marks_the_self_row_for_the_spotlight(self, client):
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+        tour.start_tour(coach.coach_profile)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert 'data-tour="roster-athlete-row-first"' in body
+
+
+class TestAdvanceIfOnStep:
+    """``tour.advance_if_on_step`` — page-visit completion for the profile step.
+
+    A no-op unless the coach is actively touring AND parked exactly on the
+    named step; then it advances one step forward.
+    """
+
+    def test_advances_a_touring_coach_parked_on_the_step(self):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        tour.set_step(coach.coach_profile, 1)  # the profile step
+
+        assert tour.advance_if_on_step(coach, "profile") is True
+        assert tour.tour_status(coach)["step"] == 2
+
+    def test_noop_when_parked_on_a_different_step(self):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)  # step 0 (welcome)
+
+        assert tour.advance_if_on_step(coach, "profile") is False
+        assert tour.tour_status(coach)["step"] == 0
+
+    def test_noop_when_not_touring(self):
+        coach = _coach()  # never started → {} → not active
+
+        assert tour.advance_if_on_step(coach, "profile") is False
+
+    def test_noop_when_dismissed(self):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        tour.set_step(coach.coach_profile, 1)
+        tour.dismiss(coach.coach_profile)
+
+        assert tour.advance_if_on_step(coach, "profile") is False
+
+    def test_noop_without_a_coach_profile(self):
+        # Defensive: an athlete with no CoachProfile visiting a profile page.
+        user = UserFactory()
+        assert tour.advance_if_on_step(user, "profile") is False
+
+
+class TestProfileVisitAdvance:
+    """The auto-advance wired into ``AthleteProfileView`` (#441 P1-2)."""
+
+    def test_visiting_an_athlete_profile_advances_the_profile_step(self, client):
+        coach = _coach()
+        CoachAthlete.add_self(coach)  # the coach's own athlete profile
+        tour.start_tour(coach.coach_profile)
+        tour.set_step(coach.coach_profile, 1)  # the profile step
+        client.force_login(coach)
+
+        client.get(reverse("meso:athlete", args=[coach.pk]))
+
+        assert tour.tour_status(coach)["step"] == 2
+
+    def test_visiting_a_profile_off_the_profile_step_does_not_advance(self, client):
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+        tour.start_tour(coach.coach_profile)  # step 0 (welcome)
+        client.force_login(coach)
+
+        client.get(reverse("meso:athlete", args=[coach.pk]))
+
+        assert tour.tour_status(coach)["step"] == 0

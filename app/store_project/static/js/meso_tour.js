@@ -136,6 +136,32 @@
     );
   }
 
+  // #441 P1-1: the sandbox-only "load everything" skip must never render for
+  // a real (self-variant) coach — it would drop 5 fake demo athletes onto
+  // their live roster. Hidden whenever the variant isn't explicitly sandbox.
+  function shouldShowSkipLoad(config) {
+    return !!config && config.variant === "sandbox";
+  }
+
+  // #441 P1-3: show "Take me there" only when the browser isn't already on
+  // the step's page AND the server says the target will actually render — a
+  // step whose data doesn't exist yet redirects to the roster, an infinite
+  // bounce loop. A missing `goto_ready` means "no prerequisite" (the
+  // roster-targeted steps), so it defaults to ready.
+  function shouldShowGoto(step, currentPath) {
+    if (!step) return false;
+    if (step.goto_ready === false) return false;
+    return !isCurrentPage(step.url, currentPath);
+  }
+
+  // #441 P1-4: a zero-area rect means the anchor is hidden/collapsed (e.g.
+  // the deliver step's control inside Alpine's `x-show="!delivered"` once a
+  // delivery is sent). Treat it as "anchor gone" so the driver hides the
+  // spotlight instead of drawing a 12x12 hole at the viewport origin.
+  function isUsableRect(rect) {
+    return !!rect && (rect.width > 0 || rect.height > 0);
+  }
+
   // The card's accessible name (issue #430 Phase 4, a11y): `aria-label` on
   // the dialog and the text of the `aria-live` announcement on step change
   // both read "Step 3 of 8: Program Designer" — the step position plus its
@@ -233,7 +259,7 @@
     var step = config.steps[index];
     var total = config.steps.length;
     var action = resolveActionState(step);
-    var showGoto = !isCurrentPage(step.url, root.location.pathname);
+    var showGoto = shouldShowGoto(step, root.location.pathname);
     var csrf = escapeHtml(getCookie("csrftoken") || "");
 
     var dots = config.steps
@@ -358,14 +384,16 @@
       (isLastStep(index, total) ? "Finish" : "Next") +
       "</button>" +
       "</div>" +
-      '<form method="post" action="' +
-      escapeHtml(config.skip_url) +
-      '" class="meso-tour-skip-form">' +
-      '<input type="hidden" name="csrfmiddlewaretoken" value="' +
-      csrf +
-      '">' +
-      '<button type="submit" class="meso-tour-skip">Skip tour · load everything</button>' +
-      "</form>" +
+      (shouldShowSkipLoad(config)
+        ? '<form method="post" action="' +
+          escapeHtml(config.skip_url) +
+          '" class="meso-tour-skip-form">' +
+          '<input type="hidden" name="csrfmiddlewaretoken" value="' +
+          csrf +
+          '">' +
+          '<button type="submit" class="meso-tour-skip">Skip tour · load everything</button>' +
+          "</form>"
+        : "") +
       "</div>"
     );
   }
@@ -390,6 +418,10 @@
       return;
     }
     var rect = el.getBoundingClientRect();
+    if (!isUsableRect(rect)) {
+      spotlight.style.display = "none";
+      return;
+    }
     var pad = 6;
     spotlight.style.display = "block";
     spotlight.style.top = Math.max(rect.top - pad, 0) + "px";
@@ -559,6 +591,9 @@
       buildStepAnnouncement: buildStepAnnouncement,
       prefersReducedMotion: prefersReducedMotion,
       scrollBehaviorFor: scrollBehaviorFor,
+      shouldShowSkipLoad: shouldShowSkipLoad,
+      shouldShowGoto: shouldShowGoto,
+      isUsableRect: isUsableRect,
     };
   }
 })(typeof window !== "undefined" ? window : this);

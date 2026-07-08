@@ -78,6 +78,12 @@ STEPS = [
     {
         "key": "profile",
         "url_name": "meso:roster",
+        # Sandbox spotlights the whole list: the athlete the copy names (Maya)
+        # can't be picked out row-by-row here — the roster is sorted by name
+        # (Devon sorts first) and her demo program only loads at a later step,
+        # so there's no row-level signal for "Maya" yet (#441 P1-2). The self
+        # variant has exactly one row (the coach's own) and re-anchors to it
+        # for a precise spotlight.
         "anchor": "roster-athlete-rows",
         "sandbox": {
             "title": "One athlete, one record",
@@ -88,6 +94,7 @@ STEPS = [
             "title": "One athlete, one record",
             "body": "Click into your own profile to see the same contraindications, "
             "training history, and program view every athlete gets.",
+            "anchor": "roster-athlete-row-first",
         },
     },
     {
@@ -182,12 +189,16 @@ STEPS = [
             "body": "The agent reads your fatigue and adherence and drafts "
             "next week's adjustments. Draft your next block with it now.",
             "action_label": "Draft next block with AI",
-            # Shown when the action isn't offered (no self-link yet, no agent
-            # allowance left, or a working plan already exists) — one generic
-            # explanation rather than three separate reasons (keep it simple).
-            "locked_body": "The agent drafts your next training block once "
-            "you're on your own roster with an active program — start a free "
-            "trial if you're not seeing this yet.",
+            # Shown when the action isn't offered — one of three distinct
+            # blockers (#441 P1-5: the old single generic explanation didn't
+            # name the actual reason, so it could tell a coach who already had
+            # a plan to go get one).
+            "locked_body_no_link": "Add yourself as an athlete first (the "
+            "welcome step) — then the agent can draft a training block for you.",
+            "locked_body_has_plan": "Your block is already drafted — open it in "
+            "the Program Designer, where the agent can adapt it from here.",
+            "locked_body_no_allowance": "You're out of free AI drafts for now — "
+            "start a trial to keep drafting next blocks with the agent.",
         },
     },
     {
@@ -332,6 +343,33 @@ def complete(profile):
     return profile.tour_state
 
 
+def advance_if_on_step(user, step_key):
+    """Auto-advance a touring coach off ``step_key`` on a page visit (#441 P1-2).
+
+    The button-less ``profile`` step has no data action to flip a
+    ``loaded`` flag — it completes when the coach actually opens an athlete
+    profile, so the server advances the tour when that visit happens
+    (``AthleteProfileView``). A strict no-op unless the coach is *actively*
+    touring (status ``active`` — not dismissed/completed/never-started)
+    **and** parked exactly on ``step_key``: revisiting the page later, or
+    visiting while parked elsewhere, does nothing. Advances one step and
+    records the ``advanced`` funnel event (mirroring ``tour_state``'s
+    goto/advance path). Returns whether it advanced.
+    """
+    profile = CoachProfile.objects.filter(user=user).first()
+    if profile is None:
+        return False
+    state = profile.tour_state or {}
+    if state.get("status") != "active":
+        return False
+    current = _clamp(state.get("step", 0))
+    if STEPS[current]["key"] != step_key or current >= len(STEPS) - 1:
+        return False
+    set_step(profile, current + 1)
+    record_advanced(user, variant_for(user), STEPS[current + 1]["key"])
+    return True
+
+
 def _segment_loaded(user, segment):
     """Whether ``segment``'s data already exists for ``user`` (O7), or ``None``."""
     predicate = _HAS_PREDICATES.get(segment)
@@ -427,14 +465,18 @@ def _self_step_fields(step, ctx):
         else:
             body = spec["locked_body"]
     elif key == "agent":
-        if ctx["has_self_link"] and ctx["can_use_agent"] and not ctx["has_plan"]:
+        if not ctx["has_self_link"]:
+            body = spec["locked_body_no_link"]
+        elif ctx["has_plan"]:
+            body = spec["locked_body_has_plan"]
+        elif not ctx["can_use_agent"]:
+            body = spec["locked_body_no_allowance"]
+        else:
             action = {
                 "url": ctx["plan_create_url"],
                 "label": spec["action_label"],
                 "fields": {"draft": "agent"},
             }
-        else:
-            body = spec["locked_body"]
 
     return {
         "title": title,
@@ -442,6 +484,38 @@ def _self_step_fields(step, ctx):
         "anchor": anchor,
         "action": action,
         "loaded": loaded,
+    }
+
+
+def _goto_ready_map(user):
+    """Per-step "Take me there" readiness — does the target render, or bounce?
+
+    designer/deliver/results redirect back to the roster (an uncorrelated
+    flash, then the tour re-offers the same dead-end link — the #441 bounce
+    loop) until the coach has a plan / a logged session. Gate the link on
+    the exact predicate each view uses; those helpers are identity-blind,
+    so one map serves both variants. Steps that target the roster aren't in
+    the map (``build_config`` defaults them to ready — the roster never
+    dead-ends).
+
+    Deferred import: ``views`` imports this module at the top level, so the
+    reverse import must happen at call time (both are loaded once a request
+    builds a config).
+    """
+    from .models import Plan
+    from .views import _coach_latest_logged_session
+    from .views import _coach_working_plan
+
+    has_editable_plan = (
+        _coach_working_plan(user, plans=Plan.objects.editable_by(user)) is not None
+    )
+    has_working_plan = _coach_working_plan(user) is not None
+    has_logged_session = _coach_latest_logged_session(user) is not None
+    return {
+        "designer": has_editable_plan,
+        "agent": has_editable_plan,
+        "deliver": has_working_plan,
+        "results": has_logged_session,
     }
 
 
@@ -462,6 +536,7 @@ def build_config(user, variant):
         return None
     state = profile.tour_state or {}
     self_ctx = _self_context(user) if variant == "self" else None
+    goto_map = _goto_ready_map(user)
     steps = []
     for step in STEPS:
         fields = (
@@ -481,10 +556,12 @@ def build_config(user, variant):
                 "signup_gate": fields.get("signup_gate", False),
                 "action": fields.get("action"),
                 "loaded": fields.get("loaded"),
+                "goto_ready": goto_map.get(step["key"], True),
             }
         )
     return {
         "steps": steps,
+        "variant": variant,
         "step": _clamp(state.get("step", 0)),
         "status": state.get("status", "active"),
         "state_url": reverse("meso:tour_state"),
