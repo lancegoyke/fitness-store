@@ -994,20 +994,24 @@ class TestTourSkipEndpoint:
 
 
 class TestProfileStepAnchor:
-    def test_profile_step_anchors_the_first_row_not_the_whole_list(self):
-        # The spotlight named the whole roster list; re-anchor it to the single
-        # row the copy actually names.
-        profile_step = next(s for s in tour.STEPS if s["key"] == "profile")
-        assert profile_step["anchor"] == "roster-athlete-row-first"
-
-    def test_config_resolves_the_new_anchor_in_both_variants(self):
+    def test_sandbox_profile_keeps_the_whole_list_spotlight(self):
+        # Maya (the athlete the copy names) can't be identified row-by-row at
+        # this step — the roster sorts by name so the first row is Devon, and
+        # her demo program only loads later — so the sandbox spotlights the
+        # whole list rather than mis-targeting a row.
         coach = _coach()
-        for variant in ("sandbox", "self"):
-            config = tour.build_config(coach, variant)
-            profile = next(s for s in config["steps"] if s["key"] == "profile")
-            assert profile["anchor"] == "roster-athlete-row-first"
+        config = tour.build_config(coach, "sandbox")
+        profile = next(s for s in config["steps"] if s["key"] == "profile")
+        assert profile["anchor"] == "roster-athlete-rows"
 
-    def test_roster_marks_the_first_athlete_row(self, client):
+    def test_self_profile_anchors_the_coachs_own_row(self):
+        # The self variant has exactly one row (the coach) — spotlight it.
+        coach = _coach()
+        config = tour.build_config(coach, "self")
+        profile = next(s for s in config["steps"] if s["key"] == "profile")
+        assert profile["anchor"] == "roster-athlete-row-first"
+
+    def test_roster_marks_the_self_row_for_the_spotlight(self, client):
         coach = _coach()
         CoachAthlete.add_self(coach)
         tour.start_tour(coach.coach_profile)

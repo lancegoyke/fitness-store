@@ -93,7 +93,7 @@
           </div>
           <div data-tour="roster-athlete-rows">
             {% for a in athletes %}
-              <a class="meso-row" href="{% url 'meso:athlete' a.id %}"{% if forloop.first %} data-tour="roster-athlete-row-first"{% endif %}>
+              <a class="meso-row" href="{% url 'meso:athlete' a.id %}"{% if a.is_self %} data-tour="roster-athlete-row-first"{% endif %}>
                 <div class="meso-avatar {% if a.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ a.initials }}</div>
                 <div style="min-width:0;">
                   <div class="meso-row-name">{{ a.name }}</div>

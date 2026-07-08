@@ -78,7 +78,13 @@ STEPS = [
     {
         "key": "profile",
         "url_name": "meso:roster",
-        "anchor": "roster-athlete-row-first",
+        # Sandbox spotlights the whole list: the athlete the copy names (Maya)
+        # can't be picked out row-by-row here — the roster is sorted by name
+        # (Devon sorts first) and her demo program only loads at a later step,
+        # so there's no row-level signal for "Maya" yet (#441 P1-2). The self
+        # variant has exactly one row (the coach's own) and re-anchors to it
+        # for a precise spotlight.
+        "anchor": "roster-athlete-rows",
         "sandbox": {
             "title": "One athlete, one record",
             "body": "Click into Maya to see her contraindications, training "
@@ -88,6 +94,7 @@ STEPS = [
             "title": "One athlete, one record",
             "body": "Click into your own profile to see the same contraindications, "
             "training history, and program view every athlete gets.",
+            "anchor": "roster-athlete-row-first",
         },
     },
     {
