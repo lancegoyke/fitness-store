@@ -415,13 +415,13 @@ export function MesoTable(props: MesoTableProps) {
                               ) : (
                                 <>
                                   <GridCellEditor cell={cell} unit={unit} onPatchCell={onPatchCell} />
-                                  {cell.swap_name && (
+                                  {cell.swap_display && (
                                     <span
                                       className="meso-table-swap-badge"
                                       data-testid={`cell-swap-${cell.prescription_id}`}
-                                      title={"Swapped for " + cell.swap_name + " this week"}
+                                      title={"Swapped for " + cell.swap_display + " this week"}
                                     >
-                                      {cell.swap_name}
+                                      {cell.swap_display}
                                     </span>
                                   )}
                                 </>

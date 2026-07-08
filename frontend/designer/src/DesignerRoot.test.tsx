@@ -158,6 +158,7 @@ function gridPayload(overrides: Record<string, unknown> = {}) {
                 skipped: false,
                 swap_name: "",
                 swap_exercise_id: null,
+                swap_display: "",
               },
             },
           },
@@ -217,13 +218,25 @@ describe("hydration: #meso-grid-data / P1 table view default", () => {
   it("switching the main view refetches the newly-activated view's data source, so neither view shows stale state", async () => {
     // The table (gridState) and "This week" (planData) are two sibling data
     // owners — an edit made in one must not leave the other showing stale
-    // server state after the coach switches back to it.
+    // server state after the coach switches back to it. The grid's CURRENT
+    // week (id 2) is deliberately different from planData's own viewedWeekId
+    // (id 1, from planPayload's `viewing: 1`) — reactivating "This week" must
+    // target the GRID's current week (the table may have removed the week
+    // planData last viewed), not planData's possibly-stale/deleted one.
     const user = userEvent.setup();
     jsonScript("meso-plan-data", planPayload());
     jsonScript("meso-chat-thread", []);
     csrfSpan();
     jsonScript("meso-designer-flags", flagsPayload());
-    jsonScript("meso-grid-data", gridPayload());
+    jsonScript(
+      "meso-grid-data",
+      gridPayload({
+        weeks: [
+          { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, current: false, delivered_at: null },
+          { id: 2, index: 1, label: "Wk 2", phase: "Accum", deload: false, current: true, delivered_at: null },
+        ],
+      }),
+    );
 
     const weekReply = {
       ok: true,
@@ -235,11 +248,19 @@ describe("hydration: #meso-grid-data / P1 table view default", () => {
           exercises: [{ id: 9, name: "Squat", sets: "3", reps: "5", load: "100", load_type: "abs" }],
         },
       ],
-      weeks: [{ id: 1, index: 1, label: "Wk 1", current: true }],
+      weeks: [{ id: 2, index: 2, label: "Wk 2", current: true }],
       phases: [{ name: "Hypertrophy", weeks: "4 wk", state: "current" }],
-      viewing: 1,
+      viewing: 2,
     };
-    const gridReply = { ok: true, ...gridPayload() };
+    const gridReply = {
+      ok: true,
+      ...gridPayload({
+        weeks: [
+          { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, current: false, delivered_at: null },
+          { id: 2, index: 1, label: "Wk 2", phase: "Accum", deload: false, current: true, delivered_at: null },
+        ],
+      }),
+    };
     const fetchMock = vi.fn((url: string) => {
       const body = url.includes("/grid/") ? gridReply : weekReply;
       return Promise.resolve({ ok: true, status: 200, json: async () => body });
@@ -251,7 +272,8 @@ describe("hydration: #meso-grid-data / P1 table view default", () => {
     expect(fetchMock).not.toHaveBeenCalled(); // no refetch on initial mount
 
     await user.click(screen.getByText("This week"));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/week/1/"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/week/2/"));
+    expect(fetchMock).not.toHaveBeenCalledWith("/meso/api/plan/7/week/1/");
 
     await user.click(screen.getByText("Table"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/"));

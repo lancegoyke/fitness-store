@@ -284,7 +284,14 @@ export function DesignerRoot() {
       if (v === "table") {
         void gridState.refetchGrid();
       } else {
-        void planData.reloadWeek();
+        // Reactivate on the grid's current week — the week planData last
+        // viewed may have been removed in the table (reloadWeek(viewedWeekId)
+        // would 404 and strand a deleted week). Falls back to planData's own
+        // viewed week when there's no grid.
+        const target = gridState.grid
+          ? gridState.grid.weeks.find((w) => w.current)?.id ?? gridState.grid.weeks[0]?.id ?? null
+          : null;
+        void planData.reloadWeek(target ?? undefined);
       }
       setView(v);
     },

@@ -165,6 +165,11 @@ export interface GridCell {
   skipped: boolean;
   swap_name: string;
   swap_exercise_id: number | null;
+  /** Resolved one-week swap display name: `swap_name` if free-text, else the
+   * swapped catalog exercise's name, else "" (no swap). A catalog-only swap
+   * (swap_exercise_id set, swap_name blank) needs this to render a badge —
+   * swap_name alone is blank for that case. */
+  swap_display: string;
 }
 
 export interface GridRow {

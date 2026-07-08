@@ -308,6 +308,38 @@ describe("reloadWeek", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  it("GETs an explicit target week instead of the currently-viewed week when given one", async () => {
+    // Guards against reactivating on a week that's been deleted elsewhere
+    // (e.g. the table removed the week planData last viewed) — the caller
+    // can hand reloadWeek a different, still-live target instead.
+    const { result } = setup({ viewing: 3 });
+    const data = {
+      ok: true,
+      program: [day({ id: 20, name: "Upper" })],
+      weeks: [week({ id: 5, label: "Wk 5", current: true })],
+      phases: [phase()],
+      viewing: 5,
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(res(data)) as unknown as typeof fetch;
+    await act(async () => {
+      await result.current.reloadWeek(5);
+    });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(url).toBe("/meso/api/plan/7/week/5/");
+    expect(opts).toBeUndefined();
+    expect(result.current.program[0]?.id).toBe(20);
+  });
+
+  it("is a no-op when explicitly given a null/undefined target and there is no viewed week", async () => {
+    const { result } = setup({ viewing: null });
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+    await act(async () => {
+      await result.current.reloadWeek(undefined);
+    });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it("leaves state unchanged and console.errors on a failed fetch", async () => {
     const { result } = setup({ viewing: 1, program: [day({ id: 99 })] });
     vi.spyOn(console, "error").mockImplementation(() => {});

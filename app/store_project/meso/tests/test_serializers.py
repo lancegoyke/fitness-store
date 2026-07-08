@@ -653,6 +653,7 @@ class TestSerializeMesocycleGrid:
             "skipped": False,
             "swap_name": "",
             "swap_exercise_id": None,
+            "swap_display": "",
         }
 
     def test_deleted_week_is_excluded(self):
@@ -700,9 +701,41 @@ class TestSerializeMesocycleGrid:
         swapped_cell = squat["cells"][str(f.week2.pk)]
         assert swapped_cell["swap_name"] == "Front Squat"
         assert swapped_cell["swap_exercise_id"] == substitute.pk
+        # Free-text swap_name wins over the catalog swap_exercise for display.
+        assert swapped_cell["swap_display"] == "Front Squat"
         # The untouched week still reads no swap.
         assert squat["cells"][str(f.week1.pk)]["swap_name"] == ""
         assert squat["cells"][str(f.week1.pk)]["swap_exercise_id"] is None
+        assert squat["cells"][str(f.week1.pk)]["swap_display"] == ""
+
+    def test_swap_display_is_free_text_swap_name_when_set(self):
+        f = _build_grid_meso()
+        f.squat_cell2.swap_name = "Front Squat"
+        f.squat_cell2.save(update_fields=["swap_name"])
+        result = serialize_mesocycle_grid(f.meso)
+        squat = result["days"][0]["rows"][0]
+        cell = squat["cells"][str(f.week2.pk)]
+        assert cell["swap_display"] == "Front Squat"
+
+    def test_swap_display_falls_back_to_swap_exercise_name_for_a_catalog_only_swap(
+        self,
+    ):
+        f = _build_grid_meso()
+        substitute = ExerciseFactory(name="Hack Squat")
+        f.squat_cell2.swap_exercise = substitute
+        f.squat_cell2.swap_name = ""
+        f.squat_cell2.save(update_fields=["swap_exercise", "swap_name"])
+        result = serialize_mesocycle_grid(f.meso)
+        squat = result["days"][0]["rows"][0]
+        cell = squat["cells"][str(f.week2.pk)]
+        # A catalog-only swap (no free-text swap_name) must still surface a
+        # display name — this is the P1 table's "no visible badge" gap: the
+        # coach couldn't tell a catalog swap was active.
+        assert cell["swap_display"] == "Hack Squat"
+        assert cell["swap_exercise_id"] == substitute.pk
+        assert cell["swap_name"] == ""
+        # The ROW identity is still block-wide, unaffected by the swap.
+        assert squat["name"] == "Back Squat"
 
     def test_history_reuses_serialize_plan_history(self):
         f = _build_grid_meso()

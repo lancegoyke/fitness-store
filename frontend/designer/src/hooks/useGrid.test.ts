@@ -35,6 +35,7 @@ function cell(overrides: Partial<GridCell> = {}): GridCell {
     skipped: false,
     swap_name: "",
     swap_exercise_id: null,
+    swap_display: "",
     ...overrides,
   };
 }

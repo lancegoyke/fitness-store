@@ -989,11 +989,13 @@ def serialize_mesocycle_grid(mesocycle):
 
     # One query for every live cell in the block, grouped by (slot, week) so
     # each row's dense ``cells`` map is built without a per-row lookup.
+    # ``select_related("swap_exercise")`` lets swap_display resolve a
+    # catalog-only swap's name below without a per-cell query.
     cells_by_key = {
         (cell.exercise_slot_id, cell.week_id): cell
         for cell in models.Prescription.objects.filter(
             exercise_slot_id__in=exercise_slot_ids, week_id__in=week_ids
-        )
+        ).select_related("swap_exercise")
     }
 
     days = []
@@ -1005,6 +1007,16 @@ def serialize_mesocycle_grid(mesocycle):
                 cell = cells_by_key.get((exercise_slot.pk, week.pk))
                 if cell is None:
                     continue
+                # The resolved one-week swap display name: free-text
+                # swap_name if set, else the swapped catalog exercise's name,
+                # else "" (no swap) — the table needs this to show a badge
+                # for catalog-only swaps too (swap_name blank).
+                if cell.swap_name:
+                    swap_display = cell.swap_name
+                elif cell.swap_exercise_id:
+                    swap_display = cell.swap_exercise.name
+                else:
+                    swap_display = ""
                 cells[str(week.pk)] = {
                     "prescription_id": cell.pk,
                     "sets": cell.sets,
@@ -1017,6 +1029,7 @@ def serialize_mesocycle_grid(mesocycle):
                     "skipped": cell.skipped,
                     "swap_name": cell.swap_name,
                     "swap_exercise_id": cell.swap_exercise_id,
+                    "swap_display": swap_display,
                 }
             rows.append(
                 {

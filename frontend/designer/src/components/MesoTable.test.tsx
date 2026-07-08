@@ -35,6 +35,7 @@ function cell(overrides: Partial<GridCell> = {}): GridCell {
     skipped: false,
     swap_name: "",
     swap_exercise_id: null,
+    swap_display: "",
     ...overrides,
   };
 }
@@ -208,13 +209,55 @@ describe("cells", () => {
       <MesoTable
         {...baseProps({
           grid: grid({
-            days: [day({ rows: [row({ cells: { "1": cell({ swap_name: "Leg Press", swap_exercise_id: 77 }) } })] })],
+            days: [
+              day({
+                rows: [
+                  row({
+                    cells: {
+                      "1": cell({ swap_name: "Leg Press", swap_exercise_id: 77, swap_display: "Leg Press" }),
+                    },
+                  }),
+                ],
+              }),
+            ],
           }),
         })}
       />,
     );
     expect(screen.getByTestId("cell-swap-100")).toHaveTextContent("Leg Press");
     expect(screen.getByTestId("cell-sets-100")).toBeInTheDocument();
+  });
+
+  it("renders the swap badge for a catalog-only swap (swap_name blank, swap_display resolved)", () => {
+    // A catalog swap (swap_exercise_id set) with no free-text swap_name is a
+    // real gap otherwise: the old `cell.swap_name` gate would render NO badge
+    // even though the backend's delivery/logging use the substitute exercise.
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({
+            days: [
+              day({
+                rows: [
+                  row({
+                    cells: {
+                      "1": cell({ swap_name: "", swap_exercise_id: 77, swap_display: "Hack Squat" }),
+                    },
+                  }),
+                ],
+              }),
+            ],
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("cell-swap-100")).toHaveTextContent("Hack Squat");
+    expect(screen.getByTestId("cell-sets-100")).toBeInTheDocument();
+  });
+
+  it("renders no swap badge for a plain cell (no swap_display)", () => {
+    render(<MesoTable {...baseProps()} />);
+    expect(screen.queryByTestId("cell-swap-100")).not.toBeInTheDocument();
   });
 });
 
