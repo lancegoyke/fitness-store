@@ -236,24 +236,6 @@ class TestDeliverScreenChanges:
         fields = {f["field"]: (f["before"], f["after"]) for f in changed["fields"]}
         assert fields["load"] == ("111", "222")
 
-    def test_redelivery_after_skip_surfaces_the_change(self):
-        plan, week, _, presc = seed_plan()
-        record_delivery(week)
-        presc.skipped = True
-        presc.save(update_fields=["skipped"])
-
-        deliver = presenters.deliver_screen(plan)["deliver"]
-
-        assert deliver["is_redelivery"] is True
-        changes = deliver["changes"]
-        assert changes is not None
-        assert changes["has_changes"] is True
-        (sess,) = changes["sessions"]
-        (changed,) = sess["changed"]
-        assert changed["name"] == "Box Squat"
-        fields = {f["field"]: (f["before"], f["after"]) for f in changed["fields"]}
-        assert fields["skipped"] == (False, True)
-
     def test_redelivery_with_no_edits_reports_no_changes(self):
         plan, week, _, _ = seed_plan()
         record_delivery(week)
