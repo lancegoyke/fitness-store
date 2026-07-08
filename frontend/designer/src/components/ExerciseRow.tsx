@@ -74,7 +74,11 @@ export function ExerciseRow(props: ExerciseRowProps) {
     onOneRmCancel,
   } = props;
 
-  const showOneRm = !isGroup && ex.load_type === "pct";
+  // P2 one-week exceptions: a skipped row has no this-week value to show a
+  // %1RM badge/editor for (mirrors MesoTable.tsx hiding GridCellEditor for a
+  // skipped cell) — folding the check in here keeps the tags-row JSX below
+  // untouched rather than threading a second condition through it.
+  const showOneRm = !isGroup && ex.load_type === "pct" && !ex.skipped;
 
   // Phase 4 (dnd-kit reordering): the row itself is a sortable item (so
   // dragging it repositions via CSS.Transform), but the drag LISTENERS are
@@ -259,79 +263,96 @@ export function ExerciseRow(props: ExerciseRowProps) {
         </div>
       </div>
 
-      <div className="meso-ex-setsreps">
-        <input
-          className="meso-cell meso-num-input meso-num-input--sets"
-          data-testid={`exercise-sets-${ex.id}`}
-          data-grid-cell={gridCellDomKey(ex.id, "sets")}
-          aria-label={cellAriaLabel(ex.name, "sets")}
-          value={ex.sets}
-          onChange={(e) => changed("sets", e.target.value)}
-          onBlur={commitIfDirty}
-          {...gridCellBindings("sets")}
-        />
-        <span className="meso-x-sep">×</span>
-        <input
-          className="meso-cell meso-num-input meso-num-input--reps"
-          data-testid={`exercise-reps-${ex.id}`}
-          data-grid-cell={gridCellDomKey(ex.id, "reps")}
-          aria-label={cellAriaLabel(ex.name, "reps")}
-          value={ex.reps}
-          onChange={(e) => changed("reps", e.target.value)}
-          onBlur={commitIfDirty}
-          {...gridCellBindings("reps")}
-        />
-      </div>
+      {ex.skipped ? (
+        // P2 one-week exceptions: this week's Prescription is skipped (not
+        // trained) — mirrors MesoTable.tsx's non-editable em-dash for a
+        // skipped GridCell. No sets/reps/load/rpe/note inputs, no load-type
+        // toggle: there's no this-week value to edit. gridNav's roving
+        // tabIndex/focus restoration simply finds no [data-grid-cell] for
+        // these columns on this row and no-ops (see useGridNav's optional
+        // `?.focus()`) rather than crashing.
+        <div className="meso-ex-skipped-cells">
+          <span className="meso-table-skipped" data-testid={`week-row-skipped-${ex.id}`}>
+            —
+          </span>
+        </div>
+      ) : (
+        <>
+          <div className="meso-ex-setsreps">
+            <input
+              className="meso-cell meso-num-input meso-num-input--sets"
+              data-testid={`exercise-sets-${ex.id}`}
+              data-grid-cell={gridCellDomKey(ex.id, "sets")}
+              aria-label={cellAriaLabel(ex.name, "sets")}
+              value={ex.sets}
+              onChange={(e) => changed("sets", e.target.value)}
+              onBlur={commitIfDirty}
+              {...gridCellBindings("sets")}
+            />
+            <span className="meso-x-sep">×</span>
+            <input
+              className="meso-cell meso-num-input meso-num-input--reps"
+              data-testid={`exercise-reps-${ex.id}`}
+              data-grid-cell={gridCellDomKey(ex.id, "reps")}
+              aria-label={cellAriaLabel(ex.name, "reps")}
+              value={ex.reps}
+              onChange={(e) => changed("reps", e.target.value)}
+              onBlur={commitIfDirty}
+              {...gridCellBindings("reps")}
+            />
+          </div>
 
-      <div className="meso-ex-load">
-        <input
-          className="meso-cell meso-num-input meso-num-input--load"
-          data-testid={`exercise-load-${ex.id}`}
-          data-grid-cell={gridCellDomKey(ex.id, "load")}
-          aria-label={cellAriaLabel(ex.name, "load")}
-          value={ex.load}
-          onChange={(e) => changed("load", e.target.value)}
-          onBlur={commitIfDirty}
-          {...gridCellBindings("load")}
-        />
-        <button
-          type="button"
-          data-testid={`exercise-load-type-${ex.id}`}
-          className="meso-load-toggle"
-          title={ex.load_type === "pct" ? "Load is % of 1RM — tap for absolute" : "Load is absolute — tap for % of 1RM"}
-          aria-label={ex.load_type === "pct" ? "Load type: percent of 1RM" : "Load type: absolute"}
-          onClick={onToggleLoadType}
-        >
-          {loadSuffix(ex, unit)}
-        </button>
-      </div>
+          <div className="meso-ex-load">
+            <input
+              className="meso-cell meso-num-input meso-num-input--load"
+              data-testid={`exercise-load-${ex.id}`}
+              data-grid-cell={gridCellDomKey(ex.id, "load")}
+              aria-label={cellAriaLabel(ex.name, "load")}
+              value={ex.load}
+              onChange={(e) => changed("load", e.target.value)}
+              onBlur={commitIfDirty}
+              {...gridCellBindings("load")}
+            />
+            <button
+              type="button"
+              data-testid={`exercise-load-type-${ex.id}`}
+              className="meso-load-toggle"
+              title={ex.load_type === "pct" ? "Load is % of 1RM — tap for absolute" : "Load is absolute — tap for % of 1RM"}
+              aria-label={ex.load_type === "pct" ? "Load type: percent of 1RM" : "Load type: absolute"}
+              onClick={onToggleLoadType}
+            >
+              {loadSuffix(ex, unit)}
+            </button>
+          </div>
 
-      <div className="meso-ex-rpe">
-        <input
-          className="meso-cell meso-num-input meso-num-input--rpe"
-          data-testid={`exercise-rpe-${ex.id}`}
-          data-grid-cell={gridCellDomKey(ex.id, "rpe")}
-          aria-label={cellAriaLabel(ex.name, "rpe")}
-          value={ex.rpe ?? ""}
-          onChange={(e) => changed("rpe", e.target.value)}
-          onBlur={commitIfDirty}
-          {...gridCellBindings("rpe")}
-        />
-      </div>
+          <div className="meso-ex-rpe">
+            <input
+              className="meso-cell meso-num-input meso-num-input--rpe"
+              data-testid={`exercise-rpe-${ex.id}`}
+              data-grid-cell={gridCellDomKey(ex.id, "rpe")}
+              aria-label={cellAriaLabel(ex.name, "rpe")}
+              value={ex.rpe ?? ""}
+              onChange={(e) => changed("rpe", e.target.value)}
+              onBlur={commitIfDirty}
+              {...gridCellBindings("rpe")}
+            />
+          </div>
 
-      <div className="meso-ex-note">
-        <input
-          className="meso-note"
-          data-testid={`exercise-note-${ex.id}`}
-          data-grid-cell={gridCellDomKey(ex.id, "note")}
-          aria-label={cellAriaLabel(ex.name, "note")}
-          value={ex.note ?? ""}
-          placeholder="—"
-          onChange={(e) => changed("note", e.target.value)}
-          onBlur={commitIfDirty}
-          {...gridCellBindings("note")}
-        />
-      </div>
+          <div className="meso-ex-note">
+            <input
+              className="meso-note"
+              data-testid={`exercise-note-${ex.id}`}
+              data-grid-cell={gridCellDomKey(ex.id, "note")}
+              aria-label={cellAriaLabel(ex.name, "note")}
+              value={ex.note ?? ""}
+              placeholder="—"
+              onChange={(e) => changed("note", e.target.value)}
+              onBlur={commitIfDirty}
+              {...gridCellBindings("note")}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

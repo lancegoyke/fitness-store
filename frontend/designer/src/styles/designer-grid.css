@@ -317,6 +317,17 @@
 .meso-ex-note {
   min-width: 0;
 }
+/* P2 one-week exceptions: a skipped row replaces the setsreps/load/rpe/note
+   sub-columns (the last 4 of .meso-ex-row's 5 grid-template-columns) with a
+   single non-editable placeholder spanning the same space —
+   `.meso-table-skipped` supplies the muted/mono text look already used by
+   MesoTable.tsx's skipped cell. */
+.meso-ex-skipped-cells {
+  grid-column: 2 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .meso-num-input {
   font-family: "IBM Plex Mono", monospace;
   font-size: 13px;

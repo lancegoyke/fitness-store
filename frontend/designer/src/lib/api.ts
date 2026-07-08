@@ -51,6 +51,12 @@ export interface Exercise {
   /** Individual mode, %1RM rows only. */
   one_rm?: string;
   one_rm_source?: string;
+  /** P2 one-week exception: this week's Prescription was skipped (not
+   * trained). Serialized by `serialize_prescription`/`serialize_session`
+   * (serializers.py) on the single-week path — mirrors `GridCell.skipped`
+   * on the P1 table path. Optional/falsy by default so existing fixtures
+   * (which never set it) keep rendering the normal editable row. */
+  skipped?: boolean;
 }
 
 /** One training day (a Session) and its exercises. */
