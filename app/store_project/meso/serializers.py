@@ -267,6 +267,7 @@ _PRESCRIPTION_DIFF_FIELDS = (
     ("rpe", "RPE"),
     ("rest", "Rest"),
     ("note", "Note"),
+    ("skipped", "Skipped"),
     ("tag", "Tag"),
 )
 
