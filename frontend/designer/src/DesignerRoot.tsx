@@ -230,12 +230,25 @@ export function DesignerRoot() {
     setPendingDelete: planData.setPendingDelete,
     applyPlanData: planData.applyPlanData,
   });
+  // P1 (multi-week table): a self-contained sibling data owner — the grid is
+  // its own server contract (serialize_mesocycle_grid), not a slice of
+  // usePlanData's program/weeks/phases. Defined here (before useUndoRedo) so
+  // its undo/redo are in scope to override the keyboard shortcut below.
+  const gridState = useGrid({ planId, csrf, initialGrid: hydrated?.gridData ?? null });
+
   const undoRedo = useUndoRedo({
     planId,
     csrf,
     viewedWeekId: planData.viewedWeekId,
     history: planData.history,
     applyPlanData: planData.applyPlanData,
+    // P1: the table is a sibling data owner (gridState), not a slice of
+    // planData — the global Ctrl/Cmd+Z shortcut must follow whichever view
+    // is actually on screen, so route it to the grid's own undo/redo while
+    // the table view is active. Falls back to planData's undo/redo
+    // otherwise (unchanged behavior).
+    keyboardUndo: view === "table" ? gridState.undo : undefined,
+    keyboardRedo: view === "table" ? gridState.redo : undefined,
   });
   const overrideEditor = useOverrideEditor({
     planId,
@@ -267,11 +280,6 @@ export function DesignerRoot() {
     initialResumeUrl: hydrated?.initialResumeUrl ?? null,
   });
   const coachmarks = useCoachmarks();
-
-  // P1 (multi-week table): a self-contained sibling data owner — the grid is
-  // its own server contract (serialize_mesocycle_grid), not a slice of
-  // usePlanData's program/weeks/phases.
-  const gridState = useGrid({ planId, csrf, initialGrid: hydrated?.gridData ?? null });
 
   // P1: the table and the one-week view are two sibling data owners
   // (gridState vs planData) — switching the primary canvas view between them

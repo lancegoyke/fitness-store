@@ -300,6 +300,49 @@ describe("hydration: #meso-grid-data / P1 table view default", () => {
     expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=2");
   });
 
+  // Code-review nit: the global Ctrl/Cmd+Z window listener lives inside
+  // useUndoRedo and always called ITS OWN planData undo/redo — even while
+  // the table (gridState) is the active view, leaving the visible table
+  // stale after an undo. DesignerRoot now overrides useUndoRedo's keyboard
+  // handlers to the grid's own undo/redo while view === "table". Both
+  // planData.undo and gridState.undo POST to the same `/undo/` endpoint, so
+  // the distinguishing signal that the GRID path ran is the follow-up GET
+  // to `/grid/` (gridState.undo refetches the grid; planData's undo does
+  // not).
+  it("routes a Ctrl/Cmd+Z keyboard shortcut to the grid's own undo while the table view is active", async () => {
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript(
+      "meso-grid-data",
+      gridPayload({
+        history: { can_undo: true, can_redo: false, undo_label: "Edited Squat", redo_label: null },
+      }),
+    );
+
+    const gridReply = {
+      ok: true,
+      ...gridPayload({
+        history: { can_undo: false, can_redo: true, undo_label: null, redo_label: "Edited Squat" },
+      }),
+    };
+    const fetchMock = vi.fn(() => {
+      return Promise.resolve({ ok: true, status: 200, json: async () => gridReply });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DesignerRoot />);
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/undo/", expect.anything()),
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/"));
+  });
+
   it("console.errors and does not crash on malformed grid JSON, still rendering the week view", () => {
     jsonScript("meso-plan-data", planPayload());
     jsonScript("meso-chat-thread", []);
