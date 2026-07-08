@@ -36,6 +36,12 @@ export interface MesoTableProps {
   onSetCurrentWeek(weekId: Id): void;
   onUndo(): void;
   onRedo(): void;
+  // P2 exceptions: one-week skip/swap + numbers fill-across-weeks + a
+  // this-week-only add — CONTRACT.md "MesoTable.tsx — new props".
+  onSkipCell(cellId: number, skipped: boolean): void;
+  onSwapCell(cellId: number, swapName: string): void;
+  onFillAcrossWeeks(cellId: number): void;
+  onAddExerciseThisWeek(day: GridDay, weekId: number): void;
 }
 
 /** The single arm/confirm slot — mirrors usePlanData's PendingDelete
@@ -179,6 +185,135 @@ function GridCellEditor({ cell, unit, onPatchCell }: GridCellEditorProps) {
   );
 }
 
+interface CellActionsProps {
+  cell: GridCell;
+  busy: boolean;
+  onSkipCell(cellId: number, skipped: boolean): void;
+  onSwapCell(cellId: number, swapName: string): void;
+  onFillAcrossWeeks(cellId: number): void;
+}
+
+/** P2 exceptions control cluster for a non-skipped cell — skip / swap
+ * (toggle -> inline input -> save, mirroring RowNameEditor/GridCellEditor's
+ * commit-on-Enter idiom) / fill-across-weeks (arm -> confirm, mirroring the
+ * remove-exercise|day|week arm/confirm pattern above, but scoped locally to
+ * this one cell rather than the table-wide `armed` slot since several cells
+ * can each have their own swap input or fill-confirm open at once). */
+function CellActions({ cell, busy, onSkipCell, onSwapCell, onFillAcrossWeeks }: CellActionsProps) {
+  const [swapOpen, setSwapOpen] = useState(false);
+  const [swapValue, setSwapValue] = useState("");
+  const [fillArmed, setFillArmed] = useState(false);
+  const cellId = cell.prescription_id;
+
+  function openSwap() {
+    setSwapValue(cell.swap_name);
+    setSwapOpen(true);
+  }
+
+  function submitSwap() {
+    onSwapCell(cellId, swapValue);
+    setSwapOpen(false);
+  }
+
+  return (
+    <div className="meso-table-cell-actions">
+      <button
+        type="button"
+        data-testid={`cell-skip-${cellId}`}
+        className="meso-cell-action-btn"
+        disabled={busy}
+        aria-label="Skip this week"
+        title="Skip this week"
+        onClick={() => onSkipCell(cellId, true)}
+      >
+        Skip
+      </button>
+
+      {!swapOpen && (
+        <button
+          type="button"
+          data-testid={`cell-swap-btn-${cellId}`}
+          className="meso-cell-action-btn"
+          disabled={busy}
+          aria-label="Swap exercise this week"
+          title="Swap exercise this week"
+          onClick={openSwap}
+        >
+          Swap
+        </button>
+      )}
+      {swapOpen && (
+        <span className="meso-cell-swap-editor">
+          <input
+            className="meso-cell meso-swap-input"
+            data-testid={`cell-swap-input-${cellId}`}
+            aria-label="Swap exercise name"
+            value={swapValue}
+            onChange={(e) => setSwapValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submitSwap();
+              }
+            }}
+          />
+          <button
+            type="button"
+            data-testid={`cell-swap-save-${cellId}`}
+            className="meso-confirm-btn"
+            disabled={busy}
+            aria-label="Save swap"
+            onClick={submitSwap}
+          >
+            Save
+          </button>
+        </span>
+      )}
+
+      {!fillArmed && (
+        <button
+          type="button"
+          data-testid={`cell-fill-${cellId}`}
+          className="meso-cell-action-btn"
+          disabled={busy}
+          aria-label="Fill numbers across weeks"
+          title="Copy this week's numbers to every other week"
+          onClick={() => setFillArmed(true)}
+        >
+          Fill →
+        </button>
+      )}
+      {fillArmed && (
+        <span className="meso-confirm-pair">
+          <button
+            type="button"
+            data-testid={`cell-fill-confirm-${cellId}`}
+            className="meso-confirm-btn"
+            disabled={busy}
+            aria-label="Confirm fill across weeks"
+            onClick={() => {
+              onFillAcrossWeeks(cellId);
+              setFillArmed(false);
+            }}
+          >
+            Confirm?
+          </button>
+          <button
+            type="button"
+            data-testid={`cell-fill-cancel-${cellId}`}
+            className="meso-cancel-btn"
+            disabled={busy}
+            aria-label="Cancel fill across weeks"
+            onClick={() => setFillArmed(false)}
+          >
+            Cancel
+          </button>
+        </span>
+      )}
+    </div>
+  );
+}
+
 interface RowNameEditorProps {
   row: GridRow;
   onRename(exerciseSlotId: Id, name: string): void;
@@ -220,6 +355,57 @@ function RowNameEditor({ row, onRename }: RowNameEditorProps) {
   );
 }
 
+interface AddThisWeekControlProps {
+  day: GridDay;
+  weeks: GridWeek[];
+  busy: boolean;
+  onAddExerciseThisWeek(day: GridDay, weekId: number): void;
+}
+
+/** P2: alongside the existing block-wide "+ Add exercise" — a toggle that
+ * reveals a week picker (one button per live week), for adding an exercise
+ * to just one week instead of the whole block. Local open/closed state,
+ * mirroring CellActions' swap toggle above (independent per day). */
+function AddThisWeekControl({ day, weeks, busy, onAddExerciseThisWeek }: AddThisWeekControlProps) {
+  const [open, setOpen] = useState(false);
+  const slotId = day.session_slot_id;
+
+  return (
+    <div className="meso-table-add-this-week">
+      <button
+        type="button"
+        data-hover="add"
+        className="meso-add-row"
+        data-testid={`add-this-week-${slotId}`}
+        disabled={busy}
+        aria-label="Add exercise for this week only"
+        onClick={() => setOpen((v) => !v)}
+      >
+        + Add this week only
+      </button>
+      {open && (
+        <div className="meso-week-picker">
+          {weeks.map((week) => (
+            <button
+              type="button"
+              key={week.id}
+              data-testid={`add-this-week-${slotId}-${week.id}`}
+              className="meso-week-strip-btn"
+              disabled={busy}
+              onClick={() => {
+                onAddExerciseThisWeek(day, week.id);
+                setOpen(false);
+              }}
+            >
+              {week.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MesoTable(props: MesoTableProps) {
   const {
     grid,
@@ -237,6 +423,10 @@ export function MesoTable(props: MesoTableProps) {
     onSetCurrentWeek,
     onUndo,
     onRedo,
+    onSkipCell,
+    onSwapCell,
+    onFillAcrossWeeks,
+    onAddExerciseThisWeek,
   } = props;
 
   const [armed, setArmed] = useState<Armed>(null);
@@ -409,9 +599,22 @@ export function MesoTable(props: MesoTableProps) {
                           return (
                             <td key={week.id} data-testid={testId} className="meso-table-cell">
                               {cell.skipped ? (
-                                <span className="meso-table-skipped" data-testid={`cell-skipped-${cell.prescription_id}`}>
-                                  —
-                                </span>
+                                <>
+                                  <span className="meso-table-skipped" data-testid={`cell-skipped-${cell.prescription_id}`}>
+                                    —
+                                  </span>
+                                  <button
+                                    type="button"
+                                    data-testid={`cell-unskip-${cell.prescription_id}`}
+                                    className="meso-cell-action-btn"
+                                    disabled={busy}
+                                    aria-label="Unskip this week"
+                                    title="Unskip this week"
+                                    onClick={() => onSkipCell(cell.prescription_id, false)}
+                                  >
+                                    Unskip
+                                  </button>
+                                </>
                               ) : (
                                 <>
                                   <GridCellEditor cell={cell} unit={unit} onPatchCell={onPatchCell} />
@@ -422,8 +625,26 @@ export function MesoTable(props: MesoTableProps) {
                                       title={"Swapped for " + cell.swap_display + " this week"}
                                     >
                                       {cell.swap_display}
+                                      <button
+                                        type="button"
+                                        data-testid={`cell-swap-clear-${cell.prescription_id}`}
+                                        className="meso-swap-badge-clear"
+                                        disabled={busy}
+                                        aria-label="Clear swap"
+                                        title="Clear swap"
+                                        onClick={() => onSwapCell(cell.prescription_id, "")}
+                                      >
+                                        ×
+                                      </button>
                                     </span>
                                   )}
+                                  <CellActions
+                                    cell={cell}
+                                    busy={busy}
+                                    onSkipCell={onSkipCell}
+                                    onSwapCell={onSwapCell}
+                                    onFillAcrossWeeks={onFillAcrossWeeks}
+                                  />
                                 </>
                               )}
                             </td>
@@ -436,16 +657,24 @@ export function MesoTable(props: MesoTableProps) {
               </table>
             </div>
 
-            <button
-              type="button"
-              data-hover="add"
-              className="meso-add-row"
-              data-testid={`add-exercise-${day.session_slot_id}`}
-              disabled={busy}
-              onClick={() => onAddExercise(day)}
-            >
-              + Add exercise
-            </button>
+            <div className="meso-table-add-row-group">
+              <button
+                type="button"
+                data-hover="add"
+                className="meso-add-row"
+                data-testid={`add-exercise-${day.session_slot_id}`}
+                disabled={busy}
+                onClick={() => onAddExercise(day)}
+              >
+                + Add exercise
+              </button>
+              <AddThisWeekControl
+                day={day}
+                weeks={grid.weeks}
+                busy={busy}
+                onAddExerciseThisWeek={onAddExerciseThisWeek}
+              />
+            </div>
           </div>
         );
       })}

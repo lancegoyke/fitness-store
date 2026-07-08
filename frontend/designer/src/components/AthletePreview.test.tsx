@@ -66,6 +66,23 @@ describe("AthletePreview", () => {
     expect(done.innerHTML).not.toBe(undone.innerHTML);
   });
 
+  it("does not render a skipped exercise, but keeps a non-skipped one", () => {
+    const p = program();
+    p[0]!.exercises.push({
+      id: 3,
+      name: "Leg Curl",
+      sets: "3",
+      reps: "12",
+      load: "40",
+      load_type: "abs",
+      skipped: true,
+    });
+    render(<AthletePreview {...baseProps({ program: p })} />);
+    expect(screen.getByText("Back Squat")).toBeInTheDocument();
+    expect(screen.getByText("Leg Press")).toBeInTheDocument();
+    expect(screen.queryByText("Leg Curl")).not.toBeInTheDocument();
+  });
+
   it("only considers the first three exercises of the first day", () => {
     const p = program();
     p[0]!.exercises.push(

@@ -42,16 +42,22 @@ export function AthletePreview({
   const athleteDay = useMemo<AthleteExerciseRow[]>(() => {
     const day = program[0];
     if (!day) return [];
-    return day.exercises.slice(0, 3).map((x, xi) => {
-      const setN = parseInt(x.sets, 10) || 3;
-      const rows: AthleteSetRow[] = [];
-      for (let i = 0; i < setN; i++) {
-        const k = "a0-" + xi + "-" + i;
-        const target = x.reps + " × " + (numeric(x.load) ? x.load + (x.load_type === "pct" ? "%" : " " + unit) : x.load);
-        rows.push({ k, n: i + 1, target, done: !!checks[k] });
-      }
-      return { id: x.id, name: x.name, target: x.sets + "×" + x.reps, rows };
-    });
+    // A skipped exercise (P2 one-week exception) isn't trained this week — the
+    // real athlete surface filters these server-side, so the coach's preview
+    // must not show a lift the athlete won't actually see.
+    return day.exercises
+      .filter((x) => !x.skipped)
+      .slice(0, 3)
+      .map((x, xi) => {
+        const setN = parseInt(x.sets, 10) || 3;
+        const rows: AthleteSetRow[] = [];
+        for (let i = 0; i < setN; i++) {
+          const k = "a0-" + xi + "-" + i;
+          const target = x.reps + " × " + (numeric(x.load) ? x.load + (x.load_type === "pct" ? "%" : " " + unit) : x.load);
+          rows.push({ k, n: i + 1, target, done: !!checks[k] });
+        }
+        return { id: x.id, name: x.name, target: x.sets + "×" + x.reps, rows };
+      });
   }, [program, unit, checks]);
 
   const aTotal = athleteDay.reduce((acc, e) => acc + e.rows.length, 0);

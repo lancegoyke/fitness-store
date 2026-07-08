@@ -514,3 +514,219 @@ describe("refetchGrid", () => {
     expect(result.current.grid?.mesocycle.name).toBe("Block 1");
   });
 });
+
+// --- P2 exceptions: skip / swap / fill / add-this-week -------------------
+// These four verbs are STRUCTURAL (contract "useGrid.ts — new verbs"): each
+// awaits its POST then refetches the whole grid, sharing the same busyRef
+// guard as add/removeExercise|Day|Week — mirroring those existing specs.
+
+describe("skipCell", () => {
+  it("POSTs {skipped:true} to prescription/{cellId}/skip/, then refetches the grid", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true }))
+      .mockResolvedValueOnce(
+        res({ ok: true, ...grid({ days: [day({ rows: [row({ cells: { "1": cell({ skipped: true }) } })] })] }) }),
+      ) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.skipCell(100, true);
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/skip/");
+    expect(calls[0]![1].method).toBe("POST");
+    expect(JSON.parse(calls[0]![1].body as string)).toEqual({ skipped: true });
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.skipped).toBe(true);
+  });
+
+  it("unskip POSTs {skipped:false}", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true }))
+      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.skipCell(100, false);
+    });
+
+    expect(sentBody()).toEqual({ skipped: false });
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+  });
+});
+
+describe("swapCell", () => {
+  it('sends {swap_name} to prescription/{cellId}/swap/ for a non-blank name, then refetches', async () => {
+    const { result } = setup();
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true }))
+      .mockResolvedValueOnce(
+        res({
+          ok: true,
+          ...grid({
+            days: [
+              day({
+                rows: [row({ cells: { "1": cell({ swap_name: "Front Squat", swap_display: "Front Squat" }) } })],
+              }),
+            ],
+          }),
+        }),
+      ) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.swapCell(100, "Front Squat");
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/swap/");
+    expect(calls[0]![1].method).toBe("POST");
+    expect(JSON.parse(calls[0]![1].body as string)).toEqual({ swap_name: "Front Squat" });
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.swap_display).toBe("Front Squat");
+  });
+
+  it("sends {clear:true} for a blank name", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true }))
+      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.swapCell(100, "");
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/swap/");
+    expect(sentBody()).toEqual({ clear: true });
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+  });
+});
+
+describe("fillAcrossWeeks", () => {
+  it("POSTs {} to prescription/{cellId}/fill/, then refetches the grid", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true, filled: 2 }))
+      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.fillAcrossWeeks(100);
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/fill/");
+    expect(calls[0]![1].method).toBe("POST");
+    expect(sentBody()).toEqual({});
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+  });
+
+  it("flushes a pending cell autosave before POSTing fill/, so fill never races a stale value to the server", async () => {
+    // Codex P2: fill/ makes the server copy the source cell's ALREADY-STORED
+    // DB values to sibling weeks. If a coach edits then immediately fills,
+    // fill must wait for the edit's autosave POST to land first.
+    const { result } = setup();
+    let resolvePatch!: (v: unknown) => void;
+    const fetchMock = vi.fn();
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePatch = resolve;
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    // Kick off the cell autosave (fire-and-forget) — its POST is now in flight.
+    act(() => {
+      result.current.patchCell(100, { sets: "4" });
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Trigger fill while the autosave is still unresolved.
+    let fillDone!: Promise<void>;
+    act(() => {
+      fillDone = result.current.fillAcrossWeeks(100);
+    });
+
+    // fill is blocked on flushPendingWrites() — the fill/ POST must NOT have
+    // been sent yet, even though fillAcrossWeeks has already been called.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Now let the pending autosave land, queuing up fill's own POST + refetch.
+    fetchMock.mockResolvedValueOnce(res({ ok: true, filled: 2 }));
+    fetchMock.mockResolvedValueOnce(res({ ok: true, ...grid() }));
+
+    await act(async () => {
+      resolvePatch(res({ ok: true }));
+      await fillDone;
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/"); // the autosave
+    expect(fetchMock.mock.calls[1]![0]).toBe("/meso/api/plan/7/prescription/100/fill/"); // fill only after
+    expect(fetchMock.mock.calls[2]![0]).toBe("/meso/api/plan/7/grid/"); // then the refetch
+  });
+});
+
+describe("addExerciseThisWeek", () => {
+  it("POSTs {week_id} to session/{sessionId}/exercise/, then refetches the grid", async () => {
+    const initial = grid();
+    const { result } = setup(initial);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true }))
+      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.addExerciseThisWeek(initial.days[0]!, 2);
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![0]).toBe("/meso/api/plan/7/session/11/exercise/");
+    expect(calls[0]![1].method).toBe("POST");
+    expect(JSON.parse(calls[0]![1].body as string)).toEqual({ week_id: 2 });
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+  });
+});
+
+describe("concurrency guard covers the new P2 verbs", () => {
+  it("a concurrent call to a different structural verb while one is in flight is a no-op", async () => {
+    const { result } = setup();
+    let resolvePost!: (v: unknown) => void;
+    const fetchMock = vi.fn();
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePost = resolve;
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.skipCell(100, true);
+      second = result.current.swapCell(100, "Leg Press");
+    });
+
+    expect(result.current.busy).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the second call bailed before POSTing
+
+    fetchMock.mockResolvedValueOnce(res({ ok: true, ...grid() })); // the refetch GET
+
+    await act(async () => {
+      resolvePost(res({ ok: true }));
+      await first;
+      await second;
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2); // POST + GET only — no third/fourth call
+    expect(result.current.busy).toBe(false);
+  });
+});

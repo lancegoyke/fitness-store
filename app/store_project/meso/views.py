@@ -2340,6 +2340,44 @@ def prescription_delete(request, plan_id, pk):
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 
+def _new_block_wide_row(session, *, week_id_only=None):
+    """Create one ``ExerciseSlot`` + a starter cell for every live week (P0/P2).
+
+    Shared by ``session_add_exercise``'s two paths (unscoped "add exercise" and
+    the P2 ``week_id``-scoped "add this week"): both create the same block-wide
+    row — one ``ExerciseSlot`` on the day's ``SessionSlot`` plus one starter
+    ``Prescription`` cell per live week of the mesocycle — so the loop lives
+    here once. ``week_id_only`` is the P2 exception: when given, every created
+    cell is ``skipped=True`` except that week's (the new row trains only that
+    one week); when ``None`` (the plain unscoped add), every cell trains.
+    Returns ``(exercise_slot, cells_by_week_id)``.
+    """
+    slot = session.session_slot
+    next_order = (
+        slot.exercise_slots.filter(deleted_at__isnull=True).aggregate(m=Max("order"))[
+            "m"
+        ]
+        or 0
+    ) + 1
+    exercise_slot = ExerciseSlot.objects.create(
+        session_slot=slot, name="New exercise", order=next_order
+    )
+    cells_by_week = {}
+    for week in Week.objects.filter(
+        mesocycle=session.week.mesocycle, deleted_at__isnull=True
+    ):
+        skipped = week_id_only is not None and week.pk != week_id_only
+        cells_by_week[week.pk] = Prescription.objects.create(
+            exercise_slot=exercise_slot,
+            week=week,
+            sets="3",
+            reps="10",
+            rpe="7",
+            skipped=skipped,
+        )
+    return exercise_slot, cells_by_week
+
+
 @login_required
 @require_POST
 def session_add_exercise(request, plan_id, pk):
@@ -2350,6 +2388,15 @@ def session_add_exercise(request, plan_id, pk):
     cell on it for EVERY live week of the mesocycle — the new row appears as
     a blank cell across the whole block, not just the viewed week. The reply
     serializes the new slot's cell for the viewed session's own week.
+
+    An optional JSON ``week_id`` (P2 "add this week", issue #440) scopes the
+    new row to train only that one week: every created cell is
+    ``skipped=True`` except ``week_id``'s. ``week_id`` must resolve to a live
+    ``Week`` of THIS session's own mesocycle, or it's a 400 (a nonexistent or
+    foreign week is a bad reference, not a 404 — mirrors ``prescription_move``'s
+    ``session_id`` convention) — never silently falling back to the unscoped,
+    train-everywhere behavior. Omitting ``week_id`` entirely keeps the
+    unscoped behavior byte-identical to before P2.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -2361,27 +2408,31 @@ def session_add_exercise(request, plan_id, pk):
         deleted_at__isnull=True,
         week__deleted_at__isnull=True,
     )
-    with transaction.atomic():
-        slot = session.session_slot
-        next_order = (
-            slot.exercise_slots.filter(deleted_at__isnull=True).aggregate(
-                m=Max("order")
-            )["m"]
-            or 0
-        ) + 1
-        record_plan_action(plan, "Added exercise")
-        exercise_slot = ExerciseSlot.objects.create(
-            session_slot=slot, name="New exercise", order=next_order
-        )
-        cell = None
-        for week in Week.objects.filter(
-            mesocycle=session.week.mesocycle, deleted_at__isnull=True
-        ):
-            new_cell = Prescription.objects.create(
-                exercise_slot=exercise_slot, week=week, sets="3", reps="10", rpe="7"
+    week_id, bad = _body_week_id(request)
+    if bad is not None:
+        return bad
+    target_week = None
+    if week_id is not None:
+        target_week = Week.objects.filter(
+            pk=week_id, mesocycle=session.week.mesocycle, deleted_at__isnull=True
+        ).first()
+        if target_week is None:
+            return JsonResponse(
+                {"ok": False, "error": "week_id must be a live week of this block."},
+                status=400,
             )
-            if week.pk == session.week_id:
-                cell = new_cell
+    with transaction.atomic():
+        label = (
+            f"Added exercise (Week {target_week.index} only)"
+            if target_week is not None
+            else "Added exercise"
+        )
+        record_plan_action(plan, label)
+        exercise_slot, cells_by_week = _new_block_wide_row(
+            session, week_id_only=target_week.pk if target_week is not None else None
+        )
+        target_id = target_week.pk if target_week is not None else session.week_id
+        cell = cells_by_week.get(target_id)
         _touch_plan(plan)
     # Row-level reply + refreshed history (see prescription_patch).
     return JsonResponse(
@@ -3210,6 +3261,177 @@ def prescription_move(request, plan_id, pk):
                 ExerciseSlot.objects.filter(pk=row.pk).update(order=new_order)
         _touch_plan(plan)
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
+
+
+def _json_object_body(request):
+    """The request's JSON object body, tolerantly parsed (P2 exceptions, #440).
+
+    A real client always posts ``application/json`` — even a bodyless write
+    sets an explicit empty/`null` JSON body (mirrors ``apiPost``). A bodyless
+    or non-JSON POST (a bare ``client.post(url)`` with no ``data=``, or a
+    form/multipart body) carries no JSON payload at all, so it's treated as
+    ``{}`` rather than a parse error (same content-type guard as
+    ``_body_week_id``) — the multipart test client still sends a *non-empty*
+    trailing-boundary body for a bodyless post, so checking ``content_type``
+    first (not just "is the body truthy") is required. A *declared* JSON body
+    that fails to parse, or isn't an object, is a 400.
+    """
+    if request.content_type != "application/json" or not request.body:
+        return {}, None
+    try:
+        payload = json.loads(request.body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, JsonResponse({"ok": False, "error": "Malformed JSON."}, status=400)
+    if not isinstance(payload, dict):
+        return None, JsonResponse(
+            {"ok": False, "error": "Expected a JSON object."}, status=400
+        )
+    return payload, None
+
+
+@login_required
+@require_POST
+def prescription_skip(request, plan_id, pk):
+    """Toggle a cell's one-week ``skipped`` exception (P2 exceptions, issue #440).
+
+    Body ``{"skipped": <bool>}`` — required; a missing or non-bool value is a
+    400 ``{"ok": false, ...}`` rather than a silent no-op. Renders as the
+    grid's em-dash cell (``skipped=True``) without touching any other week's
+    cell or the block-shared ``ExerciseSlot``.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    cell = _cell_or_404(plan, pk)
+    payload, bad = _json_object_body(request)
+    if bad is not None:
+        return bad
+
+    skipped = payload.get("skipped")
+    if not isinstance(skipped, bool):
+        return JsonResponse(
+            {"ok": False, "error": "skipped must be a boolean."}, status=400
+        )
+
+    with transaction.atomic():
+        record_plan_action(
+            plan, f"Skipped {cell.name}" if skipped else f"Restored {cell.name}"
+        )
+        cell.skipped = skipped
+        cell.save(update_fields=["skipped"])
+        _touch_plan(plan)
+    return JsonResponse({"ok": True, "history": serialize_plan_history(plan)})
+
+
+@login_required
+@require_POST
+def prescription_swap(request, plan_id, pk):
+    """Set or clear a cell's one-week free-text swap (P2 exceptions, issue #440).
+
+    Body ``{"swap_name": "<str>"}`` sets a free-text substitute for just this
+    week (``.strip()``-ed; blank after stripping clears, same as
+    ``{"clear": true}``); over 255 chars is a 400. ``{"clear": true}`` clears
+    it outright. Either way ``swap_exercise`` is cleared — a catalog-linked
+    swap (``swap_exercise_id``) is a DEFERRED follow-up, not this endpoint.
+
+    TODO(P?): support a catalog ``swap_exercise_id`` swap alongside this
+    free-text one.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    cell = _cell_or_404(plan, pk)
+    payload, bad = _json_object_body(request)
+    if bad is not None:
+        return bad
+
+    clear = payload.get("clear") is True
+    name = ""
+    if not clear:
+        if "swap_name" not in payload:
+            return JsonResponse(
+                {"ok": False, "error": "swap_name or clear is required."}, status=400
+            )
+        raw_name = payload["swap_name"]
+        if not isinstance(raw_name, str):
+            return JsonResponse(
+                {"ok": False, "error": "swap_name must be a string."}, status=400
+            )
+        if len(raw_name) > 255:
+            return JsonResponse(
+                {"ok": False, "error": "swap_name is too long."}, status=400
+            )
+        name = raw_name.strip()
+        if not name:
+            clear = True  # blank after stripping clears, same as {"clear": true}
+
+    # The block-shared slot's name, not ``cell.name`` — that resolves THROUGH
+    # the very swap this label is describing setting/clearing.
+    slot_name = cell.exercise_slot.name
+    with transaction.atomic():
+        if clear:
+            record_plan_action(plan, f"Cleared swap on {slot_name}")
+            cell.swap_name = ""
+            cell.swap_exercise = None
+        else:
+            record_plan_action(plan, f"Swapped {slot_name} → {name}")
+            cell.swap_name = name
+            cell.swap_exercise = None
+        cell.save(update_fields=["swap_name", "swap_exercise"])
+        _touch_plan(plan)
+    return JsonResponse({"ok": True, "history": serialize_plan_history(plan)})
+
+
+# Numeric fields "fill across weeks" copies — mirrors PATCHABLE_FIELDS minus
+# ``load_type`` (an enum, not free text, but still a per-week number setting).
+_FILL_FIELDS = ["sets", "reps", "load", "load_type", "rpe", "rest", "note"]
+
+
+@login_required
+@require_POST
+def prescription_fill(request, plan_id, pk):
+    """Copy a cell's numeric fields to sibling weeks of the same row (P2, #440).
+
+    Body OPTIONAL ``{"week_ids": [<int>...]}`` — the target weeks; absent or
+    empty means every OTHER live week of this cell's ``exercise_slot``. Copies
+    only ``sets/reps/load/load_type/rpe/rest/note`` — never a target's
+    ``skipped``/``swap_*``, which stay whatever one-week exception they were.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    cell = _cell_or_404(plan, pk)
+    payload, bad = _json_object_body(request)
+    if bad is not None:
+        return bad
+
+    week_ids = payload.get("week_ids")
+    if week_ids is not None:
+        if not isinstance(week_ids, list) or not all(
+            isinstance(w, int) and not isinstance(w, bool) for w in week_ids
+        ):
+            return JsonResponse(
+                {"ok": False, "error": "week_ids must be a list of integers."},
+                status=400,
+            )
+
+    targets = Prescription.objects.filter(
+        exercise_slot_id=cell.exercise_slot_id, week__deleted_at__isnull=True
+    ).exclude(week_id=cell.week_id)
+    if week_ids:
+        targets = targets.filter(week_id__in=week_ids)
+    targets = list(targets)
+
+    with transaction.atomic():
+        record_plan_action(plan, f"Filled {cell.name} across weeks")
+        for target in targets:
+            for field in _FILL_FIELDS:
+                setattr(target, field, getattr(cell, field))
+            target.save(update_fields=_FILL_FIELDS)
+        _touch_plan(plan)
+    return JsonResponse(
+        {"ok": True, "filled": len(targets), "history": serialize_plan_history(plan)}
+    )
 
 
 @login_required

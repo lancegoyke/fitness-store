@@ -4,7 +4,11 @@
 // Cell edits (patchCell/renameExercise) are optimistic + fire-and-forget,
 // mirroring useAutosave's semantics (CONTRACT.md "useAutosave") — updated in
 // local state immediately, POSTed without being awaited by the caller, and
-// NOT rolled back on failure (only console.error'd), same as persistRow.
+// NOT rolled back on failure (only console.error'd), same as persistRow. Each
+// in-flight autosave POST is tracked in `pendingWritesRef` so fillAcrossWeeks
+// can flush (await) them before it fills — the fill endpoint copies the
+// source cell's already-committed DB values, so an in-flight edit must land
+// first or the fill can copy stale data (Codex P2).
 //
 // Structural verbs (add/remove day|week|exercise, set-current, undo/redo)
 // await their POST, then call refetchGrid() (a plain GET, mirroring
@@ -124,8 +128,18 @@ export function useGrid(options: UseGridOptions) {
   const busyRef = useRef(false);
   const [busy, setBusy] = useState(false);
 
+  // In-flight cell-autosave POSTs (patchCell/renameExercise are fire-and-
+  // forget). fillAcrossWeeks reads the source cell's already-stored DB values
+  // server-side, so it must flush these first or it can copy stale data to
+  // sibling weeks when a coach edits then immediately fills (Codex P2).
+  const pendingWritesRef = useRef<Set<Promise<unknown>>>(new Set());
+
   const adoptGridHistory = useCallback((data: GridHistoryCarrier) => {
     if (data && data.history) setHistory(data.history);
+  }, []);
+
+  const flushPendingWrites = useCallback(async () => {
+    await Promise.allSettled([...pendingWritesRef.current]);
   }, []);
 
   const refetchGrid = useCallback(async () => {
@@ -155,9 +169,11 @@ export function useGrid(options: UseGridOptions) {
   const patchCell = useCallback(
     (cellId: Id, patch: GridCellPatch) => {
       setGrid((prev) => (prev ? updateCellInGrid(prev, cellId, patch) : prev));
-      apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, patch, csrf)
+      const write = apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, patch, csrf)
         .then((data) => adoptGridHistory(data as GridHistoryCarrier))
         .catch((err) => console.error("Cell autosave failed", err));
+      pendingWritesRef.current.add(write);
+      write.finally(() => pendingWritesRef.current.delete(write));
     },
     [planId, csrf, adoptGridHistory],
   );
@@ -168,9 +184,11 @@ export function useGrid(options: UseGridOptions) {
       const cellId = renameTargetCellId(grid, row);
       if (cellId == null) return;
       setGrid((prev) => (prev ? updateRowNameInGrid(prev, exerciseSlotId, name) : prev));
-      apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, { name }, csrf)
+      const write = apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, { name }, csrf)
         .then((data) => adoptGridHistory(data as GridHistoryCarrier))
         .catch((err) => console.error("Rename exercise failed", err));
+      pendingWritesRef.current.add(write);
+      write.finally(() => pendingWritesRef.current.delete(write));
     },
     [grid, planId, csrf, adoptGridHistory],
   );
@@ -277,6 +295,73 @@ export function useGrid(options: UseGridOptions) {
     [planId, csrf, runStructural, refetchGrid],
   );
 
+  // --- P2 exceptions: skip / swap / fill / add-this-week -----------------
+  // Same STRUCTURAL shape as add/removeExercise|Day|Week above — the grid
+  // (not just one cell) can change shape/content in ways only the server
+  // knows (swap_display is server-resolved, add-this-week creates a new
+  // slot+cells) so these await their POST then refetch, sharing busyRef.
+
+  const skipCell = useCallback(
+    (cellId: number, skipped: boolean) =>
+      runStructural(async () => {
+        try {
+          await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/skip/`, { skipped }, csrf);
+        } catch (err) {
+          console.error("Skip cell failed", err);
+          return;
+        }
+        await refetchGrid();
+      }),
+    [planId, csrf, runStructural, refetchGrid],
+  );
+
+  const swapCell = useCallback(
+    (cellId: number, swapName: string) =>
+      runStructural(async () => {
+        const body = swapName.trim() ? { swap_name: swapName } : { clear: true };
+        try {
+          await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/swap/`, body, csrf);
+        } catch (err) {
+          console.error("Swap cell failed", err);
+          return;
+        }
+        await refetchGrid();
+      }),
+    [planId, csrf, runStructural, refetchGrid],
+  );
+
+  const fillAcrossWeeks = useCallback(
+    (cellId: number) =>
+      runStructural(async () => {
+        // Flush any in-flight cell autosave first — fill copies the source
+        // cell's ALREADY-STORED DB values server-side, so a just-edited cell
+        // must finish committing or the fill can copy stale data (Codex P2).
+        await flushPendingWrites();
+        try {
+          await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/fill/`, {}, csrf);
+        } catch (err) {
+          console.error("Fill across weeks failed", err);
+          return;
+        }
+        await refetchGrid();
+      }),
+    [planId, csrf, runStructural, refetchGrid, flushPendingWrites],
+  );
+
+  const addExerciseThisWeek = useCallback(
+    (day: GridDay, weekId: number) =>
+      runStructural(async () => {
+        try {
+          await apiPost(`/meso/api/plan/${planId}/session/${day.session_id}/exercise/`, { week_id: weekId }, csrf);
+        } catch (err) {
+          console.error("Add exercise this week failed", err);
+          return;
+        }
+        await refetchGrid();
+      }),
+    [planId, csrf, runStructural, refetchGrid],
+  );
+
   const undo = useCallback(
     () =>
       runStructural(async () => {
@@ -322,6 +407,10 @@ export function useGrid(options: UseGridOptions) {
     addWeek,
     removeWeek,
     setCurrentWeek,
+    skipCell,
+    swapCell,
+    fillAcrossWeeks,
+    addExerciseThisWeek,
     undo,
     redo,
     refetchGrid,

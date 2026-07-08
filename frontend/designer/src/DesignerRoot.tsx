@@ -405,6 +405,10 @@ export function DesignerRoot() {
                 onSetCurrentWeek={gridState.setCurrentWeek}
                 onUndo={gridState.undo}
                 onRedo={gridState.redo}
+                onSkipCell={gridState.skipCell}
+                onSwapCell={gridState.swapCell}
+                onFillAcrossWeeks={gridState.fillAcrossWeeks}
+                onAddExerciseThisWeek={gridState.addExerciseThisWeek}
               />
             )}
 

@@ -185,6 +185,29 @@ existing per-week gate rather than inventing a block-level one:
 - **P4 — Agent rescope.** Slot-level structural changes, cell-level numeric changes.
 - **P5 — Group.** Slot/cell-based `sync_delivered_plan`; group table view.
 
+### P2 → P3 carry-over (delivery ⨯ exceptions)
+
+P2 delivered the coach **edit** UX for exceptions and made them coherent across the *designer*
+surfaces (multi-week table, the transitional "This week" grid, and the athlete **preview**). The
+**delivery** subsystem was deliberately left untouched — it is P3's job to rewrite delivery around
+the slots+cells+exceptions model. Concrete items P3 must reconcile (surfaced by the P2 Codex review):
+
+- **Deliver-screen diff is not exception-aware.** `diff_week_snapshots` / `_PRESCRIPTION_DIFF_FIELDS`
+  omit `skipped`, so skipping/unskipping a *delivered* row is not reported as a change (swaps already
+  read as a `name` change). Adding `skipped` to the generic diff is not enough on its own: (a) the
+  deliver screen renders diff fields through a `default`-filtered template, so a boolean `False→True`
+  shows as `— → True` — a `skipped` diff needs off/on (or no/yes) rendering; and (b) an **add-this-week**
+  row creates real `skipped=True` placeholder cells in every non-target week, and the pk-based "added"
+  detection in `_diff_exercises` would surface those placeholders as phantom *added* exercises on
+  redelivery of a non-target week even though the athlete has no new work. Do delivery-diff
+  exception-awareness holistically in P3, not piecemeal.
+- **`append_week` starts new-week cells clean** (documented decision in `Mesocycle.append_week`):
+  `skipped`/`swap_*` are never carried forward. This means an "add-this-week-only" row becomes
+  trainable in any week added *afterward*. That is consistent with the "a new week is a clean draft"
+  model and is visible/correctable in the table, but if P3 wants one-week-only rows to stay absent
+  from future weeks it needs an explicit product decision (the P0 model collapses "one-week-only row"
+  and "normal row skipped elsewhere" into the same `skipped` representation).
+
 ---
 
 ## Resolved with the coach (2026-07-07)

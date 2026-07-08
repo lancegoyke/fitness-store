@@ -418,6 +418,46 @@ describe("Phase 3: cellProps callback wiring (Enter-commit / Escape-revert contr
 // - the handle is explicitly `type="button"` (never relying on a bare
 //   <button>'s implicit "submit" default) — the same convention every other
 //   testid'd button in this file already follows.
+// === P2 one-week exceptions: a skipped row (Codex review finding — the
+// legacy "This week" view didn't branch on `skipped`, unlike MesoTable.tsx's
+// non-editable em-dash for a skipped GridCell). `Exercise.skipped` is
+// optional/falsy by default, so every fixture above (which never sets it)
+// keeps exercising the normal editable row untouched.
+describe("P2 one-week exceptions: skipped row", () => {
+  it("renders the em-dash placeholder and hides the editable sets/reps/load/rpe/note inputs", () => {
+    render(<ExerciseRow {...baseProps({ ex: ex({ skipped: true }) })} />);
+    expect(screen.getByTestId("week-row-skipped-9")).toHaveTextContent("—");
+    expect(screen.queryByTestId("exercise-sets-9")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("exercise-reps-9")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("exercise-load-9")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("exercise-load-type-9")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("exercise-rpe-9")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("exercise-note-9")).not.toBeInTheDocument();
+    // The exercise name stays visible (block identity, not a this-week value).
+    expect(screen.getByTestId("exercise-name-9")).toHaveValue("Squat");
+  });
+
+  it("hides the %1RM badge/editor on a skipped row even when load_type is pct", () => {
+    render(
+      <ExerciseRow
+        {...baseProps({ ex: ex({ skipped: true, load_type: "pct", one_rm: "140" }), oneRmOpenForRow: true })}
+      />,
+    );
+    expect(screen.queryByTestId("one-rm-badge-9")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("one-rm-input-9")).not.toBeInTheDocument();
+  });
+
+  it("a normal row (skipped falsy) is unchanged: no em-dash, all editable cells present", () => {
+    render(<ExerciseRow {...baseProps()} />);
+    expect(screen.queryByTestId("week-row-skipped-9")).not.toBeInTheDocument();
+    expect(screen.getByTestId("exercise-sets-9")).toHaveValue("3");
+    expect(screen.getByTestId("exercise-reps-9")).toHaveValue("5");
+    expect(screen.getByTestId("exercise-load-9")).toHaveValue("100");
+    expect(screen.getByTestId("exercise-rpe-9")).toHaveValue("8");
+    expect(screen.getByTestId("exercise-note-9")).toHaveValue("");
+  });
+});
+
 describe("drag handle (Phase 4, dnd-kit reordering)", () => {
   it("renders a drag-handle button with the reorder testid/aria-label, before the name cell", () => {
     render(<ExerciseRow {...baseProps()} />);
