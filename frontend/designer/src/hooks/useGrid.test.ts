@@ -626,6 +626,52 @@ describe("fillAcrossWeeks", () => {
     expect(sentBody()).toEqual({});
     expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
   });
+
+  it("flushes a pending cell autosave before POSTing fill/, so fill never races a stale value to the server", async () => {
+    // Codex P2: fill/ makes the server copy the source cell's ALREADY-STORED
+    // DB values to sibling weeks. If a coach edits then immediately fills,
+    // fill must wait for the edit's autosave POST to land first.
+    const { result } = setup();
+    let resolvePatch!: (v: unknown) => void;
+    const fetchMock = vi.fn();
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePatch = resolve;
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    // Kick off the cell autosave (fire-and-forget) — its POST is now in flight.
+    act(() => {
+      result.current.patchCell(100, { sets: "4" });
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Trigger fill while the autosave is still unresolved.
+    let fillDone!: Promise<void>;
+    act(() => {
+      fillDone = result.current.fillAcrossWeeks(100);
+    });
+
+    // fill is blocked on flushPendingWrites() — the fill/ POST must NOT have
+    // been sent yet, even though fillAcrossWeeks has already been called.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Now let the pending autosave land, queuing up fill's own POST + refetch.
+    fetchMock.mockResolvedValueOnce(res({ ok: true, filled: 2 }));
+    fetchMock.mockResolvedValueOnce(res({ ok: true, ...grid() }));
+
+    await act(async () => {
+      resolvePatch(res({ ok: true }));
+      await fillDone;
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/"); // the autosave
+    expect(fetchMock.mock.calls[1]![0]).toBe("/meso/api/plan/7/prescription/100/fill/"); // fill only after
+    expect(fetchMock.mock.calls[2]![0]).toBe("/meso/api/plan/7/grid/"); // then the refetch
+  });
 });
 
 describe("addExerciseThisWeek", () => {
