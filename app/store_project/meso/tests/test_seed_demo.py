@@ -164,9 +164,16 @@ class TestSeedCreatesDemo:
         current = hypertrophy.weeks.get(is_current=True)
         assert current.index == 2
         assert hypertrophy.weeks.get(is_deload=True).index == 4
-        # Only the current week materializes sessions.
-        assert Session.objects.filter(week=current).count() == 3
-        assert Session.objects.filter(week__mesocycle=hypertrophy).count() == 3
+        # The fixed lineup is DENSE across the whole block (P0 invariant: every
+        # slot × live-week has a cell) — every week materializes the same 3 days,
+        # so no live week is a half-built shell.
+        assert current.sessions.count() == 3
+        expected_cells = current.cells.count()
+        assert expected_cells == 15  # 3 days × 5 rows
+        assert Session.objects.filter(week__mesocycle=hypertrophy).count() == 12
+        for week in hypertrophy.weeks.all():
+            assert week.sessions.count() == 3
+            assert week.cells.count() == expected_cells
 
 
 class TestSeedCreatesGroup:
@@ -309,7 +316,7 @@ class TestSeedLogsASession:
             week__mesocycle__plan=plan,
             week__mesocycle__name="Hypertrophy",
             week__index=2,
-            day_number=1,
+            session_slot__day_number=1,
         )
 
     def test_delivers_and_logs_the_lower_session(self):

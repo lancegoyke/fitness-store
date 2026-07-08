@@ -18,19 +18,20 @@ import pytest
 from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc
 
 pytestmark = pytest.mark.django_db
 
 
 def seed_plan(coach=None, athlete=None):
-    """A minimal owned plan with one current week → session → prescription."""
+    """A minimal owned plan with one current week → session → prescription cell."""
     rel = CoachAthleteFactory(
         coach=coach or UserFactory(), athlete=athlete or UserFactory()
     )
@@ -39,11 +40,9 @@ def seed_plan(coach=None, athlete=None):
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(
-        session=session, name="Box Squat", sets="4", reps="6", load="70", rpe="7"
-    )
-    return plan, session, presc
+    session = day(week, day_number=1, name="Lower")
+    cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
+    return plan, session, cell
 
 
 class TestDesignerLoad:
@@ -213,26 +212,26 @@ class TestAddExercise:
         )
 
     def test_add_exercise_persists(self, client):
-        plan, session, presc = seed_plan()
+        plan, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        before = session.prescriptions.count()
+        before = session.cells().count()
         resp = client.post(self._url(plan, session))
         assert resp.status_code == 201
-        assert session.prescriptions.count() == before + 1
+        assert session.cells().count() == before + 1
         payload = resp.json()["prescription"]
         assert isinstance(payload["id"], int)
         assert payload["name"] == "New exercise"
         # The new row lands after the existing ones (max order + 1).
-        added = session.prescriptions.order_by("order").last()
+        added = session.cells().last()
         assert added.pk == payload["id"]
-        assert added.order == presc.order + 1
+        assert added.exercise_slot.order == cell.exercise_slot.order + 1
 
     def test_non_owner_add_forbidden(self, client):
         plan, session, _ = seed_plan()
         client.force_login(UserFactory())
         resp = client.post(self._url(plan, session))
         assert resp.status_code == 403
-        assert session.prescriptions.count() == 1
+        assert session.cells().count() == 1
 
     def test_add_rejects_foreign_session(self, client):
         plan, _, _ = seed_plan()
@@ -252,3 +251,66 @@ class TestAddExercise:
         client.force_login(plan.relationship.coach)
         resp = client.get(self._url(plan, session))
         assert resp.status_code == 405
+
+
+class TestNamePatchIsSwapAware:
+    """``name`` in a cell patch resolves to the right identity (P0 fixed lineup).
+
+    A normal cell's rename edits the block-shared ``ExerciseSlot`` (a fixed-lineup
+    rename); a swapped cell's rename edits only that week's swap. Crucially, the
+    React client echoes the cell's *effective* name on every autosave (even a
+    sets-only edit), so an unchanged name must be a no-op — otherwise a swapped
+    cell's routine autosave would rename the base row for the whole block.
+    """
+
+    def _patch(self, client, plan, cell, body):
+        return client.post(
+            reverse(
+                "meso:api_prescription_patch",
+                kwargs={"plan_id": plan.pk, "pk": cell.pk},
+            ),
+            data=json.dumps(body),
+            content_type="application/json",
+        )
+
+    def test_rename_a_normal_cell_renames_the_block_slot(self, client):
+        plan, _, cell = seed_plan()
+        client.force_login(plan.relationship.coach)
+
+        resp = self._patch(client, plan, cell, {"name": "Front Squat"})
+
+        assert resp.status_code == 200
+        cell.exercise_slot.refresh_from_db()
+        assert cell.exercise_slot.name == "Front Squat"  # block-wide rename
+
+    def test_editing_a_swapped_cells_name_retargets_the_swap(self, client):
+        plan, _, cell = seed_plan()
+        cell.swap_name = "Goblet Squat"
+        cell.save(update_fields=["swap_name"])
+        client.force_login(plan.relationship.coach)
+
+        resp = self._patch(client, plan, cell, {"name": "Hack Squat", "sets": "5"})
+
+        assert resp.status_code == 200
+        cell.refresh_from_db()
+        cell.exercise_slot.refresh_from_db()
+        assert cell.swap_name == "Hack Squat"  # this week's swap changed
+        assert cell.exercise_slot.name == "Box Squat"  # base row untouched
+        assert cell.sets == "5"
+
+    def test_swapped_cells_unchanged_name_autosave_leaves_the_slot_alone(self, client):
+        # A sets-only edit echoes the shown (swap) name unchanged — it must NOT
+        # rename the block base row (the whole point of the guard).
+        plan, _, cell = seed_plan()
+        cell.swap_name = "Goblet Squat"
+        cell.save(update_fields=["swap_name"])
+        client.force_login(plan.relationship.coach)
+
+        resp = self._patch(client, plan, cell, {"name": "Goblet Squat", "sets": "3"})
+
+        assert resp.status_code == 200
+        cell.refresh_from_db()
+        cell.exercise_slot.refresh_from_db()
+        assert cell.exercise_slot.name == "Box Squat"  # unchanged
+        assert cell.swap_name == "Goblet Squat"  # unchanged
+        assert cell.sets == "3"

@@ -119,11 +119,11 @@ class TestDraftKickoff:
         from store_project.meso.serializers import current_week
 
         week = current_week(plan)
-        before = {s.pk: s.prescriptions.count() for s in week.sessions.all()}
+        before = {s.pk: s.cells().count() for s in week.sessions.all()}
 
         agent_apply.apply_batch(batch)
 
-        after = {s.pk: s.prescriptions.count() for s in week.sessions.all()}
+        after = {s.pk: s.cells().count() for s in week.sessions.all()}
         for pk, count in before.items():
             assert after[pk] == count + 1
 

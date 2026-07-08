@@ -54,17 +54,18 @@ import pytest
 from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
 from store_project.meso.models import PlanAction
 from store_project.meso.serializers import serialize_plan
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc
 
 pytestmark = pytest.mark.django_db
 
@@ -79,12 +80,9 @@ def seed_session(n=3, coach=None, athlete=None):
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower", order=0)
-    prescs = [
-        ExercisePrescriptionFactory(session=session, name=f"Exercise {i}", order=i)
-        for i in range(n)
-    ]
-    return plan, week, session, prescs
+    session = day(week, day_number=1, name="Lower", order=0)
+    cells = [presc(session, name=f"Exercise {i}", order=i) for i in range(n)]
+    return plan, week, session, cells
 
 
 def seed_week_with_sessions(n=3, coach=None, athlete=None):
@@ -98,8 +96,7 @@ def seed_week_with_sessions(n=3, coach=None, athlete=None):
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
     sessions = [
-        SessionFactory(week=week, day_number=i + 1, name=f"Day {i + 1}", order=i)
-        for i in range(n)
+        day(week, day_number=i + 1, name=f"Day {i + 1}", order=i) for i in range(n)
     ]
     return plan, week, sessions
 
@@ -108,9 +105,9 @@ def seed_two_sessions(coach=None, athlete=None):
     """One current week: ``session_a`` (2 rows: p0, p1), ``session_b`` (1 row: q0)."""
     plan, week, sessions = seed_week_with_sessions(n=2, coach=coach, athlete=athlete)
     session_a, session_b = sessions
-    p0 = ExercisePrescriptionFactory(session=session_a, name="Box Squat", order=0)
-    p1 = ExercisePrescriptionFactory(session=session_a, name="RDL", order=1)
-    q0 = ExercisePrescriptionFactory(session=session_b, name="Bench", order=0)
+    p0 = presc(session_a, name="Box Squat", order=0)
+    p1 = presc(session_a, name="RDL", order=1)
+    q0 = presc(session_b, name="Bench", order=0)
     return plan, week, session_a, session_b, p0, p1, q0
 
 
@@ -153,9 +150,9 @@ def _week_order_url(plan, week):
     )
 
 
-def _move_url(plan, presc):
+def _move_url(plan, cell):
     return reverse(
-        "meso:api_prescription_move", kwargs={"plan_id": plan.pk, "pk": presc.pk}
+        "meso:api_prescription_move", kwargs={"plan_id": plan.pk, "pk": cell.pk}
     )
 
 
@@ -180,11 +177,19 @@ class TestSessionReorderEndpoint:
         p0.refresh_from_db()
         p1.refresh_from_db()
         p2.refresh_from_db()
-        assert (p2.order, p0.order, p1.order) == (0, 1, 2)
+        assert (
+            p2.exercise_slot.order,
+            p0.exercise_slot.order,
+            p1.exercise_slot.order,
+        ) == (
+            0,
+            1,
+            2,
+        )
 
         data = serialize_plan(plan, week=week)
-        day = next(d for d in data["program"] if d["id"] == session.pk)
-        assert [e["id"] for e in day["exercises"]] == [p2.pk, p0.pk, p1.pk]
+        day_data = next(d for d in data["program"] if d["id"] == session.pk)
+        assert [e["id"] for e in day_data["exercises"]] == [p2.pk, p0.pk, p1.pk]
 
     def test_idempotent_repost_is_a_200_noop_that_still_records_one_action(
         self, client
@@ -203,7 +208,15 @@ class TestSessionReorderEndpoint:
         p0.refresh_from_db()
         p1.refresh_from_db()
         p2.refresh_from_db()
-        assert (p0.order, p1.order, p2.order) == (0, 1, 2)
+        assert (
+            p0.exercise_slot.order,
+            p1.exercise_slot.order,
+            p2.exercise_slot.order,
+        ) == (
+            0,
+            1,
+            2,
+        )
 
     def test_missing_id_400(self, client):
         plan, week, session, (p0, p1, p2) = seed_session(n=3)
@@ -216,13 +229,13 @@ class TestSessionReorderEndpoint:
 
     def test_extra_id_from_a_sibling_session_400(self, client):
         plan, week, session, (p0, p1, p2) = seed_session(n=3)
-        other_session = SessionFactory(week=week, day_number=2, name="Upper", order=1)
-        other_presc = ExercisePrescriptionFactory(session=other_session, name="Bench")
+        other_session = day(week, day_number=2, name="Upper", order=1)
+        other_cell = presc(other_session, name="Bench")
         client.force_login(plan.relationship.coach)
         resp = post_json(
             client,
             _session_order_url(plan, session),
-            {"order": [p0.pk, p1.pk, p2.pk, other_presc.pk]},
+            {"order": [p0.pk, p1.pk, p2.pk, other_cell.pk]},
         )
         assert resp.status_code == 400
         assert resp.json()["ok"] is False
@@ -238,12 +251,12 @@ class TestSessionReorderEndpoint:
 
     def test_foreign_plans_id_400(self, client):
         plan, week, session, (p0, p1, p2) = seed_session(n=3)
-        _, _, _, (other_presc, *_rest) = seed_session(n=1)  # a different coach's plan
+        _, _, _, (other_cell, *_rest) = seed_session(n=1)  # a different coach's plan
         client.force_login(plan.relationship.coach)
         resp = post_json(
             client,
             _session_order_url(plan, session),
-            {"order": [p0.pk, p1.pk, other_presc.pk]},
+            {"order": [p0.pk, p1.pk, other_cell.pk]},
         )
         assert resp.status_code == 400
         assert resp.json()["ok"] is False
@@ -337,7 +350,7 @@ class TestSessionReorderEndpoint:
     def test_soft_deleted_ancestor_week_404(self, client):
         link, plan, week1, week2 = _two_week_plan()
         session2 = week2.sessions.first()
-        presc2 = session2.prescriptions.first()
+        cell2 = list(session2.cells())[0]
         client.force_login(link.coach)
         del_resp = client.post(
             reverse(
@@ -346,7 +359,7 @@ class TestSessionReorderEndpoint:
         )
         assert del_resp.status_code == 200
         resp = post_json(
-            client, _session_order_url(plan, session2), {"order": [presc2.pk]}
+            client, _session_order_url(plan, session2), {"order": [cell2.pk]}
         )
         assert resp.status_code == 404
 
@@ -374,7 +387,42 @@ class TestSessionReorderEndpoint:
         p0.refresh_from_db()
         p1.refresh_from_db()
         p2.refresh_from_db()
-        assert (p0.order, p1.order, p2.order) == (0, 1, 2)
+        assert (
+            p0.exercise_slot.order,
+            p1.exercise_slot.order,
+            p2.exercise_slot.order,
+        ) == (
+            0,
+            1,
+            2,
+        )
+
+    def test_reorder_is_visible_from_every_week_block_wide(self, client):
+        # P0 fixed-lineup semantics: row order lives on the block-shared
+        # ExerciseSlot, so reordering rows in one week's session reorders the
+        # SAME day's rows in every other live week too — even one never
+        # directly touched by this request.
+        link = CoachAthleteFactory()
+        plan = link.create_plan()
+        meso = plan.mesocycles.get()
+        week1 = meso.weeks.get(index=1)
+        session1 = week1.sessions.order_by("session_slot__order").first()
+        presc(session1, name="Second Row", order=1)
+        week2 = meso.append_week()
+        session2 = week2.sessions.get(session_slot=session1.session_slot)
+
+        cells1 = list(session1.cells())
+        assert len(cells1) == 2
+        new_order = [cells1[1].pk, cells1[0].pk]
+        client.force_login(link.coach)
+        resp = post_json(
+            client, _session_order_url(plan, session1), {"order": new_order}
+        )
+        assert resp.status_code == 200
+
+        slot_order_week1 = [c.exercise_slot_id for c in session1.cells()]
+        slot_order_week2 = [c.exercise_slot_id for c in session2.cells()]
+        assert slot_order_week1 == slot_order_week2
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +622,31 @@ class TestWeekReorderSessionsEndpoint:
         s2.refresh_from_db()
         assert (s0.order, s1.order, s2.order) == (0, 1, 2)
 
+    def test_reorder_is_visible_from_every_week_block_wide(self, client):
+        # P0 fixed-lineup semantics: a day's order lives on the block-shared
+        # SessionSlot, so reordering days in one week reorders the SAME days
+        # in every other live week too — even one never directly touched by
+        # this request.
+        link = CoachAthleteFactory()
+        plan = link.create_plan()  # scaffold: 2 days
+        meso = plan.mesocycles.get()
+        week1 = meso.weeks.get(index=1)
+        week2 = meso.append_week()
+        sessions1 = list(week1.sessions.order_by("session_slot__order"))
+        assert len(sessions1) == 2
+        new_order = [sessions1[1].pk, sessions1[0].pk]
+        client.force_login(link.coach)
+        resp = post_json(client, _week_order_url(plan, week1), {"order": new_order})
+        assert resp.status_code == 200
+
+        slot_order_week1 = [
+            s.session_slot_id for s in week1.sessions.order_by("session_slot__order")
+        ]
+        slot_order_week2 = [
+            s.session_slot_id for s in week2.sessions.order_by("session_slot__order")
+        ]
+        assert slot_order_week1 == slot_order_week2
+
 
 # ---------------------------------------------------------------------------
 # POST /meso/api/plan/<id>/prescription/<pk>/move/
@@ -598,12 +671,12 @@ class TestPrescriptionMoveEndpoint:
         p0.refresh_from_db()
         p1.refresh_from_db()
         q0.refresh_from_db()
-        assert p0.session_id == session_b.pk
-        assert p0.order == 0
-        assert q0.order == 1
+        assert p0.exercise_slot.session_slot_id == session_b.session_slot_id
+        assert p0.exercise_slot.order == 0
+        assert q0.exercise_slot.order == 1
         # session_a's remaining row renumbers densely (was order=1, now 0).
-        assert p1.session_id == session_a.pk
-        assert p1.order == 0
+        assert p1.exercise_slot.session_slot_id == session_a.session_slot_id
+        assert p1.exercise_slot.order == 0
 
         data = serialize_plan(plan, week=week)
         day_a = next(d for d in data["program"] if d["id"] == session_a.pk)
@@ -625,8 +698,8 @@ class TestPrescriptionMoveEndpoint:
         assert resp.status_code == 200
         assert undo_actions(plan).count() == 2
         p0.refresh_from_db()
-        assert p0.session_id == session_b.pk
-        assert p0.order == 0
+        assert p0.exercise_slot.session_slot_id == session_b.session_slot_id
+        assert p0.exercise_slot.order == 0
 
     def test_target_equals_source_behaves_like_a_reorder(self, client):
         plan, week, session_a, session_b, p0, p1, q0 = seed_two_sessions()
@@ -639,27 +712,30 @@ class TestPrescriptionMoveEndpoint:
         p1.refresh_from_db()
         q0.refresh_from_db()
         # p0 moved past p1 within the SAME session — a plain within-day reorder.
-        assert p0.session_id == session_a.pk
-        assert p1.session_id == session_a.pk
-        assert (p1.order, p0.order) == (0, 1)
+        assert p0.exercise_slot.session_slot_id == session_a.session_slot_id
+        assert p1.exercise_slot.session_slot_id == session_a.session_slot_id
+        assert (p1.exercise_slot.order, p0.exercise_slot.order) == (0, 1)
         # session_b is untouched.
-        assert q0.session_id == session_b.pk
-        assert q0.order == 0
+        assert q0.exercise_slot.session_slot_id == session_b.session_slot_id
+        assert q0.exercise_slot.order == 0
 
     def test_cross_week_move_400(self, client):
         link, plan, week1, week2 = _two_week_plan()
-        presc1 = week1.sessions.first().prescriptions.first()
+        cell1 = list(week1.sessions.first().cells())[0]
         session2 = week2.sessions.first()
         client.force_login(link.coach)
         resp = post_json(
-            client, _move_url(plan, presc1), {"session_id": session2.pk, "index": 0}
+            client, _move_url(plan, cell1), {"session_id": session2.pk, "index": 0}
         )
         assert resp.status_code == 400
         body = resp.json()
         assert body["ok"] is False
         assert body["error"] == "Move within one week."
-        presc1.refresh_from_db()
-        assert presc1.session_id == week1.sessions.first().pk
+        cell1.refresh_from_db()
+        assert (
+            cell1.exercise_slot.session_slot_id
+            == week1.sessions.first().session_slot_id
+        )
 
     def test_index_clamps_above_range_to_the_end(self, client):
         plan, week, session_a, session_b, p0, p1, q0 = seed_two_sessions()
@@ -670,9 +746,9 @@ class TestPrescriptionMoveEndpoint:
         assert resp.status_code == 200
         p0.refresh_from_db()
         q0.refresh_from_db()
-        assert p0.session_id == session_b.pk
-        assert p0.order == 1  # clamped to the end (after q0)
-        assert q0.order == 0
+        assert p0.exercise_slot.session_slot_id == session_b.session_slot_id
+        assert p0.exercise_slot.order == 1  # clamped to the end (after q0)
+        assert q0.exercise_slot.order == 0
 
     def test_index_clamps_below_range_to_zero(self, client):
         plan, week, session_a, session_b, p0, p1, q0 = seed_two_sessions()
@@ -683,9 +759,9 @@ class TestPrescriptionMoveEndpoint:
         assert resp.status_code == 200
         p0.refresh_from_db()
         q0.refresh_from_db()
-        assert p0.session_id == session_b.pk
-        assert p0.order == 0
-        assert q0.order == 1
+        assert p0.exercise_slot.session_slot_id == session_b.session_slot_id
+        assert p0.exercise_slot.order == 0
+        assert q0.exercise_slot.order == 1
 
     def test_missing_session_id_400(self, client):
         plan, week, session_a, session_b, p0, p1, q0 = seed_two_sessions()
@@ -803,8 +879,8 @@ class TestPrescriptionMoveEndpoint:
     def test_soft_deleted_ancestor_week_404(self, client):
         link, plan, week1, week2 = _two_week_plan()
         session2a = week2.sessions.first()
-        session2b = SessionFactory(week=week2, day_number=2, name="Upper", order=1)
-        presc2 = session2a.prescriptions.first()
+        session2b = day(week2, day_number=2, name="Upper", order=1)
+        cell2 = list(session2a.cells())[0]
         client.force_login(link.coach)
         del_resp = client.post(
             reverse(
@@ -813,7 +889,7 @@ class TestPrescriptionMoveEndpoint:
         )
         assert del_resp.status_code == 200
         resp = post_json(
-            client, _move_url(plan, presc2), {"session_id": session2b.pk, "index": 0}
+            client, _move_url(plan, cell2), {"session_id": session2b.pk, "index": 0}
         )
         assert resp.status_code == 404
 
@@ -844,12 +920,12 @@ class TestPrescriptionMoveEndpoint:
         p0.refresh_from_db()
         p1.refresh_from_db()
         q0.refresh_from_db()
-        assert p0.session_id == session_a.pk
-        assert p0.order == 0
-        assert p1.session_id == session_a.pk
-        assert p1.order == 1
-        assert q0.session_id == session_b.pk
-        assert q0.order == 0
+        assert p0.exercise_slot.session_slot_id == session_a.session_slot_id
+        assert p0.exercise_slot.order == 0
+        assert p1.exercise_slot.session_slot_id == session_a.session_slot_id
+        assert p1.exercise_slot.order == 1
+        assert q0.exercise_slot.session_slot_id == session_b.session_slot_id
+        assert q0.exercise_slot.order == 0
 
     def test_logged_set_survives_the_move_pointing_at_the_same_prescription(
         self, client

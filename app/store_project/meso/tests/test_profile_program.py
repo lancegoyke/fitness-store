@@ -23,18 +23,19 @@ from store_project.meso import presenters
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachProfileFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc
 
 pytestmark = pytest.mark.django_db
 
@@ -69,9 +70,7 @@ def make_plan(
             week.delivered_at = timezone.now()
             week.save(update_fields=["delivered_at"])
             for n in range(sessions):
-                session = SessionFactory(
-                    week=week, day_number=n + 1, name=f"Day {n + 1}"
-                )
+                session = day(week, day_number=n + 1, name=f"Day {n + 1}")
                 if n < done:
                     SessionLogFactory(
                         session=session,
@@ -251,15 +250,15 @@ class TestResultsSummary:
     def test_summary_from_the_athletes_done_log(self):
         rel = CoachAthleteFactory()
         plan, week = make_plan(rel, sessions=2, done=0)  # log explicitly below
-        session = week.sessions.order_by("day_number").first()
-        ExercisePrescriptionFactory(session=session, name="Back Squat", sets="3")
+        session = week.sessions.order_by("session_slot__day_number").first()
+        presc(session, name="Back Squat", sets="3")
         log = SessionLogFactory(
             session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
         )
         for n in range(3):
             LoggedSetFactory(
                 session_log=log,
-                prescription=session.prescriptions.first(),
+                prescription=session.cells().first(),
                 set_number=n + 1,
             )
         summary = presenters.profile_program(rel, None)["results_summary"]

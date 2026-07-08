@@ -37,7 +37,6 @@ from django.urls import reverse
 
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import GroupMembershipFactory
 from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import LoggedSetFactory
@@ -45,19 +44,22 @@ from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import ProposedChangeFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
-from store_project.meso.models import ExercisePrescription
+from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
 from store_project.meso.models import PlanAction
+from store_project.meso.models import Prescription
 from store_project.meso.models import PrescriptionOverride
 from store_project.meso.models import ProposedChange
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Week
 from store_project.meso.serializers import serialize_plan
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc
 
 pytestmark = pytest.mark.django_db
 
@@ -70,7 +72,7 @@ EMPTY_HISTORY = {
 
 
 def seed_plan(coach=None, athlete=None):
-    """A minimal owned plan with one current week → session → prescription."""
+    """A minimal owned plan with one current week → session → prescription cell."""
     rel = CoachAthleteFactory(
         coach=coach or UserFactory(), athlete=athlete or UserFactory()
     )
@@ -79,22 +81,20 @@ def seed_plan(coach=None, athlete=None):
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(
-        session=session, name="Box Squat", sets="4", reps="6", load="70", rpe="7"
-    )
-    return plan, week, session, presc
+    session = day(week, day_number=1, name="Lower")
+    cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
+    return plan, week, session, cell
 
 
 def seed_group_plan():
-    """A minimal owned group plan with one current week → session → prescription."""
+    """A minimal owned group plan with one current week → session → prescription cell."""
     group = MesoGroupFactory()
     plan = GroupPlanFactory(group=group, title="Squad Block", status=Plan.Status.ACTIVE)
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(session=session, name="Box Squat")
-    return group, plan, week, session, presc
+    session = day(week, day_number=1, name="Lower")
+    cell = presc(session, name="Box Squat")
+    return group, plan, week, session, cell
 
 
 def _two_week_plan():
@@ -115,9 +115,9 @@ def redo_url(plan):
     return reverse("meso:api_plan_redo", kwargs={"plan_id": plan.pk})
 
 
-def patch_url(plan, presc):
+def patch_url(plan, cell):
     return reverse(
-        "meso:api_prescription_patch", kwargs={"plan_id": plan.pk, "pk": presc.pk}
+        "meso:api_prescription_patch", kwargs={"plan_id": plan.pk, "pk": cell.pk}
     )
 
 
@@ -125,8 +125,8 @@ def post_json(client, url, payload):
     return client.post(url, data=json.dumps(payload), content_type="application/json")
 
 
-def patch(client, plan, presc, **fields):
-    resp = post_json(client, patch_url(plan, presc), fields)
+def patch(client, plan, cell, **fields):
+    resp = post_json(client, patch_url(plan, cell), fields)
     assert resp.status_code == 200
     return resp
 
@@ -157,11 +157,11 @@ class TestRecording:
     def test_each_mutating_endpoint_records_one_undo_action_with_increasing_seq(
         self, client
     ):
-        plan, week1, session, presc = seed_plan()
+        plan, week1, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
 
         # 1. prescription_patch
-        patch(client, plan, presc, load="75")
+        patch(client, plan, cell, load="75")
         assert undo_actions(plan).count() == 1
 
         # 2. session_add_exercise
@@ -237,18 +237,24 @@ class TestRecording:
             assert "Deleted" in action.label
 
     def test_patch_snapshot_captures_pre_mutation_prescription_values(self, client):
-        plan, week, session, presc = seed_plan()
+        # P0 fixed-lineup cutover: the snapshot splits the old per-week
+        # ``prescriptions`` rows into a block-shared ``exercise_slots`` (row
+        # identity — name/deleted_at) and per-week ``cells`` (numbers) row.
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, presc, load="90", rpe="9")
+        patch(client, plan, cell, load="90", rpe="9")
 
         action = undo_actions(plan).get()
-        rows = action.snapshot["prescriptions"]
-        entry = next(r for r in rows if r["pk"] == presc.pk)
+        cell_rows = action.snapshot["cells"]
+        entry = next(r for r in cell_rows if r["pk"] == cell.pk)
         # The snapshot holds the state BEFORE the mutation.
-        assert entry["name"] == "Box Squat"
         assert entry["load"] == "70"
         assert entry["rpe"] == "7"
-        assert entry["deleted_at"] is None
+
+        slot_rows = action.snapshot["exercise_slots"]
+        slot_entry = next(r for r in slot_rows if r["pk"] == cell.exercise_slot_id)
+        assert slot_entry["name"] == "Box Squat"
+        assert slot_entry["deleted_at"] is None
 
     def test_week_delete_snapshot_contains_the_doomed_weeks_pk(self, client):
         link, plan, week1, week2 = _two_week_plan()
@@ -268,13 +274,13 @@ class TestRecording:
         assert entry["deleted_at"] is None
 
     def test_coach_set_one_rm_records_nothing(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = post_json(
             client,
             reverse(
                 "meso:api_coach_set_one_rm",
-                kwargs={"plan_id": plan.pk, "pk": presc.pk},
+                kwargs={"plan_id": plan.pk, "pk": cell.pk},
             ),
             {"value": "140"},
         )
@@ -282,7 +288,7 @@ class TestRecording:
         assert PlanAction.objects.filter(plan=plan).count() == 0
 
     def test_plan_deliver_records_nothing(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.post(
             reverse("meso:api_plan_deliver", kwargs={"plan_id": plan.pk})
@@ -298,11 +304,11 @@ class TestRecording:
 
 class TestUndoPrescriptionPatch:
     def test_undo_restores_prior_cell_values_and_returns_envelope(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, presc, load="75", rpe="8", note="felt easy")
-        presc.refresh_from_db()
-        assert presc.load == "75"  # sanity: the edit landed
+        patch(client, plan, cell, load="75", rpe="8", note="felt easy")
+        cell.refresh_from_db()
+        assert cell.load == "75"  # sanity: the edit landed
 
         popped = undo_actions(plan).get()
         resp = client.post(undo_url(plan))
@@ -314,10 +320,10 @@ class TestUndoPrescriptionPatch:
         assert body["history"]["can_redo"] is True
         assert body["history"]["can_undo"] is False
 
-        presc.refresh_from_db()
-        assert presc.load == "70"
-        assert presc.rpe == "7"
-        assert presc.note == ""
+        cell.refresh_from_db()
+        assert cell.load == "70"
+        assert cell.rpe == "7"
+        assert cell.note == ""
 
         # The popped undo row moved to the redo stack with the SAME seq + label.
         assert undo_actions(plan).count() == 0
@@ -326,9 +332,9 @@ class TestUndoPrescriptionPatch:
         assert redo_row.label == popped.label
 
     def test_undo_bumps_plan_modified(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, presc, load="75")
+        patch(client, plan, cell, load="75")
         plan.refresh_from_db()
         before = plan.modified
         resp = client.post(undo_url(plan))
@@ -339,9 +345,9 @@ class TestUndoPrescriptionPatch:
 
 class TestUndoDeleteDay:
     def test_undo_restores_the_day_with_its_logs_intact(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         log = SessionLogFactory(session=session, athlete=plan.athlete)
-        logged_set = LoggedSetFactory(session_log=log, prescription=presc)
+        logged_set = LoggedSetFactory(session_log=log, prescription=cell)
         client.force_login(plan.relationship.coach)
 
         resp = client.post(
@@ -368,14 +374,18 @@ class TestUndoDeleteDay:
         assert log.session_id == session.pk
         logged_set.refresh_from_db()
         assert logged_set.session_log_id == log.pk
-        assert logged_set.prescription_id == presc.pk
+        assert logged_set.prescription_id == cell.pk
         assert SessionLog.objects.filter(session=session).count() == 1
         assert LoggedSet.objects.filter(session_log=log).count() == 1
 
 
 class TestUndoAddExercise:
     def test_undo_soft_deletes_the_added_row_and_redo_revives_the_same_pk(self, client):
-        plan, week, session, presc = seed_plan()
+        # P0 fixed-lineup cutover: the added row's identity is its
+        # ``ExerciseSlot`` (it, not the ``Prescription`` cell, carries
+        # ``deleted_at``) — restore flips that slot's flag, never hard-deletes
+        # or recreates it, so redo revives the SAME pk.
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.post(
             reverse(
@@ -385,44 +395,46 @@ class TestUndoAddExercise:
         )
         assert resp.status_code == 201
         new_pk = resp.json()["prescription"]["id"]
-        rows_after_add = ExercisePrescription.objects.count()
+        new_slot_pk = Prescription.objects.get(pk=new_pk).exercise_slot_id
+        rows_after_add = ExerciseSlot.objects.count()
 
         resp = client.post(undo_url(plan))
         assert resp.status_code == 200
         # Soft-deleted, not hard-deleted: the row survives with the flag set…
-        added = ExercisePrescription.objects.get(pk=new_pk)
-        assert added.deleted_at is not None
+        added_slot = ExerciseSlot.objects.get(pk=new_slot_pk)
+        assert added_slot.deleted_at is not None
         # …and drops out of the serialized plan.
         assert new_pk not in _live_exercise_ids(plan, week=week)
 
         resp = client.post(redo_url(plan))
         assert resp.status_code == 200
         # Redo revives the SAME row — never a recreated one.
-        added.refresh_from_db()
-        assert added.deleted_at is None
+        added_slot.refresh_from_db()
+        assert added_slot.deleted_at is None
         assert new_pk in _live_exercise_ids(plan, week=week)
-        assert ExercisePrescription.objects.count() == rows_after_add
+        assert ExerciseSlot.objects.count() == rows_after_add
 
 
 class TestRoundTrip:
     def test_edit_undo_redo_leaves_db_identical_to_post_edit(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, presc, load="82.5", rpe="8", note="top set")
-        presc.refresh_from_db()
+        patch(client, plan, cell, load="82.5", rpe="8", note="top set")
+        cell.refresh_from_db()
+        # A cell (P0 fixed-lineup cutover) has no ``deleted_at`` of its own —
+        # only the fields this endpoint can patch round-trip here.
         post_edit = (
-            presc.name,
-            presc.sets,
-            presc.reps,
-            presc.load,
-            presc.rpe,
-            presc.note,
-            presc.deleted_at,
+            cell.name,
+            cell.sets,
+            cell.reps,
+            cell.load,
+            cell.rpe,
+            cell.note,
         )
 
         assert client.post(undo_url(plan)).status_code == 200
-        presc.refresh_from_db()
-        assert presc.load == "70"  # sanity: the undo actually reverted
+        cell.refresh_from_db()
+        assert cell.load == "70"  # sanity: the undo actually reverted
 
         resp = client.post(redo_url(plan))
         assert resp.status_code == 200
@@ -430,15 +442,14 @@ class TestRoundTrip:
         assert body["ok"] is True
         assert _envelope_keys(body)
 
-        presc.refresh_from_db()
+        cell.refresh_from_db()
         assert (
-            presc.name,
-            presc.sets,
-            presc.reps,
-            presc.load,
-            presc.rpe,
-            presc.note,
-            presc.deleted_at,
+            cell.name,
+            cell.sets,
+            cell.reps,
+            cell.load,
+            cell.rpe,
+            cell.note,
         ) == post_edit
         # The stacks mirror back: one undoable action again, nothing redoable.
         assert undo_actions(plan).count() == 1
@@ -449,14 +460,14 @@ class TestRoundTrip:
 
 class TestRedoInvalidation:
     def test_fresh_mutation_after_undo_clears_the_redo_stack(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, presc, load="75")
+        patch(client, plan, cell, load="75")
         assert client.post(undo_url(plan)).status_code == 200
         assert redo_actions(plan).count() == 1
 
         # A fresh mutation forks history — the redo stack is dropped.
-        patch(client, plan, presc, rpe="9")
+        patch(client, plan, cell, rpe="9")
         assert redo_actions(plan).count() == 0
 
         resp = client.post(redo_url(plan))
@@ -468,7 +479,7 @@ class TestRedoInvalidation:
 
 class TestEmptyStacks:
     def test_undo_on_empty_stack_400s_with_the_exact_error(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.post(undo_url(plan))
         assert resp.status_code == 400
@@ -477,7 +488,7 @@ class TestEmptyStacks:
         assert body["error"] == "Nothing to undo"
 
     def test_redo_on_empty_stack_400s_with_the_exact_error(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.post(redo_url(plan))
         assert resp.status_code == 400
@@ -488,13 +499,13 @@ class TestEmptyStacks:
 
 class TestHistoryCap:
     def test_55_mutations_keep_exactly_50_undo_rows_trimming_the_oldest(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
 
-        patch(client, plan, presc, load="1")
+        patch(client, plan, cell, load="1")
         first_seq = undo_actions(plan).get().seq
         for i in range(2, 56):  # 54 more → 55 total
-            patch(client, plan, presc, load=str(i))
+            patch(client, plan, cell, load=str(i))
 
         seqs = sorted(undo_actions(plan).values_list("seq", flat=True))
         assert len(seqs) == 50
@@ -511,18 +522,18 @@ class TestHistoryCap:
 
 class TestBatchApplyUndo:
     def test_batch_apply_records_one_action_and_undo_reverts_every_change(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         batch = AgentProposalBatchFactory(plan=plan, coach=plan.relationship.coach)
         ProposedChangeFactory(
             batch=batch,
             kind=ProposedChange.Kind.SWAP,
-            prescription=presc,
+            prescription=cell,
             payload={"name": "Front Squat"},
         )
         ProposedChangeFactory(
             batch=batch,
             kind=ProposedChange.Kind.PROGRESS,
-            prescription=presc,
+            prescription=cell,
             payload={"load": "85"},
         )
         client.force_login(plan.relationship.coach)
@@ -532,9 +543,9 @@ class TestBatchApplyUndo:
         )
         assert resp.status_code == 200
         assert resp.json()["applied"] == 2
-        presc.refresh_from_db()
-        assert presc.name == "Front Squat"
-        assert presc.load == "85"
+        cell.refresh_from_db()
+        assert cell.name == "Front Squat"
+        assert cell.load == "85"
 
         # ONE action for the whole batch, labelled as an agent apply.
         actions = list(undo_actions(plan))
@@ -544,9 +555,9 @@ class TestBatchApplyUndo:
         resp = client.post(undo_url(plan))
         assert resp.status_code == 200
         # Every change the batch applied is reverted by the single undo.
-        presc.refresh_from_db()
-        assert presc.name == "Box Squat"
-        assert presc.load == "70"
+        cell.refresh_from_db()
+        assert cell.name == "Box Squat"
+        assert cell.load == "70"
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +567,7 @@ class TestBatchApplyUndo:
 
 class TestOverrideUndoRedo:
     def test_undo_drops_the_override_and_redo_restores_the_same_values(self, client):
-        group, plan, week, session, presc = seed_group_plan()
+        group, plan, week, session, cell = seed_group_plan()
         membership = GroupMembershipFactory(group=group)
         athlete_id = str(membership.relationship.athlete_id)
         client.force_login(group.coach)
@@ -565,26 +576,26 @@ class TestOverrideUndoRedo:
             client,
             reverse(
                 "meso:api_prescription_override",
-                kwargs={"plan_id": plan.pk, "pk": presc.pk},
+                kwargs={"plan_id": plan.pk, "pk": cell.pk},
             ),
             {"athlete": athlete_id, "swap": "Box Squat Variant", "load_pct": 90},
         )
         assert resp.status_code == 200
         assert PrescriptionOverride.objects.filter(
-            membership=membership, prescription=presc
+            membership=membership, prescription=cell
         ).exists()
         assert undo_actions(plan).count() == 1
 
         resp = client.post(undo_url(plan))
         assert resp.status_code == 200
         assert not PrescriptionOverride.objects.filter(
-            membership=membership, prescription=presc
+            membership=membership, prescription=cell
         ).exists()
 
         resp = client.post(redo_url(plan))
         assert resp.status_code == 200
         override = PrescriptionOverride.objects.get(
-            membership=membership, prescription=presc
+            membership=membership, prescription=cell
         )
         assert override.swap_name == "Box Squat Variant"
         assert override.load_pct == 90
@@ -624,20 +635,20 @@ class TestWeekSetCurrentUndo:
 
 class TestAuth:
     def test_requires_login(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         for url in (undo_url(plan), redo_url(plan)):
             resp = client.post(url)
             assert resp.status_code == 302
             assert "/accounts/login/" in resp.url
 
     def test_get_not_allowed(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         assert client.get(undo_url(plan)).status_code == 405
         assert client.get(redo_url(plan)).status_code == 405
 
     def test_non_owner_forbidden(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(UserFactory())
         assert client.post(undo_url(plan)).status_code == 403
         assert client.post(redo_url(plan)).status_code == 403
@@ -647,7 +658,7 @@ class TestAuth:
         # newer one pushes the free coach over the cap, freezing this plan.
         coach = UserFactory()
         CoachAthleteFactory(coach=coach)  # older link → kept
-        plan, week, session, presc = seed_plan(coach=coach)  # newer → suspended
+        plan, week, session, cell = seed_plan(coach=coach)  # newer → suspended
         client.force_login(coach)
         resp = client.post(undo_url(plan))
         assert resp.status_code == 402
@@ -663,22 +674,22 @@ class TestAuth:
 class TestViewedWeekPreservation:
     def test_undo_pins_the_response_to_the_posted_week_when_still_live(self, client):
         link, plan, week1, week2 = _two_week_plan()
-        presc = week1.sessions.first().prescriptions.first()
+        cell = list(week1.sessions.first().cells())[0]
         client.force_login(link.coach)
-        patch(client, plan, presc, load="99")
+        patch(client, plan, cell, load="99")
 
         resp = post_json(client, undo_url(plan), {"week_id": week2.pk})
         assert resp.status_code == 200
         body = resp.json()
         # The coach was viewing week 2 — the reply keeps them there.
         assert body["viewing"] == week2.pk
-        presc.refresh_from_db()
-        assert presc.load == ""  # the scaffolded row's pre-edit load
+        cell.refresh_from_db()
+        assert cell.load == ""  # the scaffolded row's pre-edit load
 
     def test_undo_falls_back_to_current_when_the_viewed_week_was_un_created(
         self, client
     ):
-        plan, week1, session, presc = seed_plan()
+        plan, week1, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.post(reverse("meso:api_week_add", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 201
@@ -701,13 +712,17 @@ class TestViewedWeekPreservation:
 
 class TestRestoreConflict:
     def test_hard_deleted_snapshot_row_makes_undo_a_409(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, presc, load="75")
+        patch(client, plan, cell, load="75")
 
         # Simulate history rot: something hard-deleted a snapshotted row out
-        # from under the op-log (bypassing soft delete via the queryset).
-        ExercisePrescription.objects.filter(pk=presc.pk).delete()
+        # from under the op-log (bypassing soft delete via the queryset). A
+        # cell's own pk going missing is a benign best-effort no-op (P0 —
+        # see restore_plan_snapshot's docstring); the integrity guarantee
+        # this endpoint protects is on the block-shared ExerciseSlot/
+        # SessionSlot/Session/Week rows instead.
+        ExerciseSlot.objects.filter(pk=cell.exercise_slot_id).delete()
 
         resp = client.post(undo_url(plan))
         assert resp.status_code == 409
@@ -726,14 +741,14 @@ class TestRestoreConflict:
 
 class TestSerializePlanHistory:
     def test_fresh_plan_has_an_empty_history(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         data = serialize_plan(plan)
         assert data["history"] == EMPTY_HISTORY
 
     def test_after_an_edit_can_undo_is_true_with_a_label(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, presc, load="75")
+        patch(client, plan, cell, load="75")
 
         history = serialize_plan(plan)["history"]
         assert history["can_undo"] is True
@@ -744,7 +759,7 @@ class TestSerializePlanHistory:
     def test_history_rides_existing_serialize_plan_responses(self, client):
         # week_view is one of the endpoints whose reply the client feeds through
         # applyPlanData — history must ride it so the buttons stay accurate.
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.get(
             reverse(
@@ -779,14 +794,14 @@ class TestPartialResponseHistory:
     """
 
     def test_prescription_patch_reply_includes_history(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        body = patch(client, plan, presc, load="75").json()
+        body = patch(client, plan, cell, load="75").json()
         assert body["history"]["can_undo"] is True
         assert body["history"]["undo_label"]
 
     def test_add_exercise_reply_includes_history(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.post(
             reverse(
@@ -798,21 +813,21 @@ class TestPartialResponseHistory:
         assert resp.json()["history"]["can_undo"] is True
 
     def test_add_day_reply_includes_history(self, client):
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
         resp = client.post(reverse("meso:api_session_add", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 201
         assert resp.json()["history"]["can_undo"] is True
 
     def test_override_reply_includes_history(self, client):
-        group, plan, week, session, presc = seed_group_plan()
+        group, plan, week, session, cell = seed_group_plan()
         membership = GroupMembershipFactory(group=group)
         client.force_login(group.coach)
         resp = post_json(
             client,
             reverse(
                 "meso:api_prescription_override",
-                kwargs={"plan_id": plan.pk, "pk": presc.pk},
+                kwargs={"plan_id": plan.pk, "pk": cell.pk},
             ),
             {"athlete": str(membership.relationship.athlete_id), "load_pct": 90},
         )
@@ -826,12 +841,14 @@ class TestActionLabelClamp:
         # f-string label would make Postgres reject the insert and break
         # autosave for long-named rows (sqlite doesn't enforce, so assert the
         # stored length directly).
-        plan, week, session, presc = seed_plan()
+        plan, week, session, cell = seed_plan()
         long_name = ("Extremely Specific Tempo Paused Safety-Bar Box Squat " * 5)[:255]
-        presc.name = long_name
-        presc.save(update_fields=["name"])
+        # `name` is a read-only resolving property now — identity (and so the
+        # label text) lives on the block-shared ExerciseSlot.
+        cell.exercise_slot.name = long_name
+        cell.exercise_slot.save(update_fields=["name"])
         client.force_login(plan.relationship.coach)
-        resp = patch(client, plan, presc, load="75")
+        resp = patch(client, plan, cell, load="75")
         assert resp.status_code == 200
         label = undo_actions(plan).order_by("-seq").first().label
         assert len(label) <= 80
@@ -843,22 +860,22 @@ class TestRestoreAfterMembershipRemoved:
         # overrides cascade away with it). A snapshot recorded before that must
         # still restore — the departed member's override is skipped, not
         # recreated (an IntegrityError-500 here would brick the plan's undo).
-        group, plan, week, session, presc = seed_group_plan()
+        group, plan, week, session, cell = seed_group_plan()
         membership = GroupMembershipFactory(group=group)
         client.force_login(group.coach)
         resp = post_json(
             client,
             reverse(
                 "meso:api_prescription_override",
-                kwargs={"plan_id": plan.pk, "pk": presc.pk},
+                kwargs={"plan_id": plan.pk, "pk": cell.pk},
             ),
             {"athlete": str(membership.relationship.athlete_id), "load_pct": 90},
         )
         assert resp.status_code == 200
 
         # A later edit snapshots state WITH the override in it…
-        original_load = presc.load
-        resp = patch(client, plan, presc, load="80")
+        original_load = cell.load
+        resp = patch(client, plan, cell, load="80")
         assert resp.status_code == 200
         # …then the member leaves (membership + its overrides hard-delete).
         membership.delete()
@@ -867,6 +884,6 @@ class TestRestoreAfterMembershipRemoved:
         # departed member's override instead of 500ing on the dead FK.
         resp = client.post(undo_url(plan))
         assert resp.status_code == 200
-        presc.refresh_from_db()
-        assert presc.load == original_load
-        assert not PrescriptionOverride.objects.filter(prescription=presc).exists()
+        cell.refresh_from_db()
+        assert cell.load == original_load
+        assert not PrescriptionOverride.objects.filter(prescription=cell).exists()

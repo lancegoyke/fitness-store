@@ -21,19 +21,20 @@ from django.urls import reverse
 from store_project.meso import presenters
 from store_project.meso import serializers
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
-from store_project.meso.models import ExercisePrescription
 from store_project.meso.models import LoadType
 from store_project.meso.models import Plan
+from store_project.meso.models import Prescription
 from store_project.meso.models import PrescriptionOverride
 from store_project.meso.models import Unit
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc as make_presc
 
 pytestmark = pytest.mark.django_db
 
@@ -48,9 +49,9 @@ def seed_plan(coach=None, athlete=None):
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(
-        session=session, name="Back Squat", sets="4", reps="6", load="70", rpe="7"
+    session = day(week, day_number=1, name="Lower")
+    presc = make_presc(
+        session, name="Back Squat", sets="4", reps="6", load="70", rpe="7"
     )
     return plan, session, presc
 
@@ -219,9 +220,7 @@ class TestGroupFanOutLoadType:
 
     def test_materialized_member_prescription_preserves_load_type(self):
         group, plan, membership = self._seed_group()
-        shared = ExercisePrescription.objects.filter(
-            session__week__mesocycle__plan=plan
-        ).first()
+        shared = Prescription.objects.filter(week__mesocycle__plan=plan).first()
         shared.load = "80"
         shared.load_type = LoadType.PERCENT
         shared.save(update_fields=["load", "load_type"])
@@ -231,8 +230,9 @@ class TestGroupFanOutLoadType:
         member_plan = Plan.objects.get(
             relationship=membership.relationship, source_group=group
         )
-        member_presc = ExercisePrescription.objects.filter(
-            session__week__mesocycle__plan=member_plan, order=shared.order
+        member_presc = Prescription.objects.filter(
+            week__mesocycle__plan=member_plan,
+            exercise_slot__order=shared.exercise_slot.order,
         ).first()
         assert member_presc is not None
         assert member_presc.load_type == LoadType.PERCENT

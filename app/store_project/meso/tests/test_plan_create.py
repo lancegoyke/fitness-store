@@ -82,7 +82,7 @@ class TestScaffoldAndCreatePlan:
         sessions = list(weeks[0].sessions.all())
         assert len(sessions) == 2
         for session in sessions:
-            assert session.prescriptions.count() == 1
+            assert session.cells().count() == 1
 
     def test_create_plan_is_editable_and_deliverable(self):
         link = CoachAthleteFactory()
@@ -167,7 +167,7 @@ class TestScaffoldAndCreatePlan:
         sessions = list(week.sessions.all())
         assert len(sessions) == 2
         for session in sessions:
-            assert session.prescriptions.count() == 1
+            assert session.cells().count() == 1
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@ class TestSessionAddEndpoint:
         assert week.sessions.count() == before + 1
         new_session = Session.objects.get(pk=body["session"]["id"])
         assert new_session.week_id == week.pk
-        assert new_session.prescriptions.count() == 1
+        assert new_session.cells().count() == 1
         # Returned in the designer's day shape so the grid can append it.
         assert set(body["session"]) >= {"id", "n", "name", "exercises"}
 
@@ -356,7 +356,7 @@ class TestFreshCoachRoundTrip:
         plan = Plan.objects.get(relationship=link)
 
         # 2) Coach edits it — autosave one of the scaffold rows.
-        presc = plan.mesocycles.get().weeks.get().sessions.first().prescriptions.first()
+        presc = plan.mesocycles.get().weeks.get().sessions.first().cells().first()
         patch = client.post(
             reverse(
                 "meso:api_prescription_patch",

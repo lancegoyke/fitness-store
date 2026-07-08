@@ -22,16 +22,17 @@ from django.utils import timezone
 
 from store_project.meso import presenters
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
 from store_project.meso.models import WeekDelivery
 from store_project.meso.serializers import diff_week_snapshots
 from store_project.meso.serializers import serialize_week_snapshot
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc as presc_
 
 pytestmark = pytest.mark.django_db
 
@@ -195,10 +196,8 @@ def seed_plan(coach=None, athlete=None, load="111"):
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(
-        session=session, name="Box Squat", sets="4", reps="6", load=load, rpe="7"
-    )
+    session = day(week, day_number=1, name="Lower")
+    presc = presc_(session, name="Box Squat", sets="4", reps="6", load=load, rpe="7")
     return plan, week, session, presc
 
 
@@ -253,10 +252,8 @@ class TestDeliverScreenChanges:
         plan, week1, _, _ = seed_plan()
         meso = plan.mesocycles.first()
         week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
-        session2 = SessionFactory(week=week2, day_number=1, name="Upper")
-        presc2 = ExercisePrescriptionFactory(
-            session=session2, name="Bench", sets="3", reps="5", load="80"
-        )
+        session2 = day(week2, day_number=2, name="Upper")
+        presc2 = presc_(session2, name="Bench", sets="3", reps="5", load="80")
         record_delivery(week2)
         presc2.load = "90"
         presc2.save(update_fields=["load"])

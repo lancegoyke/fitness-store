@@ -12,7 +12,6 @@ until those surfaces grow their own slices.
 import math
 from collections import defaultdict
 
-from django.db.models import Prefetch
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.timesince import timesince
@@ -24,7 +23,6 @@ from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachSubscription
-from .models import ExercisePrescription
 from .models import LoadType
 from .models import Plan
 from .models import SessionLog
@@ -871,12 +869,12 @@ def session_results(session):
     scores its sets against the prescribed targets. A pending draft (the athlete
     hit "Save progress" but hasn't finished) is not feedback yet, so it — like an
     unlogged session — renders an honest awaiting state (targets only, 0%
-    complete) rather than inventing numbers. ``session`` arrives coach-scoped
-    with its prescriptions prefetched.
+    complete) rather than inventing numbers. ``session`` arrives coach-scoped;
+    its cells are read via ``session.cells()`` (P0 fixed-lineup cutover).
     """
     plan = session.week.mesocycle.plan
     athlete = plan.athlete
-    prescriptions = list(session.prescriptions.all())
+    prescriptions = list(session.trainable_cells())
     log = (
         SessionLog.objects.filter(
             session=session, athlete=athlete, status=SessionLog.Status.DONE
@@ -967,8 +965,9 @@ def _athlete_session_row(session, *, done):
         "n": session.day_number,
         "name": session.name,
         "bias": session.bias,
-        # ``prescriptions`` is prefetched on the home query — no per-row query.
-        "exercise_count": len(session.prescriptions.all()),
+        # Trainable rows only — live + non-skipped (P0 fixed-lineup cutover); a
+        # week-skipped exercise doesn't count toward the day's "N exercises" chip.
+        "exercise_count": session.trainable_cells().count(),
         "status": status,
         "status_label": "Logged" if done else "To do",
         "url": reverse("meso:athlete_session", kwargs={"pk": session.pk}),
@@ -996,17 +995,10 @@ def athlete_home(user):
             # Live rows only (soft delete, designer framework Phase 0): a day
             # the coach removed after delivering is gone from the athlete's
             # home too, and a removed exercise stops counting toward the row's
-            # "N exercises" chip (the prefetch feeds ``_athlete_session_row``).
-            session_objs = list(
-                week.sessions.filter(deleted_at__isnull=True).prefetch_related(
-                    Prefetch(
-                        "prescriptions",
-                        queryset=ExercisePrescription.objects.filter(
-                            deleted_at__isnull=True
-                        ),
-                    )
-                )
-            )
+            # "N exercises" chip (``_athlete_session_row`` reads it via
+            # ``session.cells()``, already live-filtered — P0 fixed-lineup
+            # cutover; a small per-session query, not prefetched).
+            session_objs = list(week.sessions.filter(deleted_at__isnull=True))
             done = _done_session_ids([s.pk for s in session_objs], user)
             sessions = [
                 _athlete_session_row(s, done=s.pk in done) for s in session_objs
@@ -1088,8 +1080,8 @@ def athlete_session(session, athlete):
 
     ``session`` is already athlete-scoped + delivered by the view; this formats
     the prescribed grid into set-input rows, pre-filled from the athlete's own
-    most-recent ``SessionLog``, and reports its done status. Prescriptions are
-    prefetched on the view query.
+    most-recent ``SessionLog``, and reports its done status. Cells are read via
+    ``session.cells()`` (P0 fixed-lineup cutover), already live-filtered.
     """
     log = (
         SessionLog.objects.filter(session=session, athlete=athlete)
@@ -1102,7 +1094,7 @@ def athlete_session(session, athlete):
     )
     done = log is not None and log.status == SessionLog.Status.DONE
     week = session.week
-    prescriptions = list(session.prescriptions.all())
+    prescriptions = list(session.trainable_cells())
     # The athlete's persisted, log-derived 1RM per lift (in this plan's unit) — the
     # %1RM logger seeds its suggested bar load from it (no manual estimate needed).
     one_rm_map = one_rm_values(athlete, prescriptions, week.mesocycle.plan.unit)

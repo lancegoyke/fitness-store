@@ -7,7 +7,8 @@ The designer (``static/js/meso.js``) keeps three in-memory arrays:
 - ``phases``  — the macrocycle rail (one entry per mesocycle).
 
 ``serialize_plan`` reproduces that shape from the ``Plan → Mesocycle → Week →
-Session → ExercisePrescription`` hierarchy so Phase 3 can hydrate the designer
+Session → Prescription`` hierarchy (a ``Prescription`` is a cell = the fixed
+``ExerciseSlot`` row × this ``Week``) so Phase 3 can hydrate the designer
 from the database instead of fixtures. The designer's ``last`` column (what the
 athlete actually did last time, per lift) is derived from real logged sets here
 (athlete slice Phase 3); ``adj`` (a group plan's per-row per-athlete auto-adjust
@@ -33,21 +34,28 @@ def initials(name):
     return (parts[0][0] + parts[-1][0]).upper()
 
 
-def serialize_prescription(prescription):
-    """One exercise row in a session's grid."""
+def serialize_prescription(cell):
+    """One exercise row in a session's grid.
+
+    ``cell`` is a ``Prescription`` — a fixed ``ExerciseSlot`` row × this
+    ``Week``. Its resolving properties (``name``/``tags``) already fold in a
+    one-week swap, so this body reads unchanged from the old per-week model.
+    """
     data = {
-        "id": prescription.pk,
-        "name": prescription.name,
-        "sets": prescription.sets,
-        "reps": prescription.reps,
-        "load": prescription.load,
-        "load_type": prescription.load_type,
-        "rpe": prescription.rpe,
-        "note": prescription.note,
+        "id": cell.pk,
+        "name": cell.name,
+        "sets": cell.sets,
+        "reps": cell.reps,
+        "load": cell.load,
+        "load_type": cell.load_type,
+        "rpe": cell.rpe,
+        "rest": cell.rest,
+        "note": cell.note,
+        "skipped": cell.skipped,
     }
     # The designer renders a single `tag`; the model stores a list.
-    if prescription.tags:
-        data["tag"] = prescription.tags[0]
+    if cell.tags:
+        data["tag"] = cell.tags[0]
     return data
 
 
@@ -146,22 +154,21 @@ def serialize_chat_thread(plan):
 
 
 def serialize_session(session):
-    """One training day (a column in the designer grid).
+    """One training day (a column in the coach designer grid).
 
-    Only live prescriptions render (soft delete, designer framework Phase 0):
-    filtered in Python — not via ``.filter()`` — so a caller that prefetched
-    ``prescriptions`` still hits the prefetch cache instead of a fresh query.
+    Returns every live cell (``session.cells()``, the P0 fixed-lineup cutover) —
+    including one-week ``skipped`` exceptions, which carry a ``skipped`` flag so
+    the grid can mark them (the P1 table renders an em-dash). Keeping them here
+    means the row/day id-sets the designer renders match the reorder/move
+    endpoints exactly. Athlete-facing surfaces use ``trainable_cells()`` instead,
+    so a skipped lift is never presented as loggable.
     """
     return {
         "id": session.pk,
         "n": session.day_number,
         "name": session.name,
         "bias": session.bias,
-        "exercises": [
-            serialize_prescription(p)
-            for p in session.prescriptions.all()
-            if p.deleted_at is None
-        ],
+        "exercises": [serialize_prescription(c) for c in session.cells()],
     }
 
 
@@ -225,8 +232,8 @@ def serialize_week_snapshot(week):
 
     Captures the week's meta plus its full session/prescription grid so a later
     delivery can diff against it ("changes since last delivery"). Only live
-    sessions (and, via ``serialize_session``, live prescriptions) are included
-    (soft delete, designer framework Phase 0).
+    sessions (and, via ``serialize_session``'s ``session.cells()``, live
+    exercise rows) are included (soft delete, designer framework Phase 0).
     """
     return {
         "week": {
@@ -238,10 +245,7 @@ def serialize_week_snapshot(week):
             "is_deload": week.is_deload,
         },
         "sessions": [
-            serialize_session(s)
-            for s in week.sessions.filter(deleted_at__isnull=True).prefetch_related(
-                "prescriptions"
-            )
+            serialize_session(s) for s in week.sessions.filter(deleted_at__isnull=True)
         ],
     }
 
@@ -256,6 +260,7 @@ _PRESCRIPTION_DIFF_FIELDS = (
     ("load", "Load"),
     ("load_type", "Load type"),
     ("rpe", "RPE"),
+    ("rest", "Rest"),
     ("note", "Note"),
     ("tag", "Tag"),
 )
@@ -625,35 +630,36 @@ def resolve_load(load, load_pct, *, load_type=None):
     return _fmt_num(int(scaled / 2.5 + 0.5) * 2.5)
 
 
-def resolve_prescription(prescription, override):
-    """A member's effective row = the shared prescription + their override diff.
+def resolve_prescription(cell, override):
+    """A member's effective row = the shared prescription cell + their override diff.
 
-    ``override`` of ``None`` yields the shared base unchanged. A swap replaces the
-    name; ``load_pct`` scales the load; ``sets``/``reps``/``note`` override the
+    ``cell`` is a ``Prescription`` (a fixed ``ExerciseSlot`` row × this
+    ``Week``); its resolving properties already fold in any one-week swap, so
+    this body is unchanged from the old per-week model. ``override`` of
+    ``None`` yields the shared base unchanged. A swap replaces the name;
+    ``load_pct`` scales the load; ``sets``/``reps``/``note`` override the
     shared volume/note when set. RPE is not per-athlete in this slice.
     """
     base = {
-        "name": prescription.name,
-        "sets": prescription.sets,
-        "reps": prescription.reps,
-        "load": prescription.load,
+        "name": cell.name,
+        "sets": cell.sets,
+        "reps": cell.reps,
+        "load": cell.load,
         # A load % scales the *number*; the load's meaning (abs/%1RM) is unchanged.
-        "load_type": prescription.load_type,
-        "rpe": prescription.rpe,
-        "note": prescription.note,
+        "load_type": cell.load_type,
+        "rpe": cell.rpe,
+        "note": cell.note,
     }
     if override is None:
         return base
     return {
-        "name": override.swap_name or prescription.name,
-        "sets": override.sets or prescription.sets,
-        "reps": override.reps or prescription.reps,
-        "load": resolve_load(
-            prescription.load, override.load_pct, load_type=prescription.load_type
-        ),
-        "load_type": prescription.load_type,
-        "rpe": prescription.rpe,
-        "note": override.note or prescription.note,
+        "name": override.swap_name or cell.name,
+        "sets": override.sets or cell.sets,
+        "reps": override.reps or cell.reps,
+        "load": resolve_load(cell.load, override.load_pct, load_type=cell.load_type),
+        "load_type": cell.load_type,
+        "rpe": cell.rpe,
+        "note": override.note or cell.note,
     }
 
 
@@ -836,16 +842,11 @@ def serialize_plan(plan, week=None):
     if open_week is not None:
         # Soft delete (designer framework Phase 0): only live sessions surface
         # in the grid, and — matching ``serialize_session`` — only their live
-        # prescriptions feed the "last time" / 1RM / adjust overlays below.
-        sessions = list(
-            open_week.sessions.filter(deleted_at__isnull=True).prefetch_related(
-                "prescriptions"
-            )
-        )
+        # cells (``session.cells()``, P0 fixed-lineup cutover) feed the "last
+        # time" / 1RM / adjust overlays below.
+        sessions = list(open_week.sessions.filter(deleted_at__isnull=True))
         program = [serialize_session(s) for s in sessions]
-        prescriptions = [
-            p for s in sessions for p in s.prescriptions.all() if p.deleted_at is None
-        ]
+        prescriptions = [c for s in sessions for c in s.cells()]
         if not plan.is_group:
             # Light up the "last time" column from real logs (athlete Phase 3):
             # one query over the plan's logged sets, mapped onto the rendered

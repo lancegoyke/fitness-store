@@ -33,14 +33,15 @@ import pytest
 from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
 from store_project.meso.models import WeekDelivery
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc as presc_
 
 pytestmark = pytest.mark.django_db
 
@@ -55,10 +56,8 @@ def seed_plan(coach=None, athlete=None):
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    ExercisePrescriptionFactory(
-        session=session, name="Box Squat", sets="4", reps="6", load="70", rpe="7"
-    )
+    session = day(week, day_number=1, name="Lower")
+    presc_(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return plan, week
 
 

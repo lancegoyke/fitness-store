@@ -13,16 +13,18 @@ try:
     from .models import CoachProfile
     from .models import CoachSubscription
     from .models import Contraindication
-    from .models import ExercisePrescription
+    from .models import ExerciseSlot
     from .models import GroupMembership
     from .models import LoggedSet
     from .models import Mesocycle
     from .models import MesoGroup
     from .models import Plan
+    from .models import Prescription
     from .models import PrescriptionOverride
     from .models import ProposedChange
     from .models import Session
     from .models import SessionLog
+    from .models import SessionSlot
     from .models import Unit
     from .models import Week
     from .models import WeekDelivery
@@ -106,30 +108,70 @@ try:
         is_deload = False
         is_current = False
 
-    class SessionFactory(DjangoModelFactory):
-        class Meta:
-            model = Session
+    class SessionSlotFactory(DjangoModelFactory):
+        """The fixed DAY definition (P0 fixed-lineup cutover)."""
 
-        week = factory.SubFactory(WeekFactory)
+        class Meta:
+            model = SessionSlot
+
+        mesocycle = factory.SubFactory(MesocycleFactory)
         day_number = factory.Sequence(lambda n: n + 1)
         name = factory.Sequence(lambda n: f"Day {n + 1}")
         bias = ""
         order = factory.Sequence(lambda n: n)
 
-    class ExercisePrescriptionFactory(DjangoModelFactory):
+    class SessionFactory(DjangoModelFactory):
         class Meta:
-            model = ExercisePrescription
+            model = Session
 
-        session = factory.SubFactory(SessionFactory)
+        week = factory.SubFactory(WeekFactory)
+        # A session is (week × slot) within ONE block, so the slot defaults onto
+        # the week's mesocycle — a bare ``SessionFactory()`` must not straddle two
+        # blocks (``session.cells()`` and week/slot joins assume a shared meso).
+        session_slot = factory.SubFactory(
+            SessionSlotFactory,
+            mesocycle=factory.SelfAttribute("..week.mesocycle"),
+        )
+
+    class ExerciseSlotFactory(DjangoModelFactory):
+        """The fixed EXERCISE row (P0 fixed-lineup cutover)."""
+
+        class Meta:
+            model = ExerciseSlot
+
+        session_slot = factory.SubFactory(SessionSlotFactory)
         exercise = None
         name = factory.Sequence(lambda n: f"Exercise {n}")
         order = factory.Sequence(lambda n: n)
+        tags = factory.LazyFunction(list)
+
+    class PrescriptionFactory(DjangoModelFactory):
+        """A cell = one ``ExerciseSlot`` (row) × one ``Week`` (P0 fixed-lineup cutover).
+
+        ``week`` defaults to a fresh ``Week`` built on the **same mesocycle** as
+        ``exercise_slot.session_slot.mesocycle`` — a real cell never crosses
+        blocks, and ``unique(exercise_slot, week)`` plus every read site that
+        joins a cell back to its slot's mesocycle would misbehave on a
+        mismatched pair. Wired via ``factory.SelfAttribute("..exercise_slot...")``
+        inside the ``week`` SubFactory, mirroring ``GroupMembershipFactory``'s
+        same-coach wiring elsewhere in this module. Callers building a whole
+        grid should still pass an explicit shared ``week=`` (or ``exercise_slot=``
+        on an existing slot) so every cell in the fixture lands on the same week.
+        """
+
+        class Meta:
+            model = Prescription
+
+        exercise_slot = factory.SubFactory(ExerciseSlotFactory)
+        week = factory.SubFactory(
+            WeekFactory,
+            mesocycle=factory.SelfAttribute("..exercise_slot.session_slot.mesocycle"),
+        )
         sets = "3"
         reps = "10"
         load = "60"
         rpe = "7"
         note = ""
-        tags = factory.LazyFunction(list)
 
     class WeekDeliveryFactory(DjangoModelFactory):
         class Meta:
@@ -177,7 +219,7 @@ try:
             model = LoggedSet
 
         session_log = factory.SubFactory(SessionLogFactory)
-        prescription = factory.SubFactory(ExercisePrescriptionFactory)
+        prescription = factory.SubFactory(PrescriptionFactory)
         set_number = factory.Sequence(lambda n: n + 1)
         reps = "10"
         load = "60"
@@ -227,7 +269,7 @@ try:
             model = PrescriptionOverride
 
         membership = factory.SubFactory(GroupMembershipFactory)
-        prescription = factory.SubFactory(ExercisePrescriptionFactory)
+        prescription = factory.SubFactory(PrescriptionFactory)
         load_pct = 90
 
     class AthleteOneRmFactory(DjangoModelFactory):
@@ -278,10 +320,16 @@ except ImportError:
     class WeekFactory:
         pass
 
+    class SessionSlotFactory:
+        pass
+
     class SessionFactory:
         pass
 
-    class ExercisePrescriptionFactory:
+    class ExerciseSlotFactory:
+        pass
+
+    class PrescriptionFactory:
         pass
 
     class WeekDeliveryFactory:

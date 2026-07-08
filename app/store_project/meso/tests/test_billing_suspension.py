@@ -32,19 +32,20 @@ from store_project.meso.billing import access
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachSubscriptionFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import GroupMembershipFactory
 from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachSubscription
 from store_project.meso.models import Plan
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc
 
 pytestmark = pytest.mark.django_db
 
@@ -70,9 +71,9 @@ def _aged_plan(coach, days_ago):
     plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE)
     meso = MesocycleFactory(plan=plan, order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(session=session, name="Back Squat")
-    return rel, plan, presc
+    session = day(week, day_number=1, name="Lower")
+    cell = presc(session, name="Back Squat")
+    return rel, plan, cell
 
 
 # ---------------------------------------------------------------------------

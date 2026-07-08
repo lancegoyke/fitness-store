@@ -26,16 +26,16 @@ from django.utils import timezone
 
 from store_project.meso.agent import service
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.meso.serializers import serialize_recent_logs
+from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import presc
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -61,9 +61,9 @@ def seed(
         is_current=True,
         delivered_at=timezone.now() if delivered else None,
     )
-    session = SessionFactory(week=week, day_number=1, name="Lower", bias="Quad")
-    squat = ExercisePrescriptionFactory(
-        session=session,
+    session = day(week, day_number=1, name="Lower", bias="Quad")
+    squat = presc(
+        session,
         name="Box Squat",
         order=0,
         sets="3",
@@ -71,9 +71,7 @@ def seed(
         load="70",
         rpe="7",
     )
-    rdl = ExercisePrescriptionFactory(
-        session=session, name="RDL", order=1, sets="3", reps="8", load="80", rpe="8"
-    )
+    rdl = presc(session, name="RDL", order=1, sets="3", reps="8", load="80", rpe="8")
     return SimpleNamespace(
         coach=coach,
         athlete=athlete,
@@ -194,6 +192,74 @@ class TestLogWrite:
         assert sets[0].reps == "6"
         assert sets[0].load == "72.5"
         assert sets[1].rpe == "8.5"
+
+    def test_skipping_a_logged_row_preserves_its_logged_sets(self, client):
+        # A coach marks a row skipped AFTER the athlete logged it. The row drops
+        # from the logger (trainable_cells), so the next save posts only the
+        # remaining rows — and must NOT wipe the skipped row's logged history.
+        s = seed()
+        client.force_login(s.athlete)
+        post(
+            client,
+            s.session,
+            {
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "6",
+                        "load": "70",
+                        "rpe": "7",
+                    },
+                    {
+                        "prescription": s.rdl.pk,
+                        "set_number": 1,
+                        "reps": "8",
+                        "load": "80",
+                        "rpe": "8",
+                    },
+                ]
+            },
+        )
+        assert LoggedSet.objects.filter(prescription=s.squat).count() == 1
+
+        s.squat.skipped = True
+        s.squat.save(update_fields=["skipped"])
+
+        # The logger now only renders/posts the RDL; the re-save must leave the
+        # squat's logged history intact.
+        resp = post(
+            client,
+            s.session,
+            {
+                "sets": [
+                    {
+                        "prescription": s.rdl.pk,
+                        "set_number": 1,
+                        "reps": "8",
+                        "load": "82",
+                        "rpe": "8",
+                    },
+                ]
+            },
+        )
+        assert resp.status_code == 200
+        assert LoggedSet.objects.filter(prescription=s.squat).count() == 1
+        assert LoggedSet.objects.filter(prescription=s.rdl, load="82").count() == 1
+
+    def test_skipped_row_is_not_a_valid_log_target(self, client):
+        # A skipped cell isn't rendered by the logger, so posting a set against it
+        # is a 400 (the same guard as a foreign prescription).
+        s = seed()
+        s.squat.skipped = True
+        s.squat.save(update_fields=["skipped"])
+        client.force_login(s.athlete)
+        resp = post(
+            client,
+            s.session,
+            {"sets": [{"prescription": s.squat.pk, "reps": "6", "load": "70"}]},
+        )
+        assert resp.status_code == 400
 
     def test_response_echoes_saved_log(self, client):
         s = seed()

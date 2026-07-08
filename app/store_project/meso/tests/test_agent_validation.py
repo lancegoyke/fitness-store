@@ -13,13 +13,14 @@ from store_project.meso.agent import client
 from store_project.meso.agent import validation
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import ContraindicationFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
+from store_project.meso.factories import PrescriptionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachSubscription
 from store_project.meso.models import LoadType
+from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import presc
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -33,9 +34,9 @@ def make_plan(athlete=None):
     plan = PlanFactory(relationship=rel)
     meso = MesocycleFactory(plan=plan, order=0)
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = SessionFactory(week=week, day_number=1, name="Lower")
-    presc = ExercisePrescriptionFactory(session=session, name="Back Squat")
-    return plan, session, presc
+    session = day(week, day_number=1, name="Lower")
+    cell = presc(session, name="Back Squat")
+    return plan, session, cell
 
 
 def base_change(**overrides):
@@ -106,7 +107,7 @@ class TestCleanChange:
 
     def test_foreign_prescription_rejected(self):
         plan, _, _ = make_plan()
-        other_presc = ExercisePrescriptionFactory()  # belongs to a different plan
+        other_presc = PrescriptionFactory()  # belongs to a different plan
         cleaned, errors = validation.clean_change(
             base_change(prescription_id=other_presc.pk), plan
         )
@@ -118,8 +119,8 @@ class TestCleanChange:
         # week of the same plan is out of contract.
         plan, session, _ = make_plan()  # week index 1 is current
         week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
-        off_session = SessionFactory(week=week2, day_number=1, name="Lower")
-        off_presc = ExercisePrescriptionFactory(session=off_session, name="Squat")
+        off_session = day(week2, day_number=1, name="Lower")
+        off_presc = presc(off_session, name="Squat")
         cleaned, errors = validation.clean_change(
             base_change(prescription_id=off_presc.pk), plan
         )
@@ -160,10 +161,10 @@ class TestCleanChange:
         assert cleaned["session"] == session
 
     def test_mismatched_prescription_and_session_rejected(self):
-        plan, session, presc = make_plan()
-        other_session = SessionFactory(week=session.week, day_number=2, name="Upper")
+        plan, session, cell = make_plan()
+        other_session = day(session.week, day_number=2, name="Upper")
         cleaned, errors = validation.clean_change(
-            base_change(prescription_id=presc.pk, session_id=other_session.pk), plan
+            base_change(prescription_id=cell.pk, session_id=other_session.pk), plan
         )
         assert cleaned is None
         assert any("not in the given session" in e for e in errors)
@@ -593,7 +594,7 @@ class TestAddKind:
         other_week = WeekFactory(
             mesocycle=plan.mesocycles.first(), index=2, is_current=False
         )
-        other_session = SessionFactory(week=other_week, day_number=1, name="Upper")
+        other_session = day(other_week, day_number=1, name="Upper")
         cleaned, errors = validation.clean_change(
             self.add_change(session_id=other_session.pk), plan
         )

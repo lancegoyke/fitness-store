@@ -15,6 +15,7 @@ from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import ProposedChangeFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import ProposedChange
+from store_project.meso.tests._helpers import presc
 from store_project.meso.tests.test_agent_validation import make_plan
 
 pytestmark = pytest.mark.django_db
@@ -78,10 +79,8 @@ class TestApplyChange:
     def test_volume_targeting_a_session_sets_all_rows(self):
         # A volume change may target a whole day (session) rather than one row;
         # apply it across every prescription so it is never a silent no-op.
-        from store_project.meso.factories import ExercisePrescriptionFactory
-
-        plan, session, presc = make_plan()  # one row at sets == "3"
-        presc2 = ExercisePrescriptionFactory(session=session, name="RDL", sets="3")
+        plan, session, first_presc = make_plan()  # one row at sets == "3"
+        presc2 = presc(session, name="RDL", sets="3")
         change = ProposedChangeFactory(
             batch=_batch(plan),
             kind=ProposedChange.Kind.VOLUME,
@@ -90,9 +89,9 @@ class TestApplyChange:
             payload={"sets": "4"},
         )
         result = agent_apply.apply_change(change)
-        presc.refresh_from_db()
+        first_presc.refresh_from_db()
         presc2.refresh_from_db()
-        assert presc.sets == "4"
+        assert first_presc.sets == "4"
         assert presc2.sets == "4"
         assert result["count"] == 2
 
@@ -152,18 +151,18 @@ class TestApplyChange:
         )
         result = agent_apply.apply_change(change)
 
-        added = session.prescriptions.order_by("order").last()
+        added = session.cells().last()
         assert added.name == "Romanian Deadlift"
         assert added.sets == "3"
         assert added.reps == "8-10"
         assert added.rpe == "7"
-        assert added.order > presc.order
+        assert added.exercise_slot.order > presc.exercise_slot.order
         assert result["kind"] == ProposedChange.Kind.ADD
-        assert session.prescriptions.count() == 2
+        assert session.cells().count() == 2
 
     def test_add_without_a_name_is_a_noop(self):
         plan, session, _ = make_plan()
-        before = session.prescriptions.count()
+        before = session.cells().count()
         change = ProposedChangeFactory(
             batch=_batch(plan),
             kind=ProposedChange.Kind.ADD,
@@ -172,7 +171,7 @@ class TestApplyChange:
             payload={"sets": "3"},
         )
         assert agent_apply.apply_change(change) is None
-        assert session.prescriptions.count() == before
+        assert session.cells().count() == before
 
     def test_add_without_a_session_is_a_noop(self):
         plan, _, _ = make_plan()

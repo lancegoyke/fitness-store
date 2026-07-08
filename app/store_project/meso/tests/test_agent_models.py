@@ -9,7 +9,7 @@ still approves (apply lands in Phase 2). See ``docs/archive/meso/agent-plan.md``
 import pytest
 
 from store_project.meso.factories import AgentProposalBatchFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
+from store_project.meso.factories import PrescriptionFactory
 from store_project.meso.factories import ProposedChangeFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import ProposedChange
@@ -52,7 +52,7 @@ class TestProposedChange:
         assert "Box Step-Down" in change.title
 
     def test_change_can_target_a_prescription(self):
-        presc = ExercisePrescriptionFactory()
+        presc = PrescriptionFactory()
         change = ProposedChangeFactory(prescription=presc)
         assert change.prescription == presc
         assert change in presc.proposed_changes.all()

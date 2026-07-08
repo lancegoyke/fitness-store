@@ -19,11 +19,9 @@ from types import SimpleNamespace
 import pytest
 
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import Plan
@@ -31,6 +29,9 @@ from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
 from store_project.meso.models import Week
 from store_project.meso.serializers import serialize_plan
+
+from ._helpers import day
+from ._helpers import presc
 
 pytestmark = pytest.mark.django_db
 
@@ -130,16 +131,16 @@ def build_maya_plan():
     ]
     current_week = weeks[1]  # Wk 2
     for day_number, (name, bias, exercises) in enumerate(SESSION_SPEC, start=1):
-        session = SessionFactory(
-            week=current_week,
+        session = day(
+            current_week,
             day_number=day_number,
             name=name,
             bias=bias,
             order=day_number,
         )
         for order, (ex_name, sets, reps, load, rpe, note, tags) in enumerate(exercises):
-            ExercisePrescriptionFactory(
-                session=session,
+            presc(
+                session,
                 exercise=None,
                 name=ex_name,
                 order=order,
@@ -265,17 +266,21 @@ class TestSerializePlan:
                     "load",
                     "load_type",
                     "rpe",
+                    "rest",
                     "note",
+                    "skipped",
                 }
                 if tags:
                     expected_keys.add("tag")
                 assert set(ex.keys()) == expected_keys
+                assert ex["skipped"] is False
                 assert isinstance(ex["id"], int)
                 assert ex["name"] == name
                 assert ex["sets"] == sets
                 assert ex["reps"] == reps
                 assert ex["load"] == load
                 assert ex["rpe"] == rpe
+                assert ex["rest"] == ""
                 assert ex["note"] == note
                 if tags:
                     assert ex["tag"] == tags[0]
@@ -312,7 +317,7 @@ class TestSerializePlan:
         # A session on a non-current week must not appear in `program`.
         hypertrophy = plan.mesocycles.get(name="Hypertrophy")
         wk1 = hypertrophy.weeks.get(index=1)
-        SessionFactory(week=wk1, day_number=1, name="Should Not Appear", order=1)
+        day(wk1, day_number=1, name="Should Not Appear", order=1)
         result = serialize_plan(plan)
         assert "Should Not Appear" not in [s["name"] for s in result["program"]]
 
@@ -333,9 +338,9 @@ class TestLastLoggedColumn:
         plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE, unit=unit)
         meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
         week = WeekFactory(mesocycle=meso, index=2, is_current=True)
-        session = SessionFactory(week=week, day_number=1, name="Lower")
-        presc = ExercisePrescriptionFactory(
-            session=session,
+        session = day(week, day_number=1, name="Lower")
+        cell = presc(
+            session,
             name="Box Squat",
             order=0,
             sets=sets,
@@ -348,12 +353,12 @@ class TestLastLoggedColumn:
             meso=meso,
             week=week,
             session=session,
-            presc=presc,
+            presc=cell,
             athlete=plan.athlete,
         )
 
-    def _log(self, session, athlete, *, when, sets):
-        """Log ``sets`` (list of (reps, load, rpe)) against the session's lift."""
+    def _log(self, session, athlete, cell, *, when, sets):
+        """Log ``sets`` (list of (reps, load, rpe)) against ``cell``."""
         log = SessionLogFactory(
             session=session,
             athlete=athlete,
@@ -363,7 +368,7 @@ class TestLastLoggedColumn:
         for n, (reps, load, rpe) in enumerate(sets, start=1):
             LoggedSetFactory(
                 session_log=log,
-                prescription=session.prescriptions.get(),
+                prescription=cell,
                 set_number=n,
                 reps=reps,
                 load=load,
@@ -383,6 +388,7 @@ class TestLastLoggedColumn:
         self._log(
             s.session,
             s.athlete,
+            s.presc,
             when=date(2026, 6, 24),
             sets=[("6", "70", "7"), ("6", "70", "7"), ("6", "70", "8")],
         )
@@ -393,21 +399,41 @@ class TestLastLoggedColumn:
     def test_last_uses_plan_unit(self):
         s = self._plan(load="135", unit=Unit.POUNDS)
         self._log(
-            s.session, s.athlete, when=date(2026, 6, 24), sets=[("6", "135", "7")]
+            s.session,
+            s.athlete,
+            s.presc,
+            when=date(2026, 6, 24),
+            sets=[("6", "135", "7")],
         )
         assert self._box_squat(s.plan)["last"] == "1×6 · 135lb · RPE7"
 
     def test_last_omits_unit_for_non_numeric_load(self):
         s = self._plan(load="BW")
-        self._log(s.session, s.athlete, when=date(2026, 6, 24), sets=[("12", "BW", "")])
+        self._log(
+            s.session,
+            s.athlete,
+            s.presc,
+            when=date(2026, 6, 24),
+            sets=[("12", "BW", "")],
+        )
         # No RPE logged → no RPE segment; "BW" carries no unit suffix.
         assert self._box_squat(s.plan)["last"] == "1×12 · BW"
 
     def test_last_picks_most_recent_log(self):
         s = self._plan()
-        self._log(s.session, s.athlete, when=date(2026, 6, 10), sets=[("6", "60", "7")])
         self._log(
-            s.session, s.athlete, when=date(2026, 6, 24), sets=[("6", "72.5", "7")]
+            s.session,
+            s.athlete,
+            s.presc,
+            when=date(2026, 6, 10),
+            sets=[("6", "60", "7")],
+        )
+        self._log(
+            s.session,
+            s.athlete,
+            s.presc,
+            when=date(2026, 6, 24),
+            sets=[("6", "72.5", "7")],
         )
         assert self._box_squat(s.plan)["last"] == "1×6 · 72.5kg · RPE7"
 
@@ -415,9 +441,9 @@ class TestLastLoggedColumn:
         """A prior week's log surfaces against the current week's same lift."""
         s = self._plan()
         wk1 = WeekFactory(mesocycle=s.meso, index=1, is_current=False)
-        wk1_session = SessionFactory(week=wk1, day_number=1, name="Lower")
-        ExercisePrescriptionFactory(
-            session=wk1_session,
+        wk1_session = day(wk1, day_number=1, name="Lower")
+        wk1_cell = presc(
+            wk1_session,
             name="Box Squat",
             order=0,
             sets="3",
@@ -426,7 +452,11 @@ class TestLastLoggedColumn:
             rpe="7",
         )
         self._log(
-            wk1_session, s.athlete, when=date(2026, 6, 17), sets=[("6", "65", "7")]
+            wk1_session,
+            s.athlete,
+            wk1_cell,
+            when=date(2026, 6, 17),
+            sets=[("6", "65", "7")],
         )
         # The current (Wk 2) Box Squat shows last week's logged Box Squat.
         assert self._box_squat(s.plan)["last"] == "1×6 · 65kg · RPE7"
@@ -438,6 +468,7 @@ class TestLastLoggedColumn:
         self._log(
             stranger.session,
             stranger.athlete,
+            stranger.presc,
             when=date(2026, 6, 24),
             sets=[("6", "200", "9")],
         )

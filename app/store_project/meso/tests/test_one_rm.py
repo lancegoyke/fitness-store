@@ -28,12 +28,10 @@ from store_project.meso import one_rm as meso_one_rm
 from store_project.meso import presenters
 from store_project.meso.factories import AthleteOneRmFactory
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import ExercisePrescriptionFactory
 from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
-from store_project.meso.factories import SessionFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AthleteOneRm
@@ -45,6 +43,9 @@ from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
 from store_project.meso.serializers import serialize_plan
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc as build_presc
 
 pytestmark = pytest.mark.django_db
 
@@ -63,10 +64,9 @@ def make_session(athlete, *, coach=None, unit=Unit.KILOGRAMS, prescriptions=()):
     week = WeekFactory(
         mesocycle=meso, index=1, is_current=True, delivered_at=timezone.now()
     )
-    session = SessionFactory(week=week, day_number=1, name="Lower")
+    session = day(week, day_number=1, name="Lower")
     presc = [
-        ExercisePrescriptionFactory(session=session, order=i, **spec)
-        for i, spec in enumerate(prescriptions)
+        build_presc(session, order=i, **spec) for i, spec in enumerate(prescriptions)
     ]
     return plan, session, presc
 
@@ -555,10 +555,8 @@ class TestSerializerThreading:
         group_plan = GroupPlanFactory(status=Plan.Status.ACTIVE)
         meso = MesocycleFactory(plan=group_plan, order=0)
         week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-        session = SessionFactory(week=week, day_number=1)
-        ExercisePrescriptionFactory(
-            session=session, order=0, name="Back Squat", load_type=LoadType.PERCENT
-        )
+        session = day(week, day_number=1)
+        build_presc(session, order=0, name="Back Squat", load_type=LoadType.PERCENT)
         data = serialize_plan(group_plan)
         assert "one_rm" not in data["program"][0]["exercises"][0]
 
@@ -1013,9 +1011,9 @@ class TestCoachSetOneRmEndpoint:
         group_plan = GroupPlanFactory(status=Plan.Status.ACTIVE, group__coach=coach)
         meso = MesocycleFactory(plan=group_plan, order=0)
         week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-        session = SessionFactory(week=week, day_number=1)
-        squat = ExercisePrescriptionFactory(
-            session=session, order=0, name="Back Squat", load_type=LoadType.PERCENT
+        session = day(week, day_number=1)
+        squat = build_presc(
+            session, order=0, name="Back Squat", load_type=LoadType.PERCENT
         )
         client.force_login(coach)
         resp = post_coach_one_rm(client, group_plan, squat, {"value": "150"})
