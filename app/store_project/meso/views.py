@@ -481,6 +481,9 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         )
         if link is None:
             raise Http404("Unknown athlete")
+        # #441 P1-2: the button-less "profile" tour step completes on the
+        # visit itself — advance the tour if this coach is parked on it.
+        meso_tour.advance_if_on_step(self.request.user, "profile")
         ctx["active"] = "roster"
         # The relationship's working program (first-time-UX Phase 1): when one
         # exists the CTAs open it in the designer; when not, they create one.
@@ -1039,24 +1042,28 @@ def tour_skip(request):
     """The O6 "skip · load everything" shortcut: the full aggregate demo, tour marked done.
 
     Reuses the exact pre-tour ``demo_load`` behavior (the whole workspace, one
-    shot) and additionally marks the tour ``completed`` so it doesn't
-    resurface on the next page load — the tour is meant to be a helpful
-    default, never a wall (O6). Records a **skipped** funnel event (not
-    **completed** — distinct from actually walking the tour to the end, even
-    though both leave ``tour_state`` parked on the same ``completed`` status),
-    keyed to whichever step the coach skipped from.
+    shot) for the **sandbox** variant only, and always marks the tour
+    ``completed`` so it doesn't resurface on the next page load — the tour is
+    meant to be a helpful default, never a wall (O6). Records a **skipped**
+    funnel event (not **completed** — distinct from actually walking the tour
+    to the end, even though both leave ``tour_state`` parked on the same
+    ``completed`` status), keyed to whichever step the coach skipped from.
     """
     profile, _ = CoachProfile.objects.get_or_create(user=request.user)
     current_step = (profile.tour_state or {}).get("step", 0)
     variant = meso_tour.variant_for(request.user)
-    meso_demo.load_demo(request.user)
+    # Only the anonymous sandbox loads the fake demo workspace; a real
+    # (self-variant) coach must never get fake athletes on their live
+    # roster (#441 P1-1, O5) — for them "skip" just ends the tour.
+    if variant == "sandbox":
+        meso_demo.load_demo(request.user)
+        messages.success(
+            request,
+            "Demo data loaded — explore a populated workspace. Remove it any time.",
+        )
     meso_tour.complete(profile)
     meso_tour.record_skipped(
         request.user, variant, meso_tour.STEPS[current_step]["key"]
-    )
-    messages.success(
-        request,
-        "Demo data loaded — explore a populated workspace. Remove it any time.",
     )
     return redirect("meso:roster")
 

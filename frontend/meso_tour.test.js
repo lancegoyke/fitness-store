@@ -20,6 +20,9 @@ import {
   buildStepAnnouncement,
   prefersReducedMotion,
   scrollBehaviorFor,
+  shouldShowSkipLoad,
+  shouldShowGoto,
+  isUsableRect,
 } from "../app/store_project/static/js/meso_tour.js";
 
 describe("clampStep", () => {
@@ -360,5 +363,90 @@ describe("scrollBehaviorFor", () => {
 
   it("is smooth otherwise", () => {
     expect(scrollBehaviorFor(false)).toBe("smooth");
+  });
+});
+
+// #441 P1-1: the "Skip tour · load everything" shortcut loads the 5 fake demo
+// athletes — right for the anonymous sandbox, but a data leak onto a real
+// coach's live roster (O5). The driver only renders that form for the sandbox
+// variant; the self variant never offers a "load everything" escape hatch.
+describe("shouldShowSkipLoad", () => {
+  it("shows the load-everything skip in the sandbox variant", () => {
+    expect(shouldShowSkipLoad({ variant: "sandbox" })).toBe(true);
+  });
+
+  it("hides it in the self variant (no fake data for real coaches)", () => {
+    expect(shouldShowSkipLoad({ variant: "self" })).toBe(false);
+  });
+
+  it("hides it when the variant is missing or the config is empty", () => {
+    expect(shouldShowSkipLoad({})).toBe(false);
+    expect(shouldShowSkipLoad(null)).toBe(false);
+  });
+});
+
+// #441 P1-3: "Take me there" on a step whose target page has no data yet
+// (designer with no plan, deliver with no plan, results with no log) redirects
+// straight back to the roster — an infinite bounce loop. The server flags each
+// step's readiness (`goto_ready`); the link only shows when the target will
+// actually render AND the browser isn't already on that page.
+describe("shouldShowGoto", () => {
+  it("shows the link when off-page and the target is ready", () => {
+    expect(
+      shouldShowGoto(
+        { url: "/meso/designer/", goto_ready: true },
+        "/meso/",
+      ),
+    ).toBe(true);
+  });
+
+  it("hides the link when the target isn't ready (would bounce back)", () => {
+    expect(
+      shouldShowGoto(
+        { url: "/meso/designer/", goto_ready: false },
+        "/meso/",
+      ),
+    ).toBe(false);
+  });
+
+  it("hides the link when already on the target page", () => {
+    expect(
+      shouldShowGoto(
+        { url: "/meso/designer/", goto_ready: true },
+        "/meso/designer/107/",
+      ),
+    ).toBe(false);
+  });
+
+  it("defaults to ready when goto_ready is absent (roster-targeted steps)", () => {
+    expect(shouldShowGoto({ url: "/meso/deliver/" }, "/meso/")).toBe(true);
+  });
+
+  it("returns false for a missing step", () => {
+    expect(shouldShowGoto(null, "/meso/")).toBe(false);
+  });
+});
+
+// #441 P1-4: the self-variant deliver step's anchor lives inside Alpine's
+// `x-show="!delivered"`; delivering hides it, so `getBoundingClientRect()`
+// returns a zero rect and the driver would draw a 12x12 spotlight hole at the
+// viewport origin. A zero rect is treated as "anchor gone" — no spotlight.
+describe("isUsableRect", () => {
+  it("accepts a rect with real dimensions", () => {
+    expect(isUsableRect({ width: 120, height: 40 })).toBe(true);
+  });
+
+  it("accepts a rect with only one non-zero dimension", () => {
+    expect(isUsableRect({ width: 0, height: 40 })).toBe(true);
+    expect(isUsableRect({ width: 120, height: 0 })).toBe(true);
+  });
+
+  it("rejects a zero rect (a hidden/collapsed anchor)", () => {
+    expect(isUsableRect({ width: 0, height: 0 })).toBe(false);
+  });
+
+  it("rejects a missing rect", () => {
+    expect(isUsableRect(null)).toBe(false);
+    expect(isUsableRect(undefined)).toBe(false);
   });
 });
