@@ -277,6 +277,69 @@ export function useGrid(options: UseGridOptions) {
     [planId, csrf, runStructural, refetchGrid],
   );
 
+  // --- P2 exceptions: skip / swap / fill / add-this-week -----------------
+  // Same STRUCTURAL shape as add/removeExercise|Day|Week above — the grid
+  // (not just one cell) can change shape/content in ways only the server
+  // knows (swap_display is server-resolved, add-this-week creates a new
+  // slot+cells) so these await their POST then refetch, sharing busyRef.
+
+  const skipCell = useCallback(
+    (cellId: number, skipped: boolean) =>
+      runStructural(async () => {
+        try {
+          await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/skip/`, { skipped }, csrf);
+        } catch (err) {
+          console.error("Skip cell failed", err);
+          return;
+        }
+        await refetchGrid();
+      }),
+    [planId, csrf, runStructural, refetchGrid],
+  );
+
+  const swapCell = useCallback(
+    (cellId: number, swapName: string) =>
+      runStructural(async () => {
+        const body = swapName.trim() ? { swap_name: swapName } : { clear: true };
+        try {
+          await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/swap/`, body, csrf);
+        } catch (err) {
+          console.error("Swap cell failed", err);
+          return;
+        }
+        await refetchGrid();
+      }),
+    [planId, csrf, runStructural, refetchGrid],
+  );
+
+  const fillAcrossWeeks = useCallback(
+    (cellId: number) =>
+      runStructural(async () => {
+        try {
+          await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/fill/`, {}, csrf);
+        } catch (err) {
+          console.error("Fill across weeks failed", err);
+          return;
+        }
+        await refetchGrid();
+      }),
+    [planId, csrf, runStructural, refetchGrid],
+  );
+
+  const addExerciseThisWeek = useCallback(
+    (day: GridDay, weekId: number) =>
+      runStructural(async () => {
+        try {
+          await apiPost(`/meso/api/plan/${planId}/session/${day.session_id}/exercise/`, { week_id: weekId }, csrf);
+        } catch (err) {
+          console.error("Add exercise this week failed", err);
+          return;
+        }
+        await refetchGrid();
+      }),
+    [planId, csrf, runStructural, refetchGrid],
+  );
+
   const undo = useCallback(
     () =>
       runStructural(async () => {
@@ -322,6 +385,10 @@ export function useGrid(options: UseGridOptions) {
     addWeek,
     removeWeek,
     setCurrentWeek,
+    skipCell,
+    swapCell,
+    fillAcrossWeeks,
+    addExerciseThisWeek,
     undo,
     redo,
     refetchGrid,

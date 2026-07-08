@@ -94,6 +94,10 @@ function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
     onSetCurrentWeek: vi.fn(),
     onUndo: vi.fn(),
     onRedo: vi.fn(),
+    onSkipCell: vi.fn(),
+    onSwapCell: vi.fn(),
+    onFillAcrossWeeks: vi.fn(),
+    onAddExerciseThisWeek: vi.fn(),
     ...overrides,
   };
 }
@@ -391,5 +395,119 @@ describe("undo/redo toolbar", () => {
     );
     expect(screen.getByTestId("grid-undo")).toBeDisabled();
     expect(screen.getByTestId("grid-redo")).toBeDisabled();
+  });
+});
+
+// --- P2 exceptions: skip / swap / fill / add-this-week write UX -----------
+// CONTRACT.md "MesoTable.tsx" — exact data-testids; `id` = prescription_id,
+// `slotId` = session_slot_id, `weekId` = week id.
+
+describe("skip / unskip", () => {
+  it("clicking skip on a non-skipped cell calls onSkipCell(id, true)", async () => {
+    const user = userEvent.setup();
+    const onSkipCell = vi.fn();
+    render(<MesoTable {...baseProps({ onSkipCell })} />);
+    await user.click(screen.getByTestId("cell-skip-100"));
+    expect(onSkipCell).toHaveBeenCalledWith(100, true);
+  });
+
+  it("clicking unskip on a skipped cell calls onSkipCell(id, false)", async () => {
+    const user = userEvent.setup();
+    const onSkipCell = vi.fn();
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": cell({ skipped: true }) } })] })] }),
+          onSkipCell,
+        })}
+      />,
+    );
+    expect(screen.getByTestId("cell-skipped-100")).toHaveTextContent("—");
+    await user.click(screen.getByTestId("cell-unskip-100"));
+    expect(onSkipCell).toHaveBeenCalledWith(100, false);
+  });
+});
+
+describe("swap / clear", () => {
+  it("swap: reveals an input, typing a name then saving calls onSwapCell(id, name)", async () => {
+    const user = userEvent.setup();
+    const onSwapCell = vi.fn();
+    render(<MesoTable {...baseProps({ onSwapCell })} />);
+    expect(screen.queryByTestId("cell-swap-input-100")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("cell-swap-btn-100"));
+    const input = screen.getByTestId("cell-swap-input-100");
+    await user.type(input, "Front Squat");
+    await user.click(screen.getByTestId("cell-swap-save-100"));
+    expect(onSwapCell).toHaveBeenCalledWith(100, "Front Squat");
+  });
+
+  it("swap: Enter in the input also submits", async () => {
+    const user = userEvent.setup();
+    const onSwapCell = vi.fn();
+    render(<MesoTable {...baseProps({ onSwapCell })} />);
+    await user.click(screen.getByTestId("cell-swap-btn-100"));
+    const input = screen.getByTestId("cell-swap-input-100");
+    await user.type(input, "Front Squat{Enter}");
+    expect(onSwapCell).toHaveBeenCalledWith(100, "Front Squat");
+  });
+
+  it('clicking clear on a swapped cell calls onSwapCell(id, "")', async () => {
+    const user = userEvent.setup();
+    const onSwapCell = vi.fn();
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({
+            days: [
+              day({
+                rows: [
+                  row({
+                    cells: { "1": cell({ swap_name: "Leg Press", swap_exercise_id: 77, swap_display: "Leg Press" }) },
+                  }),
+                ],
+              }),
+            ],
+          }),
+          onSwapCell,
+        })}
+      />,
+    );
+    expect(screen.getByTestId("cell-swap-100")).toHaveTextContent("Leg Press");
+    await user.click(screen.getByTestId("cell-swap-clear-100"));
+    expect(onSwapCell).toHaveBeenCalledWith(100, "");
+  });
+});
+
+describe("fill across weeks (arm -> confirm)", () => {
+  it("arms then confirms, calling onFillAcrossWeeks(id)", async () => {
+    const user = userEvent.setup();
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
+    await user.click(screen.getByTestId("cell-fill-100"));
+    await user.click(screen.getByTestId("cell-fill-confirm-100"));
+    expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
+  });
+});
+
+describe("add exercise this week", () => {
+  it("toggling the week picker and clicking a week calls onAddExerciseThisWeek(day, weekId)", async () => {
+    const user = userEvent.setup();
+    const onAddExerciseThisWeek = vi.fn();
+    const targetDay = day({ session_slot_id: 1 });
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({
+            weeks: [week({ id: 1, current: true }), week({ id: 2, label: "Wk 2", current: false })],
+            days: [targetDay],
+          }),
+          onAddExerciseThisWeek,
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("add-this-week-1-2")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("add-this-week-1"));
+    await user.click(screen.getByTestId("add-this-week-1-2"));
+    expect(onAddExerciseThisWeek).toHaveBeenCalledWith(expect.objectContaining({ session_slot_id: 1 }), 2);
   });
 });

@@ -140,7 +140,9 @@
 }
 
 .meso-table-swap-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   margin-top: 3px;
   font-size: 10px;
   font-weight: 600;
@@ -149,4 +151,74 @@
   border: 1px solid var(--soft-line);
   border-radius: 4px;
   padding: 0 5px;
+}
+
+.meso-swap-badge-clear {
+  appearance: none;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  line-height: 1;
+  color: inherit;
+  padding: 0;
+}
+
+/* P2 exceptions: skip / swap / fill control cluster, shown alongside a
+   non-skipped cell's editor (CONTRACT.md "MesoTable.tsx — new props"). */
+.meso-table-cell-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.meso-cell-action-btn {
+  appearance: none;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--dim);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.meso-cell-swap-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.meso-swap-input {
+  width: 110px;
+  font-size: 11px;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+}
+
+/* P2: per-day "add this week only" toggle + week picker, alongside the
+   existing block-wide "+ Add exercise" button. */
+.meso-table-add-row-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  border-top: 1px solid var(--line-2);
+}
+
+.meso-table-add-this-week {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.meso-week-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 4px 15px 8px;
 }

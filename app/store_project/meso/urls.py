@@ -243,6 +243,22 @@ urlpatterns = [
         views.prescription_move,
         name="api_prescription_move",
     ),
+    # One-week exceptions: skip / swap / fill-across-weeks (P2, issue #440).
+    path(
+        "api/plan/<int:plan_id>/prescription/<int:pk>/skip/",
+        views.prescription_skip,
+        name="api_prescription_skip",
+    ),
+    path(
+        "api/plan/<int:plan_id>/prescription/<int:pk>/swap/",
+        views.prescription_swap,
+        name="api_prescription_swap",
+    ),
+    path(
+        "api/plan/<int:plan_id>/prescription/<int:pk>/fill/",
+        views.prescription_fill,
+        name="api_prescription_fill",
+    ),
     path(
         "api/plan/<int:plan_id>/deliver/",
         views.plan_deliver,
