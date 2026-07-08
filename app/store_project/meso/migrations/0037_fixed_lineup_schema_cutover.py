@@ -4,43 +4,19 @@ import django.db.models.deletion
 from django.db import migrations, models
 
 
-def reset_program_data(apps, schema_editor):
-    """Pre-launch reshape (no data to preserve): delete every ``Plan`` so the
-    fixed-lineup schema ops below apply to empty program tables AND the demo
-    rebuilds cleanly post-deploy.
-
-    Deleting the plans cascades the WHOLE program hierarchy — mesocycles → weeks →
-    sessions → prescriptions/logs/deliveries, agent batches → proposed changes, and
-    the designer undo/redo ``PlanAction`` stacks — while leaving the coach/athlete/
-    group/subscription scaffolding intact (``Plan`` FKs *to* those; they are not
-    cascaded). This matters because:
-
-    - the new NOT NULL ``Session.session_slot`` FK and the repointed ``prescription``
-      FKs would otherwise violate their constraints against pre-existing rows;
-    - ``seed_meso_demo`` early-returns when ``plan.mesocycles.exists()`` and the group
-      path only builds when the shared plan is missing, so leaving empty
-      ``Mesocycle``/``Week`` shells behind would leave delivered-but-empty programs the
-      reseeder never rebuilds — deleting the plans resets to the fresh-DB state the
-      reseeder is built to populate (idempotent), which recreates the new-shape tree;
-    - stale ``PlanAction`` snapshots reference the retired per-week rows, so an undo
-      after the cutover would restore an old-shape snapshot with no slots/cells — the
-      cascade drops those stacks with their plans.
-
-    On a fresh test DB there are no plans, so this is a no-op there. Reseed with
-    ``manage.py seed_meso_demo`` after the deploy. Irreversible (reverse = no-op).
-    """
-    apps.get_model("meso", "Plan").objects.all().delete()
-
-
 class Migration(migrations.Migration):
 
+    # The fixed-lineup schema cutover. The destructive program-data reset it needs
+    # (empty tables so the new NOT NULL FKs + repoints apply) runs in the PREVIOUS
+    # migration (0036) so its cascade DELETE commits — flushing Postgres deferred
+    # trigger events — before these ALTERs run. See 0036 for the "pending trigger
+    # events" rationale.
     dependencies = [
         ('exercises', '0002_auto_20201204_2000'),
-        ('meso', '0035_tourevent'),
+        ('meso', '0036_reset_program_data'),
     ]
 
     operations = [
-        migrations.RunPython(reset_program_data, migrations.RunPython.noop),
         migrations.RemoveField(
             model_name='exerciseprescription',
             name='exercise',
