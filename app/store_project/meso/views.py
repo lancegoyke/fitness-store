@@ -89,6 +89,7 @@ from .models import WeekDelivery
 from .serializers import current_week
 from .serializers import group_adjustments
 from .serializers import serialize_chat_thread
+from .serializers import serialize_mesocycle_grid
 from .serializers import serialize_plan
 from .serializers import serialize_plan_history
 from .serializers import serialize_prescription
@@ -255,6 +256,15 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         if plan is None:
             raise Http404("Unknown plan")
         ctx["plan_data"] = serialize_plan(plan)
+        # P1 multi-week table (backend): the current block's dense day × row ×
+        # week grid, hydrated alongside ``plan_data`` so the table can render
+        # without a round-trip on first paint. Uses the same block resolution
+        # as ``serialize_plan`` (the current week's mesocycle); left unset for
+        # a plan with no block at all (shouldn't happen post-scaffold, but a
+        # corrupt/legacy row shouldn't 500 the whole designer).
+        mesocycle = _default_grid_mesocycle(plan)
+        if mesocycle is not None:
+            ctx["grid_data"] = serialize_mesocycle_grid(mesocycle)
         # The persisted agent conversation, rebuilt from this plan's proposal
         # batches so the chat survives a reload (the JS hydrates ``messages``
         # from it, falling back to the greeting when empty).
@@ -2594,6 +2604,49 @@ def week_view(request, plan_id, week_id):
         Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
     )
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
+
+
+def _default_grid_mesocycle(plan):
+    """The block the P1 grid opens onto when no ``?mesocycle=`` is given.
+
+    Mirrors ``serialize_plan``'s block resolution: the current (live) week's
+    block, falling back to the plan's first block for the rare case where the
+    plan has a block but no materialized weeks yet (a fresh, not-yet-designed
+    block). ``None`` only when the plan has no block at all.
+    """
+    open_week = current_week(plan)
+    if open_week is not None:
+        return open_week.mesocycle
+    return plan.mesocycles.order_by("order").first()
+
+
+@login_required
+@require_GET
+def api_mesocycle_grid(request, plan_id):
+    """The P1 multi-week table's data: every live day × row × week cell.
+
+    A pure read (mirrors ``week_view``) — scoped by ownership only (404/403),
+    **not** billing-gated: an over-limit coach keeps read access. Defaults to
+    the plan's current mesocycle; ``?mesocycle=<id>`` views another block of
+    the same plan (404 for one that doesn't belong to it, 400 for a
+    non-integer). A plan with no block at all is a 404; a block with no
+    materialized weeks yet returns a valid, empty-ish grid.
+    """
+    plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    raw_mesocycle_id = request.GET.get("mesocycle")
+    if raw_mesocycle_id is not None:
+        try:
+            mesocycle_id = int(raw_mesocycle_id)
+        except (TypeError, ValueError):
+            return HttpResponseBadRequest("mesocycle must be an integer.")
+        mesocycle = get_object_or_404(Mesocycle, pk=mesocycle_id, plan=plan)
+    else:
+        mesocycle = _default_grid_mesocycle(plan)
+        if mesocycle is None:
+            raise Http404("This plan has no block yet.")
+    return JsonResponse({"ok": True, **serialize_mesocycle_grid(mesocycle)})
 
 
 @login_required

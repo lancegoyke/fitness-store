@@ -120,6 +120,119 @@ describe("hydration: full payload", () => {
   });
 });
 
+// === P1 (multi-week table): #meso-grid-data hydration + the new default
+// view. `view` gains a "table" member (frontend/designer/CONTRACT.md predates
+// this — see the P1 spec instead); the default `view` becomes "table" when
+// grid data is hydrated, falling back to today's "week" default otherwise —
+// every OTHER describe block in this file never hydrates #meso-grid-data, so
+// none of them needed touching.
+function gridPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    mesocycle: { id: 1, plan_id: 7, name: "Block 1", week_count: 1 },
+    weeks: [{ id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, current: true, delivered_at: null }],
+    days: [
+      {
+        session_slot_id: 1,
+        session_id: 11,
+        day_number: 1,
+        name: "Lower",
+        bias: "Quad bias",
+        order: 0,
+        rows: [
+          {
+            exercise_slot_id: 9,
+            name: "Squat",
+            exercise_id: 55,
+            order: 0,
+            tags: [],
+            cells: {
+              "1": {
+                prescription_id: 100,
+                sets: "3",
+                reps: "5",
+                load: "100",
+                load_type: "abs",
+                rpe: "8",
+                rest: "90",
+                note: "",
+                skipped: false,
+                swap_name: "",
+                swap_exercise_id: null,
+              },
+            },
+          },
+        ],
+      },
+    ],
+    history: { can_undo: false, can_redo: false, undo_label: "", redo_label: "" },
+    ...overrides,
+  };
+}
+
+describe("hydration: #meso-grid-data / P1 table view default", () => {
+  it("defaults to the table view when #meso-grid-data is present", () => {
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript("meso-grid-data", gridPayload());
+
+    render(<DesignerRoot />);
+
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+    expect(screen.getByTestId("meso-day-table-1")).toBeInTheDocument();
+  });
+
+  it("falls back to the week view when #meso-grid-data is absent", () => {
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+
+    render(<DesignerRoot />);
+
+    expect(screen.queryByTestId("meso-table-view")).not.toBeInTheDocument();
+    expect(screen.getByTestId("exercise-name-9")).toBeInTheDocument();
+  });
+
+  it("can switch from the table view to the week view and back via the segmented control", async () => {
+    const user = userEvent.setup();
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript("meso-grid-data", gridPayload());
+
+    render(<DesignerRoot />);
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+
+    await user.click(screen.getByText("This week"));
+    expect(screen.queryByTestId("meso-table-view")).not.toBeInTheDocument();
+    expect(screen.getByTestId("exercise-name-9")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Table"));
+    expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+  });
+
+  it("console.errors and does not crash on malformed grid JSON, still rendering the week view", () => {
+    jsonScript("meso-plan-data", planPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    const el = document.createElement("script");
+    el.type = "application/json";
+    el.id = "meso-grid-data";
+    el.textContent = "{not valid json";
+    document.body.appendChild(el);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    render(<DesignerRoot />);
+
+    expect(spy).toHaveBeenCalled();
+    expect(screen.getByTestId("exercise-name-9")).toBeInTheDocument();
+  });
+});
+
 describe("hydration: missing or malformed payload", () => {
   it("renders nothing when #meso-plan-data is absent", () => {
     const { container } = render(<DesignerRoot />);

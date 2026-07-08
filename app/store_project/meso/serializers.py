@@ -172,6 +172,11 @@ def serialize_session(session):
     }
 
 
+def _week_label(week):
+    """The week strip / grid's short label, e.g. "Wk 3"."""
+    return f"Wk {week.index}"
+
+
 def serialize_week(week):
     """One column in the designer's week strip.
 
@@ -181,7 +186,7 @@ def serialize_week(week):
     return {
         "id": week.pk,
         "index": week.index,
-        "label": f"Wk {week.index}",
+        "label": _week_label(week),
         "phase": week.phase,
         "vol": week.volume,
         "inten": week.intensity,
@@ -915,5 +920,147 @@ def serialize_plan(plan, week=None):
         "phases": phases,
         # Undo/redo button state (designer framework Phase 1) — rides every
         # serialize_plan response so the designer's buttons stay accurate.
+        "history": serialize_plan_history(plan),
+    }
+
+
+def _pick_session_id(slot_id, sessions_by_slot, current_week_id, weeks):
+    """The live ``Session`` pk the P1 grid uses for one day column.
+
+    Prefers the current (deliver-target) week's session for this slot, since
+    that's the row the write endpoints (add-exercise, remove-day) already key
+    off of; falls back to the earliest live week that has one (``weeks`` is
+    already ordered by ``index``) when the current week is missing a session
+    for this slot (e.g. it was independently soft-deleted). ``None`` only when
+    no live week has a session for this slot at all.
+    """
+    by_week = sessions_by_slot.get(slot_id)
+    if not by_week:
+        return None
+    if current_week_id is not None and current_week_id in by_week:
+        return by_week[current_week_id]
+    for week in weeks:
+        if week.pk in by_week:
+            return by_week[week.pk]
+    return None
+
+
+def serialize_mesocycle_grid(mesocycle):
+    """The P1 multi-week table: every live day × row × week cell, densely.
+
+    Unlike ``serialize_plan``'s single-week ``program`` (one week's sessions),
+    this renders the whole block at once — one row per live ``ExerciseSlot``,
+    one column per live ``Week``, keyed by ``str(week_id)`` so the grid can
+    look a cell up directly. A cell is live iff both its ``ExerciseSlot`` and
+    its ``Week`` are live (``Prescription`` carries no ``deleted_at`` of its
+    own); every live (slot × week) pair should have exactly one, built from a
+    single query grouped in Python to avoid N+1 over the block.
+    """
+    plan = mesocycle.plan
+    weeks = list(mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index"))
+    week_ids = [w.pk for w in weeks]
+    current_week_id = next((w.pk for w in weeks if w.is_current), None)
+
+    session_slots = list(
+        mesocycle.session_slots.filter(deleted_at__isnull=True).order_by(
+            "order", "day_number"
+        )
+    )
+    slot_ids = [s.pk for s in session_slots]
+
+    # session_id resolution: one query over every live session for this
+    # block's live slots/weeks, grouped ``slot_id -> {week_id: session_id}``
+    # so ``_pick_session_id`` can prefer the current week per slot.
+    sessions_by_slot = defaultdict(dict)
+    for sess in models.Session.objects.filter(
+        week_id__in=week_ids, session_slot_id__in=slot_ids, deleted_at__isnull=True
+    ):
+        sessions_by_slot[sess.session_slot_id][sess.week_id] = sess.pk
+
+    exercise_slots = list(
+        models.ExerciseSlot.objects.filter(
+            session_slot_id__in=slot_ids, deleted_at__isnull=True
+        ).order_by("order")
+    )
+    exercise_slot_ids = [e.pk for e in exercise_slots]
+    rows_by_slot = defaultdict(list)
+    for exercise_slot in exercise_slots:
+        rows_by_slot[exercise_slot.session_slot_id].append(exercise_slot)
+
+    # One query for every live cell in the block, grouped by (slot, week) so
+    # each row's dense ``cells`` map is built without a per-row lookup.
+    cells_by_key = {
+        (cell.exercise_slot_id, cell.week_id): cell
+        for cell in models.Prescription.objects.filter(
+            exercise_slot_id__in=exercise_slot_ids, week_id__in=week_ids
+        )
+    }
+
+    days = []
+    for slot in session_slots:
+        rows = []
+        for exercise_slot in rows_by_slot.get(slot.pk, []):
+            cells = {}
+            for week in weeks:
+                cell = cells_by_key.get((exercise_slot.pk, week.pk))
+                if cell is None:
+                    continue
+                cells[str(week.pk)] = {
+                    "prescription_id": cell.pk,
+                    "sets": cell.sets,
+                    "reps": cell.reps,
+                    "load": cell.load,
+                    "load_type": cell.load_type,
+                    "rpe": cell.rpe,
+                    "rest": cell.rest,
+                    "note": cell.note,
+                    "skipped": cell.skipped,
+                    "swap_name": cell.swap_name,
+                    "swap_exercise_id": cell.swap_exercise_id,
+                }
+            rows.append(
+                {
+                    "exercise_slot_id": exercise_slot.pk,
+                    "name": exercise_slot.name,
+                    "exercise_id": exercise_slot.exercise_id,
+                    "order": exercise_slot.order,
+                    "tags": list(exercise_slot.tags or []),
+                    "cells": cells,
+                }
+            )
+        days.append(
+            {
+                "session_slot_id": slot.pk,
+                "session_id": _pick_session_id(
+                    slot.pk, sessions_by_slot, current_week_id, weeks
+                ),
+                "day_number": slot.day_number,
+                "name": slot.name,
+                "bias": slot.bias,
+                "order": slot.order,
+                "rows": rows,
+            }
+        )
+
+    return {
+        "mesocycle": {
+            "id": mesocycle.pk,
+            "plan_id": plan.pk,
+            "name": mesocycle.name,
+            "week_count": mesocycle.week_count,
+        },
+        "weeks": [
+            {
+                "id": w.pk,
+                "index": w.index,
+                "label": _week_label(w),
+                "phase": w.phase,
+                "deload": w.is_deload,
+                "current": w.is_current,
+                "delivered_at": w.delivered_at.isoformat() if w.delivered_at else None,
+            }
+            for w in weeks
+        ],
+        "days": days,
         "history": serialize_plan_history(plan),
     }

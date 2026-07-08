@@ -137,6 +137,75 @@ export interface HistoryCarrier {
 }
 
 /**
+ * P1 multi-week table grid (`serialize_mesocycle_grid`, backend
+ * `app/store_project/meso/serializers.py`) — the whole block at once: one row
+ * per live ExerciseSlot, one column per live Week, keyed by `str(week_id)`.
+ * Distinct from `PlanEnvelope`'s single-week `program` (see CONTRACT.md's
+ * useGrid section) — this is P1's own data shape, fetched/POSTed independently.
+ */
+export interface GridWeek {
+  id: number;
+  index: number;
+  label: string;
+  phase: string;
+  deload: boolean;
+  current: boolean;
+  delivered_at: string | null;
+}
+
+export interface GridCell {
+  prescription_id: number;
+  sets: string;
+  reps: string;
+  load: string;
+  load_type: "abs" | "pct";
+  rpe: string;
+  rest: string;
+  note: string;
+  skipped: boolean;
+  swap_name: string;
+  swap_exercise_id: number | null;
+}
+
+export interface GridRow {
+  exercise_slot_id: number;
+  /** The BLOCK identity (not swap-resolved) — a swapped cell shows its own
+   * `swap_name` alongside this. */
+  name: string;
+  exercise_id: number | null;
+  order: number;
+  tags: unknown[];
+  /** One cell per live week, keyed by `String(week.id)`. */
+  cells: Record<string, GridCell>;
+}
+
+export interface GridDay {
+  session_slot_id: number;
+  session_id: number | null;
+  day_number: number;
+  name: string;
+  bias: string;
+  order: number;
+  rows: GridRow[];
+}
+
+/** `serialize_plan_history`'s shape as ridden by the grid endpoints — labels
+ * are always strings (never null), unlike `HistoryState`. */
+export interface GridHistory {
+  can_undo: boolean;
+  can_redo: boolean;
+  undo_label: string;
+  redo_label: string;
+}
+
+export interface MesoGrid {
+  mesocycle: { id: number; plan_id: number; name: string; week_count: number };
+  weeks: GridWeek[];
+  days: GridDay[];
+  history: GridHistory;
+}
+
+/**
  * POST JSON to `url` with the CSRF header and same-origin credentials
  * (fetch's default), throwing on a non-ok response. `csrf` is an explicit
  * argument (the Alpine original read `this.csrf`); callers supply it from
