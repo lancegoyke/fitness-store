@@ -78,15 +78,18 @@ def normalize_result(result):
 PROPOSE_TOOL = {
     "name": TOOL_NAME,
     "description": (
-        "Propose a batch of edits to the CURRENT training week. Each change must "
-        "target a real session or exercise by the id given in the plan context (an "
-        "'add' introduces a NEW exercise row into a session, so it targets a "
-        "session_id, not a prescription). For a GROUP's shared program you have an "
-        "extra verb: 'adjust' diverges ONE member from the shared row (a "
-        "per-athlete auto-adjust) — it targets that member by member_id plus the "
-        "shared prescription_id, and the other members are unaffected. Honor every "
-        "active contraindication and the coach's avoid-rules — never introduce a "
-        "movement a contraindication flags."
+        "Propose a batch of edits to the athlete's whole training BLOCK. The plan "
+        "context gives every week's rows and numbers; target a real session or "
+        "exercise by the id given there. A 'swap' changes the exercise for the "
+        "WHOLE block (every week follows), so it targets any week's "
+        "prescription_id. A 'progress', 'volume', or 'deload' acts on the specific "
+        "week's row/day you target by id. An 'add' introduces a NEW exercise row "
+        "into a session, so it targets a session_id, not a prescription. For a "
+        "GROUP's shared program you have an extra verb: 'adjust' diverges ONE "
+        "member from the shared row (a per-athlete auto-adjust) — it targets that "
+        "member by member_id plus the shared prescription_id, and the other "
+        "members are unaffected. Honor every active contraindication and the "
+        "coach's avoid-rules — never introduce a movement a contraindication flags."
     ),
     "input_schema": {
         "type": "object",
@@ -117,15 +120,18 @@ PROPOSE_TOOL = {
                         "session_id": {
                             "type": ["integer", "null"],
                             "description": (
-                                "Target session id from the plan context (required "
-                                "for an 'add', which creates a row in that session)."
+                                "Target session id from the plan context — may be "
+                                "any week's day (required for an 'add', which "
+                                "creates a row in that session)."
                             ),
                         },
                         "prescription_id": {
                             "type": ["integer", "null"],
                             "description": (
-                                "Target exercise row id from the plan context "
-                                "(required for swap/progress)."
+                                "Target exercise-row cell id from the plan context "
+                                "(any week). A swap renames that exercise for the "
+                                "WHOLE block; a progress sets that specific week's "
+                                "load."
                             ),
                         },
                         "day_label": {
@@ -153,7 +159,9 @@ PROPOSE_TOOL = {
                             "type": "string",
                             "description": (
                                 "swap/add: the exercise name to set on the row "
-                                "(defaults to introduces_exercise if omitted)."
+                                "(defaults to introduces_exercise if omitted). A "
+                                "swap renames the exercise for the whole block — "
+                                "every week follows."
                             ),
                         },
                         "new_load": {
@@ -215,16 +223,24 @@ PROPOSE_TOOL = {
 SYSTEM_PROMPT = (
     "You are an expert strength & conditioning programming assistant working "
     "inside a coach's program designer. A coach gives you an instruction and the "
-    "current state of one athlete's training plan. Propose concrete edits to the "
-    "athlete's CURRENT week.\n\n"
+    "current state of one athlete's training plan. The plan context includes the "
+    "athlete's FULL training block — every week's session rows and numbers "
+    "(sets/reps/load/RPE/rest) plus each week's volume/intensity/phase and which "
+    "week is current. Propose concrete edits, programming progression ACROSS the "
+    "weeks of the block.\n\n"
     "Rules:\n"
     "- Emit edits ONLY through the propose_program_changes tool.\n"
-    "- Target real rows by the ids in the plan context. Do not invent ids.\n"
+    "- Target real rows by the ids in the plan context. Do not invent ids. Each "
+    "row/day id belongs to a specific week — a progress, volume, or deload acts "
+    "on the week you target by id, so address each week's rows by that week's "
+    "ids.\n"
+    "- A swap changes the exercise for the WHOLE block: renaming a row updates "
+    "every week's copy of it, so swap once, not per week.\n"
     "- Honor every active contraindication and the coach's avoid-rules. If a "
     "contraindication flags a movement, do not introduce it — choose a safe "
     "alternative and name it in introduces_exercise.\n"
     "- Anchor load progressions to the values already in the plan; prefer small, "
-    "defensible steps.\n"
+    "defensible steps from one week to the next.\n"
     "- Use the 'add' kind to introduce a NEW exercise into a day: target the day "
     "by session_id, give the exercise in new_name, and set new_sets/new_reps/"
     "new_rpe (and new_load only if you want a starting weight). This is how you "
@@ -236,7 +252,8 @@ SYSTEM_PROMPT = (
     "weight in the plan's unit (kg/lb); 'pct' means the load is a percentage of "
     "1RM. When you progress a 'pct' lift, new_load is a percentage (keep it in a "
     "sane range, typically at or below 100%) — never convert it into an absolute "
-    "weight, and never convert an absolute lift into a percentage.\n"
+    "weight, and never convert an absolute lift into a percentage. rest is a "
+    "per-week field like load and RPE.\n"
     "- Give the value to apply: new_name for a swap, new_load for a progress, "
     "new_sets for a volume change. A deload needs no value.\n"
     "- Set 'honors' to the specific contraindication or coaching rule each change "
@@ -249,9 +266,11 @@ SYSTEM_PROMPT = (
 _GROUP_FRAMING = (
     "This is a GROUP's SHARED program — every listed member trains off it. You "
     "can edit it two ways:\n"
-    "- A SHARED edit (swap/progress/volume/deload/add) changes the one shared week "
-    "for EVERYONE. Honor every member's contraindications (group.contraindications "
-    "folds them together) — a shared movement must be safe for all of them.\n"
+    "- A SHARED edit (swap/progress/volume/deload/add) changes the shared program "
+    "for EVERYONE — a swap changes that exercise across the WHOLE block, and "
+    "progress/volume/deload act on the week you target by id. Honor every member's "
+    "contraindications (group.contraindications folds them together) — a shared "
+    "movement must be safe for all of them.\n"
     "- A per-athlete ADJUST diverges ONE member from the shared row (a swap, a "
     "load %, or a volume tweak just for them). Use it when the instruction is "
     "about a single athlete or when one member's constraint differs from the "

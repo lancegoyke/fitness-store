@@ -13,10 +13,44 @@ import pytest
 from store_project.meso.agent import service
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import SessionLogFactory
+from store_project.meso.factories import WeekFactory
 from store_project.meso.models import SessionLog
+from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import presc
 from store_project.meso.tests.test_agent_validation import make_plan
 
 pytestmark = pytest.mark.django_db
+
+
+def test_context_includes_whole_block():
+    # P4 whole-block grounding: the agent sees EVERY live week of the current
+    # mesocycle — its full session/cell grid (numbers incl. ``rest``) plus each
+    # week's volume/intensity/is_current — so it can program across the block.
+    plan, session, _ = make_plan()  # week 1 (current) with a day + "Back Squat"
+    week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
+    w2_session = day(week2, day_number=1, name="Lower")
+    presc(w2_session, name="Front Squat")
+
+    block = service.build_context(plan)["block"]
+
+    assert len(block["weeks"]) == 2
+    for w in block["weeks"]:
+        # Week meta exposes the progression levers.
+        assert "volume" in w["week"]
+        assert "intensity" in w["week"]
+        assert "is_current" in w["week"]
+        # Each cell exposes its full numbers, including ``rest``.
+        for s in w["sessions"]:
+            for ex in s["exercises"]:
+                assert "rest" in ex
+    # Week 2's cell is visible — the agent sees beyond the current week.
+    names = {
+        ex["name"]
+        for w in block["weeks"]
+        for s in w["sessions"]
+        for ex in s["exercises"]
+    }
+    assert "Front Squat" in names
 
 
 def test_context_has_empty_recent_logs_without_any():
@@ -58,11 +92,11 @@ def test_recent_logs_are_scoped_to_the_plans_athlete():
 
 def test_recent_logs_are_capped_and_newest_first():
     plan, session, _ = make_plan()
-    for day in range(1, 9):
+    for day_num in range(1, 9):
         SessionLogFactory(
             session=session,
             athlete=plan.athlete,
-            date=datetime.date(2026, 6, day),
+            date=datetime.date(2026, 6, day_num),
         )
 
     logs = service.build_context(plan)["recent_logs"]

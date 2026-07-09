@@ -1104,3 +1104,26 @@ def serialize_mesocycle_grid(mesocycle):
         "days": days,
         "history": serialize_plan_history(plan),
     }
+
+
+def serialize_agent_block(plan):
+    """The whole current block for the agent's grounding (P4).
+
+    Every live week of the plan's current mesocycle with its full session/cell
+    grid (numbers incl. ``rest``) plus the week's phase/volume/intensity/deload/
+    current flags — so the agent programs progression across the block, not one
+    week in isolation. Reuses ``serialize_week_snapshot`` and adds ``is_current``.
+    A cell's pk is stable, so ids here match ``serialize_plan``'s single-week
+    ``program`` — any id the agent returns resolves the same either way.
+    """
+    week = current_week(plan)
+    mesocycle = week.mesocycle if week else None
+    if mesocycle is None:
+        return {"name": "", "weeks": []}
+    weeks = mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index")
+    serialized = []
+    for w in weeks:
+        snap = serialize_week_snapshot(w)
+        snap["week"]["is_current"] = w.is_current
+        serialized.append(snap)
+    return {"name": mesocycle.name, "weeks": serialized}

@@ -3,8 +3,7 @@
 The review screen is the human gate; once a coach approves changes, this module
 performs the structured edit each ``ProposedChange`` describes:
 
-- **swap**     → set the prescription cell's one-week ``swap_name`` to the
-  introduced exercise (this week only; a block-wide rename is a later phase);
+- **swap**     → rename the block-shared ``ExerciseSlot`` (every week follows);
 - **progress** → set the prescription's ``load``;
 - **volume**   → set the prescription's set count (``sets``);
 - **deload**   → flag the target week (``is_deload``);
@@ -185,21 +184,32 @@ def _apply_deload(change):
 
 
 def _apply_swap(change, name):
-    """Write a one-week swap onto the change's prescription cell.
+    """Rename the exercise for the WHOLE block (P4 structural rescope).
 
-    A cell's effective name delegates to its ``ExerciseSlot`` (block-wide
-    identity) unless this week carries its own ``swap_name`` — a swap change is
-    scoped to *this week only* (the same scope the old per-week
-    ``ExercisePrescription.name`` write had), so it sets the cell's ``swap_*``
-    fields rather than the (now read-only) ``name`` property. A block-wide
-    rename of the slot itself is a later phase (P4).
+    Under fixed selection the lineup is shared across every week, so an agent
+    swap changes identity on the block-shared ``ExerciseSlot`` — every week's
+    cell follows (``Prescription.name`` resolves to the slot). A one-week-only
+    substitute stays the coach's manual exception (a cell ``swap_*``), not an
+    agent verb. A free-text rename severs the slot's catalog link so the row
+    isn't mis-keyed to the old exercise.
     """
     presc = change.prescription
     if presc is None or not name:
         return None
-    presc.swap_name = name
-    presc.swap_exercise = None
-    presc.save(update_fields=["swap_name", "swap_exercise"])
+    slot = presc.exercise_slot
+    slot.name = name
+    slot.exercise = None
+    slot.save(update_fields=["name", "exercise"])
+    # The block grounding serializes each cell's *effective* name, so the model
+    # can target a cell that already carries a one-week ``swap_*`` exception. That
+    # override shadows the slot's name, so without clearing it the reviewed week
+    # would silently keep the old lift while every other week changed. Clear the
+    # target cell's exception so the swap the coach approved shows through here
+    # too; sibling weeks' own exceptions are left untouched (still block-wide).
+    if presc.swap_name or presc.swap_exercise_id:
+        presc.swap_name = ""
+        presc.swap_exercise = None
+        presc.save(update_fields=["swap_name", "swap_exercise"])
     return {"id": change.pk, "kind": change.kind, "field": "name", "value": name}
 
 
