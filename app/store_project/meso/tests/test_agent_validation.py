@@ -116,8 +116,9 @@ class TestCleanChange:
 
     def test_swap_can_target_any_week(self):
         # P4: the agent is grounded on the WHOLE block, so a swap targeting an
-        # off-(current-)week cell is now IN contract — targets resolve within
-        # the whole plan, any live week (a swap renames the block-shared slot).
+        # off-(current-)week cell of the SAME block is now IN contract — targets
+        # resolve within the current block, any live week (a swap renames the
+        # block-shared slot).
         plan, session, _ = make_plan()  # week index 1 is current
         week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
         off_session = day(week2, day_number=1, name="Lower")
@@ -127,6 +128,36 @@ class TestCleanChange:
         )
         assert errors == []
         assert cleaned["prescription"] == off_presc
+
+    def test_target_from_another_block_rejected(self):
+        # P4 scope: the agent is grounded on ONE block (the current mesocycle),
+        # so a target from a DIFFERENT block of the same plan — never serialized
+        # for review — is out of contract and dropped, like a foreign-plan id.
+        # Guards both the prescription (swap) and the session (add) lookups.
+        plan, _, _ = make_plan()  # current block = mesocycle order 0
+        other_block = MesocycleFactory(plan=plan, order=1)
+        other_week = WeekFactory(mesocycle=other_block, index=1, is_current=False)
+        other_session = day(other_week, day_number=1, name="Lower")
+        other_presc = presc(other_session, name="Squat")
+
+        swap_cleaned, swap_errors = validation.clean_change(
+            base_change(prescription_id=other_presc.pk), plan
+        )
+        assert swap_cleaned is None
+        assert any("not in this plan" in e for e in swap_errors)
+
+        add_cleaned, add_errors = validation.clean_change(
+            {
+                "kind": "add",
+                "title": "Add Plank",
+                "rationale": "...",
+                "session_id": other_session.pk,
+                "new_name": "Plank",
+            },
+            plan,
+        )
+        assert add_cleaned is None
+        assert any("not in this plan" in e for e in add_errors)
 
     def test_progress_can_target_any_week(self):
         # P4: a progress can set a specific (future/other) week's load — the

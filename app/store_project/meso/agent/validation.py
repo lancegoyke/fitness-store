@@ -23,6 +23,7 @@ from ..models import LoadType
 from ..models import Prescription
 from ..models import PrescriptionOverride
 from ..models import Session
+from ..serializers import current_week
 
 VALID_KINDS = {"swap", "progress", "volume", "deload", "add", "adjust"}
 
@@ -201,7 +202,7 @@ def _resolve(model, value, label, errors, **scope):
         return None
     obj = model.objects.filter(pk=pk, **scope).first()
     if obj is None:
-        errors.append(f"{label} {pk} is not in this plan")
+        errors.append(f"{label} {pk} is not in this plan's current block")
     return obj
 
 
@@ -295,17 +296,21 @@ def clean_change(raw, plan, *, forbidden=None):
     rationale = raw.get("rationale", "")
     cleaned["rationale"] = rationale.strip() if isinstance(rationale, str) else ""
 
-    # Structural: targets must belong to the plan, in any LIVE week (P4 block-wide
-    # semantics). The agent is now grounded on the whole block, so a structural
-    # swap renames the block-shared slot and numeric edits address a specific
-    # week — targets resolve within the whole plan (any live week/slot), not just
-    # the current week. A foreign-plan id is still dropped, never applied.
+    # Structural: targets must belong to the plan's CURRENT block, in any LIVE
+    # week (P4 block-wide semantics). The agent is grounded on that one block
+    # (``serialize_agent_block`` serializes only ``current_week(plan).mesocycle``),
+    # so a structural swap renames the block-shared slot and numeric edits address
+    # any *week* of that block — but a target from another block of the same plan
+    # (a past/future mesocycle the coach did not review) is out of contract and is
+    # dropped, just like a foreign-plan id.
+    week = current_week(plan)
+    mesocycle = week.mesocycle if week is not None else None
     presc = _resolve(
         Prescription,
         raw.get("prescription_id"),
         "prescription",
         errors,
-        exercise_slot__session_slot__mesocycle__plan=plan,
+        exercise_slot__session_slot__mesocycle=mesocycle,
         exercise_slot__deleted_at__isnull=True,
         week__deleted_at__isnull=True,
     )
@@ -314,7 +319,7 @@ def clean_change(raw, plan, *, forbidden=None):
         raw.get("session_id"),
         "session",
         errors,
-        session_slot__mesocycle__plan=plan,
+        session_slot__mesocycle=mesocycle,
         deleted_at__isnull=True,
         week__deleted_at__isnull=True,
     )
