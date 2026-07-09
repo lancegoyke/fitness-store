@@ -15,6 +15,7 @@ weeks, and never another athlete's data. Delivery — not plan status — is the
 publish gate; an undelivered week is invisible even to its own athlete.
 """
 
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -302,6 +303,25 @@ class TestAthleteHome:
         body = client.get(HOME).content.decode()
         assert "Front Squat" in body  # the swap
         assert "Box Squat" in body  # the underlying slot row still labels the row
+
+    def test_multiple_current_weeks_focus_the_latest_delivered(self, client):
+        """The home opens to the newest delivered week when several are current.
+
+        A group-materialized plan flags EVERY delivered week ``is_current``, so
+        the home must not focus the earliest of them (regression: focusing
+        ``current_week`` stranded the athlete on week 1 after week 2 was
+        delivered).
+        """
+        b = seed_block()  # w1 & w2 delivered at the same ``now``; w2 is_current
+        # Reproduce the group-sync anomaly: an earlier week is *also* current and
+        # was delivered before w2.
+        b.w1.is_current = True
+        b.w1.delivered_at = timezone.now() - timedelta(days=1)
+        b.w1.save(update_fields=["is_current", "delivered_at"])
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert session_url(b.s2) in body  # newest delivered week is the focus
+        assert session_url(b.s1) not in body  # the earlier current week is not
 
     def test_future_only_add_this_week_row_is_not_leaked(self, client):
         """An exercise added only to an undelivered future week must not surface.

@@ -1114,12 +1114,14 @@ def athlete_home(user):
             ).order_by("index")
         )
         delivered_ids = {w.pk for w in delivered_weeks}
-        # Focus = the week the athlete is on (``is_current``) when it's a
-        # delivered week of THIS block; otherwise the latest delivered week.
-        current = current_week(plan)
-        focus = (
-            current if (current is not None and current.pk in delivered_ids) else latest
-        )
+        # Focus (what the home opens to) = the latest delivered week. Its ordering
+        # already breaks the block-delivery timestamp tie toward the athlete's
+        # ``is_current`` week (see ``latest_delivered_week``), so for an individual
+        # block this IS the current week. Deriving it from ``latest`` rather than
+        # ``current_week`` also stays correct for a group-materialized plan, whose
+        # sync flags EVERY delivered week ``is_current`` — ``current_week`` would
+        # return the earliest of those and strand the athlete on week 1.
+        focus = latest
 
         # The focus week's sessions are the tappable log rows. Live rows only
         # (soft delete, designer framework Phase 0): a day the coach removed after
