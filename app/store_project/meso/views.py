@@ -857,13 +857,17 @@ def plan_create(request, pk):
         tour_step = None
     if tour_step is not None:
         meso_tour.record_opt_in(request.user, "self", tour_step, "plan_create")
-    # #441 P3-5: the designer/agent steps auto-advance once the coach's *own*
-    # plan exists — ``natural_step`` names which of the two fired (agent when
-    # drafting, else designer). Gated on the self-link so building a program for
-    # another athlete the coach coaches doesn't skip their own tour. A no-op
-    # unless the coach is parked on that step.
+    # #441 P3-5: both the designer and agent self steps complete on the same
+    # signal — "the coach's own plan now exists" — regardless of which control
+    # created it (a plain "+ New program" or "Draft with AI", the latter sending
+    # draft=agent even while parked on designer). So advance is decoupled from
+    # ``natural_step`` (which is only the funnel attribution above): advance
+    # whichever of the two the coach is parked on — each call no-ops off its
+    # step. Gated on the self-link so building a program for another athlete the
+    # coach coaches never skips their own tour.
     if relationship.is_self:
-        meso_tour.advance_if_on_step(request.user, natural_step)
+        meso_tour.advance_if_on_step(request.user, "designer")
+        meso_tour.advance_if_on_step(request.user, "agent")
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 

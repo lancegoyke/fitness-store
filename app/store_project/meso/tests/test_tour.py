@@ -1608,6 +1608,19 @@ class TestActionSiteAutoAdvance:
 
         assert tour.tour_status(coach)["step"] == 7  # finish (terminal)
 
+    def test_self_designer_advances_on_ai_draft_from_designer_step(self, client):
+        # The visible "Draft with AI" control sends draft=agent, but a coach
+        # parked on the designer step who uses it still creates their self plan —
+        # the designer step must advance, not no-op on the agent key (#441 P3-5).
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+        tour.set_step(coach.coach_profile, 2)  # designer
+        client.force_login(coach)
+
+        client.post(reverse("meso:plan_create", args=[coach.pk]), {"draft": "agent"})
+
+        assert tour.tour_status(coach)["step"] == 3  # deliver
+
     def test_self_designer_does_not_advance_creating_another_athletes_plan(
         self, client
     ):
