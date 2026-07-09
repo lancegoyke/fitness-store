@@ -247,12 +247,15 @@ function createLogger() {
         this.status = data.log.status;
         this.syncFromLog(data.log);
         this.saved = true;
-        // Only a completed log (`markDone`) advances the self-variant "results"
-        // tour step server-side (`advance_self_step_if_complete("results")`), so
-        // only that path nudges the mounted tour to re-render (#451). A pending
-        // "Save progress" — and the offline `flushQueue` path — must not fire a
-        // spurious re-render / screen-reader re-announcement.
-        if (markDone) notifyTourRefresh();
+        // Key the tour nudge off the log status the *server* persisted, not the
+        // button pressed (#451): the self-variant "results" step advances on a
+        // `done` log (`advance_self_step_if_complete("results")`), and a "Save
+        // progress" on an already-completed session still writes `done` — so
+        // `markDone` alone would leave the card stale after re-saving a logged
+        // session. A pending save returns `pending` → no spurious re-render /
+        // screen-reader re-announcement (the offline `flushQueue` path stays
+        // silent regardless — it never calls this).
+        if (data.log.status === "done") notifyTourRefresh();
         setTimeout(() => {
           this.saved = false;
         }, 2400);

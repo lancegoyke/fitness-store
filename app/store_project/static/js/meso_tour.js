@@ -483,6 +483,10 @@
 
     var index = clampStep(config.step, config.steps.length);
     var reposition = null;
+    // #451: set once `teardown()` runs so an in-flight `meso:tour-refresh` GET
+    // that resolves *after* a concurrent dismiss/complete can't reassign
+    // `config`/`index` and `render()` a torn-down tour back onto the page.
+    var torndown = false;
 
     // A persistent `aria-live` region (issue #430 Phase 4 a11y) — created
     // once and only ever text-updated, never recreated, unlike the card
@@ -571,6 +575,7 @@
       }
       doc.removeEventListener("keydown", onKeydown);
       doc.removeEventListener("meso:tour-refresh", onTourRefresh);
+      torndown = true;
       mount.innerHTML = "";
       mount.setAttribute("aria-hidden", "true");
       if (liveRegion.parentNode) liveRegion.parentNode.removeChild(liveRegion);
@@ -601,6 +606,10 @@
           return res.json();
         })
         .then(function (fresh) {
+          // The tour was dismissed/completed while this read was in flight —
+          // its listener + mount are already gone; applying a stale (still
+          // "active") snapshot now would resurrect the torn-down card (#451).
+          if (torndown) return;
           // A steps-less / empty snapshot means "no tour" (e.g. no
           // CoachProfile) — nothing to show, so don't disturb the card.
           if (

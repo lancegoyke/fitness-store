@@ -724,4 +724,36 @@ describe("initTour tour-refresh listener (#451)", () => {
 
     expect(window.fetch).not.toHaveBeenCalled();
   });
+
+  it("discards an in-flight refresh that resolves after teardown", async () => {
+    // Codex #451: a `config_url` GET still in flight when the coach dismisses
+    // the tour must not resurrect the torn-down card with a stale (still
+    // "active") snapshot.
+    mount();
+    let resolveConfig;
+    const pending = new Promise((r) => {
+      resolveConfig = r;
+    });
+    window.fetch = vi.fn((url) =>
+      // Hold the refresh read open; let the dismiss state POST settle at once.
+      url === CONFIG.config_url ? pending : Promise.resolve({ ok: true }),
+    );
+    tourDriver.initTour(document, window);
+    const mountEl = document.getElementById("meso-tour");
+
+    // Kick the refresh off (its fetch stays pending)...
+    document.dispatchEvent(new CustomEvent("meso:tour-refresh"));
+    // ...then dismiss, tearing the tour down while that read is still open.
+    mountEl.querySelector("[data-tour-dismiss]").click();
+    await vi.waitFor(() => expect(mountEl.innerHTML).toBe(""));
+
+    // The in-flight read now resolves with a still-active config — the
+    // torn-down guard must keep it from re-rendering onto the page.
+    resolveConfig({ json: () => Promise.resolve({ ...CONFIG, step: 1 }) });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mountEl.innerHTML).toBe("");
+    expect(mountEl.getAttribute("aria-hidden")).toBe("true");
+  });
 });
