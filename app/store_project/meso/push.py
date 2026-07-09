@@ -99,7 +99,51 @@ def notify_week_delivered(*, athlete, coach, plan, week, home_url):
         "url": home_url,
         "tag": f"meso-week-{week.pk}",
     }
+    return _fan_out(subscriptions, payload)
 
+
+def notify_block_delivered(*, athlete, coach, plan, mesocycle, week_count, home_url):
+    """Push a block-delivery notification to the athlete's devices (best-effort).
+
+    The block-level peer of ``notify_week_delivered`` (Meso P3): the individual
+    deliver path releases a whole mesocycle at once, so the athlete gets one
+    "your new block is ready" push, not one per week. Same contract — a no-op
+    (returns 0) when push is disabled or the athlete has no subscriptions, dead
+    subscriptions are pruned, other per-device failures are logged and skipped,
+    and nothing here ever raises to the caller. Returns the number of devices
+    actually pushed to.
+    """
+    # Imported here to avoid a models import at module load (push.py is imported
+    # from views before app loading settles in some paths).
+    from .models import PushSubscription
+
+    if not push_enabled():
+        return 0
+
+    subscriptions = list(PushSubscription.objects.filter(athlete=athlete))
+    if not subscriptions:
+        return 0
+
+    payload = {
+        "title": "Your new training block is ready",
+        "body": (
+            f"{coach.display_name()} delivered a new block "
+            f"({_week_count_label(week_count)}) of {plan.title}."
+        ),
+        "url": home_url,
+        "tag": f"meso-block-{mesocycle.pk}",
+    }
+    return _fan_out(subscriptions, payload)
+
+
+def _fan_out(subscriptions, payload):
+    """Send one ``payload`` to each subscription; return the count actually sent.
+
+    The shared per-device loop behind the delivery notifiers: dead endpoints
+    (404/410 Gone) are pruned, any other per-device failure is logged and
+    skipped, and nothing here ever raises — one bad endpoint never blocks the
+    others or fails the deliver.
+    """
     sent = 0
     for subscription in subscriptions:
         try:
@@ -121,3 +165,8 @@ def notify_week_delivered(*, athlete, coach, plan, week, home_url):
 
 def _week_label(week):
     return f"Week {week.index}"
+
+
+def _week_count_label(week_count):
+    """Pluralize-correct "N week(s)" for the block push copy."""
+    return f"{week_count} week" + ("" if week_count == 1 else "s")

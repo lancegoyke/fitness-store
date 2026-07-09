@@ -39,6 +39,7 @@ from django.views.decorators.http import require_GET
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 
+from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
 from store_project.notifications.emails import send_week_delivered_email
@@ -3512,17 +3513,19 @@ def _fan_out_group_delivery(request, plan):
 @login_required
 @require_POST
 def plan_deliver(request, plan_id):
-    """Deliver a week of the plan: stamp ``delivered_at`` + snapshot it (Phase 4).
+    """Deliver a **block** of the plan: stamp + snapshot its whole mesocycle (P3).
 
-    Delivers the plan's **current** (live) week by default, or a specific week
-    when the body carries a ``week_id`` — the multi-week designer's "send the week
-    I'm viewing". A coach can deliver a built-ahead week directly: delivering never
-    changes ``is_current``, so sending a future week doesn't move the live pointer.
-    Visibility is by newest ``delivered_at`` (``latest_delivered_week``), so the
-    athlete lands on the week just sent while the live pointer stays put. The chosen
-    week must belong to the plan (a foreign week is a 404). A group plan ignores
-    ``week_id`` and fans out its current week (per-week delivery is an
-    individual-designer affordance).
+    The individual deliver path releases the whole block (one ``Mesocycle``, all
+    its live weeks) at once, not one week at a time. The target week is resolved
+    exactly as before — the ``week_id`` in the body (the multi-week designer's
+    "send the week I'm viewing"), else the plan's **current** (live) week — but it
+    only *selects which block* to send: every live week of ``target.mesocycle`` is
+    stamped ``delivered_at`` (one shared timestamp) and snapshotted. The chosen
+    week must belong to the plan (a foreign week is a 404). Re-delivering re-stamps
+    every week and writes fresh ``WeekDelivery`` rows. Delivering never changes
+    ``is_current`` — releasing a block doesn't move the live pointer. A group plan
+    still fans out its current week per-member (per-week delivery is a group-path
+    affordance a later phase rewrites), so its branch is unchanged.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -3535,33 +3538,37 @@ def plan_deliver(request, plan_id):
         if error is not None:
             return HttpResponseBadRequest(error)
         return JsonResponse({"ok": True, **summary}, status=201)
-    # An empty body (the bare deliver button) means "no week_id" — deliver the
-    # live week, as before; a present-but-malformed body is a 400, not a silent
-    # delivery of the wrong week.
+    # An empty body (the bare deliver button) means "no week_id" — target the
+    # live week's block, as before; a present-but-malformed body is a 400, not a
+    # silent delivery of the wrong block.
     week_id, bad = _body_week_id(request)
     if bad is not None:
         return bad
     if week_id is not None:
-        week = get_object_or_404(
+        target_week = get_object_or_404(
             Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
         )
     else:
-        week = current_week(plan)
-    if week is None:
+        target_week = current_week(plan)
+    if target_week is None:
         return HttpResponseBadRequest("This plan has no week to deliver.")
+    block = target_week.mesocycle
     now = timezone.now()
-    week.delivered_at = now
-    week.save(update_fields=["delivered_at"])
-    WeekDelivery.objects.create(
-        week=week, delivered_at=now, payload=serialize_week_snapshot(week)
-    )
+    live_weeks = list(block.weeks.filter(deleted_at__isnull=True))
+    for week in live_weeks:
+        week.delivered_at = now
+        week.save(update_fields=["delivered_at"])
+        WeekDelivery.objects.create(
+            week=week, delivered_at=now, payload=serialize_week_snapshot(week)
+        )
     _touch_plan(plan)
-    _notify_athlete_delivered(request, plan, week)
+    _notify_athlete_block_delivered(request, plan, block, len(live_weeks))
     return JsonResponse(
         {
             "ok": True,
             "delivered_at": now.isoformat(),
-            "week": {"id": week.pk, "label": f"Wk {week.index}"},
+            "mesocycle": {"id": block.pk, "name": block.name},
+            "week_count": len(live_weeks),
         },
         status=201,
     )
@@ -3623,6 +3630,70 @@ def _notify_athlete_delivered(request, plan, week):
                 "Failed to send delivery push for plan %s week %s",
                 plan.pk,
                 week.pk,
+            )
+
+    transaction.on_commit(_send)
+
+
+def _notify_athlete_block_delivered(request, plan, mesocycle, week_count):
+    """Best-effort: ONE email + ONE push that a whole **block** was delivered.
+
+    The block-level peer of ``_notify_athlete_delivered`` (P3): the individual
+    deliver path releases the whole mesocycle at once, so the athlete gets a
+    single "your new block is ready" nudge — not one notification per week. Same
+    contract as the per-week notifier: sandbox-gated at the coach check, deferred
+    to ``transaction.on_commit`` (under ``ATOMIC_REQUESTS`` a rolled-back deliver
+    must not notify a false "your block is ready"), and each channel is
+    independently best-effort — a failure in one is swallowed and logged, never a
+    500 or a rolled-back deliver, and never blocks the other.
+
+    Sandbox gate (S4): a sandbox coach's deliveries never notify — there is no
+    real person behind a seeded demo athlete.
+    """
+    if meso_sandbox.is_sandbox(plan.coach):
+        return
+    home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
+    unsubscribe_url = request.build_absolute_uri(
+        reverse(
+            "meso:unsubscribe_delivery_email",
+            kwargs={"token": make_unsubscribe_token(plan.athlete)},
+        )
+    )
+
+    def _send():
+        try:
+            # The athlete can opt out of delivery emails (the email's
+            # List-Unsubscribe link). Push is a separate, browser-opt-in channel
+            # and is never gated by the email opt-out.
+            if not athlete_opted_out(plan.athlete):
+                send_block_delivered_email(
+                    athlete=plan.athlete,
+                    coach=plan.coach,
+                    plan=plan,
+                    week_count=week_count,
+                    home_url=home_url,
+                    unsubscribe_url=unsubscribe_url,
+                )
+        except Exception:  # mail is best-effort; never fail a delivery on it
+            logger.exception(
+                "Failed to send block delivery email for plan %s mesocycle %s",
+                plan.pk,
+                mesocycle.pk,
+            )
+        try:
+            meso_push.notify_block_delivered(
+                athlete=plan.athlete,
+                coach=plan.coach,
+                plan=plan,
+                mesocycle=mesocycle,
+                week_count=week_count,
+                home_url=home_url,
+            )
+        except Exception:  # push is best-effort too; never fail a delivery on it
+            logger.exception(
+                "Failed to send block delivery push for plan %s mesocycle %s",
+                plan.pk,
+                mesocycle.pk,
             )
 
     transaction.on_commit(_send)

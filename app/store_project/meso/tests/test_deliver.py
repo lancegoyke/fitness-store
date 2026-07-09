@@ -99,9 +99,10 @@ class TestDeliver:
         exercises = sessions[0]["exercises"]
         assert any(e["name"] == "Box Squat" and e["load"] == "70" for e in exercises)
 
-    def test_deliver_stamps_flagged_current_week_only(self, client):
+    def test_deliver_stamps_the_whole_block_not_just_current(self, client):
+        # P3 block delivery: sending a plan releases the whole mesocycle, so a
+        # second week in the same block is stamped too — not only the flagged one.
         plan, week1, _, _ = seed_plan()
-        # A second, current week in the same plan; week1 is no longer current.
         week1.is_current = False
         week1.save(update_fields=["is_current"])
         week2 = WeekFactory(mesocycle=week1.mesocycle, index=2, is_current=True)
@@ -113,10 +114,10 @@ class TestDeliver:
         assert resp.status_code == 201
         week1.refresh_from_db()
         week2.refresh_from_db()
-        assert week1.delivered_at is None
+        assert week1.delivered_at is not None
         assert week2.delivered_at is not None
         assert WeekDelivery.objects.filter(week=week2).count() == 1
-        assert WeekDelivery.objects.filter(week=week1).count() == 0
+        assert WeekDelivery.objects.filter(week=week1).count() == 1
 
     def test_redelivering_records_a_fresh_snapshot(self, client):
         plan, week, _, _ = seed_plan()
@@ -127,14 +128,16 @@ class TestDeliver:
 
         assert WeekDelivery.objects.filter(week=week).count() == 2
 
-    def test_response_reports_delivered_week(self, client):
+    def test_response_reports_delivered_block(self, client):
         plan, week, _, _ = seed_plan()
         client.force_login(plan.relationship.coach)
 
         data = client.post(deliver_url(plan)).json()
 
         assert data["ok"] is True
-        assert data["week"]["id"] == week.pk
+        assert data["mesocycle"]["id"] == week.mesocycle.pk
+        assert data["mesocycle"]["name"] == "Hypertrophy"
+        assert data["week_count"] == 1
         assert data["delivered_at"]
 
     def test_empty_json_body_delivers_current_week(self, client):
@@ -210,7 +213,7 @@ class TestDeliverChosenWeek:
     pointer is left untouched, and a foreign week is rejected.
     """
 
-    def test_delivers_the_chosen_non_current_week(self, client):
+    def test_choosing_a_week_delivers_its_whole_block(self, client):
         plan, week1, _, _ = seed_plan()
         week2 = add_week(plan, index=2, is_current=False)
         client.force_login(plan.relationship.coach)
@@ -218,14 +221,16 @@ class TestDeliverChosenWeek:
         resp = post_week(client, plan, week2.pk)
 
         assert resp.status_code == 201
-        assert resp.json()["week"]["id"] == week2.pk
+        assert resp.json()["mesocycle"]["id"] == week2.mesocycle.pk
+        assert resp.json()["week_count"] == 2
         week1.refresh_from_db()
         week2.refresh_from_db()
-        # Only the chosen week is delivered + snapshotted; the live week is not.
+        # Choosing any week delivers its whole mesocycle — both weeks are stamped
+        # + snapshotted, not just the one named in the body.
         assert week2.delivered_at is not None
-        assert week1.delivered_at is None
+        assert week1.delivered_at is not None
         assert WeekDelivery.objects.filter(week=week2).count() == 1
-        assert WeekDelivery.objects.filter(week=week1).count() == 0
+        assert WeekDelivery.objects.filter(week=week1).count() == 1
 
     def test_delivering_a_week_does_not_change_the_current_pointer(self, client):
         plan, week1, _, _ = seed_plan()
@@ -240,17 +245,18 @@ class TestDeliverChosenWeek:
         assert week1.is_current is True
         assert week2.is_current is False
 
-    def test_chosen_week_becomes_the_athletes_visible_week(self, client):
+    def test_delivering_a_block_makes_its_weeks_visible(self, client):
         from store_project.meso.serializers import latest_delivered_week
 
-        plan, _, _, _ = seed_plan()
+        plan, week1, _, _ = seed_plan()
         week2 = add_week(plan, index=2, is_current=False)
         client.force_login(plan.relationship.coach)
 
         post_week(client, plan, week2.pk)
 
-        # Newest delivery wins → the athlete lands on the week just sent.
-        assert latest_delivered_week(plan).pk == week2.pk
+        # The whole block is delivered at once, so a delivered block week is now
+        # visible to the athlete (both share one delivery timestamp).
+        assert latest_delivered_week(plan).pk in {week1.pk, week2.pk}
 
     def test_foreign_week_id_is_404_and_delivers_nothing(self, client):
         plan, _, _, _ = seed_plan()
@@ -327,6 +333,92 @@ class TestDeliverChosenWeek:
         assert resp.status_code == 402
         week2.refresh_from_db()
         assert week2.delivered_at is None
+
+
+class TestBlockDeliver:
+    """P3: the individual deliver path releases the whole block (one mesocycle).
+
+    Delivering stamps ``delivered_at`` + writes a ``WeekDelivery`` snapshot for
+    every *live* week of the target week's mesocycle at once — the athlete gets
+    the whole block in a single release, not one week at a time.
+    """
+
+    def test_delivers_every_live_week_in_the_block(self, client):
+        plan, week1, _, _ = seed_plan()
+        week2 = add_week(plan, index=2)
+        week3 = add_week(plan, index=3)
+        client.force_login(plan.relationship.coach)
+
+        resp = client.post(deliver_url(plan))
+
+        assert resp.status_code == 201
+        assert resp.json()["week_count"] == 3
+        for w in (week1, week2, week3):
+            w.refresh_from_db()
+            assert w.delivered_at is not None
+        # One shared timestamp across the whole block.
+        assert week1.delivered_at == week2.delivered_at == week3.delivered_at
+
+    def test_one_delivery_row_per_live_week(self, client):
+        plan, week1, _, _ = seed_plan()
+        week2 = add_week(plan, index=2)
+        client.force_login(plan.relationship.coach)
+
+        client.post(deliver_url(plan))
+
+        assert WeekDelivery.objects.filter(week=week1).count() == 1
+        assert WeekDelivery.objects.filter(week=week2).count() == 1
+        assert WeekDelivery.objects.count() == 2
+
+    def test_redeliver_restamps_and_adds_fresh_rows(self, client):
+        plan, week1, _, _ = seed_plan()
+        week2 = add_week(plan, index=2)
+        client.force_login(plan.relationship.coach)
+
+        client.post(deliver_url(plan))
+        week1.refresh_from_db()
+        first_stamp = week1.delivered_at
+
+        client.post(deliver_url(plan))
+        week1.refresh_from_db()
+
+        # Re-delivering re-stamps every week and writes a fresh snapshot each.
+        assert week1.delivered_at > first_stamp
+        assert WeekDelivery.objects.filter(week=week1).count() == 2
+        assert WeekDelivery.objects.filter(week=week2).count() == 2
+
+    def test_soft_deleted_week_is_not_delivered(self, client):
+        plan, week1, _, _ = seed_plan()
+        dead = add_week(plan, index=2)
+        dead.soft_delete()
+        client.force_login(plan.relationship.coach)
+
+        resp = client.post(deliver_url(plan))
+
+        assert resp.status_code == 201
+        assert resp.json()["week_count"] == 1  # only the live week counts
+        dead.refresh_from_db()
+        assert dead.delivered_at is None
+        assert WeekDelivery.objects.filter(week=dead).count() == 0
+
+    def test_a_week_of_a_different_block_is_not_delivered(self, client):
+        # A block == ONE mesocycle. Delivering the current week's block leaves a
+        # sibling mesocycle of the same plan untouched.
+        plan, week1, _, _ = seed_plan()
+        other_meso = MesocycleFactory(plan=plan, name="Strength", order=1)
+        other_week = WeekFactory(mesocycle=other_meso, index=1, is_current=False)
+        day(other_week, day_number=1, name="Push")
+        client.force_login(plan.relationship.coach)
+
+        resp = client.post(deliver_url(plan))
+
+        assert resp.status_code == 201
+        assert resp.json()["mesocycle"]["id"] == week1.mesocycle.pk
+        week1.refresh_from_db()
+        other_week.refresh_from_db()
+        assert week1.delivered_at is not None
+        assert other_week.delivered_at is None
+        assert WeekDelivery.objects.filter(week=other_week).count() == 0
 
 
 class TestDeliverScreen:
