@@ -33,6 +33,9 @@ import { useCoachmarks } from "./hooks/useCoachmarks";
 import type {
   AthleteIdentity,
   Day,
+  Exercise,
+  GridCell,
+  GridRow,
   GroupIdentity,
   HistoryState,
   MesoGrid,
@@ -185,6 +188,27 @@ function readHydration(): Hydrated | null {
   };
 }
 
+/** P5 group: the override editor's `openOverride(ex)` takes an `Exercise`, but
+ * the multi-week table works in (GridRow, GridCell) pairs — each cell IS a
+ * Prescription. Synthesize the Exercise the editor needs from that pair: the
+ * cell's own numbers under the row's block name, carrying `adj`/`adjusts` so
+ * the modal preselects the adjusted member and seeds their draft. `id` is the
+ * cell's `prescription_id` — the same id the override reply patches back. */
+function synthesizeCellExercise(row: GridRow, cell: GridCell): Exercise {
+  return {
+    id: cell.prescription_id,
+    name: row.name,
+    sets: cell.sets,
+    reps: cell.reps,
+    load: cell.load,
+    load_type: cell.load_type,
+    rpe: cell.rpe,
+    note: cell.note,
+    adj: cell.adj ?? null,
+    adjusts: cell.adjusts ?? [],
+  };
+}
+
 export function DesignerRoot() {
   const [hydrated] = useState<Hydrated | null>(() => readHydration());
   const [mode, setMode] = useState<DesignerMode>(hydrated?.initialMode ?? "individual");
@@ -256,6 +280,19 @@ export function DesignerRoot() {
     group: planData.group,
     adoptHistory: planData.adoptHistory,
     patchExercise: planData.patchExercise,
+  });
+  // P5 group: a SECOND override editor scoped to the table's data owner
+  // (gridState) rather than planData — same hook, same modal, but its
+  // save/clear reply repaints the grid cell (patchCellAdj) and adopts the
+  // grid's own undo history. Keeps the two sibling data owners independent
+  // (an adjust made in the table doesn't touch planData's one-week program,
+  // and vice-versa), matching how gridState and planData already diverge.
+  const gridOverrideEditor = useOverrideEditor({
+    planId,
+    csrf,
+    group: planData.group,
+    adoptHistory: gridState.adoptGridHistory,
+    patchExercise: gridState.patchCellAdj,
   });
   const oneRmEditor = useOneRmEditor({
     planId,
@@ -394,6 +431,8 @@ export function DesignerRoot() {
                 history={gridState.history}
                 busy={gridState.busy}
                 unit={unit}
+                group={planData.group}
+                onOpenOverride={(row, cell) => gridOverrideEditor.openOverride(synthesizeCellExercise(row, cell))}
                 onPatchCell={gridState.patchCell}
                 onRenameExercise={gridState.renameExercise}
                 onAddExercise={gridState.addExercise}
@@ -500,6 +539,20 @@ export function DesignerRoot() {
         onClose={overrideEditor.closeOverride}
         onSave={overrideEditor.saveOverride}
         onClear={overrideEditor.clearOverride}
+      />
+
+      {/* P5 group: the table view's own override modal (grid-scoped editor).
+          Portal-free like its sibling above; only one is ever non-null at a
+          time since each opens from its own view (WeekGrid vs MesoTable). */}
+      <OverrideModal
+        override={gridOverrideEditor.override}
+        overrideHasExisting={gridOverrideEditor.overrideHasExisting}
+        unit={unit}
+        onSelectMember={gridOverrideEditor.selectOverrideMember}
+        onUpdateDraft={gridOverrideEditor.updateDraft}
+        onClose={gridOverrideEditor.closeOverride}
+        onSave={gridOverrideEditor.saveOverride}
+        onClear={gridOverrideEditor.clearOverride}
       />
     </div>
   );

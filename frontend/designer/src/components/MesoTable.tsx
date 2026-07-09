@@ -17,7 +17,7 @@
 // one-rm editor, agent-chat wiring, coachmarks. Swap/skip/add-this-week
 // WRITE UX is P2 — this file only ever DISPLAYS swap_name/skipped.
 import { useEffect, useRef, useState } from "react";
-import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, MesoGrid } from "../lib/api";
+import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, GroupIdentity, MesoGrid } from "../lib/api";
 import type { GridCellPatch, Id } from "../hooks/useGrid";
 
 export interface MesoTableProps {
@@ -25,6 +25,13 @@ export interface MesoTableProps {
   history: GridHistory;
   busy: boolean;
   unit: string;
+  // P5 group: the plan's group identity (null for an individual plan). When
+  // it has members, every non-skipped cell gains a per-athlete adjust badge
+  // (mirroring ExerciseRow's group "+ adjust"/`ex.adj` badge on the one-week
+  // path); clicking it hands (row, cell) up so DesignerRoot can open the
+  // shared override editor scoped to that cell.
+  group: GroupIdentity | null;
+  onOpenOverride(row: GridRow, cell: GridCell): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
   onAddExercise(day: GridDay): void;
@@ -412,6 +419,8 @@ export function MesoTable(props: MesoTableProps) {
     history,
     busy,
     unit,
+    group,
+    onOpenOverride,
     onPatchCell,
     onRenameExercise,
     onAddExercise,
@@ -432,6 +441,10 @@ export function MesoTable(props: MesoTableProps) {
   const [armed, setArmed] = useState<Armed>(null);
   const isArmed = (type: ArmedKind, id: Id) => !!armed && armed.type === type && armed.id === id;
   const disarm = () => setArmed(null);
+
+  // P5 group: the per-cell adjust badge only exists on a GROUP plan with
+  // members — an individual plan carries no `group`, so no cell ever shows it.
+  const showAdjust = !!(group && group.members.length);
 
   if (!grid) return null;
 
@@ -637,6 +650,22 @@ export function MesoTable(props: MesoTableProps) {
                                         ×
                                       </button>
                                     </span>
+                                  )}
+                                  {showAdjust && (
+                                    <button
+                                      type="button"
+                                      data-testid={`cell-override-badge-${cell.prescription_id}`}
+                                      data-hover="brighten"
+                                      className="meso-adjust-badge"
+                                      onClick={() => onOpenOverride(row, cell)}
+                                      title={
+                                        cell.adj
+                                          ? (cell.adjusts || []).map((a) => (a.name || "") + ": " + (a.label || "")).join("\n")
+                                          : "Set a per-athlete adjust"
+                                      }
+                                    >
+                                      {cell.adj ? cell.adj : <span className="meso-adjust-empty">+ adjust</span>}
+                                    </button>
                                   )}
                                   <CellActions
                                     cell={cell}

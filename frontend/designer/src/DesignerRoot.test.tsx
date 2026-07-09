@@ -362,6 +362,89 @@ describe("hydration: #meso-grid-data / P1 table view default", () => {
   });
 });
 
+// === P5 group: per-cell per-athlete adjust on the multi-week table. The
+// table (gridState) is a sibling data owner to planData, so it gets its own
+// grid-scoped useOverrideEditor whose patchExercise/adoptHistory route into
+// gridState — a cell's adjust badge repaints (and the grid's undo history
+// updates) straight from the override reply, no grid refetch. Mounted at the
+// DesignerRoot level because these specs exercise the real modal + POST wiring
+// that MesoTable only reaches through DesignerRoot.
+function groupPlanPayload(overrides: Record<string, unknown> = {}) {
+  return planPayload({
+    group: {
+      id: 3,
+      name: "Squad",
+      member_count: 2,
+      members: [
+        { id: "a1", name: "Maya Okonkwo", initials: "MO" },
+        { id: "a2", name: "Aaron Adams", initials: "AA" },
+      ],
+      flags: [],
+    },
+    athlete: null,
+    ...overrides,
+  });
+}
+
+describe("P5 group: per-cell adjust on the table", () => {
+  it("shows the adjust badge on a group table cell and opens the override editor for that cell on click", async () => {
+    const user = userEvent.setup();
+    jsonScript("meso-plan-data", groupPlanPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript("meso-grid-data", gridPayload());
+
+    render(<DesignerRoot />);
+
+    const badge = screen.getByTestId("cell-override-badge-100");
+    expect(badge).toHaveTextContent("+ adjust");
+
+    await user.click(badge);
+
+    // The override modal is open, scoped to this cell's row (name "Squat")
+    // with the group's members selectable.
+    expect(screen.getByText("Per-athlete adjust")).toBeInTheDocument();
+    expect(screen.getByTestId("override-member-a1")).toBeInTheDocument();
+    expect(screen.getByTestId("override-member-a2")).toBeInTheDocument();
+    expect(screen.getByText("Squat")).toBeInTheDocument();
+  });
+
+  it("saving an adjust POSTs to the cell's /prescription/{id}/override/ and repaints the badge without a grid refetch", async () => {
+    const user = userEvent.setup();
+    jsonScript("meso-plan-data", groupPlanPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    jsonScript("meso-grid-data", gridPayload());
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        adj: "MO -10%",
+        adjusts: [
+          { id: "a1", name: "Maya Okonkwo", initials: "MO", label: "-10%", swap: "", load_pct: 90, sets: "", reps: "", note: "" },
+        ],
+        history: { can_undo: true, can_redo: false, undo_label: "Adjusted Squat", redo_label: "" },
+      }),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DesignerRoot />);
+    await user.click(screen.getByTestId("cell-override-badge-100"));
+    await user.type(screen.getByTestId("override-load-pct-input"), "90");
+    await user.click(screen.getByTestId("override-save-button"));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/prescription/100/override/", expect.anything()),
+    );
+    // Only the override POST — no follow-up /grid/ refetch (repaint is local).
+    expect(fetchMock).not.toHaveBeenCalledWith("/meso/api/plan/7/grid/");
+    await waitFor(() => expect(screen.getByTestId("cell-override-badge-100")).toHaveTextContent("MO -10%"));
+  });
+});
+
 describe("hydration: missing or malformed payload", () => {
   it("renders nothing when #meso-plan-data is absent", () => {
     const { container } = render(<DesignerRoot />);

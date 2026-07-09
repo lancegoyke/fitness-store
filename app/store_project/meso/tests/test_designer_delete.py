@@ -637,7 +637,8 @@ class TestGroupPlanDelete:
         )
         assert resp.status_code == 200
 
-        member_plan, member_week = membership.sync_delivered_plan(week)
+        member_plan, member_weeks = membership.sync_delivered_plan(week.mesocycle)
+        member_week = member_weeks[0]
         day_numbers = [s.day_number for s in member_week.sessions.all()]
         assert session.day_number not in day_numbers
         assert survivor.day_number in day_numbers
@@ -657,7 +658,8 @@ class TestGroupRedeliverySoftDelete:
     def test_redelivery_hides_member_session_and_keeps_its_logs(self, client):
         group, plan, week, session, cell = seed_group_plan()
         membership = GroupMembershipFactory(group=group)
-        _, member_week = membership.sync_delivered_plan(week)
+        _, member_weeks = membership.sync_delivered_plan(week.mesocycle)
+        member_week = member_weeks[0]
         member_session = member_week.sessions.get(
             session_slot__day_number=session.day_number
         )
@@ -673,7 +675,7 @@ class TestGroupRedeliverySoftDelete:
             )
         )
         assert resp.status_code == 200
-        membership.sync_delivered_plan(week)
+        membership.sync_delivered_plan(week.mesocycle)
 
         member_session.refresh_from_db()
         assert member_session.deleted_at is not None
@@ -691,7 +693,7 @@ class TestGroupRedeliverySoftDelete:
         source_slot.save(update_fields=["deleted_at"])
         source_slot.exercise_slots.update(deleted_at=None)
         source_slot.sessions.update(deleted_at=None)
-        membership.sync_delivered_plan(week)
+        membership.sync_delivered_plan(week.mesocycle)
         member_session.refresh_from_db()
         assert member_session.deleted_at is None
         assert (
@@ -705,7 +707,8 @@ class TestGroupRedeliverySoftDelete:
         group, plan, week, session, cell = seed_group_plan()
         extra = presc(session, name="Curl", order=7)
         membership = GroupMembershipFactory(group=group)
-        _, member_week = membership.sync_delivered_plan(week)
+        _, member_weeks = membership.sync_delivered_plan(week.mesocycle)
+        member_week = member_weeks[0]
         member_session = member_week.sessions.get(
             session_slot__day_number=session.day_number
         )
@@ -719,7 +722,7 @@ class TestGroupRedeliverySoftDelete:
             )
         )
         assert resp.status_code == 200
-        membership.sync_delivered_plan(week)
+        membership.sync_delivered_plan(week.mesocycle)
 
         member_extra.exercise_slot.refresh_from_db()
         assert member_extra.exercise_slot.deleted_at is not None

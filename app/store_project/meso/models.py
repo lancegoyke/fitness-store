@@ -2322,8 +2322,12 @@ class MesoGroup(models.Model):
             .order_by("relationship__athlete__name", "relationship__athlete__email")
         )
 
-    def deliver_current_week(self, plan=None):
-        """Fan the shared program's current week out to every active member (Phase 4).
+    def deliver_block(self, plan=None):
+        """Fan the shared program's whole current BLOCK out to every member (P5).
+
+        The group peer of the P3 individual whole-block delivery: the current
+        block (``current_week(plan).mesocycle``, every one of its live weeks) is
+        released at once, not one week at a time.
 
         ``plan`` pins *which* of the group's plans to deliver — the endpoint passes
         the exact plan the request addressed so it can't drift to a different one
@@ -2331,16 +2335,19 @@ class MesoGroup(models.Model):
         (the canonical current one) for the seed / server button. A plan that
         isn't this group's is rejected.
 
-        Each active member gets their *resolved* week (the shared template + their
-        override diffs) materialized into their own individual plan and stamped
-        ``delivered_at``, plus a ``WeekDelivery`` snapshot; the shared (group) week
-        is stamped too as the coach-side record. Returns ``(now, [(member_plan,
-        member_week), ...])`` so a caller (the view) can notify each athlete — the
-        model layer stays request-free so the seed can reuse it.
+        Each active member gets their *resolved* block (the shared template + their
+        override diffs) materialized into their own individual plan; every live
+        member week is stamped ``delivered_at`` (one shared timestamp) with a
+        ``WeekDelivery`` snapshot. Every live week of the shared block is stamped
+        + snapshotted too, as the coach-side record. Returns ``(now,
+        [(member_plan, member_weeks), ...])`` so a caller (the view) can notify
+        each athlete once at block level — the model layer stays request-free so
+        the seed can reuse it.
 
         Raises ``InvalidTransition`` when there is nothing to deliver: no shared
-        program, no current week, or no active members (delivering to nobody is a
-        coach mistake, surfaced as a 400 / flashed error rather than a silent no-op).
+        program, no live week in the block, or no active members (delivering to
+        nobody is a coach mistake, surfaced as a 400 / flashed error rather than a
+        silent no-op).
         """
         # Local import avoids a models→serializers cycle at module load.
         from .serializers import current_week
@@ -2350,9 +2357,10 @@ class MesoGroup(models.Model):
             plan = self.shared_plan()
         if plan is None or plan.group_id != self.pk:
             raise InvalidTransition("The group has no shared program to deliver.")
-        group_week = current_week(plan)
-        if group_week is None:
+        target_week = current_week(plan)
+        if target_week is None:
             raise InvalidTransition("The shared program has no week to deliver.")
+        src_meso = target_week.mesocycle
         memberships = self.active_memberships()
         if not memberships:
             raise InvalidTransition("The group has no members to deliver to.")
@@ -2360,22 +2368,27 @@ class MesoGroup(models.Model):
         now = timezone.now()
         delivered = []
         for membership in memberships:
-            member_plan, member_week = membership.sync_delivered_plan(group_week)
-            member_week.delivered_at = now
-            member_week.save(update_fields=["delivered_at"])
+            member_plan, member_weeks = membership.sync_delivered_plan(src_meso)
+            for member_week in member_weeks:
+                member_week.delivered_at = now
+                member_week.save(update_fields=["delivered_at"])
+                WeekDelivery.objects.create(
+                    week=member_week,
+                    delivered_at=now,
+                    payload=serialize_week_snapshot(member_week),
+                )
+            delivered.append((member_plan, member_weeks))
+        # Stamp + snapshot every live week of the shared block (coach-side record).
+        for group_week in src_meso.weeks.filter(deleted_at__isnull=True).order_by(
+            "index"
+        ):
+            group_week.delivered_at = now
+            group_week.save(update_fields=["delivered_at"])
             WeekDelivery.objects.create(
-                week=member_week,
+                week=group_week,
                 delivered_at=now,
-                payload=serialize_week_snapshot(member_week),
+                payload=serialize_week_snapshot(group_week),
             )
-            delivered.append((member_plan, member_week))
-        group_week.delivered_at = now
-        group_week.save(update_fields=["delivered_at"])
-        WeekDelivery.objects.create(
-            week=group_week,
-            delivered_at=now,
-            payload=serialize_week_snapshot(group_week),
-        )
         # Bump the shared plan so it stays the coach's working plan after a deliver.
         plan.save(update_fields=["modified"])
         return now, delivered
@@ -2491,36 +2504,42 @@ class GroupMembership(models.Model):
 
     # -- delivery fan-out (groups Phase 4) --------------------------------
 
-    def sync_delivered_plan(self, group_week):
-        """Materialize/refresh this member's resolved copy of ``group_week`` (Phase 4).
+    def sync_delivered_plan(self, src_meso):
+        """Materialize/refresh this member's resolved copy of the whole block (P5).
 
         Get-or-creates the member's individual plan for this group (rooted at
         their relationship, tagged ``source_group``) and syncs it *in place* to
-        the resolved group week — the shared lineup (slots + exercise rows)
-        **+** this member's override diffs (``resolve_prescription``), written
-        onto the member's own mirrored ``SessionSlot``/``ExerciseSlot`` rows and
-        this delivery's ``Week``.
+        the resolved shared block — every live ``Week`` of ``src_meso``, each the
+        shared lineup (slots + exercise rows) **+** this member's override diffs
+        (``resolve_prescription``), written onto the member's own mirrored
+        ``SessionSlot``/``ExerciseSlot`` rows and this block's ``Week``s.
 
         Mirrors the coach's live ``SessionSlot``s onto the member's mesocycle
-        (matched by ``day_number`` — the P0 fixed-lineup's natural key),
-        live ``ExerciseSlot``s onto each (matched by ``(slot, order)``), then
-        upserts a ``Prescription`` cell on the member's slot for this
-        delivery's week — a swap override becomes the cell's ``swap_name``
-        (block identity stays the shared slot's); load/sets/reps/note
-        overrides become the cell's numbers. Syncing in place this way
-        preserves any ``SessionLog`` the athlete already wrote against an
-        unchanged slot while propagating the coach's edits; a slot/row dropped
-        from the shared program is soft-deleted on the member's side too
-        (never hard-deleted: ``SessionLog.session`` cascades, so a hard delete
-        would erase the member's logged history on re-delivery — a dropped
-        source row that comes back, e.g. via undo, revives the member's hidden
-        copy in place via ``deleted_at: None`` in the upsert defaults).
-        Returns ``(member_plan, member_week)`` — the week is *not* yet stamped
-        delivered (``deliver_current_week`` stamps + snapshots it).
+        (matched by ``day_number`` — the P0 fixed-lineup's natural key) once,
+        block-wide; live ``ExerciseSlot``s onto each (matched by ``(slot,
+        order)``); and, for **every** live source week, upserts a member
+        ``Week`` (matched by ``index``) and a ``Prescription`` cell per exercise
+        slot on that week — a swap override becomes the cell's ``swap_name``
+        (block identity stays the shared slot's); load/sets/reps/note overrides
+        become the cell's numbers. Each member week's ``is_current`` MIRRORS its
+        source week's (post-P3 ``is_current`` = the week the athlete is on), so
+        the athlete's home anchors on the same week the coach points to — never a
+        block that flags every week current.
+
+        Syncing in place this way preserves any ``SessionLog`` the athlete
+        already wrote against an unchanged slot while propagating the coach's
+        edits; a slot/row/**week** dropped from the shared block is soft-deleted
+        on the member's side too (never hard-deleted: ``SessionLog.session``
+        cascades, so a hard delete would erase the member's logged history on
+        re-delivery — a dropped source row that comes back, e.g. via undo,
+        revives the member's hidden copy in place via ``deleted_at: None`` in the
+        upsert defaults). Returns ``(member_plan, member_weeks)`` — the weeks, in
+        ``index`` order, are *not* yet stamped delivered (``deliver_block`` stamps
+        + snapshots each).
         """
         from .serializers import resolve_prescription
 
-        shared_plan = group_week.mesocycle.plan
+        shared_plan = src_meso.plan
         member_plan, _ = Plan.objects.get_or_create(
             relationship=self.relationship,
             source_group=self.group,
@@ -2540,23 +2559,37 @@ class GroupMembership(models.Model):
         member_plan.status = Plan.Status.ACTIVE
         member_plan.save()
 
-        src_meso = group_week.mesocycle
         member_meso, _ = Mesocycle.objects.update_or_create(
             plan=member_plan,
             order=src_meso.order,
             defaults={"name": src_meso.name, "week_count": src_meso.week_count},
         )
-        member_week, _ = Week.objects.update_or_create(
-            mesocycle=member_meso,
-            index=group_week.index,
-            defaults={
-                "phase": group_week.phase,
-                "volume": group_week.volume,
-                "intensity": group_week.intensity,
-                "is_deload": group_week.is_deload,
-                "is_current": True,
-            },
+        # Mirror every live source week onto the member's block (matched by
+        # ``index``); ``deleted_at: None`` revives a member week whose source
+        # week was dropped then returned. ``week_pairs`` keeps each source week
+        # beside its member copy so the per-cell upsert below writes onto the
+        # right column.
+        src_weeks = list(
+            src_meso.weeks.filter(deleted_at__isnull=True).order_by("index")
         )
+        member_weeks = []
+        week_pairs = []
+        for src_week in src_weeks:
+            member_week, _ = Week.objects.update_or_create(
+                mesocycle=member_meso,
+                index=src_week.index,
+                defaults={
+                    "phase": src_week.phase,
+                    "volume": src_week.volume,
+                    "intensity": src_week.intensity,
+                    "is_deload": src_week.is_deload,
+                    # Mirror the source pointer — do NOT hardcode ``True`` (P3).
+                    "is_current": src_week.is_current,
+                    "deleted_at": None,
+                },
+            )
+            member_weeks.append(member_week)
+            week_pairs.append((src_week, member_week))
 
         overrides = {o.prescription_id: o for o in self.overrides.all()}
         # Source-side reads are live-only — a soft-deleted slot/row on the
@@ -2577,20 +2610,25 @@ class GroupMembership(models.Model):
                     "deleted_at": None,
                 },
             )
-            Session.objects.update_or_create(
-                week=member_week,
-                session_slot=member_slot,
-                defaults={"deleted_at": None},
-            )
+            # This day's ``Session`` join row per live member week (block-wide).
+            for member_week in member_weeks:
+                Session.objects.update_or_create(
+                    week=member_week,
+                    session_slot=member_slot,
+                    defaults={"deleted_at": None},
+                )
 
             # Filtered in Python so this still reads from the prefetch cache above.
             src_exercise_slots = [
                 es for es in src_slot.exercise_slots.all() if es.deleted_at is None
             ]
-            src_cells_by_slot = {
-                c.exercise_slot_id: c
+            # One query for every live source cell of this day's rows across the
+            # whole block, grouped by ``(exercise_slot, week)`` so the per-week
+            # upsert below reads it without a per-cell query.
+            src_cells_by_key = {
+                (c.exercise_slot_id, c.week_id): c
                 for c in Prescription.objects.filter(
-                    exercise_slot__in=src_exercise_slots, week=group_week
+                    exercise_slot__in=src_exercise_slots, week__in=src_weeks
                 )
             }
             for src_es in src_exercise_slots:
@@ -2604,33 +2642,40 @@ class GroupMembership(models.Model):
                         "deleted_at": None,
                     },
                 )
-                src_cell = src_cells_by_slot.get(src_es.pk)
-                if src_cell is None:
-                    # No cell for this week yet (shouldn't normally happen —
-                    # every live slot gets a blank cell per live week — but
-                    # skip defensively rather than materialize a bad row).
-                    continue
-                resolved = resolve_prescription(src_cell, overrides.get(src_cell.pk))
-                # A swap means the effective name no longer matches the slot's.
-                swapped = resolved["name"] != src_es.name
-                Prescription.objects.update_or_create(
-                    exercise_slot=member_es,
-                    week=member_week,
-                    defaults={
-                        "sets": resolved["sets"],
-                        "reps": resolved["reps"],
-                        "load": resolved["load"],
-                        "load_type": resolved["load_type"],
-                        "rpe": resolved["rpe"],
-                        "rest": src_cell.rest,
-                        "note": resolved["note"],
-                        # A week the coach skipped for the shared lineup stays
-                        # skipped for every member — don't resurrect it per athlete.
-                        "skipped": src_cell.skipped,
-                        "swap_name": resolved["name"] if swapped else "",
-                        "swap_exercise": None,
-                    },
-                )
+                for src_week, member_week in week_pairs:
+                    src_cell = src_cells_by_key.get((src_es.pk, src_week.pk))
+                    if src_cell is None:
+                        # No cell for this week yet (shouldn't normally happen —
+                        # every live slot gets a blank cell per live week — but
+                        # skip defensively rather than materialize a bad row).
+                        continue
+                    # An override targets a specific *cell* (one week), so it
+                    # resolves per week: the same exercise slot in another week
+                    # gets the shared base unless it too carries an override.
+                    resolved = resolve_prescription(
+                        src_cell, overrides.get(src_cell.pk)
+                    )
+                    # A swap means the effective name no longer matches the slot's.
+                    swapped = resolved["name"] != src_es.name
+                    Prescription.objects.update_or_create(
+                        exercise_slot=member_es,
+                        week=member_week,
+                        defaults={
+                            "sets": resolved["sets"],
+                            "reps": resolved["reps"],
+                            "load": resolved["load"],
+                            "load_type": resolved["load_type"],
+                            "rpe": resolved["rpe"],
+                            "rest": src_cell.rest,
+                            "note": resolved["note"],
+                            # A week the coach skipped for the shared lineup stays
+                            # skipped for every member — don't resurrect it per
+                            # athlete.
+                            "skipped": src_cell.skipped,
+                            "swap_name": resolved["name"] if swapped else "",
+                            "swap_exercise": None,
+                        },
+                    )
             # Soft-delete member exercise rows dropped from this day's source
             # lineup (matched by the same (slot, order) natural key).
             member_slot.exercise_slots.exclude(
@@ -2644,7 +2689,15 @@ class GroupMembership(models.Model):
             day_number__in=src_day_numbers
         ).filter(deleted_at__isnull=True):
             dropped_slot.soft_delete()
-        return member_plan, member_week
+        # Soft-delete member weeks whose source week is no longer live — a whole
+        # column the coach removed from the shared block disappears from the
+        # member's copy too (``Week.soft_delete`` cascades to its sessions).
+        src_indexes = [w.index for w in src_weeks]
+        for dropped_week in member_meso.weeks.exclude(index__in=src_indexes).filter(
+            deleted_at__isnull=True
+        ):
+            dropped_week.soft_delete()
+        return member_plan, member_weeks
 
     def clean(self):
         """Backstop ``add_athlete``'s contract on the admin inline (raw FKs).

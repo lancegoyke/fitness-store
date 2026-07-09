@@ -176,6 +176,15 @@ export interface GridCell {
    * (swap_exercise_id set, swap_name blank) needs this to render a badge —
    * swap_name alone is blank for that case. */
   swap_display: string;
+  /** P5 group: this cell's per-athlete adjust badge summary (e.g. "MO -10%"
+   * or "2 adjusts"), or absent when no member has an effective adjust here.
+   * Only attached for a GROUP plan (serialize_mesocycle_grid) — individual
+   * plans never carry it, so `cell.adj` is `undefined` and MesoTable renders
+   * no adjust control. Mirrors `Exercise.adj` on the single-week path. */
+  adj?: string | null;
+  /** P5 group: every member's stored diff on this cell (drives the override
+   * editor's member dots + draft). Present alongside `adj`; absent otherwise. */
+  adjusts?: OverrideAdjust[];
 }
 
 export interface GridRow {

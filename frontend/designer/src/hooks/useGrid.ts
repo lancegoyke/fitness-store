@@ -28,8 +28,24 @@ export type GridCellPatch = Partial<
   Pick<GridCell, "sets" | "reps" | "load" | "load_type" | "rpe" | "rest" | "note">
 >;
 
+/** P5 group: the adj/adjusts a group override save/clear returns for one cell
+ * — patched into that cell (matched by prescription_id) so its adjust badge
+ * repaints without a full grid refetch. The grid analog of usePlanData's
+ * `patchExercise({adj, adjusts})` on the single-week path. */
+export type GridCellAdjPatch = Pick<GridCell, "adj" | "adjusts">;
+
+/** Any payload carrying a fresh plan history — accepts BOTH the grid
+ * endpoints' `GridHistory` (string labels) AND the override editor's
+ * `serialize_plan_history` reply routed through `useOverrideEditor`
+ * (`undo_label`/`redo_label` typed `string | null`). Coerced to `GridHistory`
+ * on adoption below, so either convention lands cleanly. */
 interface GridHistoryCarrier {
-  history?: GridHistory;
+  history?: {
+    can_undo: boolean;
+    can_redo: boolean;
+    undo_label: string | null;
+    redo_label: string | null;
+  };
 }
 
 const EMPTY_GRID_HISTORY: GridHistory = {
@@ -84,8 +100,10 @@ function currentWeekId(grid: MesoGrid | null): Id | undefined {
 
 /** Immutably patch every cell (across every day/row/week) whose
  * prescription_id matches — in practice exactly one, since prescription_id
- * is unique per (row, week). */
-function updateCellInGrid(grid: MesoGrid, cellId: Id, patch: GridCellPatch): MesoGrid {
+ * is unique per (row, week). Takes a `Partial<GridCell>` so both a typed-in
+ * field patch (GridCellPatch) and a group adjust repaint (GridCellAdjPatch)
+ * route through the same immutable walk. */
+function updateCellInGrid(grid: MesoGrid, cellId: Id, patch: Partial<GridCell>): MesoGrid {
   return {
     ...grid,
     days: grid.days.map((day) => ({
@@ -135,7 +153,14 @@ export function useGrid(options: UseGridOptions) {
   const pendingWritesRef = useRef<Set<Promise<unknown>>>(new Set());
 
   const adoptGridHistory = useCallback((data: GridHistoryCarrier) => {
-    if (data && data.history) setHistory(data.history);
+    const h = data?.history;
+    if (!h) return;
+    setHistory({
+      can_undo: h.can_undo,
+      can_redo: h.can_redo,
+      undo_label: h.undo_label ?? "",
+      redo_label: h.redo_label ?? "",
+    });
   }, []);
 
   const flushPendingWrites = useCallback(async () => {
@@ -177,6 +202,17 @@ export function useGrid(options: UseGridOptions) {
     },
     [planId, csrf, adoptGridHistory],
   );
+
+  // P5 group: repaint one cell's per-athlete adjust badge from a group
+  // override save/clear reply. Purely local (no POST) — useOverrideEditor
+  // already POSTed to prescription/<id>/override/ and hands back {adj,
+  // adjusts, history}; DesignerRoot routes its `patchExercise` here and its
+  // `adoptHistory` to adoptGridHistory above. Matches on prescription_id, so
+  // it no-ops harmlessly when the edited row lives on the OTHER data owner
+  // (planData) rather than the grid.
+  const patchCellAdj = useCallback((cellId: Id, patch: GridCellAdjPatch) => {
+    setGrid((prev) => (prev ? updateCellInGrid(prev, cellId, patch) : prev));
+  }, []);
 
   const renameExercise = useCallback(
     (exerciseSlotId: Id, name: string) => {
@@ -399,6 +435,8 @@ export function useGrid(options: UseGridOptions) {
     history,
     busy,
     patchCell,
+    patchCellAdj,
+    adoptGridHistory,
     renameExercise,
     addExercise,
     removeExercise,

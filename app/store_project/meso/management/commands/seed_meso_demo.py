@@ -789,12 +789,12 @@ class Command(BaseCommand):
             memberships["marcus"].set_override(second, sets="2", reps="8")
 
     def _ensure_group_delivery(self, group):
-        """Deliver the group's shared current week to its members once (Phase 4).
+        """Deliver the group's whole shared current block to its members once (P5).
 
-        Idempotent: skipped once the shared week is stamped delivered, so a reseed
-        never re-fans-out or piles up snapshots. Gives the three demo members a
-        real, *resolved* delivered plan on their own athlete surface (Devon's load
-        %, Priya's swap, Marcus's volume tweak all applied).
+        Idempotent: skipped once the shared block's current week is stamped
+        delivered, so a reseed never re-fans-out or piles up snapshots. Gives the
+        three demo members a real, *resolved* delivered block on their own athlete
+        surface (Devon's load %, Priya's swap, Marcus's volume tweak all applied).
         """
         from store_project.meso.serializers import current_week
 
@@ -804,8 +804,8 @@ class Command(BaseCommand):
         week = current_week(plan)
         if week is None or week.delivered_at is not None:
             return
-        group.deliver_current_week()
-        self.stdout.write(f"  - delivered shared week to group '{group.name}' members")
+        group.deliver_block()
+        self.stdout.write(f"  - delivered shared block to group '{group.name}' members")
 
     # -- the sample plan --------------------------------------------------
 

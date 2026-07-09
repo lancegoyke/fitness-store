@@ -225,7 +225,7 @@ class TestGroupFanOutLoadType:
         shared.load_type = LoadType.PERCENT
         shared.save(update_fields=["load", "load_type"])
 
-        group.deliver_current_week(plan)
+        group.deliver_block(plan)
 
         member_plan = Plan.objects.get(
             relationship=membership.relationship, source_group=group

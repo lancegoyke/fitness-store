@@ -253,6 +253,40 @@ adjusts: data.adjusts ?? []})`, `adoptHistory(data)`, close; on failure,
 editor stays open (`ex` on `program` is untouched either way, matching
 "keeps the editor open ... row unchanged" in `meso.test.js`).
 
+#### P5: per-athlete adjust on the multi-week table (`MesoTable`)
+
+The broader multi-week grid subsystem (`useGrid`, `MesoTable`, `GridCell`/
+`GridRow`/`GridDay`/`MesoGrid`) postdates this contract and is specified in
+`docs/meso/fixed-selection-plan.md` — only the P5 group-adjust slice is
+pinned here, since it reuses the override machinery above.
+
+`GridCell` (in `lib/api.ts`) gains two optional group-only fields, emitted
+by `serialize_mesocycle_grid` on a GROUP plan for each cell that has an
+effective adjust (individual plans never carry them, so `cell.adj` is
+`undefined`): `adj?: string | null` — the cell's badge summary (e.g.
+`"MO -10%"` / `"2 adjusts"`) — and `adjusts?: OverrideAdjust[]` — every
+member's stored diff. They mirror `Exercise.adj`/`Exercise.adjusts` on the
+one-week path.
+
+`MesoTable` gains `group: GroupIdentity | null` and
+`onOpenOverride(row: GridRow, cell: GridCell)`. When `group` has members,
+every NON-skipped cell renders the same `.meso-adjust-badge` /
+`.meso-adjust-empty` "+ adjust"/`cell.adj` control `ExerciseRow` uses (testid
+`cell-override-badge-{prescription_id}`); a click hands `(row, cell)` up.
+No control renders for an individual plan (`group === null`) or a skipped cell.
+
+`DesignerRoot` synthesizes an `Exercise` from the `(row, cell)` pair
+(`id: cell.prescription_id`, `name: row.name`, the cell's numbers, plus
+`adj`/`adjusts`) and opens a SECOND, grid-scoped `useOverrideEditor` — same
+hook, same `OverrideModal`, but wired `patchExercise: gridState.patchCellAdj`
+(repaints the cell's `adj`/`adjusts` in place, no grid refetch) and
+`adoptHistory: gridState.adoptGridHistory` (adopts the reply's
+`serialize_plan_history` into the grid's own undo history). Only one of the
+two override modals is ever open at a time (each opens from its own view).
+`useGrid` exposes `patchCellAdj(cellId, {adj, adjusts})` (a local, POST-free
+cell repaint — the grid analog of `patchExercise`) and `adoptGridHistory`
+(now coercing `string | null` labels so the override reply adopts cleanly).
+
 ### useOneRmEditor
 
 ```ts
