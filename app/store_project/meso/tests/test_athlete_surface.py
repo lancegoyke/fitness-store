@@ -303,6 +303,20 @@ class TestAthleteHome:
         assert "Front Squat" in body  # the swap
         assert "Box Squat" in body  # the underlying slot row still labels the row
 
+    def test_block_table_comment_does_not_leak_onto_the_page(self, client):
+        """The block table's template-author note stays out of the rendered HTML.
+
+        Django's ``{# #}`` comment is single-line only, so a multi-line one would
+        render verbatim onto the athlete's screen; the note must use
+        ``{% comment %}`` (regression guard).
+        """
+        b = seed_block()
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "Read-only multi-week" not in body
+        assert "server-rendered" not in body
+        assert "#}" not in body
+
 
 # -- athlete session detail ------------------------------------------------
 

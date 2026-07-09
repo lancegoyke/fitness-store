@@ -151,11 +151,15 @@
           </div>
 
           {% if plan.grid.days %}
-            {# Read-only multi-week block table (P3). One compact table per
-               training day; rows = exercises, columns = delivered weeks. Each
-               table scrolls horizontally inside its own container so a narrow
-               phone screen never scrolls the whole page sideways. Pure
-               server-rendered — no JS. #}
+            {% comment %}
+              Read-only multi-week block table (P3). One compact table per
+              training day; rows = exercises, columns = delivered weeks. Each
+              table scrolls horizontally inside its own container so a narrow
+              phone screen never scrolls the whole page sideways. Pure
+              server-rendered — no JS. (A multi-line {# #} comment is NOT
+              stripped by Django — its tokenizer is single-line — so it would
+              leak onto the athlete's screen; use {% comment %} here.)
+            {% endcomment %}
             <div style="margin-top:14px;">
               <p class="meso-eyebrow" style="margin-bottom:8px;">Your block</p>
               {% for day in plan.grid.days %}
