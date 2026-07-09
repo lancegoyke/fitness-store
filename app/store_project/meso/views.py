@@ -712,6 +712,9 @@ def group_create(request):
     group = MesoGroup.create_for_coach(
         request.user, name=name, focus=focus, athletes=athletes
     )
+    # #441 P3-5: the groups step auto-advances once the group exists. A no-op
+    # unless the coach is parked on groups.
+    meso_tour.advance_if_on_step(request.user, "groups")
     return redirect("meso:group", pk=group.pk)
 
 
@@ -854,6 +857,10 @@ def plan_create(request, pk):
         tour_step = None
     if tour_step is not None:
         meso_tour.record_opt_in(request.user, "self", tour_step, "plan_create")
+    # #441 P3-5: the designer/agent steps auto-advance once the plan exists —
+    # ``natural_step`` already names which of the two fired (agent when drafting,
+    # else designer). A no-op unless the coach is parked on that step.
+    meso_tour.advance_if_on_step(request.user, natural_step)
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
@@ -989,6 +996,12 @@ def demo_load(request):
         meso_tour.record_opt_in(
             request.user, "sandbox", meso_tour.step_key_for_segment(segment), segment
         )
+        # #441 P3-5: the sandbox action steps auto-advance the moment their
+        # segment loads — the coach doesn't have to click Next after doing the
+        # thing. A no-op unless parked exactly on the step this segment offers.
+        meso_tour.advance_if_on_step(
+            request.user, meso_tour.step_key_for_segment(segment)
+        )
     else:
         meso_demo.load_demo(request.user)
         messages.success(
@@ -1058,6 +1071,9 @@ def roster_add_self(request):
         and meso_tour.current_step_key(request.user) == "welcome"
     ):
         meso_tour.record_opt_in(request.user, "self", "welcome", "roster_add_self")
+    # #441 P3-5: the welcome step auto-advances once the coach is on their own
+    # roster — no manual Next needed. A no-op unless parked on welcome.
+    meso_tour.advance_if_on_step(request.user, "welcome")
     return redirect("meso:roster")
 
 
@@ -1449,6 +1465,10 @@ def athlete_log_session(request, pk):
             list(session.trainable_cells()),
             session.week.mesocycle.plan.unit,
         )
+    # #441 P3-5: the results step auto-advances once a session is logged — the
+    # self-coaching coach logs their own session here. A no-op unless parked on
+    # results.
+    meso_tour.advance_if_on_step(request.user, "results")
     return JsonResponse({"ok": True, "log": serialize_session_log(log)})
 
 
@@ -3645,6 +3665,9 @@ def plan_deliver(request, plan_id):
         )
     _touch_plan(plan)
     _notify_athlete_block_delivered(request, plan, block, len(live_weeks))
+    # #441 P3-5: the deliver step auto-advances the moment the block is
+    # delivered. A no-op unless the coach is parked on deliver.
+    meso_tour.advance_if_on_step(request.user, "deliver")
     return JsonResponse(
         {
             "ok": True,
