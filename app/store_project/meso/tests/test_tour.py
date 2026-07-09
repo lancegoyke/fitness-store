@@ -1086,3 +1086,271 @@ class TestProfileVisitAdvance:
         client.get(reverse("meso:athlete", args=[coach.pk]))
 
         assert tour.tour_status(coach)["step"] == 0
+
+
+# ---------------------------------------------------------------------------
+# #441 P2: state-aware copy — steps' bodies react to what the coach has
+# actually done (data-derived from the same predicates the tour already
+# computes), rather than always reading as an unstarted call to action.
+# ---------------------------------------------------------------------------
+
+
+def _step(config, key):
+    return next(s for s in config["steps"] if s["key"] == key)
+
+
+class TestAdaptiveDoneCopySandbox:
+    """A loaded sandbox segment swaps its step body to a "done" variant (P2-1)."""
+
+    def test_welcome_body_adapts_to_loaded_state(self):
+        coach = _coach()
+        welcome = _step(tour.build_config(coach, "sandbox"), "welcome")
+        assert "Add 5 sample athletes" in welcome["body"]
+
+        demo.load_athletes(coach)
+
+        welcome = _step(tour.build_config(coach, "sandbox"), "welcome")
+        assert "are here now" in welcome["body"]
+        assert "Add 5 sample athletes" not in welcome["body"]
+
+    def test_designer_body_shows_done_after_load_program(self):
+        coach = _coach()
+        demo.load_program(coach)
+        designer = _step(tour.build_config(coach, "sandbox"), "designer")
+        assert "sample program is loaded" in designer["body"]
+
+    def test_deliver_body_shows_done_after_load_delivery(self):
+        coach = _coach()
+        demo.load_delivery(coach)
+        deliver = _step(tour.build_config(coach, "sandbox"), "deliver")
+        assert "Delivered" in deliver["body"]
+
+    def test_results_body_shows_done_after_load_log(self):
+        coach = _coach()
+        demo.load_log(coach)
+        results = _step(tour.build_config(coach, "sandbox"), "results")
+        assert "is logged" in results["body"]
+
+    def test_groups_body_shows_done_after_load_group(self):
+        coach = _coach()
+        demo.load_group(coach)
+        groups = _step(tour.build_config(coach, "sandbox"), "groups")
+        assert "Sample group added" in groups["body"]
+
+
+class TestAdaptiveDoneCopySelf:
+    """The self variant's welcome/designer bodies flip to "done" too (P2-1)."""
+
+    def test_welcome_body_adapts_to_loaded_state(self):
+        coach = _coach()
+        welcome = _step(tour.build_config(coach, "self"), "welcome")
+        assert "Add yourself as your first athlete" in welcome["body"]
+
+        CoachAthlete.add_self(coach)
+
+        welcome = _step(tour.build_config(coach, "self"), "welcome")
+        assert "on it now" in welcome["body"]
+        assert "Add yourself as your first athlete" not in welcome["body"]
+
+    def test_designer_body_shows_done_after_plan(self):
+        coach = _coach()
+        link = CoachAthlete.add_self(coach)
+        link.create_plan()
+        designer = _step(tour.build_config(coach, "self"), "designer")
+        assert "program is started" in designer["body"]
+
+
+class TestProfilePrerequisiteCopy:
+    """The profile step's body is gated on its prerequisite existing (P2-2)."""
+
+    def test_sandbox_profile_locked_without_athletes(self):
+        coach = _coach()
+        profile = _step(tour.build_config(coach, "sandbox"), "profile")
+        assert "Add the sample athletes first" in profile["body"]
+        assert "Click into Maya" not in profile["body"]
+        assert profile["loaded"] is None
+
+    def test_sandbox_profile_unlocked_after_load_athletes(self):
+        coach = _coach()
+        demo.load_athletes(coach)
+        profile = _step(tour.build_config(coach, "sandbox"), "profile")
+        assert "Click into Maya" in profile["body"]
+
+    def test_self_profile_locked_without_a_self_link(self):
+        coach = _coach()
+        profile = _step(tour.build_config(coach, "self"), "profile")
+        assert "Add yourself as an athlete first" in profile["body"]
+        assert "Click into your own profile" not in profile["body"]
+        assert profile["action"] is None
+        assert profile["loaded"] is None
+
+    def test_self_profile_unlocked_after_add_self(self):
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+        profile = _step(tour.build_config(coach, "self"), "profile")
+        assert "Click into your own profile" in profile["body"]
+
+
+class TestFinishCopyBranchesOnHasDemo:
+    """The sandbox finish's copy branches on whether there's demo data (P2-4).
+
+    It only promises "remove the demo data" when there's some to remove, and
+    never claims a tour "start over".
+    """
+
+    def test_no_demo_copy_omits_the_removal_promise(self):
+        coach = _coach()
+        finish = _step(tour.build_config(coach, "sandbox"), "finish")
+        assert "Create a free account" in finish["body"]
+        assert "sample data" not in finish["body"]
+        assert "remove" not in finish["body"].lower()
+        assert "start over" not in finish["body"].lower()
+
+    def test_has_demo_copy_offers_removal(self):
+        coach = _coach()
+        demo.load_demo(coach)
+        finish = _step(tour.build_config(coach, "sandbox"), "finish")
+        assert "remove it any time" in finish["body"]
+        assert "start over" not in finish["body"].lower()
+
+
+class TestDemoBannerDecoupling:
+    """The demo-removal banner and the mounted tour are mutually exclusive.
+
+    P2-5a: during an active tour with demo loaded neither the banner nor the
+    Get-started card renders.
+    """
+
+    def test_banner_suppressed_while_touring(self, client):
+        user = sandbox.create_sandbox()
+        demo.load_athletes(user)
+        client.force_login(user)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Demo workspace" not in body
+        assert reverse("meso:demo_clear") not in body
+
+    def test_banner_shows_for_a_non_touring_real_coach(self, client):
+        coach = _coach()
+        demo.load_demo(coach)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Demo workspace" in body
+
+
+class TestDemoClearResetsTour:
+    """Clearing the demo mid-tour restarts the tour at step 0 (P2-5b).
+
+    Removing the demo data the tour was walking you through would otherwise
+    park the step index on a now-empty workspace, so an actively-touring coach
+    is reset; a dismissed/completed tour is left alone.
+    """
+
+    def test_resets_a_mid_flight_tour_to_step_zero(self, client):
+        user = sandbox.create_sandbox()
+        profile = CoachProfile.objects.get(user=user)
+        tour.set_step(profile, 3)
+        demo.load_athletes(user)
+        client.force_login(user)
+
+        client.post(reverse("meso:demo_clear"))
+
+        assert tour.tour_status(user) == {"step": 0, "status": "active"}
+
+    def test_leaves_a_non_touring_tour_alone(self, client):
+        coach = _coach()
+        tour.complete(coach.coach_profile)
+        demo.load_demo(coach)
+        client.force_login(coach)
+
+        client.post(reverse("meso:demo_clear"))
+
+        assert tour.tour_status(coach)["status"] == "completed"
+
+
+class TestSandboxFallbackCardCopy:
+    """The Get-started card's fallback copy is sandbox-aware (P2-6).
+
+    It never dangles a real-invite offer at a sandbox coach, who can't invite
+    real athletes; the real-coach copy is unchanged.
+    """
+
+    def test_sandbox_hides_the_invite_copy(self, client):
+        user = sandbox.create_sandbox()
+        tour.dismiss(CoachProfile.objects.get(user=user))
+        client.force_login(user)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "inviting real athletes is off in the demo" in body
+        assert "invite your first athlete below" not in body
+
+    def test_real_coach_keeps_the_invite_copy(self, client):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        tour.dismiss(coach.coach_profile)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "invite your first athlete below" in body
+
+
+class TestDurableRestartAffordance:
+    """An always-available tour restart lives in the sidebar (P2-3).
+
+    It appears once the empty-state entry card is gone (data added, or the tour
+    dismissed/completed), and is hidden while the tour is mounted or on the
+    fresh first run. Its "Restart" label is distinct from the entry card's
+    "Start" button so the two never collide in body assertions.
+    """
+
+    def test_present_after_completing_the_tour(self, client):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)
+        tour.complete(coach.coach_profile)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Restart the guided tour" in body
+        assert reverse("meso:tour_state") in body
+        assert 'value="restart"' in body
+
+    def test_survives_having_workspace_data(self, client):
+        coach = _coach()
+        CoachAthleteFactory(coach=coach)
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Restart the guided tour" in body
+
+    def test_hidden_while_the_tour_is_mounted(self, client):
+        user = sandbox.create_sandbox()
+        client.force_login(user)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Restart the guided tour" not in body
+
+    def test_absent_on_the_fresh_empty_first_run(self, client):
+        coach = _coach()
+        client.force_login(coach)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Start the guided tour" in body
+        assert "Restart the guided tour" not in body
+
+    def test_restored_for_a_dismissed_sandbox_coach(self, client):
+        user = sandbox.create_sandbox()
+        tour.dismiss(CoachProfile.objects.get(user=user))
+        client.force_login(user)
+
+        body = client.get(reverse("meso:roster")).content.decode()
+
+        assert "Restart the guided tour" in body

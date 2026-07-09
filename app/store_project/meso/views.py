@@ -937,8 +937,18 @@ def demo_load(request):
 @login_required
 @require_POST
 def demo_clear(request):
-    """Remove exactly this coach's demo data (never their real data) — the teardown."""
+    """Remove exactly this coach's demo data (never their real data) — the teardown.
+
+    Removing the demo data a mid-flight tour was walking you through would leave
+    the step index parked on a now-empty workspace (e.g. the profile step with
+    no athlete to open), so an actively-touring coach is restarted at step 0
+    (#441 P2-5b). A dismissed/completed tour is left alone — only a live tour
+    is out of sync with the cleared workspace.
+    """
     meso_demo.clear_demo(request.user)
+    if meso_tour.is_touring(request.user):
+        profile = CoachProfile.objects.get(user=request.user)
+        meso_tour.start_tour(profile)
     messages.success(request, "Demo data removed.")
     return redirect("meso:roster")
 

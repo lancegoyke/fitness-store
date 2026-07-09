@@ -65,6 +65,8 @@ STEPS = [
             "title": "Where your clients live",
             "body": "This is your roster — every athlete you coach, at a glance. "
             "Add 5 sample athletes to see it in action.",
+            "body_done": "This is your roster — every athlete you coach, at a "
+            "glance. Your five sample athletes are here now.",
             "segment": "athletes",
             "action_label": "Add 5 sample athletes",
         },
@@ -72,6 +74,8 @@ STEPS = [
             "title": "Where your clients live",
             "body": "This is your roster — every athlete you coach, at a glance. "
             "Add yourself as your first athlete to see it in action.",
+            "body_done": "This is your roster — every athlete you coach, at a "
+            "glance. You're on it now as your first athlete.",
             "action_label": "Add yourself as your first athlete",
         },
     },
@@ -89,11 +93,20 @@ STEPS = [
             "title": "One athlete, one record",
             "body": "Click into Maya to see her contraindications, training "
             "history, and program — everything you need before you build for her.",
+            # Gated: there's no athlete to click into until the welcome step
+            # loads them, so the copy asks for that first (#441 P2-2).
+            "requires_segment": "athletes",
+            "body_locked": "Add the sample athletes first (the welcome step), "
+            "then click into one to see contraindications, training history, "
+            "and program.",
         },
         "self": {
             "title": "One athlete, one record",
             "body": "Click into your own profile to see the same contraindications, "
             "training history, and program view every athlete gets.",
+            "body_locked": "Add yourself as an athlete first (the welcome step), "
+            "then open your profile to see the contraindications, training "
+            "history, and program view every athlete gets.",
             "anchor": "roster-athlete-row-first",
         },
     },
@@ -105,6 +118,8 @@ STEPS = [
             "title": "Program Designer",
             "body": "The flagship: lay out a mesocycle week by week. Load a "
             "sample program to see a full block.",
+            "body_done": "The flagship: lay out a mesocycle week by week. The "
+            "sample program is loaded — here's a full block, week by week.",
             "segment": "program",
             "action_label": "Load a sample mesocycle",
         },
@@ -112,6 +127,8 @@ STEPS = [
             "title": "Program Designer",
             "body": "The flagship: lay out a mesocycle week by week. Start a "
             "program for yourself to see a full block take shape.",
+            "body_done": "The flagship: lay out a mesocycle week by week. Your "
+            "program is started — here's a full block taking shape.",
             "action_label": "Start a program for yourself",
             # Shown instead of ``body`` when there's no self-link yet (the
             # action itself is omitted too — step 1 has to come first).
@@ -127,6 +144,8 @@ STEPS = [
             "title": "Deliver to their phone",
             "body": "Push the current week straight to the athlete's phone — "
             "she sees it the moment you send it.",
+            "body_done": "Delivered — the athlete sees this week on her phone "
+            "now, exactly as you sent it.",
             "segment": "delivery",
             "action_label": "Deliver the sample week",
         },
@@ -144,6 +163,8 @@ STEPS = [
             "title": "What actually happened",
             "body": "Logged sets, adherence, and estimated 1RM flow back here "
             "the moment she logs a session.",
+            "body_done": "A sample session is logged — here are the sets, "
+            "adherence, and estimated 1RM flowing back.",
             "segment": "log",
             "action_label": "Log a sample session",
         },
@@ -161,6 +182,8 @@ STEPS = [
             "title": "Program a whole group at once",
             "body": "Groups share one program with per-athlete auto-adjusts — "
             "build it once, tune it per person.",
+            "body_done": "Sample group added — one shared program with "
+            "per-athlete auto-adjusts, built once and tuned per person.",
             "segment": "group",
             "action_label": "Add a sample group",
         },
@@ -207,8 +230,14 @@ STEPS = [
         "anchor": None,
         "sandbox": {
             "title": "You're ready",
-            "body": "Create a free account to keep coaching for real — or "
-            "remove this demo data and start over.",
+            # Default (has-demo) copy: only promise removal when there's demo
+            # data to remove, and never imply a tour "start over" — the real
+            # restart path is the durable sidebar affordance (#441 P2-4/P2-3).
+            "body": "You've seen the whole workflow. Create a free account to "
+            "keep coaching for real — your sample data stays private and you "
+            "can remove it any time.",
+            "body_no_demo": "You've seen the whole workflow. Create a free "
+            "account to keep coaching for real.",
             "signup_gate": True,
         },
         "self": {
@@ -376,25 +405,39 @@ def _segment_loaded(user, segment):
     return bool(predicate(user)) if predicate else None
 
 
-def _sandbox_step_fields(step, user):
-    """Resolve one step's sandbox-variant fields — byte-identical to Phase 2.
+def _sandbox_step_fields(step, user, *, has_demo=False):
+    """Resolve one step's sandbox-variant fields.
 
     Produces the same ``segment``/``action_label``/``signup_gate``/``loaded``
     keys the JS driver has always read; ``action`` (the Phase 3 generic form
     action) is always ``None`` here, so ``resolveActionState`` never takes
     that branch for a sandbox step.
+
+    The ``body`` is state-aware (#441 P2): once a step's segment is loaded it
+    swaps to the step's ``body_done`` ("here's the thing you just built");
+    a step gated on another segment (``requires_segment`` — ``profile`` needs
+    ``athletes`` first) shows its ``body_locked`` prerequisite prompt until
+    that data exists; and the signup-gated ``finish`` drops its removal promise
+    when the workspace has no demo data to remove (``has_demo``).
     """
     spec = step["sandbox"]
     segment = spec.get("segment")
+    loaded = _segment_loaded(user, segment)
+    body = spec["body_done"] if (loaded and spec.get("body_done")) else spec["body"]
+    requires = spec.get("requires_segment")
+    if requires and not _segment_loaded(user, requires):
+        body = spec.get("body_locked", body)
+    if not has_demo and spec.get("body_no_demo"):
+        body = spec["body_no_demo"]
     return {
         "title": spec["title"],
-        "body": spec["body"],
+        "body": body,
         "anchor": step["anchor"],
         "segment": segment,
         "action_label": spec.get("action_label"),
         "signup_gate": spec.get("signup_gate", False),
         "action": None,
-        "loaded": _segment_loaded(user, segment),
+        "loaded": loaded,
     }
 
 
@@ -449,14 +492,23 @@ def _self_step_fields(step, ctx):
 
     if key == "welcome":
         loaded = ctx["has_self_link"]
+        if loaded and spec.get("body_done"):
+            body = spec["body_done"]
         action = {
             "url": reverse("meso:roster_add_self"),
             "label": spec["action_label"],
             "fields": {},
         }
+    elif key == "profile":
+        # Same prerequisite gate as the sandbox profile step (#441 P2-2): no
+        # own row to open until the welcome step adds the coach's self-link.
+        if not ctx["has_self_link"]:
+            body = spec.get("body_locked", body)
     elif key == "designer":
         loaded = ctx["has_plan"]
         if ctx["has_self_link"]:
+            if loaded and spec.get("body_done"):
+                body = spec["body_done"]
             action = {
                 "url": ctx["plan_create_url"],
                 "label": spec["action_label"],
@@ -536,13 +588,16 @@ def build_config(user, variant):
         return None
     state = profile.tour_state or {}
     self_ctx = _self_context(user) if variant == "self" else None
+    # #441 P2-4: the sandbox finish step's copy branches on whether there's any
+    # demo data to remove; resolved once here (has_demo == has_athletes).
+    sandbox_has_demo = meso_demo.has_demo(user) if variant == "sandbox" else False
     goto_map = _goto_ready_map(user)
     steps = []
     for step in STEPS:
         fields = (
             _self_step_fields(step, self_ctx)
             if variant == "self"
-            else _sandbox_step_fields(step, user)
+            else _sandbox_step_fields(step, user, has_demo=sandbox_has_demo)
         )
         steps.append(
             {

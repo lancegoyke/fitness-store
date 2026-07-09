@@ -16,9 +16,17 @@
       <!-- main column -->
       <div style="display:flex;flex-direction:column;gap:18px;">
 
-        {% if has_demo %}
+        {% if has_demo and not show_meso_tour %}
           <!-- Demo workspace banner (first-time-UX Phase 2, Q3): clearly labeled,
-               one-click removable. -->
+               one-click removable. Suppressed while the guided tour is mounted
+               (#441 P2-5a): the tour is already narrating the demo data it loaded
+               step by step, so the standalone "remove it" banner would double up
+               (and its Remove button would yank the workspace out from under a
+               live tour). -->
+          <!-- (When has_demo AND show_meso_tour are both true the elif below
+               won't fire either — is_empty is false — so during an active tour
+               with demo loaded neither the banner nor the Get-started card
+               renders.) -->
           <div class="meso-card meso-card--pad" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
             <div style="min-width:0;flex:1;">
               <p class="meso-eyebrow" style="margin:0 0 3px;">Demo workspace</p>
@@ -78,7 +86,13 @@
                   {% csrf_token %}
                   <button type="submit" class="meso-btn meso-btn--primary">Load a demo athlete &amp; program</button>
                 </form>
-                <span class="meso-sub" style="margin:0;">Not sure yet? Explore a populated workspace first — or invite your first athlete below.</span>
+                {% if is_sandbox %}
+                  <!-- A sandbox coach can't invite real athletes (S4), so the
+                       fallback must not dangle that offer at them (#441 P2-6). -->
+                  <span class="meso-sub" style="margin:0;">Not sure yet? Load a populated workspace to explore — inviting real athletes is off in the demo.</span>
+                {% else %}
+                  <span class="meso-sub" style="margin:0;">Not sure yet? Explore a populated workspace first — or invite your first athlete below.</span>
+                {% endif %}
               </div>
             {% endif %}
           </div>
@@ -365,6 +379,29 @@
           <hr class="meso-hr" />
           <a class="meso-btn meso-btn--ghost" href="{% url 'meso:results' %}">View latest session results →</a>
         </div>
+
+        {% if not show_meso_tour %}
+          {% if not is_empty or not tour_entry_available %}
+            <!-- Durable tour restart (#441 P2): the empty-state entry card disappears
+                 once the workspace has data or the tour is dismissed/completed, so this
+                 is the always-available way back into the guided tour. Hidden while the
+                 tour is already mounted, and suppressed on the fresh empty state where
+                 the Get-started card already offers the guided-tour entry button (no
+                 dup). Its label reads "Restart" — distinct from that entry button — so
+                 the two never collide in a test's body assertions. -->
+            <div class="meso-card meso-card--pad" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <div style="min-width:0;flex:1;">
+                <p class="meso-eyebrow" style="margin:0 0 2px;">Guided tour</p>
+                <p class="meso-sub" style="margin:0;">Walk through Meso's core workflow again any time.</p>
+              </div>
+              <form method="post" action="{% url 'meso:tour_state' %}" style="margin:0;">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="restart" />
+                <button type="submit" class="meso-btn meso-btn--ghost">Restart the guided tour</button>
+              </form>
+            </div>
+          {% endif %}
+        {% endif %}
       </div>
     </div>
   </div>
