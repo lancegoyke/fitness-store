@@ -267,6 +267,10 @@ _PRESCRIPTION_DIFF_FIELDS = (
     ("rpe", "RPE"),
     ("rest", "Rest"),
     ("note", "Note"),
+    # A one-week skip (P2) is athlete-facing: applying/lifting it changes what she
+    # trains that week, so it diffs like any other field (rendered on/off, not the
+    # boolean "— → True" a |default fallback gives).
+    ("skipped", "Skipped"),
     ("tag", "Tag"),
 )
 
@@ -307,23 +311,37 @@ def _diff_exercises(current, previous):
     row reads as *changed* (with per-field before/after), a brand-new row as
     *added*, and a deleted one as *removed*. (A delete-then-re-add of the same
     movement honestly shows as remove + add, since it's a different row.)
+
+    Exception-aware (P2 → P3): the diff is *athlete-facing*, so one-week skips
+    don't manufacture phantom changes. The "add-this-week" action seeds a fresh
+    ``skipped`` placeholder cell in every non-target week; on a re-delivery its
+    new pk would otherwise read as an *added* exercise the athlete never trains.
+    So a row absent from the other snapshot counts as added/removed only when it
+    is actually trained (``skipped`` False), and a row skipped in *both*
+    snapshots suppresses its field edits (trained in neither delivery). A skip
+    *applied* or *lifted* (the flag flips) still surfaces — it changes her week.
     """
     prev_by_id = {e.get("id"): e for e in previous}
     cur_by_id = {e.get("id"): e for e in current}
     added = [
         {"label": _prescription_label(e)}
         for e in current
-        if e.get("id") not in prev_by_id
+        if e.get("id") not in prev_by_id and not e.get("skipped")
     ]
     removed = [
         {"label": _prescription_label(e)}
         for e in previous
-        if e.get("id") not in cur_by_id
+        if e.get("id") not in cur_by_id and not e.get("skipped")
     ]
     changed = []
     for e in current:
         prev_e = prev_by_id.get(e.get("id"))
         if prev_e is None:
+            continue
+        # Skipped in both snapshots → not trained in either delivery, so its
+        # field edits aren't athlete-facing (a flip out of/into skipped is,
+        # since ``skipped`` itself is one of the diffed fields below).
+        if prev_e.get("skipped") and e.get("skipped"):
             continue
         fields = _diff_fields(prev_e, e, _PRESCRIPTION_DIFF_FIELDS)
         if fields:
@@ -569,26 +587,35 @@ def latest_delivered_week(plan):
     is reflected, by design; the frozen ``WeekDelivery`` snapshot is the
     historical record for the (deferred) "changes since last delivery" diff, not
     a separate athlete-facing view. Newest delivery wins so the athlete lands on
-    the week their coach just sent. See ``docs/archive/meso/athlete-plan.md``.
+    the week their coach just sent. Post-P3 the athlete home renders the whole
+    delivered *block* (this week's ``mesocycle``) as a read-only multi-week table
+    and uses this week as the block anchor + the focus-week fallback when no
+    delivered week is flagged current. See ``docs/archive/meso/athlete-plan.md``.
     """
+    # P3 delivers a whole block at once, so every live week of that block shares
+    # one ``delivered_at`` — ordering on it alone would tie non-deterministically.
+    # Break the tie toward the week the athlete is on (``is_current``), then the
+    # earliest index, so the anchor/fallback is stable and meaningful. (Per-week
+    # delivery gives distinct timestamps, so the tiebreak never engages there.)
     return (
         models.Week.objects.filter(
             mesocycle__plan=plan, delivered_at__isnull=False, deleted_at__isnull=True
         )
         .select_related("mesocycle")
-        .order_by("-delivered_at")
+        .order_by("-delivered_at", "-is_current", "index")
         .first()
     )
 
 
 def current_week(plan, week=None):
-    """The week the designer opens to.
+    """The week the designer opens to — and, post-P3, the week the athlete is on.
 
     An explicit ``week`` wins (callers are expected to have already checked it
     is live — the delete endpoints pin the response to the just-touched row's
     own, still-live, week); otherwise the flagged current week among the
     plan's **live** weeks, or — failing both — the earliest live week in the
-    plan.
+    plan. The athlete home focuses this week (when it's a delivered week of the
+    block it renders) so "today's session" comes from where the athlete is.
     """
     if week is not None:
         return week

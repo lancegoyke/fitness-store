@@ -329,6 +329,71 @@ class TestNotifyWeekDelivered:
         assert endpoints == {"https://push/athlete"}
 
 
+class TestNotifyBlockDelivered:
+    """P3 block push: one nudge for the whole delivered mesocycle."""
+
+    def _call(self, athlete, plan, mesocycle, week_count):
+        return meso_push.notify_block_delivered(
+            athlete=athlete,
+            coach=plan.coach,
+            plan=plan,
+            mesocycle=mesocycle,
+            week_count=week_count,
+            home_url="http://testserver/meso/me/",
+        )
+
+    def test_pushes_block_payload_shape(self):
+        plan, week = seed_plan()
+        athlete = plan.athlete
+        mesocycle = week.mesocycle
+        make_sub(athlete, endpoint="https://push/1")
+        with mock.patch(PUSH_PATH) as webpush:
+            sent = self._call(athlete, plan, mesocycle, 3)
+        assert sent == 1
+        payload = json.loads(webpush.call_args.kwargs["data"])
+        assert payload["title"] == "Your new training block is ready"
+        assert plan.coach.display_name() in payload["body"]
+        assert plan.title in payload["body"]
+        assert "3 weeks" in payload["body"]
+        assert payload["url"] == "http://testserver/meso/me/"
+        assert payload["tag"] == f"meso-block-{mesocycle.pk}"
+
+    def test_singular_week_phrasing(self):
+        plan, week = seed_plan()
+        make_sub(plan.athlete, endpoint="https://push/1")
+        with mock.patch(PUSH_PATH) as webpush:
+            self._call(plan.athlete, plan, week.mesocycle, 1)
+        payload = json.loads(webpush.call_args.kwargs["data"])
+        # Pluralize-correct: "1 week" (not "1 weeks").
+        assert "(1 week)" in payload["body"]
+
+    def test_pushes_to_each_device_once(self):
+        plan, week = seed_plan()
+        athlete = plan.athlete
+        make_sub(athlete, endpoint="https://push/1")
+        make_sub(athlete, endpoint="https://push/2")
+        with mock.patch(PUSH_PATH) as webpush:
+            sent = self._call(athlete, plan, week.mesocycle, 2)
+        assert sent == 2
+        assert webpush.call_count == 2
+
+    def test_no_subscriptions_is_noop(self):
+        plan, week = seed_plan()
+        with mock.patch(PUSH_PATH) as webpush:
+            sent = self._call(plan.athlete, plan, week.mesocycle, 2)
+        assert sent == 0
+        webpush.assert_not_called()
+
+    @override_settings(**DISABLED)
+    def test_disabled_is_noop(self):
+        plan, week = seed_plan()
+        make_sub(plan.athlete, endpoint="https://push/1")
+        with mock.patch(PUSH_PATH) as webpush:
+            sent = self._call(plan.athlete, plan, week.mesocycle, 2)
+        assert sent == 0
+        webpush.assert_not_called()
+
+
 # -- the deliver hook ------------------------------------------------------
 
 
@@ -352,6 +417,23 @@ class TestDeliverTriggersPush:
             webpush.call_args.kwargs["subscription_info"]["endpoint"]
             == "https://push/athlete"
         )
+
+    def test_multi_week_block_pushes_once_per_device(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        plan, week = seed_plan()
+        WeekFactory(mesocycle=week.mesocycle, index=2)
+        WeekFactory(mesocycle=week.mesocycle, index=3)
+        make_sub(plan.athlete, endpoint="https://push/athlete")
+        client.force_login(plan.coach)
+        with mock.patch(PUSH_PATH) as webpush:
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(deliver_url(plan))
+        assert resp.status_code == 201
+        # One block delivery → one push per device, not one push per week.
+        assert webpush.call_count == 1
+        payload = json.loads(webpush.call_args.kwargs["data"])
+        assert payload["tag"] == f"meso-block-{week.mesocycle.pk}"
 
     def test_coach_is_not_pushed(self, client, django_capture_on_commit_callbacks):
         plan, _ = seed_plan()

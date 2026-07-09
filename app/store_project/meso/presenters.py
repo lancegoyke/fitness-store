@@ -11,6 +11,7 @@ until those surfaces grow their own slices.
 
 import math
 from collections import defaultdict
+from types import SimpleNamespace
 
 from django.urls import reverse
 from django.utils import timezone
@@ -37,6 +38,7 @@ from .serializers import diff_week_snapshots
 from .serializers import initials
 from .serializers import latest_delivered_week
 from .serializers import serialize_mesocycle
+from .serializers import serialize_mesocycle_grid
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 from .serializers import serialize_week_snapshot
@@ -605,79 +607,86 @@ def group_detail(group):
 
 
 def deliver_screen(plan, week=None):
-    """Context for the plan-bound deliver screen (Phase 4; per-week, multi-week).
+    """Context for the plan-bound deliver screen (P3; block delivery).
 
-    Summarizes the **target** week — the plan's current (live) week by default, or
-    an explicit ``week`` the coach chose in the designer's switcher. ``deliver.weeks``
-    lists every week (id / label / whether it's the live week / whether it's already
-    been delivered) so the screen offers a per-week selector, and ``is_current``
-    /``current_label`` let it warn when the coach is sending a week that isn't the
-    live one (delivering it won't move the live pointer). On a re-delivery,
-    ``deliver["changes"]`` is the diff of the target week's live grid against the
-    snapshot last delivered (``diff_week_snapshots``) so the coach reviews exactly
-    what's about to change for the athlete; it's ``None`` on a first delivery.
-    Scheduling stays a later-slice concern.
+    The individual deliver path releases the **whole block** — one ``Mesocycle``,
+    every one of its live weeks — at once (see ``plan_deliver``), so this screen
+    confirms the block, not a single week. The ``week`` argument (the plan's
+    current/live week by default, or an explicit ``?week=`` the coach picked in
+    the designer's switcher) only *selects which block* to send; ``block`` is
+    that week's mesocycle.
+
+    ``deliver["weeks"]`` carries one entry per live week of the block, each with
+    its OWN "changes since last delivery" diff: a re-delivered week (it has a
+    prior ``WeekDelivery``) diffs its live grid against its latest snapshot
+    (``diff_week_snapshots``), a never-delivered week has ``changes=None``. The
+    block-level ``is_redelivery`` / ``has_changes`` fold those per-week facts up
+    for the headline. ``week_id`` stays the target week's pk — the Alpine
+    ``mesoDeliver(planId, csrf, weekId)`` component still posts it to pick the
+    block. Scheduling stays a later-slice concern.
     """
     live = current_week(plan)
     target = week or live
-    # "Live" everywhere = the week ``current_week`` *resolves* to, not the raw
-    # ``is_current`` flag: a plan with no flagged week falls back to its earliest
-    # week as the live target, and the chip marker + the "not the live week"
-    # warning must agree with that fallback (else the screen contradicts itself —
-    # "sending Wk 1, not the live week (Wk 1)").
+    # The target week only *selects the block*; block delivery sends all its live
+    # weeks, so there's no "sending a week that isn't live" warning any more.
     live_id = live.pk if live else None
-    mesocycle = target.mesocycle if target else None
-    # Live rows only (soft delete, designer framework Phase 0): a removed day
-    # doesn't count toward "N sessions", and the selector below never offers a
-    # removed week (the deliver POST would 404 it).
-    session_count = (
-        target.sessions.filter(deleted_at__isnull=True).count() if target else 0
-    )
-    is_redelivery = target is not None and target.deliveries.exists()
+    block = target.mesocycle if target else None
 
-    # On a re-delivery, diff the live grid against the snapshot last delivered so
-    # the coach sees what's about to change for the athlete. A first delivery (no
-    # prior snapshot) has nothing to diff → None.
-    changes = None
-    if is_redelivery:
-        last_payload = (
-            WeekDelivery.objects.filter(week=target)
-            .order_by("-delivered_at")
-            .values_list("payload", flat=True)
-            .first()
-        )
-        if last_payload:
-            changes = diff_week_snapshots(serialize_week_snapshot(target), last_payload)
+    weeks = []
+    block_is_redelivery = False
+    block_has_changes = False
+    if block is not None:
+        # Live weeks only (soft delete, designer framework Phase 0): a removed
+        # week is never delivered (the POST 404s it), so it's not listed here.
+        for w in block.weeks.filter(deleted_at__isnull=True).order_by("index"):
+            # Live rows only: a removed day doesn't count toward "N sessions".
+            session_count = w.sessions.filter(deleted_at__isnull=True).count()
+            is_redelivery = w.deliveries.exists()
+            # On a re-delivery, diff the week's live grid against the snapshot it
+            # last went out as, so the coach sees what's about to change for the
+            # athlete. A first delivery (no prior snapshot) has nothing to diff.
+            changes = None
+            if is_redelivery:
+                last_payload = (
+                    WeekDelivery.objects.filter(week=w)
+                    .order_by("-delivered_at")
+                    .values_list("payload", flat=True)
+                    .first()
+                )
+                if last_payload:
+                    changes = diff_week_snapshots(
+                        serialize_week_snapshot(w), last_payload
+                    )
+            if is_redelivery:
+                block_is_redelivery = True
+            if changes is not None and changes["has_changes"]:
+                block_has_changes = True
+            weeks.append(
+                {
+                    "id": w.pk,
+                    "label": f"Wk {w.index}",
+                    "index": w.index,
+                    "is_current": w.pk == live_id,
+                    "is_delivered": w.delivered_at is not None,
+                    "session_count": session_count,
+                    "is_redelivery": is_redelivery,
+                    "changes": changes,
+                }
+            )
 
-    weeks = [
-        {
-            "id": w.pk,
-            "label": f"Wk {w.index}",
-            "is_current": w.pk == live_id,
-            "is_delivered": w.delivered_at is not None,
-            "is_target": target is not None and w.pk == target.pk,
-        }
-        for w in (
-            Week.objects.filter(mesocycle__plan=plan, deleted_at__isnull=True)
-            .select_related("mesocycle")
-            .order_by("mesocycle__order", "index")
-        )
-    ]
-
+    week_count = len(weeks)
     athlete = profile_athlete(plan.athlete)
-    athlete["block"] = mesocycle.name if mesocycle else ""
-    athlete["week"] = f"Wk {target.index}" if target else ""
+    athlete["block"] = block.name if block else ""
+    athlete["week"] = f"{week_count} week{'' if week_count == 1 else 's'}"
     return {
         "athlete": athlete,
         "deliver": {
             "what": plan.title,
-            "sessions": session_count,
-            "is_redelivery": is_redelivery,
-            "changes": changes,
+            "block_name": block.name if block else "",
+            "week_count": week_count,
+            "is_redelivery": block_is_redelivery,
+            "has_changes": block_has_changes,
             "week_id": target.pk if target else None,
-            "week_label": f"Wk {target.index}" if target else "",
-            "is_current": target is not None and target.pk == live_id,
-            "current_label": f"Wk {live.index}" if live else "",
             "weeks": weeks,
         },
     }
@@ -974,12 +983,119 @@ def _athlete_session_row(session, *, done):
     }
 
 
+def _cell_summary(cell, unit):
+    """A read-only prescription summary for one athlete-table cell.
+
+    Reads a ``serialize_mesocycle_grid`` cell dict (the athlete table is
+    transformed from that coach grid, not from ``Prescription`` rows) and reuses
+    the results screen's target label so the athlete reads the same "4×8 @ 100 kg
+    · RPE 8" shape everywhere. A ``%1RM`` load carries ``%``; an absolute one the
+    plan's ``unit``; "BW" no suffix.
+    """
+    return _results_target_label(
+        SimpleNamespace(
+            sets=cell["sets"],
+            reps=cell["reps"],
+            load=cell["load"],
+            load_type=cell["load_type"],
+            rpe=cell["rpe"],
+        ),
+        unit,
+    )
+
+
+def _athlete_block_grid(block, delivered_week_ids, focus_week_id, unit):
+    """The athlete's read-only multi-week table, transformed from the coach grid.
+
+    Reuses ``serialize_mesocycle_grid`` (one dense query set for the whole block —
+    no N+1 per cell) and strips it to what a read-only table needs: columns
+    filtered to the *delivered* weeks, each cell reduced to a display summary
+    (em-dash rendered by the template when ``skipped``; the swapped exercise name
+    surfaced), and every coach-editing internal (history / ``*_id`` /
+    ``prescription_id`` / ``session_id``) dropped. The focus (current) week's
+    column is flagged (``current``) so the template can highlight it.
+    """
+    grid = serialize_mesocycle_grid(block)
+    delivered = {str(wid) for wid in delivered_week_ids}
+    columns = [w for w in grid["weeks"] if str(w["id"]) in delivered]
+    col_keys = [str(w["id"]) for w in columns]
+    weeks = [
+        {
+            "index": w["index"],
+            "label": w["label"],
+            "deload": w["deload"],
+            "current": w["id"] == focus_week_id,
+        }
+        for w in columns
+    ]
+    days = []
+    for day in grid["days"]:
+        rows = []
+        for row in day["rows"]:
+            cells = []
+            # Include the row only if the athlete actually trains it in some
+            # delivered week. An "add this week only" targeting an *undelivered*
+            # future week seeds skipped placeholder cells in the delivered weeks;
+            # counting any present cell would leak that build-ahead exercise's
+            # name across em-dash cells, so gate on a non-skipped delivered cell.
+            has_trainable = False
+            for w, key in zip(columns, col_keys):
+                cell = row["cells"].get(key)
+                current = w["id"] == focus_week_id
+                if cell is None:
+                    cells.append({"present": False, "current": current})
+                    continue
+                if not cell["skipped"]:
+                    has_trainable = True
+                cells.append(
+                    {
+                        "present": True,
+                        "current": current,
+                        "summary": _cell_summary(cell, unit),
+                        "skipped": cell["skipped"],
+                        "swap": cell["swap_display"],
+                    }
+                )
+            if has_trainable:
+                rows.append({"name": row["name"], "cells": cells})
+        if rows:
+            days.append(
+                {
+                    "name": day["name"],
+                    "bias": day["bias"],
+                    "day_number": day["day_number"],
+                    "rows": rows,
+                }
+            )
+    return {"weeks": weeks, "days": days}
+
+
+def _single_current_week(plan):
+    """True when ``plan`` has exactly one live ``is_current`` week.
+
+    An individual plan keeps a single current pointer (``week_set_current``
+    clears the others), so its current week is trustworthy as "the week the
+    athlete is on." A group-materialized snapshot instead flags EVERY delivered
+    week ``is_current`` (``sync_delivered_plan``), so there ``current_week`` is
+    ambiguous — this is how ``athlete_home`` tells the two apart.
+    """
+    return (
+        Week.objects.filter(
+            mesocycle__plan=plan, is_current=True, deleted_at__isnull=True
+        ).count()
+        == 1
+    )
+
+
 def athlete_home(user):
-    """The athlete's active programs, each with its latest delivered week.
+    """The athlete's active programs, each as its whole delivered block.
 
     One card per non-archived plan across the athlete's *active* coaches (D-a).
-    A plan with no delivered week is shown as awaiting; otherwise its delivered
-    sessions render with the athlete's own done/pending status.
+    A plan with no delivered week is shown as awaiting; otherwise the card opens
+    to the week the athlete is currently on (``is_current`` when it's delivered,
+    else the latest delivered week) — that focus week's sessions are the tappable
+    log rows — and carries a read-only multi-week table (``grid``) of the whole
+    delivered block so the athlete can see the weeks around them (P3).
     """
     plans = (
         Plan.objects.for_athlete(user)
@@ -989,31 +1105,74 @@ def athlete_home(user):
     )
     cards = []
     for plan in plans:
-        week = latest_delivered_week(plan)
-        sessions = []
-        if week is not None:
-            # Live rows only (soft delete, designer framework Phase 0): a day
-            # the coach removed after delivering is gone from the athlete's
-            # home too, and a removed exercise stops counting toward the row's
-            # "N exercises" chip (``_athlete_session_row`` reads it via
-            # ``session.cells()``, already live-filtered — P0 fixed-lineup
-            # cutover; a small per-session query, not prefetched).
-            session_objs = list(week.sessions.filter(deleted_at__isnull=True))
-            done = _done_session_ids([s.pk for s in session_objs], user)
-            sessions = [
-                _athlete_session_row(s, done=s.pk in done) for s in session_objs
-            ]
+        latest = latest_delivered_week(plan)
+        if latest is None:
+            cards.append(
+                {
+                    "id": plan.pk,
+                    "title": plan.title,
+                    "goal": plan.goal,
+                    "coach": plan.coach.display_name(),
+                    "block": "",
+                    "focus_index": None,
+                    "delivered_at": None,
+                    "sessions": [],
+                    "grid": None,
+                    "awaiting": True,
+                }
+            )
+            continue
+
+        # Anchor the card (both the block shown and the focus week) on the week
+        # the athlete is on. For an individual plan that's its single ``is_current``
+        # week, so a coach's "Make current" is honored even when it moves the
+        # athlete back to an earlier delivered block. A group-materialized snapshot
+        # flags every delivered week ``is_current``, so there ``current_week`` is
+        # ambiguous (it returns the earliest) — fall back to the latest delivered
+        # week, whose ordering already tracks the newest delivery. A current week
+        # the coach is still building (undelivered) also falls back to latest.
+        current = current_week(plan)
+        if (
+            current is not None
+            and current.delivered_at is not None
+            and _single_current_week(plan)
+        ):
+            anchor = current
+        else:
+            anchor = latest
+        block = anchor.mesocycle
+        focus = anchor
+        # The table columns: only DELIVERED live weeks of this block — a week the
+        # coach is building ahead (delivered_at is None) never reaches the athlete.
+        delivered_weeks = list(
+            block.weeks.filter(
+                deleted_at__isnull=True, delivered_at__isnull=False
+            ).order_by("index")
+        )
+        delivered_ids = {w.pk for w in delivered_weeks}
+
+        # The focus week's sessions are the tappable log rows. Live rows only
+        # (soft delete, designer framework Phase 0): a day the coach removed after
+        # delivering is gone from the athlete's home too, and a removed exercise
+        # stops counting toward the row's "N exercises" chip
+        # (``_athlete_session_row`` reads it via ``session.trainable_cells()``,
+        # already live-filtered — P0 fixed-lineup cutover).
+        session_objs = list(focus.sessions.filter(deleted_at__isnull=True))
+        done = _done_session_ids([s.pk for s in session_objs], user)
+        sessions = [_athlete_session_row(s, done=s.pk in done) for s in session_objs]
+
         cards.append(
             {
                 "id": plan.pk,
                 "title": plan.title,
                 "goal": plan.goal,
                 "coach": plan.coach.display_name(),
-                "block": week.mesocycle.name if week else "",
-                "week": f"Wk {week.index}" if week else "",
-                "delivered_at": week.delivered_at if week else None,
+                "block": block.name,
+                "focus_index": focus.index,
+                "delivered_at": focus.delivered_at,
                 "sessions": sessions,
-                "awaiting": week is None,
+                "grid": _athlete_block_grid(block, delivered_ids, focus.pk, plan.unit),
+                "awaiting": False,
             }
         )
     return cards

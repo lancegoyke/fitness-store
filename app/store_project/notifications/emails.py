@@ -296,3 +296,63 @@ def send_week_delivered_email(
     message.attach_alternative(msg_html, "text/html")
     message.send(fail_silently=False)
     return True
+
+
+def send_block_delivered_email(
+    *, athlete, coach, plan, week_count, home_url, unsubscribe_url=None
+) -> bool:
+    """Email an athlete that their coach delivered a whole new training block.
+
+    The block-level peer of ``send_week_delivered_email`` (Meso P3): the
+    individual deliver path releases a whole mesocycle at once, so the athlete
+    gets a single email naming the block's week count, not one per week. Same
+    ``List-Unsubscribe`` (RFC 8058 one-click) wiring and best-effort contract as
+    the per-week email — the caller gates the opt-out; this only advertises it.
+
+    Args:
+        athlete: the ``User`` who trains the plan (the recipient).
+        coach: the ``User`` who delivered the block.
+        plan: the delivered ``Plan`` (for its title).
+        week_count: how many live weeks were delivered (drives the "N weeks" copy).
+        home_url: absolute URL of the athlete's training surface (``/meso/me/``).
+        unsubscribe_url: absolute URL of the tokened, login-free unsubscribe
+            page; ``None`` omits the headers and footer.
+
+    Returns:
+        ``True`` if a message was sent, ``False`` if skipped because the athlete
+        has no email address on file.
+
+    Raises a mail backend exception (``fail_silently=False``); callers that must
+    not let a delivery fail on a bounced email should treat this as best-effort.
+    """
+    if not athlete.email:
+        return False
+    context = {
+        "athlete_name": athlete.display_name(),
+        "coach_name": coach.display_name(),
+        "plan_title": plan.title,
+        "week_count": week_count,
+        "home_url": home_url,
+        "unsubscribe_url": unsubscribe_url,
+    }
+    subject = render_to_string(
+        "notifications/block_delivered_subject.txt", context
+    ).strip()
+    msg_plain = render_to_string("notifications/block_delivered.md", context)
+    msg_html = render_to_string("notifications/block_delivered.html", context)
+    headers = {}
+    if unsubscribe_url:
+        # RFC 2369 + RFC 8058: a header List-Unsubscribe (https for one-click)
+        # plus List-Unsubscribe-Post turns it into a one-click mail-client button.
+        headers["List-Unsubscribe"] = f"<{unsubscribe_url}>"
+        headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    message = EmailMultiAlternatives(
+        subject=subject,
+        body=msg_plain,
+        from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
+        to=[athlete.email],
+        headers=headers,
+    )
+    message.attach_alternative(msg_html, "text/html")
+    message.send(fail_silently=False)
+    return True

@@ -19,8 +19,8 @@
     <div class="meso-pagehead">
       <div>
         <p class="meso-eyebrow">Publish</p>
-        <h1 class="meso-h1">Deliver {{ deliver.what }}</h1>
-        <p class="meso-sub">{{ deliver.sessions }} sessions · to {{ athlete.name }} · once delivered she sees it in her app.</p>
+        <h1 class="meso-h1">Deliver {{ deliver.block_name|default:"block" }}</h1>
+        <p class="meso-sub">{{ deliver.week_count }} week{{ deliver.week_count|pluralize }} · to {{ athlete.name }} · once delivered she sees the whole block in her app.</p>
       </div>
     </div>
 
@@ -38,88 +38,72 @@
         </div>
       </div>
 
-      {% if deliver.weeks|length > 1 %}
-      <!-- Multi-week designer: pick which week to send. Each chip re-targets the
-           screen at that week (?week=) — server-rendered so the summary stays
-           consistent — and the "Deliver" button sends the highlighted one. -->
-        <div class="meso-card meso-card--pad">
-          <p class="meso-eyebrow">Which week</p>
-          <div style="display:flex;gap:7px;flex-wrap:wrap;">
-            {% for w in deliver.weeks %}
-              <a href="?week={{ w.id }}"
-                 title="{% if w.is_current %}Live · the deliver target{% else %}Deliver {{ w.label }}{% endif %}"
-                 style="text-decoration:none;font:inherit;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:650;padding:6px 11px;border-radius:999px;border:1px solid {% if w.is_target %}var(--accent){% else %}var(--line){% endif %};background:{% if w.is_target %}var(--accent){% else %}var(--surface){% endif %};color:{% if w.is_target %}var(--accent-ink){% else %}var(--ink){% endif %};">
-                <span>{{ w.label }}</span>
-                {% if w.is_current %}<span style="opacity:0.8;">&#183; live</span>{% endif %}
-                {% if w.is_delivered %}<span title="Already delivered" aria-label="already delivered" style="opacity:0.8;">&#10003;</span>{% endif %}
-              </a>
-            {% endfor %}
-          </div>
-        </div>
-      {% endif %}
-
-      {% if not deliver.is_current %}
-      <!-- The coach chose a week that isn't the live one. Delivering it makes it
-           visible to the athlete (newest delivery wins) without moving the live
-           pointer — make that explicit so it's never a surprise. -->
-        <div class="meso-card meso-card--pad" style="border-color:var(--warn);">
-          <p class="meso-sub" style="margin:0;font-size:12.5px;line-height:1.4;">
-            You&#8217;re sending <strong>{{ deliver.week_label }}</strong> — not {{ athlete.name }}&#8217;s live week ({{ deliver.current_label }}). Delivering this week makes it visible to her without changing which week is current.
-          </p>
-        </div>
-      {% endif %}
-
       <div class="meso-card meso-card--pad">
         <p class="meso-eyebrow">Changes since last delivery</p>
         {% if not deliver.is_redelivery %}
-        <!-- First delivery: nothing to diff against. -->
-          <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">First delivery — {{ athlete.week }} ({{ deliver.sessions }} session{{ deliver.sessions|pluralize }}) is sent to {{ athlete.name }}.</span>
-        {% elif not deliver.changes.has_changes %}
-        <!-- Re-delivering the same week with no edits since it last went out. -->
-          <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">No changes since you last delivered {{ athlete.week }} — re-delivering it as-is.</span>
+        <!-- First delivery of the block: nothing to diff against. -->
+          <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">First delivery — the whole block ({{ deliver.week_count }} week{{ deliver.week_count|pluralize }}) is sent to {{ athlete.name }}.</span>
         {% else %}
-        <!-- The week's live grid diffed against the snapshot last delivered: per
-             session, each edited row's fields (before &#8594; after), rows added
-             (+) or removed (&#8722;), then whole days and week-meta changes. -->
-          <div style="display:flex;flex-direction:column;gap:12px;">
-            {% for s in deliver.changes.sessions %}
+        <!-- Block delivery sends every live week; each week carries its own diff
+             against the snapshot it last went out as. A never-delivered week is
+             new this delivery; a delivered week with no edits since is unchanged;
+             otherwise its live grid is diffed per session (edited rows'
+             before &#8594; after, rows added (+) or removed (&#8722;), whole days,
+             week-meta). -->
+          <div style="display:flex;flex-direction:column;gap:18px;">
+            {% for wk in deliver.weeks %}
               <div>
-                <div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--dim);margin-bottom:4px;">{{ s.name }}</div>
-                <div style="display:flex;flex-direction:column;gap:3px;">
-                  {% for c in s.changed %}
-                    <div style="font-size:12.5px;line-height:1.45;">
-                      <span style="font-weight:650;">{{ c.name }}</span><span style="color:var(--dim);"> &#183; </span>{% for f in c.fields %}{% if not forloop.first %}<span style="color:var(--dim);">, </span>{% endif %}<span style="color:var(--dim);">{{ f.label }}</span> {% if f.field == 'is_deload' %}{{ f.before|yesno:"on,off" }} &#8594; <span style="font-weight:650;">{{ f.after|yesno:"on,off" }}</span>{% else %}<span style="text-decoration:line-through;opacity:0.6;">{{ f.before|default:"&#8212;" }}</span> &#8594; <span style="font-weight:650;">{{ f.after|default:"&#8212;" }}</span>{% endif %}{% endfor %}
-                    </div>
-                  {% endfor %}
-                  {% for a in s.added %}
-                    <div style="font-size:12.5px;line-height:1.45;color:var(--ok);"><span style="font-weight:700;">+</span> {{ a.label }}</div>
-                  {% endfor %}
-                  {% for r in s.removed %}
-                    <div style="font-size:12.5px;line-height:1.45;color:var(--warn);"><span style="font-weight:700;">&#8722;</span> <span style="text-decoration:line-through;opacity:0.8;">{{ r.label }}</span></div>
-                  {% endfor %}
-                </div>
+                <div style="font-size:11px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:var(--ink);margin-bottom:6px;">{{ wk.label }}</div>
+                {% if not wk.changes %}
+                <!-- Never delivered before — first time this week is sent. -->
+                  <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">New this delivery — first time {{ wk.label }} is sent to {{ athlete.name }}.</span>
+                {% elif not wk.changes.has_changes %}
+                <!-- Re-delivering this week with no edits since it last went out. -->
+                  <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">No changes since you last delivered {{ wk.label }} — re-delivering it as-is.</span>
+                {% else %}
+                  <div style="display:flex;flex-direction:column;gap:12px;">
+                    {% for s in wk.changes.sessions %}
+                      <div>
+                        <div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--dim);margin-bottom:4px;">{{ s.name }}</div>
+                        <div style="display:flex;flex-direction:column;gap:3px;">
+                          {% for c in s.changed %}
+                            <div style="font-size:12.5px;line-height:1.45;">
+                              <span style="font-weight:650;">{{ c.name }}</span><span style="color:var(--dim);"> &#183; </span>{% for f in c.fields %}{% if not forloop.first %}<span style="color:var(--dim);">, </span>{% endif %}<span style="color:var(--dim);">{{ f.label }}</span> {% if f.field == 'is_deload' or f.field == 'skipped' %}{{ f.before|yesno:"on,off" }} &#8594; <span style="font-weight:650;">{{ f.after|yesno:"on,off" }}</span>{% else %}<span style="text-decoration:line-through;opacity:0.6;">{{ f.before|default:"&#8212;" }}</span> &#8594; <span style="font-weight:650;">{{ f.after|default:"&#8212;" }}</span>{% endif %}{% endfor %}
+                            </div>
+                          {% endfor %}
+                          {% for a in s.added %}
+                            <div style="font-size:12.5px;line-height:1.45;color:var(--ok);"><span style="font-weight:700;">+</span> {{ a.label }}</div>
+                          {% endfor %}
+                          {% for r in s.removed %}
+                            <div style="font-size:12.5px;line-height:1.45;color:var(--warn);"><span style="font-weight:700;">&#8722;</span> <span style="text-decoration:line-through;opacity:0.8;">{{ r.label }}</span></div>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    {% endfor %}
+
+                    {% for a in wk.changes.added_sessions %}
+                      <div style="font-size:12.5px;line-height:1.45;color:var(--ok);"><span style="font-weight:700;">+</span> New day &#183; {{ a.name }} ({{ a.count }} exercise{{ a.count|pluralize }})</div>
+                    {% endfor %}
+                    {% for r in wk.changes.removed_sessions %}
+                      <div style="font-size:12.5px;line-height:1.45;color:var(--warn);"><span style="font-weight:700;">&#8722;</span> Removed day &#183; {{ r.name }}</div>
+                    {% endfor %}
+
+                    {% if wk.changes.week %}
+                      <div>
+                        <div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--dim);margin-bottom:4px;">Week</div>
+                        <div style="display:flex;flex-direction:column;gap:3px;">
+                          {% for f in wk.changes.week %}
+                            <!-- volume/intensity are ints where 0 is valid — default_if_none
+                                 (not default) so a real 0 isn't shown as the em-dash. -->
+                            <div style="font-size:12.5px;line-height:1.45;"><span style="color:var(--dim);">{{ f.label }}</span> {% if f.field == 'is_deload' or f.field == 'skipped' %}{{ f.before|yesno:"on,off" }} &#8594; <span style="font-weight:650;">{{ f.after|yesno:"on,off" }}</span>{% else %}<span style="text-decoration:line-through;opacity:0.6;">{{ f.before|default_if_none:"&#8212;" }}</span> &#8594; <span style="font-weight:650;">{{ f.after|default_if_none:"&#8212;" }}</span>{% endif %}</div>
+                          {% endfor %}
+                        </div>
+                      </div>
+                    {% endif %}
+                  </div>
+                {% endif %}
               </div>
             {% endfor %}
-
-            {% for a in deliver.changes.added_sessions %}
-              <div style="font-size:12.5px;line-height:1.45;color:var(--ok);"><span style="font-weight:700;">+</span> New day &#183; {{ a.name }} ({{ a.count }} exercise{{ a.count|pluralize }})</div>
-            {% endfor %}
-            {% for r in deliver.changes.removed_sessions %}
-              <div style="font-size:12.5px;line-height:1.45;color:var(--warn);"><span style="font-weight:700;">&#8722;</span> Removed day &#183; {{ r.name }}</div>
-            {% endfor %}
-
-            {% if deliver.changes.week %}
-              <div>
-                <div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--dim);margin-bottom:4px;">Week</div>
-                <div style="display:flex;flex-direction:column;gap:3px;">
-                  {% for f in deliver.changes.week %}
-                    <!-- volume/intensity are ints where 0 is valid — default_if_none
-                         (not default) so a real 0 isn't shown as the em-dash. -->
-                    <div style="font-size:12.5px;line-height:1.45;"><span style="color:var(--dim);">{{ f.label }}</span> {% if f.field == 'is_deload' %}{{ f.before|yesno:"on,off" }} &#8594; <span style="font-weight:650;">{{ f.after|yesno:"on,off" }}</span>{% else %}<span style="text-decoration:line-through;opacity:0.6;">{{ f.before|default_if_none:"&#8212;" }}</span> &#8594; <span style="font-weight:650;">{{ f.after|default_if_none:"&#8212;" }}</span>{% endif %}</div>
-                  {% endfor %}
-                </div>
-              </div>
-            {% endif %}
           </div>
         {% endif %}
       </div>
@@ -134,7 +118,7 @@
         <div class="meso-spacer"></div>
         <span x-show="error" x-cloak style="font-size:12.5px;color:var(--warn);">Delivery failed — try again.</span>
         <button data-testid="deliver-send" class="meso-btn meso-btn--primary" @click="deliver()" :disabled="sending" style="font-size:13.5px;padding:10px 18px;">
-          <span x-text="sending ? 'Delivering…' : 'Deliver to {{ athlete.name }}'"></span>
+          <span x-text="sending ? 'Delivering…' : 'Deliver block to {{ athlete.name }}'"></span>
         </button>
       </div>
     </div>
@@ -142,8 +126,8 @@
     <!-- post-deliver -->
     <div x-show="delivered" x-cloak class="meso-card meso-card--pad" style="text-align:center;padding:36px 24px;">
       <div style="width:46px;height:46px;border-radius:50%;background:var(--ok);display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;margin:0 auto 14px;">✓</div>
-      <h2 style="margin:0 0 4px;font-size:19px;font-weight:800;letter-spacing:-0.02em;">Delivered to {{ athlete.name }}</h2>
-      <p class="meso-sub" style="margin-bottom:20px;">{{ deliver.what }} is live — she'll see Day 1 on her phone.</p>
+      <h2 style="margin:0 0 4px;font-size:19px;font-weight:800;letter-spacing:-0.02em;">Block delivered to {{ athlete.name }}</h2>
+      <p class="meso-sub" style="margin-bottom:20px;">She'll see all {{ deliver.week_count }} week{{ deliver.week_count|pluralize }} — Day 1 on her phone.</p>
       <div style="display:flex;gap:10px;justify-content:center;">
         <a class="meso-btn" href="{% url 'meso:roster' %}">Back to roster</a>
         <a class="meso-btn meso-btn--primary" href="{% url 'meso:results' %}">Track her sessions →</a>

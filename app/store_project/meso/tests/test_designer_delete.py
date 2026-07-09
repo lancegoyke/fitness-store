@@ -759,4 +759,5 @@ class TestDeliverScreenSoftDelete:
         extra_session.deleted_at = timezone.now()
         extra_session.save(update_fields=["deleted_at"])
         deliver = presenters.deliver_screen(plan)["deliver"]
-        assert deliver["sessions"] == 1
+        (wk,) = deliver["weeks"]
+        assert wk["session_count"] == 1

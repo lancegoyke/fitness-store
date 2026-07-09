@@ -81,12 +81,15 @@ class TestDeliveryNotification:
         assert len(mailoutbox) == 1
         assert mailoutbox[0].to == ["maya@example.com"]
 
-    def test_email_names_coach_plan_and_week(
+    def test_email_names_coach_plan_and_block(
         self, client, mailoutbox, django_capture_on_commit_callbacks
     ):
         coach = UserFactory(name="Coach Lance", email="coach@example.com")
         athlete = UserFactory(name="Maya Okonkwo", email="maya@example.com")
-        plan, _ = seed_plan(coach=coach, athlete=athlete)
+        plan, week = seed_plan(coach=coach, athlete=athlete)
+        # A three-week block; the block email names the count, not each week.
+        WeekFactory(mesocycle=week.mesocycle, index=2)
+        WeekFactory(mesocycle=week.mesocycle, index=3)
         client.force_login(coach)
 
         with django_capture_on_commit_callbacks(execute=True):
@@ -96,7 +99,26 @@ class TestDeliveryNotification:
         haystack = f"{email.subject}\n{email.body}"
         assert "Coach Lance" in haystack
         assert "Hypertrophy Block" in haystack
-        assert "Week 1" in haystack
+        assert "block" in haystack.lower()
+        assert "3 weeks" in haystack
+
+    def test_multi_week_block_emails_the_athlete_once(
+        self, client, mailoutbox, django_capture_on_commit_callbacks
+    ):
+        coach = UserFactory(name="Coach Lance", email="coach@example.com")
+        athlete = UserFactory(name="Maya Okonkwo", email="maya@example.com")
+        plan, week = seed_plan(coach=coach, athlete=athlete)
+        # Three live weeks in the block → still exactly one email, not one/week.
+        WeekFactory(mesocycle=week.mesocycle, index=2)
+        WeekFactory(mesocycle=week.mesocycle, index=3)
+        client.force_login(coach)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = client.post(deliver_url(plan))
+
+        assert resp.status_code == 201
+        assert len(mailoutbox) == 1
+        assert mailoutbox[0].to == ["maya@example.com"]
 
     def test_email_links_to_athlete_home(
         self, client, mailoutbox, django_capture_on_commit_callbacks
@@ -137,7 +159,7 @@ class TestDeliveryNotification:
 
         with (
             mock.patch(
-                "store_project.meso.views.send_week_delivered_email",
+                "store_project.meso.views.send_block_delivered_email",
                 side_effect=RuntimeError("SES is down"),
             ),
             django_capture_on_commit_callbacks(execute=True),

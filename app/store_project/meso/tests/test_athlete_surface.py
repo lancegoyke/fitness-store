@@ -15,6 +15,7 @@ weeks, and never another athlete's data. Delivery — not plan status — is the
 publish gate; an undelivered week is invisible even to its own athlete.
 """
 
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -28,8 +29,10 @@ from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
+from store_project.meso.models import SessionSlot
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc as make_presc
 from store_project.users.factories import UserFactory
@@ -71,6 +74,86 @@ def seed(
         week=week,
         session=session,
         presc=presc,
+    )
+
+
+def seed_block(
+    *,
+    coach=None,
+    athlete=None,
+    skip_first=False,
+    swap_second="",
+    third_delivered=False,
+):
+    """A three-week block of ONE day × ONE exercise row (P3 athlete multi-week).
+
+    All three weeks share one ``SessionSlot`` (the day) and one ``ExerciseSlot``
+    (the row), with a per-week ``Prescription`` cell carrying a distinct load so
+    each week's column is identifiable. Weeks 1 & 2 are delivered (the whole
+    block delivers at once); week 2 is the athlete's ``is_current`` week; week 3
+    is left undelivered unless ``third_delivered`` (a week the coach is still
+    building — invisible to the athlete).
+    """
+    coach = coach or UserFactory()
+    athlete = athlete or UserFactory()
+    rel = CoachAthleteFactory(
+        coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+    )
+    plan = PlanFactory(
+        relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
+    )
+    meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
+    now = timezone.now()
+    slot = SessionSlot.objects.create(
+        mesocycle=meso, day_number=1, name="Lower", bias="Quad", order=0
+    )
+    ex = ExerciseSlot.objects.create(session_slot=slot, name="Box Squat", order=0)
+    w1 = WeekFactory(mesocycle=meso, index=1, is_current=False, delivered_at=now)
+    w2 = WeekFactory(mesocycle=meso, index=2, is_current=True, delivered_at=now)
+    w3 = WeekFactory(
+        mesocycle=meso,
+        index=3,
+        is_current=False,
+        delivered_at=now if third_delivered else None,
+    )
+    s1 = day(w1, session_slot=slot)
+    s2 = day(w2, session_slot=slot)
+    s3 = day(w3, session_slot=slot)
+    c1 = make_presc(
+        exercise_slot=ex,
+        week=w1,
+        sets="4",
+        reps="8",
+        load="71",
+        rpe="7",
+        skipped=skip_first,
+    )
+    c2 = make_presc(
+        exercise_slot=ex,
+        week=w2,
+        sets="4",
+        reps="8",
+        load="101",
+        rpe="8",
+        swap_name=swap_second,
+    )
+    c3 = make_presc(exercise_slot=ex, week=w3, sets="4", reps="8", load="131", rpe="8")
+    return SimpleNamespace(
+        coach=coach,
+        athlete=athlete,
+        plan=plan,
+        meso=meso,
+        slot=slot,
+        ex=ex,
+        w1=w1,
+        w2=w2,
+        w3=w3,
+        s1=s1,
+        s2=s2,
+        s3=s3,
+        c1=c1,
+        c2=c2,
+        c3=c3,
     )
 
 
@@ -166,6 +249,169 @@ class TestAthleteHome:
         client.force_login(s.athlete)
         body = client.get(HOME).content.decode()
         assert "To do" in body
+
+    # -- multi-week block (P3) --------------------------------------------
+
+    def test_shows_every_delivered_week_of_the_block(self, client):
+        """The card renders the WHOLE delivered block, not just the latest week.
+
+        The read-only multi-week table has a column per delivered week, each
+        carrying that week's own prescription summary.
+        """
+        b = seed_block()
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        # A column per delivered week (labels + their distinct per-week loads).
+        assert "Wk 1" in body
+        assert "Wk 2" in body
+        assert "71 kg" in body  # week-1 cell summary
+        assert "101 kg" in body  # week-2 cell summary
+
+    def test_undelivered_week_is_not_a_column(self, client):
+        """A week the coach hasn't delivered yet never becomes an athlete column."""
+        b = seed_block()  # week 3 undelivered
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "Wk 3" not in body
+        assert "131 kg" not in body  # its cell is never rendered
+
+    def test_home_focuses_the_current_delivered_week(self, client):
+        """The home opens to ``is_current``: only its sessions are tappable rows.
+
+        Earlier delivered weeks live in the read-only table — their sessions are
+        cells, not links to the logger.
+        """
+        b = seed_block()  # week 2 is_current + delivered
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert session_url(b.s2) in body  # current week's session logs
+        assert session_url(b.s1) not in body  # earlier week is read-only
+
+    def test_skipped_cell_renders_em_dash(self, client):
+        """A one-week skip shows an em-dash in its cell, not a prescription."""
+        b = seed_block(skip_first=True)
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "—" in body  # em-dash present
+        assert "71 kg" not in body  # the skipped week shows no numbers
+        assert "101 kg" in body  # the other delivered week still does
+
+    def test_swapped_cell_shows_the_swapped_name(self, client):
+        """A one-week swap surfaces the swapped exercise's name in its cell."""
+        b = seed_block(swap_second="Front Squat")
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "Front Squat" in body  # the swap
+        assert "Box Squat" in body  # the underlying slot row still labels the row
+
+    def test_multiple_current_weeks_focus_the_latest_delivered(self, client):
+        """The home opens to the newest delivered week when several are current.
+
+        A group-materialized plan flags EVERY delivered week ``is_current``, so
+        the home must not focus the earliest of them (regression: focusing
+        ``current_week`` stranded the athlete on week 1 after week 2 was
+        delivered).
+        """
+        b = seed_block()  # w1 & w2 delivered at the same ``now``; w2 is_current
+        # Reproduce the group-sync anomaly: an earlier week is *also* current and
+        # was delivered before w2.
+        b.w1.is_current = True
+        b.w1.delivered_at = timezone.now() - timedelta(days=1)
+        b.w1.save(update_fields=["is_current", "delivered_at"])
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert session_url(b.s2) in body  # newest delivered week is the focus
+        assert session_url(b.s1) not in body  # the earlier current week is not
+
+    def test_current_pointer_in_an_earlier_block_anchors_that_block(self, client):
+        """A "Make current" back to an earlier delivered block wins over latest.
+
+        ``latest_delivered_week`` points at the newest block, but when the coach
+        moves the (single) ``is_current`` pointer to a week in an earlier
+        delivered block, the individual athlete's home must open to THAT block and
+        week — not the most recent delivery.
+        """
+        coach = UserFactory()
+        athlete = UserFactory()
+        rel = CoachAthleteFactory(
+            coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        )
+        plan = PlanFactory(
+            relationship=rel, title="Two-Block Plan", status=Plan.Status.ACTIVE
+        )
+        earlier = timezone.now() - timedelta(days=7)
+        now = timezone.now()
+        # Block A — delivered earlier, carries the athlete's current week.
+        meso_a = MesocycleFactory(plan=plan, name="Base", order=0)
+        slot_a = SessionSlot.objects.create(
+            mesocycle=meso_a, day_number=1, name="Squat Day", bias="Quad", order=0
+        )
+        ex_a = ExerciseSlot.objects.create(
+            session_slot=slot_a, name="Back Squat", order=0
+        )
+        w_a = WeekFactory(
+            mesocycle=meso_a, index=1, is_current=True, delivered_at=earlier
+        )
+        s_a = day(w_a, session_slot=slot_a)
+        make_presc(
+            exercise_slot=ex_a, week=w_a, sets="5", reps="5", load="100", rpe="8"
+        )
+        # Block B — delivered later, no current week.
+        meso_b = MesocycleFactory(plan=plan, name="Peak", order=1)
+        slot_b = SessionSlot.objects.create(
+            mesocycle=meso_b, day_number=1, name="Bench Day", bias="Push", order=0
+        )
+        ex_b = ExerciseSlot.objects.create(
+            session_slot=slot_b, name="Bench Press", order=0
+        )
+        w_b = WeekFactory(mesocycle=meso_b, index=1, is_current=False, delivered_at=now)
+        s_b = day(w_b, session_slot=slot_b)
+        make_presc(exercise_slot=ex_b, week=w_b, sets="3", reps="5", load="80", rpe="8")
+
+        client.force_login(athlete)
+        body = client.get(HOME).content.decode()
+        assert "Base" in body  # anchored on block A (the current pointer)
+        assert "Back Squat" in body
+        assert session_url(s_a) in body  # its week is the tappable log row
+        assert "Peak" not in body  # the newer block is not shown
+        assert session_url(s_b) not in body
+
+    def test_future_only_add_this_week_row_is_not_leaked(self, client):
+        """An exercise added only to an undelivered future week must not surface.
+
+        "Add this week only" seeds skipped placeholder cells in every other live
+        week; when the target is an undelivered future week, the athlete's block
+        table (delivered columns only) would otherwise render that build-ahead
+        exercise's name across em-dash cells. A row with no trainable delivered
+        cell is dropped.
+        """
+        b = seed_block()  # weeks 1 & 2 delivered, week 3 undelivered
+        future = ExerciseSlot.objects.create(
+            session_slot=b.slot, name="Front Squat (future only)", order=1
+        )
+        # Skipped placeholders in the delivered weeks; trainable only in the
+        # undelivered week 3 (the add-this-week-only-a-future-week shape).
+        make_presc(exercise_slot=future, week=b.w1, skipped=True)
+        make_presc(exercise_slot=future, week=b.w2, skipped=True)
+        make_presc(exercise_slot=future, week=b.w3, sets="3", reps="8", load="90")
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "Front Squat (future only)" not in body  # build-ahead not leaked
+        assert "Box Squat" in body  # the real delivered row still shows
+
+    def test_block_table_comment_does_not_leak_onto_the_page(self, client):
+        """The block table's template-author note stays out of the rendered HTML.
+
+        Django's ``{# #}`` comment is single-line only, so a multi-line one would
+        render verbatim onto the athlete's screen; the note must use
+        ``{% comment %}`` (regression guard).
+        """
+        b = seed_block()
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "Read-only multi-week" not in body
+        assert "server-rendered" not in body
+        assert "#}" not in body
 
 
 # -- athlete session detail ------------------------------------------------

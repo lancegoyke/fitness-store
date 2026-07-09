@@ -10,10 +10,14 @@ Three seams, mirroring the slice discipline:
 
 - ``diff_week_snapshots`` — the pure diff over two snapshot payloads (matched by
   stable pks): added / removed / changed exercise rows grouped by session, whole
-  sessions added/removed, and week-meta changes;
-- ``presenters.deliver_screen`` — surfaces ``deliver["changes"]`` (``None`` on a
-  first delivery; the diff on a re-delivery);
-- ``DeliverView`` — the screen renders the diff on a re-delivery.
+  sessions added/removed, and week-meta changes. Exception-aware (P2 → P3): a
+  one-week ``skipped`` flip surfaces, but skipped placeholder rows (the
+  "add-this-week" seed) never manufacture phantom added/removed/changed noise;
+- ``presenters.deliver_screen`` — block delivery, so every live week of the
+  target block carries its OWN ``changes`` (``None`` on a first delivery; the
+  diff on a re-delivery), folded up into block-level ``is_redelivery`` /
+  ``has_changes``;
+- ``DeliverView`` — the screen renders each week's diff on a re-delivery.
 """
 
 import pytest
@@ -32,6 +36,7 @@ from store_project.meso.serializers import serialize_week_snapshot
 from store_project.users.factories import UserFactory
 
 from ._helpers import day
+from ._helpers import make_slot
 from ._helpers import presc as presc_
 
 pytestmark = pytest.mark.django_db
@@ -52,6 +57,7 @@ def _presc(pk, name, **over):
         "load_type": "abs",
         "rpe": "7",
         "note": "",
+        "skipped": False,
     }
     row.update(over)
     return row
@@ -180,6 +186,79 @@ class TestDiffWeekSnapshots:
         assert field["before"] is False
         assert field["after"] is True
 
+    # -- one-week skip / add-this-week exceptions (P2 → P3 carry-over) -------- #
+
+    def test_skip_applied_is_a_skipped_field_change(self):
+        # Applying a one-week skip after delivery changes what she trains, so it
+        # surfaces as a ``skipped`` field flip (off → on).
+        prev = _snap([_session(1, 1, "Lower", [_presc(10, "Squat", skipped=False)])])
+        cur = _snap([_session(1, 1, "Lower", [_presc(10, "Squat", skipped=True)])])
+        diff = diff_week_snapshots(cur, prev)
+        assert diff["has_changes"] is True
+        (sess,) = diff["sessions"]
+        (changed,) = sess["changed"]
+        fields = {f["field"]: (f["before"], f["after"]) for f in changed["fields"]}
+        assert fields["skipped"] == (False, True)
+
+    def test_skip_lifted_is_a_skipped_field_change(self):
+        prev = _snap([_session(1, 1, "Lower", [_presc(10, "Squat", skipped=True)])])
+        cur = _snap([_session(1, 1, "Lower", [_presc(10, "Squat", skipped=False)])])
+        diff = diff_week_snapshots(cur, prev)
+        (sess,) = diff["sessions"]
+        (changed,) = sess["changed"]
+        fields = {f["field"]: (f["before"], f["after"]) for f in changed["fields"]}
+        assert fields["skipped"] == (True, False)
+
+    def test_added_skipped_placeholder_is_not_reported_as_added(self):
+        # The "add-this-week" action seeds a skipped placeholder cell (a fresh pk)
+        # in every non-target week. The athlete has no new work there, so a skipped
+        # row absent from the prior snapshot must NOT show as +added.
+        prev = _snap([_session(1, 1, "Lower", [_presc(10, "Squat")])])
+        cur = _snap(
+            [
+                _session(
+                    1,
+                    1,
+                    "Lower",
+                    [_presc(10, "Squat"), _presc(11, "RDL", skipped=True)],
+                )
+            ]
+        )
+        diff = diff_week_snapshots(cur, prev)
+        assert diff["sessions"] == []
+        assert diff["has_changes"] is False
+
+    def test_removed_skipped_placeholder_is_not_reported_as_removed(self):
+        # A skipped placeholder the athlete never trained, now gone, is not a
+        # −removed change from her perspective.
+        prev = _snap(
+            [
+                _session(
+                    1,
+                    1,
+                    "Lower",
+                    [_presc(10, "Squat"), _presc(11, "RDL", skipped=True)],
+                )
+            ]
+        )
+        cur = _snap([_session(1, 1, "Lower", [_presc(10, "Squat")])])
+        diff = diff_week_snapshots(cur, prev)
+        assert diff["sessions"] == []
+        assert diff["has_changes"] is False
+
+    def test_doubly_skipped_row_with_numeric_edit_reports_no_change(self):
+        # Skipped in BOTH snapshots → trained in neither delivery, so a numeric
+        # edit to it is not an athlete-facing change.
+        prev = _snap(
+            [_session(1, 1, "Lower", [_presc(10, "Squat", skipped=True, load="100")])]
+        )
+        cur = _snap(
+            [_session(1, 1, "Lower", [_presc(10, "Squat", skipped=True, load="150")])]
+        )
+        diff = diff_week_snapshots(cur, prev)
+        assert diff["sessions"] == []
+        assert diff["has_changes"] is False
+
 
 # --------------------------------------------------------------------------- #
 # Presenter + view (DB-backed)                                                 #
@@ -216,7 +295,18 @@ class TestDeliverScreenChanges:
         plan, _, _, _ = seed_plan()
         deliver = presenters.deliver_screen(plan)["deliver"]
         assert deliver["is_redelivery"] is False
-        assert deliver["changes"] is None
+        assert deliver["has_changes"] is False
+        # Every per-week entry carries its own (absent) diff on a first delivery.
+        assert all(w["changes"] is None for w in deliver["weeks"])
+        assert all(w["is_redelivery"] is False for w in deliver["weeks"])
+
+    def test_screen_reports_block_shape(self):
+        plan, week1, _, _ = seed_plan()
+        WeekFactory(mesocycle=plan.mesocycles.first(), index=2, is_current=False)
+        deliver = presenters.deliver_screen(plan)["deliver"]
+        assert deliver["week_count"] == 2
+        assert deliver["block_name"] == "Hypertrophy"
+        assert deliver["week_id"] == week1.pk
 
     def test_redelivery_after_edit_surfaces_the_change(self):
         plan, week, _, presc = seed_plan(load="111")
@@ -227,7 +317,10 @@ class TestDeliverScreenChanges:
         deliver = presenters.deliver_screen(plan)["deliver"]
 
         assert deliver["is_redelivery"] is True
-        changes = deliver["changes"]
+        assert deliver["has_changes"] is True
+        (wk,) = [w for w in deliver["weeks"] if w["id"] == week.pk]
+        assert wk["is_redelivery"] is True
+        changes = wk["changes"]
         assert changes is not None
         assert changes["has_changes"] is True
         (sess,) = changes["sessions"]
@@ -236,6 +329,24 @@ class TestDeliverScreenChanges:
         fields = {f["field"]: (f["before"], f["after"]) for f in changed["fields"]}
         assert fields["load"] == ("111", "222")
 
+    def test_redelivery_after_skip_surfaces_the_change(self):
+        # A one-week skip applied after delivery is athlete-facing (trained
+        # before, not now) → it surfaces on re-delivery as a ``skipped`` flip.
+        plan, week, _, presc = seed_plan()
+        record_delivery(week)
+        presc.skipped = True
+        presc.save(update_fields=["skipped"])
+
+        deliver = presenters.deliver_screen(plan)["deliver"]
+
+        assert deliver["is_redelivery"] is True
+        assert deliver["has_changes"] is True
+        (wk,) = deliver["weeks"]
+        (sess,) = wk["changes"]["sessions"]
+        (changed,) = sess["changed"]
+        fields = {f["field"]: (f["before"], f["after"]) for f in changed["fields"]}
+        assert fields["skipped"] == (False, True)
+
     def test_redelivery_with_no_edits_reports_no_changes(self):
         plan, week, _, _ = seed_plan()
         record_delivery(week)
@@ -243,12 +354,14 @@ class TestDeliverScreenChanges:
         deliver = presenters.deliver_screen(plan)["deliver"]
 
         assert deliver["is_redelivery"] is True
-        assert deliver["changes"] is not None
-        assert deliver["changes"]["has_changes"] is False
+        assert deliver["has_changes"] is False
+        (wk,) = deliver["weeks"]
+        assert wk["changes"] is not None
+        assert wk["changes"]["has_changes"] is False
 
-    def test_diff_targets_the_chosen_week(self):
-        # A coach can deliver a built-ahead week; the diff must compare *that*
-        # week's snapshot, not the live week's.
+    def test_each_week_carries_its_own_diff(self):
+        # Block delivery: every live week diffs against ITS OWN last-delivered
+        # snapshot — an edit on the built-ahead week surfaces on that week only.
         plan, week1, _, _ = seed_plan()
         meso = plan.mesocycles.first()
         week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
@@ -260,10 +373,44 @@ class TestDeliverScreenChanges:
 
         deliver = presenters.deliver_screen(plan, week=week2)["deliver"]
 
+        # ?week= only *selects the block* — both weeks are listed.
         assert deliver["week_id"] == week2.pk
-        (sess,) = deliver["changes"]["sessions"]
+        ids = {w["id"] for w in deliver["weeks"]}
+        assert ids == {week1.pk, week2.pk}
+        (wk2,) = [w for w in deliver["weeks"] if w["id"] == week2.pk]
+        (sess,) = wk2["changes"]["sessions"]
         (changed,) = sess["changed"]
         assert changed["name"] == "Bench"
+        # week1 was never delivered → no diff of its own.
+        (wk1,) = [w for w in deliver["weeks"] if w["id"] == week1.pk]
+        assert wk1["changes"] is None
+
+    def test_add_this_week_placeholder_is_not_a_phantom_add_on_other_weeks(self):
+        # "add-this-week" creates a new ExerciseSlot + a real cell on the target
+        # week and a ``skipped`` placeholder cell on every OTHER live week. On a
+        # re-delivery, the placeholder must not surface as a phantom +add on a
+        # non-target week the athlete has no new work in.
+        plan, week1, session1, _ = seed_plan()
+        meso = plan.mesocycles.first()
+        week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
+        day(week2, session_slot=session1.session_slot)
+        record_delivery(week1)
+        record_delivery(week2)
+
+        new_slot = make_slot(session1, name="Face Pull")
+        presc_(exercise_slot=new_slot, week=week1, skipped=False)
+        presc_(exercise_slot=new_slot, week=week2, skipped=True)
+
+        deliver = presenters.deliver_screen(plan)["deliver"]
+
+        (wk1,) = [w for w in deliver["weeks"] if w["id"] == week1.pk]
+        (wk2,) = [w for w in deliver["weeks"] if w["id"] == week2.pk]
+        # The target week legitimately gains Face Pull...
+        assert wk1["changes"]["has_changes"] is True
+        added = [a["label"] for s in wk1["changes"]["sessions"] for a in s["added"]]
+        assert any("Face Pull" in lbl for lbl in added)
+        # ...but the other week's skipped placeholder is invisible to her.
+        assert wk2["changes"]["has_changes"] is False
 
 
 class TestDeliverScreenRendersDiff:
@@ -290,6 +437,43 @@ class TestDeliverScreenRendersDiff:
         assert "111" in body
         assert "222" in body
 
+    def test_redelivery_screen_renders_per_week_change_headers(self, client):
+        # Two delivered weeks, each edited → each gets its own "Wk N" section.
+        plan, week1, _, presc1 = seed_plan(load="111")
+        meso = plan.mesocycles.first()
+        week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
+        session2 = day(week2, day_number=2, name="Upper")
+        presc2 = presc_(session2, name="Bench", sets="3", reps="5", load="80")
+        record_delivery(week1)
+        record_delivery(week2)
+        presc1.load = "222"
+        presc1.save(update_fields=["load"])
+        presc2.load = "90"
+        presc2.save(update_fields=["load"])
+        client.force_login(plan.relationship.coach)
+
+        body = self._screen(client, plan).content.decode()
+
+        assert "Wk 1" in body
+        assert "Wk 2" in body
+        assert "Box Squat" in body
+        assert "Bench" in body
+
+    def test_redelivery_screen_renders_a_skip_as_off_to_on(self, client):
+        # A ``skipped`` flip renders through the on/off (yesno) branch, never the
+        # boolean "— → True" the |default fallback would give.
+        plan, week, _, presc = seed_plan()
+        record_delivery(week)
+        presc.skipped = True
+        presc.save(update_fields=["skipped"])
+        client.force_login(plan.relationship.coach)
+
+        body = self._screen(client, plan).content.decode()
+
+        assert "Skipped" in body
+        assert ">on</span>" in body
+        assert ">True</span>" not in body
+
     def test_redelivery_screen_with_no_edits_says_no_changes(self, client):
         plan, week, _, _ = seed_plan()
         record_delivery(week)
@@ -297,6 +481,30 @@ class TestDeliverScreenRendersDiff:
 
         body = self._screen(client, plan).content.decode()
 
+        assert "No changes" in body
+
+    def test_add_this_week_placeholder_shows_no_phantom_add_on_other_weeks(
+        self, client
+    ):
+        # The skipped placeholder on a non-target week must not render a phantom
+        # + add. The target week (Face Pull added) does; the other week reads
+        # "No changes".
+        plan, week1, session1, _ = seed_plan()
+        meso = plan.mesocycles.first()
+        week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
+        day(week2, session_slot=session1.session_slot)
+        record_delivery(week1)
+        record_delivery(week2)
+        new_slot = make_slot(session1, name="Face Pull")
+        presc_(exercise_slot=new_slot, week=week1, skipped=False)
+        presc_(exercise_slot=new_slot, week=week2, skipped=True)
+        client.force_login(plan.relationship.coach)
+
+        body = self._screen(client, plan).content.decode()
+
+        # Face Pull surfaces exactly once (the target week's real add), and the
+        # non-target week reads as unchanged rather than a phantom add.
+        assert body.count("Face Pull") == 1
         assert "No changes" in body
 
     def test_redelivery_screen_renders_a_zero_week_value(self, client):
