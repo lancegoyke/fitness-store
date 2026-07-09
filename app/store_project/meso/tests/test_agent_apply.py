@@ -80,6 +80,34 @@ class TestApplyChange:
         assert cell_w1.swap_name == ""  # slot rename, NOT a cell swap
         assert cell_w1.exercise_slot.name == "Front Squat"
 
+    def test_swap_clears_target_cells_one_week_exception(self):
+        # If the reviewed cell already carried a one-week ``swap_*`` exception, a
+        # block-wide swap clears it so the new lift shows through on THIS week too
+        # — otherwise the reviewed week would silently keep the old override while
+        # every other week changed. Sibling weeks' own exceptions are preserved.
+        plan, session, cell_w1 = make_plan()  # week 1 (current)
+        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2)
+        day(week2, session_slot=session.session_slot)
+        cell_w2 = presc(
+            exercise_slot=cell_w1.exercise_slot, week=week2, swap_name="Leg Press"
+        )
+        cell_w1.swap_name = "Hack Squat"
+        cell_w1.save(update_fields=["swap_name"])
+        change = ProposedChangeFactory(
+            batch=_batch(plan),
+            kind=ProposedChange.Kind.SWAP,
+            prescription=cell_w1,
+            payload={"name": "Front Squat"},
+        )
+        agent_apply.apply_change(change)
+
+        cell_w1 = Prescription.objects.get(pk=cell_w1.pk)
+        cell_w2 = Prescription.objects.get(pk=cell_w2.pk)
+        assert cell_w1.swap_name == ""  # target exception cleared
+        assert cell_w1.name == "Front Squat"  # shows the block-wide identity
+        assert cell_w2.swap_name == "Leg Press"  # sibling exception preserved
+        assert cell_w2.name == "Leg Press"
+
     def test_swap_severs_catalog_link(self):
         # A free-text rename severs the slot's catalog FK so the row isn't
         # mis-keyed to the old exercise.

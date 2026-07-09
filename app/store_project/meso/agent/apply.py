@@ -200,6 +200,16 @@ def _apply_swap(change, name):
     slot.name = name
     slot.exercise = None
     slot.save(update_fields=["name", "exercise"])
+    # The block grounding serializes each cell's *effective* name, so the model
+    # can target a cell that already carries a one-week ``swap_*`` exception. That
+    # override shadows the slot's name, so without clearing it the reviewed week
+    # would silently keep the old lift while every other week changed. Clear the
+    # target cell's exception so the swap the coach approved shows through here
+    # too; sibling weeks' own exceptions are left untouched (still block-wide).
+    if presc.swap_name or presc.swap_exercise_id:
+        presc.swap_name = ""
+        presc.swap_exercise = None
+        presc.save(update_fields=["swap_name", "swap_exercise"])
     return {"id": change.pk, "kind": change.kind, "field": "name", "value": name}
 
 
