@@ -496,13 +496,23 @@ def _self_has_delivery(coach):
 
 
 def _self_has_log(coach):
-    """Whether the coach has logged one of their own sessions (self mirror).
+    """Whether the coach has *completed* one of their own self-link sessions.
 
-    Existence-based, mirroring ``demo.has_log``: a ``SessionLog`` row is written
-    only on an explicit log action (delivery never pre-creates one), so its mere
-    existence is a valid "has logged" signal with no post-delivery false positive.
+    The self mirror of ``demo.has_log``, but scoped tighter than the sandbox's
+    bare existence (safe there only because the demo log is created ``done`` on
+    the coach's own plan): a real coach can hold ``pending`` "save progress" rows
+    and — if they're also an athlete under another coach — logs on a foreign
+    plan. Neither is a completed result on their own workspace, so gate on a
+    ``done`` log on the coach's *self-link individual* plan (same scoping as
+    ``_self_has_delivery`` + ``_coach_latest_logged_session``'s ``done`` filter).
     """
-    return SessionLog.objects.filter(athlete=coach).exists()
+    return SessionLog.objects.filter(
+        athlete=coach,
+        status=SessionLog.Status.DONE,
+        session__week__mesocycle__plan__relationship__coach=coach,
+        session__week__mesocycle__plan__relationship__is_self=True,
+        session__week__mesocycle__plan__source_group__isnull=True,
+    ).exists()
 
 
 def _self_has_group(coach):

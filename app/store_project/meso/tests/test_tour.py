@@ -1432,7 +1432,13 @@ class TestSelfLoadedPredicates:
         assert tour._self_has_log(coach) is False
 
         s = _self_plan(coach, delivered=True)
+        # A pending "save progress" log doesn't count — only a done one does.
         SessionLog.objects.create(session=s.session, athlete=coach)
+        assert tour._self_has_log(coach) is False
+
+        SessionLog.objects.filter(session=s.session, athlete=coach).update(
+            status=SessionLog.Status.DONE
+        )
         assert tour._self_has_log(coach) is True
 
     def test_has_group_false_before_true_after(self):
@@ -1478,11 +1484,26 @@ class TestSelfActionGoalLoadedCopy:
         assert "Log your own sets" in results["body"]
 
         s = _self_plan(coach, delivered=True)
-        SessionLog.objects.create(session=s.session, athlete=coach)
+        SessionLog.objects.create(
+            session=s.session, athlete=coach, status=SessionLog.Status.DONE
+        )
 
         results = _step(tour.build_config(coach, "self"), "results")
         assert results["loaded"] is True
         assert "is logged" in results["body"]
+
+    def test_results_pending_log_does_not_count_as_done(self):
+        # A "save progress" (pending) log — or a done log on another coach's
+        # plan — must not mark the self results step complete (Codex #441 P3-5).
+        coach = _coach()
+        s = _self_plan(coach, delivered=True)
+        SessionLog.objects.create(
+            session=s.session, athlete=coach, status=SessionLog.Status.PENDING
+        )
+
+        results = _step(tour.build_config(coach, "self"), "results")
+        assert results["loaded"] is False
+        assert "Log your own sets" in results["body"]
 
     def test_groups_loaded_flips_and_body_switches_to_done(self):
         coach = _coach()
@@ -1551,6 +1572,22 @@ class TestActionSiteAutoAdvance:
         )
 
         assert tour.tour_status(coach)["step"] == 5  # groups
+
+    def test_self_results_does_not_advance_on_pending_log(self, client):
+        # A pending "save progress" post isn't a completed result — the results
+        # step must stay put (Codex #441 P3-5).
+        coach = _coach()
+        s = _self_plan(coach, delivered=True)
+        tour.set_step(coach.coach_profile, 4)  # results
+        client.force_login(coach)
+
+        client.post(
+            reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
+            data=json.dumps({"sets": [], "status": "pending"}),
+            content_type="application/json",
+        )
+
+        assert tour.tour_status(coach)["step"] == 4  # unchanged
 
     def test_self_groups_advances_on_group_create(self, client):
         coach = _coach()
