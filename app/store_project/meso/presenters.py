@@ -1032,14 +1032,20 @@ def _athlete_block_grid(block, delivered_week_ids, focus_week_id, unit):
         rows = []
         for row in day["rows"]:
             cells = []
-            has_any = False
+            # Include the row only if the athlete actually trains it in some
+            # delivered week. An "add this week only" targeting an *undelivered*
+            # future week seeds skipped placeholder cells in the delivered weeks;
+            # counting any present cell would leak that build-ahead exercise's
+            # name across em-dash cells, so gate on a non-skipped delivered cell.
+            has_trainable = False
             for w, key in zip(columns, col_keys):
                 cell = row["cells"].get(key)
                 current = w["id"] == focus_week_id
                 if cell is None:
                     cells.append({"present": False, "current": current})
                     continue
-                has_any = True
+                if not cell["skipped"]:
+                    has_trainable = True
                 cells.append(
                     {
                         "present": True,
@@ -1049,7 +1055,7 @@ def _athlete_block_grid(block, delivered_week_ids, focus_week_id, unit):
                         "swap": cell["swap_display"],
                     }
                 )
-            if has_any:
+            if has_trainable:
                 rows.append({"name": row["name"], "cells": cells})
         if rows:
             days.append(

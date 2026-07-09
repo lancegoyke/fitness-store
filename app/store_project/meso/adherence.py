@@ -36,7 +36,11 @@ def link_latest_delivered_week(link):
         )
         .exclude(mesocycle__plan__status=Plan.Status.ARCHIVED)
         .select_related("mesocycle")
-        .order_by("-delivered_at")
+        # A P3 block delivery stamps every week with one ``delivered_at``; break
+        # that tie toward the athlete's current week (then earliest index) so the
+        # meter is deterministic instead of DB-order dependent. (Per-week delivery
+        # has distinct timestamps, so this never changes its result.)
+        .order_by("-delivered_at", "-is_current", "index")
         .first()
     )
 

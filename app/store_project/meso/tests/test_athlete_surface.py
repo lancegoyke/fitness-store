@@ -303,6 +303,29 @@ class TestAthleteHome:
         assert "Front Squat" in body  # the swap
         assert "Box Squat" in body  # the underlying slot row still labels the row
 
+    def test_future_only_add_this_week_row_is_not_leaked(self, client):
+        """An exercise added only to an undelivered future week must not surface.
+
+        "Add this week only" seeds skipped placeholder cells in every other live
+        week; when the target is an undelivered future week, the athlete's block
+        table (delivered columns only) would otherwise render that build-ahead
+        exercise's name across em-dash cells. A row with no trainable delivered
+        cell is dropped.
+        """
+        b = seed_block()  # weeks 1 & 2 delivered, week 3 undelivered
+        future = ExerciseSlot.objects.create(
+            session_slot=b.slot, name="Front Squat (future only)", order=1
+        )
+        # Skipped placeholders in the delivered weeks; trainable only in the
+        # undelivered week 3 (the add-this-week-only-a-future-week shape).
+        make_presc(exercise_slot=future, week=b.w1, skipped=True)
+        make_presc(exercise_slot=future, week=b.w2, skipped=True)
+        make_presc(exercise_slot=future, week=b.w3, sets="3", reps="8", load="90")
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "Front Squat (future only)" not in body  # build-ahead not leaked
+        assert "Box Squat" in body  # the real delivered row still shows
+
     def test_block_table_comment_does_not_leak_onto_the_page(self, client):
         """The block table's template-author note stays out of the rendered HTML.
 

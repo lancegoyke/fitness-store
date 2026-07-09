@@ -592,12 +592,17 @@ def latest_delivered_week(plan):
     and uses this week as the block anchor + the focus-week fallback when no
     delivered week is flagged current. See ``docs/archive/meso/athlete-plan.md``.
     """
+    # P3 delivers a whole block at once, so every live week of that block shares
+    # one ``delivered_at`` — ordering on it alone would tie non-deterministically.
+    # Break the tie toward the week the athlete is on (``is_current``), then the
+    # earliest index, so the anchor/fallback is stable and meaningful. (Per-week
+    # delivery gives distinct timestamps, so the tiebreak never engages there.)
     return (
         models.Week.objects.filter(
             mesocycle__plan=plan, delivered_at__isnull=False, deleted_at__isnull=True
         )
         .select_related("mesocycle")
-        .order_by("-delivered_at")
+        .order_by("-delivered_at", "-is_current", "index")
         .first()
     )
 
