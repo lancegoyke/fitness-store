@@ -466,6 +466,39 @@ class TestRosterAddSelfOptIn:
         assert resp.status_code == 302
         assert CoachAthlete.objects.filter(coach=coach, athlete=coach).exists()
 
+    # #441 P3-2: the organic twin carries no ``tour=1``, so a coach who takes the
+    # action *while actively touring & parked on the matching step* was never
+    # counted — undercounting tour conversion. Record it too, keyed off the
+    # parked step, without double-recording the marked path.
+    def test_organic_post_while_touring_on_welcome_records_opt_in(self, client):
+        coach = _coach()
+        tour.set_step(CoachProfile.objects.get(user=coach), 0)  # active, on welcome
+        client.force_login(coach)
+
+        client.post(reverse("meso:roster_add_self"))  # organic — no tour=1
+
+        event = TourEvent.objects.get(kind=TourEvent.Kind.OPT_IN)
+        assert event.variant == "self"
+        assert event.step_key == "welcome"
+        assert event.segment == "roster_add_self"
+        # The real action still happens.
+        assert CoachAthlete.objects.filter(coach=coach, athlete=coach).exists()
+
+    def test_organic_post_while_touring_on_a_non_welcome_step_records_nothing(
+        self, client
+    ):
+        # Parked on a step other than welcome → the organic action is not the
+        # welcome-step opt-in, so nothing is recorded (guards against
+        # over-recording); the self link is still added.
+        coach = _coach()
+        tour.set_step(CoachProfile.objects.get(user=coach), 2)  # active, on designer
+        client.force_login(coach)
+
+        client.post(reverse("meso:roster_add_self"))  # organic — no tour=1
+
+        assert TourEvent.objects.count() == 0
+        assert CoachAthlete.objects.filter(coach=coach, athlete=coach).exists()
+
 
 # ---------------------------------------------------------------------------
 # plan_create — tour=1-gated opt-in, step key from `draft`
@@ -514,4 +547,76 @@ class TestPlanCreateOptIn:
         client.post(reverse("meso:plan_create", args=[link.athlete_id]))
 
         assert TourEvent.objects.count() == 0
+        assert link.working_plan() is not None
+
+    # #441 P3-2: organic ``plan_create`` while touring & parked on the designer
+    # step (no draft) records the designer opt-in, keyed off the parked step.
+    def test_organic_post_while_touring_on_designer_records_opt_in(self, client):
+        link = CoachAthleteFactory()
+        tour.set_step(CoachProfile.objects.create(user=link.coach), 2)  # designer
+        client.force_login(link.coach)
+
+        client.post(reverse("meso:plan_create", args=[link.athlete_id]))  # no tour=1
+
+        event = TourEvent.objects.get(kind=TourEvent.Kind.OPT_IN)
+        assert event.variant == "self"
+        assert event.step_key == "designer"
+        assert event.segment == "plan_create"
+        assert link.working_plan() is not None
+
+    # …and a draft while parked on the agent step records the agent opt-in.
+    def test_organic_draft_post_while_touring_on_agent_records_the_agent_step(
+        self, client, monkeypatch
+    ):
+        class _FakeDraftClient:
+            model = "fake"
+
+            def propose(self, *, context, instruction):
+                return {"summary": "drafted", "changes": []}
+
+        from store_project.meso.agent import client as client_module
+
+        link = CoachAthleteFactory()
+        tour.set_step(CoachProfile.objects.create(user=link.coach), 6)  # agent
+        monkeypatch.setattr(
+            client_module, "get_default_client", lambda: _FakeDraftClient()
+        )
+        client.force_login(link.coach)
+
+        client.post(
+            reverse("meso:plan_create", args=[link.athlete_id]),
+            {"draft": "agent"},  # organic (no tour=1) but a draft request
+        )
+
+        event = TourEvent.objects.get(kind=TourEvent.Kind.OPT_IN)
+        assert event.variant == "self"
+        assert event.step_key == "agent"
+        assert event.segment == "plan_create"
+
+    # …but a plain (non-draft) organic plan_create while parked on the *agent*
+    # step must NOT be miscounted as an agent opt-in — the AI-draft action was
+    # never taken, so the action shape doesn't match the step (Codex review nit).
+    def test_organic_plain_post_while_touring_on_agent_records_nothing(self, client):
+        link = CoachAthleteFactory()
+        tour.set_step(CoachProfile.objects.create(user=link.coach), 6)  # agent
+        client.force_login(link.coach)
+
+        # No draft, no tour=1 — a manual "New program" while parked on agent.
+        client.post(reverse("meso:plan_create", args=[link.athlete_id]))
+
+        assert TourEvent.objects.count() == 0
+        assert link.working_plan() is not None
+
+    # Codex review: a *sandbox* coach's organic "+ New program" posts here with
+    # no tour=1; the sandbox opt-in path is demo_load(segment=program), so this
+    # must NOT log a self-variant plan_create opt-in even while parked on designer.
+    def test_organic_sandbox_plan_create_records_no_self_optin(self, client):
+        coach = sandbox.create_sandbox()  # sandbox variant; tour armed at step 0
+        link = CoachAthlete.add_self(coach)  # a self athlete to build a plan for
+        tour.set_step(CoachProfile.objects.get(user=coach), 2)  # designer step
+        client.force_login(coach)
+
+        client.post(reverse("meso:plan_create", args=[link.athlete_id]))  # organic
+
+        assert not TourEvent.objects.filter(kind=TourEvent.Kind.OPT_IN).exists()
         assert link.working_plan() is not None

@@ -20,7 +20,7 @@
       <div>
         <p class="meso-eyebrow">Publish</p>
         <h1 class="meso-h1">Deliver {{ deliver.block_name|default:"block" }}</h1>
-        <p class="meso-sub">{{ deliver.week_count }} week{{ deliver.week_count|pluralize }} · to {{ athlete.name }} · once delivered she sees the whole block in her app.</p>
+        <p class="meso-sub">{{ deliver.week_count }} week{{ deliver.week_count|pluralize }} · to {{ athlete.name }} · once delivered, {{ athlete.name }} sees the whole block in their app.</p>
       </div>
     </div>
 
@@ -127,10 +127,10 @@
     <div x-show="delivered" x-cloak class="meso-card meso-card--pad" style="text-align:center;padding:36px 24px;">
       <div style="width:46px;height:46px;border-radius:50%;background:var(--ok);display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;margin:0 auto 14px;">✓</div>
       <h2 style="margin:0 0 4px;font-size:19px;font-weight:800;letter-spacing:-0.02em;">Block delivered to {{ athlete.name }}</h2>
-      <p class="meso-sub" style="margin-bottom:20px;">She'll see all {{ deliver.week_count }} week{{ deliver.week_count|pluralize }} — Day 1 on her phone.</p>
+      <p class="meso-sub" style="margin-bottom:20px;">{{ athlete.name }} will see all {{ deliver.week_count }} week{{ deliver.week_count|pluralize }} — Day 1 on their phone.</p>
       <div style="display:flex;gap:10px;justify-content:center;">
         <a class="meso-btn" href="{% url 'meso:roster' %}">Back to roster</a>
-        <a class="meso-btn meso-btn--primary" href="{% url 'meso:results' %}">Track her sessions →</a>
+        <a class="meso-btn meso-btn--primary" href="{% url 'meso:results' %}">Track sessions →</a>
       </div>
     </div>
   </div>

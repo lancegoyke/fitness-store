@@ -24,6 +24,12 @@ import {
   shouldShowGoto,
   isUsableRect,
 } from "../app/store_project/static/js/meso_tour.js";
+// The pure-logic helpers above are named exports; the DOM-level helpers the P3
+// tests exercise (`bottomSheetInset`, `scrollAnchorIntoView`, `initTour`) are
+// pulled in as a namespace so a not-yet-exported symbol reads as `undefined`
+// (a clean "feature missing" failure) rather than breaking module collection
+// for the whole suite.
+import * as tourDriver from "../app/store_project/static/js/meso_tour.js";
 
 describe("clampStep", () => {
   it("keeps an in-range step unchanged", () => {
@@ -448,5 +454,158 @@ describe("isUsableRect", () => {
   it("rejects a missing rect", () => {
     expect(isUsableRect(null)).toBe(false);
     expect(isUsableRect(undefined)).toBe(false);
+  });
+});
+
+// #441 P3-1: on a phone the step card is a bottom sheet (min(75vh,520px), pinned
+// bottom:0) that covers viewport center, so `scrollIntoView({block:"center"})`
+// buries the spotlighted anchor behind it. The fix computes the sheet height in
+// px and sets `scroll-margin-bottom` on the anchor before scrolling, lifting its
+// resting position out from behind the sheet — and clears the margin on desktop
+// so a rotate-to-wide doesn't leave a stale offset.
+//
+// A `window`-like fake whose `matchMedia` answers both the sheet-layout query
+// and the reduced-motion query `scrollAnchorIntoView` reads, mirroring the
+// existing `prefersReducedMotion` `fakeWin` helper. The sheet query is matched
+// space-insensitively so it holds whether the impl writes "(max-width:640px)"
+// or "(max-width: 640px)".
+function sheetWin({ innerHeight = 800, sheet = false, reducedMotion = false } = {}) {
+  return {
+    innerHeight,
+    matchMedia(query) {
+      const q = String(query).replace(/\s+/g, "");
+      if (q === "(max-width:640px)") return { matches: sheet };
+      if (q.indexOf("prefers-reduced-motion") !== -1) {
+        return { matches: reducedMotion };
+      }
+      return { matches: false };
+    },
+  };
+}
+
+describe("bottomSheetInset (P3-1 mobile bottom-sheet height)", () => {
+  it("returns the sheet height min(innerHeight*0.75, 520) on the sheet layout", () => {
+    // 800 * 0.75 = 600, clamped to the 520px cap.
+    expect(tourDriver.bottomSheetInset(sheetWin({ sheet: true, innerHeight: 800 }))).toBe(
+      520,
+    );
+  });
+
+  it("uses the 75vh branch on a shorter viewport", () => {
+    // 600 * 0.75 = 450, under the 520 cap.
+    expect(tourDriver.bottomSheetInset(sheetWin({ sheet: true, innerHeight: 600 }))).toBe(
+      450,
+    );
+  });
+
+  it("is 0 on desktop (not the sheet layout)", () => {
+    expect(
+      tourDriver.bottomSheetInset(sheetWin({ sheet: false, innerHeight: 800 })),
+    ).toBe(0);
+  });
+
+  it("is 0 when matchMedia is unavailable", () => {
+    expect(tourDriver.bottomSheetInset({ innerHeight: 800 })).toBe(0);
+  });
+});
+
+describe("scrollAnchorIntoView (P3-1 sets scroll-margin-bottom for the sheet)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  function anchor(name) {
+    const el = document.createElement("div");
+    el.setAttribute("data-tour", name);
+    // jsdom's scrollIntoView is a no-op stub; keep it a function so the driver's
+    // `typeof el.scrollIntoView === "function"` guard passes.
+    el.scrollIntoView = () => {};
+    document.body.appendChild(el);
+    return el;
+  }
+
+  it("sets the anchor's scrollMarginBottom to the sheet inset on mobile (520px)", () => {
+    const el = anchor("roster-invite");
+    tourDriver.scrollAnchorIntoView(
+      document,
+      sheetWin({ sheet: true, innerHeight: 800 }),
+      "roster-invite",
+    );
+    expect(el.style.scrollMarginBottom).toBe("520px");
+  });
+
+  it("uses the 75vh branch inset on a shorter mobile viewport (450px)", () => {
+    const el = anchor("roster-invite");
+    tourDriver.scrollAnchorIntoView(
+      document,
+      sheetWin({ sheet: true, innerHeight: 600 }),
+      "roster-invite",
+    );
+    expect(el.style.scrollMarginBottom).toBe("450px");
+  });
+
+  it("clears scrollMarginBottom on desktop (never leaves a stale margin)", () => {
+    const el = anchor("roster-invite");
+    el.style.scrollMarginBottom = "999px"; // a stale mobile margin
+    tourDriver.scrollAnchorIntoView(
+      document,
+      sheetWin({ sheet: false, innerHeight: 800 }),
+      "roster-invite",
+    );
+    expect(el.style.scrollMarginBottom).toBe("");
+  });
+});
+
+// #441 P3-3: the driver repositions its spotlight on throttled resize + a
+// capture-phase scroll listener only. Step 8 (self) spotlights a
+// `<details data-tour="roster-invite">`; expanding it fires a `toggle` event
+// that doesn't bubble, so the spotlight never re-measures and goes stale. The
+// fix registers the same throttled reposition as a capture-phase `toggle`
+// listener on mount and tears it down with the rest.
+describe("initTour toggle reposition listener (P3-3)", () => {
+  const CONFIG = {
+    steps: [
+      { key: "welcome", title: "Welcome", body: "Hi", anchor: "roster-individuals" },
+      { key: "finish", title: "Done", body: "Bye", anchor: "roster-invite" },
+    ],
+    variant: "self",
+    step: 0,
+    status: "active",
+    state_url: "/meso/tour/state/",
+    skip_url: "/meso/tour/skip/",
+    demo_load_url: "/meso/demo/load/",
+    signup_url: "/meso/demo/signup/",
+  };
+
+  function mount() {
+    document.body.innerHTML =
+      '<div id="meso-tour" aria-hidden="true"></div>' +
+      '<script type="application/json" id="meso-tour-config">' +
+      JSON.stringify(CONFIG) +
+      "</script>";
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  it("registers a capture-phase toggle listener on the document on mount", () => {
+    mount();
+    const addSpy = vi.spyOn(document, "addEventListener");
+    tourDriver.initTour(document, window);
+    expect(addSpy).toHaveBeenCalledWith("toggle", expect.any(Function), true);
+  });
+
+  it("removes the capture-phase toggle listener on teardown", async () => {
+    mount();
+    window.fetch = vi.fn().mockResolvedValue({ ok: true });
+    const removeSpy = vi.spyOn(document, "removeEventListener");
+    tourDriver.initTour(document, window);
+    // Dismiss tears the tour down once the (mocked) state POST settles.
+    document.querySelector("[data-tour-dismiss]").click();
+    await vi.waitFor(() => {
+      expect(removeSpy).toHaveBeenCalledWith("toggle", expect.any(Function), true);
+    });
   });
 });

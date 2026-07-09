@@ -1,0 +1,128 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Tour funnel · Meso{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-crumbs">
+      <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span> <span>Tour funnel</span>
+    </div>
+
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Owner · guided-tour funnel</p>
+        <h1 class="meso-h1">Tour engagement</h1>
+        <p class="meso-sub">
+          {{ total_events }} event{{ total_events|pluralize }} in scope
+          {% if variant %}· variant <b>{{ variant }}</b>{% endif %}
+          {% if days %}· last {{ days }} day{{ days|pluralize }}{% endif %}
+        </p>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <a class="meso-btn meso-btn--ghost" href="?">All</a>
+        <a class="meso-btn meso-btn--ghost" href="?variant=sandbox">Sandbox</a>
+        <a class="meso-btn meso-btn--ghost" href="?variant=self">Self</a>
+      </div>
+    </div>
+
+    <!-- Funnel: Started → Opt-in → Completed event counts, pct vs. Started (capped). -->
+    <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
+      <p class="meso-eyebrow">Funnel</p>
+      <p class="meso-sub" style="margin:2px 0 0;font-size:11.5px;">events per stage; conversion bar capped at 100%</p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px;">
+        {% for stage in funnel %}
+          <div>
+            <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:3px;">
+              <b style="font-size:13.5px;">{{ stage.label }}</b>
+              <span class="meso-row-meta">{{ stage.count }} · {{ stage.pct }}%</span>
+            </div>
+            <div style="height:10px;border-radius:999px;background:var(--line-2);overflow:hidden;">
+              <div style="height:100%;width:{{ stage.pct }}%;background:var(--accent);border-radius:999px;"></div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="meso-grid meso-grid--profile">
+      <!-- left rail: per-step advances -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="meso-card">
+          <div style="padding:13px 16px;border-bottom:1px solid var(--line-2);">
+            <p class="meso-eyebrow" style="margin:0;">Advances by step</p>
+          </div>
+          {% for step in step_advances %}
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line-2);">
+              <span class="meso-row-name" style="font-size:13.5px;">{{ step.step_key }}</span>
+              <div class="meso-spacer"></div>
+              <span class="meso-row-meta"><b style="color:var(--ink);">{{ step.count }}</b></span>
+            </div>
+          {% empty %}
+            <div class="meso-row" style="color:var(--dim);padding:16px;">
+              No step advances yet.
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- main: per-kind totals, split by variant -->
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="meso-card">
+          <div style="padding:13px 16px;border-bottom:1px solid var(--line-2);">
+            <p class="meso-eyebrow" style="margin:0;">Events by kind &amp; variant</p>
+          </div>
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead>
+                <tr style="text-align:left;color:var(--dim);">
+                  <th style="padding:9px 16px;font-weight:650;">Kind</th>
+                  <th style="padding:9px 16px;font-weight:650;text-align:right;">All</th>
+                  <th style="padding:9px 16px;font-weight:650;text-align:right;">Sandbox</th>
+                  <th style="padding:9px 16px;font-weight:650;text-align:right;">Self</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-top:1px solid var(--line-2);">
+                  <td style="padding:9px 16px;">Started</td>
+                  <td style="padding:9px 16px;text-align:right;"><b>{{ event_counts.started }}</b></td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.sandbox.started }}</td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.self.started }}</td>
+                </tr>
+                <tr style="border-top:1px solid var(--line-2);">
+                  <td style="padding:9px 16px;">Step advanced</td>
+                  <td style="padding:9px 16px;text-align:right;"><b>{{ event_counts.advanced }}</b></td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.sandbox.advanced }}</td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.self.advanced }}</td>
+                </tr>
+                <tr style="border-top:1px solid var(--line-2);">
+                  <td style="padding:9px 16px;">Opt-in</td>
+                  <td style="padding:9px 16px;text-align:right;"><b>{{ event_counts.opt_in }}</b></td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.sandbox.opt_in }}</td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.self.opt_in }}</td>
+                </tr>
+                <tr style="border-top:1px solid var(--line-2);">
+                  <td style="padding:9px 16px;">Dismissed</td>
+                  <td style="padding:9px 16px;text-align:right;"><b>{{ event_counts.dismissed }}</b></td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.sandbox.dismissed }}</td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.self.dismissed }}</td>
+                </tr>
+                <tr style="border-top:1px solid var(--line-2);">
+                  <td style="padding:9px 16px;">Completed</td>
+                  <td style="padding:9px 16px;text-align:right;"><b>{{ event_counts.completed }}</b></td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.sandbox.completed }}</td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.self.completed }}</td>
+                </tr>
+                <tr style="border-top:1px solid var(--line-2);">
+                  <td style="padding:9px 16px;">Skipped</td>
+                  <td style="padding:9px 16px;text-align:right;"><b>{{ event_counts.skipped }}</b></td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.sandbox.skipped }}</td>
+                  <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ by_variant.self.skipped }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

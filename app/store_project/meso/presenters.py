@@ -13,11 +13,13 @@ import math
 from collections import defaultdict
 from types import SimpleNamespace
 
+from django.db.models import Count
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.timesince import timesince
 
 from . import adherence
+from . import tour
 from .billing import access as billing_access
 from .billing import agent_usage_report
 from .models import AgentProposalBatch
@@ -27,6 +29,7 @@ from .models import CoachSubscription
 from .models import LoadType
 from .models import Plan
 from .models import SessionLog
+from .models import TourEvent
 from .models import Week
 from .models import WeekDelivery
 from .one_rm import one_rm_values
@@ -1374,4 +1377,98 @@ def usage_dashboard(report, *, threshold):
         "by_tier": agent_usage_report.sorted_totals(report.by_tier),
         "by_model": agent_usage_report.sorted_totals(report.by_model),
         "by_trigger": agent_usage_report.sorted_totals(report.by_trigger),
+    }
+
+
+def tour_funnel(*, variant=None, since=None):
+    """Aggregate :class:`TourEvent` rows into the staff funnel dashboard's context.
+
+    The read side of the guided-tour analytics (#441 P3-6): the ``record_*``
+    helpers write one row per funnel moment; this rolls them up per-kind,
+    per-variant, and per-advance-step, plus a compact Started → Opt-in →
+    Completed funnel. Everything is ORM-aggregated (``values(...).annotate(
+    Count(...))``) — no row ever loads into Python. Optional ``variant`` /
+    ``since`` narrow the scope; the default is all-time, all-variants.
+
+    Contract (the view + tests read these exact keys):
+
+    - ``event_counts`` — every ``Kind`` 0-filled → count.
+    - ``by_variant`` — ``{"sandbox": {...}, "self": {...}}``, both present, each
+      kind 0-filled (so a variant with no events still renders a full row).
+    - ``step_advances`` — ``[{"step_key", "count"}]`` for ADVANCED events, in the
+      tour ``STEPS`` order. Only steps that actually appear are emitted (0-count
+      steps are intentionally omitted — the table lists what happened, ordered
+      canonically, not every possible step).
+    - ``funnel`` — ordered display stages, each ``{"label", "count", "pct"}``.
+      ``count`` is the raw event total for the stage (Started / Opt-in /
+      Completed) so reaped null-coach sandbox rows are never dropped; ``pct`` is
+      that count over Started, clamped to <= 100% (one sandbox tour emits several
+      ``opt_in`` rows, so opt-in events can exceed starts).
+    - ``total_events`` — all events in scope.
+    """
+    qs = TourEvent.objects.all()
+    if variant is not None:
+        qs = qs.filter(variant=variant)
+    if since is not None:
+        qs = qs.filter(created__gte=since)
+
+    kinds = [value for value, _ in TourEvent.Kind.choices]
+    variants = [value for value, _ in TourEvent.Variant.choices]
+
+    event_counts = {kind: 0 for kind in kinds}
+    for row in qs.values("kind").annotate(n=Count("id")):
+        if row["kind"] in event_counts:
+            event_counts[row["kind"]] = row["n"]
+
+    by_variant = {v: {kind: 0 for kind in kinds} for v in variants}
+    for row in qs.values("variant", "kind").annotate(n=Count("id")):
+        bucket = by_variant.get(row["variant"])
+        if bucket is not None and row["kind"] in bucket:
+            bucket[row["kind"]] = row["n"]
+
+    # ADVANCED counts per step, re-ordered into the canonical tour STEP order.
+    advance_counts = {
+        row["step_key"]: row["n"]
+        for row in qs.filter(kind=TourEvent.Kind.ADVANCED)
+        .values("step_key")
+        .annotate(n=Count("id"))
+    }
+    step_order = [step["key"] for step in tour.STEPS]
+    step_advances = [
+        {"step_key": key, "count": advance_counts[key]}
+        for key in step_order
+        if key in advance_counts
+    ]
+
+    # Funnel = raw event counts per stage, NOT distinct coaches: the sandbox
+    # expiry sweep reaps throwaway coaches to ``coach = NULL`` (SET_NULL), and a
+    # distinct-coach count would silently drop all that historical sandbox
+    # traffic. Raw counts keep every row. The tradeoff — one sandbox tour emits
+    # several ``opt_in`` rows, so opt-in events can exceed starts — is handled by
+    # clamping the displayed conversion to <= 100%.
+    started = event_counts["started"]
+
+    def _pct(n):
+        return min(100, round(100 * n / started)) if started else 0
+
+    funnel = [
+        {"label": "Started", "count": started, "pct": 100 if started else 0},
+        {
+            "label": "Opt-in",
+            "count": event_counts["opt_in"],
+            "pct": _pct(event_counts["opt_in"]),
+        },
+        {
+            "label": "Completed",
+            "count": event_counts["completed"],
+            "pct": _pct(event_counts["completed"]),
+        },
+    ]
+
+    return {
+        "event_counts": event_counts,
+        "by_variant": by_variant,
+        "step_advances": step_advances,
+        "funnel": funnel,
+        "total_events": qs.count(),
     }

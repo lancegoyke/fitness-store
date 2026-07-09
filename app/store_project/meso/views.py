@@ -583,6 +583,59 @@ class UsageDashboardView(UserPassesTestMixin, TemplateView):
         return usage_report.current_month_bounds()
 
 
+class TourFunnelView(UserPassesTestMixin, TemplateView):
+    """Owner-facing guided-tour funnel dashboard (#441 P3-6).
+
+    The staff read-out of the ``TourEvent`` funnel: per-kind totals, the
+    per-variant (sandbox vs. self) breakdown, the per-advance-step table, and a
+    Started → Opt-in → Completed funnel — the web complement to reading the raw
+    rows in the admin. Aggregation lives in ``presenters.tour_funnel``.
+
+    Gate mirrors ``UsageDashboardView`` exactly: anonymous bounces to login
+    (``UserPassesTestMixin`` default); an authenticated non-staff user gets a
+    flat 403, so a logged-in coach can't probe org-wide tour analytics.
+
+    Optional ``?variant=sandbox|self`` narrows to one audience and ``?days=N``
+    to a trailing window; the default is all-time, all-variants.
+    """
+
+    template_name = "meso/tour_funnel.html"
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
+        if self.request.user.is_authenticated:
+            raise PermissionDenied
+        return super().handle_no_permission()
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["active"] = "tour_funnel"
+        variant = self.request.GET.get("variant")
+        if variant not in ("sandbox", "self"):
+            variant = None
+        since = None
+        days = None
+        raw_days = self.request.GET.get("days")
+        if raw_days:
+            try:
+                parsed = int(raw_days)
+            except (TypeError, ValueError):
+                parsed = 0
+            if parsed > 0:
+                # Cap to ~10 years so an enormous value can't OverflowError the
+                # timedelta; only surface ``days`` once a real window applies, so
+                # the heading never claims to show "last abc days".
+                parsed = min(parsed, 3650)
+                since = timezone.now() - datetime.timedelta(days=parsed)
+                days = parsed
+        ctx["variant"] = variant
+        ctx["days"] = days
+        ctx.update(presenters.tour_funnel(variant=variant, since=since))
+        return ctx
+
+
 class CoachBillingView(LoginRequiredMixin, TemplateView):
     """Coach-facing billing & plan page (agent-usage — coach surface).
 
@@ -780,10 +833,27 @@ def plan_create(request, pk):
     if draft_batch is not None:
         agent_jobs.dispatch_proposal(draft_batch.pk)
         _touch_plan(plan)
+    # The tour marker (``tour=1``) picks the step from ``draft`` ("agent" vs
+    # "designer"). #441 P3-2 also counts the organic twin while touring — but
+    # only when this POST's action shape (``draft`` → agent, plain → designer)
+    # matches the step the coach is parked on, so a manual "New program" on the
+    # agent step isn't miscounted as an AI-draft opt-in. One ``record_opt_in``
+    # call, never double-recorded.
+    natural_step = "agent" if draft else "designer"
     if request.POST.get("tour") == "1":
-        meso_tour.record_opt_in(
-            request.user, "self", "agent" if draft else "designer", "plan_create"
-        )
+        tour_step = natural_step
+    elif (
+        meso_tour.variant_for(request.user) == "self"
+        and meso_tour.current_step_key(request.user) == natural_step
+    ):
+        # Organic twin, self variant only: the sandbox opt-in path is
+        # demo_load(segment=program), not plan_create, so a sandbox coach's
+        # organic "+ New program" must not log a self-variant plan_create opt-in.
+        tour_step = natural_step
+    else:
+        tour_step = None
+    if tour_step is not None:
+        meso_tour.record_opt_in(request.user, "self", tour_step, "plan_create")
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
@@ -979,7 +1049,14 @@ def roster_add_self(request):
         request,
         "You're on your roster — build a program for yourself like any athlete.",
     )
-    if request.POST.get("tour") == "1":
+    # The tour marker (``tour=1``) counts an in-tour opt-in; #441 P3-2 also counts
+    # the organic twin when the coach is actively touring & parked on the matching
+    # (welcome) step. The organic fallback is self-variant only — a sandbox coach
+    # opts in via demo_load, not roster_add_self. One call, never double-recorded.
+    if request.POST.get("tour") == "1" or (
+        meso_tour.variant_for(request.user) == "self"
+        and meso_tour.current_step_key(request.user) == "welcome"
+    ):
         meso_tour.record_opt_in(request.user, "self", "welcome", "roster_add_self")
     return redirect("meso:roster")
 
