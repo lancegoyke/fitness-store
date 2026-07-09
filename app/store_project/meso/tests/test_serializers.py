@@ -750,3 +750,85 @@ class TestSerializeMesocycleGrid:
         result = serialize_mesocycle_grid(f.meso)
         day1_data = result["days"][0]
         assert day1_data["session_id"] == f.day1_wk2.pk
+
+    def test_individual_grid_cells_carry_no_adj_overlay(self):
+        # The per-athlete ``adj`` overlay is a GROUP-only concern; an individual
+        # plan's grid cells never carry ``adj``/``adjusts``.
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        for day_data in result["days"]:
+            for row in day_data["rows"]:
+                for cell in row["cells"].values():
+                    assert "adj" not in cell
+                    assert "adjusts" not in cell
+
+
+def _build_group_grid_meso():
+    """A one-day, two-row, single-week GROUP block with one member override.
+
+    Day 1 (order 0): Back Squat (order 0, load 100, overridden for the member)
+    + Bench Press (order 1, no override). The member's adjust — a swap + a load %
+    — is the ``adj`` overlay the grid must attach to the overridden cell only.
+    """
+    from store_project.meso.factories import GroupMembershipFactory
+    from store_project.meso.factories import GroupPlanFactory
+    from store_project.meso.factories import MesoGroupFactory
+
+    group = MesoGroupFactory()
+    plan = GroupPlanFactory(group=group, status=Plan.Status.ACTIVE)
+    meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
+    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    day1 = day(week, day_number=1, name="Lower", order=0)
+    squat_cell = presc(day1, name="Back Squat", order=0, load="100")
+    bench_cell = presc(day1, name="Bench Press", order=1, load="60")
+    membership = GroupMembershipFactory(group=group)
+    membership.set_override(squat_cell, load_pct=90, swap_name="Box Squat")
+    return SimpleNamespace(
+        group=group,
+        plan=plan,
+        meso=meso,
+        week=week,
+        day1=day1,
+        squat_cell=squat_cell,
+        bench_cell=bench_cell,
+        membership=membership,
+    )
+
+
+class TestSerializeMesocycleGridGroupAdj:
+    """A group plan's grid cells carry the per-athlete ``adj`` overlay (P5).
+
+    The multi-week table must show the same per-row adjust badge the single-week
+    ``serialize_plan`` overlay does — driven by the members' real override diffs —
+    so a coach editing the whole block still sees who diverges from the shared base.
+    """
+
+    def _cell(self, result, *, day_index, row_index, week):
+        return result["days"][day_index]["rows"][row_index]["cells"][str(week.pk)]
+
+    def test_overridden_cell_carries_adj_and_adjusts(self):
+        f = _build_group_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        cell = self._cell(result, day_index=0, row_index=0, week=f.week)
+        assert "adj" in cell
+        assert "adjusts" in cell
+        # The raw stored diff round-trips so the in-grid editor can pre-fill it.
+        adjust = cell["adjusts"][0]
+        assert adjust["swap"] == "Box Squat"
+        assert adjust["load_pct"] == 90
+
+    def test_unadjusted_cell_has_no_adj(self):
+        f = _build_group_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        cell = self._cell(result, day_index=0, row_index=1, week=f.week)
+        assert "adj" not in cell
+        assert "adjusts" not in cell
+
+    def test_dropped_member_leaves_no_adj(self):
+        # ``group_adjustments`` scopes to *active* members — an ended link's adjust
+        # drops off the grid, matching the single-week overlay.
+        f = _build_group_grid_meso()
+        f.membership.relationship.end()
+        result = serialize_mesocycle_grid(f.meso)
+        cell = self._cell(result, day_index=0, row_index=0, week=f.week)
+        assert "adj" not in cell

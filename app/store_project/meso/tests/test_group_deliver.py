@@ -1,10 +1,15 @@
-"""Groups slice (S1) Phase 4 — deliver to all members.
+"""Groups slice — deliver the whole shared BLOCK to all members (P5).
 
-Delivering a group's shared week **fans out** a per-athlete *resolved* program:
-each active member gets their effective week (the shared template + their
-override diffs) materialized into their own individual plan, stamped delivered,
-so they see it through the unchanged athlete surface (`/meso/me/` + the session
-logger) and get the same delivery email/push the individual slice built.
+Delivering a group's shared program **fans out** a per-athlete *resolved* copy of
+the whole block: each active member gets every live week of the shared mesocycle
+(the shared template + their override diffs) materialized into their own
+individual plan, stamped delivered, so they see it through the unchanged athlete
+surface (`/meso/me/` + the session logger) and get a single "your block is ready"
+email/push — one per member, not one per week.
+
+This is the group peer of the P3 individual whole-block delivery: both release
+the whole mesocycle at once, and both mirror the source's ``is_current`` pointer
+(the week the athlete is on) rather than flagging every delivered week current.
 
 The modeling: a materialized plan is rooted at the member's `CoachAthlete`
 relationship (an ordinary individual plan to the athlete surface) and tagged
@@ -14,8 +19,8 @@ individual surfaces never see it.
 These tests cover:
 
 - `GroupMembership.sync_delivered_plan` — materializes one resolved plan per
-  member, idempotently, preserving logs while propagating edits;
-- `MesoGroup.deliver_current_week` — the fan-out + its empty-state guards;
+  member, block-wide, idempotently, preserving logs while propagating edits;
+- `MesoGroup.deliver_block` — the whole-block fan-out + its empty-state guards;
 - the queryset tenancy (`for_coach`/`editable_by` hide it, `for_athlete` shows it)
   and the athlete-surface reuse;
 - `plan_deliver` (the group-aware JSON endpoint) + its notifications + guards;
@@ -64,9 +69,24 @@ def seed_group(coach=None, *, member_count=2, focus="Strength"):
     return group, plan, memberships
 
 
+def shared_meso(plan):
+    """The shared program's (only) mesocycle — the block delivery targets."""
+    return plan.mesocycles.get()
+
+
+def append_shared_week(plan):
+    """Grow the shared block to a second live week so a block has ≥2 to deliver.
+
+    ``append_week`` adds a non-current, undelivered draft column — exactly what
+    the multi-week designer does — so the block now holds week 1 (the scaffold's
+    current week) plus week 2. Returns the new ``Week``.
+    """
+    return shared_meso(plan).append_week()
+
+
 def shared_prescriptions(plan):
     """The shared program's current-week prescription cells, in (day, row) order."""
-    week = plan.mesocycles.get().weeks.get()
+    week = shared_meso(plan).weeks.get(is_current=True)
     return list(
         Prescription.objects.filter(week=week)
         .select_related("exercise_slot", "exercise_slot__session_slot")
@@ -74,27 +94,78 @@ def shared_prescriptions(plan):
     )
 
 
+def live_weeks(plan):
+    """The shared block's live weeks, in ``index`` order."""
+    return list(
+        shared_meso(plan).weeks.filter(deleted_at__isnull=True).order_by("index")
+    )
+
+
 def deliver_url(plan):
     return reverse("meso:api_plan_deliver", kwargs={"plan_id": plan.pk})
 
 
-# -- model: sync_delivered_plan (per-member materialization) ------------------
+# -- model: sync_delivered_plan (per-member block materialization) ------------
 
 
 class TestSyncDeliveredPlan:
     def test_materializes_one_plan_per_member_rooted_at_relationship(self):
         group, plan, [m] = seed_group(member_count=1)
-        group_week = plan.mesocycles.get().weeks.get()
+        meso = shared_meso(plan)
 
-        member_plan, member_week = m.sync_delivered_plan(group_week)
+        member_plan, member_weeks = m.sync_delivered_plan(meso)
 
         assert member_plan.relationship_id == m.relationship_id
         assert member_plan.source_group_id == group.pk
         assert member_plan.group_id is None  # rooted at the relationship, not the group
         assert member_plan.athlete == m.relationship.athlete
-        # The materialized week mirrors the shared week's structure.
-        assert member_week.index == group_week.index
-        assert member_week.sessions.count() == group_week.sessions.count()
+        # The single scaffold week is materialized, mirroring its structure.
+        assert [w.index for w in member_weeks] == [1]
+        src_week = meso.weeks.get()
+        assert member_weeks[0].sessions.count() == src_week.sessions.count()
+
+    def test_materializes_every_live_week_of_the_block(self):
+        group, plan, [m] = seed_group(member_count=1)
+        append_shared_week(plan)  # a second live week
+        meso = shared_meso(plan)
+
+        _, member_weeks = m.sync_delivered_plan(meso)
+
+        assert [w.index for w in member_weeks] == [1, 2]
+        src_weeks = meso.weeks.filter(deleted_at__isnull=True).order_by("index")
+        for member_week, src_week in zip(member_weeks, src_weeks):
+            assert member_week.sessions.count() == src_week.sessions.count()
+
+    def test_member_week_is_current_mirrors_the_source(self):
+        # Post-P3, ``is_current`` means "the week the athlete is on"; the member's
+        # copy must mirror the source pointer (week 1), NOT flag every week current.
+        group, plan, [m] = seed_group(member_count=1)
+        append_shared_week(plan)
+        meso = shared_meso(plan)
+
+        _, member_weeks = m.sync_delivered_plan(meso)
+
+        by_index = {w.index: w for w in member_weeks}
+        assert by_index[1].is_current is True
+        assert by_index[2].is_current is False
+
+    def test_member_week_is_current_follows_a_moved_source_pointer(self):
+        # When the coach moves the shared current pointer to week 2, the member's
+        # copy follows on the next sync.
+        group, plan, [m] = seed_group(member_count=1)
+        week2 = append_shared_week(plan)
+        meso = shared_meso(plan)
+        week1 = meso.weeks.get(index=1)
+        week1.is_current = False
+        week1.save(update_fields=["is_current"])
+        week2.is_current = True
+        week2.save(update_fields=["is_current"])
+
+        _, member_weeks = m.sync_delivered_plan(meso)
+
+        by_index = {w.index: w for w in member_weeks}
+        assert by_index[1].is_current is False
+        assert by_index[2].is_current is True
 
     def test_resolves_override_for_the_member(self):
         group, plan, [m] = seed_group(member_count=1)
@@ -103,8 +174,9 @@ class TestSyncDeliveredPlan:
         first.save(update_fields=["load"])
         m.set_override(first, load_pct=90, swap_name="Box Squat")
 
-        _, member_week = m.sync_delivered_plan(first.week)
+        _, member_weeks = m.sync_delivered_plan(shared_meso(plan))
 
+        member_week = next(w for w in member_weeks if w.index == first.week.index)
         materialized = (
             member_week.sessions.get(
                 session_slot__day_number=first.exercise_slot.session_slot.day_number
@@ -115,6 +187,40 @@ class TestSyncDeliveredPlan:
         assert materialized.name == "Box Squat"
         assert materialized.load == "90"  # 90% of 100, round-to-2.5
 
+    def test_override_resolves_per_week(self):
+        # An override targets one week's *cell*; only that week's materialized row
+        # carries the diff, the other weeks stay on the shared base.
+        group, plan, [m] = seed_group(member_count=1)
+        week2 = append_shared_week(plan)
+        meso = shared_meso(plan)
+        # The same exercise slot in week 1 (current) and week 2.
+        wk1_cell = shared_prescriptions(plan)[0]
+        wk1_cell.load = "100"
+        wk1_cell.save(update_fields=["load"])
+        wk2_cell = Prescription.objects.get(
+            exercise_slot=wk1_cell.exercise_slot, week=week2
+        )
+        wk2_cell.load = "100"
+        wk2_cell.save(update_fields=["load"])
+        # Override only week 2's cell.
+        m.set_override(wk2_cell, load_pct=50)
+
+        _, member_weeks = m.sync_delivered_plan(meso)
+
+        by_index = {w.index: w for w in member_weeks}
+
+        def cell_for(week):
+            return (
+                week.sessions.get(
+                    session_slot__day_number=wk1_cell.exercise_slot.session_slot.day_number
+                )
+                .cells()
+                .get(exercise_slot__order=wk1_cell.exercise_slot.order)
+            )
+
+        assert cell_for(by_index[1]).load == "100"  # untouched week
+        assert cell_for(by_index[2]).load == "50"  # 50% of 100 on the overridden week
+
     def test_unadjusted_member_gets_the_shared_base(self):
         group, plan, [adjusted, plain] = seed_group(member_count=2)
         first = shared_prescriptions(plan)[0]
@@ -122,8 +228,9 @@ class TestSyncDeliveredPlan:
         first.save(update_fields=["load"])
         adjusted.set_override(first, load_pct=80)
 
-        _, plain_week = plain.sync_delivered_plan(first.week)
+        _, member_weeks = plain.sync_delivered_plan(shared_meso(plan))
 
+        plain_week = next(w for w in member_weeks if w.index == first.week.index)
         row = (
             plain_week.sessions.get(
                 session_slot__day_number=first.exercise_slot.session_slot.day_number
@@ -142,8 +249,9 @@ class TestSyncDeliveredPlan:
         first.skipped = True
         first.save(update_fields=["skipped"])
 
-        _, member_week = m.sync_delivered_plan(first.week)
+        _, member_weeks = m.sync_delivered_plan(shared_meso(plan))
 
+        member_week = next(w for w in member_weeks if w.index == first.week.index)
         materialized = (
             member_week.sessions.get(
                 session_slot__day_number=first.exercise_slot.session_slot.day_number
@@ -155,10 +263,10 @@ class TestSyncDeliveredPlan:
 
     def test_redelivery_reuses_the_same_plan(self):
         group, plan, [m] = seed_group(member_count=1)
-        group_week = plan.mesocycles.get().weeks.get()
+        meso = shared_meso(plan)
 
-        first_plan, _ = m.sync_delivered_plan(group_week)
-        second_plan, _ = m.sync_delivered_plan(group_week)
+        first_plan, _ = m.sync_delivered_plan(meso)
+        second_plan, _ = m.sync_delivered_plan(meso)
 
         assert first_plan.pk == second_plan.pk
         assert (
@@ -168,16 +276,16 @@ class TestSyncDeliveredPlan:
 
     def test_redelivery_preserves_an_athletes_log(self):
         group, plan, [m] = seed_group(member_count=1)
-        group_week = plan.mesocycles.get().weeks.get()
-        _, member_week = m.sync_delivered_plan(group_week)
-        session = member_week.sessions.first()
+        meso = shared_meso(plan)
+        _, member_weeks = m.sync_delivered_plan(meso)
+        session = member_weeks[0].sessions.first()
         log = SessionLogFactory(
             session=session, athlete=m.relationship.athlete, status="done"
         )
 
         # The coach re-delivers (no structural change) — the session row survives,
         # so the athlete's log isn't cascade-deleted.
-        m.sync_delivered_plan(group_week)
+        m.sync_delivered_plan(meso)
 
         assert SessionLog.objects.filter(pk=log.pk).exists()
 
@@ -186,12 +294,13 @@ class TestSyncDeliveredPlan:
         first = shared_prescriptions(plan)[0]
         first.load = "100"
         first.save(update_fields=["load"])
-        group_week = first.week
+        meso = shared_meso(plan)
 
-        m.sync_delivered_plan(group_week)
+        m.sync_delivered_plan(meso)
         m.set_override(first, load_pct=50)
-        _, member_week = m.sync_delivered_plan(group_week)
+        _, member_weeks = m.sync_delivered_plan(meso)
 
+        member_week = next(w for w in member_weeks if w.index == first.week.index)
         row = (
             member_week.sessions.get(
                 session_slot__day_number=first.exercise_slot.session_slot.day_number
@@ -203,61 +312,96 @@ class TestSyncDeliveredPlan:
 
     def test_dropped_shared_prescription_hides_on_member_week(self):
         group, plan, [m] = seed_group(member_count=1)
-        group_week = plan.mesocycles.get().weeks.get()
-        m.sync_delivered_plan(group_week)
+        meso = shared_meso(plan)
+        m.sync_delivered_plan(meso)
         # Drop a row from the shared program, then re-deliver.
         first = shared_prescriptions(plan)[0]
         day_number = first.exercise_slot.session_slot.day_number
         order = first.exercise_slot.order
         first.exercise_slot.soft_delete()
 
-        _, member_week = m.sync_delivered_plan(group_week)
+        _, member_weeks = m.sync_delivered_plan(meso)
 
+        member_week = member_weeks[0]
         member_slot = member_week.mesocycle.session_slots.get(day_number=day_number)
         # The member's copy is *hidden*, never hard-deleted (soft delete,
         # designer framework Phase 0): the member's LoggedSets may reference
         # it, and a source row that returns revives it in place.
         dropped = member_slot.exercise_slots.get(order=order)
         assert dropped.deleted_at is not None
-        live_group_day = group_week.sessions.get(session_slot__day_number=day_number)
+        src_week = meso.weeks.get()
+        live_src_day = src_week.sessions.get(session_slot__day_number=day_number)
         assert (
             member_slot.exercise_slots.filter(deleted_at__isnull=True).count()
-            == live_group_day.cells().count()
+            == live_src_day.cells().count()
         )
 
+    def test_dropped_shared_week_hides_on_member_side(self):
+        # A whole week removed from the shared block soft-deletes the member's
+        # matching week (never hard-deletes — logged history stays recoverable).
+        group, plan, [m] = seed_group(member_count=1)
+        week2 = append_shared_week(plan)
+        meso = shared_meso(plan)
+        member_plan, _ = m.sync_delivered_plan(meso)
+        member_meso = member_plan.mesocycles.get()
+        assert member_meso.weeks.filter(deleted_at__isnull=True).count() == 2
 
-# -- model: deliver_current_week (the fan-out) -------------------------------
+        week2.soft_delete()
+        m.sync_delivered_plan(meso)
+
+        dropped = member_meso.weeks.get(index=2)
+        assert dropped.deleted_at is not None
+        assert member_meso.weeks.filter(deleted_at__isnull=True).count() == 1
 
 
-class TestDeliverCurrentWeek:
-    def test_stamps_every_member_week_and_the_group_week(self):
+# -- model: deliver_block (the whole-block fan-out) --------------------------
+
+
+class TestDeliverBlock:
+    def test_stamps_every_member_week_and_every_shared_week(self):
         group, plan, memberships = seed_group(member_count=2)
-        group_week = plan.mesocycles.get().weeks.get()
+        append_shared_week(plan)  # a two-week block
+        shared_live = live_weeks(plan)
+        assert len(shared_live) == 2
 
-        now, delivered = group.deliver_current_week()
+        now, delivered = group.deliver_block()
 
         assert len(delivered) == 2
-        for member_plan, member_week in delivered:
-            assert member_week.delivered_at == now
-            assert WeekDelivery.objects.filter(week=member_week).count() == 1
-        group_week.refresh_from_db()
-        assert group_week.delivered_at == now
+        for member_plan, member_weeks in delivered:
+            assert len(member_weeks) == 2
+            for member_week in member_weeks:
+                assert member_week.delivered_at == now
+                assert WeekDelivery.objects.filter(week=member_week).count() == 1
+        for shared_week in shared_live:
+            shared_week.refresh_from_db()
+            assert shared_week.delivered_at == now
+            assert WeekDelivery.objects.filter(week=shared_week).count() == 1
+
+    def test_member_weeks_mirror_the_source_current_pointer(self):
+        group, plan, [m] = seed_group(member_count=1)
+        append_shared_week(plan)
+
+        group.deliver_block()
+
+        member_meso = Plan.objects.get(source_group=group).mesocycles.get()
+        assert member_meso.weeks.get(index=1).is_current is True
+        assert member_meso.weeks.get(index=2).is_current is False
 
     def test_raises_without_a_shared_plan(self):
         group = MesoGroupFactory()
         with pytest.raises(InvalidTransition):
-            group.deliver_current_week()
+            group.deliver_block()
 
     def test_raises_without_members(self):
         group, _, _ = seed_group(member_count=0)
         with pytest.raises(InvalidTransition):
-            group.deliver_current_week()
+            group.deliver_block()
 
     def test_skips_a_member_whose_link_ended(self):
         group, plan, [stays, leaves] = seed_group(member_count=2)
         leaves.relationship.end()
 
-        _, delivered = group.deliver_current_week()
+        _, delivered = group.deliver_block()
 
         athletes = {p.athlete for p, _ in delivered}
         assert stays.relationship.athlete in athletes
@@ -272,7 +416,7 @@ class TestDeliverCurrentWeek:
         newer = group.create_shared_plan()
         assert group.shared_plan().pk == newer.pk
 
-        group.deliver_current_week(older)
+        group.deliver_block(older)
 
         materialized = Plan.objects.get(source_group=group, relationship=m.relationship)
         assert materialized.title == older.title
@@ -285,7 +429,7 @@ class TestMaterializedPlanScoping:
     def test_hidden_from_coach_surfaces_visible_to_athlete(self):
         group, plan, [m] = seed_group(member_count=1)
         coach = group.coach
-        group.deliver_current_week()
+        group.deliver_block()
         member_plan = Plan.objects.get(source_group=group)
 
         # The coach manages the group only through the shared program — the
@@ -297,7 +441,7 @@ class TestMaterializedPlanScoping:
 
     def test_member_sees_delivered_week_on_athlete_home(self, client):
         group, plan, [m] = seed_group(member_count=1)
-        group.deliver_current_week()
+        group.deliver_block()
         athlete = m.relationship.athlete
         client.force_login(athlete)
 
@@ -307,7 +451,7 @@ class TestMaterializedPlanScoping:
 
     def test_member_can_open_a_delivered_session(self, client):
         group, plan, [m] = seed_group(member_count=1)
-        group.deliver_current_week()
+        group.deliver_block()
         member_plan = Plan.objects.get(source_group=group)
         session = Session.objects.get(
             week__mesocycle__plan=member_plan, session_slot__day_number=1
@@ -323,7 +467,7 @@ class TestMaterializedPlanScoping:
         # materialized snapshot — a coach posting its id directly to deliver /
         # autosave must not be able to mutate the athlete-facing copy.
         group, plan, [m] = seed_group(member_count=1)
-        group.deliver_current_week()
+        group.deliver_block()
         member_plan = Plan.objects.get(source_group=group)
         assert member_plan.is_editable_by(group.coach) is False
         client.force_login(group.coach)
@@ -336,7 +480,7 @@ class TestMaterializedPlanScoping:
 class TestRemovedMemberLosesAccess:
     def test_remove_athlete_archives_their_materialized_plan(self):
         group, plan, [stays, leaves] = seed_group(member_count=2)
-        group.deliver_current_week()
+        group.deliver_block()
         gone = leaves.relationship.athlete
         leaves_plan = Plan.objects.get(source_group=group, relationship__athlete=gone)
 
@@ -371,11 +515,33 @@ class TestPlanDeliverGroup:
         assert data["ok"] is True
         assert data["members"] == 2
         assert data["delivered_at"]
+        assert data["week_count"] == 1
         assert Plan.objects.filter(source_group=group).count() == 2
 
-    def test_group_ignores_a_week_id_and_fans_out_current(self, client):
+    def test_group_plan_fans_out_the_whole_block(self, client):
+        group, plan, memberships = seed_group(member_count=2)
+        append_shared_week(plan)  # a two-week block
+        client.force_login(group.coach)
+
+        resp = client.post(deliver_url(plan))
+
+        assert resp.status_code == 201
+        assert resp.json()["week_count"] == 2
+        # Each member's materialized plan carries both delivered weeks.
+        for m in memberships:
+            member_plan = Plan.objects.get(
+                source_group=group, relationship=m.relationship
+            )
+            assert (
+                member_plan.mesocycles.get()
+                .weeks.filter(delivered_at__isnull=False)
+                .count()
+                == 2
+            )
+
+    def test_group_ignores_a_week_id_and_fans_out_the_block(self, client):
         # Per-week delivery is an individual-designer affordance; a group plan
-        # always fans out its current week, so a stray ``week_id`` in the body is
+        # always fans out its whole block, so a stray ``week_id`` in the body is
         # ignored (the group branch short-circuits before the body is read).
         import json
 
@@ -392,18 +558,21 @@ class TestPlanDeliverGroup:
         assert resp.json()["members"] == 2
         assert Plan.objects.filter(source_group=group).count() == 2
 
-    def test_notifies_each_member_once(
+    def test_notifies_each_member_once_for_the_whole_block(
         self, client, mailoutbox, django_capture_on_commit_callbacks
     ):
+        # A two-week block delivers ONE nudge per member (the block notifier),
+        # never one email per week — so member_count emails, not member_count×weeks.
         coach = UserFactory(name="Coach Lance", email="coach@example.com")
         group, plan, memberships = seed_group(coach=coach, member_count=2)
+        append_shared_week(plan)  # two live weeks
         emails = {m.relationship.athlete.email for m in memberships}
         client.force_login(coach)
 
         with django_capture_on_commit_callbacks(execute=True):
             client.post(deliver_url(plan))
 
-        assert len(mailoutbox) == 2
+        assert len(mailoutbox) == 2  # one per member, NOT one per member per week
         assert {m.to[0] for m in mailoutbox} == emails
 
     def test_group_without_members_400(self, client):
@@ -455,6 +624,25 @@ class TestGroupDeliverView:
         assert resp.url == reverse("meso:group", kwargs={"pk": group.pk})
         assert Plan.objects.filter(source_group=group).count() == 2
 
+    def test_flash_names_the_block_and_week_count(self, client):
+        group, plan, memberships = seed_group(member_count=2)
+        append_shared_week(plan)  # two live weeks
+        client.force_login(group.coach)
+
+        resp = client.post(group_deliver_url(group), follow=True)
+
+        body = resp.content.decode()
+        assert "Delivered the block (2 weeks) to 2 members." in body
+
+    def test_flash_singular_block_and_member(self, client):
+        group, plan, [m] = seed_group(member_count=1)
+        client.force_login(group.coach)
+
+        resp = client.post(group_deliver_url(group), follow=True)
+
+        body = resp.content.decode()
+        assert "Delivered the block (1 week) to 1 member." in body
+
     def test_requires_a_shared_program(self, client):
         coach = UserFactory()
         group = MesoGroupFactory(coach=coach)
@@ -491,6 +679,8 @@ class TestGroupDeliverView:
             reverse("meso:group", kwargs={"pk": group.pk})
         ).content.decode()
         assert group_deliver_url(group) in body
+        # The button names the whole block, not a single week (P5).
+        assert "Deliver this block" in body
 
     def test_detail_page_hides_deliver_button_without_members(self, client):
         coach = UserFactory()

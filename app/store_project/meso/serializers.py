@@ -1025,6 +1025,13 @@ def serialize_mesocycle_grid(mesocycle):
         ).select_related("swap_exercise")
     }
 
+    # A GROUP plan carries the per-athlete adjust overlay on each cell (P5): the
+    # same per-row ``adj`` badge ``serialize_plan``'s single-week ``program``
+    # shows, driven by the members' real override diffs — one query over the
+    # block's cells, keyed by prescription pk. An individual plan has no members,
+    # so its cells get no ``adj`` keys.
+    adj_map = group_adjustments(plan, cells_by_key.values()) if plan.is_group else {}
+
     days = []
     for slot in session_slots:
         rows = []
@@ -1044,7 +1051,7 @@ def serialize_mesocycle_grid(mesocycle):
                     swap_display = cell.swap_exercise.name
                 else:
                     swap_display = ""
-                cells[str(week.pk)] = {
+                cell_data = {
                     "prescription_id": cell.pk,
                     "sets": cell.sets,
                     "reps": cell.reps,
@@ -1058,6 +1065,15 @@ def serialize_mesocycle_grid(mesocycle):
                     "swap_exercise_id": cell.swap_exercise_id,
                     "swap_display": swap_display,
                 }
+                # The per-athlete adjust overlay (group plans only) — set exactly
+                # as ``serialize_plan``'s adj-merge does: only when the cell has an
+                # effective adjust. An individual plan's ``adj_map`` is empty, so
+                # its cells never carry ``adj``/``adjusts``.
+                entry = adj_map.get(cell.pk)
+                if entry:
+                    cell_data["adj"] = entry["adj"]
+                    cell_data["adjusts"] = entry["adjusts"]
+                cells[str(week.pk)] = cell_data
             rows.append(
                 {
                     "exercise_slot_id": exercise_slot.pk,

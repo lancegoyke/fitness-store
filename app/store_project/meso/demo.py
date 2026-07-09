@@ -18,7 +18,7 @@ the requesting coach** so two coaches never collide. Guardrails (Q3):
   trips the paywall;
 - **no outbound email/push** — demo athletes are fake people: their address is
   non-routable and namespaced per coach, they carry the delivery-email opt-out,
-  and the load delivers weeks at the **model layer** (``deliver_current_week`` /
+  and the load delivers weeks at the **model layer** (``deliver_block`` /
   a direct ``delivered_at`` stamp), which — unlike the deliver *views* — notifies
   nobody.
 """
@@ -505,7 +505,7 @@ def _ensure_demo_overrides(group, memberships):
 
 
 def _ensure_demo_group_delivery(group):
-    """Deliver the shared current week to members once (model layer — no notify)."""
+    """Deliver the shared current block to members once (model layer — no notify)."""
     from .serializers import current_week
 
     plan = group.shared_plan()
@@ -514,4 +514,4 @@ def _ensure_demo_group_delivery(group):
     week = current_week(plan)
     if week is None or week.delivered_at is not None:
         return
-    group.deliver_current_week()
+    group.deliver_block()

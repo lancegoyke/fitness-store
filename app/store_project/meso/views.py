@@ -1182,14 +1182,14 @@ def sandbox_signup(request):
 @login_required
 @require_POST
 def group_deliver(request, pk):
-    """Deliver a group's shared current week to every active member (Phase 4).
+    """Deliver a group's whole shared current block to every active member (P5).
 
     The coach-facing entry — a plain form POST from the group-detail page's
-    "Deliver this week to all members" button. Coach-scoped (a foreign or unknown
+    "Deliver this block to all members" button. Coach-scoped (a foreign or unknown
     group is a flat 404). Requires a shared program (else a flashed prompt to
     design one) and at least one member (else a flashed error from the fan-out);
-    on success it flashes how many members were delivered to. Always lands back on
-    the group-detail page.
+    on success it flashes the block's week count + how many members were delivered
+    to. Always lands back on the group-detail page.
     """
     group = MesoGroup.objects.for_coach(request.user).filter(pk=pk).first()
     if group is None:
@@ -1207,9 +1207,11 @@ def group_deliver(request, pk):
         messages.error(request, error)
     else:
         n = summary["members"]
+        w = summary["week_count"]
         messages.success(
             request,
-            f"Delivered this week to {n} member{'' if n == 1 else 's'}.",
+            f"Delivered the block ({w} week{'' if w == 1 else 's'}) to "
+            f"{n} member{'' if n == 1 else 's'}.",
         )
     return redirect("meso:group", pk=group.pk)
 
@@ -3571,25 +3573,38 @@ def coach_set_one_rm(request, plan_id, pk):
 
 
 def _fan_out_group_delivery(request, plan):
-    """Deliver a group plan's current week to every active member (groups Phase 4).
+    """Deliver a group plan's whole current block to every active member (P5).
 
-    Runs the model fan-out (``MesoGroup.deliver_current_week``) — each member's
-    *resolved* week materialized + stamped + snapshotted — then notifies each
-    athlete (email + push, best-effort on commit), reusing the individual deliver
-    hook. Returns ``(summary, error)``: ``error`` is a human message when there is
-    nothing to deliver (no week / no members), which the callers map to a 400 /
-    flashed error. The whole fan-out runs inside the request's transaction
-    (``ATOMIC_REQUESTS``), so a partial fan-out can't half-commit.
+    Runs the model fan-out (``MesoGroup.deliver_block``) — each member's
+    *resolved* block materialized + every live week stamped + snapshotted — then
+    notifies each athlete ONCE at block level (email + push, best-effort on
+    commit), reusing the P3 individual block deliver hook (one nudge per member,
+    not one per week). Returns ``(summary, error)``: ``error`` is a human message
+    when there is nothing to deliver (no live week / no members), which the
+    callers map to a 400 / flashed error. ``summary["week_count"]`` is the shared
+    block's live-week count. The whole fan-out runs inside the request's
+    transaction (``ATOMIC_REQUESTS``), so a partial fan-out can't half-commit.
     """
     try:
         # Deliver the *requested* plan, not whichever the group reselects, so a
         # group holding more than one program can't drift to a different one.
-        now, delivered = plan.group.deliver_current_week(plan)
+        now, delivered = plan.group.deliver_block(plan)
     except InvalidTransition as exc:
         return None, str(exc)
-    for member_plan, member_week in delivered:
-        _notify_athlete_delivered(request, member_plan, member_week)
-    return {"members": len(delivered), "delivered_at": now.isoformat()}, None
+    for member_plan, member_weeks in delivered:
+        # One block notification per member (the whole block delivered at once),
+        # not one per week — reuse the P3 block notifier.
+        _notify_athlete_block_delivered(
+            request, member_plan, member_weeks[0].mesocycle, len(member_weeks)
+        )
+    # Every member mirrors the same shared block, so its live-week count is the
+    # member's week count; the fan-out guarantees at least one member.
+    week_count = len(delivered[0][1])
+    return {
+        "members": len(delivered),
+        "delivered_at": now.isoformat(),
+        "week_count": week_count,
+    }, None
 
 
 @login_required
@@ -3606,16 +3621,16 @@ def plan_deliver(request, plan_id):
     week must belong to the plan (a foreign week is a 404). Re-delivering re-stamps
     every week and writes fresh ``WeekDelivery`` rows. Delivering never changes
     ``is_current`` — releasing a block doesn't move the live pointer. A group plan
-    still fans out its current week per-member (per-week delivery is a group-path
-    affordance a later phase rewrites), so its branch is unchanged.
+    fans out its whole current block per-member (P5 brought group delivery to the
+    same whole-block parity), so its branch also releases every live week at once.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
     if plan.is_group:
-        # A group plan fans its current week out to every active member (each
-        # member's *resolved* program), groups Phase 4. ``week_id`` is ignored —
-        # the group always sends its current week.
+        # A group plan fans its whole current block out to every active member
+        # (each member's *resolved* program), P5. ``week_id`` is ignored — the
+        # group always sends its whole block.
         summary, error = _fan_out_group_delivery(request, plan)
         if error is not None:
             return HttpResponseBadRequest(error)

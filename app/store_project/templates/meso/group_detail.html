@@ -51,7 +51,7 @@
             {% if group.member_count %}
               <form method="post" action="{% url 'meso:group_deliver' group.id %}" style="margin-top:10px;">
                 {% csrf_token %}
-                <button type="submit" class="meso-btn">Deliver this week to all {{ group.member_count }} member{{ group.member_count|pluralize }}</button>
+                <button type="submit" class="meso-btn">Deliver this block to all {{ group.member_count }} member{{ group.member_count|pluralize }}</button>
               </form>
             {% endif %}
           {% else %}
