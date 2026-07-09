@@ -133,3 +133,42 @@ describe("deliver", () => {
     expect(c.delivered).toBe(true); // failure doesn't unset a prior success
   });
 });
+
+// Issue #451: delivering the coach's own self-link block can auto-advance the
+// guided tour server-side, but this is a fetch (no page reload), so the mounted
+// meso_tour.js driver can't see it. On a *successful* deliver the screen nudges
+// the driver to re-read the authoritative step via a `meso:tour-refresh`
+// document event; a failed deliver (no advance) must stay silent.
+describe("deliver → tour refresh nudge (#451)", () => {
+  it("dispatches meso:tour-refresh on a successful deliver", async () => {
+    const c = createMesoDeliver(PLAN_ID, CSRF, null);
+    const handler = vi.fn();
+    document.addEventListener("meso:tour-refresh", handler);
+    global.fetch = vi.fn().mockResolvedValue(res());
+    await c.deliver();
+    document.removeEventListener("meso:tour-refresh", handler);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dispatch when the deliver fails (HTTP error)", async () => {
+    const c = createMesoDeliver(PLAN_ID, CSRF, null);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const handler = vi.fn();
+    document.addEventListener("meso:tour-refresh", handler);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 500 }));
+    await c.deliver();
+    document.removeEventListener("meso:tour-refresh", handler);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch when the deliver fails (network error)", async () => {
+    const c = createMesoDeliver(PLAN_ID, CSRF, null);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const handler = vi.fn();
+    document.addEventListener("meso:tour-refresh", handler);
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.deliver();
+    document.removeEventListener("meso:tour-refresh", handler);
+    expect(handler).not.toHaveBeenCalled();
+  });
+});

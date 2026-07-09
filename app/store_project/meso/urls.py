@@ -107,6 +107,10 @@ urlpatterns = [
     # everything" shortcut (O6).
     path("tour/state/", views.tour_state, name="tour_state"),
     path("tour/skip/", views.tour_skip, name="tour_skip"),
+    # Read-only snapshot of the coach's authoritative tour config (issue #451):
+    # the mounted driver re-reads it after a self-variant deliver/results fetch
+    # action to mirror the server-side auto-advance without a page reload.
+    path("tour/config/", views.tour_config, name="tour_config"),
     path("group/new/", views.group_create, name="group_create"),
     path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
     path("group/<int:pk>/design/", views.group_design, name="group_design"),

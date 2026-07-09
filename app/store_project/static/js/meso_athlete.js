@@ -54,6 +54,22 @@ function loadForPercent(oneRm, percent) {
   return roundToStep((one * pct) / 100, 2.5);
 }
 
+// Issue #451: after a fetch action that can auto-advance the guided tour
+// server-side (logging the coach's own session), nudge the mounted
+// meso_tour.js driver to re-read the authoritative step and re-render — the
+// tour card would otherwise stay on the results step until the coach's next
+// navigation. Best-effort + guarded: a real page has `document`, but the
+// vitest import that pulls in the factory does not.
+function notifyTourRefresh() {
+  if (
+    typeof document !== "undefined" &&
+    typeof document.dispatchEvent === "function" &&
+    typeof CustomEvent === "function"
+  ) {
+    document.dispatchEvent(new CustomEvent("meso:tour-refresh"));
+  }
+}
+
 function createLogger() {
   return {
     logUrl: "",
@@ -231,6 +247,12 @@ function createLogger() {
         this.status = data.log.status;
         this.syncFromLog(data.log);
         this.saved = true;
+        // Only a completed log (`markDone`) advances the self-variant "results"
+        // tour step server-side (`advance_self_step_if_complete("results")`), so
+        // only that path nudges the mounted tour to re-render (#451). A pending
+        // "Save progress" — and the offline `flushQueue` path — must not fire a
+        // spurious re-render / screen-reader re-announcement.
+        if (markDone) notifyTourRefresh();
         setTimeout(() => {
           this.saved = false;
         }, 2400);

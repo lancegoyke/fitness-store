@@ -269,6 +269,9 @@ class TestBuildConfig:
         assert config["skip_url"] == reverse("meso:tour_skip")
         assert config["demo_load_url"] == reverse("meso:demo_load")
         assert config["signup_url"] == reverse("meso:sandbox_signup")
+        # #451: the read-only endpoint the driver re-reads after a fetch action
+        # (self-variant deliver/results) to mirror the server-side auto-advance.
+        assert config["config_url"] == reverse("meso:tour_config")
 
     def test_sandbox_steps_never_carry_a_generic_action(self):
         # The additive Phase 3 `action` field must stay null for every sandbox
@@ -942,6 +945,59 @@ class TestTourStateEndpoint:
         )
 
         assert CoachProfile.objects.filter(user=user).exists()
+
+
+# ---------------------------------------------------------------------------
+# meso:tour_config — read-only authoritative-config snapshot (#451)
+# ---------------------------------------------------------------------------
+
+
+class TestTourConfigEndpoint:
+    """The GET-only endpoint the driver re-reads after a fetch action (#451).
+
+    The self-variant deliver/results steps take their real action via ``fetch``
+    (no page reload), so the already-mounted ``meso_tour.js`` card can't see the
+    server-side auto-advance until the coach next navigates. This endpoint hands
+    the driver the same ``build_config`` snapshot the template embeds via
+    ``json_script`` so it can re-render at whatever step the server now reports —
+    a display mirror, never a state write (advance stays server-authoritative).
+    """
+
+    def test_get_returns_the_authoritative_config_json(self, client):
+        coach = _coach()  # a real (non-sandbox) coach → the self variant
+        client.force_login(coach)
+
+        resp = client.get(reverse("meso:tour_config"))
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data["steps"], list) and data["steps"]
+        assert "step" in data
+        assert data["variant"] == "self"
+        assert data["state_url"] == reverse("meso:tour_state")
+        assert data["config_url"] == reverse("meso:tour_config")
+
+    def test_step_reflects_the_coachs_current_progress(self, client):
+        coach = _coach()
+        tour.set_step(coach.coach_profile, 3)
+        client.force_login(coach)
+
+        resp = client.get(reverse("meso:tour_config"))
+
+        assert resp.json()["step"] == 3
+
+    def test_anonymous_is_redirected_to_login(self, client):
+        resp = client.get(reverse("meso:tour_config"))
+        assert resp.status_code == 302
+        assert reverse("account_login") in resp.url
+
+    def test_post_is_rejected_get_only(self, client):
+        coach = _coach()
+        client.force_login(coach)
+
+        resp = client.post(reverse("meso:tour_config"))
+
+        assert resp.status_code == 405
 
 
 # ---------------------------------------------------------------------------

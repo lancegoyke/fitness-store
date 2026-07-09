@@ -195,6 +195,78 @@ describe("save", () => {
   });
 });
 
+// Issue #451: logging the coach's own session can auto-advance the guided tour
+// server-side (`advance_self_step_if_complete("results")` in
+// `athlete_log_session`), but the log POST is a fetch (no reload), so the
+// mounted meso_tour.js driver can't see it. Only a *completed* log (save(true))
+// advances the "results" step, so only that path nudges the driver via a
+// `meso:tour-refresh` document event — a pending "save progress", an offline
+// queue, or an outright failure must stay silent (no spurious re-render / SR
+// re-announcement).
+describe("save → tour refresh nudge (#451)", () => {
+  it("dispatches meso:tour-refresh after a completed log (save(true))", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    c.exercises[0].set_rows[0].done = true;
+    const handler = vi.fn();
+    document.addEventListener("meso:tour-refresh", handler);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] },
+        },
+      }),
+    );
+    await c.save(true);
+    document.removeEventListener("meso:tour-refresh", handler);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dispatch for a pending 'save progress' (save(false))", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    c.exercises[0].set_rows[0].done = true;
+    const handler = vi.fn();
+    document.addEventListener("meso:tour-refresh", handler);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          log: {
+            status: "pending",
+            sets: [{ prescription: 1, set_number: 1 }],
+          },
+        },
+      }),
+    );
+    await c.save(false);
+    document.removeEventListener("meso:tour-refresh", handler);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch when the save fails (HTTP error)", async () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[0].done = true;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const handler = vi.fn();
+    document.addEventListener("meso:tour-refresh", handler);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 500 }));
+    await c.save(true);
+    document.removeEventListener("meso:tour-refresh", handler);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch when the save is queued offline", async () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[0].done = true;
+    const handler = vi.fn();
+    document.addEventListener("meso:tour-refresh", handler);
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.save(true);
+    document.removeEventListener("meso:tour-refresh", handler);
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
 describe("flushQueue", () => {
   it("replays a queued save and clears it on success", async () => {
     vi.useFakeTimers();
