@@ -33,20 +33,30 @@ guide them to add *themselves* as an athlete and program for themselves
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 
 from store_project.meso import demo
 from store_project.meso import sandbox
 from store_project.meso import tour
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
+from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
+from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import CoachSubscription
+from store_project.meso.models import MesoGroup
+from store_project.meso.models import Plan
+from store_project.meso.models import SessionLog
 from store_project.users.factories import UserFactory
+
+from ._helpers import day
+from ._helpers import presc
 
 pytestmark = pytest.mark.django_db
 
@@ -491,13 +501,22 @@ class TestBuildConfigSelfVariant:
         assert "Invite your first real athlete" in finish["body"]
 
     @pytest.mark.parametrize("key", ["profile", "deliver", "results", "groups"])
-    def test_static_steps_have_no_action_or_loaded_flag(self, key):
+    def test_action_less_self_steps_offer_no_action_or_segment(self, key):
+        # These self steps have no typed action button and never carry a sandbox
+        # ``segment`` — the coach uses the real spotlighted control. (#441 P3-5:
+        # deliver/results/groups now DO carry a data-derived ``loaded`` flag; see
+        # ``TestSelfActionGoalLoadedCopy``. Only ``profile`` stays loaded-less.)
         coach = _coach()
         config = tour.build_config(coach, "self")
         step = next(s for s in config["steps"] if s["key"] == key)
         assert step["action"] is None
-        assert step["loaded"] is None
         assert step["segment"] is None
+
+    def test_profile_self_step_has_no_loaded_flag(self):
+        coach = _coach()
+        config = tour.build_config(coach, "self")
+        profile_step = next(s for s in config["steps"] if s["key"] == "profile")
+        assert profile_step["loaded"] is None
 
     def test_posting_roster_add_self_flips_welcome_and_unlocks_designer(self, client):
         # An end-to-end version of the two tests above, through the real view.
@@ -1354,3 +1373,403 @@ class TestDurableRestartAffordance:
         body = client.get(reverse("meso:roster")).content.decode()
 
         assert "Restart the guided tour" in body
+
+
+# ---------------------------------------------------------------------------
+# #441 P3-5: action-completion auto-advance — the tour reacts to what the coach
+# actually did. Part A fills the self-variant ``loaded`` predicate gaps
+# (deliver/results/groups) + their done-copy; part B wires
+# ``advance_if_on_step`` into every action-completion site so each action-goal
+# step advances the moment its data lands, not on a later Next click. See
+# ``docs/meso/tour-auto-advance-model.md``.
+# ---------------------------------------------------------------------------
+
+
+def _self_plan(coach, *, delivered=False, current=True):
+    """A self-link + individual plan with one week (session + prescription).
+
+    Mirrors ``test_deliver``/``test_athlete_logging``'s seed graph, but on the
+    coach's own ``is_self`` link (coach == athlete) so the self-variant
+    deliver/log flow runs end to end. ``delivered`` stamps the week (a loggable,
+    delivered session); ``current`` flags it live (a deliverable week).
+    """
+    link = CoachAthlete.add_self(coach)
+    plan = PlanFactory(relationship=link, status=Plan.Status.ACTIVE)
+    meso = MesocycleFactory(plan=plan, name="Block", order=0)
+    week = WeekFactory(
+        mesocycle=meso,
+        index=1,
+        is_current=current,
+        delivered_at=timezone.now() if delivered else None,
+    )
+    session = day(week, day_number=1, name="Lower")
+    presc(session, name="Box Squat", sets="3", reps="6", load="70", rpe="7")
+    return SimpleNamespace(link=link, plan=plan, meso=meso, week=week, session=session)
+
+
+class TestSelfLoadedPredicates:
+    """The self-variant ``loaded`` predicates mirror the sandbox ``demo.has_*`` (P3-5-A).
+
+    Self-scoped (an ``is_self`` link's individual plan / ``athlete == coach`` /
+    a non-demo group), so a self-coaching coach's deliver/results/groups steps
+    finally get a real completion signal — the gap the auto-advance doc named.
+    """
+
+    def test_has_delivery_false_before_true_after(self):
+        coach = _coach()
+        assert tour._self_has_delivery(coach) is False
+
+        _self_plan(coach, delivered=True)
+        assert tour._self_has_delivery(coach) is True
+
+    def test_has_delivery_false_for_an_undelivered_self_week(self):
+        coach = _coach()
+        _self_plan(coach)  # a current week, not yet delivered
+        assert tour._self_has_delivery(coach) is False
+
+    def test_has_log_false_before_true_after(self):
+        coach = _coach()
+        assert tour._self_has_log(coach) is False
+
+        s = _self_plan(coach, delivered=True)
+        # A pending "save progress" log doesn't count — only a done one does.
+        SessionLog.objects.create(session=s.session, athlete=coach)
+        assert tour._self_has_log(coach) is False
+
+        SessionLog.objects.filter(session=s.session, athlete=coach).update(
+            status=SessionLog.Status.DONE
+        )
+        assert tour._self_has_log(coach) is True
+
+    def test_has_group_false_before_true_after(self):
+        coach = _coach()
+        assert tour._self_has_group(coach) is False
+
+        MesoGroup.create_for_coach(coach, name="Squad")
+        assert tour._self_has_group(coach) is True
+
+    def test_has_group_ignores_demo_groups(self):
+        coach = _coach()
+        demo.load_group(coach)  # an ``is_demo`` group, not a real one
+        assert tour._self_has_group(coach) is False
+
+    def test_ended_self_link_delivery_and_log_do_not_count(self):
+        # Ending a self-link archives its plans (Codex #441 P3-5): a delivered /
+        # logged week on that removed link must not read as the coach's *current*
+        # deliver/results completion when they restart the tour.
+        coach = _coach()
+        s = _self_plan(coach, delivered=True)
+        SessionLog.objects.create(
+            session=s.session, athlete=coach, status=SessionLog.Status.DONE
+        )
+        assert tour._self_has_delivery(coach) is True
+        assert tour._self_has_log(coach) is True
+
+        s.link.end()  # archives the self-link's plans, deactivates the link
+        assert tour._self_has_delivery(coach) is False
+        assert tour._self_has_log(coach) is False
+
+
+class TestSelfActionGoalLoadedCopy:
+    """deliver/results/groups self steps gain a ``loaded`` flag + done-copy (P3-5-A).
+
+    Before completion ``loaded`` is ``False`` and the body reads as a call to
+    action; once the data exists ``loaded`` flips ``True`` and the body swaps to
+    a "done" variant. These steps have no action button (the coach uses the real
+    spotlighted control), so ``action`` stays ``None`` throughout.
+    """
+
+    def test_deliver_loaded_flips_and_body_switches_to_done(self):
+        coach = _coach()
+        deliver = _step(tour.build_config(coach, "self"), "deliver")
+        assert deliver["loaded"] is False
+        assert deliver["action"] is None
+        assert "Push the current week" in deliver["body"]
+
+        _self_plan(coach, delivered=True)
+
+        deliver = _step(tour.build_config(coach, "self"), "deliver")
+        assert deliver["loaded"] is True
+        assert deliver["action"] is None
+        assert "Delivered" in deliver["body"]
+
+    def test_results_loaded_flips_and_body_switches_to_done(self):
+        coach = _coach()
+        results = _step(tour.build_config(coach, "self"), "results")
+        assert results["loaded"] is False
+        assert "Log your own sets" in results["body"]
+
+        s = _self_plan(coach, delivered=True)
+        SessionLog.objects.create(
+            session=s.session, athlete=coach, status=SessionLog.Status.DONE
+        )
+
+        results = _step(tour.build_config(coach, "self"), "results")
+        assert results["loaded"] is True
+        assert "is logged" in results["body"]
+
+    def test_results_pending_log_does_not_count_as_done(self):
+        # A "save progress" (pending) log — or a done log on another coach's
+        # plan — must not mark the self results step complete (Codex #441 P3-5).
+        coach = _coach()
+        s = _self_plan(coach, delivered=True)
+        SessionLog.objects.create(
+            session=s.session, athlete=coach, status=SessionLog.Status.PENDING
+        )
+
+        results = _step(tour.build_config(coach, "self"), "results")
+        assert results["loaded"] is False
+        assert "Log your own sets" in results["body"]
+
+    def test_groups_loaded_flips_and_body_switches_to_done(self):
+        coach = _coach()
+        groups = _step(tour.build_config(coach, "self"), "groups")
+        assert groups["loaded"] is False
+        assert "Skip this one" in groups["body"]
+
+        MesoGroup.create_for_coach(coach, name="Squad")
+
+        groups = _step(tour.build_config(coach, "self"), "groups")
+        assert groups["loaded"] is True
+        assert "Your group exists" in groups["body"]
+
+
+class TestActionSiteAutoAdvance:
+    """Each action-goal step auto-advances at its action-completion site (P3-5-B).
+
+    The generalization of the profile visit-advance: instead of waiting for a
+    Next click, the tour advances the moment the step's data-producing action
+    lands — server-side, from the same POST handler that records the opt-in.
+    Gated by ``advance_if_on_step``'s parked-step check, so an action off its
+    step (or by a non-touring coach) never advances.
+    """
+
+    # -- self variant -----------------------------------------------------
+
+    def test_self_welcome_advances_on_roster_add_self(self, client):
+        coach = _coach()
+        tour.start_tour(coach.coach_profile)  # step 0 (welcome)
+        client.force_login(coach)
+
+        client.post(reverse("meso:roster_add_self"))
+
+        assert tour.tour_status(coach)["step"] == 1  # profile
+
+    def test_self_designer_advances_on_plan_create(self, client):
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+        tour.set_step(coach.coach_profile, 2)  # designer
+        client.force_login(coach)
+
+        client.post(reverse("meso:plan_create", args=[coach.pk]))
+
+        assert tour.tour_status(coach)["step"] == 3  # deliver
+
+    def test_self_deliver_advances_on_plan_deliver(self, client):
+        coach = _coach()
+        s = _self_plan(coach)  # a deliverable current week
+        tour.set_step(coach.coach_profile, 3)  # deliver
+        client.force_login(coach)
+
+        client.post(reverse("meso:api_plan_deliver", kwargs={"plan_id": s.plan.pk}))
+
+        assert tour.tour_status(coach)["step"] == 4  # results
+
+    def test_self_results_advances_on_log_session(self, client):
+        coach = _coach()
+        s = _self_plan(coach, delivered=True)  # a delivered, loggable session
+        tour.set_step(coach.coach_profile, 4)  # results
+        client.force_login(coach)
+
+        client.post(
+            reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
+            data=json.dumps({"sets": []}),
+            content_type="application/json",
+        )
+
+        assert tour.tour_status(coach)["step"] == 5  # groups
+
+    def test_self_results_does_not_advance_on_pending_log(self, client):
+        # A pending "save progress" post isn't a completed result — the results
+        # step must stay put (Codex #441 P3-5).
+        coach = _coach()
+        s = _self_plan(coach, delivered=True)
+        tour.set_step(coach.coach_profile, 4)  # results
+        client.force_login(coach)
+
+        client.post(
+            reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
+            data=json.dumps({"sets": [], "status": "pending"}),
+            content_type="application/json",
+        )
+
+        assert tour.tour_status(coach)["step"] == 4  # unchanged
+
+    def test_self_groups_advances_on_group_create(self, client):
+        coach = _coach()
+        tour.set_step(coach.coach_profile, 5)  # groups
+        client.force_login(coach)
+
+        client.post(reverse("meso:group_create"), {"name": "Squad"})
+
+        assert tour.tour_status(coach)["step"] == 6  # agent
+
+    def test_self_agent_advances_on_draft_plan_create(self, client):
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+        tour.set_step(coach.coach_profile, 6)  # agent
+        client.force_login(coach)
+
+        client.post(reverse("meso:plan_create", args=[coach.pk]), {"draft": "agent"})
+
+        assert tour.tour_status(coach)["step"] == 7  # finish (terminal)
+
+    def test_self_designer_advances_on_ai_draft_from_designer_step(self, client):
+        # The visible "Draft with AI" control sends draft=agent, but a coach
+        # parked on the designer step who uses it still creates their self plan —
+        # the designer step must advance, not no-op on the agent key (#441 P3-5).
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+        tour.set_step(coach.coach_profile, 2)  # designer
+        client.force_login(coach)
+
+        client.post(reverse("meso:plan_create", args=[coach.pk]), {"draft": "agent"})
+
+        assert tour.tour_status(coach)["step"] == 3  # deliver
+
+    def test_self_designer_does_not_advance_creating_another_athletes_plan(
+        self, client
+    ):
+        # A coach who also coaches others, parked on their own designer step,
+        # builds a program for a *different* athlete — their self tour must not
+        # skip forward (Codex #441 P3-5): their self-link still has no plan.
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+        other = CoachAthleteFactory(coach=coach)  # a non-self athlete
+        tour.set_step(coach.coach_profile, 2)  # designer
+        client.force_login(coach)
+
+        client.post(reverse("meso:plan_create", args=[other.athlete.pk]))
+
+        assert tour.tour_status(coach)["step"] == 2  # unchanged
+
+    # -- sandbox variant --------------------------------------------------
+
+    def test_sandbox_welcome_advances_on_demo_load_athletes(self, client):
+        coach = sandbox.create_sandbox()  # armed at step 0 (welcome)
+        client.force_login(coach)
+
+        client.post(reverse("meso:demo_load"), {"segment": "athletes"})
+
+        assert tour.tour_status(coach)["step"] == 1  # profile
+
+    def test_sandbox_designer_advances_on_demo_load_program(self, client):
+        coach = sandbox.create_sandbox()
+        tour.set_step(CoachProfile.objects.get(user=coach), 2)  # designer
+        client.force_login(coach)
+
+        client.post(reverse("meso:demo_load"), {"segment": "program"})
+
+        assert tour.tour_status(coach)["step"] == 3  # deliver
+
+    def test_sandbox_deliver_advances_on_demo_load_delivery(self, client):
+        coach = sandbox.create_sandbox()
+        tour.set_step(CoachProfile.objects.get(user=coach), 3)  # deliver
+        client.force_login(coach)
+
+        client.post(reverse("meso:demo_load"), {"segment": "delivery"})
+
+        assert tour.tour_status(coach)["step"] == 4  # results
+
+    def test_sandbox_results_advances_on_demo_load_log(self, client):
+        coach = sandbox.create_sandbox()
+        tour.set_step(CoachProfile.objects.get(user=coach), 4)  # results
+        client.force_login(coach)
+
+        client.post(reverse("meso:demo_load"), {"segment": "log"})
+
+        assert tour.tour_status(coach)["step"] == 5  # groups
+
+    def test_sandbox_groups_advances_on_demo_load_group(self, client):
+        coach = sandbox.create_sandbox()
+        tour.set_step(CoachProfile.objects.get(user=coach), 5)  # groups
+        client.force_login(coach)
+
+        client.post(reverse("meso:demo_load"), {"segment": "group"})
+
+        assert tour.tour_status(coach)["step"] == 6  # agent
+
+    # -- negative: no skip, no advance off-step or when not touring --------
+
+    def test_action_off_its_step_does_not_advance(self, client):
+        # Deliver fired while parked on designer must not skip the coach forward.
+        coach = _coach()
+        s = _self_plan(coach)
+        tour.set_step(coach.coach_profile, 2)  # designer, not deliver
+        client.force_login(coach)
+
+        client.post(reverse("meso:api_plan_deliver", kwargs={"plan_id": s.plan.pk}))
+
+        assert tour.tour_status(coach)["step"] == 2  # unchanged
+
+    def test_non_touring_coach_is_left_untouched(self, client):
+        # No live tour → the action still performs, but tour_state stays empty.
+        coach = _coach()
+        s = _self_plan(coach)
+        client.force_login(coach)
+
+        client.post(reverse("meso:api_plan_deliver", kwargs={"plan_id": s.plan.pk}))
+
+        assert tour.tour_status(coach) == {}
+
+
+class TestAdvanceSelfStepGate:
+    """The advance gate waits for the step's own self predicate (Codex #441 P3-5).
+
+    ``advance_self_step_if_complete`` only advances once the step's completion
+    predicate holds. The deliver/log endpoints are shared with a coach's real
+    coaching of other athletes (and the logger can save a ``pending`` draft), so
+    a parked-step check alone would let a foreign/incomplete action skip the
+    coach's own tour.
+    """
+
+    def test_deliver_gate_waits_for_own_delivery(self):
+        coach = _coach()
+        s = _self_plan(coach)  # a self plan, but its week is NOT yet delivered
+        tour.set_step(coach.coach_profile, 3)  # deliver
+
+        # Parked on deliver, but no self delivery exists → refuses to advance.
+        assert tour.advance_self_step_if_complete(coach, "deliver") is False
+        assert tour.tour_status(coach)["step"] == 3
+
+        s.week.delivered_at = timezone.now()
+        s.week.save(update_fields=["delivered_at"])
+        assert tour.advance_self_step_if_complete(coach, "deliver") is True
+        assert tour.tour_status(coach)["step"] == 4
+
+    def test_results_gate_waits_for_done_own_log(self):
+        coach = _coach()
+        s = _self_plan(coach, delivered=True)
+        tour.set_step(coach.coach_profile, 4)  # results
+
+        # A pending draft doesn't satisfy the predicate → no advance.
+        log = SessionLog.objects.create(
+            session=s.session, athlete=coach, status=SessionLog.Status.PENDING
+        )
+        assert tour.advance_self_step_if_complete(coach, "results") is False
+        assert tour.tour_status(coach)["step"] == 4
+
+        log.status = SessionLog.Status.DONE
+        log.save(update_fields=["status"])
+        assert tour.advance_self_step_if_complete(coach, "results") is True
+        assert tour.tour_status(coach)["step"] == 5
+
+    def test_gate_refuses_for_sandbox_variant(self):
+        # The sandbox tour advances only through demo_load segments; a sandbox
+        # coach who happens to deliver/log real data must never move their
+        # sandbox tour via the self hook (Codex #441 P3-5).
+        coach = sandbox.create_sandbox()
+        tour.set_step(CoachProfile.objects.get(user=coach), 3)  # deliver
+
+        assert tour.advance_self_step_if_complete(coach, "deliver") is False
+        assert tour.tour_status(coach)["step"] == 3

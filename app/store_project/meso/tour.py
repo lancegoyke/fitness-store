@@ -46,7 +46,10 @@ from . import demo as meso_demo
 from .billing import access as billing_access
 from .models import CoachAthlete
 from .models import CoachProfile
+from .models import MesoGroup
+from .models import SessionLog
 from .models import TourEvent
+from .models import Week
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +156,8 @@ STEPS = [
             "title": "Deliver to your phone",
             "body": "Push the current week straight to your own phone — "
             "you'll see it the moment you send it, exactly like any athlete would.",
+            "body_done": "Delivered — this week is on your phone now, exactly as "
+            "you sent it.",
         },
     },
     {
@@ -172,6 +177,8 @@ STEPS = [
             "title": "What actually happened",
             "body": "Log your own sets from your phone at /meso/me/ — logged "
             "sets, adherence, and estimated 1RM flow back here the moment you do.",
+            "body_done": "Your session is logged — here are the sets, adherence, "
+            "and estimated 1RM flowing back.",
         },
     },
     {
@@ -192,6 +199,8 @@ STEPS = [
             "body": "Groups share one program with per-athlete auto-adjusts — "
             "built for when you're coaching several athletes together. Coaching "
             "just yourself for now? Skip this one.",
+            "body_done": "Your group exists — one shared program with per-athlete "
+            "auto-adjusts, built once and tuned per person.",
         },
     },
     {
@@ -460,19 +469,94 @@ def _sandbox_step_fields(step, user, *, has_demo=False):
     }
 
 
+# -- self-variant "is it done?" predicates ------------------------------------
+#
+# The self mirrors of the sandbox ``demo.has_*`` predicates (which are
+# ``is_demo``-scoped by contract, so they can't be reused here). Same shape —
+# cheap ``exists()``, derived from data (O7) — but scoped to the coach's own
+# self-coaching data: the ``is_self`` link's individual plan, the coach's own
+# logs, and their real (non-demo) groups. They give the deliver/results/groups
+# self steps the ``loaded`` completion signal the sandbox already had (#441 P3-5).
+
+
+def _active_self_working_plan(user):
+    """The current working plan on the coach's *active* self-link, or ``None``.
+
+    The single source of "the coach's own plan right now". ``working_plan``
+    already drops archived plans and group-materialized trees, and ``.active()``
+    drops an *ended* self-link — so the deliver/results predicates below never
+    read a stale delivered/logged week from a self-link the coach has since
+    removed (which ``CoachAthlete.end()`` archives but leaves ``is_self`` set).
+    """
+    link = CoachAthlete.objects.for_coach(user).active().filter(is_self=True).first()
+    return link.working_plan() if link else None
+
+
+def _self_has_delivery(user):
+    """Whether the coach's own current self-link plan has a delivered week.
+
+    Scoped to ``_active_self_working_plan`` (the self mirror of
+    ``demo.has_delivery``), so only a delivery on the plan the deliver step is
+    actually pointing at counts.
+    """
+    plan = _active_self_working_plan(user)
+    return (
+        plan is not None
+        and Week.objects.filter(
+            mesocycle__plan=plan, delivered_at__isnull=False
+        ).exists()
+    )
+
+
+def _self_has_log(user):
+    """Whether the coach has *completed* a session on their current self plan.
+
+    The self mirror of ``demo.has_log``, but scoped tighter than the sandbox's
+    bare existence (safe there only because the demo log is created ``done`` on
+    the coach's own plan): a real coach can hold ``pending`` "save progress" rows
+    and — if they're also an athlete under another coach — logs on a foreign
+    plan. Neither is a completed result on their current workspace, so gate on a
+    ``done`` log on ``_active_self_working_plan`` (matching ``has_plan`` and
+    ``_coach_latest_logged_session``'s ``done`` filter).
+    """
+    plan = _active_self_working_plan(user)
+    return (
+        plan is not None
+        and SessionLog.objects.filter(
+            athlete=user,
+            status=SessionLog.Status.DONE,
+            session__week__mesocycle__plan=plan,
+        ).exists()
+    )
+
+
+def _self_has_group(coach):
+    """Whether the coach has created a real (non-demo) group (self mirror).
+
+    Mirrors ``demo.has_group`` but non-demo: a demo group (loaded by the sandbox
+    ``group`` segment) must not read as the coach's own real group.
+    """
+    return MesoGroup.objects.filter(coach=coach).exclude(is_demo=True).exists()
+
+
 def _self_context(user):
     """One-shot facts every dynamic self-variant step needs (computed once per call).
 
-    The welcome/designer/agent steps all key off the same self-link / working
-    -plan / agent-allowance state, so this is read once per ``build_config``
-    call rather than re-queried per step.
+    The welcome/designer/agent steps key off the self-link / working-plan /
+    agent-allowance state, and the deliver/results/groups steps off their own
+    completion predicates, so all of it is read once per ``build_config`` call
+    rather than re-queried per step.
     """
-    self_link = (
-        CoachAthlete.objects.for_coach(user).active().filter(is_self=True).first()
-    )
+    working_plan = _active_self_working_plan(user)
     return {
-        "has_self_link": self_link is not None,
-        "has_plan": bool(self_link and self_link.working_plan()),
+        "has_self_link": CoachAthlete.objects.for_coach(user)
+        .active()
+        .filter(is_self=True)
+        .exists(),
+        "has_plan": working_plan is not None,
+        "has_delivery": _self_has_delivery(user),
+        "has_log": _self_has_log(user),
+        "has_group": _self_has_group(user),
         "can_use_agent": billing_access.can_use_agent(user),
         # Cheap to resolve unconditionally (no query) — used only once a
         # self-link exists, but harmless to compute either way.
@@ -480,10 +564,55 @@ def _self_context(user):
     }
 
 
+#: self step key → the ``_self_context`` predicate keying its ``loaded`` flag +
+#: "done" copy. These are the action-goal steps whose data-producing action
+#: happens on the *real* spotlighted control (no typed tour action button), so
+#: they only need a completion signal, not an ``action`` (#441 P3-5).
+_SELF_LOADED_BY_STEP = {
+    "deliver": "has_delivery",
+    "results": "has_log",
+    "groups": "has_group",
+}
+
+#: self step key → the completion predicate its action-completion advance must
+#: gate on. ``plan_deliver`` / ``athlete_log_session`` are also hit when a coach
+#: delivers/logs for the athletes they *coach* (not their own self plan), and the
+#: logger can save a ``pending`` draft — so the advance may only fire once the
+#: coach's *own* step data exists, matching the ``loaded`` display (Codex #441
+#: P3-5). Steps whose action can only produce the coach's own data
+#: (welcome/designer/groups/agent) need no gate — their endpoint implies it.
+_SELF_ADVANCE_PREDICATE = {
+    "deliver": _self_has_delivery,
+    "results": _self_has_log,
+}
+
+
+def advance_self_step_if_complete(user, step_key):
+    """Advance a self-variant action-goal step, gated on its completion predicate.
+
+    Unlike the bare ``advance_if_on_step`` (parked-step check only), this refuses
+    to advance until ``step_key``'s own self predicate is satisfied — so a coach
+    delivering/logging for *another* athlete they coach, or saving a ``pending``
+    log, never skips their own tour past a step whose data doesn't yet exist.
+    Steps not in ``_SELF_ADVANCE_PREDICATE`` fall back to the plain advance.
+
+    Self-variant only: the sandbox tour advances exclusively through ``demo_load``
+    (its ``program``/``delivery``/``log`` segments), so a sandbox coach who
+    happens to deliver/log real data must not move their sandbox tour off a
+    segment signal it never loaded.
+    """
+    if variant_for(user) != "self":
+        return False
+    predicate = _SELF_ADVANCE_PREDICATE.get(step_key)
+    if predicate is not None and not predicate(user):
+        return False
+    return advance_if_on_step(user, step_key)
+
+
 def _self_step_fields(step, ctx):
     """Resolve one step's self-variant title/body/action/loaded/anchor (O5).
 
-    Only the three steps with a real data action branch on ``ctx``:
+    The three steps with a real typed *action* branch on ``ctx``:
 
     - ``welcome``: action always offered (``roster_add_self``); ``loaded`` —
       and the driver's disabled "Done ✓" state — flips once the self-link
@@ -497,9 +626,12 @@ def _self_step_fields(step, ctx):
       (mirrors the roster's "Draft with AI" gate); any other combination
       falls back to the generic ``locked_body``, no ``loaded`` concept.
 
-    Every other step (profile/deliver/results/groups/finish) is static copy
-    with no action at all — the driver already renders an action-less step
-    fine (Next/Back + "Take me there" still work).
+    The three action-goal steps whose action is taken on the *real* spotlighted
+    control — ``deliver``/``results``/``groups`` — carry a data-derived
+    ``loaded`` flag (``_SELF_LOADED_BY_STEP``) and swap to their ``body_done``
+    once complete, but never offer a typed ``action`` (#441 P3-5). ``profile``
+    and ``finish`` stay static copy with no action or ``loaded`` — the driver
+    renders an action-less step fine (Next/Back + "Take me there" still work).
     """
     spec = step["self"]
     key = step["key"]
@@ -523,6 +655,13 @@ def _self_step_fields(step, ctx):
         # own row to open until the welcome step adds the coach's self-link.
         if not ctx["has_self_link"]:
             body = spec.get("body_locked", body)
+    elif key in _SELF_LOADED_BY_STEP:
+        # Action-goal steps with no typed button (the coach uses the real
+        # spotlighted control): flip ``loaded`` + swap to done-copy off the
+        # step's own completion predicate (#441 P3-5).
+        loaded = ctx[_SELF_LOADED_BY_STEP[key]]
+        if loaded and spec.get("body_done"):
+            body = spec["body_done"]
     elif key == "designer":
         loaded = ctx["has_plan"]
         if ctx["has_self_link"]:

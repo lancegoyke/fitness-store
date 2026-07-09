@@ -712,6 +712,11 @@ def group_create(request):
     group = MesoGroup.create_for_coach(
         request.user, name=name, focus=focus, athletes=athletes
     )
+    # #441 P3-5: the groups step auto-advances once the group exists. Self
+    # variant only (the sandbox groups step completes via demo_load(group)). A
+    # no-op unless the coach is parked on groups.
+    if meso_tour.variant_for(request.user) == "self":
+        meso_tour.advance_if_on_step(request.user, "groups")
     return redirect("meso:group", pk=group.pk)
 
 
@@ -854,6 +859,18 @@ def plan_create(request, pk):
         tour_step = None
     if tour_step is not None:
         meso_tour.record_opt_in(request.user, "self", tour_step, "plan_create")
+    # #441 P3-5: both the designer and agent self steps complete on the same
+    # signal — "the coach's own plan now exists" — regardless of which control
+    # created it (a plain "+ New program" or "Draft with AI", the latter sending
+    # draft=agent even while parked on designer). So advance is decoupled from
+    # ``natural_step`` (which is only the funnel attribution above): advance
+    # whichever of the two the coach is parked on — each call no-ops off its
+    # step. Self variant only (the sandbox designer completes via
+    # demo_load(program), not plan_create) and gated on the self-link so building
+    # a program for another athlete the coach coaches never skips their own tour.
+    if meso_tour.variant_for(request.user) == "self" and relationship.is_self:
+        meso_tour.advance_if_on_step(request.user, "designer")
+        meso_tour.advance_if_on_step(request.user, "agent")
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
@@ -989,6 +1006,12 @@ def demo_load(request):
         meso_tour.record_opt_in(
             request.user, "sandbox", meso_tour.step_key_for_segment(segment), segment
         )
+        # #441 P3-5: the sandbox action steps auto-advance the moment their
+        # segment loads — the coach doesn't have to click Next after doing the
+        # thing. A no-op unless parked exactly on the step this segment offers.
+        meso_tour.advance_if_on_step(
+            request.user, meso_tour.step_key_for_segment(segment)
+        )
     else:
         meso_demo.load_demo(request.user)
         messages.success(
@@ -1058,6 +1081,12 @@ def roster_add_self(request):
         and meso_tour.current_step_key(request.user) == "welcome"
     ):
         meso_tour.record_opt_in(request.user, "self", "welcome", "roster_add_self")
+    # #441 P3-5: the welcome step auto-advances once the coach is on their own
+    # roster — no manual Next needed. Self variant only (the sandbox welcome
+    # completes by loading demo athletes, not by adding a self-link). A no-op
+    # unless parked on welcome.
+    if meso_tour.variant_for(request.user) == "self":
+        meso_tour.advance_if_on_step(request.user, "welcome")
     return redirect("meso:roster")
 
 
@@ -1449,6 +1478,12 @@ def athlete_log_session(request, pk):
             list(session.trainable_cells()),
             session.week.mesocycle.plan.unit,
         )
+    # #441 P3-5: the results step auto-advances once the coach *completes* one of
+    # their own self-link sessions. Gated on the step's own predicate so a
+    # ``pending`` "save progress" — or a done log the coach makes as an athlete
+    # under *another* coach — never skips the step. A no-op unless parked on
+    # results.
+    meso_tour.advance_self_step_if_complete(request.user, "results")
     return JsonResponse({"ok": True, "log": serialize_session_log(log)})
 
 
@@ -3645,6 +3680,11 @@ def plan_deliver(request, plan_id):
         )
     _touch_plan(plan)
     _notify_athlete_block_delivered(request, plan, block, len(live_weeks))
+    # #441 P3-5: the deliver step auto-advances the moment the coach delivers
+    # their *own* self-link block — gated on the step's predicate so delivering
+    # for another athlete they coach doesn't skip it. A no-op unless parked on
+    # deliver.
+    meso_tour.advance_self_step_if_complete(request.user, "deliver")
     return JsonResponse(
         {
             "ok": True,
