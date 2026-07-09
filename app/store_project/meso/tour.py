@@ -558,6 +558,33 @@ _SELF_LOADED_BY_STEP = {
     "groups": "has_group",
 }
 
+#: self step key → the completion predicate its action-completion advance must
+#: gate on. ``plan_deliver`` / ``athlete_log_session`` are also hit when a coach
+#: delivers/logs for the athletes they *coach* (not their own self plan), and the
+#: logger can save a ``pending`` draft — so the advance may only fire once the
+#: coach's *own* step data exists, matching the ``loaded`` display (Codex #441
+#: P3-5). Steps whose action can only produce the coach's own data
+#: (welcome/designer/groups/agent) need no gate — their endpoint implies it.
+_SELF_ADVANCE_PREDICATE = {
+    "deliver": _self_has_delivery,
+    "results": _self_has_log,
+}
+
+
+def advance_self_step_if_complete(user, step_key):
+    """Advance a self-variant action-goal step, gated on its completion predicate.
+
+    Unlike the bare ``advance_if_on_step`` (parked-step check only), this refuses
+    to advance until ``step_key``'s own self predicate is satisfied — so a coach
+    delivering/logging for *another* athlete they coach, or saving a ``pending``
+    log, never skips their own tour past a step whose data doesn't yet exist.
+    Steps not in ``_SELF_ADVANCE_PREDICATE`` fall back to the plain advance.
+    """
+    predicate = _SELF_ADVANCE_PREDICATE.get(step_key)
+    if predicate is not None and not predicate(user):
+        return False
+    return advance_if_on_step(user, step_key)
+
 
 def _self_step_fields(step, ctx):
     """Resolve one step's self-variant title/body/action/loaded/anchor (O5).

@@ -1466,11 +1466,11 @@ def athlete_log_session(request, pk):
             session.week.mesocycle.plan.unit,
         )
     # #441 P3-5: the results step auto-advances once the coach *completes* one of
-    # their own sessions (the self-coaching coach logs here). Only a ``done`` log
-    # counts — a ``pending`` "save progress" isn't a result yet, so it must not
-    # skip the step (matches ``_self_has_log``). A no-op unless parked on results.
-    if log.status == SessionLog.Status.DONE:
-        meso_tour.advance_if_on_step(request.user, "results")
+    # their own self-link sessions. Gated on the step's own predicate so a
+    # ``pending`` "save progress" — or a done log the coach makes as an athlete
+    # under *another* coach — never skips the step. A no-op unless parked on
+    # results.
+    meso_tour.advance_self_step_if_complete(request.user, "results")
     return JsonResponse({"ok": True, "log": serialize_session_log(log)})
 
 
@@ -3667,9 +3667,11 @@ def plan_deliver(request, plan_id):
         )
     _touch_plan(plan)
     _notify_athlete_block_delivered(request, plan, block, len(live_weeks))
-    # #441 P3-5: the deliver step auto-advances the moment the block is
-    # delivered. A no-op unless the coach is parked on deliver.
-    meso_tour.advance_if_on_step(request.user, "deliver")
+    # #441 P3-5: the deliver step auto-advances the moment the coach delivers
+    # their *own* self-link block — gated on the step's predicate so delivering
+    # for another athlete they coach doesn't skip it. A no-op unless parked on
+    # deliver.
+    meso_tour.advance_self_step_if_complete(request.user, "deliver")
     return JsonResponse(
         {
             "ok": True,

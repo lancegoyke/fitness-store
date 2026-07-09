@@ -1676,3 +1676,45 @@ class TestActionSiteAutoAdvance:
         client.post(reverse("meso:api_plan_deliver", kwargs={"plan_id": s.plan.pk}))
 
         assert tour.tour_status(coach) == {}
+
+
+class TestAdvanceSelfStepGate:
+    """The advance gate waits for the step's own self predicate (Codex #441 P3-5).
+
+    ``advance_self_step_if_complete`` only advances once the step's completion
+    predicate holds. The deliver/log endpoints are shared with a coach's real
+    coaching of other athletes (and the logger can save a ``pending`` draft), so
+    a parked-step check alone would let a foreign/incomplete action skip the
+    coach's own tour.
+    """
+
+    def test_deliver_gate_waits_for_own_delivery(self):
+        coach = _coach()
+        s = _self_plan(coach)  # a self plan, but its week is NOT yet delivered
+        tour.set_step(coach.coach_profile, 3)  # deliver
+
+        # Parked on deliver, but no self delivery exists → refuses to advance.
+        assert tour.advance_self_step_if_complete(coach, "deliver") is False
+        assert tour.tour_status(coach)["step"] == 3
+
+        s.week.delivered_at = timezone.now()
+        s.week.save(update_fields=["delivered_at"])
+        assert tour.advance_self_step_if_complete(coach, "deliver") is True
+        assert tour.tour_status(coach)["step"] == 4
+
+    def test_results_gate_waits_for_done_own_log(self):
+        coach = _coach()
+        s = _self_plan(coach, delivered=True)
+        tour.set_step(coach.coach_profile, 4)  # results
+
+        # A pending draft doesn't satisfy the predicate → no advance.
+        log = SessionLog.objects.create(
+            session=s.session, athlete=coach, status=SessionLog.Status.PENDING
+        )
+        assert tour.advance_self_step_if_complete(coach, "results") is False
+        assert tour.tour_status(coach)["step"] == 4
+
+        log.status = SessionLog.Status.DONE
+        log.save(update_fields=["status"])
+        assert tour.advance_self_step_if_complete(coach, "results") is True
+        assert tour.tour_status(coach)["step"] == 5
