@@ -114,9 +114,10 @@ class TestCleanChange:
         assert cleaned is None
         assert any("not in this plan" in e for e in errors)
 
-    def test_off_week_target_rejected(self):
-        # The agent is grounded on the current week only; an id from another
-        # week of the same plan is out of contract.
+    def test_swap_can_target_any_week(self):
+        # P4: the agent is grounded on the WHOLE block, so a swap targeting an
+        # off-(current-)week cell is now IN contract — targets resolve within
+        # the whole plan, any live week (a swap renames the block-shared slot).
         plan, session, _ = make_plan()  # week index 1 is current
         week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
         off_session = day(week2, day_number=1, name="Lower")
@@ -124,8 +125,25 @@ class TestCleanChange:
         cleaned, errors = validation.clean_change(
             base_change(prescription_id=off_presc.pk), plan
         )
-        assert cleaned is None
-        assert any("current week" in e for e in errors)
+        assert errors == []
+        assert cleaned["prescription"] == off_presc
+
+    def test_progress_can_target_any_week(self):
+        # P4: a progress can set a specific (future/other) week's load — the
+        # agent programs progression across the whole block.
+        plan, session, _ = make_plan()  # week index 1 is current
+        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
+        off_session = day(week2, day_number=1, name="Lower")
+        off_presc = presc(off_session, name="Squat")
+        cleaned, errors = validation.clean_change(
+            base_change(
+                kind="progress", prescription_id=off_presc.pk, new_load="100 kg"
+            ),
+            plan,
+        )
+        assert errors == []
+        assert cleaned["prescription"] == off_presc
+        assert cleaned["payload"] == {"load": "100 kg"}
 
     def test_non_integer_prescription_id_rejected(self):
         plan, _, _ = make_plan()
@@ -485,6 +503,10 @@ class TestPercentAwarePrompt:
         new_load = props["changes"]["items"]["properties"]["new_load"]
         assert "%" in new_load["description"] or "1RM" in new_load["description"]
 
+    def test_system_prompt_mentions_whole_block(self):
+        # P4: the agent is grounded on the whole block, not just the current week.
+        assert "block" in client.SYSTEM_PROMPT.lower()
+
 
 class TestAddKind:
     """The ``add`` kind introduces a NEW exercise row into a session.
@@ -588,8 +610,9 @@ class TestAddKind:
         assert cleaned is None
         assert any("contraindication" in e for e in errors)
 
-    def test_add_session_must_be_in_the_current_week(self):
-        # A session from another week is out of contract, like swap/progress.
+    def test_add_session_can_be_any_week(self):
+        # P4: whole-block grounding — an add can target any live week's day, not
+        # just the current week's.
         plan, _, _ = make_plan()
         other_week = WeekFactory(
             mesocycle=plan.mesocycles.first(), index=2, is_current=False
@@ -598,8 +621,8 @@ class TestAddKind:
         cleaned, errors = validation.clean_change(
             self.add_change(session_id=other_session.pk), plan
         )
-        assert cleaned is None
-        assert any("session" in e for e in errors)
+        assert errors == []
+        assert cleaned["session"] == other_session
 
     def test_add_field_values_are_length_capped(self):
         plan, session, _ = make_plan()
@@ -626,3 +649,10 @@ class TestAddAwareTool:
 
     def test_system_prompt_explains_add(self):
         assert "add" in client.SYSTEM_PROMPT.lower()
+
+    def test_swap_is_block_wide_in_tool(self):
+        # P4: the tool tells the model a swap renames the exercise for the WHOLE
+        # block (every week follows).
+        props = client.PROPOSE_TOOL["input_schema"]["properties"]
+        new_name = props["changes"]["items"]["properties"]["new_name"]
+        assert "block" in new_name["description"].lower()

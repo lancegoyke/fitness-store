@@ -23,7 +23,6 @@ from ..models import LoadType
 from ..models import Prescription
 from ..models import PrescriptionOverride
 from ..models import Session
-from ..serializers import current_week
 
 VALID_KINDS = {"swap", "progress", "volume", "deload", "add", "adjust"}
 
@@ -202,7 +201,7 @@ def _resolve(model, value, label, errors, **scope):
         return None
     obj = model.objects.filter(pk=pk, **scope).first()
     if obj is None:
-        errors.append(f"{label} {pk} is not in this plan's current week")
+        errors.append(f"{label} {pk} is not in this plan")
     return obj
 
 
@@ -296,23 +295,28 @@ def clean_change(raw, plan, *, forbidden=None):
     rationale = raw.get("rationale", "")
     cleaned["rationale"] = rationale.strip() if isinstance(rationale, str) else ""
 
-    # Structural: targets must belong to the plan's CURRENT week — the agent is
-    # grounded on (and only edits) that week, so an id from another week is out
-    # of contract even if it belongs to the same plan.
-    week = current_week(plan)
+    # Structural: targets must belong to the plan, in any LIVE week (P4 block-wide
+    # semantics). The agent is now grounded on the whole block, so a structural
+    # swap renames the block-shared slot and numeric edits address a specific
+    # week — targets resolve within the whole plan (any live week/slot), not just
+    # the current week. A foreign-plan id is still dropped, never applied.
     presc = _resolve(
         Prescription,
         raw.get("prescription_id"),
         "prescription",
         errors,
-        week=week,
+        exercise_slot__session_slot__mesocycle__plan=plan,
+        exercise_slot__deleted_at__isnull=True,
+        week__deleted_at__isnull=True,
     )
     session = _resolve(
         Session,
         raw.get("session_id"),
         "session",
         errors,
-        week=week,
+        session_slot__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        week__deleted_at__isnull=True,
     )
     # A prescription's own session is authoritative: backfill it when no session
     # was given, and reject a session_id that points at a different day (the

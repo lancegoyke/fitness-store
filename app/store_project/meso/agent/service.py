@@ -116,10 +116,16 @@ def build_context(plan):
     recent logs). A **group** plan grounds on the group instead (members + the
     contraindications folded across them); there is no single athlete log stream,
     so ``recent_logs`` is empty for a group.
+
+    Both paths carry the whole current **block** (``serialize_agent_block``): every
+    live week of the plan's current mesocycle with its full session/cell grid and
+    per-week volume/intensity/phase/current flags, so the agent programs
+    progression across the block, not one week in isolation (P4).
     """
     context = {
         "plan": serializers.serialize_plan(plan),
         "coach_style": _coach_style(plan.coach),
+        "block": serializers.serialize_agent_block(plan),
     }
     if plan.is_group:
         context["group"] = _group_context(plan.group)
