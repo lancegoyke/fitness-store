@@ -27,6 +27,7 @@ from .models import CoachSubscription
 from .models import LoadType
 from .models import Plan
 from .models import SessionLog
+from .models import Week
 from .models import WeekDelivery
 from .one_rm import one_rm_values
 from .serializers import _fmt_num
@@ -1069,6 +1070,23 @@ def _athlete_block_grid(block, delivered_week_ids, focus_week_id, unit):
     return {"weeks": weeks, "days": days}
 
 
+def _single_current_week(plan):
+    """True when ``plan`` has exactly one live ``is_current`` week.
+
+    An individual plan keeps a single current pointer (``week_set_current``
+    clears the others), so its current week is trustworthy as "the week the
+    athlete is on." A group-materialized snapshot instead flags EVERY delivered
+    week ``is_current`` (``sync_delivered_plan``), so there ``current_week`` is
+    ambiguous — this is how ``athlete_home`` tells the two apart.
+    """
+    return (
+        Week.objects.filter(
+            mesocycle__plan=plan, is_current=True, deleted_at__isnull=True
+        ).count()
+        == 1
+    )
+
+
 def athlete_home(user):
     """The athlete's active programs, each as its whole delivered block.
 
@@ -1105,7 +1123,25 @@ def athlete_home(user):
             )
             continue
 
-        block = latest.mesocycle
+        # Anchor the card (both the block shown and the focus week) on the week
+        # the athlete is on. For an individual plan that's its single ``is_current``
+        # week, so a coach's "Make current" is honored even when it moves the
+        # athlete back to an earlier delivered block. A group-materialized snapshot
+        # flags every delivered week ``is_current``, so there ``current_week`` is
+        # ambiguous (it returns the earliest) — fall back to the latest delivered
+        # week, whose ordering already tracks the newest delivery. A current week
+        # the coach is still building (undelivered) also falls back to latest.
+        current = current_week(plan)
+        if (
+            current is not None
+            and current.delivered_at is not None
+            and _single_current_week(plan)
+        ):
+            anchor = current
+        else:
+            anchor = latest
+        block = anchor.mesocycle
+        focus = anchor
         # The table columns: only DELIVERED live weeks of this block — a week the
         # coach is building ahead (delivered_at is None) never reaches the athlete.
         delivered_weeks = list(
@@ -1114,14 +1150,6 @@ def athlete_home(user):
             ).order_by("index")
         )
         delivered_ids = {w.pk for w in delivered_weeks}
-        # Focus (what the home opens to) = the latest delivered week. Its ordering
-        # already breaks the block-delivery timestamp tie toward the athlete's
-        # ``is_current`` week (see ``latest_delivered_week``), so for an individual
-        # block this IS the current week. Deriving it from ``latest`` rather than
-        # ``current_week`` also stays correct for a group-materialized plan, whose
-        # sync flags EVERY delivered week ``is_current`` — ``current_week`` would
-        # return the earliest of those and strand the athlete on week 1.
-        focus = latest
 
         # The focus week's sessions are the tappable log rows. Live rows only
         # (soft delete, designer framework Phase 0): a day the coach removed after

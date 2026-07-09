@@ -323,6 +323,59 @@ class TestAthleteHome:
         assert session_url(b.s2) in body  # newest delivered week is the focus
         assert session_url(b.s1) not in body  # the earlier current week is not
 
+    def test_current_pointer_in_an_earlier_block_anchors_that_block(self, client):
+        """A "Make current" back to an earlier delivered block wins over latest.
+
+        ``latest_delivered_week`` points at the newest block, but when the coach
+        moves the (single) ``is_current`` pointer to a week in an earlier
+        delivered block, the individual athlete's home must open to THAT block and
+        week — not the most recent delivery.
+        """
+        coach = UserFactory()
+        athlete = UserFactory()
+        rel = CoachAthleteFactory(
+            coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        )
+        plan = PlanFactory(
+            relationship=rel, title="Two-Block Plan", status=Plan.Status.ACTIVE
+        )
+        earlier = timezone.now() - timedelta(days=7)
+        now = timezone.now()
+        # Block A — delivered earlier, carries the athlete's current week.
+        meso_a = MesocycleFactory(plan=plan, name="Base", order=0)
+        slot_a = SessionSlot.objects.create(
+            mesocycle=meso_a, day_number=1, name="Squat Day", bias="Quad", order=0
+        )
+        ex_a = ExerciseSlot.objects.create(
+            session_slot=slot_a, name="Back Squat", order=0
+        )
+        w_a = WeekFactory(
+            mesocycle=meso_a, index=1, is_current=True, delivered_at=earlier
+        )
+        s_a = day(w_a, session_slot=slot_a)
+        make_presc(
+            exercise_slot=ex_a, week=w_a, sets="5", reps="5", load="100", rpe="8"
+        )
+        # Block B — delivered later, no current week.
+        meso_b = MesocycleFactory(plan=plan, name="Peak", order=1)
+        slot_b = SessionSlot.objects.create(
+            mesocycle=meso_b, day_number=1, name="Bench Day", bias="Push", order=0
+        )
+        ex_b = ExerciseSlot.objects.create(
+            session_slot=slot_b, name="Bench Press", order=0
+        )
+        w_b = WeekFactory(mesocycle=meso_b, index=1, is_current=False, delivered_at=now)
+        s_b = day(w_b, session_slot=slot_b)
+        make_presc(exercise_slot=ex_b, week=w_b, sets="3", reps="5", load="80", rpe="8")
+
+        client.force_login(athlete)
+        body = client.get(HOME).content.decode()
+        assert "Base" in body  # anchored on block A (the current pointer)
+        assert "Back Squat" in body
+        assert session_url(s_a) in body  # its week is the tappable log row
+        assert "Peak" not in body  # the newer block is not shown
+        assert session_url(s_b) not in body
+
     def test_future_only_add_this_week_row_is_not_leaked(self, client):
         """An exercise added only to an undelivered future week must not surface.
 
