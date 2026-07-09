@@ -1,8 +1,9 @@
 # Meso guided tour — auto-advance model (decision note)
 
-Status: **decided, implementation deferred.** Written for issue #441 P3. This records
-the consistent advance model the audit asked us to settle "before patching steps
-individually." No tour-flow code changes in the P3 PR that ships this note.
+Status: **decided + implemented** (#449, squash `a53bd55`, 2026-07-09). Written for
+issue #441 P3 to settle the consistent advance model the audit asked us to nail down
+"before patching steps individually"; shipped a follow-up PR later. This is now a
+reference for the *live* behavior, not a pending plan.
 
 ## The problem the audit named
 
@@ -57,6 +58,13 @@ Advance stays server-authoritative: the funnel events (`TourEvent`) and tour res
 already live in `tour_state`. A client-side advance would desync the recorded funnel and the
 resumed step. Keep the single source of truth on the server.
 
+**Accepted consequence (as shipped):** the self `deliver`/`results` controls post via `fetch`
+(no full-page reload), so their mounted tour card only re-reads the advanced step on the
+coach's *next* navigation, not the instant the fetch returns. The advance itself is correct and
+resumes at the right step; making the card update immediately would require the client-side
+advance this section rules out, so it was intentionally left as-is. The sandbox action steps
+(and the self welcome/designer, which redirect) reload, so they advance visibly at once.
+
 ### The `current == step` guard prevents skips
 
 `advance_if_on_step` only advances when the coach is parked *exactly* on the named step and
@@ -80,8 +88,24 @@ Do this in a single change so the flow is coherent — not per-step patches — 
 audit warned. Ship it behind the same red/green + browser-walkthrough verification the P1/P2
 fixes used, because it changes the mainline tour progression.
 
-## Decision for P3
+## Outcome (shipped in #449)
 
-Documented, **not implemented** in the P3 PR. The predicate-gap + action-hook work is a
-focused follow-up (roughly: one presenter/predicate change per variant + one `advance_if_on_step`
-call per action site + tests). Tracked under issue #441.
+Implemented as the single coherent change this note prescribed: `advance_if_on_step` generalized
+to every action-completion POST site (`demo_load` covers all sandbox steps via
+`step_key_for_segment`; `roster_add_self` / `plan_create` / `plan_deliver` /
+`athlete_log_session` / `group_create` for the self variant), plus self-variant completion
+predicates for deliver/results/groups. Two refinements over the sketch above, forced by
+shared-endpoint edge cases (a coach also coaches other athletes; the logger can save a
+`pending` draft; a sandbox coach can self-link; an ended self-link's plans are archived):
+
+- **Self predicates scope to `_active_self_working_plan(user)`** — the active self-link's
+  `working_plan()` (which already excludes archived + group-materialized trees), not a broad
+  `is_self` filter. `has_log` additionally requires a `done` log. A `has_group` predicate was
+  added alongside the `has_delivery`/`has_log` named here, for symmetry.
+- **Every self-action advance is gated on `variant_for(user) == "self"`** and on the step's own
+  completion predicate (`advance_self_step_if_complete`), so a shared endpoint only ever
+  advances the coach's *own* tour, in the right variant. The sandbox tour advances solely via
+  `demo_load`.
+
+Closed issue #441 (its final item). See the "Accepted consequence" note under *Why not
+client-side advance* for the one deliberate UX tradeoff.
