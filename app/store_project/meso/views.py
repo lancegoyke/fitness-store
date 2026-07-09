@@ -2764,7 +2764,12 @@ def week_set_current(request, plan_id, week_id):
 
     The designer's "Make current": flips the live pointer to the viewed week so
     delivery (which sends ``current_week``) targets it and the designer opens onto
-    it next time. Exactly one week is current — the others in the plan are cleared.
+    it next time. Post-P3 this pointer also means "the week the athlete is on":
+    the athlete home (``presenters.athlete_home``) opens its block card onto the
+    current week (when it's delivered) and takes "today's session" from it — the
+    coach marks which week the athlete is on by setting it current here. (Setting
+    it stays manual; auto-advance is out of scope.) Exactly one week is current —
+    the others in the plan are cleared.
     Scoped + edit-gated (403 foreign, 402 over-limit); a foreign week is a 404.
     Row-locks the plan so concurrent set-currents serialize, and re-reads the
     week's liveness under that lock — a concurrent ``week_delete`` (which

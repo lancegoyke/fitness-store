@@ -127,11 +127,12 @@
       <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
         <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px;flex-wrap:wrap;">
           <span style="font-size:17px;font-weight:800;letter-spacing:-0.02em;">{{ plan.title }}</span>
-          {% if plan.block %}<span class="meso-row-meta">{{ plan.block }} · {{ plan.week }}</span>{% endif %}
+          {% if plan.block %}<span class="meso-row-meta">{{ plan.block }} · Week {{ plan.focus_index }}</span>{% endif %}
         </div>
         <p class="meso-row-meta" style="margin-bottom:12px;">Coach {{ plan.coach }}{% if plan.goal %} · {{ plan.goal }}{% endif %}</p>
 
         {% if plan.sessions %}
+          {# The focus (current) week's sessions — the "log today" affordance. #}
           <div class="meso-flex" style="flex-direction:column;gap:8px;">
             {% for s in plan.sessions %}
               <a class="meso-row" href="{{ s.url }}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;text-decoration:none;color:inherit;">
@@ -148,6 +149,46 @@
               </a>
             {% endfor %}
           </div>
+
+          {% if plan.grid.days %}
+            {# Read-only multi-week block table (P3). One compact table per
+               training day; rows = exercises, columns = delivered weeks. Each
+               table scrolls horizontally inside its own container so a narrow
+               phone screen never scrolls the whole page sideways. Pure
+               server-rendered — no JS. #}
+            <div style="margin-top:14px;">
+              <p class="meso-eyebrow" style="margin-bottom:8px;">Your block</p>
+              {% for day in plan.grid.days %}
+                <div style="margin-bottom:12px;">
+                  <div class="meso-row-meta" style="font-weight:700;margin-bottom:6px;">D{{ day.day_number }} · {{ day.name }}{% if day.bias %} · {{ day.bias }}{% endif %}</div>
+                  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:11px;">
+                    <table class="meso-mono" style="border-collapse:collapse;width:100%;font-size:12px;white-space:nowrap;">
+                      <thead>
+                        <tr>
+                          <th style="position:sticky;left:0;z-index:1;text-align:left;padding:7px 10px;font-weight:700;color:var(--dim);background:var(--surface);border-bottom:1px solid var(--line);">Exercise</th>
+                          {% for w in plan.grid.weeks %}
+                            <th style="text-align:left;padding:7px 10px;font-weight:700;border-bottom:1px solid var(--line);{% if w.current %}color:var(--accent-deep);background:var(--soft);{% else %}color:var(--dim);{% endif %}">{{ w.label }}{% if w.deload %} · DL{% endif %}</th>
+                          {% endfor %}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for row in day.rows %}
+                          <tr>
+                            <td style="position:sticky;left:0;z-index:1;padding:7px 10px;font-weight:700;color:var(--ink);background:var(--surface);border-top:1px solid var(--line);">{{ row.name }}</td>
+                            {% for c in row.cells %}
+                              <td style="padding:7px 10px;color:var(--ink);border-top:1px solid var(--line);{% if c.current %}background:var(--soft);{% endif %}">
+                                {% if not c.present %}<span style="color:var(--dim);">·</span>{% elif c.skipped %}<span style="color:var(--dim);">—</span>{% else %}{% if c.swap %}<span style="display:block;color:var(--accent-deep);font-weight:700;">{{ c.swap }}</span>{% endif %}{{ c.summary }}{% endif %}
+                              </td>
+                            {% endfor %}
+                          </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
         {% else %}
           <p class="meso-row-meta">Nothing delivered yet — your coach is still building this week.</p>
         {% endif %}

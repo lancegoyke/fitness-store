@@ -587,7 +587,10 @@ def latest_delivered_week(plan):
     is reflected, by design; the frozen ``WeekDelivery`` snapshot is the
     historical record for the (deferred) "changes since last delivery" diff, not
     a separate athlete-facing view. Newest delivery wins so the athlete lands on
-    the week their coach just sent. See ``docs/archive/meso/athlete-plan.md``.
+    the week their coach just sent. Post-P3 the athlete home renders the whole
+    delivered *block* (this week's ``mesocycle``) as a read-only multi-week table
+    and uses this week as the block anchor + the focus-week fallback when no
+    delivered week is flagged current. See ``docs/archive/meso/athlete-plan.md``.
     """
     return (
         models.Week.objects.filter(
@@ -600,13 +603,14 @@ def latest_delivered_week(plan):
 
 
 def current_week(plan, week=None):
-    """The week the designer opens to.
+    """The week the designer opens to — and, post-P3, the week the athlete is on.
 
     An explicit ``week`` wins (callers are expected to have already checked it
     is live — the delete endpoints pin the response to the just-touched row's
     own, still-live, week); otherwise the flagged current week among the
     plan's **live** weeks, or — failing both — the earliest live week in the
-    plan.
+    plan. The athlete home focuses this week (when it's a delivered week of the
+    block it renders) so "today's session" comes from where the athlete is.
     """
     if week is not None:
         return week
