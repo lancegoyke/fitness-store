@@ -26,7 +26,6 @@ from .models import CoachSubscription
 from .models import LoadType
 from .models import Plan
 from .models import SessionLog
-from .models import Week
 from .models import WeekDelivery
 from .one_rm import one_rm_values
 from .serializers import _fmt_num
@@ -605,79 +604,86 @@ def group_detail(group):
 
 
 def deliver_screen(plan, week=None):
-    """Context for the plan-bound deliver screen (Phase 4; per-week, multi-week).
+    """Context for the plan-bound deliver screen (P3; block delivery).
 
-    Summarizes the **target** week — the plan's current (live) week by default, or
-    an explicit ``week`` the coach chose in the designer's switcher. ``deliver.weeks``
-    lists every week (id / label / whether it's the live week / whether it's already
-    been delivered) so the screen offers a per-week selector, and ``is_current``
-    /``current_label`` let it warn when the coach is sending a week that isn't the
-    live one (delivering it won't move the live pointer). On a re-delivery,
-    ``deliver["changes"]`` is the diff of the target week's live grid against the
-    snapshot last delivered (``diff_week_snapshots``) so the coach reviews exactly
-    what's about to change for the athlete; it's ``None`` on a first delivery.
-    Scheduling stays a later-slice concern.
+    The individual deliver path releases the **whole block** — one ``Mesocycle``,
+    every one of its live weeks — at once (see ``plan_deliver``), so this screen
+    confirms the block, not a single week. The ``week`` argument (the plan's
+    current/live week by default, or an explicit ``?week=`` the coach picked in
+    the designer's switcher) only *selects which block* to send; ``block`` is
+    that week's mesocycle.
+
+    ``deliver["weeks"]`` carries one entry per live week of the block, each with
+    its OWN "changes since last delivery" diff: a re-delivered week (it has a
+    prior ``WeekDelivery``) diffs its live grid against its latest snapshot
+    (``diff_week_snapshots``), a never-delivered week has ``changes=None``. The
+    block-level ``is_redelivery`` / ``has_changes`` fold those per-week facts up
+    for the headline. ``week_id`` stays the target week's pk — the Alpine
+    ``mesoDeliver(planId, csrf, weekId)`` component still posts it to pick the
+    block. Scheduling stays a later-slice concern.
     """
     live = current_week(plan)
     target = week or live
-    # "Live" everywhere = the week ``current_week`` *resolves* to, not the raw
-    # ``is_current`` flag: a plan with no flagged week falls back to its earliest
-    # week as the live target, and the chip marker + the "not the live week"
-    # warning must agree with that fallback (else the screen contradicts itself —
-    # "sending Wk 1, not the live week (Wk 1)").
+    # The target week only *selects the block*; block delivery sends all its live
+    # weeks, so there's no "sending a week that isn't live" warning any more.
     live_id = live.pk if live else None
-    mesocycle = target.mesocycle if target else None
-    # Live rows only (soft delete, designer framework Phase 0): a removed day
-    # doesn't count toward "N sessions", and the selector below never offers a
-    # removed week (the deliver POST would 404 it).
-    session_count = (
-        target.sessions.filter(deleted_at__isnull=True).count() if target else 0
-    )
-    is_redelivery = target is not None and target.deliveries.exists()
+    block = target.mesocycle if target else None
 
-    # On a re-delivery, diff the live grid against the snapshot last delivered so
-    # the coach sees what's about to change for the athlete. A first delivery (no
-    # prior snapshot) has nothing to diff → None.
-    changes = None
-    if is_redelivery:
-        last_payload = (
-            WeekDelivery.objects.filter(week=target)
-            .order_by("-delivered_at")
-            .values_list("payload", flat=True)
-            .first()
-        )
-        if last_payload:
-            changes = diff_week_snapshots(serialize_week_snapshot(target), last_payload)
+    weeks = []
+    block_is_redelivery = False
+    block_has_changes = False
+    if block is not None:
+        # Live weeks only (soft delete, designer framework Phase 0): a removed
+        # week is never delivered (the POST 404s it), so it's not listed here.
+        for w in block.weeks.filter(deleted_at__isnull=True).order_by("index"):
+            # Live rows only: a removed day doesn't count toward "N sessions".
+            session_count = w.sessions.filter(deleted_at__isnull=True).count()
+            is_redelivery = w.deliveries.exists()
+            # On a re-delivery, diff the week's live grid against the snapshot it
+            # last went out as, so the coach sees what's about to change for the
+            # athlete. A first delivery (no prior snapshot) has nothing to diff.
+            changes = None
+            if is_redelivery:
+                last_payload = (
+                    WeekDelivery.objects.filter(week=w)
+                    .order_by("-delivered_at")
+                    .values_list("payload", flat=True)
+                    .first()
+                )
+                if last_payload:
+                    changes = diff_week_snapshots(
+                        serialize_week_snapshot(w), last_payload
+                    )
+            if is_redelivery:
+                block_is_redelivery = True
+            if changes is not None and changes["has_changes"]:
+                block_has_changes = True
+            weeks.append(
+                {
+                    "id": w.pk,
+                    "label": f"Wk {w.index}",
+                    "index": w.index,
+                    "is_current": w.pk == live_id,
+                    "is_delivered": w.delivered_at is not None,
+                    "session_count": session_count,
+                    "is_redelivery": is_redelivery,
+                    "changes": changes,
+                }
+            )
 
-    weeks = [
-        {
-            "id": w.pk,
-            "label": f"Wk {w.index}",
-            "is_current": w.pk == live_id,
-            "is_delivered": w.delivered_at is not None,
-            "is_target": target is not None and w.pk == target.pk,
-        }
-        for w in (
-            Week.objects.filter(mesocycle__plan=plan, deleted_at__isnull=True)
-            .select_related("mesocycle")
-            .order_by("mesocycle__order", "index")
-        )
-    ]
-
+    week_count = len(weeks)
     athlete = profile_athlete(plan.athlete)
-    athlete["block"] = mesocycle.name if mesocycle else ""
-    athlete["week"] = f"Wk {target.index}" if target else ""
+    athlete["block"] = block.name if block else ""
+    athlete["week"] = f"{week_count} week{'' if week_count == 1 else 's'}"
     return {
         "athlete": athlete,
         "deliver": {
             "what": plan.title,
-            "sessions": session_count,
-            "is_redelivery": is_redelivery,
-            "changes": changes,
+            "block_name": block.name if block else "",
+            "week_count": week_count,
+            "is_redelivery": block_is_redelivery,
+            "has_changes": block_has_changes,
             "week_id": target.pk if target else None,
-            "week_label": f"Wk {target.index}" if target else "",
-            "is_current": target is not None and target.pk == live_id,
-            "current_label": f"Wk {live.index}" if live else "",
             "weeks": weeks,
         },
     }

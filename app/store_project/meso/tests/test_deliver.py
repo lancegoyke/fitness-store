@@ -460,48 +460,41 @@ class TestDeliverScreen:
 
         ctx = self._screen(client, plan).context["deliver"]
 
+        # The target week (which *selects the block*) defaults to the live week;
+        # ``is_current`` is now a per-week fact, not a block-level warning.
         assert ctx["week_id"] == week1.pk
-        assert ctx["is_current"] is True
+        live_chip = next(w for w in ctx["weeks"] if w["id"] == week1.pk)
+        assert live_chip["is_current"] is True
 
-    def test_screen_targets_the_week_query_param(self, client):
-        plan, _, _, _ = seed_plan()
-        week2 = add_week(plan, index=2, is_current=False)
+    def test_screen_targets_the_week_query_param_selects_the_block(self, client):
+        # ?week= picks which BLOCK to deliver (via one of its weeks); the whole
+        # block's live weeks are then listed.
+        plan, week1, _, _ = seed_plan()
+        meso2 = MesocycleFactory(plan=plan, name="Strength", order=1)
+        week2 = WeekFactory(mesocycle=meso2, index=1, is_current=False)
+        day(week2, day_number=1, name="Push")
         client.force_login(plan.relationship.coach)
 
         resp = self._screen(client, plan, week=week2.pk)
 
         ctx = resp.context["deliver"]
         assert ctx["week_id"] == week2.pk
-        # Targeting a non-current week flags it so the screen can warn the coach.
-        assert ctx["is_current"] is False
-        assert "Wk 2" in resp.content.decode()
+        assert ctx["block_name"] == "Strength"
+        # Only the selected block's weeks — week1 lives in the other block.
+        ids = {w["id"] for w in ctx["weeks"]}
+        assert ids == {week2.pk}
 
-    def test_screen_lists_every_week_for_the_selector(self, client):
+    def test_screen_lists_every_live_week_in_the_block(self, client):
         plan, week1, _, _ = seed_plan()
         week2 = add_week(plan, index=2, is_current=False)
         client.force_login(plan.relationship.coach)
 
         resp = self._screen(client, plan)
 
-        weeks = resp.context["deliver"]["weeks"]
-        ids = {w["id"] for w in weeks}
+        deliver = resp.context["deliver"]
+        ids = {w["id"] for w in deliver["weeks"]}
         assert ids == {week1.pk, week2.pk}
-        body = resp.content.decode()
-        # Each week is a link that re-targets the screen at that week.
-        assert f"?week={week1.pk}" in body
-        assert f"?week={week2.pk}" in body
-
-    def test_screen_warns_when_target_is_not_the_live_week(self, client):
-        plan, _, _, _ = seed_plan()
-        week2 = add_week(plan, index=2, is_current=False)
-        client.force_login(plan.relationship.coach)
-
-        on_current = self._screen(client, plan).content.decode()
-        on_other = self._screen(client, plan, week=week2.pk).content.decode()
-
-        # The "not the live week" notice shows only when sending a non-live week.
-        assert "live week" not in on_current.lower()
-        assert "live week" in on_other.lower()
+        assert deliver["week_count"] == 2
 
     def test_screen_foreign_week_param_falls_back_to_current(self, client):
         plan, week1, _, _ = seed_plan()
@@ -524,8 +517,8 @@ class TestDeliverScreen:
 
     def test_screen_no_flagged_week_treats_the_fallback_as_live(self, client):
         # When no week is flagged ``is_current``, ``current_week`` falls back to the
-        # earliest week as the live target. The screen must agree: default target ==
-        # that fallback, marked live, with no contradictory "not the live week" notice.
+        # earliest week as the live target. The screen must agree: the default
+        # target == that fallback, and it's the week marked live in the per-week list.
         plan, week1, _, _ = seed_plan()
         week1.is_current = False
         week1.save(update_fields=["is_current"])
@@ -536,8 +529,6 @@ class TestDeliverScreen:
 
         ctx = resp.context["deliver"]
         assert ctx["week_id"] == week1.pk
-        assert ctx["is_current"] is True
-        assert "live week" not in resp.content.decode().lower()
-        # The fallback week is the one marked live in the selector.
+        # The fallback week is the one marked live in the per-week list.
         live_chip = next(w for w in ctx["weeks"] if w["id"] == week1.pk)
         assert live_chip["is_current"] is True

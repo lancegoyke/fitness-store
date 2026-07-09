@@ -267,6 +267,10 @@ _PRESCRIPTION_DIFF_FIELDS = (
     ("rpe", "RPE"),
     ("rest", "Rest"),
     ("note", "Note"),
+    # A one-week skip (P2) is athlete-facing: applying/lifting it changes what she
+    # trains that week, so it diffs like any other field (rendered on/off, not the
+    # boolean "— → True" a |default fallback gives).
+    ("skipped", "Skipped"),
     ("tag", "Tag"),
 )
 
@@ -307,23 +311,37 @@ def _diff_exercises(current, previous):
     row reads as *changed* (with per-field before/after), a brand-new row as
     *added*, and a deleted one as *removed*. (A delete-then-re-add of the same
     movement honestly shows as remove + add, since it's a different row.)
+
+    Exception-aware (P2 → P3): the diff is *athlete-facing*, so one-week skips
+    don't manufacture phantom changes. The "add-this-week" action seeds a fresh
+    ``skipped`` placeholder cell in every non-target week; on a re-delivery its
+    new pk would otherwise read as an *added* exercise the athlete never trains.
+    So a row absent from the other snapshot counts as added/removed only when it
+    is actually trained (``skipped`` False), and a row skipped in *both*
+    snapshots suppresses its field edits (trained in neither delivery). A skip
+    *applied* or *lifted* (the flag flips) still surfaces — it changes her week.
     """
     prev_by_id = {e.get("id"): e for e in previous}
     cur_by_id = {e.get("id"): e for e in current}
     added = [
         {"label": _prescription_label(e)}
         for e in current
-        if e.get("id") not in prev_by_id
+        if e.get("id") not in prev_by_id and not e.get("skipped")
     ]
     removed = [
         {"label": _prescription_label(e)}
         for e in previous
-        if e.get("id") not in cur_by_id
+        if e.get("id") not in cur_by_id and not e.get("skipped")
     ]
     changed = []
     for e in current:
         prev_e = prev_by_id.get(e.get("id"))
         if prev_e is None:
+            continue
+        # Skipped in both snapshots → not trained in either delivery, so its
+        # field edits aren't athlete-facing (a flip out of/into skipped is,
+        # since ``skipped`` itself is one of the diffed fields below).
+        if prev_e.get("skipped") and e.get("skipped"):
             continue
         fields = _diff_fields(prev_e, e, _PRESCRIPTION_DIFF_FIELDS)
         if fields:
