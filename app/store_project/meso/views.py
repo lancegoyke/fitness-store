@@ -857,10 +857,13 @@ def plan_create(request, pk):
         tour_step = None
     if tour_step is not None:
         meso_tour.record_opt_in(request.user, "self", tour_step, "plan_create")
-    # #441 P3-5: the designer/agent steps auto-advance once the plan exists —
-    # ``natural_step`` already names which of the two fired (agent when drafting,
-    # else designer). A no-op unless the coach is parked on that step.
-    meso_tour.advance_if_on_step(request.user, natural_step)
+    # #441 P3-5: the designer/agent steps auto-advance once the coach's *own*
+    # plan exists — ``natural_step`` names which of the two fired (agent when
+    # drafting, else designer). Gated on the self-link so building a program for
+    # another athlete the coach coaches doesn't skip their own tour. A no-op
+    # unless the coach is parked on that step.
+    if relationship.is_self:
+        meso_tour.advance_if_on_step(request.user, natural_step)
     return redirect("meso:designer_plan", plan_id=plan.pk)
 
 

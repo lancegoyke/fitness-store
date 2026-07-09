@@ -1608,6 +1608,22 @@ class TestActionSiteAutoAdvance:
 
         assert tour.tour_status(coach)["step"] == 7  # finish (terminal)
 
+    def test_self_designer_does_not_advance_creating_another_athletes_plan(
+        self, client
+    ):
+        # A coach who also coaches others, parked on their own designer step,
+        # builds a program for a *different* athlete — their self tour must not
+        # skip forward (Codex #441 P3-5): their self-link still has no plan.
+        coach = _coach()
+        CoachAthlete.add_self(coach)
+        other = CoachAthleteFactory(coach=coach)  # a non-self athlete
+        tour.set_step(coach.coach_profile, 2)  # designer
+        client.force_login(coach)
+
+        client.post(reverse("meso:plan_create", args=[other.athlete.pk]))
+
+        assert tour.tour_status(coach)["step"] == 2  # unchanged
+
     # -- sandbox variant --------------------------------------------------
 
     def test_sandbox_welcome_advances_on_demo_load_athletes(self, client):
