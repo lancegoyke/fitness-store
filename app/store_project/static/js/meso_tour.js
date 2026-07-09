@@ -190,6 +190,21 @@
     return reducedMotion ? "auto" : "smooth";
   }
 
+  // #441 P3-1: the step card is a bottom sheet on narrow viewports (the
+  // `@media (max-width:640px)` block in `_tour.html`, height `min(75vh,520px)`
+  // pinned `bottom:0`), which covers viewport center and buries a
+  // `block:"center"` scrolled anchor behind it. This returns the sheet's height
+  // in px so `scrollAnchorIntoView` can lift the anchor's resting position out
+  // from under it — 0 off the sheet layout (or when `matchMedia`/`innerHeight`
+  // is missing), so a rotate-to-desktop leaves no stale margin. A plain px value
+  // (not the `min(75vh,520px)` CSS string) so CSSOM accepts it as-is.
+  function bottomSheetInset(win) {
+    if (!win || typeof win.matchMedia !== "function") return 0;
+    if (typeof win.innerHeight !== "number") return 0;
+    if (!win.matchMedia("(max-width: 640px)").matches) return 0;
+    return Math.round(Math.min(win.innerHeight * 0.75, 520));
+  }
+
   // ---- DOM wiring (browser only) ----
 
   var MAX_ANCHOR_ATTEMPTS = 10;
@@ -444,6 +459,12 @@
     var selector = '[data-tour="' + anchorValue.replace(/"/g, '\\"') + '"]';
     var el = doc.querySelector(selector);
     if (!el || typeof el.scrollIntoView !== "function") return;
+    // #441 P3-1: lift the anchor's resting position out from behind the mobile
+    // bottom sheet before scrolling (with `block:"center"` a `scroll-margin-
+    // bottom` of S raises the anchor by ~S/2). Cleared to "" off the sheet
+    // layout so a rotate-to-desktop leaves no stale margin.
+    var inset = bottomSheetInset(win);
+    el.style.scrollMarginBottom = inset ? inset + "px" : "";
     el.scrollIntoView({
       behavior: scrollBehaviorFor(prefersReducedMotion(win)),
       block: "center",
@@ -546,6 +567,7 @@
       if (reposition) {
         win.removeEventListener("resize", reposition);
         win.removeEventListener("scroll", reposition, true);
+        doc.removeEventListener("toggle", reposition, true);
       }
       doc.removeEventListener("keydown", onKeydown);
       mount.innerHTML = "";
@@ -558,6 +580,10 @@
     }, 100);
     win.addEventListener("resize", reposition);
     win.addEventListener("scroll", reposition, true);
+    // #441 P3-3: a spotlighted `<details>` (step 8's roster-invite) fires a
+    // non-bubbling `toggle` on expand — listen in capture so the spotlight
+    // re-measures instead of going stale at the collapsed size.
+    doc.addEventListener("toggle", reposition, true);
     doc.addEventListener("keydown", onKeydown);
 
     render();
@@ -594,6 +620,9 @@
       shouldShowSkipLoad: shouldShowSkipLoad,
       shouldShowGoto: shouldShowGoto,
       isUsableRect: isUsableRect,
+      bottomSheetInset: bottomSheetInset,
+      scrollAnchorIntoView: scrollAnchorIntoView,
+      initTour: initTour,
     };
   }
 })(typeof window !== "undefined" ? window : this);

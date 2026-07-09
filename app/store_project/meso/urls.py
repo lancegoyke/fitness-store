@@ -29,6 +29,8 @@ urlpatterns = [
     # Owner-facing agent usage + margin dashboard (agent-usage Phase 4) —
     # staff-gated, all-coach; the web read-out of meso_agent_usage_report.
     path("usage/", UsageDashboardView.as_view(), name="usage_dashboard"),
+    # Owner-facing guided-tour funnel dashboard (#441 P3-6) — staff-gated, all-coach.
+    path("tour/funnel/", views.TourFunnelView.as_view(), name="tour_funnel"),
     path("designer/<int:plan_id>/", MesoDesignerView.as_view(), name="designer_plan"),
     path("review/", ChangeReviewView.as_view(), name="review"),
     path(

@@ -399,6 +399,25 @@ def advance_if_on_step(user, step_key):
     return True
 
 
+def current_step_key(user):
+    """The key of the step a coach is *actively* parked on, else ``None``.
+
+    Mirrors ``advance_if_on_step``'s guards (and ``_clamp``): only a live tour
+    (``tour_state.status == "active"``) reports a parked step — a dismissed,
+    completed, or never-started tour returns ``None``. Used by the organic
+    ``roster_add_self``/``plan_create`` twins (#441 P3-2) to count a coach who
+    takes the action while touring but whose POST carries no ``tour=1`` marker,
+    without over-recording when they're parked on some other step.
+    """
+    profile = CoachProfile.objects.filter(user=user).first()
+    if profile is None:
+        return None
+    state = profile.tour_state or {}
+    if state.get("status") != "active":
+        return None
+    return STEPS[_clamp(state.get("step", 0))]["key"]
+
+
 def _segment_loaded(user, segment):
     """Whether ``segment``'s data already exists for ``user`` (O7), or ``None``."""
     predicate = _HAS_PREDICATES.get(segment)
