@@ -1453,6 +1453,22 @@ class TestSelfLoadedPredicates:
         demo.load_group(coach)  # an ``is_demo`` group, not a real one
         assert tour._self_has_group(coach) is False
 
+    def test_ended_self_link_delivery_and_log_do_not_count(self):
+        # Ending a self-link archives its plans (Codex #441 P3-5): a delivered /
+        # logged week on that removed link must not read as the coach's *current*
+        # deliver/results completion when they restart the tour.
+        coach = _coach()
+        s = _self_plan(coach, delivered=True)
+        SessionLog.objects.create(
+            session=s.session, athlete=coach, status=SessionLog.Status.DONE
+        )
+        assert tour._self_has_delivery(coach) is True
+        assert tour._self_has_log(coach) is True
+
+        s.link.end()  # archives the self-link's plans, deactivates the link
+        assert tour._self_has_delivery(coach) is False
+        assert tour._self_has_log(coach) is False
+
 
 class TestSelfActionGoalLoadedCopy:
     """deliver/results/groups self steps gain a ``loaded`` flag + done-copy (P3-5-A).
@@ -1747,3 +1763,13 @@ class TestAdvanceSelfStepGate:
         log.save(update_fields=["status"])
         assert tour.advance_self_step_if_complete(coach, "results") is True
         assert tour.tour_status(coach)["step"] == 5
+
+    def test_gate_refuses_for_sandbox_variant(self):
+        # The sandbox tour advances only through demo_load segments; a sandbox
+        # coach who happens to deliver/log real data must never move their
+        # sandbox tour via the self hook (Codex #441 P3-5).
+        coach = sandbox.create_sandbox()
+        tour.set_step(CoachProfile.objects.get(user=coach), 3)  # deliver
+
+        assert tour.advance_self_step_if_complete(coach, "deliver") is False
+        assert tour.tour_status(coach)["step"] == 3

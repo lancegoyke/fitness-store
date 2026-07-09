@@ -712,9 +712,11 @@ def group_create(request):
     group = MesoGroup.create_for_coach(
         request.user, name=name, focus=focus, athletes=athletes
     )
-    # #441 P3-5: the groups step auto-advances once the group exists. A no-op
-    # unless the coach is parked on groups.
-    meso_tour.advance_if_on_step(request.user, "groups")
+    # #441 P3-5: the groups step auto-advances once the group exists. Self
+    # variant only (the sandbox groups step completes via demo_load(group)). A
+    # no-op unless the coach is parked on groups.
+    if meso_tour.variant_for(request.user) == "self":
+        meso_tour.advance_if_on_step(request.user, "groups")
     return redirect("meso:group", pk=group.pk)
 
 
@@ -863,9 +865,10 @@ def plan_create(request, pk):
     # draft=agent even while parked on designer). So advance is decoupled from
     # ``natural_step`` (which is only the funnel attribution above): advance
     # whichever of the two the coach is parked on — each call no-ops off its
-    # step. Gated on the self-link so building a program for another athlete the
-    # coach coaches never skips their own tour.
-    if relationship.is_self:
+    # step. Self variant only (the sandbox designer completes via
+    # demo_load(program), not plan_create) and gated on the self-link so building
+    # a program for another athlete the coach coaches never skips their own tour.
+    if meso_tour.variant_for(request.user) == "self" and relationship.is_self:
         meso_tour.advance_if_on_step(request.user, "designer")
         meso_tour.advance_if_on_step(request.user, "agent")
     return redirect("meso:designer_plan", plan_id=plan.pk)
@@ -1079,8 +1082,11 @@ def roster_add_self(request):
     ):
         meso_tour.record_opt_in(request.user, "self", "welcome", "roster_add_self")
     # #441 P3-5: the welcome step auto-advances once the coach is on their own
-    # roster — no manual Next needed. A no-op unless parked on welcome.
-    meso_tour.advance_if_on_step(request.user, "welcome")
+    # roster — no manual Next needed. Self variant only (the sandbox welcome
+    # completes by loading demo athletes, not by adding a self-link). A no-op
+    # unless parked on welcome.
+    if meso_tour.variant_for(request.user) == "self":
+        meso_tour.advance_if_on_step(request.user, "welcome")
     return redirect("meso:roster")
 
 

@@ -479,40 +479,55 @@ def _sandbox_step_fields(step, user, *, has_demo=False):
 # self steps the ``loaded`` completion signal the sandbox already had (#441 P3-5).
 
 
-def _self_has_delivery(coach):
-    """Whether the coach's own (self-link) current block has been delivered.
+def _active_self_working_plan(user):
+    """The current working plan on the coach's *active* self-link, or ``None``.
 
-    The self mirror of ``demo.has_delivery``: a delivered week on the coach's
-    *individual* self-link plan. ``source_group`` is excluded (same as
-    ``has_delivery``/``CoachAthlete.working_plan``) so a materialized group-member
-    week can't read as the self delivery.
+    The single source of "the coach's own plan right now". ``working_plan``
+    already drops archived plans and group-materialized trees, and ``.active()``
+    drops an *ended* self-link — so the deliver/results predicates below never
+    read a stale delivered/logged week from a self-link the coach has since
+    removed (which ``CoachAthlete.end()`` archives but leaves ``is_self`` set).
     """
-    return Week.objects.filter(
-        mesocycle__plan__relationship__coach=coach,
-        mesocycle__plan__relationship__is_self=True,
-        mesocycle__plan__source_group__isnull=True,
-        delivered_at__isnull=False,
-    ).exists()
+    link = CoachAthlete.objects.for_coach(user).active().filter(is_self=True).first()
+    return link.working_plan() if link else None
 
 
-def _self_has_log(coach):
-    """Whether the coach has *completed* one of their own self-link sessions.
+def _self_has_delivery(user):
+    """Whether the coach's own current self-link plan has a delivered week.
+
+    Scoped to ``_active_self_working_plan`` (the self mirror of
+    ``demo.has_delivery``), so only a delivery on the plan the deliver step is
+    actually pointing at counts.
+    """
+    plan = _active_self_working_plan(user)
+    return (
+        plan is not None
+        and Week.objects.filter(
+            mesocycle__plan=plan, delivered_at__isnull=False
+        ).exists()
+    )
+
+
+def _self_has_log(user):
+    """Whether the coach has *completed* a session on their current self plan.
 
     The self mirror of ``demo.has_log``, but scoped tighter than the sandbox's
     bare existence (safe there only because the demo log is created ``done`` on
     the coach's own plan): a real coach can hold ``pending`` "save progress" rows
     and — if they're also an athlete under another coach — logs on a foreign
-    plan. Neither is a completed result on their own workspace, so gate on a
-    ``done`` log on the coach's *self-link individual* plan (same scoping as
-    ``_self_has_delivery`` + ``_coach_latest_logged_session``'s ``done`` filter).
+    plan. Neither is a completed result on their current workspace, so gate on a
+    ``done`` log on ``_active_self_working_plan`` (matching ``has_plan`` and
+    ``_coach_latest_logged_session``'s ``done`` filter).
     """
-    return SessionLog.objects.filter(
-        athlete=coach,
-        status=SessionLog.Status.DONE,
-        session__week__mesocycle__plan__relationship__coach=coach,
-        session__week__mesocycle__plan__relationship__is_self=True,
-        session__week__mesocycle__plan__source_group__isnull=True,
-    ).exists()
+    plan = _active_self_working_plan(user)
+    return (
+        plan is not None
+        and SessionLog.objects.filter(
+            athlete=user,
+            status=SessionLog.Status.DONE,
+            session__week__mesocycle__plan=plan,
+        ).exists()
+    )
 
 
 def _self_has_group(coach):
@@ -532,12 +547,13 @@ def _self_context(user):
     completion predicates, so all of it is read once per ``build_config`` call
     rather than re-queried per step.
     """
-    self_link = (
-        CoachAthlete.objects.for_coach(user).active().filter(is_self=True).first()
-    )
+    working_plan = _active_self_working_plan(user)
     return {
-        "has_self_link": self_link is not None,
-        "has_plan": bool(self_link and self_link.working_plan()),
+        "has_self_link": CoachAthlete.objects.for_coach(user)
+        .active()
+        .filter(is_self=True)
+        .exists(),
+        "has_plan": working_plan is not None,
         "has_delivery": _self_has_delivery(user),
         "has_log": _self_has_log(user),
         "has_group": _self_has_group(user),
@@ -579,7 +595,14 @@ def advance_self_step_if_complete(user, step_key):
     delivering/logging for *another* athlete they coach, or saving a ``pending``
     log, never skips their own tour past a step whose data doesn't yet exist.
     Steps not in ``_SELF_ADVANCE_PREDICATE`` fall back to the plain advance.
+
+    Self-variant only: the sandbox tour advances exclusively through ``demo_load``
+    (its ``program``/``delivery``/``log`` segments), so a sandbox coach who
+    happens to deliver/log real data must not move their sandbox tour off a
+    segment signal it never loaded.
     """
+    if variant_for(user) != "self":
+        return False
     predicate = _SELF_ADVANCE_PREDICATE.get(step_key)
     if predicate is not None and not predicate(user):
         return False
