@@ -99,20 +99,29 @@ visitor — demo/trial lead, athlete login is a compact strip, not a card.
     </div>
 
     {% comment %}
-      Hosted walkthrough video (issue #415 follow-up to #388) — the real coach
-      flow (roster -> athlete -> designer -> agent proposal -> review ->
-      deliver), captured by `just record-demo` and hosted on S3 by
-      `just publish-demo-video` (scripts/publish_demo_video.py). Both write to
-      fixed keys, so refreshing after a UI change is just re-running those two
-      commands — nothing here or in settings needs to change.
+      Hosted walkthrough video (issue #415 follow-up to #388) — HIDDEN BY
+      DEFAULT (issue #454). The recording's quality wasn't good enough and it
+      was confusing/repetitive with the other visuals already on this page
+      (the hero shot + the how-it-works stills below); the live, no-signup
+      public sandbox at /meso/demo/ (issue #389) is the walkthrough now, so
+      `demo_video_url` defaults to "" in settings and this section renders
+      nothing.
+
+      The section itself is untouched, so re-enabling a future, better
+      recording is still just: `just record-demo` (captures the real coach
+      flow: roster -> athlete -> designer -> agent proposal -> review ->
+      deliver) then `just publish-demo-video`
+      (scripts/publish_demo_video.py) to host it on S3 at a fixed key, then
+      set MESO_DEMO_VIDEO_URL — nothing here or in the view needs to change.
 
       `preload="none"` + this `{% if %}` guard are the page-weight guarantee:
       an anonymous visit that never presses play costs nothing beyond the
       ~50KB poster image, and the whole section (including that image) simply
-      isn't in the page when the setting is blanked (e.g. mid-refresh, before
-      a first upload). Framed with `.meso-hero-shot` (meso.css) — the same
-      card chrome as the hero screenshot above, so the two product visuals on
-      this page read as one system.
+      isn't in the page when the setting is blank (the default, or
+      mid-refresh before a first upload). Framed with `.meso-hero-shot`
+      (meso.css) — the same card chrome as the hero screenshot above, so the
+      two product visuals on this page would read as one system if
+      re-enabled.
     {% endcomment %}
     {% if demo_video_url %}
       <div class="meso-card meso-card--pad" style="text-align:center;margin-bottom:18px;">

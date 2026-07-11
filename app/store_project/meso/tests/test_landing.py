@@ -159,26 +159,67 @@ class TestLandingContent:
 
 
 # ---------------------------------------------------------------------------
-# Hosted walkthrough video (issue #415 follow-up to #388)
+# Hosted walkthrough video — hidden by default (issue #454, follow-up to
+# #415/#388)
 # ---------------------------------------------------------------------------
 
 
 class TestLandingDemoVideo:
+    """The recorded walkthrough is OFF by default (issue #454).
+
+    #415 put a recorded coach-flow video on the landing page; #454 turned it
+    back off — the recording's quality wasn't good enough, and it was
+    confusing/repetitive with the other visuals already on the page (the
+    hero shot + the three how-it-works stills below it). The real
+    walkthrough now is the live, no-signup public sandbox at ``/meso/demo/``
+    (issue #389) — a cold visitor can drive the actual product instead of
+    watching a recording of it.
+
+    Nothing about the section or its ``{% if demo_video_url %}`` gate
+    changed — only the *default* of ``MESO_DEMO_VIDEO_URL`` /
+    ``MESO_DEMO_VIDEO_POSTER_URL`` flipped from a live S3 URL to ``""``, so
+    re-enabling a future, better recording is still zero code: `just
+    record-demo && just publish-demo-video`, then set the env var. The tests
+    below split accordingly: the plain, no-override request must show
+    nothing; an explicit override (the re-enable path) must still render the
+    full player, poster, and the `preload="none"` page-weight guard.
+    """
+
+    def test_video_section_hidden_by_default(self, client):
+        """No override => no section, no heading, no trace of the old asset."""
+        resp = client.get(reverse("meso:roster"))
+        body = resp.content.decode()
+        assert "<video" not in body
+        assert "See it in action" not in body
+        assert "meso-walkthrough" not in body  # the S3 object's filename
+
+    @override_settings(
+        MESO_DEMO_VIDEO_URL="https://example.test/meso/demo.mp4",
+        MESO_DEMO_VIDEO_POSTER_URL="https://example.test/meso/poster.webp",
+    )
     def test_video_section_renders_with_settings_url(self, client):
-        """The <video> section renders from settings, not a hardcoded URL."""
+        """Re-enabled (a URL set), the <video> section renders from settings."""
         resp = client.get(reverse("meso:roster"))
         body = resp.content.decode()
         assert "<video" in body
         assert f'<source src="{settings.MESO_DEMO_VIDEO_URL}"' in body
         assert 'type="video/mp4"' in body
 
+    @override_settings(
+        MESO_DEMO_VIDEO_URL="https://example.test/meso/demo.mp4",
+        MESO_DEMO_VIDEO_POSTER_URL="https://example.test/meso/poster.webp",
+    )
     def test_poster_renders_from_settings(self, client):
         resp = client.get(reverse("meso:roster"))
         body = resp.content.decode()
         assert f'poster="{settings.MESO_DEMO_VIDEO_POSTER_URL}"' in body
 
+    @override_settings(
+        MESO_DEMO_VIDEO_URL="https://example.test/meso/demo.mp4",
+        MESO_DEMO_VIDEO_POSTER_URL="https://example.test/meso/poster.webp",
+    )
     def test_preload_none_guards_page_weight(self, client):
-        """The page-weight guarantee.
+        """The page-weight guarantee, still true once re-enabled.
 
         An anonymous visit must not fetch the video unless the visitor
         presses play — the only thing that should load unconditionally is
@@ -186,17 +227,6 @@ class TestLandingDemoVideo:
         """
         resp = client.get(reverse("meso:roster"))
         assert 'preload="none"' in resp.content.decode()
-
-    @override_settings(MESO_DEMO_VIDEO_URL="")
-    def test_hidden_when_url_is_blank(self, client):
-        """An empty override hides the section, not a broken/empty player.
-
-        E.g. mid-refresh, before a first upload.
-        """
-        resp = client.get(reverse("meso:roster"))
-        body = resp.content.decode()
-        assert "<video" not in body
-        assert "See it in action" not in body
 
 
 # ---------------------------------------------------------------------------

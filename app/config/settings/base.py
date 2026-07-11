@@ -344,22 +344,23 @@ MESO_SANDBOX_TTL_HOURS = int(os.environ.get("MESO_SANDBOX_TTL_HOURS", "48"))
 MESO_SANDBOX_PER_IP_PER_HOUR = int(os.environ.get("MESO_SANDBOX_PER_IP_PER_HOUR", "5"))
 MESO_SANDBOX_MAX_CONCURRENT = int(os.environ.get("MESO_SANDBOX_MAX_CONCURRENT", "100"))
 
-# Public walkthrough video (issue #415 follow-up to #388). `just record-demo`
-# regenerates docs/demo/out/meso-walkthrough.mp4 (git-ignored); `just
-# publish-demo-video` (scripts/publish_demo_video.py) uploads it — plus a
-# poster frame — to the `masterfit` S3 bucket at a fixed public key, so these
-# defaults work with zero config in every environment (the bucket serves
-# public-read objects unsigned; see AWS_S3_OBJECT_PARAMETERS above). Override
-# to "" to hide the landing page's video section entirely (e.g. mid-refresh,
-# before a first upload).
-MESO_DEMO_VIDEO_URL = os.environ.get(
-    "MESO_DEMO_VIDEO_URL",
-    "https://masterfit.s3.amazonaws.com/meso/demo/meso-walkthrough.mp4",
-)
-MESO_DEMO_VIDEO_POSTER_URL = os.environ.get(
-    "MESO_DEMO_VIDEO_POSTER_URL",
-    "https://masterfit.s3.amazonaws.com/meso/demo/meso-walkthrough-poster.webp",
-)
+# Public walkthrough video (issue #415 follow-up to #388) — OFF by default
+# (issue #454). The recording's quality wasn't good enough and it was
+# confusing/repetitive with the other visuals already on the landing page
+# (the hero shot + the how-it-works stills); the live, no-signup public
+# sandbox at /meso/demo/ (issue #389) is the walkthrough we point cold
+# visitors at now. The landing template's `{% if demo_video_url %}` gate is
+# unchanged, so this is purely a default flip, not a removal — the
+# recording/publishing tooling (`just record-demo`, `just
+# publish-demo-video` / scripts/publish_demo_video.py) still works. To
+# re-enable a future, better recording: `just record-demo && just
+# publish-demo-video` (uploads the video + a poster frame to the
+# `masterfit` S3 bucket at the fixed public keys
+# meso/demo/meso-walkthrough.mp4 and meso/demo/meso-walkthrough-poster.webp),
+# then set MESO_DEMO_VIDEO_URL (and optionally MESO_DEMO_VIDEO_POSTER_URL) in
+# the environment.
+MESO_DEMO_VIDEO_URL = os.environ.get("MESO_DEMO_VIDEO_URL", "")
+MESO_DEMO_VIDEO_POSTER_URL = os.environ.get("MESO_DEMO_VIDEO_POSTER_URL", "")
 
 # Cache
 

@@ -335,9 +335,11 @@ class RosterView(TemplateView):
                     # so the price can't drift out of sync with the landing page.
                     "price_summary": presenters.PRICE_SUMMARY,
                     # The hosted walkthrough video (issue #415 follow-up to
-                    # #388) — settings-driven so `just record-demo && just
-                    # publish-demo-video` is the entire refresh story; an empty
-                    # override hides the section (template checks
+                    # #388) — hidden by default (issue #454; blank is the
+                    # default in settings). Still settings-driven so setting
+                    # a URL is the entire re-enable story: `just record-demo
+                    # && just publish-demo-video`, then set
+                    # MESO_DEMO_VIDEO_URL (template checks
                     # `{% if demo_video_url %}`).
                     "demo_video_url": settings.MESO_DEMO_VIDEO_URL,
                     "demo_video_poster_url": settings.MESO_DEMO_VIDEO_POSTER_URL,
