@@ -159,6 +159,63 @@ def seed_block(
     )
 
 
+def seed_two_block(*, coach=None, athlete=None):
+    """A two-mesocycle plan (issue #456 Finding 1): both blocks delivered.
+
+    Block A ("Base", order 0) carries two delivered weeks, week 2 of which is
+    the athlete's ``is_current`` week — the athlete is mid-block-A. Block B
+    ("Peak", order 1) carries one delivered week, index 1, ``is_current``
+    False — a coach delivering a brand-new mesocycle never moves the pointer
+    (by design), so block B starts out reachable only via plan-wide
+    navigation, never the anchored block A alone.
+    """
+    coach = coach or UserFactory()
+    athlete = athlete or UserFactory()
+    rel = CoachAthleteFactory(
+        coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+    )
+    plan = PlanFactory(
+        relationship=rel, title="Two-Block Plan", status=Plan.Status.ACTIVE
+    )
+    now = timezone.now()
+
+    meso_a = MesocycleFactory(plan=plan, name="Base", order=0)
+    slot_a = SessionSlot.objects.create(
+        mesocycle=meso_a, day_number=1, name="Squat Day", bias="Quad", order=0
+    )
+    ex_a = ExerciseSlot.objects.create(session_slot=slot_a, name="Back Squat", order=0)
+    a1 = WeekFactory(mesocycle=meso_a, index=1, is_current=False, delivered_at=now)
+    a2 = WeekFactory(mesocycle=meso_a, index=2, is_current=True, delivered_at=now)
+    sa1 = day(a1, session_slot=slot_a)
+    sa2 = day(a2, session_slot=slot_a)
+    make_presc(exercise_slot=ex_a, week=a1, sets="5", reps="5", load="90", rpe="8")
+    make_presc(exercise_slot=ex_a, week=a2, sets="5", reps="5", load="100", rpe="8")
+
+    meso_b = MesocycleFactory(plan=plan, name="Peak", order=1)
+    slot_b = SessionSlot.objects.create(
+        mesocycle=meso_b, day_number=1, name="Bench Day", bias="Push", order=0
+    )
+    ex_b = ExerciseSlot.objects.create(session_slot=slot_b, name="Bench Press", order=0)
+    b1 = WeekFactory(mesocycle=meso_b, index=1, is_current=False, delivered_at=now)
+    sb1 = day(b1, session_slot=slot_b)
+    make_presc(exercise_slot=ex_b, week=b1, sets="3", reps="5", load="80", rpe="8")
+
+    return SimpleNamespace(
+        coach=coach,
+        athlete=athlete,
+        rel=rel,
+        plan=plan,
+        meso_a=meso_a,
+        meso_b=meso_b,
+        a1=a1,
+        a2=a2,
+        b1=b1,
+        sa1=sa1,
+        sa2=sa2,
+        sb1=sb1,
+    )
+
+
 HOME = reverse("meso:athlete_home")
 
 
@@ -331,7 +388,10 @@ class TestAthleteHome:
         ``latest_delivered_week`` points at the newest block, but when the coach
         moves the (single) ``is_current`` pointer to a week in an earlier
         delivered block, the individual athlete's home must open to THAT block and
-        week — not the most recent delivery.
+        week — not the most recent delivery. The newer block is still reachable
+        (issue #456 Finding 1: the chip strip spans the whole plan), just not the
+        anchor — its session is not a tappable log row until the athlete taps
+        into it.
         """
         coach = UserFactory()
         athlete = UserFactory()
@@ -375,8 +435,8 @@ class TestAthleteHome:
         assert "Base" in body  # anchored on block A (the current pointer)
         assert "Back Squat" in body
         assert session_url(s_a) in body  # its week is the tappable log row
-        assert "Peak" not in body  # the newer block is not shown
-        assert session_url(s_b) not in body
+        assert "Peak" in body  # the newer block is reachable via the chip strip
+        assert session_url(s_b) not in body  # but not a tappable row (not the anchor)
 
     def test_future_only_add_this_week_row_is_not_leaked(self, client):
         """An exercise added only to an undelivered future week must not surface.
@@ -622,6 +682,163 @@ class TestWeekFocusIntegrationLoop:
         body = client.get(HOME).content.decode()
         assert session_url(b.s3) in body
         assert session_url(b.s2) not in body
+
+
+# -- issue #456 Finding 1: navigation spans the whole PLAN, not just the ----
+# -- anchored block (a newly delivered block never moves is_current) -------
+
+
+class TestPlanWideChips:
+    """The chip strip spans every delivered week of the plan, grouped by block."""
+
+    def test_chips_span_both_blocks_with_block_labels(self, client):
+        b = seed_two_block()  # a2 (block A) is_current; block B has one more
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "Base" in body
+        assert "Peak" in body
+        assert f"?week={b.a1.pk}" in body  # block A's earlier week
+        assert f"?week={b.b1.pk}" in body  # block B's week is reachable too
+        assert "Wk 1" in body
+        assert "Wk 2" in body
+
+    def test_override_into_a_different_block_renders_that_blocks_grid_and_sessions(
+        self, client
+    ):
+        b = seed_two_block()
+        client.force_login(b.athlete)
+        resp = client.get(HOME, {"week": b.b1.pk})
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert session_url(b.sb1) in body  # block B's session is now tappable
+        assert session_url(b.sa2) not in body
+        assert "Bench Press" in body  # block B's grid
+        assert "Back Squat" not in body  # block A's grid is not also shown
+        # The GET never moved the pointer.
+        b.a2.refresh_from_db()
+        b.b1.refresh_from_db()
+        assert b.a2.is_current is True
+        assert b.b1.is_current is False
+        assert Week.objects.filter(mesocycle__plan=b.plan, is_current=True).count() == 1
+
+
+class TestPlanWideNudge:
+    """The "start next week" nudge crosses block boundaries too."""
+
+    def test_nudge_crosses_into_the_next_delivered_block(self, client):
+        b = seed_two_block()  # a2 = last delivered week of block A, is_current
+        SessionLogFactory(
+            session=b.sa2, athlete=b.athlete, status=SessionLog.Status.DONE
+        )
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "start Peak · Week 1" in body  # block-aware copy
+        assert f"?week={b.b1.pk}" in body
+
+
+class TestPlanWideIntegrationLoop:
+    """Tapping into a later BLOCK, logging there, and auto-advance crossing it."""
+
+    def test_full_http_loop_logs_into_block_two_and_advances_across_blocks(
+        self, client
+    ):
+        b = seed_two_block()
+        client.force_login(b.athlete)
+
+        # The athlete taps into block B via the override...
+        body = client.get(HOME, {"week": b.b1.pk}).content.decode()
+        assert session_url(b.sb1) in body
+
+        # ...and logs its session — auto-advance follows them across the block.
+        resp = post_log(client, b.sb1, {"sets": []})
+        assert resp.status_code == 200
+
+        b.a2.refresh_from_db()
+        b.b1.refresh_from_db()
+        assert b.b1.is_current is True
+        assert b.a2.is_current is False
+        assert Week.objects.filter(mesocycle__plan=b.plan, is_current=True).count() == 1
+
+        # Their next bare visit naturally focuses block B.
+        body = client.get(HOME).content.decode()
+        assert session_url(b.sb1) in body
+        assert session_url(b.sa2) not in body
+        assert "Peak" in body
+
+
+class TestPlanWideGroupMember:
+    """A group member's materialized plan gets the same plan-wide navigation."""
+
+    def test_second_delivered_block_reachable_and_advances_the_members_own_pointer(
+        self, client
+    ):
+        from store_project.meso.tests.test_group_deliver import seed_group
+        from store_project.meso.tests.test_group_deliver import shared_meso
+
+        group, plan, [m] = seed_group(member_count=1)
+        meso1 = shared_meso(plan)
+        group.deliver_block()  # first materialization mirrors is_current onto block 1
+        athlete = m.relationship.athlete
+
+        member_plan = Plan.objects.get(relationship=m.relationship, source_group=group)
+        member_week1 = member_plan.mesocycles.get(order=meso1.order).weeks.get(
+            is_current=True
+        )
+
+        # The coach ships a brand-new mesocycle (block 2) and delivers it.
+        meso2 = MesocycleFactory(plan=plan, name="Peak", order=1)
+        slot2 = SessionSlot.objects.create(
+            mesocycle=meso2, day_number=1, name="Bench Day", bias="Push", order=0
+        )
+        ex2 = ExerciseSlot.objects.create(
+            session_slot=slot2, name="Bench Press", order=0
+        )
+        src_week2 = WeekFactory(
+            mesocycle=meso2, index=1, is_current=False, delivered_at=timezone.now()
+        )
+        day(src_week2, session_slot=slot2)
+        make_presc(
+            exercise_slot=ex2, week=src_week2, sets="3", reps="5", load="80", rpe="8"
+        )
+
+        # Second materialization: is_current is NOT re-mirrored (post-first-sync rule).
+        _, member_weeks2 = m.sync_delivered_plan(meso2)
+        member_week2 = member_weeks2[0]
+        member_week2.delivered_at = timezone.now()
+        member_week2.save(update_fields=["delivered_at"])
+
+        member_week1.refresh_from_db()
+        member_week2.refresh_from_db()
+        assert member_week1.is_current is True
+        assert member_week2.is_current is False
+
+        client.force_login(athlete)
+        body = client.get(HOME).content.decode()
+        assert "Peak" in body  # block 2's chip group is reachable
+        assert f"?week={member_week2.pk}" in body
+
+        resp = client.get(HOME, {"week": member_week2.pk})
+        assert resp.status_code == 200
+        assert "Bench Press" in resp.content.decode()
+
+        session2 = member_week2.sessions.first()
+        resp = post_log(client, session2, {"sets": []})
+        assert resp.status_code == 200
+
+        member_week1.refresh_from_db()
+        member_week2.refresh_from_db()
+        assert member_week2.is_current is True
+        assert member_week1.is_current is False
+        assert (
+            Week.objects.filter(
+                mesocycle__plan=member_plan, is_current=True, deleted_at__isnull=True
+            ).count()
+            == 1
+        )
+
+        # The shared plan's own pointer is untouched by the member's log.
+        shared_week1 = meso1.weeks.get(index=1)
+        assert shared_week1.is_current is True
 
 
 # -- athlete session detail ------------------------------------------------

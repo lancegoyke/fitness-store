@@ -1112,6 +1112,13 @@ def athlete_home(user, focus_week_id=None):
     the pointer only moves via the athlete's own logging (auto-advance) or the
     coach's "Make current". An invalid/foreign/undelivered/deleted id is
     silently ignored, rendering exactly as a bare request would.
+
+    The chip strip and "start next week" nudge span every delivered week of
+    the whole PLAN, not just the anchored block (Finding 1, issue #456): a
+    coach delivering a new block never moves the pointer, so a chip strip
+    scoped to only the anchored block would strand the athlete on the old one
+    forever. ``grid``/``sessions`` stay block-scoped — they follow the anchor
+    (the focus week's mesocycle) alone.
     """
     requested_week = None
     if focus_week_id is not None:
@@ -1198,32 +1205,30 @@ def athlete_home(user, focus_week_id=None):
         done = _done_session_ids([s.pk for s in session_objs], user)
         sessions = [_athlete_session_row(s, done=s.pk in done) for s in session_objs]
 
-        # Week chips (issue #456): the navigation affordance onto any delivered
-        # week of the block, not just the focus one — a partially-skipped week
-        # still has a tappable way forward. ``current`` reads the week's own
-        # ``is_current`` (the real pointer); ``focused`` is merely which column
-        # this card is showing right now (the ``?week=`` override, or the
-        # anchor's default). They usually coincide but must not be conflated —
-        # ``_athlete_block_grid``'s own ``current`` flag means "focused column",
-        # a separate, older field kept as-is for its existing consumers.
-        week_chips = [
-            {
-                "id": w.pk,
-                "index": w.index,
-                "label": _week_label(w),
-                "current": w.is_current,
-                "focused": w.pk == focus.pk,
-            }
-            for w in delivered_weeks
-        ]
-        next_week_obj = next(
-            (w for w in delivered_weeks if w.index > focus.index), None
+        # Week chips + the "start next week" nudge (issue #456 Finding 1) span the
+        # WHOLE PLAN, not just the anchored block: delivery never moves
+        # ``is_current`` (by design — see ``Week.advance_current_week`` /
+        # ``GroupMembership.sync_delivered_plan``), so a coach delivering a NEW
+        # block never touches the athlete's (or a group member's, post-first-
+        # materialization) pointer. Restricting navigation to the anchored
+        # block's own delivered weeks would make that new block invisible and
+        # permanently unreachable — the athlete could never tap into it, and
+        # auto-advance could never carry them there either, since it only fires
+        # from a session the athlete has already reached. Ordered plan-wide by
+        # ``(mesocycle.order, index)`` — the same tuple order
+        # ``advance_current_week`` compares — since a block's own week
+        # ``index`` restarts at 1 each mesocycle.
+        plan_delivered_weeks = list(
+            Week.objects.filter(
+                mesocycle__plan_id=plan.pk,
+                deleted_at__isnull=True,
+                delivered_at__isnull=False,
+            )
+            .select_related("mesocycle")
+            .order_by("mesocycle__order", "index")
         )
-        next_week = (
-            {"id": next_week_obj.pk, "index": next_week_obj.index}
-            if next_week_obj is not None
-            else None
-        )
+        week_chip_groups = _week_chip_groups(plan_delivered_weeks, focus)
+        next_week = _next_delivered_week(plan_delivered_weeks, focus)
         # Vacuously false with no sessions — "start next week" would be a
         # non-sequitur nudge on an empty focus week.
         focus_done = bool(session_objs) and all(s.pk in done for s in session_objs)
@@ -1239,13 +1244,74 @@ def athlete_home(user, focus_week_id=None):
                 "delivered_at": focus.delivered_at,
                 "sessions": sessions,
                 "grid": _athlete_block_grid(block, delivered_ids, focus.pk, plan.unit),
-                "week_chips": week_chips,
+                "week_chip_groups": week_chip_groups,
+                "chip_count": len(plan_delivered_weeks),
                 "next_week": next_week,
                 "focus_done": focus_done,
                 "awaiting": False,
             }
         )
     return cards
+
+
+def _week_chip_groups(plan_delivered_weeks, focus):
+    """Navigation chips for every delivered week of the PLAN, grouped by block.
+
+    Issue #456 Finding 1: the chip strip must span every live mesocycle, not
+    just the anchored one, or a newly delivered block is permanently
+    unreachable. Grouping is by mesocycle (order preserved from
+    ``plan_delivered_weeks``, already plan-wide ordered); a plan with more
+    than one delivered block gets each group labeled with its block's name
+    (``mesocycle.name`` — the same string the card header shows as
+    ``plan.block``) so the jump is legible, while a single-block plan gets one
+    unlabeled group — today's flat "Wk N" row, unchanged. ``current`` reads
+    the week's own ``is_current`` (the real pointer); ``focused`` is merely
+    which column this card is showing right now (the ``?week=`` override, or
+    the anchor's default) — they usually coincide but must not be conflated.
+    """
+    multi_block = len({w.mesocycle_id for w in plan_delivered_weeks}) > 1
+    groups = []
+    current_meso_id = None
+    group = None
+    for w in plan_delivered_weeks:
+        if w.mesocycle_id != current_meso_id:
+            group = {"label": w.mesocycle.name if multi_block else "", "chips": []}
+            groups.append(group)
+            current_meso_id = w.mesocycle_id
+        group["chips"].append(
+            {
+                "id": w.pk,
+                "index": w.index,
+                "label": _week_label(w),
+                "current": w.is_current,
+                "focused": w.pk == focus.pk,
+            }
+        )
+    return groups
+
+
+def _next_delivered_week(plan_delivered_weeks, focus):
+    """The next delivered week after ``focus``, plan-wide — or ``None``.
+
+    Issue #456 Finding 1: crosses block boundaries, so the "start next week"
+    nudge can point into a newly delivered block, not just the anchored one.
+    ``cross_block`` flags when the next week belongs to a different mesocycle
+    than the focus week, so the template can phrase the nudge with the
+    destination block's name instead of a same-block "start Week N".
+    """
+    focus_pos = next(
+        (i for i, w in enumerate(plan_delivered_weeks) if w.pk == focus.pk), None
+    )
+    if focus_pos is None or focus_pos + 1 >= len(plan_delivered_weeks):
+        return None
+    nxt = plan_delivered_weeks[focus_pos + 1]
+    cross_block = nxt.mesocycle_id != focus.mesocycle_id
+    return {
+        "id": nxt.pk,
+        "index": nxt.index,
+        "cross_block": cross_block,
+        "block_label": nxt.mesocycle.name if cross_block else "",
+    }
 
 
 def _prescribed_set_count(sets_text):

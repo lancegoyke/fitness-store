@@ -132,19 +132,30 @@
         <p class="meso-row-meta" style="margin-bottom:12px;">Coach {{ plan.coach }}{% if plan.goal %} · {{ plan.goal }}{% endif %}</p>
 
         {% if plan.sessions %}
-          {% if plan.week_chips|length > 1 %}
+          {% if plan.chip_count > 1 %}
             {% comment %}
               Week chips (issue #456) — the tappable path onto any delivered
-              week of this block, not just the focus one, so an athlete who
-              partially skipped a week is never stranded on it. Pure
-              server-rendered links; the CURRENT (is_current) chip is filled,
-              the FOCUSED (viewed) chip gets an accent outline, and the two
-              can differ (viewing an earlier week for review doesn't move
-              is_current). Only shown for a multi-delivered-week block.
+              week of this PLAN, not just the anchored block's (Finding 1: a
+              coach delivering a new block never moves is_current, so scoping
+              this to the anchored block would strand the athlete on the old
+              one forever). Pure server-rendered links; the CURRENT
+              (is_current) chip is filled, the FOCUSED (viewed) chip gets an
+              accent outline, and the two can differ (viewing an earlier week
+              for review doesn't move is_current). Grouped by block: a group
+              only gets a visible label once the plan has more than one
+              delivered block, otherwise it's today's flat "Wk N" row. Only
+              shown at all once the plan has more than one delivered week.
             {% endcomment %}
-            <div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px;">
-              {% for w in plan.week_chips %}
-                <a href="{% if w.current %}{% url 'meso:athlete_home' %}{% else %}{% url 'meso:athlete_home' %}?week={{ w.id }}{% endif %}" class="meso-mono" style="display:inline-flex;align-items:center;padding:7px 13px;border-radius:999px;font-size:12px;font-weight:700;text-decoration:none;{% if w.current %}background:var(--accent-deep);color:var(--accent-ink);border:1px solid var(--accent-deep);{% else %}background:var(--surface);color:var(--ink);border:1px solid var(--line);{% endif %}{% if w.focused and not w.current %}box-shadow:inset 0 0 0 1.5px var(--accent-deep);color:var(--accent-deep);{% endif %}">{{ w.label }}</a>
+            <div style="margin-bottom:12px;">
+              {% for group in plan.week_chip_groups %}
+                <div style="{% if not forloop.first %}margin-top:8px;{% endif %}">
+                  {% if group.label %}<p class="meso-eyebrow" style="margin-bottom:5px;">{{ group.label }}</p>{% endif %}
+                  <div style="display:flex;flex-wrap:wrap;gap:7px;">
+                    {% for w in group.chips %}
+                      <a href="{% if w.current %}{% url 'meso:athlete_home' %}{% else %}{% url 'meso:athlete_home' %}?week={{ w.id }}{% endif %}" class="meso-mono" style="display:inline-flex;align-items:center;padding:7px 13px;border-radius:999px;font-size:12px;font-weight:700;text-decoration:none;{% if w.current %}background:var(--accent-deep);color:var(--accent-ink);border:1px solid var(--accent-deep);{% else %}background:var(--surface);color:var(--ink);border:1px solid var(--line);{% endif %}{% if w.focused and not w.current %}box-shadow:inset 0 0 0 1.5px var(--accent-deep);color:var(--accent-deep);{% endif %}">{{ w.label }}</a>
+                    {% endfor %}
+                  </div>
+                </div>
               {% endfor %}
             </div>
           {% endif %}
@@ -168,8 +179,8 @@
           </div>
 
           {% if plan.focus_done and plan.next_week %}
-            {# "Start next week" nudge (#456) — discoverability sugar; the chips above are the universal path. #}
-            <a class="meso-btn meso-btn--primary" href="{% url 'meso:athlete_home' %}?week={{ plan.next_week.id }}" style="width:100%;justify-content:center;margin-top:10px;padding:11px 14px;font-size:13.5px;">Week {{ plan.focus_index }} done — start Week {{ plan.next_week.index }} &rarr;</a>
+            {# "Start next week" nudge (#456) — discoverability sugar; the chips above are the universal path. Crosses blocks (Finding 1): when the next delivered week lives in a different mesocycle, the copy names the destination block so the jump makes sense. #}
+            <a class="meso-btn meso-btn--primary" href="{% url 'meso:athlete_home' %}?week={{ plan.next_week.id }}" style="width:100%;justify-content:center;margin-top:10px;padding:11px 14px;font-size:13.5px;">{% if plan.next_week.cross_block %}Week {{ plan.focus_index }} done — start {{ plan.next_week.block_label }} · Week {{ plan.next_week.index }} &rarr;{% else %}Week {{ plan.focus_index }} done — start Week {{ plan.next_week.index }} &rarr;{% endif %}</a>
           {% endif %}
 
           {% if plan.grid.days %}
