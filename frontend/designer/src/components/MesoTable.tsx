@@ -51,11 +51,13 @@ import {
 import type { CollisionDetection, DragEndEvent, DragStartEvent, KeyboardCoordinateGetter } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, GroupIdentity, MesoGrid } from "../lib/api";
-import type { GridCellPatch, Id } from "../hooks/useGrid";
+import type { GridCellOneRmPatch, GridCellPatch, Id } from "../hooks/useGrid";
+import { rowIdentityCellId } from "../hooks/useGrid";
 import { useTableNav, tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
 import type { EditableField, UseTableNavResult } from "../hooks/useTableNav";
 import type { TableDragData, TableDragEndEvent } from "../hooks/useTableReorder";
 import { TABLE_DAY_DRAG_PREFIX, tableDayDragId, tableRowDragId, tableRowDragPrefix } from "../lib/tableDragIds";
+import { parseOneRm } from "../lib/oneRm";
 
 export interface MesoTableProps {
   grid: MesoGrid | null;
@@ -71,6 +73,11 @@ export interface MesoTableProps {
   onOpenOverride(row: GridRow, cell: GridCell): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
+  // Issue #455 phase A3: the per-ROW %1RM editor's save verb — AWAITED (the
+  // editor drives its own saving/error UI off the promise; see useGrid.setOneRm's
+  // header for why this is awaited, unlike the fire-and-forget onPatchCell/
+  // onRenameExercise above).
+  onSetOneRm(exerciseSlotId: Id, value: string): Promise<GridCellOneRmPatch>;
   onAddExercise(day: GridDay): void;
   onRemoveExercise(exerciseSlotId: Id): void;
   onAddDay(): void;
@@ -491,6 +498,168 @@ function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
   );
 }
 
+/** The row's identity CELL object (not just its id) — resolves
+ * `rowIdentityCellId` (useGrid.ts, shared with row rename) against `row.cells`,
+ * which is keyed by WEEK id, not prescription id, so the lookup is a search
+ * over the cell VALUES rather than a direct index. Returns undefined when the
+ * row has no live cell at all. */
+function rowIdentityCell(weeks: GridWeek[], row: GridRow): GridCell | undefined {
+  const cellId = rowIdentityCellId(weeks, row);
+  if (cellId == null) return undefined;
+  return Object.values(row.cells).find((c) => c.prescription_id === cellId);
+}
+
+interface RowOneRmEditorProps {
+  row: GridRow;
+  cell: GridCell | undefined;
+  unit: string;
+  busy: boolean;
+  onSetOneRm(exerciseSlotId: Id, value: string): Promise<GridCellOneRmPatch>;
+}
+
+/** Issue #455 phase A3 — the per-ROW %1RM badge/editor (name column, 2nd
+ * line). A %1RM is a property of the athlete + lift IDENTITY (AthleteOneRm
+ * has no week dimension), NOT a per-week cell value — unlike P5's per-cell
+ * adjust badge (CellActions/`cell-override-badge-*`), this control reads and
+ * writes the row's single IDENTITY cell regardless of which week column the
+ * coach is looking at. Local state (CellActions' idiom) rather than a second
+ * useOneRmEditor instance — that hook needs planId/csrf, which would force
+ * MesoTable to take those directly and break the verbs-as-props boundary
+ * every other control here honors. Mirrors ExerciseRow.tsx's one-week %1RM
+ * badge/editor (label text, "1RM: "/"1RM ≈ " prefixes, "+ set 1RM",
+ * Enter=save/Escape=cancel) — ported, not reused, for the same reason. */
+function RowOneRmEditor({ row, cell, unit, busy, onSetOneRm }: RowOneRmEditorProps) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  // DISPLAY gate: any live, unswapped, non-skipped cell of the row carrying
+  // a % load makes the row 1RM-relevant — load_type is edited PER CELL in
+  // this table, so gating on the identity cell's own load_type alone hides
+  // the only 1RM control from a mixed-load row (identity week abs, a later
+  // week pct — Codex #455 A3 review). The SAVE target stays the identity
+  // cell regardless: all unswapped cells share the row's lift identity, so
+  // any of them keys the same AthleteOneRm row.
+  // Scope cut (A3): a SWAPPED pct cell still gets no control of its own —
+  // its lift identity differs from the row's; server data
+  // (one_rm/one_rm_source) stays correct regardless (see this file's
+  // header / the implementation brief's "Risks" section).
+  const rowHasPct = Object.values(row.cells).some(
+    (c) => c.load_type === "pct" && !c.skipped && c.swap_name === "" && c.swap_exercise_id == null,
+  );
+  if (!cell || !rowHasPct) return null;
+
+  const id = row.exercise_slot_id;
+
+  function openEditor() {
+    setValue(cell!.one_rm || "");
+    setError("");
+    setOpen(true);
+  }
+
+  function cancel() {
+    if (saving) return;
+    setOpen(false);
+    setError("");
+  }
+
+  async function save() {
+    // `busy` too, not just `saving`: the save button is disabled during a
+    // structural mutation/refetch, but Enter in the input reaches here
+    // directly (Codex review) — the keyboard path honors the same lock.
+    if (saving || busy) return;
+    const parsed = parseOneRm(value);
+    if (!parsed.ok) {
+      setError("Enter a positive number, or leave blank to clear.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      await onSetOneRm(id, parsed.value);
+      setSaving(false);
+      setOpen(false);
+    } catch (err) {
+      console.error("1RM save failed", err);
+      setSaving(false);
+      setError("Couldn't save that 1RM. Please try again.");
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        data-testid={`row-one-rm-badge-${id}`}
+        data-hover="brighten"
+        className={`meso-onerm-badge${cell.one_rm ? " meso-onerm-badge--set" : ""}`}
+        onClick={openEditor}
+        title={
+          cell.one_rm
+            ? cell.one_rm_source === "manual"
+              ? "Athlete's 1RM (manually set) — tap to edit"
+              : "Athlete's estimated 1RM, from their logged history — tap to edit"
+            : "Set this athlete's 1RM so the % target resolves to a load"
+        }
+      >
+        {cell.one_rm
+          ? (cell.one_rm_source === "manual" ? "1RM: " : "1RM ≈ ") + cell.one_rm + (unit ? " " + unit : "")
+          : "+ set 1RM"}
+      </button>
+    );
+  }
+
+  return (
+    <span className="meso-onerm-editor">
+      <input
+        data-testid={`row-one-rm-input-${id}`}
+        className="meso-onerm-input"
+        type="text"
+        inputMode="decimal"
+        placeholder={unit}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            save();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          }
+        }}
+      />
+      <button
+        type="button"
+        data-testid={`row-one-rm-save-${id}`}
+        data-hover="brighten"
+        className="meso-onerm-save"
+        disabled={saving || busy}
+        onClick={save}
+      >
+        save
+      </button>
+      <button
+        type="button"
+        data-testid={`row-one-rm-cancel-${id}`}
+        data-hover="brighten"
+        className="meso-onerm-cancel"
+        disabled={saving || busy}
+        title="Cancel"
+        onClick={cancel}
+      >
+        ×
+      </button>
+      {error && (
+        <span data-testid={`row-one-rm-error-${id}`} className="meso-onerm-error">
+          {error}
+        </span>
+      )}
+    </span>
+  );
+}
+
 interface AddThisWeekControlProps {
   day: GridDay;
   weeks: GridWeek[];
@@ -549,6 +718,12 @@ interface TableRowProps {
   busy: boolean;
   unit: string;
   showAdjust: boolean;
+  // Issue #455 phase A3: gates the per-ROW %1RM badge/editor — `!isGroupPlan`
+  // (see MesoTable()'s computation below), DELIBERATELY NOT `showAdjust`'s
+  // member-count check (`!!(group && members.length)`): coach_set_one_rm
+  // 400s on ANY group plan (member count is irrelevant — a group has no
+  // single athlete), so this must gate on group identity alone.
+  showOneRm: boolean;
   tableNav: UseTableNavResult;
   rowArmed: boolean;
   onArmRow(): void;
@@ -557,6 +732,7 @@ interface TableRowProps {
   onOpenOverride(row: GridRow, cell: GridCell): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
+  onSetOneRm(exerciseSlotId: Id, value: string): Promise<GridCellOneRmPatch>;
   onSkipCell(cellId: number, skipped: boolean): void;
   onSwapCell(cellId: number, swapName: string): void;
   onFillAcrossWeeks(cellId: number): void;
@@ -575,6 +751,7 @@ function TableRow({
   busy,
   unit,
   showAdjust,
+  showOneRm,
   tableNav,
   rowArmed,
   onArmRow,
@@ -583,6 +760,7 @@ function TableRow({
   onOpenOverride,
   onPatchCell,
   onRenameExercise,
+  onSetOneRm,
   onSkipCell,
   onSwapCell,
   onFillAcrossWeeks,
@@ -605,55 +783,68 @@ function TableRow({
       data-testid={`meso-row-${row.exercise_slot_id}`}
     >
       <td className="meso-table-row-name-col">
-        <button
-          type="button"
-          ref={setActivatorNodeRef}
-          data-testid={`row-drag-${row.exercise_slot_id}`}
-          className="meso-drag-handle"
-          aria-label={`Reorder ${row.name || "exercise"}`}
-          disabled={busy}
-          {...attributes}
-          {...listeners}
-        >
-          ⠿
-        </button>
-        <RowNameEditor row={row} tableNav={tableNav} onRename={onRenameExercise} />
-        {!rowArmed && (
+        <div className="meso-table-row-name-row">
           <button
             type="button"
-            data-testid={`remove-exercise-${row.exercise_slot_id}`}
-            className="meso-remove-x meso-remove-x--sm"
+            ref={setActivatorNodeRef}
+            data-testid={`row-drag-${row.exercise_slot_id}`}
+            className="meso-drag-handle"
+            aria-label={`Reorder ${row.name || "exercise"}`}
             disabled={busy}
-            aria-label="Remove exercise"
-            title="Remove exercise"
-            onClick={onArmRow}
+            {...attributes}
+            {...listeners}
           >
-            ×
+            ⠿
           </button>
-        )}
-        {rowArmed && (
-          <span className="meso-confirm-pair">
+          <RowNameEditor row={row} tableNav={tableNav} onRename={onRenameExercise} />
+          {!rowArmed && (
             <button
               type="button"
-              data-testid={`confirm-remove-exercise-${row.exercise_slot_id}`}
-              className="meso-confirm-btn"
+              data-testid={`remove-exercise-${row.exercise_slot_id}`}
+              className="meso-remove-x meso-remove-x--sm"
               disabled={busy}
-              aria-label="Confirm remove exercise"
-              onClick={onConfirmRemoveRow}
+              aria-label="Remove exercise"
+              title="Remove exercise"
+              onClick={onArmRow}
             >
-              Confirm?
+              ×
             </button>
-            <button
-              type="button"
-              data-testid={`cancel-remove-exercise-${row.exercise_slot_id}`}
-              className="meso-cancel-btn"
-              disabled={busy}
-              aria-label="Cancel remove exercise"
-              onClick={onCancelRemoveRow}
-            >
-              Cancel
-            </button>
-          </span>
+          )}
+          {rowArmed && (
+            <span className="meso-confirm-pair">
+              <button
+                type="button"
+                data-testid={`confirm-remove-exercise-${row.exercise_slot_id}`}
+                className="meso-confirm-btn"
+                disabled={busy}
+                aria-label="Confirm remove exercise"
+                onClick={onConfirmRemoveRow}
+              >
+                Confirm?
+              </button>
+              <button
+                type="button"
+                data-testid={`cancel-remove-exercise-${row.exercise_slot_id}`}
+                className="meso-cancel-btn"
+                disabled={busy}
+                aria-label="Cancel remove exercise"
+                onClick={onCancelRemoveRow}
+              >
+                Cancel
+              </button>
+            </span>
+          )}
+        </div>
+        {showOneRm && (
+          <div className="meso-table-row-tags meso-ex-tags">
+            <RowOneRmEditor
+              row={row}
+              cell={rowIdentityCell(weeks, row)}
+              unit={unit}
+              busy={busy}
+              onSetOneRm={onSetOneRm}
+            />
+          </div>
         )}
       </td>
       {weeks.map((week) => {
@@ -740,6 +931,7 @@ interface TableDayBlockProps {
   busy: boolean;
   unit: string;
   showAdjust: boolean;
+  showOneRm: boolean;
   tableNav: UseTableNavResult;
   isArmed(type: ArmedKind, id: Id): boolean;
   arm(type: ArmedKind, id: Id): void;
@@ -747,6 +939,7 @@ interface TableDayBlockProps {
   onOpenOverride(row: GridRow, cell: GridCell): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
+  onSetOneRm(exerciseSlotId: Id, value: string): Promise<GridCellOneRmPatch>;
   onAddExercise(day: GridDay): void;
   onRemoveExercise(exerciseSlotId: Id): void;
   onRemoveDay(day: GridDay): void;
@@ -768,6 +961,7 @@ function TableDayBlock({
   busy,
   unit,
   showAdjust,
+  showOneRm,
   tableNav,
   isArmed,
   arm,
@@ -775,6 +969,7 @@ function TableDayBlock({
   onOpenOverride,
   onPatchCell,
   onRenameExercise,
+  onSetOneRm,
   onAddExercise,
   onRemoveExercise,
   onRemoveDay,
@@ -887,6 +1082,7 @@ function TableDayBlock({
                   busy={busy}
                   unit={unit}
                   showAdjust={showAdjust}
+                  showOneRm={showOneRm}
                   tableNav={tableNav}
                   rowArmed={isArmed("exercise", row.exercise_slot_id)}
                   onArmRow={() => arm("exercise", row.exercise_slot_id)}
@@ -898,6 +1094,7 @@ function TableDayBlock({
                   onOpenOverride={onOpenOverride}
                   onPatchCell={onPatchCell}
                   onRenameExercise={onRenameExercise}
+                  onSetOneRm={onSetOneRm}
                   onSkipCell={onSkipCell}
                   onSwapCell={onSwapCell}
                   onFillAcrossWeeks={onFillAcrossWeeks}
@@ -935,6 +1132,7 @@ export function MesoTable(props: MesoTableProps) {
     onOpenOverride,
     onPatchCell,
     onRenameExercise,
+    onSetOneRm,
     onAddExercise,
     onRemoveExercise,
     onAddDay,
@@ -959,6 +1157,14 @@ export function MesoTable(props: MesoTableProps) {
   // P5 group: the per-cell adjust badge only exists on a GROUP plan with
   // members — an individual plan carries no `group`, so no cell ever shows it.
   const showAdjust = !!(group && group.members.length);
+
+  // Issue #455 phase A3: the per-ROW %1RM badge/editor exists on an
+  // INDIVIDUAL plan only — DELIBERATELY `!group` rather than showAdjust's
+  // member-count check above. A %1RM belongs to a single athlete
+  // (AthleteOneRm), so coach_set_one_rm 400s on ANY group plan regardless of
+  // member count; gating on member count here (like showAdjust) would try to
+  // open the editor for a 0-member group and hit that 400.
+  const showOneRm = !group;
 
   // Rules of Hooks: called unconditionally, before the `!grid` early return
   // below — useTableNav tolerates a null grid the same way (anchor stays
@@ -1066,6 +1272,7 @@ export function MesoTable(props: MesoTableProps) {
               busy={busy}
               unit={unit}
               showAdjust={showAdjust}
+              showOneRm={showOneRm}
               tableNav={tableNav}
               isArmed={isArmed}
               arm={arm}
@@ -1073,6 +1280,7 @@ export function MesoTable(props: MesoTableProps) {
               onOpenOverride={onOpenOverride}
               onPatchCell={onPatchCell}
               onRenameExercise={onRenameExercise}
+              onSetOneRm={onSetOneRm}
               onAddExercise={onAddExercise}
               onRemoveExercise={onRemoveExercise}
               onRemoveDay={onRemoveDay}

@@ -185,6 +185,13 @@ export interface GridCell {
   /** P5 group: every member's stored diff on this cell (drives the override
    * editor's member dots + draft). Present alongside `adj`; absent otherwise. */
   adjusts?: OverrideAdjust[];
+  /** Issue #455 phase A3: the athlete's persisted %1RM estimate for THIS
+   * cell's resolved lift identity (swap-aware — a swapped cell reads its own
+   * identity's estimate, not the row's block identity). Individual-plan-only
+   * (server attaches uniformly per cell, regardless of `load_type`; absent
+   * for a group plan and when the athlete has no stored estimate). */
+  one_rm?: string;
+  one_rm_source?: string;
 }
 
 export interface GridRow {

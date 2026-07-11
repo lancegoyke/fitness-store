@@ -14,12 +14,14 @@ are intentionally absent here; only the program-schema-owned fields round-trip.
 """
 
 from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 from django.utils import timezone
 
 from store_project.exercises.factories import ExerciseFactory
+from store_project.meso.factories import AthleteOneRmFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
@@ -866,3 +868,90 @@ class TestSerializeMesocycleGridGroupAdj:
         result = serialize_mesocycle_grid(f.meso)
         cell = self._cell(result, day_index=0, row_index=0, week=f.week)
         assert "adj" not in cell
+
+
+class TestSerializeMesocycleGridOneRm:
+    """Every individual-plan cell carries the athlete's stored %1RM estimate.
+
+    Issue #455 phase A3, mirroring ``serialize_plan``'s single-week attach —
+    ATTACHED UNIFORMLY per cell regardless of ``load_type`` (the pct gate is a
+    frontend concern, MesoTable.tsx / ExerciseRow.tsx). A group plan has no
+    single athlete, so its cells never carry the key.
+    """
+
+    def _cell(self, result, *, day_index, row_index, week):
+        return result["days"][day_index]["rows"][row_index]["cells"][str(week.pk)]
+
+    def test_individual_cell_carries_one_rm_and_source_when_stored(self):
+        f = _build_grid_meso()
+        AthleteOneRmFactory(
+            athlete=f.plan.athlete, exercise=f.catalog, value=Decimal("140")
+        )
+        result = serialize_mesocycle_grid(f.meso)
+        cell = self._cell(result, day_index=0, row_index=0, week=f.week1)
+        assert cell["one_rm"] == "140"
+        assert cell["one_rm_source"] == "logged"
+
+    def test_lift_with_no_stored_estimate_has_no_one_rm_key(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        cell = self._cell(result, day_index=0, row_index=0, week=f.week1)
+        assert "one_rm" not in cell
+        assert "one_rm_source" not in cell
+
+    def test_group_grid_cells_never_carry_one_rm(self):
+        # A group plan has no single athlete, so `one_rm_values` is never even
+        # called — seed a matching-identity row on a member to prove that.
+        f = _build_group_grid_meso()
+        AthleteOneRmFactory(
+            athlete=f.membership.relationship.athlete,
+            name="Back Squat",
+            value=Decimal("140"),
+        )
+        result = serialize_mesocycle_grid(f.meso)
+        for day_data in result["days"]:
+            for row in day_data["rows"]:
+                for cell in row["cells"].values():
+                    assert "one_rm" not in cell
+                    assert "one_rm_source" not in cell
+
+    def test_swapped_cell_carries_its_own_resolved_identity_value(self):
+        # KEY regression: a swap changes ``Prescription.exercise_id`` for that
+        # cell only (models.py resolving properties) — the badge must show
+        # THAT identity's estimate, not the row's block identity.
+        f = _build_grid_meso()
+        AthleteOneRmFactory(
+            athlete=f.plan.athlete, exercise=f.catalog, value=Decimal("140")
+        )
+        substitute = ExerciseFactory()
+        AthleteOneRmFactory(
+            athlete=f.plan.athlete, exercise=substitute, value=Decimal("100")
+        )
+        f.squat_cell2.swap_exercise = substitute
+        f.squat_cell2.save(update_fields=["swap_exercise"])
+        result = serialize_mesocycle_grid(f.meso)
+        unswapped = self._cell(result, day_index=0, row_index=0, week=f.week1)
+        swapped = self._cell(result, day_index=0, row_index=0, week=f.week2)
+        assert unswapped["one_rm"] == "140"
+        assert swapped["one_rm"] == "100"
+
+    def test_individual_grid_query_count_is_baseline_plus_one(
+        self, django_assert_num_queries
+    ):
+        # Baseline (no adj/one_rm overlay) is 7: weeks, session slots, sessions,
+        # exercise slots, cells, 2x PlanAction (serialize_plan_history) — this
+        # phase adds exactly ONE query (one_rm_values), establishing the budget.
+        f = _build_grid_meso()
+        AthleteOneRmFactory(
+            athlete=f.plan.athlete, exercise=f.catalog, value=Decimal("140")
+        )
+        with django_assert_num_queries(8):
+            serialize_mesocycle_grid(f.meso)
+
+    def test_group_grid_query_count_is_unaffected(self, django_assert_num_queries):
+        # A group plan skips one_rm_values entirely (short-circuited on
+        # ``plan.is_group``) — the group baseline (8, incl. group_adjustments)
+        # stays exactly where it was.
+        f = _build_group_grid_meso()
+        with django_assert_num_queries(8):
+            serialize_mesocycle_grid(f.meso)

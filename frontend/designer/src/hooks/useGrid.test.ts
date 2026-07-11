@@ -244,6 +244,161 @@ describe("renameExercise", () => {
   });
 });
 
+describe("setOneRm (issue #455 phase A3)", () => {
+  it("flushes a pending rename before POSTing one-rm/, so the 1RM never keys under the old lift name", async () => {
+    // Codex #455 A3 review: the server keys a MANUAL 1RM off the
+    // prescription's RESOLVED name at POST time. A just-blurred free-text
+    // rename whose autosave is still in flight must land first, or the
+    // value is stored under the OLD identity and vanishes on refetch.
+    const { result } = setup();
+    let resolveRename!: (v: unknown) => void;
+    const fetchMock = vi.fn();
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRename = resolve;
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    // Kick off the rename autosave (fire-and-forget) — POST now in flight.
+    act(() => {
+      result.current.renameExercise(9, "Front Squat");
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Save a 1RM while the rename is still unresolved.
+    let saveDone!: Promise<unknown>;
+    act(() => {
+      saveDone = result.current.setOneRm(9, "140");
+    });
+
+    // Blocked on flushPendingWrites(): the one-rm/ POST must not be out yet.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockResolvedValueOnce(res({ ok: true, one_rm: "140", source: "manual" }));
+    await act(async () => {
+      resolveRename(res({ ok: true }));
+      await saveDone;
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/"); // the rename
+    expect(fetchMock.mock.calls[1]![0]).toBe("/meso/api/plan/7/prescription/100/one-rm/"); // only after
+  });
+
+  it("repaints every cell sharing the lift identity, not just the target (duplicate lift across days)", async () => {
+    // AthleteOneRm is keyed athlete+lift — the same free-text "Squat" on two
+    // days shares one server record, so a save from day 1 must repaint day
+    // 2's badge too or it shows stale until a full refetch (Codex review).
+    const { result } = setup(
+      grid({
+        days: [
+          day({
+            session_slot_id: 1,
+            rows: [
+              row({ exercise_slot_id: 9, name: "Squat", exercise_id: null, cells: { "1": cell({ prescription_id: 100 }) } }),
+            ],
+          }),
+          day({
+            session_slot_id: 2,
+            session_ids: { "1": 22 },
+            rows: [
+              row({ exercise_slot_id: 10, name: "squat ", exercise_id: null, cells: { "1": cell({ prescription_id: 200 }) } }),
+              row({ exercise_slot_id: 11, name: "Bench", exercise_id: null, cells: { "1": cell({ prescription_id: 300 }) } }),
+            ],
+          }),
+        ],
+      }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true, one_rm: "140", source: "manual" })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.setOneRm(9, "140");
+    });
+
+    const days = result.current.grid!.days;
+    expect(days[0]!.rows[0]!.cells["1"]!.one_rm).toBe("140"); // the target
+    expect(days[1]!.rows[0]!.cells["1"]!.one_rm).toBe("140"); // same lift ("squat " folds to squat)
+    expect(days[1]!.rows[1]!.cells["1"]!.one_rm).toBeUndefined(); // different lift untouched
+  });
+
+  it("POSTs {value} to the row's identity cell and locally patches one_rm/one_rm_source, without refetching", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res({ ok: true, one_rm: "140", source: "manual" }),
+    ) as unknown as typeof fetch;
+
+    let patch: { one_rm?: string; one_rm_source?: string } | undefined;
+    await act(async () => {
+      patch = await result.current.setOneRm(9, "140");
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(url).toBe("/meso/api/plan/7/prescription/100/one-rm/");
+    expect(opts.method).toBe("POST");
+    expect(sentBody()).toEqual({ value: "140" });
+    expect(patch).toEqual({ one_rm: "140", one_rm_source: "manual" });
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.one_rm).toBe("140");
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.one_rm_source).toBe("manual");
+  });
+
+  it("targets the first NON-swapped week when week[0]'s cell is itself the swap", async () => {
+    const { result } = setup(
+      grid({
+        weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
+        days: [
+          day({
+            rows: [
+              row({
+                exercise_slot_id: 9,
+                cells: {
+                  "1": cell({ prescription_id: 100, swap_name: "Leg Press", swap_exercise_id: 77 }),
+                  "2": cell({ prescription_id: 101 }),
+                },
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true, one_rm: "100", source: "logged" })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.setOneRm(9, "100");
+    });
+
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(url).toBe("/meso/api/plan/7/prescription/101/one-rm/"); // week[1]'s (unswapped) cell, not the swapped week[0] one
+  });
+
+  it("rethrows on a rejected save, leaving the grid unchanged", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi.fn().mockResolvedValue(res({}, false, 400)) as unknown as typeof fetch;
+
+    await expect(
+      act(async () => {
+        await result.current.setOneRm(9, "abc");
+      }),
+    ).rejects.toThrow();
+
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.one_rm).toBeUndefined();
+  });
+
+  it("leaves history untouched after a save (coach_set_one_rm records no plan action)", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true, one_rm: "140", source: "manual" })) as unknown as typeof fetch;
+
+    const before = result.current.history;
+    await act(async () => {
+      await result.current.setOneRm(9, "140");
+    });
+
+    expect(result.current.history).toBe(before);
+  });
+});
+
 describe("addExercise", () => {
   it("POSTs session/{sessionId}/exercise/ with a null body, then refetches the grid", async () => {
     const initial = grid();
