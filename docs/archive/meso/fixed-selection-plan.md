@@ -1,8 +1,23 @@
 # Meso — fixed exercise selection & multi-week table plan
 
-**Status:** IN PROGRESS — building as 6 per-phase PRs (P0…P5), started 2026-07-07 · **pre-launch: no
-production data, all demo** (so this is a clean reshape + reseed, not a data migration)
-**Companion to:** [`decisions.md`](./decisions.md), [`persistence-plan`](../archive/meso/persistence-plan.md) (the schema this reshapes), [`designer-framework-plan`](../archive/meso/designer-framework-plan.md) (soft-delete + undo op-log the writes reuse)
+**Status:** COMPLETE — all 6 phases shipped 2026-07-07…2026-07-09 (started 2026-07-07). Tracking
+issue: [#440](https://github.com/lancegoyke/fitness-store/issues/440) (closed).
+
+| Phase | What shipped | PR(s) |
+|---|---|---|
+| P0 | Schema cutover — `SessionSlot`/`ExerciseSlot`/`Prescription` (cell) + thin `Session`; reseed | [#438](https://github.com/lancegoyke/fitness-store/pull/438) + [#439](https://github.com/lancegoyke/fitness-store/pull/439) (migration split, see gotcha below) |
+| P1 | Multi-week table UI — `serialize_mesocycle_grid` + `MesoTable`; slot CRUD + cell-patch endpoints | [#442](https://github.com/lancegoyke/fitness-store/pull/442) |
+| P2 | Exceptions — skip / swap / add-this-week + fill-across-weeks | [#444](https://github.com/lancegoyke/fitness-store/pull/444) |
+| P3 | Whole-block delivery + athlete multi-week home; `is_current` re-meaning | [#447](https://github.com/lancegoyke/fitness-store/pull/447) |
+| P4 | Agent structural rescope + whole-block grounding | [#448](https://github.com/lancegoyke/fitness-store/pull/448) |
+| P5 | Group — whole-block group delivery + group table adjusts | [#452](https://github.com/lancegoyke/fitness-store/pull/452) |
+
+Per the docs-archive convention (finished plan docs live under `docs/archive/`), this plan is
+archived at `docs/archive/meso/fixed-selection-plan.md` now that all 6 phases are shipped and
+deployed. The two open questions it left behind are now tracked as their own epics — see
+[Open questions / risks](#open-questions--risks) below.
+
+**Companion to:** [`decisions.md`](../../meso/decisions.md), [`persistence-plan`](./persistence-plan.md) (the schema this reshapes), [`designer-framework-plan`](./designer-framework-plan.md) (soft-delete + undo op-log the writes reuse)
 
 ## Goal
 
@@ -134,6 +149,17 @@ There is **no production data** — the app is pre-launch and everything is demo
 No lossless-migration logic, no drift reconciliation — that entire section of the original
 plan is gone.
 
+> **GOTCHA (P0, [#438](https://github.com/lancegoyke/fitness-store/pull/438)/[#439](https://github.com/lancegoyke/fitness-store/pull/439)):**
+> the original P0 migration deleted the old per-week `ExercisePrescription` rows and
+> `ALTER`ed the table in the **same transaction**. That passed clean against the SQLite test
+> DB but **failed on production Postgres** with "cannot ALTER TABLE because it has pending
+> trigger events" — Postgres defers `DELETE` trigger events to end-of-transaction, and the
+> in-transaction `ALTER TABLE` chokes on them. The fix: split the destructive reset into its
+> **own migration**, separate from the schema `ALTER`. Lesson for future destructive
+> migrations in this codebase: **validate them against Postgres with real rows, not just the
+> SQLite test DB** — SQLite's DDL/trigger semantics are too permissive to catch this class of
+> bug.
+
 ---
 
 ## Delivery — whole block at once
@@ -174,16 +200,19 @@ existing per-week gate rather than inventing a block-level one:
 
 ## Phasing
 
-- **P0 — Schema + seed.** New `SessionSlot`/`ExerciseSlot`/`Prescription` (cell) + thin
+All 6 phases shipped and deployed 2026-07-07…2026-07-09 (see the breadcrumb table at the top).
+
+- **P0 — Schema + seed.** ✅ SHIPPED [#438](https://github.com/lancegoyke/fitness-store/pull/438)+[#439](https://github.com/lancegoyke/fitness-store/pull/439). New `SessionSlot`/`ExerciseSlot`/`Prescription` (cell) + thin
   `Session`; retire per-week `ExercisePrescription`; `rest` on the cell. Rewrite
-  `seed_meso_demo` + factories. Drop-and-recreate migration (safe — no data).
-- **P1 — Table UI.** `serialize_mesocycle_grid` + `MesoTable`; slot CRUD + cell-patch write
+  `seed_meso_demo` + factories. Drop-and-recreate migration (safe — no data). See the
+  Postgres migration gotcha above.
+- **P1 — Table UI.** ✅ SHIPPED [#442](https://github.com/lancegoyke/fitness-store/pull/442). `serialize_mesocycle_grid` + `MesoTable`; slot CRUD + cell-patch write
   endpoints; `rest` in the cell editor.
-- **P2 — Exceptions.** swap / skip / add-this-week; fill-across-weeks.
-- **P3 — Whole-block delivery + athlete view.** Block-level deliver; athlete home shows the
+- **P2 — Exceptions.** ✅ SHIPPED [#444](https://github.com/lancegoyke/fitness-store/pull/444). swap / skip / add-this-week; fill-across-weeks.
+- **P3 — Whole-block delivery + athlete view.** ✅ SHIPPED [#447](https://github.com/lancegoyke/fitness-store/pull/447). Block-level deliver; athlete home shows the
   whole block; `is_current` = the week the athlete is on; notification copy.
-- **P4 — Agent rescope.** Slot-level structural changes, cell-level numeric changes.
-- **P5 — Group.** Slot/cell-based `sync_delivered_plan`; group table view.
+- **P4 — Agent rescope.** ✅ SHIPPED [#448](https://github.com/lancegoyke/fitness-store/pull/448). Slot-level structural changes, cell-level numeric changes.
+- **P5 — Group.** ✅ SHIPPED [#452](https://github.com/lancegoyke/fitness-store/pull/452). Slot/cell-based `sync_delivered_plan`; group table view.
 
 ### P2 → P3 carry-over (delivery ⨯ exceptions)
 
@@ -236,12 +265,21 @@ Two spec assumptions did not hold against the real code, plus the delivery decis
 
 ## Open questions / risks
 
+This plan is closed, but it left two open questions behind. Both are now tracked as their own
+epics rather than being resolved here:
+
 1. **`is_current` advancing over time** — kept as a manual marker of the week the athlete is
-   on. Auto-advancing as weeks complete is a natural follow-up, out of scope here.
+   on. Auto-advancing as weeks complete is a natural follow-up, out of scope here. **Now
+   tracked as [#456 — Epic: `is_current` auto-advance](https://github.com/lancegoyke/fitness-store/issues/456).**
 2. **Editing a delivered block** — the whole block is visible to the athlete, so later edits
    (e.g. tuning week 4) show live. Matches today's behavior but is more visible; confirm
-   coaches are comfortable editing "ahead" of the athlete.
+   coaches are comfortable editing "ahead" of the athlete. Accepted as-is when P3 shipped
+   (matches pre-existing behavior) — no follow-up epic.
 3. **Scope of the P0 reshape** — retiring `ExercisePrescription` touches serializers, the
    agent, group sync, and the seeder in one release. Pre-launch this is fine, but it's the
    biggest single phase; worth landing behind the existing designer flag until the table UI
-   (P1) is ready.
+   (P1) is ready. P0 shipped as a clean cutover instead (see Implementation notes above), which
+   left the one-week-at-a-time designer view (`WeekStrip`/`WeekGrid`/`DayCard`) alive as a
+   transitional fallback alongside the new `MesoTable`. **Retiring that fallback is now tracked
+   as [#455 — Epic: MesoTable parity — port the last 4 capabilities, then retire the one-week
+   designer fallback](https://github.com/lancegoyke/fitness-store/issues/455).**
