@@ -13,8 +13,8 @@
 // periodStyle control)" component-tree comment.
 import type { CSSProperties } from "react";
 import { barH, cellOn, cellStyle } from "../lib/grid";
-import type { Phase, Week } from "../lib/api";
-import type { Id } from "../hooks/usePlanData";
+import type { GridWeek, Phase } from "../lib/api";
+import type { Id } from "../hooks/useGrid";
 
 const CAL_DAYS = ["M", "T", "W", "T", "F", "S", "S"];
 
@@ -22,7 +22,12 @@ export type PeriodStyle = "timeline" | "ladder" | "calendar";
 
 export interface BlockViewProps {
   phases: Phase[];
-  weeks: Week[];
+  // Issue #455 phase A5: sourced straight off the grid (gridState.grid.weeks)
+  // now that the one-week planData owner is retired — GridWeek already
+  // structurally satisfies cellOn/cellStyle's Pick<Week, "current"|"deload">
+  // and carries its own vol/inten (serialize_mesocycle_grid additions), so
+  // no render-logic change was needed here, only this prop type.
+  weeks: GridWeek[];
   periodStyle: PeriodStyle;
   onSetPeriodStyle(style: PeriodStyle): void;
   onSwitchWeek(weekId: Id): void;
