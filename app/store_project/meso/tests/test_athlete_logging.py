@@ -27,12 +27,17 @@ from django.utils import timezone
 from store_project.meso.agent import service
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import MesocycleFactory
+from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
+from store_project.meso.models import PlanAction
 from store_project.meso.models import SessionLog
+from store_project.meso.models import SessionSlot
+from store_project.meso.models import Week
 from store_project.meso.serializers import serialize_recent_logs
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
@@ -626,3 +631,188 @@ class TestLogFeedsBack:
         # And through the agent's context builder.
         context = service.build_context(s.plan)
         assert context["recent_logs"][0]["sets"][0]["load"] == "105"
+
+
+# -- issue #456: logging auto-advances the plan's is_current pointer -------
+
+
+class TestLogAdvancesCurrentWeek:
+    """A log write moves ``Week.is_current`` forward to the week it belongs to.
+
+    Locked rule: logging (pending OR done) a session in a week LATER than the
+    plan's current week advances the pointer there — forward-only, tuple
+    compared on ``(mesocycle.order, week.index)`` since ``is_current`` is
+    plan-wide (see ``Week.advance_current_week``). The coach's manual
+    ``week_set_current`` override is untouched by this behavior.
+    """
+
+    def _two_week_plan(
+        self,
+        *,
+        coach=None,
+        athlete=None,
+        current_index=1,
+        other_index=2,
+        delivered=True,
+    ):
+        """One mesocycle, two weeks sharing a day/row, each independently loggable."""
+        coach = coach or UserFactory()
+        athlete = athlete or UserFactory()
+        rel = CoachAthleteFactory(
+            coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        )
+        plan = PlanFactory(
+            relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
+        )
+        meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
+        now = timezone.now()
+        slot = SessionSlot.objects.create(
+            mesocycle=meso, day_number=1, name="Lower", bias="Quad", order=0
+        )
+        ex = ExerciseSlot.objects.create(session_slot=slot, name="Box Squat", order=0)
+        week_a = WeekFactory(
+            mesocycle=meso,
+            index=current_index,
+            is_current=True,
+            delivered_at=now if delivered else None,
+        )
+        week_b = WeekFactory(
+            mesocycle=meso,
+            index=other_index,
+            is_current=False,
+            delivered_at=now if delivered else None,
+        )
+        session_a = day(week_a, session_slot=slot)
+        session_b = day(week_b, session_slot=slot)
+        presc(exercise_slot=ex, week=week_a, sets="3", reps="6", load="70", rpe="7")
+        presc(exercise_slot=ex, week=week_b, sets="3", reps="6", load="75", rpe="7")
+        return SimpleNamespace(
+            coach=coach,
+            athlete=athlete,
+            rel=rel,
+            plan=plan,
+            meso=meso,
+            week_a=week_a,
+            week_b=week_b,
+            session_a=session_a,
+            session_b=session_b,
+        )
+
+    def test_logging_a_later_week_done_advances_and_clears_the_old_one(self, client):
+        s = self._two_week_plan()  # week_a (idx 1) current, week_b (idx 2) later
+        client.force_login(s.athlete)
+        resp = post(client, s.session_b, {"sets": []})
+        assert resp.status_code == 200
+        s.week_a.refresh_from_db()
+        s.week_b.refresh_from_db()
+        assert s.week_b.is_current is True
+        assert s.week_a.is_current is False
+        assert Week.objects.filter(mesocycle__plan=s.plan, is_current=True).count() == 1
+
+    def test_logging_a_later_week_pending_also_advances(self, client):
+        s = self._two_week_plan()
+        client.force_login(s.athlete)
+        resp = post(client, s.session_b, {"status": "pending", "sets": []})
+        assert resp.status_code == 200
+        s.week_a.refresh_from_db()
+        s.week_b.refresh_from_db()
+        assert s.week_b.is_current is True
+        assert s.week_a.is_current is False
+
+    def test_logging_the_current_week_is_a_noop(self, client):
+        s = self._two_week_plan()
+        client.force_login(s.athlete)
+        resp = post(client, s.session_a, {"sets": []})
+        assert resp.status_code == 200
+        s.week_a.refresh_from_db()
+        s.week_b.refresh_from_db()
+        assert s.week_a.is_current is True
+        assert s.week_b.is_current is False
+
+    def test_logging_an_earlier_week_is_a_noop(self, client):
+        # week_a (idx 2) is current; week_b (idx 1) is earlier.
+        s = self._two_week_plan(current_index=2, other_index=1)
+        client.force_login(s.athlete)
+        resp = post(client, s.session_b, {"sets": []})
+        assert resp.status_code == 200
+        s.week_a.refresh_from_db()
+        s.week_b.refresh_from_db()
+        assert s.week_a.is_current is True
+        assert s.week_b.is_current is False
+
+    def test_cross_mesocycle_advance_uses_tuple_order_not_bare_index(self, client):
+        # week1 lives in mesocycle order=0 at index 2 (current); week2 lives in a
+        # LATER mesocycle (order=1) at index 1 — a lower bare index, but later in
+        # plan-wide (mesocycle.order, index) tuple order.
+        coach = UserFactory()
+        athlete = UserFactory()
+        rel = CoachAthleteFactory(
+            coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        )
+        plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE)
+        meso1 = MesocycleFactory(plan=plan, order=0)
+        meso2 = MesocycleFactory(plan=plan, order=1)
+        now = timezone.now()
+        week1 = WeekFactory(mesocycle=meso1, index=2, is_current=True, delivered_at=now)
+        week2 = WeekFactory(
+            mesocycle=meso2, index=1, is_current=False, delivered_at=now
+        )
+        session2 = day(week2, day_number=1, name="Lower")
+        presc(session2, name="Squat")
+        client.force_login(athlete)
+        resp = post(client, session2, {"sets": []})
+        assert resp.status_code == 200
+        week1.refresh_from_db()
+        week2.refresh_from_db()
+        assert week2.is_current is True
+        assert week1.is_current is False
+
+    def test_self_heals_when_plan_has_no_current_week(self, client):
+        s = self._two_week_plan()
+        s.week_a.is_current = False
+        s.week_a.save(update_fields=["is_current"])
+        client.force_login(s.athlete)
+        resp = post(client, s.session_b, {"sets": []})
+        assert resp.status_code == 200
+        s.week_a.refresh_from_db()
+        s.week_b.refresh_from_db()
+        assert s.week_b.is_current is True
+        assert s.week_a.is_current is False
+
+    def test_advances_a_group_materialized_member_plan_not_the_shared_pointer(
+        self, client
+    ):
+        coach = UserFactory()
+        group = MesoGroupFactory(coach=coach)
+        athlete = UserFactory()
+        CoachAthleteFactory(
+            coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        )
+        group.add_athlete(athlete)
+        shared_plan = group.create_shared_plan()
+        shared_meso = shared_plan.mesocycles.get()
+        shared_meso.append_week()  # a second live week; week 1 stays current
+
+        _, delivered = group.deliver_block(shared_plan)
+        member_plan, member_weeks = delivered[0]
+        member_week1, member_week2 = member_weeks  # index order
+
+        client.force_login(athlete)
+        session2 = member_week2.sessions.first()
+        resp = post(client, session2, {"sets": []})
+        assert resp.status_code == 200
+
+        member_week1.refresh_from_db()
+        member_week2.refresh_from_db()
+        assert member_week2.is_current is True
+        assert member_week1.is_current is False
+
+        # The group's own shared pointer is untouched by a member's log.
+        shared_week1 = shared_meso.weeks.get(index=1)
+        assert shared_week1.is_current is True
+
+    def test_advance_does_not_append_to_the_undo_stack(self, client):
+        s = self._two_week_plan()
+        client.force_login(s.athlete)
+        post(client, s.session_b, {"sets": []})
+        assert PlanAction.objects.filter(plan=s.plan).count() == 0

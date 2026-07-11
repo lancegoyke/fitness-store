@@ -17,6 +17,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -1656,6 +1657,65 @@ class Week(models.Model):
         self.save(update_fields=["deleted_at"])
         self.sessions.filter(deleted_at__isnull=True).update(deleted_at=now)
         return self
+
+    def advance_current_week(self):
+        """Move the plan's ``is_current`` pointer forward onto this week (#456).
+
+        Locked product rule: when an athlete logs a session belonging to a week
+        LATER than the plan's current week, the pointer follows them — "they
+        started the next week." Forward-only: logging an earlier-or-equal week
+        is a no-op. Advances on ANY successful log write, ``pending`` ("Save
+        progress") just as much as ``done`` ("Log session") — the rule is about
+        which week the athlete is *on*, not whether they finished it, so this
+        deliberately does NOT gate on completion.
+
+        "Later" is PLAN-wide, not per-block: compared as the tuple
+        ``(mesocycle.order, week.index)`` — the same ordering ``current_week()``
+        (serializers.py) walks — since ``is_current`` is unique per plan and
+        spans mesocycles, while a block's own week ``index`` resets to 1 each
+        time.
+
+        Locks the plan first (mirrors ``week_set_current``/``session_add`` et
+        al. in views.py) so two concurrent log writes can't both read a stale
+        current week and race past each other.
+
+        Never calls ``record_plan_action``: the athlete moving their own
+        position is not a coach designer edit and must not enter the coach's
+        undo stack — ``week_set_current`` stays the coach's manual, undoable
+        override, in any direction.
+
+        Only ever compares against / clears *live* weeks (``deleted_at``
+        ``isnull``) — the logged week is live by construction
+        (``_athlete_session_or_404`` only ever serves a live session), and a
+        soft-deleted week must never be treated as, or clobbered into, current.
+
+        Returns ``True`` when the pointer moved — including a plan with zero
+        current weeks self-healing onto this one — ``False`` for a no-op. A
+        caller that cares about ``Plan.modified`` staleness should bump it
+        itself when this returns ``True`` (mirrors views.py's ``_touch_plan``;
+        kept out of this model-layer helper to avoid a models→views dependency).
+        """
+        plan_id = self.mesocycle.plan_id
+        with transaction.atomic():
+            Plan.objects.select_for_update().filter(pk=plan_id).first()
+            live_weeks = list(
+                Week.objects.filter(mesocycle__plan_id=plan_id, deleted_at__isnull=True)
+                .select_related("mesocycle")
+                .order_by("mesocycle__order", "index")
+            )
+            current = next((w for w in live_weeks if w.is_current), None)
+            if current is not None:
+                current_key = (current.mesocycle.order, current.index)
+                logged_key = (self.mesocycle.order, self.index)
+                if logged_key <= current_key:
+                    return False
+            Week.objects.filter(
+                mesocycle__plan_id=plan_id, deleted_at__isnull=True
+            ).exclude(pk=self.pk).update(is_current=False)
+            if not self.is_current:
+                self.is_current = True
+                self.save(update_fields=["is_current"])
+            return True
 
 
 class Session(models.Model):

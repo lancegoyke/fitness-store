@@ -1510,6 +1510,12 @@ def athlete_log_session(request, pk):
             list(session.trainable_cells()),
             session.week.mesocycle.plan.unit,
         )
+        # #456: any successful log write — pending or done alike, forward-only —
+        # advances the plan's ``is_current`` pointer onto this week (the athlete
+        # started it). Covers both individual and group-materialized member
+        # plans, since both flow through this one view.
+        if session.week.advance_current_week():
+            _touch_plan(session.week.mesocycle.plan)
     # #441 P3-5: the results step auto-advances once the coach *completes* one of
     # their own self-link sessions. Gated on the step's own predicate so a
     # ``pending`` "save progress" — or a done log the coach makes as an athlete
