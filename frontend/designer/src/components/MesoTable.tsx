@@ -36,7 +36,9 @@
 // P1: deferred (see docs/archive/meso/fixed-selection-plan.md) — in-cell
 // group override editor / one-rm editor, agent-chat wiring, coachmarks.
 // Swap/skip/add-this-week WRITE UX is P2 — this file only ever DISPLAYS
-// swap_name/skipped.
+// swap_name/skipped. The table's own coachmark landed in issue #455 phase
+// A4 (re-authored copy, not a mechanical port of WeekGrid.tsx's "grid"
+// mark — see this file's coachmarkVisible/dismissCoachmark prop header).
 import { useEffect, useRef, useState } from "react";
 import {
   DndContext,
@@ -98,6 +100,11 @@ export interface MesoTableProps {
   // MesoTable.test.tsx's existing baseProps() (which never sets it) keeps
   // passing untouched.
   onDragEnd?(event: TableDragEndEvent): void;
+  // Issue #455 phase A4: the table's own first-run coachmark — same
+  // useCoachmarks hook slice WeekGrid.tsx takes for its "grid" mark
+  // (lib/coachmarks.ts's COACHMARK_KEYS now carries a "table" entry too).
+  coachmarkVisible(key: string): boolean;
+  dismissCoachmark(key: string): void;
 }
 
 /** The single arm/confirm slot — mirrors usePlanData's PendingDelete
@@ -1147,6 +1154,8 @@ export function MesoTable(props: MesoTableProps) {
     onFillAcrossWeeks,
     onAddExerciseThisWeek,
     onDragEnd,
+    coachmarkVisible,
+    dismissCoachmark,
   } = props;
 
   const [armed, setArmed] = useState<Armed>(null);
@@ -1256,6 +1265,27 @@ export function MesoTable(props: MesoTableProps) {
           + Add week
         </button>
       </div>
+
+      {coachmarkVisible("table") && (
+        <div className="meso-flex meso-coachmark">
+          <div className="meso-coachmark-body">
+            <div className="meso-coachmark-title">The block table</div>
+            <div className="meso-coachmark-text">
+              Tap any cell — sets, reps, load, RPE, rest, or notes — to edit it; arrow keys move cell to
+              cell, and every change autosaves. Drag a ⠿ handle to reorder exercises or days.
+            </div>
+          </div>
+          <button
+            type="button"
+            data-hover="rail"
+            className="meso-coachmark-dismiss"
+            aria-label="Dismiss tip"
+            onClick={() => dismissCoachmark("table")}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <DndContext
         sensors={sensors}
