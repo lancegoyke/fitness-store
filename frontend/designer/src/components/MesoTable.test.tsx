@@ -117,6 +117,7 @@ function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
     onFillAcrossWeeks: vi.fn(),
     onAddExerciseThisWeek: vi.fn(),
     onSetOneRm: vi.fn().mockResolvedValue({ one_rm: "", one_rm_source: "" }),
+    onMoveExerciseToDay: vi.fn(),
     coachmarkVisible: vi.fn(() => true),
     dismissCoachmark: vi.fn(),
     ...overrides,
@@ -618,6 +619,115 @@ describe("row 1RM editor (issue #455 phase A3)", () => {
     expect(screen.getByTestId("row-one-rm-badge-9")).not.toHaveAttribute("data-grid-cell");
     await user.click(screen.getByTestId("row-one-rm-badge-9"));
     expect(screen.getByTestId("row-one-rm-input-9")).not.toHaveAttribute("data-grid-cell");
+  });
+});
+
+// --- Issue #455 phase A2.5: menu-based cross-day move (row-name column,
+// 2nd line, alongside the A3 %1RM badge) --------------------------------
+// Closes the parity gap A2's drag scope deliberately left out (cross-day row
+// drag — separate <table> containers + sticky columns = high dnd-kit risk).
+// Only rendered on a MULTI-day grid, and only for a row with a live cell for
+// the CURRENT week (the only week `prescription_move`'s block-wide re-point
+// can key off).
+describe("move to day (issue #455 phase A2.5)", () => {
+  function twoDayGrid(overrides: Partial<MesoGrid> = {}) {
+    return grid({
+      days: [
+        day({
+          session_slot_id: 1,
+          name: "Lower",
+          day_number: 1,
+          session_id: 11,
+          session_ids: { "1": 11 },
+          rows: [row({ exercise_slot_id: 9, name: "Squat", cells: { "1": cell({ prescription_id: 100 }) } })],
+        }),
+        day({
+          session_slot_id: 2,
+          name: "Upper",
+          day_number: 2,
+          session_id: 22,
+          session_ids: { "1": 22 },
+          rows: [],
+        }),
+      ],
+      ...overrides,
+    });
+  }
+
+  it("renders a select with one option per OTHER day when the grid has more than one day", () => {
+    render(<MesoTable {...baseProps({ grid: twoDayGrid() })} />);
+    expect(screen.getByTestId("row-move-day-9")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "D2 · Upper" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Lower/ })).not.toBeInTheDocument(); // no self-option
+  });
+
+  it("hides the select for a single-day grid", () => {
+    render(<MesoTable {...baseProps()} />); // default fixture has exactly one day
+    expect(screen.queryByTestId("row-move-day-9")).not.toBeInTheDocument();
+  });
+
+  it("hides the select when the row has no current-week cell", () => {
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: twoDayGrid({
+            days: [
+              day({ session_slot_id: 1, rows: [row({ exercise_slot_id: 9, cells: {} })] }),
+              day({ session_slot_id: 2, session_id: 22, session_ids: { "1": 22 }, rows: [] }),
+            ],
+          }),
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("row-move-day-9")).not.toBeInTheDocument();
+  });
+
+  it("disables the option for a target day lacking a current-week session id", () => {
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: twoDayGrid({
+            days: [
+              day({
+                session_slot_id: 1,
+                rows: [row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 100 }) } })],
+              }),
+              day({ session_slot_id: 2, name: "Upper", day_number: 2, session_ids: {}, rows: [] }),
+            ],
+          }),
+        })}
+      />,
+    );
+    const option = screen.getByRole("option", { name: "D2 · Upper" }) as HTMLOptionElement;
+    expect(option.disabled).toBe(true);
+  });
+
+  it("choosing a day calls onMoveExerciseToDay with the row's exercise_slot_id and the chosen day", async () => {
+    const user = userEvent.setup();
+    const onMoveExerciseToDay = vi.fn();
+    render(<MesoTable {...baseProps({ grid: twoDayGrid(), onMoveExerciseToDay })} />);
+    await user.selectOptions(screen.getByTestId("row-move-day-9"), "2");
+    expect(onMoveExerciseToDay).toHaveBeenCalledWith(9, expect.objectContaining({ session_slot_id: 2 }));
+  });
+
+  it("resets the select to the placeholder after choosing", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: twoDayGrid() })} />);
+    const select = screen.getByTestId("row-move-day-9") as HTMLSelectElement;
+    await user.selectOptions(select, "2");
+    expect(select.value).toBe("");
+  });
+
+  it("disables the select while busy", () => {
+    render(<MesoTable {...baseProps({ grid: twoDayGrid(), busy: true })} />);
+    expect(screen.getByTestId("row-move-day-9")).toBeDisabled();
+  });
+
+  it("carries no data-grid-cell/data-grid-restore (outside A1 keyboard-nav space, not an Undo/etc. restore target)", () => {
+    render(<MesoTable {...baseProps({ grid: twoDayGrid() })} />);
+    const select = screen.getByTestId("row-move-day-9");
+    expect(select).not.toHaveAttribute("data-grid-cell");
+    expect(select).not.toHaveAttribute("data-grid-restore");
   });
 });
 

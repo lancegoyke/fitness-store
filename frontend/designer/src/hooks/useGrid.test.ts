@@ -771,6 +771,179 @@ describe("reorderDays", () => {
   });
 });
 
+// --- Issue #455 phase A2.5: menu-based cross-day move ----------------------
+// Closes the parity gap A2's drag scope deliberately left out (separate
+// <table> containers + sticky columns = high dnd-kit risk — see
+// useTableReorder.ts's header). Same STRUCTURAL shape as reorderExercises/
+// reorderDays above: await the POST, then refetch the whole grid, sharing
+// busyRef. `prescription_move` (views.py) re-points the cell's
+// exercise_slot.session_slot BLOCK-WIDE — so both the source cell and the
+// target session_id are keyed off the row's/day's CURRENT week only (never
+// GridDay.session_id, which can silently be a fallback to a different week
+// — the same lesson useTableReorder.ts encodes for A2's row/day reorder).
+
+describe("moveExerciseToDay (issue #455 phase A2.5)", () => {
+  function twoDayGrid(overrides: Partial<MesoGrid> = {}) {
+    return grid({
+      days: [
+        day({
+          session_slot_id: 1,
+          session_id: 11,
+          session_ids: { "1": 11 },
+          rows: [row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 100 }) } })],
+        }),
+        day({
+          session_slot_id: 2,
+          session_id: 22,
+          session_ids: { "1": 22 },
+          rows: [row({ exercise_slot_id: 20, cells: { "1": cell({ prescription_id: 200 }) } })],
+        }),
+      ],
+      ...overrides,
+    });
+  }
+
+  it("POSTs {session_id, index} to prescription/<current week cell pk>/move/, then refetches", async () => {
+    const initial = twoDayGrid();
+    const { result } = setup(initial);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true }))
+      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.moveExerciseToDay(9, initial.days[1]!);
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/move/");
+    expect(calls[0]![1].method).toBe("POST");
+    expect(sentBody()).toEqual({ session_id: 22, index: 1 }); // target already has 1 live row
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+  });
+
+  it("targets the CURRENT week's session_ids entry, never the (possibly-fallback) session_id", async () => {
+    const initial = grid({
+      days: [
+        day({
+          session_slot_id: 1,
+          session_id: 11,
+          session_ids: { "1": 11 },
+          rows: [row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 100 }) } })],
+        }),
+        day({
+          session_slot_id: 2,
+          session_id: 99, // a fallback pk belonging to a DIFFERENT week
+          session_ids: { "1": 22 }, // the real current-week session
+          rows: [],
+        }),
+      ],
+    });
+    const { result } = setup(initial);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true }))
+      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.moveExerciseToDay(9, initial.days[1]!);
+    });
+
+    expect(sentBody()).toEqual({ session_id: 22, index: 0 });
+  });
+
+  it("index is the target day's count of rows with a CURRENT-week cell (append at end, skipping add-this-week-only holes)", async () => {
+    const initial = grid({
+      days: [
+        day({
+          session_slot_id: 1,
+          session_id: 11,
+          session_ids: { "1": 11 },
+          rows: [row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 100 }) } })],
+        }),
+        day({
+          session_slot_id: 2,
+          session_id: 22,
+          session_ids: { "1": 22 },
+          rows: [
+            row({ exercise_slot_id: 20, cells: { "1": cell({ prescription_id: 200 }) } }), // live this week
+            row({ exercise_slot_id: 21, cells: {} }), // add-this-week-only hole for THIS week — excluded
+          ],
+        }),
+      ],
+    });
+    const { result } = setup(initial);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true }))
+      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.moveExerciseToDay(9, initial.days[1]!);
+    });
+
+    expect(sentBody()).toEqual({ session_id: 22, index: 1 });
+  });
+
+  it("is a no-op (no fetch) when the row has no live cell for the current week", async () => {
+    const initial = grid({
+      days: [
+        day({
+          session_slot_id: 1,
+          session_id: 11,
+          session_ids: { "1": 11 },
+          rows: [row({ exercise_slot_id: 9, cells: {} })], // no current-week cell
+        }),
+        day({ session_slot_id: 2, session_id: 22, session_ids: { "1": 22 }, rows: [] }),
+      ],
+    });
+    const { result } = setup(initial);
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.moveExerciseToDay(9, initial.days[1]!);
+    });
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op (no fetch) when the target day has no live session for the current week", async () => {
+    const initial = grid({
+      days: [
+        day({
+          session_slot_id: 1,
+          session_id: 11,
+          session_ids: { "1": 11 },
+          rows: [row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 100 }) } })],
+        }),
+        day({ session_slot_id: 2, session_id: 22, session_ids: {}, rows: [] }), // no current-week session
+      ],
+    });
+    const { result } = setup(initial);
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.moveExerciseToDay(9, initial.days[1]!);
+    });
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("console.errors and does not refetch on POST failure", async () => {
+    const initial = twoDayGrid();
+    const { result } = setup(initial);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("boom")) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.moveExerciseToDay(9, initial.days[1]!);
+    });
+
+    expect(console.error).toHaveBeenCalled();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1); // no refetch after a failed POST
+  });
+});
+
 // --- P2 exceptions: skip / swap / fill / add-this-week -------------------
 // These four verbs are STRUCTURAL (contract "useGrid.ts — new verbs"): each
 // awaits its POST then refetches the whole grid, sharing the same busyRef
@@ -1002,6 +1175,51 @@ describe("concurrency guard covers the new P2 verbs", () => {
     let second!: Promise<void>;
     act(() => {
       first = result.current.reorderExercises(11, [100]);
+      second = result.current.addWeek();
+    });
+
+    expect(result.current.busy).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the second call bailed before POSTing
+
+    fetchMock.mockResolvedValueOnce(res({ ok: true, ...grid() })); // the refetch GET
+
+    await act(async () => {
+      resolvePost(res({ ok: true }));
+      await first;
+      await second;
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2); // POST + GET only — no third/fourth call
+    expect(result.current.busy).toBe(false);
+  });
+
+  it("moveExerciseToDay (issue #455 phase A2.5) also shares the busyRef guard", async () => {
+    const initial = grid({
+      days: [
+        day({
+          session_slot_id: 1,
+          session_id: 11,
+          session_ids: { "1": 11 },
+          rows: [row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 100 }) } })],
+        }),
+        day({ session_slot_id: 2, session_id: 22, session_ids: { "1": 22 }, rows: [] }),
+      ],
+    });
+    const { result } = setup(initial);
+    let resolvePost!: (v: unknown) => void;
+    const fetchMock = vi.fn();
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePost = resolve;
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.moveExerciseToDay(9, initial.days[1]!);
       second = result.current.addWeek();
     });
 
