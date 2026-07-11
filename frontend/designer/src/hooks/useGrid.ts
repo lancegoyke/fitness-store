@@ -220,7 +220,23 @@ export function useGrid(options: UseGridOptions) {
       const res = await fetch(`/meso/api/plan/${planId}/grid/`);
       if (!res.ok) throw new Error("Request failed: " + res.status);
       const data = (await res.json()) as MesoGrid & { ok?: boolean };
-      setGrid({ mesocycle: data.mesocycle, weeks: data.weeks, days: data.days, history: data.history });
+      // Issue #455 phase A5: plan/group/athlete/phases must ride every
+      // refetch too, not just the initial hydration — this is now the
+      // front-end's ONLY source for the top bar / left rail / block view (the
+      // one-week plan_data owner that used to carry them is gone). Dropping
+      // any of these here would silently blank that chrome after the very
+      // next structural edit (regression test: useGrid.test.ts "refetchGrid
+      // carries the new plan/group/athlete/phases fields through").
+      setGrid({
+        plan: data.plan,
+        group: data.group,
+        athlete: data.athlete,
+        phases: data.phases,
+        mesocycle: data.mesocycle,
+        weeks: data.weeks,
+        days: data.days,
+        history: data.history,
+      });
       setHistory(data.history);
     } catch (err) {
       console.error("Refetch grid failed", err);
