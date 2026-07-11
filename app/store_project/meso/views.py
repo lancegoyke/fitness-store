@@ -2917,9 +2917,13 @@ def week_set_current(request, plan_id, week_id):
     it next time. Post-P3 this pointer also means "the week the athlete is on":
     the athlete home (``presenters.athlete_home``) opens its block card onto the
     current week (when it's delivered) and takes "today's session" from it — the
-    coach marks which week the athlete is on by setting it current here. (Setting
-    it stays manual; auto-advance is out of scope.) Exactly one week is current —
-    the others in the plan are cleared.
+    coach marks which week the athlete is on by setting it current here. Since
+    #456, the athlete's own logging auto-advances the pointer forward too
+    (``Week.advance_current_week``, forward-only, off any successful log write)
+    — this endpoint is the coach's *manual* override: unlike the athlete's
+    logging, it can move the pointer in either direction (back to an earlier
+    week included). Exactly one week is current — the others in the plan are
+    cleared.
     Scoped + edit-gated (403 foreign, 402 over-limit); a foreign week is a 404.
     Row-locks the plan so concurrent set-currents serialize, and re-reads the
     week's liveness under that lock — a concurrent ``week_delete`` (which

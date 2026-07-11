@@ -1076,11 +1076,15 @@ def _athlete_block_grid(block, delivered_week_ids, focus_week_id, unit):
 def _single_current_week(plan):
     """True when ``plan`` has exactly one live ``is_current`` week.
 
-    An individual plan keeps a single current pointer (``week_set_current``
-    clears the others), so its current week is trustworthy as "the week the
-    athlete is on." A group-materialized snapshot instead flags EVERY delivered
-    week ``is_current`` (``sync_delivered_plan``), so there ``current_week`` is
-    ambiguous — this is how ``athlete_home`` tells the two apart.
+    Both an individual plan (``week_set_current``) and a group-materialized
+    member plan (``sync_delivered_plan``, which now only ever mirrors the
+    source's pointer on the member's *first* materialization — issue #456)
+    keep a single current pointer, so ``current_week`` is normally trustworthy
+    as "the week the athlete is on." Nothing in the schema enforces that,
+    though — no DB constraint bars two live ``True`` rows on the same plan —
+    so this stays defensive hardening rather than an assumption: ``athlete_home``
+    falls back to the latest delivered week whenever this doesn't hold, instead
+    of trusting an ambiguous pointer.
     """
     return (
         Week.objects.filter(
@@ -1129,11 +1133,15 @@ def athlete_home(user):
         # Anchor the card (both the block shown and the focus week) on the week
         # the athlete is on. For an individual plan that's its single ``is_current``
         # week, so a coach's "Make current" is honored even when it moves the
-        # athlete back to an earlier delivered block. A group-materialized snapshot
-        # flags every delivered week ``is_current``, so there ``current_week`` is
-        # ambiguous (it returns the earliest) — fall back to the latest delivered
-        # week, whose ordering already tracks the newest delivery. A current week
-        # the coach is still building (undelivered) also falls back to latest.
+        # athlete back to an earlier delivered block. A group-materialized member
+        # plan carries that same single pointer post-#456 (mirrored once, at the
+        # member's first materialization; from there the athlete's own logging or
+        # a coach override is what moves it) — ``_single_current_week`` is
+        # defensive hardening against the schema not actually enforcing "exactly
+        # one," not an expectation that a group plan is shaped any differently.
+        # When it doesn't hold (or the flagged week is undelivered — a current
+        # week the coach is still building), fall back to the latest delivered
+        # week, whose ordering already tracks the newest delivery.
         current = current_week(plan)
         if (
             current is not None
