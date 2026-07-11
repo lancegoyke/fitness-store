@@ -257,8 +257,8 @@ editor stays open (`ex` on `program` is untouched either way, matching
 
 The broader multi-week grid subsystem (`useGrid`, `MesoTable`, `GridCell`/
 `GridRow`/`GridDay`/`MesoGrid`) postdates this contract and is specified in
-`docs/meso/fixed-selection-plan.md` — only the P5 group-adjust slice is
-pinned here, since it reuses the override machinery above.
+`docs/archive/meso/fixed-selection-plan.md` (archived — all 6 phases shipped) — only the
+P5 group-adjust slice is pinned here, since it reuses the override machinery above.
 
 `GridCell` (in `lib/api.ts`) gains two optional group-only fields, emitted
 by `serialize_mesocycle_grid` on a GROUP plan for each cell that has an
