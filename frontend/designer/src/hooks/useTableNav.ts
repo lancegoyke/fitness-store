@@ -185,6 +185,25 @@ function cellExists(rowId: number, weekId: number | null, field: TableColumn): b
   return document.querySelector(cellSelector(rowId, weekId, field)) !== null;
 }
 
+/** The nearest rendered column of `cell`'s own row — forward first, then
+ * backward. Restoration's post-tier guard uses this when a surviving
+ * (row, week) coordinate turns out to be hollow (see the effect below);
+ * the leading name column always renders for a live row, so the backward
+ * scan terminates there at worst. */
+function nearestRenderedInRow(cell: TableCellId, columns: TableColumnPos[]): TableCellId | null {
+  const at = columns.findIndex((c) => c.weekId === cell.weekId && c.field === cell.field);
+  if (at === -1) return null;
+  for (let i = at + 1; i < columns.length; i++) {
+    const col = columns[i];
+    if (col && cellExists(cell.rowId, col.weekId, col.field)) return { rowId: cell.rowId, weekId: col.weekId, field: col.field };
+  }
+  for (let i = at - 1; i >= 0; i--) {
+    const col = columns[i];
+    if (col && cellExists(cell.rowId, col.weekId, col.field)) return { rowId: cell.rowId, weekId: col.weekId, field: col.field };
+  }
+  return null;
+}
+
 const HANDLED_KEYS = new Set(["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Enter", "Escape"]);
 
 export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
@@ -225,20 +244,10 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
 
     let next: TableCellId | null;
     if (rowSurvives && weekSurvives) {
-      // Tier 1: same (rowId, weekId, field) survives. This checks row/week
-      // EXISTENCE (is the id still anywhere in the grid), not whether THIS
-      // row still renders a cell at THIS week — a skip or a this-week-only
-      // add/remove can hollow out just one coordinate while its row and
-      // week both live on elsewhere. Unlike the arrow-key scan above (this
-      // PR's #455 review-nit fix), Tier 1 doesn't re-verify against
-      // cellExists: doing so would mean deciding what to fall back to
-      // (Tier 2b's "first remaining week" isn't guaranteed to exist for
-      // this row either), which is restoration-tier redesign, not an
-      // arrow-key fix. Tiers 2a/2b/3 land on the name column or the
-      // table's first cell, which — row-name always renders regardless of
-      // per-week holes — always exist. Left as-is deliberately: revisit
-      // with a failing restoration test if Tier 1 is ever observed to
-      // strand the anchor in practice.
+      // Tier 1: same (rowId, weekId, field) survives — row/week EXISTENCE
+      // only; whether the coordinate still RENDERS is the post-tier guard
+      // below's job (a skip can hollow out one coordinate while its row and
+      // week both live on).
       next = { rowId: prev.rowId, weekId: prev.weekId, field: prev.field };
     } else if (rowSurvives) {
       // Tier 2b: the week is gone (remove-week) but the row survives — keep
@@ -256,6 +265,19 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
       // Tier 2a: first row of the same day, else Tier 3: table's first cell
       // (firstCellOf returns null for Tier 4 — the whole table is empty).
       next = firstOfDay !== undefined ? { rowId: firstOfDay, weekId: null, field: "name" } : firstCellOf(flat);
+    }
+
+    // Post-tier guard (#455 review): a SURVIVING coordinate can still be
+    // hollow — skipping the focused cell (or dropping an add-this-week
+    // cell) refetches the grid with that input gone while its row and week
+    // both live on. Committing the anchor there would zero the whole table
+    // out of the tab order (every rendered cell gets tabIndex=-1 and
+    // focusCell no-ops). This effect runs after React committed the new
+    // DOM, so cellExists sees the post-refetch truth: skid to the nearest
+    // rendered column of the same row (the name column always renders for
+    // a live row), else the table's first cell.
+    if (next && !cellExists(next.rowId, next.weekId, next.field)) {
+      next = nearestRenderedInRow(next, columns) ?? firstCellOf(flat);
     }
 
     // Restoration may move focus ONLY when it won't steal it: the active

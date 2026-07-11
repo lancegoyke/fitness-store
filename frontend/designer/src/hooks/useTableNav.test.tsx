@@ -652,6 +652,50 @@ describe("focus restoration across a grid swap", () => {
     expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "sets" });
   });
 
+  it("post-tier guard: skids forward off a surviving-but-hollow coordinate (skip on the focused cell)", () => {
+    // Skipping the FOCUSED cell hollows out its coordinate on the refetch:
+    // row 9 and week 1 both survive, but row 9 renders nothing at week 1
+    // anymore. Tier 1 alone would strand the anchor there — no rendered
+    // cell would hold tabIndex=0 and the table would drop out of the tab
+    // order. The guard skids to the nearest rendered column of the row
+    // (forward first: week 2's sets).
+    let cells = mountCells(GRID);
+    const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
+      initialProps: { grid: GRID },
+    });
+    focus(result.current, cells, 9, 1, "sets");
+
+    const NEXT = grid({ days: [day(1, [row(9, [2]), row(10, [1, 2])]), day(2, [row(11, [1, 2])])] });
+    document.querySelectorAll("[data-grid-cell]").forEach((n) => n.remove());
+    cells = mountCellsWithHoles(NEXT);
+    act(() => rerender({ grid: NEXT }));
+
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 2, field: "sets" });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 2, "sets")]);
+    expect(result.current.cellProps(9, 2, "sets", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).tabIndex).toBe(-1);
+  });
+
+  it("post-tier guard: skids backward when everything after the hollow coordinate is holes too", () => {
+    let cells = mountCells(GRID);
+    const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
+      initialProps: { grid: GRID },
+    });
+    focus(result.current, cells, 9, 2, "sets");
+
+    // Row 9 keeps only week 1 — the focused week-2 coordinate and every
+    // column after it are gone, so the guard scans backward and lands on
+    // week 1's trailing note field (the nearest rendered column).
+    const NEXT = grid({ days: [day(1, [row(9, [1]), row(10, [1, 2])]), day(2, [row(11, [1, 2])])] });
+    document.querySelectorAll("[data-grid-cell]").forEach((n) => n.remove());
+    cells = mountCellsWithHoles(NEXT);
+    act(() => rerender({ grid: NEXT }));
+
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "note" });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "note")]);
+    expect(result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).tabIndex).toBe(0);
+  });
+
   it("tier 3: falls back to the table's first cell when the day itself is gone", () => {
     let cells = mountCells(GRID);
     const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
