@@ -2697,6 +2697,10 @@ class GroupMembership(models.Model):
         src_weeks = list(
             src_meso.weeks.filter(deleted_at__isnull=True).order_by("index")
         )
+        # One list, two consumers: the revival check below only counts a
+        # "surviving" current week (one this sync isn't about to drop), and the
+        # drop loop at the bottom soft-deletes everything outside it.
+        src_indexes = [w.index for w in src_weeks]
         member_weeks = []
         week_pairs = []
         for src_week in src_weeks:
@@ -2737,6 +2741,13 @@ class GroupMembership(models.Model):
                 if prior is not None:
                     prior_pk, prior_deleted_at, prior_is_current = prior
                     if prior_deleted_at is not None and prior_is_current:
+                        # Only a current week that SURVIVES this sync counts as
+                        # "the member's real position": a week of this block
+                        # whose source is gone is soft-deleted at the bottom of
+                        # this very method, so counting it here would clear the
+                        # revived flag and then kill the counted week — zero
+                        # live currents. Weeks in other mesocycles always
+                        # survive (this sync never touches them).
                         has_other_current = (
                             Week.objects.filter(
                                 mesocycle__plan=member_plan,
@@ -2744,6 +2755,12 @@ class GroupMembership(models.Model):
                                 deleted_at__isnull=True,
                             )
                             .exclude(pk=prior_pk)
+                            .exclude(
+                                mesocycle=member_meso,
+                                index__in=[
+                                    i for i in prior_week_state if i not in src_indexes
+                                ],
+                            )
                             .exists()
                         )
                         week_defaults["is_current"] = not has_other_current
@@ -2856,7 +2873,6 @@ class GroupMembership(models.Model):
         # Soft-delete member weeks whose source week is no longer live — a whole
         # column the coach removed from the shared block disappears from the
         # member's copy too (``Week.soft_delete`` cascades to its sessions).
-        src_indexes = [w.index for w in src_weeks]
         for dropped_week in member_meso.weeks.exclude(index__in=src_indexes).filter(
             deleted_at__isnull=True
         ):

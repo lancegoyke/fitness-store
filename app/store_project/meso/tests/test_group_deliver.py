@@ -523,6 +523,57 @@ class TestSyncDeliveredPlan:
             == 1
         )
 
+    def test_revival_ignores_a_current_week_the_same_sync_drops(self):
+        # Issue #456 nit follow-up: ONE sync can both revive the member's old
+        # stale-current week AND drop the week they had advanced to. The
+        # revival's "does the member have another live current week?" check
+        # must not count a week this very sync is about to soft-delete —
+        # otherwise it clears the revived flag, then the drop loop kills the
+        # counted week, and the member plan ends with ZERO live current weeks.
+        group, plan, [m] = seed_group(member_count=1)
+        append_shared_week(plan)
+        append_shared_week(plan)
+        meso = shared_meso(plan)
+        week1 = meso.weeks.get(index=1)
+        week3 = meso.weeks.get(index=3)
+
+        m.sync_delivered_plan(meso)  # first sync mirrors week 1 as current
+        member_plan = Plan.objects.get(relationship=m.relationship, source_group=group)
+        member_meso = member_plan.mesocycles.get()
+
+        # Coach drops week 1; the member's dead copy keeps its stale flag.
+        week1.soft_delete()
+        m.sync_delivered_plan(meso)
+        member_week1 = member_meso.weeks.get(index=1)
+        assert member_week1.deleted_at is not None
+        assert member_week1.is_current is True
+
+        # The member advances to week 3 (their real position).
+        member_week3 = member_meso.weeks.get(index=3)
+        member_week3.is_current = True
+        member_week3.save(update_fields=["is_current"])
+
+        # In ONE shared-block edit the coach brings week 1 back and removes
+        # week 3, then re-delivers.
+        week1.deleted_at = None
+        week1.save(update_fields=["deleted_at"])
+        week3.soft_delete()
+        m.sync_delivered_plan(meso)
+
+        member_week1.refresh_from_db()
+        member_week3.refresh_from_db()
+        assert member_week1.deleted_at is None  # revived
+        assert member_week3.deleted_at is not None  # dropped with its source
+        # The doomed week 3 must not have counted as the member's position:
+        # the revived week keeps the pointer, leaving exactly one live current.
+        assert member_week1.is_current is True
+        assert (
+            Week.objects.filter(
+                mesocycle__plan=member_plan, is_current=True, deleted_at__isnull=True
+            ).count()
+            == 1
+        )
+
 
 # -- model: deliver_block (the whole-block fan-out) --------------------------
 
