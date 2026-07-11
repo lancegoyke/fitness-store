@@ -1090,6 +1090,19 @@ def serialize_mesocycle_grid(mesocycle):
                 "session_id": _pick_session_id(
                     slot.pk, sessions_by_slot, current_week_id, weeks
                 ),
+                # Per-week session pks for this day (Codex #455 A2 review
+                # finding 2) — reuses ``sessions_by_slot`` (already loaded
+                # above for ``_pick_session_id``, no extra query), keyed by
+                # ``str(week_id)`` so a day-reorder client can look up its
+                # OWN current-week session id instead of trusting
+                # ``session_id`` above, which can silently be a FALLBACK to
+                # a different (non-current) week's session when the current
+                # week's was independently soft-deleted. A week missing a
+                # live session for this slot has no entry.
+                "session_ids": {
+                    str(week_id): session_pk
+                    for week_id, session_pk in sessions_by_slot.get(slot.pk, {}).items()
+                },
                 "day_number": slot.day_number,
                 "name": slot.name,
                 "bias": slot.bias,

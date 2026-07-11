@@ -19,18 +19,34 @@
 //   with no cell for that week (an add-this-week-only hole) is excluded,
 //   mirroring the server's own `session.cells()` query for that week
 //   (views.py `session_reorder`).
-// - Day order payload = the CURRENT week's live Session pks (GridDay.
-//   session_id), in the new order (views.py `week_reorder_sessions`) — a
-//   defensive no-op if ANY live day's session_id is null.
+// - Day order payload = the CURRENT week's live Session pks, read from EACH
+//   day's OWN `GridDay.session_ids[String(currentWeekId)]` (views.py
+//   `week_reorder_sessions`) — never the display-only `GridDay.session_id`,
+//   which can silently fall back to a DIFFERENT week's session
+//   (`_pick_session_id`, serializers.py) and would 400 server-side if
+//   posted. Defensive no-op if ANY live day lacks a `session_ids` entry for
+//   the current week.
 // - Cross-day row moves are OUT of scope for A2 (own follow-up) — enforced
 //   here as a second, independent guard even though MesoTable's own
 //   collision filter (filterTableDragCandidates) should already keep a row
 //   drag from colliding with another day's rows in the first place.
+//
+// === Fixture truthfulness (Codex #455 A2 review finding 1) ===
+// Every event's top-level `id` below is built with `tableRowDragId`/
+// `tableDayDragId` — the SAME exported builders the real MesoTable.tsx uses
+// at its useSortable/SortableContext call sites (../lib/tableDragIds) — NOT
+// bare numeric slot ids. The old fixtures here used bare numeric ids, which
+// made every spec pass against a hook that read `active.id`/`over.id`
+// directly as if they WERE the numeric slot ids; the real MesoTable never
+// emits an id shaped that way (it's always the encoded string), so every
+// real drop silently no-op'd. Building ids the real way here is what
+// catches that class of bug.
 import { renderHook } from "@testing-library/react";
 import { useTableReorder } from "./useTableReorder";
 import type { TableDragEndEvent } from "./useTableReorder";
 import type { GridCell, GridDay, GridRow, GridWeek, MesoGrid } from "../lib/api";
 import type { Id } from "./useGrid";
+import { tableDayDragId, tableRowDragId } from "../lib/tableDragIds";
 
 function week(overrides: Partial<GridWeek> = {}): GridWeek {
   return {
@@ -79,6 +95,7 @@ function day(overrides: Partial<GridDay> = {}): GridDay {
   return {
     session_slot_id: 1,
     session_id: 11,
+    session_ids: { "1": 11 },
     day_number: 1,
     name: "Lower",
     bias: "",
@@ -99,9 +116,13 @@ function grid(overrides: Partial<MesoGrid> = {}): MesoGrid {
 }
 
 /** Builds a dnd-kit-shaped row drag event — see useTableReorder.ts's
- * `TableDragData` union. `overDaySlotId` defaults to the active row's own
- * day (the common within-day case); pass a different one to build a
- * cross-day drop for the scope-guard spec. */
+ * `TableDragData` union. The top-level `id`s are built with
+ * `tableRowDragId`, the SAME builder MesoTable.tsx uses at its
+ * useSortable/SortableContext call sites — an ENCODED string
+ * ("row-<daySlotId>-<exerciseSlotId>"), never the bare numeric slot id (see
+ * this file's header). `overDaySlotId` defaults to the active row's own day
+ * (the common within-day case); pass a different one to build a cross-day
+ * drop for the scope-guard spec. */
 function rowDragEvent(
   activeExerciseSlotId: Id,
   activeDaySlotId: Id,
@@ -110,27 +131,29 @@ function rowDragEvent(
 ): TableDragEndEvent {
   return {
     active: {
-      id: activeExerciseSlotId,
+      id: tableRowDragId(activeDaySlotId, activeExerciseSlotId),
       data: { current: { type: "row", daySlotId: activeDaySlotId, exerciseSlotId: activeExerciseSlotId } },
     },
     over:
       overExerciseSlotId == null
         ? null
         : {
-            id: overExerciseSlotId,
+            id: tableRowDragId(overDaySlotId, overExerciseSlotId),
             data: { current: { type: "row", daySlotId: overDaySlotId, exerciseSlotId: overExerciseSlotId } },
           },
   };
 }
 
-/** Builds a dnd-kit-shaped day-strip drag event. */
+/** Builds a dnd-kit-shaped day-strip drag event — `id`s built with
+ * `tableDayDragId`, mirroring `rowDragEvent` above (see this file's
+ * header). */
 function dayDragEvent(activeSessionSlotId: Id, overSessionSlotId: Id | null): TableDragEndEvent {
   return {
-    active: { id: activeSessionSlotId, data: { current: { type: "day", sessionSlotId: activeSessionSlotId } } },
+    active: { id: tableDayDragId(activeSessionSlotId), data: { current: { type: "day", sessionSlotId: activeSessionSlotId } } },
     over:
       overSessionSlotId == null
         ? null
-        : { id: overSessionSlotId, data: { current: { type: "day", sessionSlotId: overSessionSlotId } } },
+        : { id: tableDayDragId(overSessionSlotId), data: { current: { type: "day", sessionSlotId: overSessionSlotId } } },
   };
 }
 
@@ -140,6 +163,59 @@ function setup(g: MesoGrid | null) {
   const { result } = renderHook(() => useTableReorder({ grid: g, reorderRow, reorderDay }));
   return { onDragEnd: result.current.onDragEnd, reorderRow, reorderDay };
 }
+
+// Regression (Codex #455 A2 review finding 1): the real MesoTable never
+// emits a bare numeric slot id as a dnd-kit sortable id — every id is
+// ENCODED (`tableRowDragId`/`tableDayDragId`). A hook that resolved
+// identity off `active.id`/`over.id` directly (comparing an encoded string
+// against a numeric `exercise_slot_id`/`session_slot_id`) would find
+// `oldIndex === -1` on every real drop and silently no-op. These specs
+// build the exact event shape MesoTable emits and assert the verb still
+// fires — proving identity comes from `TableDragData`, not the id string.
+describe("regression: encoded dnd ids (as the real MesoTable emits) resolve correctly", () => {
+  it("a row event with encoded string ids still calls reorderRow with the right payload", () => {
+    const g = grid({
+      days: [
+        day({
+          session_slot_id: 1,
+          session_id: 11,
+          session_ids: { "1": 11 },
+          rows: [
+            row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 900 }) } }),
+            row({ exercise_slot_id: 10, cells: { "1": cell({ prescription_id: 1000 }) } }),
+          ],
+        }),
+      ],
+    });
+    const event = rowDragEvent(9, 1, 10);
+    // Sanity: the ids really are encoded strings, not the bare numeric slot
+    // ids — this is the exact shape the old (buggy) numeric-lookup hook
+    // would silently no-op on.
+    expect(event.active.id).toBe("row-1-9");
+    expect(event.over?.id).toBe("row-1-10");
+    expect(event.active.id).not.toBe(9);
+    const { onDragEnd, reorderRow } = setup(g);
+    onDragEnd(event);
+    expect(reorderRow).toHaveBeenCalledWith(11, [1000, 900]);
+  });
+
+  it("a day event with encoded string ids still calls reorderDay with the right payload", () => {
+    const g = grid({
+      weeks: [week({ id: 1, current: true })],
+      days: [
+        day({ session_slot_id: 1, session_id: 11, session_ids: { "1": 11 } }),
+        day({ session_slot_id: 2, session_id: 22, session_ids: { "1": 22 } }),
+      ],
+    });
+    const event = dayDragEvent(1, 2);
+    expect(event.active.id).toBe("day-1");
+    expect(event.over?.id).toBe("day-2");
+    expect(event.active.id).not.toBe(1);
+    const { onDragEnd, reorderDay } = setup(g);
+    onDragEnd(event);
+    expect(reorderDay).toHaveBeenCalledWith(1, [22, 11]);
+  });
+});
 
 describe("within-day row reorder", () => {
   it("calls reorderRow with the day's session_id and the current week's cell ids in the new order", () => {
@@ -203,20 +279,66 @@ describe("day reorder", () => {
   it("calls reorderDay with the current week's id and the block's session ids in the new order", () => {
     const g = grid({
       weeks: [week({ id: 1, current: true })],
-      days: [day({ session_slot_id: 1, session_id: 11 }), day({ session_slot_id: 2, session_id: 22 })],
+      days: [
+        day({ session_slot_id: 1, session_id: 11, session_ids: { "1": 11 } }),
+        day({ session_slot_id: 2, session_id: 22, session_ids: { "1": 22 } }),
+      ],
     });
     const { onDragEnd, reorderDay } = setup(g);
     onDragEnd(dayDragEvent(1, 2));
     expect(reorderDay).toHaveBeenCalledWith(1, [22, 11]);
   });
 
-  it("no-ops when any live day's session_id is null", () => {
+  it("no-ops when any live day lacks a session_ids entry for the current week", () => {
     const g = grid({
-      days: [day({ session_slot_id: 1, session_id: 11 }), day({ session_slot_id: 2, session_id: null })],
+      days: [
+        day({ session_slot_id: 1, session_id: 11, session_ids: { "1": 11 } }),
+        day({ session_slot_id: 2, session_id: 22, session_ids: {} }),
+      ],
     });
     const { onDragEnd, reorderDay } = setup(g);
     onDragEnd(dayDragEvent(1, 2));
     expect(reorderDay).not.toHaveBeenCalled();
+  });
+
+  // Regression (Codex #455 A2 review finding 2): `session_id` is a
+  // DISPLAY-ONLY field that can fall back to a different, non-current
+  // week's session pk (`_pick_session_id`, serializers.py) when the current
+  // week's own session was independently deleted (see the per-week
+  // exceptions system's `session_delete` endpoint). Day reorder must read
+  // `session_ids[currentWeekKey]` — never let the fallback `session_id`
+  // substitute — or the client posts another week's session pk to
+  // `week_reorder_sessions`, which 400s (it requires EXACTLY the current
+  // week's live session ids).
+  it("does not substitute the fallback session_id when the current week's own session_ids entry is missing", () => {
+    const g = grid({
+      weeks: [week({ id: 1, current: true })],
+      days: [
+        day({ session_slot_id: 1, session_id: 11, session_ids: { "1": 11 } }),
+        // day 2's current week (week 1) session was independently deleted —
+        // session_id falls back to some OTHER week's session (pk 999), but
+        // session_ids carries no "1" entry.
+        day({ session_slot_id: 2, session_id: 999, session_ids: {} }),
+      ],
+    });
+    const { onDragEnd, reorderDay } = setup(g);
+    onDragEnd(dayDragEvent(1, 2));
+    expect(reorderDay).not.toHaveBeenCalled();
+  });
+
+  it("builds the order from each day's CURRENT-WEEK session_ids entry, not the (possibly-fallback) session_id field", () => {
+    const g = grid({
+      weeks: [week({ id: 5, current: true })],
+      days: [
+        // session_id (999) intentionally mismatches session_ids["5"] (11) —
+        // if the hook ever read session_id again, this assertion would catch it.
+        day({ session_slot_id: 1, session_id: 999, session_ids: { "5": 11 } }),
+        day({ session_slot_id: 2, session_id: 22, session_ids: { "5": 22 } }),
+      ],
+    });
+    const { onDragEnd, reorderDay } = setup(g);
+    onDragEnd(dayDragEvent(1, 2));
+    expect(reorderDay).toHaveBeenCalledWith(5, [22, 11]);
   });
 });
 

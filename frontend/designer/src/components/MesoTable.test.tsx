@@ -57,6 +57,7 @@ function day(overrides: Partial<GridDay> = {}): GridDay {
   return {
     session_slot_id: 1,
     session_id: 11,
+    session_ids: { "1": 11 },
     day_number: 1,
     name: "Lower",
     bias: "Quad bias",

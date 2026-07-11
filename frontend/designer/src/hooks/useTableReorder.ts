@@ -20,12 +20,22 @@
 //    live row cells' `prescription_id`s, in the new order — a row with no
 //    cell for that week (an add-this-week-only hole) is excluded, mirroring
 //    the server's own `session.cells()` query for that week.
-//  - Day order = the CURRENT week's live Session pks (`GridDay.session_id`),
-//    in the new order. Defensive no-op if ANY live day's `session_id` is
-//    null — `_pick_session_id` (serializers.py:954) can fall back to an
-//    earlier week's session for a slot when the current week's was
-//    independently soft-deleted, which would desync the posted order from
-//    the current week's actual live session set and 400 server-side.
+//  - Day order = the CURRENT week's live Session pks, in the new order —
+//    read from EACH day's own `GridDay.session_ids[String(currentWeekId)]`,
+//    never `GridDay.session_id` (display-only, and `_pick_session_id`
+//    (serializers.py:954) can fall back to an earlier live week's session
+//    for a slot when the current week's was independently soft-deleted; the
+//    fallback pk belongs to the WRONG week and would 400 server-side if
+//    posted as part of the current week's order — Codex #455 A2 review
+//    finding 2). Defensive no-op if ANY live day lacks a `session_ids` entry
+//    for the current week.
+//
+// IMPORTANT (Codex #455 A2 review finding 1): identity for both verbs comes
+// EXCLUSIVELY from the `TableDragData` carried on `active.data.current`/
+// `over.data.current` — `active.id`/`over.id` are dnd-kit's own opaque
+// sortable ids (in the real MesoTable wiring, ENCODED strings like
+// "row-<daySlotId>-<exerciseSlotId>" — see ../lib/tableDragIds), never
+// parsed or compared here as if they were the numeric slot ids themselves.
 import { arrayMove } from "@dnd-kit/sortable";
 import type { GridDay, MesoGrid } from "../lib/api";
 import type { Id } from "./useGrid";
@@ -81,15 +91,17 @@ export function useTableReorder(options: UseTableReorderOptions) {
     if (!grid) return;
     const weekId = currentWeekId(grid);
     if (weekId == null) return;
-    // Defensive no-op: every live day must resolve a session for the
-    // CURRENT week (see this file's header) — reordering against a
-    // mismatched week's session set would 400 server-side.
-    if (grid.days.some((d) => d.session_id == null)) return;
+    const weekKey = String(weekId);
+    // Defensive no-op: every live day must resolve its OWN current-week
+    // session id via `session_ids[weekKey]` (see this file's header) —
+    // `session_id` can silently be a FALLBACK to a different week and must
+    // never substitute here, or the posted order 400s server-side.
+    if (grid.days.some((d) => d.session_ids[weekKey] == null)) return;
     const oldIndex = grid.days.findIndex((d) => d.session_slot_id === activeSessionSlotId);
     const newIndex = grid.days.findIndex((d) => d.session_slot_id === overSessionSlotId);
     if (oldIndex === -1 || newIndex === -1) return;
     const reordered = arrayMove(grid.days, oldIndex, newIndex);
-    const order = reordered.map((d) => d.session_id).filter((id): id is number => id != null);
+    const order = reordered.map((d) => d.session_ids[weekKey]).filter((id): id is number => id != null);
     reorderDay(weekId, order);
   }
 
@@ -103,12 +115,15 @@ export function useTableReorder(options: UseTableReorderOptions) {
       if (activeData.daySlotId !== overData.daySlotId) return; // cross-day: OUT of A2 scope
       const day = grid.days.find((d) => d.session_slot_id === activeData.daySlotId);
       if (!day) return;
-      rowReorder(day, active.id, over.id);
+      // Identity is the TableDragData payload, NEVER active.id/over.id (the
+      // real MesoTable emits ENCODED string ids there — Codex #455 A2
+      // review finding 1).
+      rowReorder(day, activeData.exerciseSlotId, overData.exerciseSlotId);
       return;
     }
 
     if (activeData.type === "day" && overData.type === "day") {
-      dayReorder(active.id, over.id);
+      dayReorder(activeData.sessionSlotId, overData.sessionSlotId);
     }
     // Any other type combination (row-over-day-header etc.) is unreachable
     // through the real UI (separate row/day SortableContexts +

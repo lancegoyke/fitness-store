@@ -54,6 +54,7 @@ import type { GridCellPatch, Id } from "../hooks/useGrid";
 import { useTableNav, tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
 import type { EditableField, UseTableNavResult } from "../hooks/useTableNav";
 import type { TableDragData, TableDragEndEvent } from "../hooks/useTableReorder";
+import { TABLE_DAY_DRAG_PREFIX, tableDayDragId, tableRowDragId, tableRowDragPrefix } from "../lib/tableDragIds";
 
 export interface MesoTableProps {
   grid: MesoGrid | null;
@@ -99,20 +100,23 @@ type Armed = { type: ArmedKind; id: Id } | null;
 
 // Issue #455 phase A2: sortable ids are "day-<sessionSlotId>" and
 // "row-<daySlotId>-<exerciseSlotId>" (id-string encoded, mirroring
-// WeekGrid.tsx's "day-"/"ex-" prefix convention). A day drag targets only
-// day containers; a row drag targets only ROW containers of its OWN day —
-// cross-day row moves are OUT of scope for A2 (decisions 5/7), enforced
-// here at the collision-filter layer (and independently again inside
-// useTableReorder's onDragEnd). Unlike WeekGrid's exercise-active filter
-// (which keeps day containers too, for the one-week grid's exercise-over-
-// day append path), the table has no cross-type drop target at all in A2.
+// WeekGrid.tsx's "day-"/"ex-" prefix convention) — built EXCLUSIVELY via
+// tableDayDragId/tableRowDragId (../lib/tableDragIds), the single source of
+// truth for this encoding (Codex #455 A2 review finding 1). A day drag
+// targets only day containers; a row drag targets only ROW containers of
+// its OWN day — cross-day row moves are OUT of scope for A2 (decisions
+// 5/7), enforced here at the collision-filter layer (and independently
+// again inside useTableReorder's onDragEnd, off TableDragData — never off
+// these strings). Unlike WeekGrid's exercise-active filter (which keeps day
+// containers too, for the one-week grid's exercise-over-day append path),
+// the table has no cross-type drop target at all in A2.
 export function filterTableDragCandidates<T extends { id: unknown }>(activeId: unknown, containers: T[]): T[] {
   const activeIdStr = String(activeId);
-  if (activeIdStr.startsWith("day-")) {
-    return containers.filter((c) => String(c.id).startsWith("day-"));
+  if (activeIdStr.startsWith(TABLE_DAY_DRAG_PREFIX)) {
+    return containers.filter((c) => String(c.id).startsWith(TABLE_DAY_DRAG_PREFIX));
   }
-  const daySlotId = activeIdStr.split("-")[1];
-  return containers.filter((c) => String(c.id).startsWith(`row-${daySlotId}-`));
+  const daySlotId = activeIdStr.split("-")[1] ?? "";
+  return containers.filter((c) => String(c.id).startsWith(tableRowDragPrefix(daySlotId)));
 }
 
 // Same type/scope filtering at the collision layer as
@@ -581,7 +585,7 @@ function TableRow({
     exerciseSlotId: row.exercise_slot_id,
   };
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
-    id: `row-${day.session_slot_id}-${row.exercise_slot_id}`,
+    id: tableRowDragId(day.session_slot_id, row.exercise_slot_id),
     data: dragData,
     disabled: busy,
   });
@@ -776,7 +780,7 @@ function TableDayBlock({
   const dayArmed = isArmed("day", day.session_slot_id);
   const dragData: TableDragData = { type: "day", sessionSlotId: day.session_slot_id };
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
-    id: `day-${day.session_slot_id}`,
+    id: tableDayDragId(day.session_slot_id),
     data: dragData,
     disabled: busy,
   });
@@ -863,7 +867,7 @@ function TableDayBlock({
           </thead>
           <tbody>
             <SortableContext
-              items={day.rows.map((r) => `row-${day.session_slot_id}-${r.exercise_slot_id}`)}
+              items={day.rows.map((r) => tableRowDragId(day.session_slot_id, r.exercise_slot_id))}
               strategy={verticalListSortingStrategy}
             >
               {day.rows.map((row) => (
@@ -1045,7 +1049,7 @@ export function MesoTable(props: MesoTableProps) {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <SortableContext items={grid.days.map((d) => `day-${d.session_slot_id}`)} strategy={verticalListSortingStrategy}>
+        <SortableContext items={grid.days.map((d) => tableDayDragId(d.session_slot_id))} strategy={verticalListSortingStrategy}>
           {grid.days.map((day) => (
             <TableDayBlock
               key={day.session_slot_id}

@@ -67,6 +67,7 @@ function day(id: number, rows: GridRow[], overrides: Partial<GridDay> = {}): Gri
   return {
     session_slot_id: id,
     session_id: id + 10,
+    session_ids: { "1": id + 10, "2": id + 10 },
     day_number: id,
     name: `Day ${id}`,
     bias: "",
