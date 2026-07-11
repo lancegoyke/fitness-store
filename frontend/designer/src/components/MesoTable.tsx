@@ -565,7 +565,10 @@ function RowOneRmEditor({ row, cell, unit, busy, onSetOneRm }: RowOneRmEditorPro
   }
 
   async function save() {
-    if (saving) return;
+    // `busy` too, not just `saving`: the save button is disabled during a
+    // structural mutation/refetch, but Enter in the input reaches here
+    // directly (Codex review) — the keyboard path honors the same lock.
+    if (saving || busy) return;
     const parsed = parseOneRm(value);
     if (!parsed.ok) {
       setError("Enter a positive number, or leave blank to clear.");

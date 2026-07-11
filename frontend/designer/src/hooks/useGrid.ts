@@ -136,6 +136,43 @@ function updateCellInGrid(grid: MesoGrid, cellId: Id, patch: Partial<GridCell>):
   };
 }
 
+/** The lift identity a cell RESOLVES to, mirroring the server's
+ * `_exercise_key`/`key_str` rule exactly (serializers.py/one_rm.py):
+ * `"id:<pk>"` for a catalog-linked lift, `"name:<trimmed lower>"` for free
+ * text; a one-week swap overrides the row's block identity for that cell. */
+export function liftIdentityOfCell(row: GridRow, c: GridCell): string {
+  const swapped = c.swap_name !== "" || c.swap_exercise_id != null;
+  const exerciseId = swapped ? c.swap_exercise_id : row.exercise_id;
+  const name = swapped ? c.swap_name : row.name;
+  return exerciseId != null ? `id:${exerciseId}` : `name:${(name || "").trim().toLowerCase()}`;
+}
+
+/** Patch every cell in the grid whose resolved lift identity matches —
+ * an AthleteOneRm is keyed athlete+lift, not per cell, so a save from one
+ * row must repaint the SAME lift's badge everywhere it appears (duplicate
+ * lifts across days, or a swap resolving to another row's lift). */
+function updateCellsByLiftIdentity(grid: MesoGrid, identity: string, patch: Partial<GridCell>): MesoGrid {
+  return {
+    ...grid,
+    days: grid.days.map((day) => ({
+      ...day,
+      rows: day.rows.map((row) => {
+        let changed = false;
+        const cells: Record<string, GridCell> = {};
+        for (const [weekId, c] of Object.entries(row.cells)) {
+          if (liftIdentityOfCell(row, c) === identity) {
+            changed = true;
+            cells[weekId] = { ...c, ...patch };
+          } else {
+            cells[weekId] = c;
+          }
+        }
+        return changed ? { ...row, cells } : row;
+      }),
+    })),
+  };
+}
+
 function updateRowNameInGrid(grid: MesoGrid, exerciseSlotId: Id, name: string): MesoGrid {
   return {
     ...grid,
@@ -267,7 +304,18 @@ export function useGrid(options: UseGridOptions) {
         csrf,
       );
       const patch: GridCellOneRmPatch = { one_rm: data.one_rm ?? "", one_rm_source: data.source ?? "" };
-      setGrid((prev) => (prev ? updateCellInGrid(prev, cellId, patch) : prev));
+      // The server record is keyed athlete+LIFT, not per cell — repaint every
+      // cell resolving to the same lift (duplicate lifts across days would
+      // otherwise show stale badges until a full refetch — Codex review).
+      const targetCell = Object.values(row!.cells).find((c) => c.prescription_id === cellId);
+      const identity = targetCell ? liftIdentityOfCell(row!, targetCell) : null;
+      setGrid((prev) =>
+        prev
+          ? identity != null
+            ? updateCellsByLiftIdentity(prev, identity, patch)
+            : updateCellInGrid(prev, cellId, patch)
+          : prev,
+      );
       return patch;
     },
     [grid, planId, csrf, flushPendingWrites],

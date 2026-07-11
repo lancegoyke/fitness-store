@@ -416,6 +416,22 @@ describe("row 1RM editor (issue #455 phase A3)", () => {
     expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
   });
 
+  it("Enter in the editor does not save while the table is busy (keyboard path honors the lock)", async () => {
+    const user = userEvent.setup();
+    const onSetOneRm = vi.fn().mockResolvedValue({ one_rm: "140", one_rm_source: "manual" });
+    const props = baseProps({
+      onSetOneRm,
+      grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }),
+    });
+    const { rerender } = render(<MesoTable {...props} />);
+    await user.click(screen.getByTestId("row-one-rm-badge-9"));
+    await user.type(screen.getByTestId("row-one-rm-input-9"), "140");
+    // A structural mutation flips busy while the editor is open.
+    rerender(<MesoTable {...props} busy={true} />);
+    await user.type(screen.getByTestId("row-one-rm-input-9"), "{Enter}");
+    expect(onSetOneRm).not.toHaveBeenCalled();
+  });
+
   it("renders NO badge when the row's only pct cell is skipped", () => {
     render(
       <MesoTable

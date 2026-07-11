@@ -287,6 +287,42 @@ describe("setOneRm (issue #455 phase A3)", () => {
     expect(fetchMock.mock.calls[1]![0]).toBe("/meso/api/plan/7/prescription/100/one-rm/"); // only after
   });
 
+  it("repaints every cell sharing the lift identity, not just the target (duplicate lift across days)", async () => {
+    // AthleteOneRm is keyed athlete+lift — the same free-text "Squat" on two
+    // days shares one server record, so a save from day 1 must repaint day
+    // 2's badge too or it shows stale until a full refetch (Codex review).
+    const { result } = setup(
+      grid({
+        days: [
+          day({
+            session_slot_id: 1,
+            rows: [
+              row({ exercise_slot_id: 9, name: "Squat", exercise_id: null, cells: { "1": cell({ prescription_id: 100 }) } }),
+            ],
+          }),
+          day({
+            session_slot_id: 2,
+            session_ids: { "1": 22 },
+            rows: [
+              row({ exercise_slot_id: 10, name: "squat ", exercise_id: null, cells: { "1": cell({ prescription_id: 200 }) } }),
+              row({ exercise_slot_id: 11, name: "Bench", exercise_id: null, cells: { "1": cell({ prescription_id: 300 }) } }),
+            ],
+          }),
+        ],
+      }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true, one_rm: "140", source: "manual" })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.setOneRm(9, "140");
+    });
+
+    const days = result.current.grid!.days;
+    expect(days[0]!.rows[0]!.cells["1"]!.one_rm).toBe("140"); // the target
+    expect(days[1]!.rows[0]!.cells["1"]!.one_rm).toBe("140"); // same lift ("squat " folds to squat)
+    expect(days[1]!.rows[1]!.cells["1"]!.one_rm).toBeUndefined(); // different lift untouched
+  });
+
   it("POSTs {value} to the row's identity cell and locally patches one_rm/one_rm_source, without refetching", async () => {
     const { result } = setup();
     globalThis.fetch = vi.fn().mockResolvedValue(
