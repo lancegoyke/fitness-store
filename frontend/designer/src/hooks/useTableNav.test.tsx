@@ -128,6 +128,42 @@ function resyncCells(g: MesoGrid) {
   return mountCells(g);
 }
 
+/** Like mountCells, but a row's OWN `cells` map decides what actually
+ * mounts: a week id missing from `row.cells` gets no `data-grid-cell` node
+ * for any of its fields — the same "no rendered input at all" shape
+ * MesoTable produces for a hole (an add-this-week row's bare `<td/>`, no
+ * GridCellEditor) or a skipped cell (em-dash + Unskip button, no
+ * GridCellEditor). Fixtures express holes just by leaving a weekId out of
+ * `row(id, weekIds)`. The row-name column always mounts — MesoTable renders
+ * RowNameEditor unconditionally, independent of any week's holes. */
+function mountCellsWithHoles(g: MesoGrid) {
+  const nodes: Record<string, HTMLInputElement> = {};
+  for (const d of g.days) {
+    for (const r of d.rows) {
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.value = r.name;
+      nameInput.setAttribute("data-grid-cell", tableCellDomKey(r.exercise_slot_id, null, "name"));
+      document.body.appendChild(nameInput);
+      nodes[tableCellDomKey(r.exercise_slot_id, null, "name")] = nameInput;
+
+      for (const w of g.weeks) {
+        const c = r.cells[String(w.id)];
+        if (!c) continue; // hole: no cell for this row this week, no inputs at all.
+        for (const field of TABLE_FIELDS) {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.value = String((c as unknown as Record<string, unknown>)[field] ?? "");
+          input.setAttribute("data-grid-cell", tableCellDomKey(r.exercise_slot_id, w.id, field));
+          document.body.appendChild(input);
+          nodes[tableCellDomKey(r.exercise_slot_id, w.id, field)] = input;
+        }
+      }
+    }
+  }
+  return nodes;
+}
+
 function keyEvent(
   key: string,
   target: HTMLInputElement,
@@ -742,5 +778,134 @@ describe("holes (missing DOM cells)", () => {
       });
     }).not.toThrow();
     expect(document.activeElement).toBe(noteInput);
+  });
+});
+
+// Issue #455 review nit: arrow handlers used to commit the anchor to the
+// adjacent COORDINATE before checking whether it actually renders — landing
+// on a hole left the old input with real DOM focus but tabIndex -1, and no
+// cell anywhere holding tabIndex 0 (the grid drops out of the tab order).
+// The fix scans past holes, at keydown time, to the first coordinate that
+// DOES render — using mountCellsWithHoles so a fixture's holes are just a
+// row's own `cells` map, exactly like MesoTable's `!cell` bare <td/> case.
+describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom coordinate", () => {
+  it("(1) ArrowRight over a hole in the middle of a row skips the entire missing week and lands on the next rendered cell", () => {
+    // Row 9 has cells for weeks 1 and 3 only — week 2 is a total hole.
+    const HOLE_GRID = grid({
+      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false }), week({ id: 3, label: "Wk 3", current: false })],
+      days: [day(1, [row(9, [1, 3])])],
+    });
+    const cells = mountCellsWithHoles(HOLE_GRID);
+    const { result } = renderHook(() => useTableNav({ grid: HOLE_GRID }));
+    const noteInput = cells[tableCellDomKey(9, 1, "note")]!;
+    noteInput.setSelectionRange(0, 0);
+    const event = keyEvent("ArrowRight", noteInput);
+    act(() => {
+      result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).onKeyDown(event);
+    });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 3, "sets")]);
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 3, field: "sets" });
+    expect(event.preventDefault).toHaveBeenCalled();
+    // (5) invariant: the anchor addresses a real node holding tabIndex 0.
+    expect(result.current.cellProps(9, 3, "sets", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).tabIndex).toBe(-1);
+  });
+
+  it("(2) ArrowRight when everything to the right is holes leaves the anchor/focus unchanged, but still preventDefaults", () => {
+    // Row 9 has a cell for week 1 only — week 2 (the only thing to its
+    // right) is a total hole all the way to the table's edge.
+    const HOLE_GRID = grid({
+      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false })],
+      days: [day(1, [row(9, [1])])],
+    });
+    const cells = mountCellsWithHoles(HOLE_GRID);
+    const { result } = renderHook(() => useTableNav({ grid: HOLE_GRID }));
+    const noteInput = cells[tableCellDomKey(9, 1, "note")]!;
+    noteInput.focus();
+    noteInput.setSelectionRange(0, 0);
+    const event = keyEvent("ArrowRight", noteInput);
+    act(() => {
+      result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).onKeyDown(event);
+    });
+    expect(document.activeElement).toBe(noteInput);
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "note" });
+    expect(event.preventDefault).toHaveBeenCalled();
+    // (5) invariant: the anchor still addresses the real node it started at.
+    expect(result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).tabIndex).toBe(0);
+  });
+
+  it("(3) ArrowLeft mirrors (1): skips the entire missing week backwards, landing on the previous rendered cell", () => {
+    const HOLE_GRID = grid({
+      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false }), week({ id: 3, label: "Wk 3", current: false })],
+      days: [day(1, [row(9, [1, 3])])],
+    });
+    const cells = mountCellsWithHoles(HOLE_GRID);
+    const { result } = renderHook(() => useTableNav({ grid: HOLE_GRID }));
+    const setsInput = cells[tableCellDomKey(9, 3, "sets")]!;
+    setsInput.setSelectionRange(0, 0);
+    const event = keyEvent("ArrowLeft", setsInput);
+    act(() => {
+      result.current.cellProps(9, 3, "sets", NOOP_CALLBACKS).onKeyDown(event);
+    });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "note")]);
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "note" });
+    expect(event.preventDefault).toHaveBeenCalled();
+    // (5) invariant.
+    expect(result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.cellProps(9, 3, "sets", NOOP_CALLBACKS).tabIndex).toBe(-1);
+  });
+
+  it("(4) ArrowDown skips a row whose cell at (weekId, field) is unrendered, landing on the next row that has it", () => {
+    // Row 10 (between 9 and 11) has no week-1 cell at all.
+    const HOLE_GRID = grid({
+      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false })],
+      days: [day(1, [row(9, [1, 2]), row(10, [2]), row(11, [1, 2])])],
+    });
+    const cells = mountCellsWithHoles(HOLE_GRID);
+    const { result } = renderHook(() => useTableNav({ grid: HOLE_GRID }));
+    const event = keyEvent("ArrowDown", cells[tableCellDomKey(9, 1, "sets")]!);
+    act(() => {
+      result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).onKeyDown(event);
+    });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(11, 1, "sets")]);
+    expect(result.current.anchor).toEqual({ rowId: 11, weekId: 1, field: "sets" });
+    expect(event.preventDefault).toHaveBeenCalled();
+    // (5) invariant: row 10 (skipped over, never had this cell) never became
+    // the anchor; row 11 (the real landing) holds the roving tabIndex 0.
+    expect(result.current.cellProps(11, 1, "sets", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).tabIndex).toBe(-1);
+  });
+
+  it("(5) invariant holds across a repeated skid in both horizontal directions: the anchor always addresses an existing, tabIndex-0 node", () => {
+    const HOLE_GRID = grid({
+      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false }), week({ id: 3, label: "Wk 3", current: false })],
+      days: [day(1, [row(9, [1, 3])])],
+    });
+    const cells = mountCellsWithHoles(HOLE_GRID);
+    const { result } = renderHook(() => useTableNav({ grid: HOLE_GRID }));
+
+    function assertAnchorIsReal() {
+      const a = result.current.anchor;
+      expect(a).not.toBeNull();
+      if (!a) return;
+      expect(document.querySelector(`[data-grid-cell="${tableCellDomKey(a.rowId, a.weekId, a.field)}"]`)).not.toBeNull();
+      expect(result.current.cellProps(a.rowId, a.weekId, a.field, NOOP_CALLBACKS).tabIndex).toBe(0);
+    }
+
+    const noteInput = cells[tableCellDomKey(9, 1, "note")]!;
+    noteInput.setSelectionRange(0, 0);
+    act(() => {
+      result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).onKeyDown(keyEvent("ArrowRight", noteInput));
+    });
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 3, field: "sets" });
+    assertAnchorIsReal();
+
+    const setsInput = cells[tableCellDomKey(9, 3, "sets")]!;
+    setsInput.setSelectionRange(0, 0);
+    act(() => {
+      result.current.cellProps(9, 3, "sets", NOOP_CALLBACKS).onKeyDown(keyEvent("ArrowLeft", setsInput));
+    });
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "note" });
+    assertAnchorIsReal();
   });
 });

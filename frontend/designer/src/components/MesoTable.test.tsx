@@ -858,3 +858,53 @@ describe("keyboard grid navigation", () => {
     });
   });
 });
+
+// Issue #455 review nit: arrow moves must skid past holes/skipped cells
+// (no `data-grid-cell` node) to the next RENDERED cell rather than
+// committing the anchor to a coordinate nothing renders — see
+// useTableNav.test.tsx's "hole-skidding" describe for the hook-level specs.
+// This is the one integration check that drives it through the real
+// MesoTable render (a skipped cell is display-only real-app coverage the
+// hook's own unit tests, mounting bare DOM nodes, can't provide).
+describe("keyboard grid navigation: skidding over a skipped cell (issue #455 review nit)", () => {
+  it("ArrowRight from the prior week's note field skips an entire skipped-week cell and lands on the following week's sets input", () => {
+    const SKIP_GRID = grid({
+      weeks: [
+        week({ id: 1, label: "Wk 1", current: true }),
+        week({ id: 2, label: "Wk 2", current: false }),
+        week({ id: 3, label: "Wk 3", current: false }),
+      ],
+      days: [
+        day({
+          session_slot_id: 1,
+          name: "Lower",
+          rows: [
+            row({
+              exercise_slot_id: 9,
+              name: "Box Squat",
+              cells: {
+                "1": cell({ prescription_id: 900 }),
+                "2": cell({ prescription_id: 901, skipped: true }),
+                "3": cell({ prescription_id: 902 }),
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    render(<MesoTable {...baseProps({ grid: SKIP_GRID })} />);
+
+    // Sanity: week 2 really is the skipped em-dash display, not an input.
+    expect(screen.getByTestId("cell-skipped-901")).toHaveTextContent("—");
+    expect(screen.queryByTestId("cell-sets-901")).not.toBeInTheDocument();
+
+    const noteInput = screen.getByTestId("cell-note-900") as HTMLInputElement;
+    noteInput.focus();
+    noteInput.setSelectionRange(noteInput.value.length, noteInput.value.length);
+    fireEvent.keyDown(noteInput, { key: "ArrowRight" });
+
+    expect(screen.getByTestId("cell-sets-902")).toHaveFocus();
+    expect(screen.getByTestId("cell-sets-902")).toHaveAttribute("tabindex", "0");
+    expect(screen.getByTestId("cell-note-900")).toHaveAttribute("tabindex", "-1");
+  });
+});

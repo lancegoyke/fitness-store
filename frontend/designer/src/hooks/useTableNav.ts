@@ -25,6 +25,25 @@
 // against a `data-grid-cell` attribute (see `tableCellDomKey`), exactly
 // like useGridNav, so arrow-key moves and focus restoration work
 // identically for a hook-only unit test and the real mounted app.
+//
+// Arrow moves SKID over holes rather than landing on them: useGridNav's
+// one-week grid has no gaps (every ExerciseRow field always renders), so its
+// "extreme: no-op, preventDefault already fired" precedent only ever had to
+// handle running off the end of the row/column. A 2D table isn't that
+// simple — a hole (an add-this-week row's missing week) or a skipped cell
+// (em-dash + Unskip, no GridCellEditor) can sit in the MIDDLE of a row or
+// column, with no `data-grid-cell` node at all. Committing the anchor to
+// that coordinate would drop the whole grid out of the tab order (no
+// rendered cell left holding tabIndex 0) and leave the anchor pointing at
+// nothing. So every arrow move re-checks `cellExists` at keydown time and
+// keeps stepping in the same direction, past any hole, to the first
+// coordinate that actually renders. If none exists all the way to the edge,
+// the anchor is left exactly where it was — vertical moves still
+// preventDefault regardless (matching ArrowDown/Up's original unconditional
+// behavior), while a horizontal move only preventDefaults once it has
+// confirmed at least one adjacent column POSITION exists to attempt (a true
+// row-extreme with zero columns left, holes or otherwise, is still a pure
+// no-op, exactly as before).
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FocusEvent, KeyboardEvent } from "react";
 import type { MesoGrid } from "../lib/api";
@@ -148,9 +167,22 @@ function firstCellOf(flat: FlatTable): TableCellId | null {
   return id === undefined ? null : { rowId: id, weekId: null, field: "name" };
 }
 
+function cellSelector(rowId: number, weekId: number | null, field: TableColumn): string {
+  return `[data-grid-cell="${tableCellDomKey(rowId, weekId, field)}"]`;
+}
+
 function focusCell(rowId: number, weekId: number | null, field: TableColumn) {
-  const selector = `[data-grid-cell="${tableCellDomKey(rowId, weekId, field)}"]`;
-  document.querySelector<HTMLElement>(selector)?.focus();
+  document.querySelector<HTMLElement>(cellSelector(rowId, weekId, field))?.focus();
+}
+
+/** Whether a cell actually has a rendered `data-grid-cell` node right now.
+ * Checked fresh at keydown time (never precomputed/cached) — cells appear
+ * and disappear with skip/unskip and add-this-week, so the DOM is the only
+ * source of truth for "is this coordinate landable". Arrow moves use this
+ * to skid over holes (see the header comment) instead of committing the
+ * anchor to a coordinate nothing renders. */
+function cellExists(rowId: number, weekId: number | null, field: TableColumn): boolean {
+  return document.querySelector(cellSelector(rowId, weekId, field)) !== null;
 }
 
 const HANDLED_KEYS = new Set(["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Enter", "Escape"]);
@@ -193,7 +225,20 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
 
     let next: TableCellId | null;
     if (rowSurvives && weekSurvives) {
-      // Tier 1: same (rowId, weekId, field) survives.
+      // Tier 1: same (rowId, weekId, field) survives. This checks row/week
+      // EXISTENCE (is the id still anywhere in the grid), not whether THIS
+      // row still renders a cell at THIS week — a skip or a this-week-only
+      // add/remove can hollow out just one coordinate while its row and
+      // week both live on elsewhere. Unlike the arrow-key scan above (this
+      // PR's #455 review-nit fix), Tier 1 doesn't re-verify against
+      // cellExists: doing so would mean deciding what to fall back to
+      // (Tier 2b's "first remaining week" isn't guaranteed to exist for
+      // this row either), which is restoration-tier redesign, not an
+      // arrow-key fix. Tiers 2a/2b/3 land on the name column or the
+      // table's first cell, which — row-name always renders regardless of
+      // per-week holes — always exist. Left as-is deliberately: revisit
+      // with a failing restoration test if Tier 1 is ever observed to
+      // strand the anchor in practice.
       next = { rowId: prev.rowId, weekId: prev.weekId, field: prev.field };
     } else if (rowSurvives) {
       // Tier 2b: the week is gone (remove-week) but the row survives — keep
@@ -265,9 +310,21 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
           event.preventDefault();
           const idx = flat.rowOrder.indexOf(rowId);
           if (idx === -1) return;
-          const nextIdx = idx + (event.key === "ArrowDown" ? 1 : -1);
-          const targetRowId = flat.rowOrder[nextIdx];
-          if (targetRowId === undefined) return; // extreme: no-op, preventDefault already fired.
+          const step = event.key === "ArrowDown" ? 1 : -1;
+          // Skid past any row that has no rendered cell at this (weekId,
+          // field) — a row's holes are independent of its neighbors' (a
+          // missing week or a skipped cell), so the next INDEX isn't
+          // necessarily the next LANDABLE row. Stop at the first row that
+          // actually renders this column, or fall off the end: either way
+          // the key was handled (preventDefault already fired above).
+          let nextIdx = idx + step;
+          let candidateRowId = flat.rowOrder[nextIdx];
+          while (candidateRowId !== undefined && !cellExists(candidateRowId, weekId, field)) {
+            nextIdx += step;
+            candidateRowId = flat.rowOrder[nextIdx];
+          }
+          const targetRowId = candidateRowId;
+          if (targetRowId === undefined) return; // no rendered cell to the edge: stay put.
           commitAnchor({ rowId: targetRowId, weekId, field }, flat, true);
           return;
         }
@@ -279,10 +336,27 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
             event.key === "ArrowRight" ? el.selectionStart === el.value.length : el.selectionStart === 0;
           if (!collapsed || !atBoundary) return; // let the caret move natively.
           const colIdx = columns.findIndex((c) => c.weekId === weekId && c.field === field);
-          const nextColIdx = colIdx + (event.key === "ArrowRight" ? 1 : -1);
-          const nextCol = columns[nextColIdx];
-          if (nextCol === undefined) return; // row extreme: nothing to prevent either.
+          const step = event.key === "ArrowRight" ? 1 : -1;
+          let nextColIdx = colIdx + step;
+          let candidateCol = columns[nextColIdx];
+          if (candidateCol === undefined) return; // absolute row extreme: no adjacent column at all, nothing to prevent.
+          // There IS an adjacent column position, so this key is being
+          // handled from here on — preventDefault even if every remaining
+          // position turns out to be a hole (below) and the anchor doesn't
+          // actually move.
           event.preventDefault();
+          // Skid past any column with no rendered cell for THIS row — a
+          // hole (an add-this-week row's missing week) or a skipped cell
+          // (em-dash + Unskip, no GridCellEditor) both leave no
+          // `data-grid-cell` node, so arrowing across one jumps straight to
+          // the next editable cell instead of stranding the anchor on a
+          // coordinate nothing renders.
+          while (candidateCol !== undefined && !cellExists(rowId, candidateCol.weekId, candidateCol.field)) {
+            nextColIdx += step;
+            candidateCol = columns[nextColIdx];
+          }
+          const nextCol = candidateCol;
+          if (nextCol === undefined) return; // ran out of columns while skidding past holes: stay put, key already handled.
           commitAnchor({ rowId, weekId: nextCol.weekId, field: nextCol.field }, flat, true);
           return;
         }
