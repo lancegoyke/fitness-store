@@ -43,7 +43,8 @@ import {
   DragOverlay,
   KeyboardSensor,
   PointerSensor,
-  closestCenter,
+  pointerWithin,
+  rectIntersection,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
@@ -120,14 +121,21 @@ export function filterTableDragCandidates<T extends { id: unknown }>(activeId: u
 }
 
 // Same type/scope filtering at the collision layer as
-// filterTableDragCandidates above — a lifted day block's center can stay
-// closest to its OWN slot (blocks are tall), so `over` never reaches the
-// neighbor even when the keyboard getter proposes its coordinates.
-export const tableCollisionDetection: CollisionDetection = (args) =>
-  closestCenter({
-    ...args,
-    droppableContainers: filterTableDragCandidates(args.active.id, args.droppableContainers),
-  });
+// filterTableDragCandidates above. INTERSECTION-based on purpose, with NO
+// closest-center fallback: closestCenter always returns the nearest
+// candidate even when the drop lands nowhere near it, which would turn an
+// unsupported cross-day drop (candidates are same-day only) into a phantom
+// same-day reorder against whichever row happened to be nearest (Codex
+// #455 A2 review). Outside every candidate → no collision → `over` stays
+// null → the drop no-ops. pointerWithin first (precise for real pointer
+// drags), rectIntersection as the fallback (keyboard drags move the overlay
+// rect with no pointer coordinates).
+export const tableCollisionDetection: CollisionDetection = (args) => {
+  const droppableContainers = filterTableDragCandidates(args.active.id, args.droppableContainers);
+  const within = pointerWithin({ ...args, droppableContainers });
+  if (within.length > 0) return within;
+  return rectIntersection({ ...args, droppableContainers });
+};
 
 // Ported verbatim-adapted from WeekGrid.tsx's typedKeyboardCoordinates:
 // DroppableContainersMap is a real Map subclass — a spread/assign clone

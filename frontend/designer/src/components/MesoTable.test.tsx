@@ -1016,6 +1016,45 @@ describe("tableCollisionDetection (day drags collide only with day containers)",
     expect(collisions.every((c: { id: unknown }) => String(c.id).startsWith("day-"))).toBe(true);
     expect(String(collisions[0]!.id)).toBe("day-1");
   });
+
+  it("returns NO collision when a row is dropped nowhere near its own day's candidates (no phantom same-day reorder)", async () => {
+    // closestCenter would have snapped this far-away drop to the nearest
+    // same-day row and committed an unintended reorder; intersection-based
+    // collision leaves `over` null so the drop no-ops (Codex #455 A2 review).
+    const { tableCollisionDetection } = await import("./MesoTable");
+    const rect = (top: number, height = 40) => ({ top, bottom: top + height, left: 0, right: 800, width: 800, height });
+    const containers = [
+      { id: "row-1-9", rect: { current: rect(0) }, data: { current: {} }, disabled: false },
+      { id: "row-1-10", rect: { current: rect(40) }, data: { current: {} }, disabled: false },
+      { id: "row-2-11", rect: { current: rect(400) }, data: { current: {} }, disabled: false },
+    ];
+    const collisions = tableCollisionDetection({
+      active: { id: "row-1-9", rect: { current: { initial: rect(0), translated: rect(400) } }, data: { current: {} } },
+      collisionRect: rect(400), // dropped over day 2's territory — no same-day candidate there
+      droppableRects: new Map(containers.map((c) => [c.id, c.rect.current])),
+      droppableContainers: containers,
+      pointerCoordinates: { x: 100, y: 420 },
+    } as never);
+    expect(collisions).toEqual([]);
+  });
+
+  it("returns the same-day row under the pointer for an in-day row drag", async () => {
+    const { tableCollisionDetection } = await import("./MesoTable");
+    const rect = (top: number, height = 40) => ({ top, bottom: top + height, left: 0, right: 800, width: 800, height });
+    const containers = [
+      { id: "row-1-9", rect: { current: rect(0) }, data: { current: {} }, disabled: false },
+      { id: "row-1-10", rect: { current: rect(40) }, data: { current: {} }, disabled: false },
+    ];
+    const collisions = tableCollisionDetection({
+      active: { id: "row-1-10", rect: { current: { initial: rect(40), translated: rect(10) } }, data: { current: {} } },
+      collisionRect: rect(10),
+      droppableRects: new Map(containers.map((c) => [c.id, c.rect.current])),
+      droppableContainers: containers,
+      pointerCoordinates: { x: 100, y: 20 },
+    } as never);
+    expect(collisions.length).toBeGreaterThan(0);
+    expect(String(collisions[0]!.id)).toBe("row-1-9");
+  });
 });
 
 describe("tableKeyboardCoordinates delegates to the real droppable map", () => {
