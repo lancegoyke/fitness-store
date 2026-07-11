@@ -816,3 +816,60 @@ class TestLogAdvancesCurrentWeek:
         client.force_login(s.athlete)
         post(client, s.session_b, {"sets": []})
         assert PlanAction.objects.filter(plan=s.plan).count() == 0
+
+    # -- issue #456 Finding 2: stale `self` under a concurrent pointer move --
+
+    def test_stale_self_survives_a_concurrent_earlier_pointer_move(self):
+        """The compare/save must use a lock-fresh row, not the pre-lock `self`.
+
+        Race: an athlete's Week instance is loaded (``is_current`` True) before
+        a concurrent write; the coach's "Make current" then moves the pointer
+        to an EARLIER week and commits, clearing our week's flag in the DB out
+        from under the in-memory instance — without touching the in-memory
+        ``self.is_current``, which is still stale ``True``. Calling that STALE
+        instance's ``advance_current_week`` must still land on exactly one
+        current week — itself — not zero. (Pre-fix: ``live_weeks`` decided to
+        proceed off a fresh read, but the final ``if not self.is_current``
+        check and the eventual save used the stale ``self`` — its stale
+        ``True`` short-circuited the save entirely, after the bulk-clear had
+        already wiped the earlier week's flag, leaving the plan with zero
+        current weeks.)
+        """
+        s = self._two_week_plan(current_index=2, other_index=1)
+        # week_a (index 2, "w2") starts current; week_b (index 1, "w1") is earlier.
+        stale = Week.objects.get(pk=s.week_a.pk)
+        assert stale.is_current is True
+
+        # A concurrent coach "Make current" moves the pointer back to the
+        # EARLIER week and commits — mimicking a write that lands between our
+        # instance loading and its (later) ``advance_current_week`` call.
+        Week.objects.filter(pk=s.week_a.pk).update(is_current=False)
+        Week.objects.filter(pk=s.week_b.pk).update(is_current=True)
+
+        assert stale.advance_current_week() is True
+
+        live_current = Week.objects.filter(
+            mesocycle__plan=s.plan, is_current=True, deleted_at__isnull=True
+        )
+        assert live_current.count() == 1
+        assert live_current.get().pk == stale.pk
+        assert stale.is_current is True  # the caller's instance stays coherent
+
+    def test_stale_self_concurrently_soft_deleted_is_a_noop(self):
+        s = self._two_week_plan()  # week_a (idx 1) current; week_b (idx 2) later
+        stale = Week.objects.get(pk=s.week_b.pk)
+
+        # The week the caller loaded is concurrently soft-deleted before the
+        # lock is acquired (e.g. the coach deleted its day/row build mid-race).
+        Week.objects.filter(pk=s.week_b.pk).update(deleted_at=timezone.now())
+
+        assert stale.advance_current_week() is False
+
+        s.week_a.refresh_from_db()
+        assert s.week_a.is_current is True  # the pointer is untouched
+        assert (
+            Week.objects.filter(
+                mesocycle__plan=s.plan, is_current=True, deleted_at__isnull=True
+            ).count()
+            == 1
+        )

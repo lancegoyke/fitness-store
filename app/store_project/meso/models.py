@@ -1689,6 +1689,16 @@ class Week(models.Model):
         (``_athlete_session_or_404`` only ever serves a live session), and a
         soft-deleted week must never be treated as, or clobbered into, current.
 
+        Re-resolves THIS week from the post-lock ``live_weeks`` read (by pk)
+        rather than trusting the caller's pre-lock ``self`` (Finding 2): a
+        concurrent writer (another log write, or the coach's
+        ``week_set_current``) can commit between the caller loading ``self``
+        and this method acquiring the lock, and both the forward/no-op
+        comparison and the eventual save use that freshly-read row so they're
+        never split across two different snapshots of the same week. A week
+        concurrently soft-deleted out from under ``self`` between load and
+        lock is never resurrected — this returns ``False`` instead.
+
         Returns ``True`` when the pointer moved — including a plan with zero
         current weeks self-healing onto this one — ``False`` for a no-op. A
         caller that cares about ``Plan.modified`` staleness should bump it
@@ -1703,18 +1713,37 @@ class Week(models.Model):
                 .select_related("mesocycle")
                 .order_by("mesocycle__order", "index")
             )
+            # Re-resolve THIS week from the just-locked, fresh read instead of
+            # trusting the pre-lock ``self`` (issue #456 Finding 2): a concurrent
+            # writer (another log write, or the coach's ``week_set_current``) can
+            # commit between the caller loading ``self`` and this method
+            # acquiring the lock, leaving ``self.is_current`` stale. Comparing
+            # and saving against ``fresh`` instead means the flag this method
+            # tests and the row it saves are always the same, current-as-of-the
+            # -lock instance — the stale ``self`` was letting a concurrent
+            # "coach moves the pointer earlier, then we advance past it" race
+            # skip the save (stale ``True``) and leave the plan with ZERO
+            # current weeks.
+            fresh = next((w for w in live_weeks if w.pk == self.pk), None)
+            if fresh is None:
+                # Concurrently soft-deleted between ``self`` loading and this
+                # lock — never resurrect a dead week as current.
+                return False
             current = next((w for w in live_weeks if w.is_current), None)
             if current is not None:
                 current_key = (current.mesocycle.order, current.index)
-                logged_key = (self.mesocycle.order, self.index)
+                logged_key = (fresh.mesocycle.order, fresh.index)
                 if logged_key <= current_key:
                     return False
             Week.objects.filter(
                 mesocycle__plan_id=plan_id, deleted_at__isnull=True
-            ).exclude(pk=self.pk).update(is_current=False)
-            if not self.is_current:
-                self.is_current = True
-                self.save(update_fields=["is_current"])
+            ).exclude(pk=fresh.pk).update(is_current=False)
+            if not fresh.is_current:
+                fresh.is_current = True
+                fresh.save(update_fields=["is_current"])
+            # Keep the caller's (possibly stale) instance coherent with what we
+            # just persisted, in case they read ``self.is_current`` afterward.
+            self.is_current = True
             return True
 
 
