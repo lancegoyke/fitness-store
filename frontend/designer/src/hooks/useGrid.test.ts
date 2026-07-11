@@ -485,6 +485,47 @@ describe("concurrency guard on structural ops", () => {
   });
 });
 
+describe("reorder -> undo integration (issue #455 phase A2)", () => {
+  it("a reorder POST's fresh undo_label flows through to a subsequent undo, in the right fetch sequence", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true })) // POST reorder
+      .mockResolvedValueOnce(
+        res({
+          ok: true,
+          ...grid({ history: { can_undo: true, can_redo: false, undo_label: "Reordered exercises", redo_label: "" } }),
+        }),
+      ) // GET grid (post-reorder)
+      .mockResolvedValueOnce(res({ ok: true, program: [], weeks: [], phases: [], viewing: null })) // POST undo (its own single-week envelope, ignored)
+      .mockResolvedValueOnce(
+        res({
+          ok: true,
+          ...grid({ history: { can_undo: false, can_redo: true, undo_label: "", redo_label: "Reordered exercises" } }),
+        }),
+      ) as unknown as typeof fetch; // GET grid (post-undo)
+
+    await act(async () => {
+      await result.current.reorderExercises(11, [101, 100]);
+    });
+    expect(result.current.history.undo_label).toBe("Reordered exercises");
+
+    await act(async () => {
+      await result.current.undo();
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.map((c) => c[0])).toEqual([
+      "/meso/api/plan/7/session/11/reorder/",
+      "/meso/api/plan/7/grid/",
+      "/meso/api/plan/7/undo/",
+      "/meso/api/plan/7/grid/",
+    ]);
+    expect(result.current.history.can_undo).toBe(false);
+    expect(result.current.history.redo_label).toBe("Reordered exercises");
+  });
+});
+
 describe("refetchGrid", () => {
   it("GETs the grid endpoint (no options) and adopts the reply", async () => {
     const { result } = setup();
@@ -512,6 +553,65 @@ describe("refetchGrid", () => {
 
     expect(console.error).toHaveBeenCalled();
     expect(result.current.grid?.mesocycle.name).toBe("Block 1");
+  });
+});
+
+// --- Issue #455 phase A2: drag reordering ---------------------------------
+// reorderExercises/reorderDays are STRUCTURAL, same shape as every verb
+// above: await the POST, then refetch the whole grid, sharing busyRef.
+// useTableReorder (the pure drag-event translator) is the caller; these
+// specs only cover the verbs' own POST/refetch contract.
+
+describe("reorderExercises", () => {
+  it("POSTs {order} to session/{sessionId}/reorder/, then refetches the grid", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true }))
+      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.reorderExercises(11, [201, 202]);
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![0]).toBe("/meso/api/plan/7/session/11/reorder/");
+    expect(calls[0]![1].method).toBe("POST");
+    expect(sentBody()).toEqual({ order: [201, 202] });
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
+  });
+
+  it("console.errors and does not refetch on POST failure", async () => {
+    const { result } = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("boom")) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.reorderExercises(11, [201, 202]);
+    });
+
+    expect(console.error).toHaveBeenCalled();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1); // no refetch after a failed POST
+  });
+});
+
+describe("reorderDays", () => {
+  it("POSTs {order} to week/{weekId}/reorder/, then refetches the grid", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res({ ok: true }))
+      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.reorderDays(1, [10, 11]);
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]![0]).toBe("/meso/api/plan/7/week/1/reorder/");
+    expect(calls[0]![1].method).toBe("POST");
+    expect(sentBody()).toEqual({ order: [10, 11] });
+    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
   });
 });
 
@@ -713,6 +813,40 @@ describe("concurrency guard covers the new P2 verbs", () => {
     act(() => {
       first = result.current.skipCell(100, true);
       second = result.current.swapCell(100, "Leg Press");
+    });
+
+    expect(result.current.busy).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the second call bailed before POSTing
+
+    fetchMock.mockResolvedValueOnce(res({ ok: true, ...grid() })); // the refetch GET
+
+    await act(async () => {
+      resolvePost(res({ ok: true }));
+      await first;
+      await second;
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2); // POST + GET only — no third/fourth call
+    expect(result.current.busy).toBe(false);
+  });
+
+  it("reorderExercises (issue #455 phase A2) also shares the busyRef guard", async () => {
+    const { result } = setup();
+    let resolvePost!: (v: unknown) => void;
+    const fetchMock = vi.fn();
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePost = resolve;
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.reorderExercises(11, [100]);
+      second = result.current.addWeek();
     });
 
     expect(result.current.busy).toBe(true);
