@@ -2582,9 +2582,18 @@ class GroupMembership(models.Model):
         slot on that week — a swap override becomes the cell's ``swap_name``
         (block identity stays the shared slot's); load/sets/reps/note overrides
         become the cell's numbers. Each member week's ``is_current`` MIRRORS its
-        source week's (post-P3 ``is_current`` = the week the athlete is on), so
-        the athlete's home anchors on the same week the coach points to — never a
-        block that flags every week current.
+        source week's pointer, but **only on this member's very first
+        materialization** (issue #456) — the moment their plan is created, so
+        the athlete's home opens on the same week the coach was pointing at
+        when the block first reached them. Every sync after that leaves
+        ``is_current`` alone entirely, on every week, new or existing: once the
+        athlete starts logging, their own position (``Week.advance_current_week``)
+        or the coach's manual override (``week_set_current``) is what moves it —
+        a re-delivery snapping it back to the coach's pointer would undo the
+        athlete's own progress, and blindly mirroring onto a brand-new week
+        could produce two ``True`` rows at once (nothing in the schema forbids
+        that; ``presenters._single_current_week`` treats it as a defensive
+        fallback case, not the expected shape).
 
         Syncing in place this way preserves any ``SessionLog`` the athlete
         already wrote against an unchanged slot while propagating the coach's
@@ -2600,7 +2609,7 @@ class GroupMembership(models.Model):
         from .serializers import resolve_prescription
 
         shared_plan = src_meso.plan
-        member_plan, _ = Plan.objects.get_or_create(
+        member_plan, plan_created = Plan.objects.get_or_create(
             relationship=self.relationship,
             source_group=self.group,
             defaults={
@@ -2635,18 +2644,30 @@ class GroupMembership(models.Model):
         member_weeks = []
         week_pairs = []
         for src_week in src_weeks:
+            week_defaults = {
+                "phase": src_week.phase,
+                "volume": src_week.volume,
+                "intensity": src_week.intensity,
+                "is_deload": src_week.is_deload,
+                "deleted_at": None,
+            }
+            # Mirror the source pointer ONLY on this member's very first
+            # materialization (#456) — gated on the PLAN-level created flag, not
+            # a per-week one: a week created by a *later* sync (the coach grows
+            # the block after the member has already started logging) must
+            # default to ``is_current=False`` even if it happens to be the
+            # source's current week, or it would materialize alongside the
+            # member's own already-advanced week — nothing in the schema
+            # prevents two ``True`` rows. After first sync, this method never
+            # touches ``is_current`` again; the athlete's own logging
+            # (``Week.advance_current_week``) and the coach's manual override
+            # (``week_set_current``) are the only things that move it from here.
+            if plan_created:
+                week_defaults["is_current"] = src_week.is_current
             member_week, _ = Week.objects.update_or_create(
                 mesocycle=member_meso,
                 index=src_week.index,
-                defaults={
-                    "phase": src_week.phase,
-                    "volume": src_week.volume,
-                    "intensity": src_week.intensity,
-                    "is_deload": src_week.is_deload,
-                    # Mirror the source pointer — do NOT hardcode ``True`` (P3).
-                    "is_current": src_week.is_current,
-                    "deleted_at": None,
-                },
+                defaults=week_defaults,
             )
             member_weeks.append(member_week)
             week_pairs.append((src_week, member_week))

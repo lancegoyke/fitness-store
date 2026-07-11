@@ -8,8 +8,11 @@ surface (`/meso/me/` + the session logger) and get a single "your block is ready
 email/push — one per member, not one per week.
 
 This is the group peer of the P3 individual whole-block delivery: both release
-the whole mesocycle at once, and both mirror the source's ``is_current`` pointer
-(the week the athlete is on) rather than flagging every delivered week current.
+the whole mesocycle at once. A member's very first materialization mirrors the
+source's ``is_current`` pointer (the week the athlete is on) rather than
+flagging every delivered week current; every sync after that leaves it alone —
+the athlete's own logging (issue #456) or the coach's manual override is what
+moves it from there, so a re-delivery can never snap an advanced member back.
 
 The modeling: a materialized plan is rooted at the member's `CoachAthlete`
 relationship (an ordinary individual plan to the athlete surface) and tagged
@@ -352,6 +355,79 @@ class TestSyncDeliveredPlan:
         dropped = member_meso.weeks.get(index=2)
         assert dropped.deleted_at is not None
         assert member_meso.weeks.filter(deleted_at__isnull=True).count() == 1
+
+    def test_member_advance_is_preserved_across_redelivery(self):
+        # Issue #456: post-first-sync, a re-delivery must never snap an
+        # athlete's own advanced pointer back to the coach's.
+        group, plan, [m] = seed_group(member_count=1)
+        append_shared_week(plan)
+        meso = shared_meso(plan)
+
+        # First sync materializes + mirrors the source's current pointer (week 1).
+        _, member_weeks = m.sync_delivered_plan(meso)
+        by_index = {w.index: w for w in member_weeks}
+        assert by_index[1].is_current is True
+        assert by_index[2].is_current is False
+
+        # The member advances to week 2 on their own (e.g. by logging it).
+        by_index[1].is_current = False
+        by_index[1].save(update_fields=["is_current"])
+        by_index[2].is_current = True
+        by_index[2].save(update_fields=["is_current"])
+
+        # The coach re-delivers (e.g. tweaks a load) — must NOT snap them back.
+        m.sync_delivered_plan(meso)
+
+        by_index[1].refresh_from_db()
+        by_index[2].refresh_from_db()
+        assert by_index[2].is_current is True
+        assert by_index[1].is_current is False
+
+    def test_source_pointer_move_does_not_move_an_already_materialized_member(self):
+        # Post-first-sync, a re-sync never touches ``is_current`` — even when
+        # the coach moves the shared pointer.
+        group, plan, [m] = seed_group(member_count=1)
+        week2 = append_shared_week(plan)
+        meso = shared_meso(plan)
+        week1 = meso.weeks.get(index=1)
+
+        m.sync_delivered_plan(meso)  # first sync mirrors week 1
+
+        week1.is_current = False
+        week1.save(update_fields=["is_current"])
+        week2.is_current = True
+        week2.save(update_fields=["is_current"])
+
+        _, member_weeks = m.sync_delivered_plan(meso)  # re-sync
+
+        by_index = {w.index: w for w in member_weeks}
+        assert by_index[1].is_current is True
+        assert by_index[2].is_current is False
+
+    def test_new_week_added_after_first_sync_materializes_not_current(self):
+        # A week the member never had before must not materialize current just
+        # because it happens to be the source's current pointer — otherwise a
+        # member who already advanced past first sync would end up with two
+        # ``is_current`` weeks (nothing in the DB prevents that).
+        group, plan, [m] = seed_group(member_count=1)
+        meso = shared_meso(plan)
+        week1 = meso.weeks.get(index=1)
+
+        _, member_weeks = m.sync_delivered_plan(meso)  # first sync: week 1 only
+        assert [w.index for w in member_weeks] == [1]
+
+        week2 = append_shared_week(plan)
+        week1.is_current = False
+        week1.save(update_fields=["is_current"])
+        week2.is_current = True
+        week2.save(update_fields=["is_current"])
+
+        _, member_weeks = m.sync_delivered_plan(meso)
+
+        by_index = {w.index: w for w in member_weeks}
+        assert by_index[2].is_current is False
+        # The member's own already-materialized pointer stays untouched too.
+        assert by_index[1].is_current is True
 
 
 # -- model: deliver_block (the whole-block fan-out) --------------------------
