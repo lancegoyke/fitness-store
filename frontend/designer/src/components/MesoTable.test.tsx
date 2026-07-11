@@ -117,6 +117,8 @@ function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
     onFillAcrossWeeks: vi.fn(),
     onAddExerciseThisWeek: vi.fn(),
     onSetOneRm: vi.fn().mockResolvedValue({ one_rm: "", one_rm_source: "" }),
+    coachmarkVisible: vi.fn(() => true),
+    dismissCoachmark: vi.fn(),
     ...overrides,
   };
 }
@@ -136,6 +138,31 @@ describe("layout", () => {
 
   it("renders nothing when grid is null", () => {
     const { container } = render(<MesoTable {...baseProps({ grid: null })} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+// Issue #455 phase A4 — the table coachmark. Mirrors WeekGrid.test.tsx's
+// "shows the grid coachmark.../hides the grid coachmark..." pair structurally,
+// against the new "table" key (lib/coachmarks.ts's COACHMARK_KEYS).
+describe("coachmark (issue #455 phase A4)", () => {
+  it("shows the table coachmark when coachmarkVisible('table') is true, dismiss wired", async () => {
+    const user = userEvent.setup();
+    const dismissCoachmark = vi.fn();
+    render(<MesoTable {...baseProps({ dismissCoachmark })} />);
+    expect(screen.getByText("The block table")).toBeInTheDocument();
+    expect(screen.getByText(/every change autosaves/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /dismiss/i }));
+    expect(dismissCoachmark).toHaveBeenCalledWith("table");
+  });
+
+  it("hides the table coachmark when dismissed", () => {
+    render(<MesoTable {...baseProps({ coachmarkVisible: vi.fn(() => false) })} />);
+    expect(screen.queryByText("The block table")).not.toBeInTheDocument();
+  });
+
+  it("renders nothing (including the coachmark) when grid is null", () => {
+    const { container } = render(<MesoTable {...baseProps({ grid: null, coachmarkVisible: vi.fn(() => true) })} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

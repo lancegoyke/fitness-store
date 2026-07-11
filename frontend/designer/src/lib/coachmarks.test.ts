@@ -13,12 +13,13 @@ describe("storageKey", () => {
   it("namespaces each coachmark's storage key", () => {
     expect(storageKey("grid")).toBe("meso-coachmark-designer-grid");
     expect(storageKey("phone")).toBe("meso-coachmark-designer-phone");
+    expect(storageKey("table")).toBe("meso-coachmark-designer-table");
   });
 });
 
 describe("COACHMARK_KEYS", () => {
-  it("lists the two designer region notes", () => {
-    expect(COACHMARK_KEYS).toEqual(["grid", "phone"]);
+  it("lists the designer region notes, including the multi-week table (issue #455 phase A4)", () => {
+    expect(COACHMARK_KEYS).toEqual(["grid", "phone", "table"]);
   });
 });
 
