@@ -131,7 +131,9 @@
         </div>
         <p class="meso-row-meta" style="margin-bottom:12px;">Coach {{ plan.coach }}{% if plan.goal %} · {{ plan.goal }}{% endif %}</p>
 
-        {% if plan.sessions %}
+        {% if plan.awaiting %}
+          <p class="meso-row-meta">Nothing delivered yet — your coach is still building this week.</p>
+        {% else %}
           {% if plan.chip_count > 1 %}
             {% comment %}
               Week chips (issue #456) — the tappable path onto any delivered
@@ -145,6 +147,9 @@
               only gets a visible label once the plan has more than one
               delivered block, otherwise it's today's flat "Wk N" row. Only
               shown at all once the plan has more than one delivered week.
+              Rendered independent of plan.sessions (nit #456 P2): a focused
+              week whose sessions were all soft-deleted must not hide the only
+              plan-wide navigation off it.
             {% endcomment %}
             <div style="margin-bottom:12px;">
               {% for group in plan.week_chip_groups %}
@@ -160,23 +165,33 @@
             </div>
           {% endif %}
 
-          {# The focus week's sessions — the "log today" affordance. #}
-          <div class="meso-flex" style="flex-direction:column;gap:8px;">
-            {% for s in plan.sessions %}
-              <a class="meso-row" href="{{ s.url }}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;text-decoration:none;color:inherit;">
-                <div class="meso-mono" style="font-size:12px;font-weight:700;color:var(--dim);">D{{ s.n }}</div>
-                <div style="flex:1;min-width:0;">
-                  <div style="font-size:14px;font-weight:700;letter-spacing:-0.01em;">{{ s.name }}{% if s.bias %} · {{ s.bias }}{% endif %}</div>
-                  <div class="meso-row-meta">{{ s.exercise_count }} exercise{{ s.exercise_count|pluralize }}</div>
-                </div>
-                {% if s.status == 'done' %}
-                  <span class="meso-badge meso-badge--ok">{{ s.status_label }}</span>
-                {% else %}
-                  <span class="meso-badge">{{ s.status_label }}</span>
-                {% endif %}
-              </a>
-            {% endfor %}
-          </div>
+          {% if plan.sessions %}
+            {# The focus week's sessions — the "log today" affordance. #}
+            <div class="meso-flex" style="flex-direction:column;gap:8px;">
+              {% for s in plan.sessions %}
+                <a class="meso-row" href="{{ s.url }}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;text-decoration:none;color:inherit;">
+                  <div class="meso-mono" style="font-size:12px;font-weight:700;color:var(--dim);">D{{ s.n }}</div>
+                  <div style="flex:1;min-width:0;">
+                    <div style="font-size:14px;font-weight:700;letter-spacing:-0.01em;">{{ s.name }}{% if s.bias %} · {{ s.bias }}{% endif %}</div>
+                    <div class="meso-row-meta">{{ s.exercise_count }} exercise{{ s.exercise_count|pluralize }}</div>
+                  </div>
+                  {% if s.status == 'done' %}
+                    <span class="meso-badge meso-badge--ok">{{ s.status_label }}</span>
+                  {% else %}
+                    <span class="meso-badge">{{ s.status_label }}</span>
+                  {% endif %}
+                </a>
+              {% endfor %}
+            </div>
+          {% else %}
+            {# This card's plan HAS delivered weeks — this focused week just has
+               no live sessions right now (e.g. the coach removed them all after
+               delivering it, or after a group-member re-sync). Distinct from
+               the truly-nothing-delivered "awaiting" state above (nit #456
+               P2): the plan-wide chips/grid above still stand, so this is
+               deliberately a light inline note, not the "still building" copy. #}
+            <p class="meso-row-meta">No sessions this week.</p>
+          {% endif %}
 
           {% if plan.focus_done and plan.next_week %}
             {# "Start next week" nudge (#456) — discoverability sugar; the chips above are the universal path. Crosses blocks (Finding 1): when the next delivered week lives in a different mesocycle, the copy names the destination block so the jump makes sense. #}
@@ -191,7 +206,9 @@
               phone screen never scrolls the whole page sideways. Pure
               server-rendered — no JS. (A multi-line {# #} comment is NOT
               stripped by Django — its tokenizer is single-line — so it would
-              leak onto the athlete's screen; use {% comment %} here.)
+              leak onto the athlete's screen; use {% comment %} here.) Rendered
+              independent of plan.sessions (nit #456 P2) — see the chips
+              comment above.
             {% endcomment %}
             <div style="margin-top:14px;">
               <p class="meso-eyebrow" style="margin-bottom:8px;">Your block</p>
@@ -226,8 +243,6 @@
               {% endfor %}
             </div>
           {% endif %}
-        {% else %}
-          <p class="meso-row-meta">Nothing delivered yet — your coach is still building this week.</p>
         {% endif %}
       </div>
     {% empty %}

@@ -475,6 +475,38 @@ class TestAthleteHome:
         assert "server-rendered" not in body
         assert "#}" not in body
 
+    # -- nit #456 P2: an empty focused week must not hide navigation --------
+
+    def test_focused_week_with_no_live_sessions_still_shows_chips_and_grid(
+        self, client
+    ):
+        """A focused week with zero live sessions keeps plan-wide navigation.
+
+        When the focused/current week's sessions are all soft-deleted but the
+        plan still has another delivered week, the card must keep the chip
+        strip and the block grid — hiding them (the old all-or-nothing
+        ``{% if plan.sessions %}`` gate) would strand the athlete on the empty
+        week with no way to reach the rest of the block.
+        """
+        b = seed_block()  # w1 & w2 delivered, w2 is_current
+        b.s2.deleted_at = timezone.now()
+        b.s2.save(update_fields=["deleted_at"])
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "No sessions this week." in body
+        assert "Nothing delivered yet" not in body
+        # The chip strip (2 delivered weeks) survives — week 1 is reachable.
+        assert f"?week={b.w1.pk}" in body
+        # The block grid survives too.
+        assert "Your block" in body
+
+    def test_nothing_delivered_still_shows_awaiting_copy(self, client):
+        """The truly-nothing-delivered state keeps its own distinct copy."""
+        s = seed(delivered=False)
+        client.force_login(s.athlete)
+        body = client.get(HOME).content.decode()
+        assert "Nothing delivered yet — your coach is still building this week." in body
+
 
 # -- issue #456: ?week= display-only focus override + the chip/nudge UI ---
 
@@ -946,13 +978,20 @@ class TestSoftDeletedRowsHidden:
         )
 
     def test_home_hides_soft_deleted_session(self, client):
+        # The tappable "log today" row/link for a soft-deleted Session must be
+        # gone. This does NOT assert the day's name disappears from the page
+        # entirely: since nit #456 P2, the read-only block-wide grid renders
+        # independent of the focus week's live ``Session`` rows (it's driven by
+        # the block-level ``SessionSlot``/``ExerciseSlot``/``Prescription``,
+        # none of which this test touches), so the day can legitimately still
+        # appear there even though its per-week log affordance is hidden.
         s = seed(session_name="Lower")
         s.session.deleted_at = timezone.now()
         s.session.save(update_fields=["deleted_at"])
         client.force_login(s.athlete)
         body = client.get(HOME).content.decode()
         assert session_url(s.session) not in body
-        assert "Lower" not in body
+        assert "No sessions this week." in body
 
     def test_session_page_404s_when_session_soft_deleted(self, client):
         s = seed()
