@@ -43,6 +43,7 @@ from store_project.meso.models import Plan
 from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
+from store_project.meso.models import Week
 from store_project.meso.models import WeekDelivery
 from store_project.users.factories import UserFactory
 
@@ -428,6 +429,99 @@ class TestSyncDeliveredPlan:
         assert by_index[2].is_current is False
         # The member's own already-materialized pointer stays untouched too.
         assert by_index[1].is_current is True
+
+    def test_revived_week_drops_stale_current_when_member_has_moved_on(self):
+        # Issue #456 nit 1: ``Week.soft_delete`` never clears ``is_current``, so
+        # a week dropped from the block while it was the member's current one
+        # keeps that stale ``True`` on its dead row. Real ``advance_current_week``
+        # only clears LIVE weeks' pointer (``.filter(deleted_at__isnull=True)``),
+        # so it never touches the dead week's stale flag either — it just
+        # quietly survives. If the coach later brings the week back, reviving
+        # it verbatim would resurrect a second live current week alongside
+        # wherever the member has since moved on — the member's real position
+        # must win instead.
+        group, plan, [m] = seed_group(member_count=1)
+        append_shared_week(plan)
+        append_shared_week(plan)
+        meso = shared_meso(plan)
+        week1 = meso.weeks.get(index=1)
+
+        m.sync_delivered_plan(meso)  # first sync mirrors week 1 as current
+        member_plan = Plan.objects.get(relationship=m.relationship, source_group=group)
+        member_meso = member_plan.mesocycles.get()
+        assert member_meso.weeks.get(index=1).is_current is True
+
+        # The coach drops week 1 from the shared block — the member's copy is
+        # soft-deleted, but its stale ``is_current`` survives the drop.
+        week1.soft_delete()
+        m.sync_delivered_plan(meso)
+        member_week1 = member_meso.weeks.get(index=1)
+        assert member_week1.deleted_at is not None
+        assert member_week1.is_current is True
+
+        # The member's own logging moves their pointer to week 3 — mirroring
+        # ``Week.advance_current_week``, which only clears live weeks, so it
+        # never touches the dead week 1's stale flag.
+        member_week3 = member_meso.weeks.get(index=3)
+        member_week3.is_current = True
+        member_week3.save(update_fields=["is_current"])
+
+        # The coach re-adds week 1 and re-delivers.
+        week1.deleted_at = None
+        week1.save(update_fields=["deleted_at"])
+        m.sync_delivered_plan(meso)
+
+        member_week1.refresh_from_db()
+        member_week3.refresh_from_db()
+        assert member_week1.deleted_at is None  # revived
+        assert member_week1.is_current is False  # stale flag dropped
+        assert member_week3.is_current is True  # member's real position wins
+        assert (
+            Week.objects.filter(
+                mesocycle__plan=member_plan, is_current=True, deleted_at__isnull=True
+            ).count()
+            == 1
+        )
+
+    def test_revived_week_keeps_stale_current_when_member_has_no_other_current(self):
+        # Issue #456 nit 1, the flip side: when the member never moved past the
+        # dropped week (so they have NO other live current week once it's
+        # dead), reviving it should restore their position rather than
+        # stranding them positionless.
+        group, plan, [m] = seed_group(member_count=1)
+        append_shared_week(plan)
+        meso = shared_meso(plan)
+        week1 = meso.weeks.get(index=1)
+
+        m.sync_delivered_plan(meso)  # first sync: week 1 current
+        member_plan = Plan.objects.get(relationship=m.relationship, source_group=group)
+        member_meso = member_plan.mesocycles.get()
+        assert member_meso.weeks.get(index=1).is_current is True
+
+        week1.soft_delete()
+        m.sync_delivered_plan(meso)
+        member_week1 = member_meso.weeks.get(index=1)
+        assert member_week1.deleted_at is not None
+        assert member_week1.is_current is True  # stale flag survives the drop
+        # The member now has zero LIVE current weeks — their only current week
+        # is dead.
+        assert not Week.objects.filter(
+            mesocycle__plan=member_plan, is_current=True, deleted_at__isnull=True
+        ).exists()
+
+        week1.deleted_at = None
+        week1.save(update_fields=["deleted_at"])
+        m.sync_delivered_plan(meso)
+
+        member_week1.refresh_from_db()
+        assert member_week1.deleted_at is None  # revived
+        assert member_week1.is_current is True  # position restored
+        assert (
+            Week.objects.filter(
+                mesocycle__plan=member_plan, is_current=True, deleted_at__isnull=True
+            ).count()
+            == 1
+        )
 
 
 # -- model: deliver_block (the whole-block fan-out) --------------------------

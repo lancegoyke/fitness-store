@@ -2622,7 +2622,19 @@ class GroupMembership(models.Model):
         athlete's own progress, and blindly mirroring onto a brand-new week
         could produce two ``True`` rows at once (nothing in the schema forbids
         that; ``presenters._single_current_week`` treats it as a defensive
-        fallback case, not the expected shape).
+        fallback case, not the expected shape). One narrow exception (#456 nit
+        1): ``Week.soft_delete`` never clears ``is_current``, so a week dropped
+        from the block while it happened to be the member's current one keeps
+        that stale flag on its now-dead row. If the source week later returns
+        (the coach undoes the drop, or re-adds it), REVIVING that row verbatim
+        would resurrect the stale ``True`` alongside wherever the member's own
+        logging/coach override has since moved them. So a revival (the row
+        existed and was soft-deleted before this sync) whose stale flag is
+        ``True`` checks whether the member plan already has another live
+        current week: if so, that week wins and the revived row's flag is
+        dropped; if the member has NO other live current week at all (they
+        never advanced past the dropped week), the flag is preserved instead —
+        the coach's temporary removal shouldn't strand the member positionless.
 
         Syncing in place this way preserves any ``SessionLog`` the athlete
         already wrote against an unchanged slot while propagating the coach's
@@ -2662,6 +2674,21 @@ class GroupMembership(models.Model):
             order=src_meso.order,
             defaults={"name": src_meso.name, "week_count": src_meso.week_count},
         )
+        # Snapshot each existing member week's soft-delete + pointer state
+        # BEFORE this sync mutates anything (#456 nit 1) — used below to detect
+        # a week being REVIVED (dropped from the block, now returning) so a
+        # stale ``is_current`` (``Week.soft_delete`` leaves the flag set on the
+        # dead row) can't resurrect a second live current week. Only needed for
+        # a non-first sync — a first sync (``plan_created``) creates every row
+        # fresh, so nothing here can have a prior soft-deleted state.
+        prior_week_state = (
+            {}
+            if plan_created
+            else {
+                w.index: (w.pk, w.deleted_at, w.is_current)
+                for w in member_meso.weeks.all()
+            }
+        )
         # Mirror every live source week onto the member's block (matched by
         # ``index``); ``deleted_at: None`` revives a member week whose source
         # week was dropped then returned. ``week_pairs`` keeps each source week
@@ -2693,6 +2720,33 @@ class GroupMembership(models.Model):
             # (``week_set_current``) are the only things that move it from here.
             if plan_created:
                 week_defaults["is_current"] = src_week.is_current
+            else:
+                # A REVIVAL (#456 nit 1): this member week existed and was
+                # soft-deleted before this sync, and its dead row's flag is
+                # still ``True`` (``Week.soft_delete`` never clears it). Reviving
+                # it verbatim could resurrect a second live current week
+                # alongside wherever the member's own logging/coach override has
+                # since moved them. If the member has another live current week,
+                # that one wins and this row's flag is dropped; if they have
+                # NONE (they never moved past the dropped week), preserve it —
+                # the coach's temporary removal shouldn't strand the member
+                # positionless. Rows that aren't a stale-current revival are
+                # left out of ``week_defaults`` entirely, so ``update_or_create``
+                # doesn't touch their ``is_current`` — unchanged behavior.
+                prior = prior_week_state.get(src_week.index)
+                if prior is not None:
+                    prior_pk, prior_deleted_at, prior_is_current = prior
+                    if prior_deleted_at is not None and prior_is_current:
+                        has_other_current = (
+                            Week.objects.filter(
+                                mesocycle__plan=member_plan,
+                                is_current=True,
+                                deleted_at__isnull=True,
+                            )
+                            .exclude(pk=prior_pk)
+                            .exists()
+                        )
+                        week_defaults["is_current"] = not has_other_current
             member_week, _ = Week.objects.update_or_create(
                 mesocycle=member_meso,
                 index=src_week.index,
