@@ -4,9 +4,10 @@
 // forward ExerciseRow's dirtySinceFocus semantics (only actually-typed
 // fields persist). Deload marker/skipped em-dash/swap badge are display-only
 // in P1 — no write UX for swap/skip.
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MesoTable } from "./MesoTable";
+import { tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
 import type { GridCell, GridDay, GridRow, GridWeek, GroupIdentity, MesoGrid } from "../lib/api";
 
 function week(overrides: Partial<GridWeek> = {}): GridWeek {
@@ -585,5 +586,275 @@ describe("group per-athlete adjust badge", () => {
       expect.objectContaining({ exercise_slot_id: 9 }),
       expect.objectContaining({ prescription_id: 100 }),
     );
+  });
+});
+
+// --- Issue #455 phase A1: keyboard grid navigation ------------------------
+// useTableNav (../hooks/useTableNav) is instantiated ONCE inside MesoTable —
+// GridCellEditor/RowNameEditor are module-private, so there's no externally
+// injectable gridNav prop and no INERT fallback to test; every spec here
+// renders the real table and drives real keyboard events through RTL,
+// mirroring WeekGrid.test.tsx's "Phase 3" block (the one-week precedent).
+//
+// Fixture: day 1 (session_slot_id 1) has row 9 "Box Squat" (cells 900/901)
+// and row 10 "RDL" (cells 1000/1001); day 2 (session_slot_id 2) has row 11
+// "Bench" (cells 1100/1101). Two weeks (id 1 "Wk 1", id 2 "Wk 2") so
+// ArrowRight/Left week-crossing is exercisable directly.
+const NAV_GRID: MesoGrid = grid({
+  weeks: [week({ id: 1, label: "Wk 1", current: true }), week({ id: 2, label: "Wk 2", current: false })],
+  days: [
+    day({
+      session_slot_id: 1,
+      name: "Lower",
+      rows: [
+        row({
+          exercise_slot_id: 9,
+          name: "Box Squat",
+          cells: { "1": cell({ prescription_id: 900 }), "2": cell({ prescription_id: 901 }) },
+        }),
+        row({
+          exercise_slot_id: 10,
+          name: "RDL",
+          cells: { "1": cell({ prescription_id: 1000 }), "2": cell({ prescription_id: 1001 }) },
+        }),
+      ],
+    }),
+    day({
+      session_slot_id: 2,
+      name: "Upper",
+      rows: [
+        row({
+          exercise_slot_id: 11,
+          name: "Bench",
+          cells: { "1": cell({ prescription_id: 1100 }), "2": cell({ prescription_id: 1101 }) },
+        }),
+      ],
+    }),
+  ],
+});
+
+describe("keyboard grid navigation", () => {
+  describe("data-grid-cell + aria-label", () => {
+    it("stamps data-grid-cell on every field input and the row-name input, keyed by (rowId, weekId, field)", () => {
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      expect(screen.getByTestId("row-name-9")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, null, "name"));
+      expect(screen.getByTestId("cell-sets-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "sets"));
+      expect(screen.getByTestId("cell-reps-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "reps"));
+      expect(screen.getByTestId("cell-load-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "load"));
+      expect(screen.getByTestId("cell-rpe-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "rpe"));
+      expect(screen.getByTestId("cell-rest-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "rest"));
+      expect(screen.getByTestId("cell-note-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "note"));
+      expect(screen.getByTestId("cell-sets-901")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 2, "sets"));
+    });
+
+    it("gives every field input an aria-label reflecting row/week/field, and the name input its own", () => {
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      expect(screen.getByTestId("cell-sets-900")).toHaveAttribute("aria-label", tableCellAriaLabel("Box Squat", "Wk 1", "sets"));
+      expect(screen.getByTestId("cell-rpe-900")).toHaveAttribute("aria-label", tableCellAriaLabel("Box Squat", "Wk 1", "rpe"));
+      expect(screen.getByTestId("cell-sets-901")).toHaveAttribute("aria-label", tableCellAriaLabel("Box Squat", "Wk 2", "sets"));
+      expect(screen.getByTestId("row-name-9")).toHaveAttribute("aria-label", tableCellAriaLabel("Box Squat", null, "name"));
+    });
+  });
+
+  describe("roving tabindex", () => {
+    it("exactly one cell (the table's first: row-name) is tabbable on initial render", () => {
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      expect(screen.getByTestId("row-name-9")).toHaveAttribute("tabindex", "0");
+      expect(screen.getByTestId("cell-sets-900")).toHaveAttribute("tabindex", "-1");
+      expect(screen.getByTestId("row-name-10")).toHaveAttribute("tabindex", "-1");
+      expect(screen.getByTestId("row-name-11")).toHaveAttribute("tabindex", "-1");
+    });
+
+    it("focusing another cell moves the roving tabIndex to it", async () => {
+      const user = userEvent.setup();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      await user.click(screen.getByTestId("cell-rpe-1000"));
+      expect(screen.getByTestId("cell-rpe-1000")).toHaveAttribute("tabindex", "0");
+      expect(screen.getByTestId("row-name-9")).toHaveAttribute("tabindex", "-1");
+    });
+
+    it("roving tabIndex spans multiple day-tables as ONE grid", async () => {
+      const user = userEvent.setup();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      await user.click(screen.getByTestId("cell-load-1000")); // day 1's last row
+      await user.keyboard("{ArrowDown}");
+      expect(screen.getByTestId("cell-load-1100")).toHaveFocus(); // day 2's row
+      expect(screen.getByTestId("cell-load-1100")).toHaveAttribute("tabindex", "0");
+    });
+  });
+
+  describe("ArrowDown / ArrowUp navigate rows across day-table boundaries", () => {
+    it("ArrowDown moves focus to the same field on the next row within a day", async () => {
+      const user = userEvent.setup();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      await user.click(screen.getByTestId("cell-sets-900"));
+      await user.keyboard("{ArrowDown}");
+      expect(screen.getByTestId("cell-sets-1000")).toHaveFocus();
+    });
+
+    it("ArrowDown crosses a day-table boundary (last row of day 1 -> first row of day 2)", async () => {
+      const user = userEvent.setup();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      await user.click(screen.getByTestId("cell-load-1000"));
+      await user.keyboard("{ArrowDown}");
+      expect(screen.getByTestId("cell-load-1100")).toHaveFocus();
+    });
+
+    it("ArrowUp mirrors ArrowDown, crossing day boundaries upward", async () => {
+      const user = userEvent.setup();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      await user.click(screen.getByTestId("cell-rpe-1100"));
+      await user.keyboard("{ArrowUp}");
+      expect(screen.getByTestId("cell-rpe-1000")).toHaveFocus();
+    });
+  });
+
+  describe("ArrowRight / ArrowLeft move fields only at caret extremes, crossing weeks and the name column", () => {
+    it("ArrowRight at the end of the text moves to the next field within the same week", () => {
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
+      setsInput.focus();
+      setsInput.setSelectionRange(setsInput.value.length, setsInput.value.length);
+      fireEvent.keyDown(setsInput, { key: "ArrowRight" });
+      expect(screen.getByTestId("cell-reps-900")).toHaveFocus();
+    });
+
+    it("ArrowLeft at the start of the text moves to the previous field within the same week", () => {
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      const repsInput = screen.getByTestId("cell-reps-900") as HTMLInputElement;
+      repsInput.focus();
+      repsInput.setSelectionRange(0, 0);
+      fireEvent.keyDown(repsInput, { key: "ArrowLeft" });
+      expect(screen.getByTestId("cell-sets-900")).toHaveFocus();
+    });
+
+    it("ArrowRight at the last field of week 1 crosses into week 2's first field", () => {
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      const noteInput = screen.getByTestId("cell-note-900") as HTMLInputElement;
+      noteInput.focus();
+      noteInput.setSelectionRange(noteInput.value.length, noteInput.value.length);
+      fireEvent.keyDown(noteInput, { key: "ArrowRight" });
+      expect(screen.getByTestId("cell-sets-901")).toHaveFocus();
+    });
+
+    it("ArrowRight at the end of the name column moves into week 1's sets field", () => {
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      const nameInput = screen.getByTestId("row-name-9") as HTMLInputElement;
+      nameInput.focus();
+      nameInput.setSelectionRange(nameInput.value.length, nameInput.value.length);
+      fireEvent.keyDown(nameInput, { key: "ArrowRight" });
+      expect(screen.getByTestId("cell-sets-900")).toHaveFocus();
+    });
+
+    it("ArrowLeft at the start of week 1's sets field moves back to the name column", () => {
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
+      setsInput.focus();
+      setsInput.setSelectionRange(0, 0);
+      fireEvent.keyDown(setsInput, { key: "ArrowLeft" });
+      expect(screen.getByTestId("row-name-9")).toHaveFocus();
+    });
+  });
+
+  describe("Enter commits / Escape reverts (integrated)", () => {
+    it("Enter commits only when the cell is dirty, and keeps focus in place", async () => {
+      const user = userEvent.setup();
+      const onPatchCell = vi.fn();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID, onPatchCell })} />);
+      const loadInput = screen.getByTestId("cell-load-900");
+      await user.click(loadInput);
+      await user.keyboard("{Enter}"); // clean cell: no-op (existing dirty gate)
+      expect(onPatchCell).not.toHaveBeenCalled();
+      await user.clear(loadInput);
+      await user.type(loadInput, "150");
+      await user.keyboard("{Enter}");
+      expect(onPatchCell).toHaveBeenCalledWith(900, { load: "150" });
+      expect(onPatchCell).toHaveBeenCalledTimes(1);
+      expect(loadInput).toHaveFocus();
+    });
+
+    it("Escape reverts only the focused field's draft, leaving a second dirty field on the same cell untouched", () => {
+      // A per-cell dirty Set (not a per-row boolean) needs per-field removal
+      // — revertField (MesoTable.tsx) is the new code under test here.
+      // fireEvent.change without a prior real .focus() dirties "load"
+      // without giving it real DOM focus, so focusing "sets" next doesn't
+      // trigger a real blur-commit of "load" and contaminate the assertion.
+      const onPatchCell = vi.fn();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID, onPatchCell })} />);
+      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
+      const loadInput = screen.getByTestId("cell-load-900") as HTMLInputElement;
+
+      fireEvent.change(loadInput, { target: { value: "150" } });
+
+      setsInput.focus();
+      fireEvent.change(setsInput, { target: { value: "9" } });
+      fireEvent.keyDown(setsInput, { key: "Escape" });
+
+      expect(setsInput).toHaveValue("3"); // reverted to the original cell value
+      expect(loadInput).toHaveValue("150"); // untouched dirty draft survives
+
+      fireEvent.blur(setsInput); // commits whatever's still dirty on this cell
+      expect(onPatchCell).toHaveBeenCalledWith(900, { load: "150" });
+      expect(onPatchCell).not.toHaveBeenCalledWith(900, expect.objectContaining({ sets: expect.anything() }));
+    });
+
+    it("Escape keeps focus on the field and suppresses its next blur-commit", () => {
+      const onPatchCell = vi.fn();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID, onPatchCell })} />);
+      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
+      setsInput.focus();
+      fireEvent.change(setsInput, { target: { value: "9" } });
+      fireEvent.keyDown(setsInput, { key: "Escape" });
+      expect(setsInput).toHaveValue("3");
+      expect(setsInput).toHaveFocus();
+      fireEvent.blur(setsInput);
+      expect(onPatchCell).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("data-grid-restore integration", () => {
+    it("refocuses the replacement cell after a fresh grid identity from a data-grid-restore control (Undo)", () => {
+      const { rerender } = render(
+        <MesoTable
+          {...baseProps({
+            grid: NAV_GRID,
+            history: { can_undo: true, can_redo: false, undo_label: "Edited", redo_label: "" },
+          })}
+        />,
+      );
+      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
+      setsInput.focus();
+
+      // Simulates the coach clicking Undo — real DOM focus moves to the
+      // (data-grid-restore-marked) button before the refetch resolves.
+      const undoButton = screen.getByTestId("grid-undo") as HTMLButtonElement;
+      undoButton.focus();
+
+      const NEXT_GRID = grid({ weeks: NAV_GRID.weeks, days: NAV_GRID.days });
+      rerender(
+        <MesoTable
+          {...baseProps({
+            grid: NEXT_GRID,
+            history: { can_undo: false, can_redo: true, undo_label: "", redo_label: "Edited" },
+          })}
+        />,
+      );
+
+      expect(screen.getByTestId("cell-sets-900")).toHaveFocus();
+    });
+
+    it("clicking the unmarked load-type toggle across a grid identity change does NOT steal focus", () => {
+      const { rerender } = render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
+      setsInput.focus();
+
+      const toggle = screen.getByTestId("cell-loadtype-900") as HTMLButtonElement;
+      toggle.focus(); // the load-type toggle is intentionally NOT data-grid-restore
+
+      const NEXT_GRID = grid({ weeks: NAV_GRID.weeks, days: NAV_GRID.days });
+      rerender(<MesoTable {...baseProps({ grid: NEXT_GRID })} />);
+
+      expect(toggle).toHaveFocus();
+    });
   });
 });

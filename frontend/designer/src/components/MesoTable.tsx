@@ -12,13 +12,21 @@
 // toggle is the one exception: like ExerciseRow's toggleLoadType, it commits
 // immediately on click (an atomic flip, not a per-keystroke draft).
 //
-// P1: deferred (see docs/meso/fixed-selection-plan.md) — dnd-kit drag
-// reordering, keyboard grid-nav (useGridNav), in-cell group override editor /
-// one-rm editor, agent-chat wiring, coachmarks. Swap/skip/add-this-week
-// WRITE UX is P2 — this file only ever DISPLAYS swap_name/skipped.
+// Keyboard grid navigation (issue #455 A1) is owned by useTableNav
+// (../hooks/useTableNav), a sibling of the one-week path's useGridNav —
+// instantiated ONCE here, below, and threaded into GridCellEditor/
+// RowNameEditor as a required prop (they're module-private, so there's no
+// INERT-fallback case to support).
+//
+// P1: deferred (see docs/archive/meso/fixed-selection-plan.md) — dnd-kit
+// drag reordering, in-cell group override editor / one-rm editor,
+// agent-chat wiring, coachmarks. Swap/skip/add-this-week WRITE UX is P2 —
+// this file only ever DISPLAYS swap_name/skipped.
 import { useEffect, useRef, useState } from "react";
 import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, GroupIdentity, MesoGrid } from "../lib/api";
 import type { GridCellPatch, Id } from "../hooks/useGrid";
+import { useTableNav, tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
+import type { EditableField, UseTableNavResult } from "../hooks/useTableNav";
 
 export interface MesoTableProps {
   grid: MesoGrid | null;
@@ -57,9 +65,6 @@ export interface MesoTableProps {
 type ArmedKind = "exercise" | "day" | "week";
 type Armed = { type: ArmedKind; id: Id } | null;
 
-const EDITABLE_FIELDS = ["sets", "reps", "load", "rpe", "rest", "note"] as const;
-type EditableField = (typeof EDITABLE_FIELDS)[number];
-
 function draftFrom(cell: GridCell): Record<EditableField, string> {
   return { sets: cell.sets, reps: cell.reps, load: cell.load, rpe: cell.rpe, rest: cell.rest, note: cell.note };
 }
@@ -67,10 +72,13 @@ function draftFrom(cell: GridCell): Record<EditableField, string> {
 interface GridCellEditorProps {
   cell: GridCell;
   unit: string;
+  row: GridRow;
+  week: GridWeek;
+  tableNav: UseTableNavResult;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
 }
 
-function GridCellEditor({ cell, unit, onPatchCell }: GridCellEditorProps) {
+function GridCellEditor({ cell, unit, row, week, tableNav, onPatchCell }: GridCellEditorProps) {
   const [draft, setDraft] = useState<Record<EditableField, string>>(() => draftFrom(cell));
   // Per-cell (not per-field) dirty set: on commit, only the fields the coach
   // actually typed into are sent — an unconditional blur commit would
@@ -103,15 +111,25 @@ function GridCellEditor({ cell, unit, onPatchCell }: GridCellEditorProps) {
     onPatchCell(cell.prescription_id, patch);
   }
 
-  function onKeyDownField(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      commitIfDirty();
-    }
+  // Escape reverts ONLY the focused field's draft — a per-cell dirty Set
+  // needs per-field removal (unlike ExerciseRow's per-row dirtySinceFocus
+  // boolean), so a second, still-dirty field on the same cell survives an
+  // Escape on its sibling untouched.
+  function revertField(field: EditableField, value: string) {
+    dirtyRef.current.delete(field);
+    setDraft((prev) => ({ ...prev, [field]: value }));
   }
 
   function toggleLoadType() {
     onPatchCell(cell.prescription_id, { load_type: cell.load_type === "pct" ? "abs" : "pct" });
+  }
+
+  // Every field's useTableNav wiring: same callback shape, keyed by field.
+  function fieldNavProps(field: EditableField) {
+    return tableNav.cellProps(row.exercise_slot_id, week.id, field, {
+      onCommit: commitIfDirty,
+      onRevert: (value) => revertField(field, value),
+    });
   }
 
   const cellId = cell.prescription_id;
@@ -122,32 +140,35 @@ function GridCellEditor({ cell, unit, onPatchCell }: GridCellEditorProps) {
         <input
           className="meso-cell meso-num-input"
           data-testid={`cell-sets-${cellId}`}
-          aria-label="sets"
+          data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "sets")}
+          aria-label={tableCellAriaLabel(row.name, week.label, "sets")}
           value={draft.sets}
           onChange={(e) => changed("sets", e.target.value)}
           onBlur={commitIfDirty}
-          onKeyDown={onKeyDownField}
+          {...fieldNavProps("sets")}
         />
         <span className="meso-x-sep">×</span>
         <input
           className="meso-cell meso-num-input"
           data-testid={`cell-reps-${cellId}`}
-          aria-label="reps"
+          data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "reps")}
+          aria-label={tableCellAriaLabel(row.name, week.label, "reps")}
           value={draft.reps}
           onChange={(e) => changed("reps", e.target.value)}
           onBlur={commitIfDirty}
-          onKeyDown={onKeyDownField}
+          {...fieldNavProps("reps")}
         />
       </div>
       <div className="meso-table-cell-load">
         <input
           className="meso-cell meso-num-input"
           data-testid={`cell-load-${cellId}`}
-          aria-label="load"
+          data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "load")}
+          aria-label={tableCellAriaLabel(row.name, week.label, "load")}
           value={draft.load}
           onChange={(e) => changed("load", e.target.value)}
           onBlur={commitIfDirty}
-          onKeyDown={onKeyDownField}
+          {...fieldNavProps("load")}
         />
         <button
           type="button"
@@ -163,30 +184,33 @@ function GridCellEditor({ cell, unit, onPatchCell }: GridCellEditorProps) {
       <input
         className="meso-cell meso-num-input"
         data-testid={`cell-rpe-${cellId}`}
-        aria-label="RPE"
+        data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "rpe")}
+        aria-label={tableCellAriaLabel(row.name, week.label, "rpe")}
         value={draft.rpe}
         onChange={(e) => changed("rpe", e.target.value)}
         onBlur={commitIfDirty}
-        onKeyDown={onKeyDownField}
+        {...fieldNavProps("rpe")}
       />
       <input
         className="meso-cell meso-num-input"
         data-testid={`cell-rest-${cellId}`}
-        aria-label="rest"
+        data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "rest")}
+        aria-label={tableCellAriaLabel(row.name, week.label, "rest")}
         value={draft.rest}
         onChange={(e) => changed("rest", e.target.value)}
         onBlur={commitIfDirty}
-        onKeyDown={onKeyDownField}
+        {...fieldNavProps("rest")}
       />
       <input
         className="meso-note"
         data-testid={`cell-note-${cellId}`}
-        aria-label="note"
+        data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "note")}
+        aria-label={tableCellAriaLabel(row.name, week.label, "note")}
         placeholder="—"
         value={draft.note}
         onChange={(e) => changed("note", e.target.value)}
         onBlur={commitIfDirty}
-        onKeyDown={onKeyDownField}
+        {...fieldNavProps("note")}
       />
     </div>
   );
@@ -323,10 +347,11 @@ function CellActions({ cell, busy, onSkipCell, onSwapCell, onFillAcrossWeeks }: 
 
 interface RowNameEditorProps {
   row: GridRow;
+  tableNav: UseTableNavResult;
   onRename(exerciseSlotId: Id, name: string): void;
 }
 
-function RowNameEditor({ row, onRename }: RowNameEditorProps) {
+function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
   const [value, setValue] = useState(row.name);
   const dirtyRef = useRef(false);
 
@@ -341,23 +366,33 @@ function RowNameEditor({ row, onRename }: RowNameEditorProps) {
     onRename(row.exercise_slot_id, value);
   }
 
+  // Mirrors GridCellEditor's revertField/ExerciseRow's revert: writes the
+  // focus-time value directly (bypassing the dirtying onChange path) and
+  // clears the dirty flag so a subsequent blur doesn't re-commit the draft
+  // the coach just backed out of.
+  function revert(newValue: string) {
+    dirtyRef.current = false;
+    setValue(newValue);
+  }
+
+  const navProps = tableNav.cellProps(row.exercise_slot_id, null, "name", {
+    onCommit: commitIfDirty,
+    onRevert: revert,
+  });
+
   return (
     <input
       className="meso-cell meso-ex-name-input"
       data-testid={`row-name-${row.exercise_slot_id}`}
-      aria-label="exercise name"
+      data-grid-cell={tableCellDomKey(row.exercise_slot_id, null, "name")}
+      aria-label={tableCellAriaLabel(row.name, null, "name")}
       value={value}
       onChange={(e) => {
         dirtyRef.current = true;
         setValue(e.target.value);
       }}
       onBlur={commitIfDirty}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          commitIfDirty();
-        }
-      }}
+      {...navProps}
     />
   );
 }
@@ -446,6 +481,11 @@ export function MesoTable(props: MesoTableProps) {
   // members — an individual plan carries no `group`, so no cell ever shows it.
   const showAdjust = !!(group && group.members.length);
 
+  // Rules of Hooks: called unconditionally, before the `!grid` early return
+  // below — useTableNav tolerates a null grid the same way (anchor stays
+  // null, no throw).
+  const tableNav = useTableNav({ grid });
+
   if (!grid) return null;
 
   return (
@@ -455,6 +495,7 @@ export function MesoTable(props: MesoTableProps) {
           type="button"
           data-testid="grid-undo"
           data-hover="rail"
+          data-grid-restore=""
           className="meso-week-strip-btn"
           disabled={busy || !history.can_undo}
           aria-label="Undo"
@@ -467,6 +508,7 @@ export function MesoTable(props: MesoTableProps) {
           type="button"
           data-testid="grid-redo"
           data-hover="rail"
+          data-grid-restore=""
           className="meso-week-strip-btn"
           disabled={busy || !history.can_redo}
           aria-label="Redo"
@@ -480,6 +522,7 @@ export function MesoTable(props: MesoTableProps) {
           type="button"
           data-testid="add-week"
           data-hover="add"
+          data-grid-restore=""
           className="meso-week-strip-btn meso-week-strip-btn--dashed"
           disabled={busy}
           onClick={onAddWeek}
@@ -563,7 +606,7 @@ export function MesoTable(props: MesoTableProps) {
                     return (
                       <tr key={row.exercise_slot_id} data-testid={`meso-row-${row.exercise_slot_id}`}>
                         <td className="meso-table-row-name-col">
-                          <RowNameEditor row={row} onRename={onRenameExercise} />
+                          <RowNameEditor row={row} tableNav={tableNav} onRename={onRenameExercise} />
                           {!rowArmed && (
                             <button
                               type="button"
@@ -630,7 +673,7 @@ export function MesoTable(props: MesoTableProps) {
                                 </>
                               ) : (
                                 <>
-                                  <GridCellEditor cell={cell} unit={unit} onPatchCell={onPatchCell} />
+                                  <GridCellEditor cell={cell} unit={unit} row={row} week={week} tableNav={tableNav} onPatchCell={onPatchCell} />
                                   {cell.swap_display && (
                                     <span
                                       className="meso-table-swap-badge"
@@ -752,6 +795,7 @@ function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek
           <button
             type="button"
             data-testid={`make-current-${week.id}`}
+            data-grid-restore=""
             className="meso-week-strip-btn meso-week-strip-btn--accent"
             disabled={busy}
             title="Make this the live week — delivery will send it"
@@ -763,6 +807,7 @@ function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek
             <button
               type="button"
               data-testid={`remove-week-${week.id}`}
+              data-grid-restore=""
               className="meso-week-strip-btn"
               disabled={busy}
               aria-label="Remove this week"
@@ -777,6 +822,7 @@ function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek
               <button
                 type="button"
                 data-testid={`confirm-remove-week-${week.id}`}
+                data-grid-restore=""
                 className="meso-week-strip-btn meso-week-strip-btn--confirm"
                 disabled={busy}
                 aria-label="Confirm remove week"
@@ -790,6 +836,7 @@ function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek
               <button
                 type="button"
                 data-testid={`cancel-remove-week-${week.id}`}
+                data-grid-restore=""
                 className="meso-week-strip-btn"
                 disabled={busy}
                 aria-label="Cancel remove week"
