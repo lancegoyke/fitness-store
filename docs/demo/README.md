@@ -1,5 +1,13 @@
 # Meso walkthrough demo video
 
+**As of issue [#454](https://github.com/lancegoyke/fitness-store/issues/454),
+the landing page does not show this video by default** — the recording's
+quality wasn't good enough and it repeated visuals already on the page, and
+the live, no-signup public sandbox at `/meso/demo/` (issue #389) is the
+walkthrough now. The recorder below still works; publishing a new recording
+and setting `MESO_DEMO_VIDEO_URL` (see `.env.example`) is what puts a video
+back on the page.
+
 `just record-demo` regenerates a short screen recording of the real Meso
 product — no manual steps, no editing. It's the "level 1" demo for issue
 [#388](https://github.com/lancegoyke/fitness-store/issues/388): plan at

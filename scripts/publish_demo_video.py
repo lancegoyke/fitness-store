@@ -17,6 +17,14 @@ timestamp/hash) — the landing page's URL never changes, so re-running this
 after a UI change is the entire "update the video" story; nothing in
 settings or the template needs touching.
 
+Publishing alone no longer puts the video *on* the page, though: issue #454
+turned the landing embed off by default (the recording was confusing and
+repeated the page's other visuals; the live sandbox at ``/meso/demo/`` is the
+walkthrough now), so ``MESO_DEMO_VIDEO_URL`` defaults to ``""``. To put a new,
+better recording back on the page, publish it with this script and *then* set
+``MESO_DEMO_VIDEO_URL`` (and optionally ``MESO_DEMO_VIDEO_POSTER_URL``) in the
+environment to the keys below.
+
 Uploaded objects (``ACL: public-read``, matching every other object this app
 puts in the bucket — see ``AWS_S3_OBJECT_PARAMETERS`` in
 ``config/settings/production.py``):

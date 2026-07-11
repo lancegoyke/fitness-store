@@ -2,6 +2,8 @@
 
 Status: **SHIPPED** — issue [#388](https://github.com/lancegoyke/fitness-store/issues/388) is done. `just record-demo` (`scripts/record_demo.py`) seeds deterministic demo data, drives the full storyboard below in headless Chromium via Playwright, and writes `docs/demo/out/meso-walkthrough.mp4` — zero manual steps, re-recordable after any UI change. See `docs/demo/README.md` for prerequisites, the enumerated `data-testid`s, and the storyboard-step editing model.
 
+**Not currently on the landing page**, though: issue [#454](https://github.com/lancegoyke/fitness-store/issues/454) turned the embed off (the recording was confusing and repeated the page's other visuals) — the live, no-signup sandbox at `/meso/demo/` (issue #389) is the walkthrough cold visitors get now. The recorder and publisher still work; re-enabling is `just record-demo && just publish-demo-video`, then setting `MESO_DEMO_VIDEO_URL`.
+
 ## Why
 
 A new, non-subscriber visitor currently cannot see Meso in action without
