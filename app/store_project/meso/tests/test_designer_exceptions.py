@@ -4,7 +4,7 @@ Model fields (``Prescription.skipped``/``.swap_exercise``/``.swap_name``)
 already exist from P0; the grid serializer already emits them read-only; the
 undo snapshot already captures/restores them. P2 adds the coach WRITE UX for
 one-week exceptions — four backend endpoints, no migrations, no serializer
-changes (see ``docs/meso/fixed-selection-plan.md`` + the P2 contract):
+changes (see ``docs/archive/meso/fixed-selection-plan.md`` + the P2 contract):
 
 - ``session_add_exercise`` extended with an optional ``week_id`` body key
   (add-this-week — the new row lands trained only on that week, skipped on

@@ -36,6 +36,7 @@ from .one_rm import one_rm_values
 from .serializers import _fmt_num
 from .serializers import _num
 from .serializers import _phase_states
+from .serializers import _week_label
 from .serializers import current_week
 from .serializers import diff_week_snapshots
 from .serializers import initials
@@ -1076,11 +1077,15 @@ def _athlete_block_grid(block, delivered_week_ids, focus_week_id, unit):
 def _single_current_week(plan):
     """True when ``plan`` has exactly one live ``is_current`` week.
 
-    An individual plan keeps a single current pointer (``week_set_current``
-    clears the others), so its current week is trustworthy as "the week the
-    athlete is on." A group-materialized snapshot instead flags EVERY delivered
-    week ``is_current`` (``sync_delivered_plan``), so there ``current_week`` is
-    ambiguous — this is how ``athlete_home`` tells the two apart.
+    Both an individual plan (``week_set_current``) and a group-materialized
+    member plan (``sync_delivered_plan``, which now only ever mirrors the
+    source's pointer on the member's *first* materialization — issue #456)
+    keep a single current pointer, so ``current_week`` is normally trustworthy
+    as "the week the athlete is on." Nothing in the schema enforces that,
+    though — no DB constraint bars two live ``True`` rows on the same plan —
+    so this stays defensive hardening rather than an assumption: ``athlete_home``
+    falls back to the latest delivered week whenever this doesn't hold, instead
+    of trusting an ambiguous pointer.
     """
     return (
         Week.objects.filter(
@@ -1090,7 +1095,7 @@ def _single_current_week(plan):
     )
 
 
-def athlete_home(user):
+def athlete_home(user, focus_week_id=None):
     """The athlete's active programs, each as its whole delivered block.
 
     One card per non-archived plan across the athlete's *active* coaches (D-a).
@@ -1099,7 +1104,31 @@ def athlete_home(user):
     else the latest delivered week) — that focus week's sessions are the tappable
     log rows — and carries a read-only multi-week table (``grid``) of the whole
     delivered block so the athlete can see the weeks around them (P3).
+
+    ``focus_week_id`` is a **display-only** override (issue #456): when it names
+    a live, delivered week belonging to one of the athlete's own cards, that
+    week — and therefore its block — becomes the anchor for THAT plan's card
+    only; every other card renders normally. It never touches ``is_current``;
+    the pointer only moves via the athlete's own logging (auto-advance) or the
+    coach's "Make current". An invalid/foreign/undelivered/deleted id is
+    silently ignored, rendering exactly as a bare request would.
+
+    The chip strip and "start next week" nudge span every delivered week of
+    the whole PLAN, not just the anchored block (Finding 1, issue #456): a
+    coach delivering a new block never moves the pointer, so a chip strip
+    scoped to only the anchored block would strand the athlete on the old one
+    forever. ``grid``/``sessions`` stay block-scoped — they follow the anchor
+    (the focus week's mesocycle) alone.
     """
+    requested_week = None
+    if focus_week_id is not None:
+        requested_week = (
+            Week.objects.filter(
+                pk=focus_week_id, deleted_at__isnull=True, delivered_at__isnull=False
+            )
+            .select_related("mesocycle")
+            .first()
+        )
     plans = (
         Plan.objects.for_athlete(user)
         .exclude(status=Plan.Status.ARCHIVED)
@@ -1129,20 +1158,32 @@ def athlete_home(user):
         # Anchor the card (both the block shown and the focus week) on the week
         # the athlete is on. For an individual plan that's its single ``is_current``
         # week, so a coach's "Make current" is honored even when it moves the
-        # athlete back to an earlier delivered block. A group-materialized snapshot
-        # flags every delivered week ``is_current``, so there ``current_week`` is
-        # ambiguous (it returns the earliest) — fall back to the latest delivered
-        # week, whose ordering already tracks the newest delivery. A current week
-        # the coach is still building (undelivered) also falls back to latest.
-        current = current_week(plan)
-        if (
-            current is not None
-            and current.delivered_at is not None
-            and _single_current_week(plan)
-        ):
-            anchor = current
+        # athlete back to an earlier delivered block. A group-materialized member
+        # plan carries that same single pointer post-#456 (mirrored once, at the
+        # member's first materialization; from there the athlete's own logging or
+        # a coach override is what moves it) — ``_single_current_week`` is
+        # defensive hardening against the schema not actually enforcing "exactly
+        # one," not an expectation that a group plan is shaped any differently.
+        # When it doesn't hold (or the flagged week is undelivered — a current
+        # week the coach is still building), fall back to the latest delivered
+        # week, whose ordering already tracks the newest delivery.
+        #
+        # ``requested_week`` (the ``?week=`` override) wins over both when it
+        # names a live delivered week of THIS plan — matched by ``plan_id``
+        # rather than a second per-card query. A foreign/other-plan week never
+        # matches here, so it's a no-op for every other card.
+        if requested_week is not None and requested_week.mesocycle.plan_id == plan.pk:
+            anchor = requested_week
         else:
-            anchor = latest
+            current = current_week(plan)
+            if (
+                current is not None
+                and current.delivered_at is not None
+                and _single_current_week(plan)
+            ):
+                anchor = current
+            else:
+                anchor = latest
         block = anchor.mesocycle
         focus = anchor
         # The table columns: only DELIVERED live weeks of this block — a week the
@@ -1164,6 +1205,34 @@ def athlete_home(user):
         done = _done_session_ids([s.pk for s in session_objs], user)
         sessions = [_athlete_session_row(s, done=s.pk in done) for s in session_objs]
 
+        # Week chips + the "start next week" nudge (issue #456 Finding 1) span the
+        # WHOLE PLAN, not just the anchored block: delivery never moves
+        # ``is_current`` (by design — see ``Week.advance_current_week`` /
+        # ``GroupMembership.sync_delivered_plan``), so a coach delivering a NEW
+        # block never touches the athlete's (or a group member's, post-first-
+        # materialization) pointer. Restricting navigation to the anchored
+        # block's own delivered weeks would make that new block invisible and
+        # permanently unreachable — the athlete could never tap into it, and
+        # auto-advance could never carry them there either, since it only fires
+        # from a session the athlete has already reached. Ordered plan-wide by
+        # ``(mesocycle.order, index)`` — the same tuple order
+        # ``advance_current_week`` compares — since a block's own week
+        # ``index`` restarts at 1 each mesocycle.
+        plan_delivered_weeks = list(
+            Week.objects.filter(
+                mesocycle__plan_id=plan.pk,
+                deleted_at__isnull=True,
+                delivered_at__isnull=False,
+            )
+            .select_related("mesocycle")
+            .order_by("mesocycle__order", "index")
+        )
+        week_chip_groups = _week_chip_groups(plan_delivered_weeks, focus)
+        next_week = _next_delivered_week(plan_delivered_weeks, focus)
+        # Vacuously false with no sessions — "start next week" would be a
+        # non-sequitur nudge on an empty focus week.
+        focus_done = bool(session_objs) and all(s.pk in done for s in session_objs)
+
         cards.append(
             {
                 "id": plan.pk,
@@ -1175,10 +1244,74 @@ def athlete_home(user):
                 "delivered_at": focus.delivered_at,
                 "sessions": sessions,
                 "grid": _athlete_block_grid(block, delivered_ids, focus.pk, plan.unit),
+                "week_chip_groups": week_chip_groups,
+                "chip_count": len(plan_delivered_weeks),
+                "next_week": next_week,
+                "focus_done": focus_done,
                 "awaiting": False,
             }
         )
     return cards
+
+
+def _week_chip_groups(plan_delivered_weeks, focus):
+    """Navigation chips for every delivered week of the PLAN, grouped by block.
+
+    Issue #456 Finding 1: the chip strip must span every live mesocycle, not
+    just the anchored one, or a newly delivered block is permanently
+    unreachable. Grouping is by mesocycle (order preserved from
+    ``plan_delivered_weeks``, already plan-wide ordered); a plan with more
+    than one delivered block gets each group labeled with its block's name
+    (``mesocycle.name`` — the same string the card header shows as
+    ``plan.block``) so the jump is legible, while a single-block plan gets one
+    unlabeled group — today's flat "Wk N" row, unchanged. ``current`` reads
+    the week's own ``is_current`` (the real pointer); ``focused`` is merely
+    which column this card is showing right now (the ``?week=`` override, or
+    the anchor's default) — they usually coincide but must not be conflated.
+    """
+    multi_block = len({w.mesocycle_id for w in plan_delivered_weeks}) > 1
+    groups = []
+    current_meso_id = None
+    group = None
+    for w in plan_delivered_weeks:
+        if w.mesocycle_id != current_meso_id:
+            group = {"label": w.mesocycle.name if multi_block else "", "chips": []}
+            groups.append(group)
+            current_meso_id = w.mesocycle_id
+        group["chips"].append(
+            {
+                "id": w.pk,
+                "index": w.index,
+                "label": _week_label(w),
+                "current": w.is_current,
+                "focused": w.pk == focus.pk,
+            }
+        )
+    return groups
+
+
+def _next_delivered_week(plan_delivered_weeks, focus):
+    """The next delivered week after ``focus``, plan-wide — or ``None``.
+
+    Issue #456 Finding 1: crosses block boundaries, so the "start next week"
+    nudge can point into a newly delivered block, not just the anchored one.
+    ``cross_block`` flags when the next week belongs to a different mesocycle
+    than the focus week, so the template can phrase the nudge with the
+    destination block's name instead of a same-block "start Week N".
+    """
+    focus_pos = next(
+        (i for i, w in enumerate(plan_delivered_weeks) if w.pk == focus.pk), None
+    )
+    if focus_pos is None or focus_pos + 1 >= len(plan_delivered_weeks):
+        return None
+    nxt = plan_delivered_weeks[focus_pos + 1]
+    cross_block = nxt.mesocycle_id != focus.mesocycle_id
+    return {
+        "id": nxt.pk,
+        "index": nxt.index,
+        "cross_block": cross_block,
+        "block_label": nxt.mesocycle.name if cross_block else "",
+    }
 
 
 def _prescribed_set_count(sets_text):

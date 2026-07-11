@@ -17,6 +17,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -1657,6 +1658,94 @@ class Week(models.Model):
         self.sessions.filter(deleted_at__isnull=True).update(deleted_at=now)
         return self
 
+    def advance_current_week(self):
+        """Move the plan's ``is_current`` pointer forward onto this week (#456).
+
+        Locked product rule: when an athlete logs a session belonging to a week
+        LATER than the plan's current week, the pointer follows them — "they
+        started the next week." Forward-only: logging an earlier-or-equal week
+        is a no-op. Advances on ANY successful log write, ``pending`` ("Save
+        progress") just as much as ``done`` ("Log session") — the rule is about
+        which week the athlete is *on*, not whether they finished it, so this
+        deliberately does NOT gate on completion.
+
+        "Later" is PLAN-wide, not per-block: compared as the tuple
+        ``(mesocycle.order, week.index)`` — the same ordering ``current_week()``
+        (serializers.py) walks — since ``is_current`` is unique per plan and
+        spans mesocycles, while a block's own week ``index`` resets to 1 each
+        time.
+
+        Locks the plan first (mirrors ``week_set_current``/``session_add`` et
+        al. in views.py) so two concurrent log writes can't both read a stale
+        current week and race past each other.
+
+        Never calls ``record_plan_action``: the athlete moving their own
+        position is not a coach designer edit and must not enter the coach's
+        undo stack — ``week_set_current`` stays the coach's manual, undoable
+        override, in any direction.
+
+        Only ever compares against / clears *live* weeks (``deleted_at``
+        ``isnull``) — the logged week is live by construction
+        (``_athlete_session_or_404`` only ever serves a live session), and a
+        soft-deleted week must never be treated as, or clobbered into, current.
+
+        Re-resolves THIS week from the post-lock ``live_weeks`` read (by pk)
+        rather than trusting the caller's pre-lock ``self`` (Finding 2): a
+        concurrent writer (another log write, or the coach's
+        ``week_set_current``) can commit between the caller loading ``self``
+        and this method acquiring the lock, and both the forward/no-op
+        comparison and the eventual save use that freshly-read row so they're
+        never split across two different snapshots of the same week. A week
+        concurrently soft-deleted out from under ``self`` between load and
+        lock is never resurrected — this returns ``False`` instead.
+
+        Returns ``True`` when the pointer moved — including a plan with zero
+        current weeks self-healing onto this one — ``False`` for a no-op. A
+        caller that cares about ``Plan.modified`` staleness should bump it
+        itself when this returns ``True`` (mirrors views.py's ``_touch_plan``;
+        kept out of this model-layer helper to avoid a models→views dependency).
+        """
+        plan_id = self.mesocycle.plan_id
+        with transaction.atomic():
+            Plan.objects.select_for_update().filter(pk=plan_id).first()
+            live_weeks = list(
+                Week.objects.filter(mesocycle__plan_id=plan_id, deleted_at__isnull=True)
+                .select_related("mesocycle")
+                .order_by("mesocycle__order", "index")
+            )
+            # Re-resolve THIS week from the just-locked, fresh read instead of
+            # trusting the pre-lock ``self`` (issue #456 Finding 2): a concurrent
+            # writer (another log write, or the coach's ``week_set_current``) can
+            # commit between the caller loading ``self`` and this method
+            # acquiring the lock, leaving ``self.is_current`` stale. Comparing
+            # and saving against ``fresh`` instead means the flag this method
+            # tests and the row it saves are always the same, current-as-of-the
+            # -lock instance — the stale ``self`` was letting a concurrent
+            # "coach moves the pointer earlier, then we advance past it" race
+            # skip the save (stale ``True``) and leave the plan with ZERO
+            # current weeks.
+            fresh = next((w for w in live_weeks if w.pk == self.pk), None)
+            if fresh is None:
+                # Concurrently soft-deleted between ``self`` loading and this
+                # lock — never resurrect a dead week as current.
+                return False
+            current = next((w for w in live_weeks if w.is_current), None)
+            if current is not None:
+                current_key = (current.mesocycle.order, current.index)
+                logged_key = (fresh.mesocycle.order, fresh.index)
+                if logged_key <= current_key:
+                    return False
+            Week.objects.filter(
+                mesocycle__plan_id=plan_id, deleted_at__isnull=True
+            ).exclude(pk=fresh.pk).update(is_current=False)
+            if not fresh.is_current:
+                fresh.is_current = True
+                fresh.save(update_fields=["is_current"])
+            # Keep the caller's (possibly stale) instance coherent with what we
+            # just persisted, in case they read ``self.is_current`` afterward.
+            self.is_current = True
+            return True
+
 
 class Session(models.Model):
     """A training day *within a week* — a column in the designer grid.
@@ -2522,9 +2611,30 @@ class GroupMembership(models.Model):
         slot on that week — a swap override becomes the cell's ``swap_name``
         (block identity stays the shared slot's); load/sets/reps/note overrides
         become the cell's numbers. Each member week's ``is_current`` MIRRORS its
-        source week's (post-P3 ``is_current`` = the week the athlete is on), so
-        the athlete's home anchors on the same week the coach points to — never a
-        block that flags every week current.
+        source week's pointer, but **only on this member's very first
+        materialization** (issue #456) — the moment their plan is created, so
+        the athlete's home opens on the same week the coach was pointing at
+        when the block first reached them. Every sync after that leaves
+        ``is_current`` alone entirely, on every week, new or existing: once the
+        athlete starts logging, their own position (``Week.advance_current_week``)
+        or the coach's manual override (``week_set_current``) is what moves it —
+        a re-delivery snapping it back to the coach's pointer would undo the
+        athlete's own progress, and blindly mirroring onto a brand-new week
+        could produce two ``True`` rows at once (nothing in the schema forbids
+        that; ``presenters._single_current_week`` treats it as a defensive
+        fallback case, not the expected shape). One narrow exception (#456 nit
+        1): ``Week.soft_delete`` never clears ``is_current``, so a week dropped
+        from the block while it happened to be the member's current one keeps
+        that stale flag on its now-dead row. If the source week later returns
+        (the coach undoes the drop, or re-adds it), REVIVING that row verbatim
+        would resurrect the stale ``True`` alongside wherever the member's own
+        logging/coach override has since moved them. So a revival (the row
+        existed and was soft-deleted before this sync) whose stale flag is
+        ``True`` checks whether the member plan already has another live
+        current week: if so, that week wins and the revived row's flag is
+        dropped; if the member has NO other live current week at all (they
+        never advanced past the dropped week), the flag is preserved instead —
+        the coach's temporary removal shouldn't strand the member positionless.
 
         Syncing in place this way preserves any ``SessionLog`` the athlete
         already wrote against an unchanged slot while propagating the coach's
@@ -2540,7 +2650,7 @@ class GroupMembership(models.Model):
         from .serializers import resolve_prescription
 
         shared_plan = src_meso.plan
-        member_plan, _ = Plan.objects.get_or_create(
+        member_plan, plan_created = Plan.objects.get_or_create(
             relationship=self.relationship,
             source_group=self.group,
             defaults={
@@ -2564,6 +2674,21 @@ class GroupMembership(models.Model):
             order=src_meso.order,
             defaults={"name": src_meso.name, "week_count": src_meso.week_count},
         )
+        # Snapshot each existing member week's soft-delete + pointer state
+        # BEFORE this sync mutates anything (#456 nit 1) — used below to detect
+        # a week being REVIVED (dropped from the block, now returning) so a
+        # stale ``is_current`` (``Week.soft_delete`` leaves the flag set on the
+        # dead row) can't resurrect a second live current week. Only needed for
+        # a non-first sync — a first sync (``plan_created``) creates every row
+        # fresh, so nothing here can have a prior soft-deleted state.
+        prior_week_state = (
+            {}
+            if plan_created
+            else {
+                w.index: (w.pk, w.deleted_at, w.is_current)
+                for w in member_meso.weeks.all()
+            }
+        )
         # Mirror every live source week onto the member's block (matched by
         # ``index``); ``deleted_at: None`` revives a member week whose source
         # week was dropped then returned. ``week_pairs`` keeps each source week
@@ -2572,21 +2697,77 @@ class GroupMembership(models.Model):
         src_weeks = list(
             src_meso.weeks.filter(deleted_at__isnull=True).order_by("index")
         )
+        # One list, two consumers: the revival check below only counts a
+        # "surviving" current week (one this sync isn't about to drop), and the
+        # drop loop at the bottom soft-deletes everything outside it.
+        src_indexes = [w.index for w in src_weeks]
         member_weeks = []
         week_pairs = []
         for src_week in src_weeks:
+            week_defaults = {
+                "phase": src_week.phase,
+                "volume": src_week.volume,
+                "intensity": src_week.intensity,
+                "is_deload": src_week.is_deload,
+                "deleted_at": None,
+            }
+            # Mirror the source pointer ONLY on this member's very first
+            # materialization (#456) — gated on the PLAN-level created flag, not
+            # a per-week one: a week created by a *later* sync (the coach grows
+            # the block after the member has already started logging) must
+            # default to ``is_current=False`` even if it happens to be the
+            # source's current week, or it would materialize alongside the
+            # member's own already-advanced week — nothing in the schema
+            # prevents two ``True`` rows. After first sync, this method never
+            # touches ``is_current`` again; the athlete's own logging
+            # (``Week.advance_current_week``) and the coach's manual override
+            # (``week_set_current``) are the only things that move it from here.
+            if plan_created:
+                week_defaults["is_current"] = src_week.is_current
+            else:
+                # A REVIVAL (#456 nit 1): this member week existed and was
+                # soft-deleted before this sync, and its dead row's flag is
+                # still ``True`` (``Week.soft_delete`` never clears it). Reviving
+                # it verbatim could resurrect a second live current week
+                # alongside wherever the member's own logging/coach override has
+                # since moved them. If the member has another live current week,
+                # that one wins and this row's flag is dropped; if they have
+                # NONE (they never moved past the dropped week), preserve it —
+                # the coach's temporary removal shouldn't strand the member
+                # positionless. Rows that aren't a stale-current revival are
+                # left out of ``week_defaults`` entirely, so ``update_or_create``
+                # doesn't touch their ``is_current`` — unchanged behavior.
+                prior = prior_week_state.get(src_week.index)
+                if prior is not None:
+                    prior_pk, prior_deleted_at, prior_is_current = prior
+                    if prior_deleted_at is not None and prior_is_current:
+                        # Only a current week that SURVIVES this sync counts as
+                        # "the member's real position": a week of this block
+                        # whose source is gone is soft-deleted at the bottom of
+                        # this very method, so counting it here would clear the
+                        # revived flag and then kill the counted week — zero
+                        # live currents. Weeks in other mesocycles always
+                        # survive (this sync never touches them).
+                        has_other_current = (
+                            Week.objects.filter(
+                                mesocycle__plan=member_plan,
+                                is_current=True,
+                                deleted_at__isnull=True,
+                            )
+                            .exclude(pk=prior_pk)
+                            .exclude(
+                                mesocycle=member_meso,
+                                index__in=[
+                                    i for i in prior_week_state if i not in src_indexes
+                                ],
+                            )
+                            .exists()
+                        )
+                        week_defaults["is_current"] = not has_other_current
             member_week, _ = Week.objects.update_or_create(
                 mesocycle=member_meso,
                 index=src_week.index,
-                defaults={
-                    "phase": src_week.phase,
-                    "volume": src_week.volume,
-                    "intensity": src_week.intensity,
-                    "is_deload": src_week.is_deload,
-                    # Mirror the source pointer — do NOT hardcode ``True`` (P3).
-                    "is_current": src_week.is_current,
-                    "deleted_at": None,
-                },
+                defaults=week_defaults,
             )
             member_weeks.append(member_week)
             week_pairs.append((src_week, member_week))
@@ -2692,7 +2873,6 @@ class GroupMembership(models.Model):
         # Soft-delete member weeks whose source week is no longer live — a whole
         # column the coach removed from the shared block disappears from the
         # member's copy too (``Week.soft_delete`` cascades to its sessions).
-        src_indexes = [w.index for w in src_weeks]
         for dropped_week in member_meso.weeks.exclude(index__in=src_indexes).filter(
             deleted_at__isnull=True
         ):

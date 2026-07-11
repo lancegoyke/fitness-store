@@ -1352,14 +1352,29 @@ def _athlete_session_or_404(user, pk):
 
 
 class AthleteHomeView(LoginRequiredMixin, TemplateView):
-    """The athlete's training home: their delivered programs, this week."""
+    """The athlete's training home: their delivered programs, this week.
+
+    ``?week=<id>`` is a display-only focus override (issue #456): it opens a
+    card onto a different delivered week of its block (e.g. tapping a week
+    chip, or the "start next week" nudge after finishing the focus week)
+    without moving anything — ``is_current`` only ever advances via the
+    athlete's own logging (``athlete_log_session``) or the coach's "Make
+    current". A missing/invalid id is just ``None``, which renders exactly
+    like a bare request.
+    """
 
     template_name = "meso/athlete_home.html"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "training"
-        ctx["plans"] = presenters.athlete_home(self.request.user)
+        try:
+            focus_week_id = int(self.request.GET.get("week", ""))
+        except (TypeError, ValueError):
+            focus_week_id = None
+        ctx["plans"] = presenters.athlete_home(
+            self.request.user, focus_week_id=focus_week_id
+        )
         # Pending coach links (N4 Phase 2): invites awaiting my reply + requests
         # I've sent + the request-a-coach form all live on this surface.
         ctx["pending"] = presenters.athlete_pending(self.request.user)
@@ -1510,6 +1525,12 @@ def athlete_log_session(request, pk):
             list(session.trainable_cells()),
             session.week.mesocycle.plan.unit,
         )
+        # #456: any successful log write — pending or done alike, forward-only —
+        # advances the plan's ``is_current`` pointer onto this week (the athlete
+        # started it). Covers both individual and group-materialized member
+        # plans, since both flow through this one view.
+        if session.week.advance_current_week():
+            _touch_plan(session.week.mesocycle.plan)
     # #441 P3-5: the results step auto-advances once the coach *completes* one of
     # their own self-link sessions. Gated on the step's own predicate so a
     # ``pending`` "save progress" — or a done log the coach makes as an athlete
@@ -2911,9 +2932,13 @@ def week_set_current(request, plan_id, week_id):
     it next time. Post-P3 this pointer also means "the week the athlete is on":
     the athlete home (``presenters.athlete_home``) opens its block card onto the
     current week (when it's delivered) and takes "today's session" from it — the
-    coach marks which week the athlete is on by setting it current here. (Setting
-    it stays manual; auto-advance is out of scope.) Exactly one week is current —
-    the others in the plan are cleared.
+    coach marks which week the athlete is on by setting it current here. Since
+    #456, the athlete's own logging auto-advances the pointer forward too
+    (``Week.advance_current_week``, forward-only, off any successful log write)
+    — this endpoint is the coach's *manual* override: unlike the athlete's
+    logging, it can move the pointer in either direction (back to an earlier
+    week included). Exactly one week is current — the others in the plan are
+    cleared.
     Scoped + edit-gated (403 foreign, 402 over-limit); a foreign week is a 404.
     Row-locks the plan so concurrent set-currents serialize, and re-reads the
     week's liveness under that lock — a concurrent ``week_delete`` (which
