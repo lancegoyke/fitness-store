@@ -534,12 +534,21 @@ function RowOneRmEditor({ row, cell, unit, busy, onSetOneRm }: RowOneRmEditorPro
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // Scope cut (A3): a swapped pct cell gets no editable control here — the
-  // row's identity cell is never the swapped one when a live unswapped week
-  // exists (rowIdentityCellId), so this simply never renders for that case;
-  // server data (one_rm/one_rm_source) stays correct regardless (see this
-  // file's header / the implementation brief's "Risks" section).
-  if (!cell || cell.load_type !== "pct") return null;
+  // DISPLAY gate: any live, unswapped, non-skipped cell of the row carrying
+  // a % load makes the row 1RM-relevant — load_type is edited PER CELL in
+  // this table, so gating on the identity cell's own load_type alone hides
+  // the only 1RM control from a mixed-load row (identity week abs, a later
+  // week pct — Codex #455 A3 review). The SAVE target stays the identity
+  // cell regardless: all unswapped cells share the row's lift identity, so
+  // any of them keys the same AthleteOneRm row.
+  // Scope cut (A3): a SWAPPED pct cell still gets no control of its own —
+  // its lift identity differs from the row's; server data
+  // (one_rm/one_rm_source) stays correct regardless (see this file's
+  // header / the implementation brief's "Risks" section).
+  const rowHasPct = Object.values(row.cells).some(
+    (c) => c.load_type === "pct" && !c.skipped && c.swap_name === "" && c.swap_exercise_id == null,
+  );
+  if (!cell || !rowHasPct) return null;
 
   const id = row.exercise_slot_id;
 

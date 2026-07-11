@@ -362,6 +362,73 @@ describe("row 1RM editor (issue #455 phase A3)", () => {
     expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
   });
 
+  it("renders the badge for a MIXED-load row (identity cell abs, a later week pct)", () => {
+    // Codex #455 A3 review: load_type is edited per cell — gating on the
+    // identity cell's own load_type alone hid the row's only 1RM control
+    // when only a later week carries the % load. The save target stays the
+    // identity cell (same lift identity either way).
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({
+            weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
+            days: [
+              day({
+                rows: [
+                  row({
+                    cells: {
+                      "1": cell({ prescription_id: 100, load_type: "abs" }),
+                      "2": pctCell({ prescription_id: 101 }),
+                    },
+                  }),
+                ],
+              }),
+            ],
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("row-one-rm-badge-9")).toBeInTheDocument();
+  });
+
+  it("renders NO badge when the row's only pct cell is a one-week SWAP (different lift identity)", () => {
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({
+            weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
+            days: [
+              day({
+                rows: [
+                  row({
+                    cells: {
+                      "1": cell({ prescription_id: 100, load_type: "abs" }),
+                      "2": pctCell({ prescription_id: 101, swap_name: "Leg Press" }),
+                    },
+                  }),
+                ],
+              }),
+            ],
+          }),
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
+  });
+
+  it("renders NO badge when the row's only pct cell is skipped", () => {
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({
+            days: [day({ rows: [row({ cells: { "1": pctCell({ skipped: true }) } })] })],
+          }),
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
+  });
+
   it("falls back to a live alternative week's identity cell when week[0] has none for this row", () => {
     render(
       <MesoTable

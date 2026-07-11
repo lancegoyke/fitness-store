@@ -245,6 +245,48 @@ describe("renameExercise", () => {
 });
 
 describe("setOneRm (issue #455 phase A3)", () => {
+  it("flushes a pending rename before POSTing one-rm/, so the 1RM never keys under the old lift name", async () => {
+    // Codex #455 A3 review: the server keys a MANUAL 1RM off the
+    // prescription's RESOLVED name at POST time. A just-blurred free-text
+    // rename whose autosave is still in flight must land first, or the
+    // value is stored under the OLD identity and vanishes on refetch.
+    const { result } = setup();
+    let resolveRename!: (v: unknown) => void;
+    const fetchMock = vi.fn();
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRename = resolve;
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    // Kick off the rename autosave (fire-and-forget) — POST now in flight.
+    act(() => {
+      result.current.renameExercise(9, "Front Squat");
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Save a 1RM while the rename is still unresolved.
+    let saveDone!: Promise<unknown>;
+    act(() => {
+      saveDone = result.current.setOneRm(9, "140");
+    });
+
+    // Blocked on flushPendingWrites(): the one-rm/ POST must not be out yet.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockResolvedValueOnce(res({ ok: true, one_rm: "140", source: "manual" }));
+    await act(async () => {
+      resolveRename(res({ ok: true }));
+      await saveDone;
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/"); // the rename
+    expect(fetchMock.mock.calls[1]![0]).toBe("/meso/api/plan/7/prescription/100/one-rm/"); // only after
+  });
+
   it("POSTs {value} to the row's identity cell and locally patches one_rm/one_rm_source, without refetching", async () => {
     const { result } = setup();
     globalThis.fetch = vi.fn().mockResolvedValue(

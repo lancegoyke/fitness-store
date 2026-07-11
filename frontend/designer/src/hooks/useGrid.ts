@@ -256,6 +256,11 @@ export function useGrid(options: UseGridOptions) {
       const row = findRow(grid, exerciseSlotId);
       const cellId = rowIdentityCellId(grid?.weeks ?? [], row);
       if (cellId == null) throw new Error("No cell to set a 1RM against.");
+      // A just-blurred free-text rename may still be in flight — the server
+      // keys a MANUAL 1RM off the prescription's RESOLVED name, so saving
+      // before the rename lands would store it under the OLD lift identity
+      // (Codex #455 A3 review). Same flush fillAcrossWeeks uses.
+      await flushPendingWrites();
       const data = await apiPost<{ one_rm?: string; source?: string }>(
         `/meso/api/plan/${planId}/prescription/${cellId}/one-rm/`,
         { value },
@@ -265,7 +270,7 @@ export function useGrid(options: UseGridOptions) {
       setGrid((prev) => (prev ? updateCellInGrid(prev, cellId, patch) : prev));
       return patch;
     },
-    [grid, planId, csrf],
+    [grid, planId, csrf, flushPendingWrites],
   );
 
   const addExercise = useCallback(
