@@ -446,6 +446,7 @@ export function DesignerRoot() {
                 onPatchCell={gridState.patchCell}
                 onRenameExercise={gridState.renameExercise}
                 onSetOneRm={gridState.setOneRm}
+                onMoveExerciseToDay={gridState.moveExerciseToDay}
                 onAddExercise={gridState.addExercise}
                 onRemoveExercise={gridState.removeExercise}
                 onAddDay={gridState.addDay}

@@ -130,6 +130,28 @@
  * renders this line EMPTY (RowOneRmEditor returns null), collapsing to
  * `.meso-ex-tags`'s own small `min-height` allowance. */
 
+/* Issue #455 phase A2.5: the "Move to…" menu — same 2nd line, alongside
+ * RowOneRmEditor's badge. Table-specific (the one-week view has no
+ * equivalent control), so it lives here rather than the shared
+ * designer-grid.css. Kept visually small/quiet like the %1RM badge it sits
+ * next to — `.meso-onerm-badge`'s font-size (designer-grid.css), not a full
+ * form control. */
+.meso-move-day-select {
+  appearance: none;
+  font: inherit;
+  font-size: 10.5px;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 4px;
+  cursor: pointer;
+}
+.meso-move-day-select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .meso-table-cell {
   min-width: 190px;
 }
