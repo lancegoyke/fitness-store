@@ -1352,14 +1352,29 @@ def _athlete_session_or_404(user, pk):
 
 
 class AthleteHomeView(LoginRequiredMixin, TemplateView):
-    """The athlete's training home: their delivered programs, this week."""
+    """The athlete's training home: their delivered programs, this week.
+
+    ``?week=<id>`` is a display-only focus override (issue #456): it opens a
+    card onto a different delivered week of its block (e.g. tapping a week
+    chip, or the "start next week" nudge after finishing the focus week)
+    without moving anything — ``is_current`` only ever advances via the
+    athlete's own logging (``athlete_log_session``) or the coach's "Make
+    current". A missing/invalid id is just ``None``, which renders exactly
+    like a bare request.
+    """
 
     template_name = "meso/athlete_home.html"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "training"
-        ctx["plans"] = presenters.athlete_home(self.request.user)
+        try:
+            focus_week_id = int(self.request.GET.get("week", ""))
+        except (TypeError, ValueError):
+            focus_week_id = None
+        ctx["plans"] = presenters.athlete_home(
+            self.request.user, focus_week_id=focus_week_id
+        )
         # Pending coach links (N4 Phase 2): invites awaiting my reply + requests
         # I've sent + the request-a-coach form all live on this surface.
         ctx["pending"] = presenters.athlete_pending(self.request.user)

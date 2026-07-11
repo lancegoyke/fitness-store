@@ -36,6 +36,7 @@ from .one_rm import one_rm_values
 from .serializers import _fmt_num
 from .serializers import _num
 from .serializers import _phase_states
+from .serializers import _week_label
 from .serializers import current_week
 from .serializers import diff_week_snapshots
 from .serializers import initials
@@ -1094,7 +1095,7 @@ def _single_current_week(plan):
     )
 
 
-def athlete_home(user):
+def athlete_home(user, focus_week_id=None):
     """The athlete's active programs, each as its whole delivered block.
 
     One card per non-archived plan across the athlete's *active* coaches (D-a).
@@ -1103,7 +1104,24 @@ def athlete_home(user):
     else the latest delivered week) — that focus week's sessions are the tappable
     log rows — and carries a read-only multi-week table (``grid``) of the whole
     delivered block so the athlete can see the weeks around them (P3).
+
+    ``focus_week_id`` is a **display-only** override (issue #456): when it names
+    a live, delivered week belonging to one of the athlete's own cards, that
+    week — and therefore its block — becomes the anchor for THAT plan's card
+    only; every other card renders normally. It never touches ``is_current``;
+    the pointer only moves via the athlete's own logging (auto-advance) or the
+    coach's "Make current". An invalid/foreign/undelivered/deleted id is
+    silently ignored, rendering exactly as a bare request would.
     """
+    requested_week = None
+    if focus_week_id is not None:
+        requested_week = (
+            Week.objects.filter(
+                pk=focus_week_id, deleted_at__isnull=True, delivered_at__isnull=False
+            )
+            .select_related("mesocycle")
+            .first()
+        )
     plans = (
         Plan.objects.for_athlete(user)
         .exclude(status=Plan.Status.ARCHIVED)
@@ -1142,15 +1160,23 @@ def athlete_home(user):
         # When it doesn't hold (or the flagged week is undelivered — a current
         # week the coach is still building), fall back to the latest delivered
         # week, whose ordering already tracks the newest delivery.
-        current = current_week(plan)
-        if (
-            current is not None
-            and current.delivered_at is not None
-            and _single_current_week(plan)
-        ):
-            anchor = current
+        #
+        # ``requested_week`` (the ``?week=`` override) wins over both when it
+        # names a live delivered week of THIS plan — matched by ``plan_id``
+        # rather than a second per-card query. A foreign/other-plan week never
+        # matches here, so it's a no-op for every other card.
+        if requested_week is not None and requested_week.mesocycle.plan_id == plan.pk:
+            anchor = requested_week
         else:
-            anchor = latest
+            current = current_week(plan)
+            if (
+                current is not None
+                and current.delivered_at is not None
+                and _single_current_week(plan)
+            ):
+                anchor = current
+            else:
+                anchor = latest
         block = anchor.mesocycle
         focus = anchor
         # The table columns: only DELIVERED live weeks of this block — a week the
@@ -1172,6 +1198,36 @@ def athlete_home(user):
         done = _done_session_ids([s.pk for s in session_objs], user)
         sessions = [_athlete_session_row(s, done=s.pk in done) for s in session_objs]
 
+        # Week chips (issue #456): the navigation affordance onto any delivered
+        # week of the block, not just the focus one — a partially-skipped week
+        # still has a tappable way forward. ``current`` reads the week's own
+        # ``is_current`` (the real pointer); ``focused`` is merely which column
+        # this card is showing right now (the ``?week=`` override, or the
+        # anchor's default). They usually coincide but must not be conflated —
+        # ``_athlete_block_grid``'s own ``current`` flag means "focused column",
+        # a separate, older field kept as-is for its existing consumers.
+        week_chips = [
+            {
+                "id": w.pk,
+                "index": w.index,
+                "label": _week_label(w),
+                "current": w.is_current,
+                "focused": w.pk == focus.pk,
+            }
+            for w in delivered_weeks
+        ]
+        next_week_obj = next(
+            (w for w in delivered_weeks if w.index > focus.index), None
+        )
+        next_week = (
+            {"id": next_week_obj.pk, "index": next_week_obj.index}
+            if next_week_obj is not None
+            else None
+        )
+        # Vacuously false with no sessions — "start next week" would be a
+        # non-sequitur nudge on an empty focus week.
+        focus_done = bool(session_objs) and all(s.pk in done for s in session_objs)
+
         cards.append(
             {
                 "id": plan.pk,
@@ -1183,6 +1239,9 @@ def athlete_home(user):
                 "delivered_at": focus.delivered_at,
                 "sessions": sessions,
                 "grid": _athlete_block_grid(block, delivered_ids, focus.pk, plan.unit),
+                "week_chips": week_chips,
+                "next_week": next_week,
+                "focus_done": focus_done,
                 "awaiting": False,
             }
         )
