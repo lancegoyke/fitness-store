@@ -982,6 +982,15 @@ def serialize_mesocycle_grid(mesocycle):
     its ``Week`` are live (``Prescription`` carries no ``deleted_at`` of its
     own); every live (slot × week) pair should have exactly one, built from a
     single query grouped in Python to avoid N+1 over the block.
+
+    Issue #455 phase A5: ``plan``/``group``/``athlete``/``phases`` join the
+    payload (and ``weeks[].vol``/``.inten`` too) so the front-end can retire
+    the separate one-week ``serialize_plan``/``plan_data`` owner and hydrate
+    the top bar / left rail / block view straight off this grid — the same
+    helpers ``serialize_plan`` already calls, just scoped to THIS grid's own
+    mesocycle (the block being edited) rather than the plan's globally
+    "current" (deliver-target) week's mesocycle. ``serialize_plan`` itself is
+    untouched — it stays the agent's own context source (``service.py``).
     """
     plan = mesocycle.plan
     weeks = list(mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index"))
@@ -1134,7 +1143,27 @@ def serialize_mesocycle_grid(mesocycle):
             }
         )
 
+    # Issue #455 phase A5: the macrocycle rail, scoped so THIS mesocycle (the
+    # block the grid renders) is the "current" one — mirrors serialize_plan's
+    # own _phase_states call, but keyed off the grid's mesocycle rather than
+    # the plan's globally-current week's mesocycle (P4 precedent).
+    mesocycles = list(plan.mesocycles.all())
+    states = _phase_states(mesocycles, mesocycle)
+    phases = [serialize_mesocycle(m, s) for m, s in zip(mesocycles, states)]
+
     return {
+        "plan": {
+            "id": plan.pk,
+            "title": plan.title,
+            "goal": plan.goal,
+            "status": plan.status,
+            "unit": plan.unit,
+        },
+        "group": serialize_group_identity(plan.group) if plan.is_group else None,
+        # None for a group plan, which renders off "group" instead — mirrors
+        # serialize_plan's athlete/group split.
+        "athlete": serialize_athlete_identity(plan),
+        "phases": phases,
         "mesocycle": {
             "id": mesocycle.pk,
             "plan_id": plan.pk,
@@ -1150,6 +1179,9 @@ def serialize_mesocycle_grid(mesocycle):
                 "deload": w.is_deload,
                 "current": w.is_current,
                 "delivered_at": w.delivered_at.isoformat() if w.delivered_at else None,
+                # BlockView's periodization timeline bar heights.
+                "vol": w.volume,
+                "inten": w.intensity,
             }
             for w in weeks
         ],

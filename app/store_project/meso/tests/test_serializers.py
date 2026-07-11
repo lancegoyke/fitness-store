@@ -33,6 +33,8 @@ from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
 from store_project.meso.models import Week
+from store_project.meso.serializers import serialize_athlete_identity
+from store_project.meso.serializers import serialize_group_identity
 from store_project.meso.serializers import serialize_mesocycle_grid
 from store_project.meso.serializers import serialize_plan
 from store_project.meso.serializers import serialize_plan_history
@@ -571,7 +573,20 @@ class TestSerializeMesocycleGrid:
     def test_top_level_keys(self):
         f = _build_grid_meso()
         result = serialize_mesocycle_grid(f.meso)
-        assert set(result.keys()) == {"mesocycle", "weeks", "days", "history"}
+        # Issue #455 phase A5: plan/group/athlete/phases join the grid payload
+        # so DesignerRoot can retire the separate one-week `plan_data` owner
+        # and hydrate the top bar / left rail / block view straight off the
+        # grid (see this class's TestSerializeMesocycleGridIdentity below).
+        assert set(result.keys()) == {
+            "plan",
+            "group",
+            "athlete",
+            "phases",
+            "mesocycle",
+            "weeks",
+            "days",
+            "history",
+        }
 
     def test_mesocycle_envelope(self):
         f = _build_grid_meso()
@@ -595,6 +610,12 @@ class TestSerializeMesocycleGrid:
             "deload": False,
             "current": True,
             "delivered_at": None,
+            # Issue #455 phase A5: BlockView's periodization timeline bars
+            # (barH(w.vol, ...)/barH(w.inten, ...)) need these on the grid
+            # payload now that the one-week `plan_data`/`serialize_week` path
+            # is no longer the front-end's only source for them.
+            "vol": f.week1.volume,
+            "inten": f.week1.intensity,
         }
         wk2 = result["weeks"][1]
         assert wk2["id"] == f.week2.pk
@@ -602,6 +623,8 @@ class TestSerializeMesocycleGrid:
         assert wk2["label"] == "Wk 2"
         assert wk2["current"] is False
         assert wk2["delivered_at"] == f.week2.delivered_at.isoformat()
+        assert wk2["vol"] == f.week2.volume
+        assert wk2["inten"] == f.week2.intensity
 
     def test_days_ordered_with_session_id_and_identity(self):
         f = _build_grid_meso()
@@ -799,6 +822,65 @@ class TestSerializeMesocycleGrid:
                     assert "adjusts" not in cell
 
 
+class TestSerializeMesocycleGridIdentity:
+    """Issue #455 phase A5: plan/group/athlete/phases join the grid payload.
+
+    DesignerRoot's top bar / left rail / block view retire the separate
+    one-week ``plan_data`` owner (``serialize_plan``) and hydrate straight off
+    the grid now. These fields are additive re-uses of the exact helpers
+    ``serialize_plan`` already calls (``serialize_group_identity``/
+    ``serialize_athlete_identity``/``serialize_mesocycle``/``_phase_states``),
+    just scoped to THIS grid's own mesocycle/plan rather than the plan's
+    globally-current week.
+    """
+
+    def test_plan_summary(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        assert result["plan"] == {
+            "id": f.plan.pk,
+            "title": f.plan.title,
+            "goal": f.plan.goal,
+            "status": f.plan.status,
+            "unit": f.plan.unit,
+        }
+
+    def test_individual_plan_carries_athlete_and_no_group(self):
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        assert result["group"] is None
+        assert result["athlete"] == serialize_athlete_identity(f.plan)
+        assert result["athlete"]["name"]  # sanity: a real name, not blank
+
+    def test_group_plan_carries_group_and_no_athlete(self):
+        f = _build_group_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        assert result["athlete"] is None
+        assert result["group"] == serialize_group_identity(f.group)
+        assert result["group"]["name"] == f.group.name
+
+    def test_phases_reflect_the_gridded_mesocycle_as_current(self):
+        # ``_build_grid_meso`` creates a single mesocycle, so ``phases`` is
+        # one "current" entry.
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        assert result["phases"] == [
+            {"name": "Hypertrophy", "weeks": "4 wk", "state": "current"}
+        ]
+
+    def test_phases_are_scoped_to_the_grid_mesocycle_not_the_plans_viewed_week(self):
+        # A later block, added after the gridded one: `serialize_mesocycle_
+        # grid(meso)` must report ITS OWN mesocycle as "current" (mirrors P4's
+        # validation-scoping precedent — the grid is its own block, not
+        # necessarily whatever week the plan happens to be viewing).
+        f = _build_grid_meso()
+        MesocycleFactory(
+            plan=f.plan, name="Strength", order=f.meso.order + 10, week_count=4
+        )
+        result = serialize_mesocycle_grid(f.meso)
+        assert [p["state"] for p in result["phases"]] == ["current", "next"]
+
+
 def _build_group_grid_meso():
     """A one-day, two-row, single-week GROUP block with one member override.
 
@@ -941,17 +1023,33 @@ class TestSerializeMesocycleGridOneRm:
         # Baseline (no adj/one_rm overlay) is 7: weeks, session slots, sessions,
         # exercise slots, cells, 2x PlanAction (serialize_plan_history) — this
         # phase adds exactly ONE query (one_rm_values), establishing the budget.
+        #
+        # Issue #455 phase A5: identity/phases add exactly TWO more —
+        # ``plan.mesocycles.all()`` (phases) and ``athlete.contraindications
+        # .all()`` (serialize_athlete_identity). ``plan.athlete`` itself
+        # (``relationship``/``relationship.athlete``) costs nothing here — both
+        # are already cached Python objects (the factories above construct
+        # ``plan``/``mesocycle`` from the same in-memory ``rel``), same as
+        # ``serialize_plan``'s identical identity calls pay for in practice.
         f = _build_grid_meso()
         AthleteOneRmFactory(
             athlete=f.plan.athlete, exercise=f.catalog, value=Decimal("140")
         )
-        with django_assert_num_queries(8):
+        with django_assert_num_queries(10):
             serialize_mesocycle_grid(f.meso)
 
-    def test_group_grid_query_count_is_unaffected(self, django_assert_num_queries):
+    def test_group_grid_query_count_is_unaffected_by_one_rm(
+        self, django_assert_num_queries
+    ):
         # A group plan skips one_rm_values entirely (short-circuited on
-        # ``plan.is_group``) — the group baseline (8, incl. group_adjustments)
-        # stays exactly where it was.
+        # ``plan.is_group``) — the pre-A5 group baseline (8, incl.
+        # group_adjustments) doesn't pay the one_rm query individual plans do.
+        #
+        # Issue #455 phase A5: identity/phases add exactly THREE more —
+        # ``plan.mesocycles.all()`` (phases), ``group.active_member_users()``,
+        # and one member's ``.contraindications.all()`` (one active member in
+        # ``_build_group_grid_meso``; N+1 over members, same as
+        # ``serialize_group_identity`` already pays for on the one-week path).
         f = _build_group_grid_meso()
-        with django_assert_num_queries(8):
+        with django_assert_num_queries(11):
             serialize_mesocycle_grid(f.meso)
