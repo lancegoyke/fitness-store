@@ -26,6 +26,7 @@ import { useOverrideEditor } from "./hooks/useOverrideEditor";
 import { useOneRmEditor } from "./hooks/useOneRmEditor";
 import { useReorder } from "./hooks/useReorder";
 import { useGrid } from "./hooks/useGrid";
+import { useTableReorder } from "./hooks/useTableReorder";
 import { useAgentChat } from "./hooks/useAgentChat";
 import type { ChatMessage } from "./hooks/useAgentChat";
 import { useCoachmarks } from "./hooks/useCoachmarks";
@@ -310,6 +311,15 @@ export function DesignerRoot() {
     setProgram: planData.setProgram,
     applyPlanData: planData.applyPlanData,
   });
+  // Issue #455 phase A2 (drag reordering): the table's own pure drag-event
+  // translator, a sibling of `reorder` above — wired to gridState's two new
+  // structural verbs (reorderExercises/reorderDays), not planData's. See
+  // useTableReorder.ts's header for why this hook owns no state of its own.
+  const tableReorder = useTableReorder({
+    grid: gridState.grid,
+    reorderRow: gridState.reorderExercises,
+    reorderDay: gridState.reorderDays,
+  });
   const agentChat = useAgentChat({
     planId,
     csrf,
@@ -448,6 +458,7 @@ export function DesignerRoot() {
                 onSwapCell={gridState.swapCell}
                 onFillAcrossWeeks={gridState.fillAcrossWeeks}
                 onAddExerciseThisWeek={gridState.addExerciseThisWeek}
+                onDragEnd={tableReorder.onDragEnd}
               />
             )}
 

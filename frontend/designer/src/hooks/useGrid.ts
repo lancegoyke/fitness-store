@@ -331,6 +331,44 @@ export function useGrid(options: UseGridOptions) {
     [planId, csrf, runStructural, refetchGrid],
   );
 
+  // Issue #455 phase A2 (drag reordering): same STRUCTURAL shape as every
+  // verb above — the server owns the authoritative order (block-wide P0
+  // ExerciseSlot/SessionSlot.order), so these await their POST then
+  // refetch the whole grid, sharing busyRef. useTableReorder (the pure
+  // drag-event translator) builds `order` from the CURRENT week's live
+  // cell/session ids and calls these two verbs — see its own header for the
+  // payload contract (mirrors views.py session_reorder/week_reorder_sessions
+  // exactly: `order` must be EXACTLY the live id set for the target session/
+  // week, in the new order).
+
+  const reorderExercises = useCallback(
+    (sessionId: Id, order: number[]) =>
+      runStructural(async () => {
+        try {
+          await apiPost(`/meso/api/plan/${planId}/session/${sessionId}/reorder/`, { order }, csrf);
+        } catch (err) {
+          console.error("Reorder exercises failed", err);
+          return;
+        }
+        await refetchGrid();
+      }),
+    [planId, csrf, runStructural, refetchGrid],
+  );
+
+  const reorderDays = useCallback(
+    (weekId: Id, order: number[]) =>
+      runStructural(async () => {
+        try {
+          await apiPost(`/meso/api/plan/${planId}/week/${weekId}/reorder/`, { order }, csrf);
+        } catch (err) {
+          console.error("Reorder days failed", err);
+          return;
+        }
+        await refetchGrid();
+      }),
+    [planId, csrf, runStructural, refetchGrid],
+  );
+
   // --- P2 exceptions: skip / swap / fill / add-this-week -----------------
   // Same STRUCTURAL shape as add/removeExercise|Day|Week above — the grid
   // (not just one cell) can change shape/content in ways only the server
@@ -445,6 +483,8 @@ export function useGrid(options: UseGridOptions) {
     addWeek,
     removeWeek,
     setCurrentWeek,
+    reorderExercises,
+    reorderDays,
     skipCell,
     swapCell,
     fillAcrossWeeks,

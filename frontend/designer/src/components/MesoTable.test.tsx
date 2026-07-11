@@ -57,6 +57,7 @@ function day(overrides: Partial<GridDay> = {}): GridDay {
   return {
     session_slot_id: 1,
     session_id: 11,
+    session_ids: { "1": 11 },
     day_number: 1,
     name: "Lower",
     bias: "Quad bias",
@@ -906,5 +907,201 @@ describe("keyboard grid navigation: skidding over a skipped cell (issue #455 rev
     expect(screen.getByTestId("cell-sets-902")).toHaveFocus();
     expect(screen.getByTestId("cell-sets-902")).toHaveAttribute("tabindex", "0");
     expect(screen.getByTestId("cell-note-900")).toHaveAttribute("tabindex", "-1");
+  });
+});
+
+// --- Issue #455 phase A2: drag reordering (row + day) -----------------------
+// Real pointer/keyboard dnd-kit drags are browser-only-verifiable (see
+// useTableReorder.ts's header + the WeekGrid/DayCard precedent, which never
+// simulates an actual drag through RTL either) — these specs pin the seams
+// MesoTable itself owns: the handles' rendering/a11y, and the three pure
+// functions its DndContext wires its sensors to (mirrors WeekGrid.test.tsx's
+// "keyboard drag candidate filtering" / "typedCollisionDetection" /
+// "typedKeyboardCoordinates" suites). onDragEnd's own translation logic is
+// covered by useTableReorder.test.ts.
+describe("drag handles", () => {
+  it("renders a row drag handle with testid/type/aria-label, first in the name cell", () => {
+    render(<MesoTable {...baseProps()} />);
+    const handle = screen.getByTestId("row-drag-9");
+    expect(handle).toHaveAttribute("type", "button");
+    expect(handle).toHaveAttribute("aria-label", "Reorder Squat");
+  });
+
+  it("falls back to a generic row handle label for a blank exercise name", () => {
+    render(<MesoTable {...baseProps({ grid: grid({ days: [day({ rows: [row({ name: "" })] })] }) })} />);
+    expect(screen.getByTestId("row-drag-9")).toHaveAttribute("aria-label", "Reorder exercise");
+  });
+
+  it("the row handle carries no data-grid-restore (Undo/etc. must not steal-refocus it)", () => {
+    render(<MesoTable {...baseProps()} />);
+    expect(screen.getByTestId("row-drag-9")).not.toHaveAttribute("data-grid-restore");
+  });
+
+  it("the row handle carries no data-grid-cell (outside useTableNav's grid entirely)", () => {
+    render(<MesoTable {...baseProps()} />);
+    expect(screen.getByTestId("row-drag-9")).not.toHaveAttribute("data-grid-cell");
+  });
+
+  it("disables the row handle while busy", () => {
+    render(<MesoTable {...baseProps({ busy: true })} />);
+    expect(screen.getByTestId("row-drag-9")).toBeDisabled();
+  });
+
+  it("renders a day drag handle with testid/type/aria-label, first in the day header", () => {
+    render(<MesoTable {...baseProps()} />);
+    const handle = screen.getByTestId("day-drag-1");
+    expect(handle).toHaveAttribute("type", "button");
+    expect(handle).toHaveAttribute("aria-label", "Reorder Lower");
+  });
+
+  it("falls back to 'Reorder Day <n>' for a blank day name", () => {
+    render(<MesoTable {...baseProps({ grid: grid({ days: [day({ name: "", day_number: 2 })] }) })} />);
+    expect(screen.getByTestId("day-drag-1")).toHaveAttribute("aria-label", "Reorder Day 2");
+  });
+
+  it("the day handle carries no data-grid-restore", () => {
+    render(<MesoTable {...baseProps()} />);
+    expect(screen.getByTestId("day-drag-1")).not.toHaveAttribute("data-grid-restore");
+  });
+
+  it("disables the day handle while busy", () => {
+    render(<MesoTable {...baseProps({ busy: true })} />);
+    expect(screen.getByTestId("day-drag-1")).toBeDisabled();
+  });
+});
+
+describe("filterTableDragCandidates (row drags stay within their own day; day drags target only days)", () => {
+  it("keeps only day containers for a day-active drag", async () => {
+    const { filterTableDragCandidates } = await import("./MesoTable");
+    const containers = [{ id: "day-1" }, { id: "row-1-9" }, { id: "row-2-11" }, { id: "day-2" }] as never[];
+    expect(filterTableDragCandidates("day-1", containers).map((c: { id: string }) => c.id)).toEqual([
+      "day-1",
+      "day-2",
+    ]);
+  });
+
+  it("keeps only SAME-DAY row containers for a row-active drag (cross-day is OUT of A2 scope)", async () => {
+    const { filterTableDragCandidates } = await import("./MesoTable");
+    const containers = [
+      { id: "day-1" },
+      { id: "row-1-9" },
+      { id: "row-1-10" },
+      { id: "row-2-11" },
+      { id: "day-2" },
+    ] as never[];
+    expect(filterTableDragCandidates("row-1-9", containers).map((c: { id: string }) => c.id)).toEqual([
+      "row-1-9",
+      "row-1-10",
+    ]);
+  });
+});
+
+describe("tableCollisionDetection (day drags collide only with day containers)", () => {
+  it("returns only day collisions for a day drag", async () => {
+    const { tableCollisionDetection } = await import("./MesoTable");
+    const rect = (top: number) => ({ top, bottom: top + 200, left: 0, right: 800, width: 800, height: 200 });
+    const containers = [
+      { id: "day-1", rect: { current: rect(0) }, data: { current: {} }, disabled: false },
+      { id: "row-1-9", rect: { current: rect(40) }, data: { current: {} }, disabled: false },
+      { id: "day-2", rect: { current: rect(220) }, data: { current: {} }, disabled: false },
+    ];
+    const collisions = tableCollisionDetection({
+      active: { id: "day-2", rect: { current: { initial: rect(220), translated: rect(10) } }, data: { current: {} } },
+      collisionRect: rect(10),
+      droppableRects: new Map(containers.map((c) => [c.id, c.rect.current])),
+      droppableContainers: containers,
+      pointerCoordinates: null,
+    } as never);
+    expect(collisions.length).toBeGreaterThan(0);
+    expect(collisions.every((c: { id: unknown }) => String(c.id).startsWith("day-"))).toBe(true);
+    expect(String(collisions[0]!.id)).toBe("day-1");
+  });
+
+  it("returns NO collision when a row is dropped nowhere near its own day's candidates (no phantom same-day reorder)", async () => {
+    // closestCenter would have snapped this far-away drop to the nearest
+    // same-day row and committed an unintended reorder; intersection-based
+    // collision leaves `over` null so the drop no-ops (Codex #455 A2 review).
+    const { tableCollisionDetection } = await import("./MesoTable");
+    const rect = (top: number, height = 40) => ({ top, bottom: top + height, left: 0, right: 800, width: 800, height });
+    const containers = [
+      { id: "row-1-9", rect: { current: rect(0) }, data: { current: {} }, disabled: false },
+      { id: "row-1-10", rect: { current: rect(40) }, data: { current: {} }, disabled: false },
+      { id: "row-2-11", rect: { current: rect(400) }, data: { current: {} }, disabled: false },
+    ];
+    const collisions = tableCollisionDetection({
+      active: { id: "row-1-9", rect: { current: { initial: rect(0), translated: rect(400) } }, data: { current: {} } },
+      collisionRect: rect(400), // dropped over day 2's territory — no same-day candidate there
+      droppableRects: new Map(containers.map((c) => [c.id, c.rect.current])),
+      droppableContainers: containers,
+      pointerCoordinates: { x: 100, y: 420 },
+    } as never);
+    expect(collisions).toEqual([]);
+  });
+
+  it("returns the same-day row under the pointer for an in-day row drag", async () => {
+    const { tableCollisionDetection } = await import("./MesoTable");
+    const rect = (top: number, height = 40) => ({ top, bottom: top + height, left: 0, right: 800, width: 800, height });
+    const containers = [
+      { id: "row-1-9", rect: { current: rect(0) }, data: { current: {} }, disabled: false },
+      { id: "row-1-10", rect: { current: rect(40) }, data: { current: {} }, disabled: false },
+    ];
+    const collisions = tableCollisionDetection({
+      active: { id: "row-1-10", rect: { current: { initial: rect(40), translated: rect(10) } }, data: { current: {} } },
+      collisionRect: rect(10),
+      droppableRects: new Map(containers.map((c) => [c.id, c.rect.current])),
+      droppableContainers: containers,
+      pointerCoordinates: { x: 100, y: 20 },
+    } as never);
+    expect(collisions.length).toBeGreaterThan(0);
+    expect(String(collisions[0]!.id)).toBe("row-1-9");
+  });
+});
+
+describe("tableKeyboardCoordinates delegates to the real droppable map", () => {
+  // dnd-kit's DroppableContainersMap is a real Map subclass; a spread/assign
+  // clone borrows its prototype without Map internal slots, so .get() throws
+  // "called on incompatible receiver" and keyboard reordering dies silently
+  // (see WeekGrid.tsx's typedKeyboardCoordinates, ported verbatim-adapted).
+  it("returns coordinates for a day drag without throwing on Map methods", async () => {
+    const { tableKeyboardCoordinates } = await import("./MesoTable");
+    class FakeContainers extends Map<string, unknown> {
+      getEnabled() {
+        return [...this.values()];
+      }
+    }
+    const mk = (id: string, top: number) => {
+      const node = document.createElement("div");
+      document.body.appendChild(node);
+      return {
+        id,
+        disabled: false,
+        node: { current: node },
+        data: { current: { sortable: { containerId: "table", index: 0, items: [] } } },
+        rect: { current: { top, bottom: top + 100, left: 0, right: 800, width: 800, height: 100 } },
+      };
+    };
+    const containers = new FakeContainers();
+    for (const c of [mk("day-1", 0), mk("row-1-9", 30), mk("day-2", 200)]) containers.set(c.id, c);
+    const rects = new Map(
+      [...containers.values()].map((c) => {
+        const e = c as { id: string; rect: { current: unknown } };
+        return [e.id, e.rect.current] as const;
+      }),
+    );
+    const event = new KeyboardEvent("keydown", { code: "ArrowDown", key: "ArrowDown" });
+    const coords = tableKeyboardCoordinates(event, {
+      currentCoordinates: { x: 0, y: 0 },
+      context: {
+        active: { id: "day-1" },
+        over: null,
+        collisionRect: { top: 0, bottom: 100, left: 0, right: 800, width: 800, height: 100 },
+        droppableRects: rects,
+        droppableContainers: containers,
+        scrollableAncestors: [],
+      },
+    } as never);
+    expect(coords).toBeTruthy();
+    // Proposed target must be day-2 (top 200), never row-1-9 (top 30).
+    expect(coords!.y).toBeGreaterThanOrEqual(150);
   });
 });

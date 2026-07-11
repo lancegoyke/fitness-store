@@ -222,3 +222,34 @@
   gap: 5px;
   padding: 4px 15px 8px;
 }
+
+/* Issue #455 phase A2 (drag reordering): the day block / table row being
+   actively dragged. No live CSS transform (a transformed <tr> inside
+   border-collapse + a sticky first column, or a transformed day block
+   inside .meso-table-scroll's overflow-x:auto, both have known cross-
+   browser glitches, unverifiable in jsdom) — opacity + shadow only,
+   mirroring designer-grid.css's .meso-day-card.is-dragging /
+   .meso-ex-row.is-dragging. The drag handle itself (`.meso-drag-handle`)
+   and `--day` variant are reused verbatim from designer-grid.css. The
+   visible drag affordance is the DragOverlay ghost below instead of a
+   live-transformed original element. */
+.meso-table-day.is-dragging {
+  opacity: 0.85;
+  box-shadow: 0 6px 18px rgba(16, 18, 22, 0.16);
+  position: relative;
+  z-index: 1;
+}
+.meso-table tbody tr.is-dragging {
+  opacity: 0.6;
+  background: var(--soft);
+}
+.meso-table-drag-ghost {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(16, 18, 22, 0.2);
+  padding: 6px 12px;
+}

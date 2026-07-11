@@ -18,15 +18,44 @@
 // RowNameEditor as a required prop (they're module-private, so there's no
 // INERT-fallback case to support).
 //
-// P1: deferred (see docs/archive/meso/fixed-selection-plan.md) — dnd-kit
-// drag reordering, in-cell group override editor / one-rm editor,
-// agent-chat wiring, coachmarks. Swap/skip/add-this-week WRITE UX is P2 —
-// this file only ever DISPLAYS swap_name/skipped.
+// Drag reordering (issue #455 A2) — row + day — is owned by useTableReorder
+// (a sibling of DesignerRoot's instantiation, NOT this file): MesoTable only
+// wires up dnd-kit's DndContext/sensors/DragOverlay and the two drag
+// handles, translating dnd-kit's real DragEndEvent into the pure
+// TableDragEndEvent shape and forwarding it to the optional `onDragEnd`
+// prop, mirroring WeekGrid.tsx's onDragEnd/handleDragEnd split exactly.
+// Cross-day row moves are OUT of scope for this phase (see
+// useTableReorder.ts's header) — enforced at the collision-filter layer
+// below (filterTableDragCandidates) so a row drag never even collides with
+// another day's rows. No live CSS.Transform on a <tr> or a day block (a
+// transformed row inside border-collapse + a sticky first column, or a
+// transformed block inside .meso-table-scroll's overflow-x:auto, are both
+// known cross-browser glitches, unverifiable in jsdom) — a DragOverlay ghost
+// plus `.is-dragging` opacity only.
+//
+// P1: deferred (see docs/archive/meso/fixed-selection-plan.md) — in-cell
+// group override editor / one-rm editor, agent-chat wiring, coachmarks.
+// Swap/skip/add-this-week WRITE UX is P2 — this file only ever DISPLAYS
+// swap_name/skipped.
 import { useEffect, useRef, useState } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  pointerWithin,
+  rectIntersection,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import type { CollisionDetection, DragEndEvent, DragStartEvent, KeyboardCoordinateGetter } from "@dnd-kit/core";
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, GroupIdentity, MesoGrid } from "../lib/api";
 import type { GridCellPatch, Id } from "../hooks/useGrid";
 import { useTableNav, tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
 import type { EditableField, UseTableNavResult } from "../hooks/useTableNav";
+import type { TableDragData, TableDragEndEvent } from "../hooks/useTableReorder";
+import { TABLE_DAY_DRAG_PREFIX, tableDayDragId, tableRowDragId, tableRowDragPrefix } from "../lib/tableDragIds";
 
 export interface MesoTableProps {
   grid: MesoGrid | null;
@@ -57,6 +86,11 @@ export interface MesoTableProps {
   onSwapCell(cellId: number, swapName: string): void;
   onFillAcrossWeeks(cellId: number): void;
   onAddExerciseThisWeek(day: GridDay, weekId: number): void;
+  // Issue #455 phase A2 (drag reordering): optional, with a no-op fallback
+  // in handleDragEnd below — mirrors WeekGrid.tsx's onDragEnd prop, so
+  // MesoTable.test.tsx's existing baseProps() (which never sets it) keeps
+  // passing untouched.
+  onDragEnd?(event: TableDragEndEvent): void;
 }
 
 /** The single arm/confirm slot — mirrors usePlanData's PendingDelete
@@ -64,6 +98,66 @@ export interface MesoTableProps {
  * remove verbs fire the mutation directly with no confirm step of their own. */
 type ArmedKind = "exercise" | "day" | "week";
 type Armed = { type: ArmedKind; id: Id } | null;
+
+// Issue #455 phase A2: sortable ids are "day-<sessionSlotId>" and
+// "row-<daySlotId>-<exerciseSlotId>" (id-string encoded, mirroring
+// WeekGrid.tsx's "day-"/"ex-" prefix convention) — built EXCLUSIVELY via
+// tableDayDragId/tableRowDragId (../lib/tableDragIds), the single source of
+// truth for this encoding (Codex #455 A2 review finding 1). A day drag
+// targets only day containers; a row drag targets only ROW containers of
+// its OWN day — cross-day row moves are OUT of scope for A2 (decisions
+// 5/7), enforced here at the collision-filter layer (and independently
+// again inside useTableReorder's onDragEnd, off TableDragData — never off
+// these strings). Unlike WeekGrid's exercise-active filter (which keeps day
+// containers too, for the one-week grid's exercise-over-day append path),
+// the table has no cross-type drop target at all in A2.
+export function filterTableDragCandidates<T extends { id: unknown }>(activeId: unknown, containers: T[]): T[] {
+  const activeIdStr = String(activeId);
+  if (activeIdStr.startsWith(TABLE_DAY_DRAG_PREFIX)) {
+    return containers.filter((c) => String(c.id).startsWith(TABLE_DAY_DRAG_PREFIX));
+  }
+  const daySlotId = activeIdStr.split("-")[1] ?? "";
+  return containers.filter((c) => String(c.id).startsWith(tableRowDragPrefix(daySlotId)));
+}
+
+// Same type/scope filtering at the collision layer as
+// filterTableDragCandidates above. INTERSECTION-based on purpose, with NO
+// closest-center fallback: closestCenter always returns the nearest
+// candidate even when the drop lands nowhere near it, which would turn an
+// unsupported cross-day drop (candidates are same-day only) into a phantom
+// same-day reorder against whichever row happened to be nearest (Codex
+// #455 A2 review). Outside every candidate → no collision → `over` stays
+// null → the drop no-ops. pointerWithin first (precise for real pointer
+// drags), rectIntersection as the fallback (keyboard drags move the overlay
+// rect with no pointer coordinates).
+export const tableCollisionDetection: CollisionDetection = (args) => {
+  const droppableContainers = filterTableDragCandidates(args.active.id, args.droppableContainers);
+  const within = pointerWithin({ ...args, droppableContainers });
+  if (within.length > 0) return within;
+  return rectIntersection({ ...args, droppableContainers });
+};
+
+// Ported verbatim-adapted from WeekGrid.tsx's typedKeyboardCoordinates:
+// DroppableContainersMap is a real Map subclass — a spread/assign clone
+// borrows its prototype WITHOUT Map internal slots, and .get() then throws
+// "called on incompatible receiver". Delegate every member to the original
+// map (methods bound to it), overriding only getEnabled with the filter.
+export const tableKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) => {
+  const containers = args.context.droppableContainers;
+  const filtered = new Proxy(containers, {
+    get(target, prop) {
+      if (prop === "getEnabled") {
+        return () => filterTableDragCandidates(args.context.active?.id ?? "", target.getEnabled());
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return sortableKeyboardCoordinates(event, {
+    ...args,
+    context: { ...args.context, droppableContainers: filtered },
+  });
+};
 
 function draftFrom(cell: GridCell): Record<EditableField, string> {
   return { sets: cell.sets, reps: cell.reps, load: cell.load, rpe: cell.rpe, rest: cell.rest, note: cell.note };
@@ -448,6 +542,389 @@ function AddThisWeekControl({ day, weeks, busy, onAddExerciseThisWeek }: AddThis
   );
 }
 
+interface TableRowProps {
+  row: GridRow;
+  day: GridDay;
+  weeks: GridWeek[];
+  busy: boolean;
+  unit: string;
+  showAdjust: boolean;
+  tableNav: UseTableNavResult;
+  rowArmed: boolean;
+  onArmRow(): void;
+  onConfirmRemoveRow(): void;
+  onCancelRemoveRow(): void;
+  onOpenOverride(row: GridRow, cell: GridCell): void;
+  onPatchCell(cellId: Id, patch: GridCellPatch): void;
+  onRenameExercise(exerciseSlotId: Id, name: string): void;
+  onSkipCell(cellId: number, skipped: boolean): void;
+  onSwapCell(cellId: number, swapName: string): void;
+  onFillAcrossWeeks(cellId: number): void;
+}
+
+/** Issue #455 phase A2: one exercise row — now a dnd-kit sortable item
+ * within its day's own row SortableContext. Drag LISTENERS are bound only
+ * to the handle button (dnd-kit's documented "drag handle" pattern, mirrors
+ * ExerciseRow.tsx) — a click/drag anywhere else in the row (a cell input, a
+ * badge) never starts a drag. No live CSS.Transform on the <tr> (see this
+ * file's header) — only the `.is-dragging` opacity class. */
+function TableRow({
+  row,
+  day,
+  weeks,
+  busy,
+  unit,
+  showAdjust,
+  tableNav,
+  rowArmed,
+  onArmRow,
+  onConfirmRemoveRow,
+  onCancelRemoveRow,
+  onOpenOverride,
+  onPatchCell,
+  onRenameExercise,
+  onSkipCell,
+  onSwapCell,
+  onFillAcrossWeeks,
+}: TableRowProps) {
+  const dragData: TableDragData = {
+    type: "row",
+    daySlotId: day.session_slot_id,
+    exerciseSlotId: row.exercise_slot_id,
+  };
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
+    id: tableRowDragId(day.session_slot_id, row.exercise_slot_id),
+    data: dragData,
+    disabled: busy,
+  });
+
+  return (
+    <tr
+      ref={setNodeRef}
+      className={isDragging ? "is-dragging" : undefined}
+      data-testid={`meso-row-${row.exercise_slot_id}`}
+    >
+      <td className="meso-table-row-name-col">
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          data-testid={`row-drag-${row.exercise_slot_id}`}
+          className="meso-drag-handle"
+          aria-label={`Reorder ${row.name || "exercise"}`}
+          disabled={busy}
+          {...attributes}
+          {...listeners}
+        >
+          ⠿
+        </button>
+        <RowNameEditor row={row} tableNav={tableNav} onRename={onRenameExercise} />
+        {!rowArmed && (
+          <button
+            type="button"
+            data-testid={`remove-exercise-${row.exercise_slot_id}`}
+            className="meso-remove-x meso-remove-x--sm"
+            disabled={busy}
+            aria-label="Remove exercise"
+            title="Remove exercise"
+            onClick={onArmRow}
+          >
+            ×
+          </button>
+        )}
+        {rowArmed && (
+          <span className="meso-confirm-pair">
+            <button
+              type="button"
+              data-testid={`confirm-remove-exercise-${row.exercise_slot_id}`}
+              className="meso-confirm-btn"
+              disabled={busy}
+              aria-label="Confirm remove exercise"
+              onClick={onConfirmRemoveRow}
+            >
+              Confirm?
+            </button>
+            <button
+              type="button"
+              data-testid={`cancel-remove-exercise-${row.exercise_slot_id}`}
+              className="meso-cancel-btn"
+              disabled={busy}
+              aria-label="Cancel remove exercise"
+              onClick={onCancelRemoveRow}
+            >
+              Cancel
+            </button>
+          </span>
+        )}
+      </td>
+      {weeks.map((week) => {
+        const cell = row.cells[String(week.id)];
+        const testId = `cell-${row.exercise_slot_id}-${week.id}`;
+        if (!cell) return <td key={week.id} data-testid={testId} />;
+        return (
+          <td key={week.id} data-testid={testId} className="meso-table-cell">
+            {cell.skipped ? (
+              <>
+                <span className="meso-table-skipped" data-testid={`cell-skipped-${cell.prescription_id}`}>
+                  —
+                </span>
+                <button
+                  type="button"
+                  data-testid={`cell-unskip-${cell.prescription_id}`}
+                  className="meso-cell-action-btn"
+                  disabled={busy}
+                  aria-label="Unskip this week"
+                  title="Unskip this week"
+                  onClick={() => onSkipCell(cell.prescription_id, false)}
+                >
+                  Unskip
+                </button>
+              </>
+            ) : (
+              <>
+                <GridCellEditor cell={cell} unit={unit} row={row} week={week} tableNav={tableNav} onPatchCell={onPatchCell} />
+                {cell.swap_display && (
+                  <span
+                    className="meso-table-swap-badge"
+                    data-testid={`cell-swap-${cell.prescription_id}`}
+                    title={"Swapped for " + cell.swap_display + " this week"}
+                  >
+                    {cell.swap_display}
+                    <button
+                      type="button"
+                      data-testid={`cell-swap-clear-${cell.prescription_id}`}
+                      className="meso-swap-badge-clear"
+                      disabled={busy}
+                      aria-label="Clear swap"
+                      title="Clear swap"
+                      onClick={() => onSwapCell(cell.prescription_id, "")}
+                    >
+                      ×
+                    </button>
+                  </span>
+                )}
+                {showAdjust && (
+                  <button
+                    type="button"
+                    data-testid={`cell-override-badge-${cell.prescription_id}`}
+                    data-hover="brighten"
+                    className="meso-adjust-badge"
+                    onClick={() => onOpenOverride(row, cell)}
+                    title={
+                      cell.adj
+                        ? (cell.adjusts || []).map((a) => (a.name || "") + ": " + (a.label || "")).join("\n")
+                        : "Set a per-athlete adjust"
+                    }
+                  >
+                    {cell.adj ? cell.adj : <span className="meso-adjust-empty">+ adjust</span>}
+                  </button>
+                )}
+                <CellActions
+                  cell={cell}
+                  busy={busy}
+                  onSkipCell={onSkipCell}
+                  onSwapCell={onSwapCell}
+                  onFillAcrossWeeks={onFillAcrossWeeks}
+                />
+              </>
+            )}
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+interface TableDayBlockProps {
+  day: GridDay;
+  weeks: GridWeek[];
+  busy: boolean;
+  unit: string;
+  showAdjust: boolean;
+  tableNav: UseTableNavResult;
+  isArmed(type: ArmedKind, id: Id): boolean;
+  arm(type: ArmedKind, id: Id): void;
+  disarm(): void;
+  onOpenOverride(row: GridRow, cell: GridCell): void;
+  onPatchCell(cellId: Id, patch: GridCellPatch): void;
+  onRenameExercise(exerciseSlotId: Id, name: string): void;
+  onAddExercise(day: GridDay): void;
+  onRemoveExercise(exerciseSlotId: Id): void;
+  onRemoveDay(day: GridDay): void;
+  onSetCurrentWeek(weekId: Id): void;
+  onRemoveWeek(weekId: Id): void;
+  onSkipCell(cellId: number, skipped: boolean): void;
+  onSwapCell(cellId: number, swapName: string): void;
+  onFillAcrossWeeks(cellId: number): void;
+  onAddExerciseThisWeek(day: GridDay, weekId: number): void;
+}
+
+/** Issue #455 phase A2: one training day's table — now also a dnd-kit
+ * sortable item within the block's own day-strip SortableContext (mirrors
+ * DayCard.tsx). Same no-live-transform rule as TableRow above — only
+ * `.is-dragging` opacity, no CSS.Transform on the block itself. */
+function TableDayBlock({
+  day,
+  weeks,
+  busy,
+  unit,
+  showAdjust,
+  tableNav,
+  isArmed,
+  arm,
+  disarm,
+  onOpenOverride,
+  onPatchCell,
+  onRenameExercise,
+  onAddExercise,
+  onRemoveExercise,
+  onRemoveDay,
+  onSetCurrentWeek,
+  onRemoveWeek,
+  onSkipCell,
+  onSwapCell,
+  onFillAcrossWeeks,
+  onAddExerciseThisWeek,
+}: TableDayBlockProps) {
+  const dayArmed = isArmed("day", day.session_slot_id);
+  const dragData: TableDragData = { type: "day", sessionSlotId: day.session_slot_id };
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
+    id: tableDayDragId(day.session_slot_id),
+    data: dragData,
+    disabled: busy,
+  });
+  const dayHandleLabel = `Reorder ${day.name || `Day ${day.day_number}`}`;
+
+  return (
+    <div className={`meso-table-day${isDragging ? " is-dragging" : ""}`} ref={setNodeRef}>
+      <div className="meso-table-day-header">
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          data-testid={`day-drag-${day.session_slot_id}`}
+          className="meso-drag-handle"
+          aria-label={dayHandleLabel}
+          disabled={busy}
+          {...attributes}
+          {...listeners}
+        >
+          ⠿
+        </button>
+        <div className="meso-day-name">{day.name}</div>
+        {day.bias && <div className="meso-day-bias">{day.bias}</div>}
+        <div className="meso-flex-spacer" />
+        {!dayArmed && (
+          <button
+            type="button"
+            data-testid={`remove-day-${day.session_slot_id}`}
+            className="meso-remove-x"
+            disabled={busy}
+            aria-label="Remove this day"
+            title="Remove this day"
+            onClick={() => arm("day", day.session_slot_id)}
+          >
+            ×
+          </button>
+        )}
+        {dayArmed && (
+          <span className="meso-confirm-pair">
+            <button
+              type="button"
+              data-testid={`confirm-remove-day-${day.session_slot_id}`}
+              className="meso-confirm-btn"
+              disabled={busy}
+              aria-label="Confirm remove day"
+              onClick={() => {
+                onRemoveDay(day);
+                disarm();
+              }}
+            >
+              Confirm?
+            </button>
+            <button
+              type="button"
+              data-testid={`cancel-remove-day-${day.session_slot_id}`}
+              className="meso-cancel-btn"
+              disabled={busy}
+              aria-label="Cancel remove day"
+              onClick={disarm}
+            >
+              Cancel
+            </button>
+          </span>
+        )}
+      </div>
+
+      <div className="meso-table-scroll">
+        <table className="meso-table" data-testid={`meso-day-table-${day.session_slot_id}`}>
+          <thead>
+            <tr>
+              <th className="meso-table-exercise-col">Exercise</th>
+              {weeks.map((week) => (
+                <WeekColumnHeader
+                  key={week.id}
+                  week={week}
+                  armed={isArmed("week", week.id)}
+                  busy={busy}
+                  onArm={() => arm("week", week.id)}
+                  onDisarm={disarm}
+                  onSetCurrentWeek={onSetCurrentWeek}
+                  onRemoveWeek={onRemoveWeek}
+                />
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <SortableContext
+              items={day.rows.map((r) => tableRowDragId(day.session_slot_id, r.exercise_slot_id))}
+              strategy={verticalListSortingStrategy}
+            >
+              {day.rows.map((row) => (
+                <TableRow
+                  key={row.exercise_slot_id}
+                  row={row}
+                  day={day}
+                  weeks={weeks}
+                  busy={busy}
+                  unit={unit}
+                  showAdjust={showAdjust}
+                  tableNav={tableNav}
+                  rowArmed={isArmed("exercise", row.exercise_slot_id)}
+                  onArmRow={() => arm("exercise", row.exercise_slot_id)}
+                  onConfirmRemoveRow={() => {
+                    onRemoveExercise(row.exercise_slot_id);
+                    disarm();
+                  }}
+                  onCancelRemoveRow={disarm}
+                  onOpenOverride={onOpenOverride}
+                  onPatchCell={onPatchCell}
+                  onRenameExercise={onRenameExercise}
+                  onSkipCell={onSkipCell}
+                  onSwapCell={onSwapCell}
+                  onFillAcrossWeeks={onFillAcrossWeeks}
+                />
+              ))}
+            </SortableContext>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="meso-table-add-row-group">
+        <button
+          type="button"
+          data-hover="add"
+          className="meso-add-row"
+          data-testid={`add-exercise-${day.session_slot_id}`}
+          disabled={busy}
+          onClick={() => onAddExercise(day)}
+        >
+          + Add exercise
+        </button>
+        <AddThisWeekControl day={day} weeks={weeks} busy={busy} onAddExerciseThisWeek={onAddExerciseThisWeek} />
+      </div>
+    </div>
+  );
+}
+
 export function MesoTable(props: MesoTableProps) {
   const {
     grid,
@@ -471,10 +948,12 @@ export function MesoTable(props: MesoTableProps) {
     onSwapCell,
     onFillAcrossWeeks,
     onAddExerciseThisWeek,
+    onDragEnd,
   } = props;
 
   const [armed, setArmed] = useState<Armed>(null);
   const isArmed = (type: ArmedKind, id: Id) => !!armed && armed.type === type && armed.id === id;
+  const arm = (type: ArmedKind, id: Id) => setArmed({ type, id });
   const disarm = () => setArmed(null);
 
   // P5 group: the per-cell adjust badge only exists on a GROUP plan with
@@ -485,6 +964,47 @@ export function MesoTable(props: MesoTableProps) {
   // below — useTableNav tolerates a null grid the same way (anchor stays
   // null, no throw).
   const tableNav = useTableNav({ grid });
+
+  // Issue #455 phase A2 (drag reordering): PointerSensor gets a small
+  // activation distance so a plain click into a cell input doesn't start a
+  // drag; KeyboardSensor rides the handle buttons' tab-order focus
+  // (Space/Enter lifts, arrows move, Space/Enter drops, Escape cancels) —
+  // mirrors WeekGrid.tsx's sensors exactly, pointed at this file's own
+  // tableKeyboardCoordinates.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: tableKeyboardCoordinates }),
+  );
+
+  // DragOverlay ghost label — set from the lifted item's own data on drag
+  // start, cleared on drop. No live sibling reflow: rows/days snap to their
+  // new position only once refetchGrid resolves, matching every other
+  // structural verb's UX (skip/add-exercise etc.).
+  const [activeDragLabel, setActiveDragLabel] = useState<string | null>(null);
+
+  function handleDragStart(event: DragStartEvent) {
+    if (!grid) return;
+    const data = event.active.data.current as TableDragData | undefined;
+    if (!data) return;
+    if (data.type === "row") {
+      const activeDay = grid.days.find((d) => d.session_slot_id === data.daySlotId);
+      const activeRow = activeDay?.rows.find((r) => r.exercise_slot_id === data.exerciseSlotId);
+      setActiveDragLabel(activeRow?.name || "exercise");
+    } else {
+      const activeDay = grid.days.find((d) => d.session_slot_id === data.sessionSlotId);
+      setActiveDragLabel(activeDay ? activeDay.name || `Day ${activeDay.day_number}` : "day");
+    }
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    setActiveDragLabel(null);
+    if (!onDragEnd) return;
+    const { active, over } = event;
+    onDragEnd({
+      active: { id: active.id, data: { current: active.data.current as TableDragData } },
+      over: over ? { id: over.id, data: { current: over.data.current as TableDragData } } : null,
+    });
+  }
 
   if (!grid) return null;
 
@@ -531,225 +1051,44 @@ export function MesoTable(props: MesoTableProps) {
         </button>
       </div>
 
-      {grid.days.map((day) => {
-        const dayArmed = isArmed("day", day.session_slot_id);
-        return (
-          <div className="meso-table-day" key={day.session_slot_id}>
-            <div className="meso-table-day-header">
-              <div className="meso-day-name">{day.name}</div>
-              {day.bias && <div className="meso-day-bias">{day.bias}</div>}
-              <div className="meso-flex-spacer" />
-              {!dayArmed && (
-                <button
-                  type="button"
-                  data-testid={`remove-day-${day.session_slot_id}`}
-                  className="meso-remove-x"
-                  disabled={busy}
-                  aria-label="Remove this day"
-                  title="Remove this day"
-                  onClick={() => setArmed({ type: "day", id: day.session_slot_id })}
-                >
-                  ×
-                </button>
-              )}
-              {dayArmed && (
-                <span className="meso-confirm-pair">
-                  <button
-                    type="button"
-                    data-testid={`confirm-remove-day-${day.session_slot_id}`}
-                    className="meso-confirm-btn"
-                    disabled={busy}
-                    aria-label="Confirm remove day"
-                    onClick={() => {
-                      onRemoveDay(day);
-                      disarm();
-                    }}
-                  >
-                    Confirm?
-                  </button>
-                  <button
-                    type="button"
-                    data-testid={`cancel-remove-day-${day.session_slot_id}`}
-                    className="meso-cancel-btn"
-                    disabled={busy}
-                    aria-label="Cancel remove day"
-                    onClick={disarm}
-                  >
-                    Cancel
-                  </button>
-                </span>
-              )}
-            </div>
-
-            <div className="meso-table-scroll">
-              <table className="meso-table" data-testid={`meso-day-table-${day.session_slot_id}`}>
-                <thead>
-                  <tr>
-                    <th className="meso-table-exercise-col">Exercise</th>
-                    {grid.weeks.map((week) => (
-                      <WeekColumnHeader
-                        key={week.id}
-                        week={week}
-                        armed={isArmed("week", week.id)}
-                        busy={busy}
-                        onArm={() => setArmed({ type: "week", id: week.id })}
-                        onDisarm={disarm}
-                        onSetCurrentWeek={onSetCurrentWeek}
-                        onRemoveWeek={onRemoveWeek}
-                      />
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {day.rows.map((row) => {
-                    const rowArmed = isArmed("exercise", row.exercise_slot_id);
-                    return (
-                      <tr key={row.exercise_slot_id} data-testid={`meso-row-${row.exercise_slot_id}`}>
-                        <td className="meso-table-row-name-col">
-                          <RowNameEditor row={row} tableNav={tableNav} onRename={onRenameExercise} />
-                          {!rowArmed && (
-                            <button
-                              type="button"
-                              data-testid={`remove-exercise-${row.exercise_slot_id}`}
-                              className="meso-remove-x meso-remove-x--sm"
-                              disabled={busy}
-                              aria-label="Remove exercise"
-                              title="Remove exercise"
-                              onClick={() => setArmed({ type: "exercise", id: row.exercise_slot_id })}
-                            >
-                              ×
-                            </button>
-                          )}
-                          {rowArmed && (
-                            <span className="meso-confirm-pair">
-                              <button
-                                type="button"
-                                data-testid={`confirm-remove-exercise-${row.exercise_slot_id}`}
-                                className="meso-confirm-btn"
-                                disabled={busy}
-                                aria-label="Confirm remove exercise"
-                                onClick={() => {
-                                  onRemoveExercise(row.exercise_slot_id);
-                                  disarm();
-                                }}
-                              >
-                                Confirm?
-                              </button>
-                              <button
-                                type="button"
-                                data-testid={`cancel-remove-exercise-${row.exercise_slot_id}`}
-                                className="meso-cancel-btn"
-                                disabled={busy}
-                                aria-label="Cancel remove exercise"
-                                onClick={disarm}
-                              >
-                                Cancel
-                              </button>
-                            </span>
-                          )}
-                        </td>
-                        {grid.weeks.map((week) => {
-                          const cell = row.cells[String(week.id)];
-                          const testId = `cell-${row.exercise_slot_id}-${week.id}`;
-                          if (!cell) return <td key={week.id} data-testid={testId} />;
-                          return (
-                            <td key={week.id} data-testid={testId} className="meso-table-cell">
-                              {cell.skipped ? (
-                                <>
-                                  <span className="meso-table-skipped" data-testid={`cell-skipped-${cell.prescription_id}`}>
-                                    —
-                                  </span>
-                                  <button
-                                    type="button"
-                                    data-testid={`cell-unskip-${cell.prescription_id}`}
-                                    className="meso-cell-action-btn"
-                                    disabled={busy}
-                                    aria-label="Unskip this week"
-                                    title="Unskip this week"
-                                    onClick={() => onSkipCell(cell.prescription_id, false)}
-                                  >
-                                    Unskip
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  <GridCellEditor cell={cell} unit={unit} row={row} week={week} tableNav={tableNav} onPatchCell={onPatchCell} />
-                                  {cell.swap_display && (
-                                    <span
-                                      className="meso-table-swap-badge"
-                                      data-testid={`cell-swap-${cell.prescription_id}`}
-                                      title={"Swapped for " + cell.swap_display + " this week"}
-                                    >
-                                      {cell.swap_display}
-                                      <button
-                                        type="button"
-                                        data-testid={`cell-swap-clear-${cell.prescription_id}`}
-                                        className="meso-swap-badge-clear"
-                                        disabled={busy}
-                                        aria-label="Clear swap"
-                                        title="Clear swap"
-                                        onClick={() => onSwapCell(cell.prescription_id, "")}
-                                      >
-                                        ×
-                                      </button>
-                                    </span>
-                                  )}
-                                  {showAdjust && (
-                                    <button
-                                      type="button"
-                                      data-testid={`cell-override-badge-${cell.prescription_id}`}
-                                      data-hover="brighten"
-                                      className="meso-adjust-badge"
-                                      onClick={() => onOpenOverride(row, cell)}
-                                      title={
-                                        cell.adj
-                                          ? (cell.adjusts || []).map((a) => (a.name || "") + ": " + (a.label || "")).join("\n")
-                                          : "Set a per-athlete adjust"
-                                      }
-                                    >
-                                      {cell.adj ? cell.adj : <span className="meso-adjust-empty">+ adjust</span>}
-                                    </button>
-                                  )}
-                                  <CellActions
-                                    cell={cell}
-                                    busy={busy}
-                                    onSkipCell={onSkipCell}
-                                    onSwapCell={onSwapCell}
-                                    onFillAcrossWeeks={onFillAcrossWeeks}
-                                  />
-                                </>
-                              )}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="meso-table-add-row-group">
-              <button
-                type="button"
-                data-hover="add"
-                className="meso-add-row"
-                data-testid={`add-exercise-${day.session_slot_id}`}
-                disabled={busy}
-                onClick={() => onAddExercise(day)}
-              >
-                + Add exercise
-              </button>
-              <AddThisWeekControl
-                day={day}
-                weeks={grid.weeks}
-                busy={busy}
-                onAddExerciseThisWeek={onAddExerciseThisWeek}
-              />
-            </div>
-          </div>
-        );
-      })}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={tableCollisionDetection}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext items={grid.days.map((d) => tableDayDragId(d.session_slot_id))} strategy={verticalListSortingStrategy}>
+          {grid.days.map((day) => (
+            <TableDayBlock
+              key={day.session_slot_id}
+              day={day}
+              weeks={grid.weeks}
+              busy={busy}
+              unit={unit}
+              showAdjust={showAdjust}
+              tableNav={tableNav}
+              isArmed={isArmed}
+              arm={arm}
+              disarm={disarm}
+              onOpenOverride={onOpenOverride}
+              onPatchCell={onPatchCell}
+              onRenameExercise={onRenameExercise}
+              onAddExercise={onAddExercise}
+              onRemoveExercise={onRemoveExercise}
+              onRemoveDay={onRemoveDay}
+              onSetCurrentWeek={onSetCurrentWeek}
+              onRemoveWeek={onRemoveWeek}
+              onSkipCell={onSkipCell}
+              onSwapCell={onSwapCell}
+              onFillAcrossWeeks={onFillAcrossWeeks}
+              onAddExerciseThisWeek={onAddExerciseThisWeek}
+            />
+          ))}
+        </SortableContext>
+        <DragOverlay>
+          {activeDragLabel ? <div className="meso-table-drag-ghost">{activeDragLabel}</div> : null}
+        </DragOverlay>
+      </DndContext>
 
       <button
         type="button"

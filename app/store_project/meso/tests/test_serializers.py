@@ -751,6 +751,40 @@ class TestSerializeMesocycleGrid:
         day1_data = result["days"][0]
         assert day1_data["session_id"] == f.day1_wk2.pk
 
+    def test_session_ids_maps_every_live_week_to_its_own_session_pk(self):
+        # Codex #455 A2 review finding 2: a day-reorder client must be able
+        # to look up ITS OWN current-week session id rather than trusting
+        # the (possibly-fallback) ``session_id`` field.
+        f = _build_grid_meso()
+        result = serialize_mesocycle_grid(f.meso)
+        day1_data = result["days"][0]
+        assert day1_data["session_ids"] == {
+            str(f.week1.pk): f.day1.pk,
+            str(f.week2.pk): f.day1_wk2.pk,
+        }
+        day2_data = result["days"][1]
+        assert day2_data["session_ids"] == {
+            str(f.week1.pk): f.day2.pk,
+            str(f.week2.pk): f.day2_wk2.pk,
+        }
+
+    def test_session_ids_omits_a_week_missing_a_live_session_even_though_session_id_falls_back(
+        self,
+    ):
+        f = _build_grid_meso()
+        # Same soft-delete as the session_id fallback test above: day1's
+        # CURRENT week (week1) session is gone, so session_id falls back to
+        # week2's — but session_ids must show NO entry for week1 at all
+        # (never substitute the fallback), only the live week2 entry.
+        Session.objects.filter(pk=f.day1.pk).update(deleted_at=timezone.now())
+        result = serialize_mesocycle_grid(f.meso)
+        day1_data = result["days"][0]
+        assert (
+            day1_data["session_id"] == f.day1_wk2.pk
+        )  # display-only fallback, unaffected
+        assert str(f.week1.pk) not in day1_data["session_ids"]
+        assert day1_data["session_ids"] == {str(f.week2.pk): f.day1_wk2.pk}
+
     def test_individual_grid_cells_carry_no_adj_overlay(self):
         # The per-athlete ``adj`` overlay is a GROUP-only concern; an individual
         # plan's grid cells never carry ``adj``/``adjusts``.

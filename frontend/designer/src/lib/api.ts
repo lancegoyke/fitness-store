@@ -201,7 +201,19 @@ export interface GridRow {
 
 export interface GridDay {
   session_slot_id: number;
+  /** The session pk the P1 table DISPLAYS for this day column — prefers the
+   * current week, but FALLS BACK to an earlier live week's session
+   * (`_pick_session_id`, serializers.py) when the current week's was
+   * independently soft-deleted. Display-only: never use this for a day
+   * REORDER post (see `session_ids` below and useTableReorder.ts's header —
+   * Codex #455 A2 review finding 2). */
   session_id: number | null;
+  /** Per-week session pks for this day, keyed by `String(week.id)` —
+   * covers only the live weeks that have a LIVE session for this day (a
+   * week missing one has no entry). The source of truth for day-reorder
+   * payloads: always read `session_ids[String(currentWeekId)]`, never the
+   * (possibly-fallback) `session_id` above. */
+  session_ids: Record<string, number>;
   day_number: number;
   name: string;
   bias: string;
