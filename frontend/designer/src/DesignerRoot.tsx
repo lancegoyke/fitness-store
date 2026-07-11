@@ -445,6 +445,7 @@ export function DesignerRoot() {
                 onOpenOverride={(row, cell) => gridOverrideEditor.openOverride(synthesizeCellExercise(row, cell))}
                 onPatchCell={gridState.patchCell}
                 onRenameExercise={gridState.renameExercise}
+                onSetOneRm={gridState.setOneRm}
                 onAddExercise={gridState.addExercise}
                 onRemoveExercise={gridState.removeExercise}
                 onAddDay={gridState.addDay}

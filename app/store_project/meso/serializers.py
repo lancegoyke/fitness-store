@@ -1017,12 +1017,16 @@ def serialize_mesocycle_grid(mesocycle):
     # One query for every live cell in the block, grouped by (slot, week) so
     # each row's dense ``cells`` map is built without a per-row lookup.
     # ``select_related("swap_exercise")`` lets swap_display resolve a
-    # catalog-only swap's name below without a per-cell query.
+    # catalog-only swap's name below without a per-cell query;
+    # ``select_related("exercise_slot")`` does the same for ``one_rm_values``
+    # below — it reads each cell's RESOLVING ``.exercise_id``/``.name``
+    # properties (models.py), which fall back to ``self.exercise_slot`` for an
+    # unswapped cell and would otherwise be an N+1 (one query per cell).
     cells_by_key = {
         (cell.exercise_slot_id, cell.week_id): cell
         for cell in models.Prescription.objects.filter(
             exercise_slot_id__in=exercise_slot_ids, week_id__in=week_ids
-        ).select_related("swap_exercise")
+        ).select_related("swap_exercise", "exercise_slot")
     }
 
     # A GROUP plan carries the per-athlete adjust overlay on each cell (P5): the
@@ -1031,6 +1035,21 @@ def serialize_mesocycle_grid(mesocycle):
     # block's cells, keyed by prescription pk. An individual plan has no members,
     # so its cells get no ``adj`` keys.
     adj_map = group_adjustments(plan, cells_by_key.values()) if plan.is_group else {}
+
+    # The athlete's persisted %1RM estimate (issue #455 phase A3) — mirrors
+    # ``serialize_plan``'s single-week attach exactly (local import: ``one_rm``
+    # imports this module). Attached to EVERY live cell regardless of
+    # ``load_type`` — the pct gate is a frontend concern (MesoTable.tsx /
+    # ExerciseRow.tsx), and ``Prescription.exercise_id``/``.name`` are
+    # swap-resolving properties, so a swapped cell's own identity is read
+    # automatically. A group plan has no single athlete, so its cells never
+    # carry the key.
+    if not plan.is_group:
+        from .one_rm import one_rm_values
+
+        one_rm_map = one_rm_values(plan.athlete, cells_by_key.values(), plan.unit)
+    else:
+        one_rm_map = {}
 
     days = []
     for slot in session_slots:
@@ -1073,6 +1092,10 @@ def serialize_mesocycle_grid(mesocycle):
                 if entry:
                     cell_data["adj"] = entry["adj"]
                     cell_data["adjusts"] = entry["adjusts"]
+                one_rm = one_rm_map.get(cell.pk)
+                if one_rm is not None:
+                    cell_data["one_rm"] = _fmt_num(one_rm.value)
+                    cell_data["one_rm_source"] = one_rm.source
                 cells[str(week.pk)] = cell_data
             rows.append(
                 {

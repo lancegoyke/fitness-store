@@ -4,7 +4,7 @@
 // forward ExerciseRow's dirtySinceFocus semantics (only actually-typed
 // fields persist). Deload marker/skipped em-dash/swap badge are display-only
 // in P1 — no write UX for swap/skip.
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MesoTable } from "./MesoTable";
 import { tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
@@ -116,6 +116,7 @@ function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
     onSwapCell: vi.fn(),
     onFillAcrossWeeks: vi.fn(),
     onAddExerciseThisWeek: vi.fn(),
+    onSetOneRm: vi.fn().mockResolvedValue({ one_rm: "", one_rm_source: "" }),
     ...overrides,
   };
 }
@@ -292,6 +293,221 @@ describe("row rename", () => {
     await user.type(nameInput, "!");
     await user.tab();
     expect(onRenameExercise).toHaveBeenCalledWith(9, "Squat!");
+  });
+});
+
+// --- Issue #455 phase A3: per-ROW %1RM badge/editor (name column, 2nd line) ---
+// A %1RM is a property of the athlete + lift IDENTITY (AthleteOneRm has no
+// week dimension), so — unlike the per-cell adjust badge (P5) — this control
+// is per-ROW, reading/writing the row's IDENTITY cell (rowIdentityCellId,
+// shared with row rename). Mirrors ExerciseRow.tsx's one-week %1RM badge
+// (label text, "1RM: "/"1RM ≈ " prefixes, "+ set 1RM").
+describe("row 1RM editor (issue #455 phase A3)", () => {
+  function pctCell(overrides: Partial<GridCell> = {}) {
+    return cell({ load_type: "pct", ...overrides });
+  }
+
+  it('renders "1RM: <val> <unit>" for a manual estimate on an individual pct row', () => {
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell({ one_rm: "140", one_rm_source: "manual" }) } })] })] }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("row-one-rm-badge-9")).toHaveTextContent("1RM: 140 kg");
+  });
+
+  it('renders "1RM ≈ <val> <unit>" for a logged (derived) estimate', () => {
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell({ one_rm: "140", one_rm_source: "logged" }) } })] })] }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("row-one-rm-badge-9")).toHaveTextContent("1RM ≈ 140 kg");
+  });
+
+  it('renders "+ set 1RM" when the athlete has no stored estimate', () => {
+    render(<MesoTable {...baseProps({ grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }) })} />);
+    expect(screen.getByTestId("row-one-rm-badge-9")).toHaveTextContent("+ set 1RM");
+  });
+
+  it("renders NO badge for an absolute-load row", () => {
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": cell({ load_type: "abs", one_rm: "140" }) } })] })] }),
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
+  });
+
+  it("renders NO badge on a group plan, even for a pct row (KEY gating regression: !group, not showAdjust's member-count check)", () => {
+    render(
+      <MesoTable
+        {...baseProps({
+          group: group(),
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell({ one_rm: "140" } ) } })] })] }),
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
+  });
+
+  it("renders NO badge when the row has no live cell at all", () => {
+    render(<MesoTable {...baseProps({ grid: grid({ days: [day({ rows: [row({ cells: {} })] })] }) })} />);
+    expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
+  });
+
+  it("falls back to a live alternative week's identity cell when week[0] has none for this row", () => {
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({
+            weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
+            days: [day({ rows: [row({ cells: { "2": pctCell({ prescription_id: 101 }) } })] })],
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("row-one-rm-badge-9")).toHaveTextContent("+ set 1RM");
+  });
+
+  it("clicking the badge opens the editor seeded with the current value", async () => {
+    const user = userEvent.setup();
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell({ one_rm: "140" }) } })] })] }),
+        })}
+      />,
+    );
+    await user.click(screen.getByTestId("row-one-rm-badge-9"));
+    expect(screen.getByTestId("row-one-rm-input-9")).toHaveValue("140");
+  });
+
+  it("Enter saves the typed value", async () => {
+    const user = userEvent.setup();
+    const onSetOneRm = vi.fn().mockResolvedValue({ one_rm: "150", one_rm_source: "manual" });
+    render(
+      <MesoTable
+        {...baseProps({
+          onSetOneRm,
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }),
+        })}
+      />,
+    );
+    await user.click(screen.getByTestId("row-one-rm-badge-9"));
+    const input = screen.getByTestId("row-one-rm-input-9");
+    await user.clear(input);
+    await user.type(input, "150{enter}");
+    expect(onSetOneRm).toHaveBeenCalledWith(9, "150");
+  });
+
+  it("Escape cancels without saving", async () => {
+    const user = userEvent.setup();
+    const onSetOneRm = vi.fn();
+    render(
+      <MesoTable
+        {...baseProps({
+          onSetOneRm,
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }),
+        })}
+      />,
+    );
+    await user.click(screen.getByTestId("row-one-rm-badge-9"));
+    const input = screen.getByTestId("row-one-rm-input-9");
+    await user.type(input, "999{escape}");
+    expect(onSetOneRm).not.toHaveBeenCalled();
+    expect(screen.getByTestId("row-one-rm-badge-9")).toBeInTheDocument();
+  });
+
+  it("an invalid value shows an inline error and does not call onSetOneRm", async () => {
+    const user = userEvent.setup();
+    const onSetOneRm = vi.fn();
+    render(
+      <MesoTable
+        {...baseProps({
+          onSetOneRm,
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }),
+        })}
+      />,
+    );
+    await user.click(screen.getByTestId("row-one-rm-badge-9"));
+    const input = screen.getByTestId("row-one-rm-input-9");
+    await user.type(input, "abc");
+    await user.click(screen.getByTestId("row-one-rm-save-9"));
+    expect(screen.getByTestId("row-one-rm-error-9")).toBeInTheDocument();
+    expect(onSetOneRm).not.toHaveBeenCalled();
+  });
+
+  it("a successful save calls onSetOneRm with the ROW id (not the cell id) and closes the editor", async () => {
+    const user = userEvent.setup();
+    const onSetOneRm = vi.fn().mockResolvedValue({ one_rm: "150", one_rm_source: "manual" });
+    render(
+      <MesoTable
+        {...baseProps({
+          onSetOneRm,
+          grid: grid({ days: [day({ rows: [row({ exercise_slot_id: 9, cells: { "1": pctCell({ prescription_id: 100 }) } })] })] }),
+        })}
+      />,
+    );
+    await user.click(screen.getByTestId("row-one-rm-badge-9"));
+    const input = screen.getByTestId("row-one-rm-input-9");
+    await user.clear(input);
+    await user.type(input, "150");
+    await user.click(screen.getByTestId("row-one-rm-save-9"));
+    await waitFor(() => expect(onSetOneRm).toHaveBeenCalledWith(9, "150"));
+    await waitFor(() => expect(screen.queryByTestId("row-one-rm-input-9")).not.toBeInTheDocument());
+  });
+
+  it("a rejected save keeps the editor open with an error", async () => {
+    const user = userEvent.setup();
+    const onSetOneRm = vi.fn().mockRejectedValue(new Error("boom"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    render(
+      <MesoTable
+        {...baseProps({
+          onSetOneRm,
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }),
+        })}
+      />,
+    );
+    await user.click(screen.getByTestId("row-one-rm-badge-9"));
+    const input = screen.getByTestId("row-one-rm-input-9");
+    await user.type(input, "150");
+    await user.click(screen.getByTestId("row-one-rm-save-9"));
+    await waitFor(() => expect(screen.getByTestId("row-one-rm-error-9")).toBeInTheDocument());
+    expect(screen.getByTestId("row-one-rm-input-9")).toBeInTheDocument();
+  });
+
+  it("disables save/cancel while busy", async () => {
+    const user = userEvent.setup();
+    const gridFixture = grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] });
+    const { rerender } = render(<MesoTable {...baseProps({ grid: gridFixture })} />);
+    await user.click(screen.getByTestId("row-one-rm-badge-9"));
+    // Local state (the open editor) persists across a prop-only re-render of
+    // the same mounted tree — mirrors CellActions' swap-input idiom.
+    rerender(<MesoTable {...baseProps({ busy: true, grid: gridFixture })} />);
+    expect(screen.getByTestId("row-one-rm-save-9")).toBeDisabled();
+    expect(screen.getByTestId("row-one-rm-cancel-9")).toBeDisabled();
+  });
+
+  it("badge and input carry NO data-grid-cell (outside A1 keyboard-nav space)", async () => {
+    const user = userEvent.setup();
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell({ one_rm: "140" }) } })] })] }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId("row-one-rm-badge-9")).not.toHaveAttribute("data-grid-cell");
+    await user.click(screen.getByTestId("row-one-rm-badge-9"));
+    expect(screen.getByTestId("row-one-rm-input-9")).not.toHaveAttribute("data-grid-cell");
   });
 });
 
