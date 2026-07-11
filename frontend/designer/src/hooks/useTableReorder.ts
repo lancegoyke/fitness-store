@@ -69,10 +69,17 @@ export function useTableReorder(options: UseTableReorderOptions) {
   const { grid, reorderRow, reorderDay } = options;
 
   function rowReorder(day: GridDay, activeExerciseSlotId: Id, overExerciseSlotId: Id) {
-    if (!grid || day.session_id == null) return;
+    if (!grid) return;
     const weekId = currentWeekId(grid);
     if (weekId == null) return;
     const weekKey = String(weekId);
+    // The endpoint is the CURRENT week's session — resolved via
+    // `session_ids[weekKey]`, never `session_id`, which can silently be a
+    // FALLBACK to a different week when the current week's session was
+    // independently soft-deleted; posting current-week cell ids to a
+    // fallback session 400s server-side (same guard as dayReorder below).
+    const sessionId = day.session_ids[weekKey];
+    if (sessionId == null) return;
     // Only rows with a live cell for the CURRENT week can appear in the
     // order array — session_reorder's contract is EXACTLY session.cells()
     // for the viewed (current) week. A row that exists only on some OTHER
@@ -84,7 +91,7 @@ export function useTableReorder(options: UseTableReorderOptions) {
     if (oldIndex === -1 || newIndex === -1) return;
     const reordered = arrayMove(liveRows, oldIndex, newIndex);
     const order = reordered.map((r) => r.cells[weekKey]?.prescription_id).filter((id): id is number => id != null);
-    reorderRow(day.session_id, order);
+    reorderRow(sessionId, order);
   }
 
   function dayReorder(activeSessionSlotId: Id, overSessionSlotId: Id) {

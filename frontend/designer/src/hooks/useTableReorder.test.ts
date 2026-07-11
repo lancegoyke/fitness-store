@@ -236,6 +236,48 @@ describe("within-day row reorder", () => {
     expect(reorderRow).toHaveBeenCalledWith(11, [1000, 900]);
   });
 
+  it("no-ops a row drop when the day's session_ids lacks a current-week entry (fallback session_id must not substitute)", () => {
+    // The current week's session was independently soft-deleted:
+    // `session_id` silently falls back to ANOTHER week's session
+    // (`_pick_session_id`), so posting current-week cell ids to it would
+    // 400 server-side — same guard the day path already has.
+    const g = grid({
+      days: [
+        day({
+          session_slot_id: 1,
+          session_id: 99, // fallback: another week's session
+          session_ids: { "2": 99 }, // no entry for current week "1"
+          rows: [
+            row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 900 }) } }),
+            row({ exercise_slot_id: 10, cells: { "1": cell({ prescription_id: 1000 }) } }),
+          ],
+        }),
+      ],
+    });
+    const { onDragEnd, reorderRow } = setup(g);
+    onDragEnd(rowDragEvent(9, 1, 10));
+    expect(reorderRow).not.toHaveBeenCalled();
+  });
+
+  it("posts a row reorder to the CURRENT week's session_ids entry, not the (possibly-fallback) session_id field", () => {
+    const g = grid({
+      days: [
+        day({
+          session_slot_id: 1,
+          session_id: 99, // display fallback pointing elsewhere
+          session_ids: { "1": 11 }, // the current week's real session
+          rows: [
+            row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 900 }) } }),
+            row({ exercise_slot_id: 10, cells: { "1": cell({ prescription_id: 1000 }) } }),
+          ],
+        }),
+      ],
+    });
+    const { onDragEnd, reorderRow } = setup(g);
+    onDragEnd(rowDragEvent(9, 1, 10));
+    expect(reorderRow).toHaveBeenCalledWith(11, [1000, 900]);
+  });
+
   it("arrayMove semantics: a 3-row day, moving row1 past row2, orders as [row2, row1, row3]", () => {
     const g = grid({
       days: [
