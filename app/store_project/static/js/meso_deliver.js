@@ -4,6 +4,22 @@
  * deliver a built-ahead week without first making it current. Scheduling and
  * push/email notifications arrive with the athlete app.
  */
+// Issue #451: after a fetch action that can auto-advance the guided tour
+// server-side (delivering the coach's own self-link block), nudge the
+// mounted meso_tour.js driver to re-read the authoritative step and
+// re-render — the tour card would otherwise stay on the deliver step until
+// the coach's next navigation. Best-effort + guarded: a real page has
+// `document`, but the vitest import that pulls in the factory does not.
+function notifyTourRefresh() {
+  if (
+    typeof document !== "undefined" &&
+    typeof document.dispatchEvent === "function" &&
+    typeof CustomEvent === "function"
+  ) {
+    document.dispatchEvent(new CustomEvent("meso:tour-refresh"));
+  }
+}
+
 function createMesoDeliver(planId, csrf, weekId) {
   return {
     planId: planId,
@@ -28,6 +44,9 @@ function createMesoDeliver(planId, csrf, weekId) {
         });
         if (!res.ok) throw new Error("Request failed: " + res.status);
         this.delivered = true;
+        // Success only (not the error/network paths below): the server may have
+        // just advanced the coach's self-variant "deliver" tour step (#451).
+        notifyTourRefresh();
       } catch (e) {
         this.error = true;
         console.error("Deliver failed", e);

@@ -1185,6 +1185,34 @@ def tour_skip(request):
     return redirect("meso:roster")
 
 
+@login_required
+@require_GET
+def tour_config(request):
+    """Read-only snapshot of the coach's authoritative tour config (issue #451).
+
+    The self-variant deliver/results steps take their data-producing action via
+    ``fetch`` (delivering the coach's own block / logging their own session) —
+    no page reload — so the server advances ``tour_state`` (via
+    ``advance_self_step_if_complete`` in ``plan_deliver``/``athlete_log_session``)
+    but the already-mounted ``meso_tour.js`` card can't see it until the coach
+    next navigates. This endpoint hands the driver the *same* ``build_config``
+    the roster template embeds via ``json_script`` so it can re-read the
+    authoritative ``tour_state`` and re-render at whatever step the server now
+    reports.
+
+    Advance stays server-authoritative — the ``TourEvent`` funnel and the resume
+    state both live in ``tour_state``, written only at the tour's own POST
+    endpoints; the client just mirrors them here, never advancing locally. A
+    plain read, so ``@require_GET`` (a state change would be a POST). Returns
+    ``{}`` for a coach with no ``CoachProfile`` (``build_config`` returns
+    ``None`` there — the driver treats an empty/steps-less config as "no tour"
+    and simply leaves the card where it is).
+    """
+    variant = meso_tour.variant_for(request.user)
+    config = meso_tour.build_config(request.user, variant)
+    return JsonResponse(config if config is not None else {})
+
+
 @require_GET
 def sandbox_signup(request):
     """The sandbox's conversion hop into a real account (issue #389, S1).

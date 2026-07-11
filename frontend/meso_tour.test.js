@@ -609,3 +609,151 @@ describe("initTour toggle reposition listener (P3-3)", () => {
     });
   });
 });
+
+// #451: the self-variant deliver/results steps take their real action via a
+// `fetch` (no page reload), so the server auto-advances `tour_state` but the
+// mounted driver keeps its local step until the next navigation. On a
+// `meso:tour-refresh` document event (dispatched by meso_deliver.js /
+// meso_athlete.js after a successful fetch action) the driver re-reads the
+// authoritative config from `config_url` (a read-only GET) and re-renders at
+// whatever step the server now reports — a DISPLAY update only, never a state
+// POST (advance stays server-authoritative: the funnel + resume live in
+// `tour_state`, the client just mirrors it).
+describe("initTour tour-refresh listener (#451)", () => {
+  const CONFIG = {
+    steps: [
+      { key: "welcome", title: "Welcome", body: "Hi", anchor: "roster-individuals" },
+      { key: "finish", title: "Done", body: "Bye", anchor: "roster-invite" },
+    ],
+    variant: "self",
+    step: 0,
+    status: "active",
+    state_url: "/meso/tour/state/",
+    skip_url: "/meso/tour/skip/",
+    demo_load_url: "/meso/demo/load/",
+    signup_url: "/meso/demo/signup/",
+    config_url: "/meso/tour/config/",
+  };
+
+  function mount(config = CONFIG) {
+    document.body.innerHTML =
+      '<div id="meso-tour" aria-hidden="true"></div>' +
+      '<script type="application/json" id="meso-tour-config">' +
+      JSON.stringify(config) +
+      "</script>";
+  }
+
+  // A fetch stub whose resolved response exposes `.json()` (the refresh path
+  // reads `res.json()`, unlike `postState` which only ever checks `.ok`).
+  function configFetch(fresh) {
+    return vi.fn().mockResolvedValue({ json: () => Promise.resolve(fresh) });
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  it("re-reads config_url and re-renders at the server's advanced step", async () => {
+    mount();
+    const fresh = { ...CONFIG, step: 1 };
+    window.fetch = configFetch(fresh);
+    tourDriver.initTour(document, window);
+    const eyebrow = () =>
+      document.getElementById("meso-tour").querySelector(".meso-eyebrow")
+        .textContent;
+    expect(eyebrow()).toBe("Step 1 of 2"); // mounted at step 0
+
+    document.dispatchEvent(new CustomEvent("meso:tour-refresh"));
+
+    await vi.waitFor(() => {
+      expect(eyebrow()).toBe("Step 2 of 2"); // advanced, from the server
+    });
+    // A display mirror: it read config_url, never POSTed state_url.
+    expect(window.fetch).toHaveBeenCalledWith(
+      CONFIG.config_url,
+      expect.any(Object),
+    );
+    expect(window.fetch).not.toHaveBeenCalledWith(
+      CONFIG.state_url,
+      expect.anything(),
+    );
+  });
+
+  it("tears the tour down when the fresh config is completed", async () => {
+    mount();
+    const fresh = { ...CONFIG, status: "completed", step: 1 };
+    window.fetch = configFetch(fresh);
+    tourDriver.initTour(document, window);
+    const mountEl = document.getElementById("meso-tour");
+    expect(mountEl.innerHTML).not.toBe("");
+
+    document.dispatchEvent(new CustomEvent("meso:tour-refresh"));
+
+    await vi.waitFor(() => {
+      expect(mountEl.innerHTML).toBe("");
+      expect(mountEl.getAttribute("aria-hidden")).toBe("true");
+    });
+  });
+
+  it("no-ops when the config has no config_url (older configs)", async () => {
+    const { config_url, ...legacy } = CONFIG;
+    mount(legacy);
+    window.fetch = vi.fn();
+    tourDriver.initTour(document, window);
+
+    document.dispatchEvent(new CustomEvent("meso:tour-refresh"));
+    await Promise.resolve();
+
+    expect(window.fetch).not.toHaveBeenCalled();
+  });
+
+  it("stops refreshing after teardown (listener removed on dismiss)", async () => {
+    mount();
+    window.fetch = vi.fn().mockResolvedValue({ ok: true });
+    tourDriver.initTour(document, window);
+    // Dismiss tears the tour down once the (mocked) state POST settles.
+    document.querySelector("[data-tour-dismiss]").click();
+    await vi.waitFor(() => {
+      expect(document.getElementById("meso-tour").innerHTML).toBe("");
+    });
+    window.fetch.mockClear();
+
+    document.dispatchEvent(new CustomEvent("meso:tour-refresh"));
+    await Promise.resolve();
+
+    expect(window.fetch).not.toHaveBeenCalled();
+  });
+
+  it("discards an in-flight refresh that resolves after teardown", async () => {
+    // Codex #451: a `config_url` GET still in flight when the coach dismisses
+    // the tour must not resurrect the torn-down card with a stale (still
+    // "active") snapshot.
+    mount();
+    let resolveConfig;
+    const pending = new Promise((r) => {
+      resolveConfig = r;
+    });
+    window.fetch = vi.fn((url) =>
+      // Hold the refresh read open; let the dismiss state POST settle at once.
+      url === CONFIG.config_url ? pending : Promise.resolve({ ok: true }),
+    );
+    tourDriver.initTour(document, window);
+    const mountEl = document.getElementById("meso-tour");
+
+    // Kick the refresh off (its fetch stays pending)...
+    document.dispatchEvent(new CustomEvent("meso:tour-refresh"));
+    // ...then dismiss, tearing the tour down while that read is still open.
+    mountEl.querySelector("[data-tour-dismiss]").click();
+    await vi.waitFor(() => expect(mountEl.innerHTML).toBe(""));
+
+    // The in-flight read now resolves with a still-active config — the
+    // torn-down guard must keep it from re-rendering onto the page.
+    resolveConfig({ json: () => Promise.resolve({ ...CONFIG, step: 1 }) });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mountEl.innerHTML).toBe("");
+    expect(mountEl.getAttribute("aria-hidden")).toBe("true");
+  });
+});

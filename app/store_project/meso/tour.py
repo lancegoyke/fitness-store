@@ -781,6 +781,10 @@ def build_config(user, variant):
         "skip_url": reverse("meso:tour_skip"),
         "demo_load_url": reverse("meso:demo_load"),
         "signup_url": reverse("meso:sandbox_signup"),
+        # #451: the read-only GET the mounted driver re-reads after a fetch
+        # action (self-variant deliver/results advance the tour server-side
+        # without a page reload) so it can re-render at the server's new step.
+        "config_url": reverse("meso:tour_config"),
     }
 
 

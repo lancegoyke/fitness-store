@@ -483,6 +483,10 @@
 
     var index = clampStep(config.step, config.steps.length);
     var reposition = null;
+    // #451: set once `teardown()` runs so an in-flight `meso:tour-refresh` GET
+    // that resolves *after* a concurrent dismiss/complete can't reassign
+    // `config`/`index` and `render()` a torn-down tour back onto the page.
+    var torndown = false;
 
     // A persistent `aria-live` region (issue #430 Phase 4 a11y) — created
     // once and only ever text-updated, never recreated, unlike the card
@@ -570,9 +574,69 @@
         doc.removeEventListener("toggle", reposition, true);
       }
       doc.removeEventListener("keydown", onKeydown);
+      doc.removeEventListener("meso:tour-refresh", onTourRefresh);
+      torndown = true;
       mount.innerHTML = "";
       mount.setAttribute("aria-hidden", "true");
       if (liveRegion.parentNode) liveRegion.parentNode.removeChild(liveRegion);
+    }
+
+    // #451: the self-variant deliver/results steps take their real,
+    // data-producing action via a `fetch` (deliver the coach's own block / log
+    // their own session) with no page reload — so the server advances
+    // `tour_state` (`advance_self_step_if_complete` in
+    // `plan_deliver`/`athlete_log_session`) but this already-mounted card keeps
+    // its local `index` until the next navigation. `meso_deliver.js` /
+    // `meso_athlete.js` dispatch a `meso:tour-refresh` document event after a
+    // successful fetch action; on it we re-read the authoritative config from
+    // the read-only `config_url` and re-render at whatever step the server now
+    // reports. Advance stays server-authoritative — the `TourEvent` funnel and
+    // the resume step both live in `tour_state`, written only at the tour's own
+    // POST endpoints — so this is a DISPLAY update only and MUST NOT `postState`
+    // (the server already advanced; posting would double-count/fight it).
+    function onTourRefresh() {
+      // Older configs (served before this endpoint existed) carry no
+      // `config_url` — nothing to re-read, so leave the card exactly as it is.
+      if (!config.config_url) return;
+      root
+        .fetch(config.config_url, {
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+        })
+        .then(function (res) {
+          return res.json();
+        })
+        .then(function (fresh) {
+          // The tour was dismissed/completed while this read was in flight —
+          // its listener + mount are already gone; applying a stale (still
+          // "active") snapshot now would resurrect the torn-down card (#451).
+          if (torndown) return;
+          // A steps-less / empty snapshot means "no tour" (e.g. no
+          // CoachProfile) — nothing to show, so don't disturb the card.
+          if (
+            !fresh ||
+            !Array.isArray(fresh.steps) ||
+            fresh.steps.length === 0
+          ) {
+            return;
+          }
+          // The tour ended out from under us (the coach finished or dismissed
+          // it elsewhere) — tear down rather than re-render a dead tour.
+          if (fresh.status === "dismissed" || fresh.status === "completed") {
+            teardown();
+            return;
+          }
+          // Adopt the fresh config + step and re-render. `render`/`goTo`/the
+          // `reposition` throttle all close over these same `config`/`index`
+          // vars (declared with `var` above), so reassigning them here updates
+          // every subsequent read — a display mirror of the server's state.
+          config = fresh;
+          index = clampStep(fresh.step, fresh.steps.length);
+          render();
+        })
+        .catch(function () {
+          /* best-effort — a lost read just leaves the card on its current step;
+             the coach's next navigation resumes from the last-saved step */
+        });
     }
 
     reposition = throttle(function () {
@@ -585,6 +649,9 @@
     // re-measures instead of going stale at the collapsed size.
     doc.addEventListener("toggle", reposition, true);
     doc.addEventListener("keydown", onKeydown);
+    // #451: re-read the server's authoritative step after a fetch action that
+    // auto-advanced the tour without a page reload (self deliver/results).
+    doc.addEventListener("meso:tour-refresh", onTourRefresh);
 
     render();
   }
