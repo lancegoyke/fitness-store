@@ -2,7 +2,7 @@
 // loadSuffix, barH, cellOn, cellStyle). `round25`, `onDeliver`/`delivered`,
 // `accent`, and `theme` are confirmed dead by the inventory and dropped
 // (never template-wired / prototype-only props with no live consumer).
-import type { Exercise, Week } from "./api";
+import type { Day, Exercise, MesoGrid, Phase, Week } from "./api";
 
 /** True when `v` is a plain non-negative decimal string (e.g. sets/reps/load). */
 export function numeric(v: unknown): boolean {
@@ -65,4 +65,83 @@ export function cellStyle(
     bg +
     ";display:flex;align-items:center;justify-content:center"
   );
+}
+
+// --- Issue #455 phase A5: re-sourcing AthletePreview / TopBar off the grid
+// alone (the one-week usePlanData/serialize_plan owner is retired) --------
+
+/**
+ * AthletePreview's `program` prop, derived from the grid instead of a
+ * separately-hydrated one-week payload. Walks `grid.days`, and for each row
+ * picks that row's cell at the resolved week (`weekId` if given, else the
+ * grid's own current week, else the FIRST week — the same fallback the
+ * server's `current_week(plan)` and `cycleLabelFromGrid` apply, so a block
+ * whose pointer isn't set still previews instead of blanking) — a row with
+ * no cell for that week is simply omitted, mirroring `Session.cells()` only
+ * ever surfacing live cells server-side. A DAY whose resolved week has no
+ * live session (`session_ids` omits the week — a per-week session delete)
+ * is omitted entirely: the athlete won't see that session, so neither
+ * should the preview (the retired `serialize_plan` filtered on the open
+ * week's live sessions the same way). The resolved exercise name is
+ * `cell.swap_display || row.name` — the same
+ * one-week-swap-overrides-block-identity rule `Prescription.name`'s
+ * resolving property applies server-side (models.py).
+ */
+export function gridToProgram(grid: MesoGrid, weekId?: number | string): Day[] {
+  const week =
+    weekId != null
+      ? grid.weeks.find((w) => w.id === weekId)
+      : (grid.weeks.find((w) => w.current) ?? grid.weeks[0]);
+  if (!week) return [];
+  const weekKey = String(week.id);
+
+  const days: Day[] = [];
+  for (const day of grid.days) {
+    const sessionId = day.session_ids[weekKey];
+    if (sessionId == null) continue;
+    const exercises: Exercise[] = [];
+    for (const row of day.rows) {
+      const cell = row.cells[weekKey];
+      if (!cell) continue;
+      exercises.push({
+        id: cell.prescription_id,
+        name: cell.swap_display || row.name,
+        sets: cell.sets,
+        reps: cell.reps,
+        load: cell.load,
+        load_type: cell.load_type,
+        rpe: cell.rpe,
+        note: cell.note,
+        tag: typeof row.tags[0] === "string" ? row.tags[0] : undefined,
+        skipped: cell.skipped,
+        adj: cell.adj ?? null,
+        adjusts: cell.adjusts ?? [],
+        one_rm: cell.one_rm,
+        one_rm_source: cell.one_rm_source,
+      });
+    }
+    days.push({
+      id: sessionId,
+      n: day.day_number,
+      name: day.name,
+      bias: day.bias,
+      exercises,
+    });
+  }
+  return days;
+}
+
+/**
+ * TopBar's cycle label, derived from the grid's own phases/weeks instead of
+ * usePlanData's "viewed week" (which no longer exists — the table shows
+ * every week as columns at once, so there's no single week being "viewed").
+ * Same formula as the retired `usePlanData.cycleLabel`, just keyed off the
+ * grid's CURRENT week instead.
+ */
+export function cycleLabelFromGrid(phases: Phase[], weeks: Pick<Week, "id" | "label" | "current">[]): string {
+  const currentPhase = phases.find((p) => p.state === "current") ?? phases[0] ?? null;
+  const week = weeks.find((w) => w.current) ?? weeks[0] ?? null;
+  const phase = currentPhase ? currentPhase.name : "";
+  const wk = week ? week.label + (weeks.length ? " / " + weeks.length : "") : "";
+  return [phase, wk].filter(Boolean).join(" · ");
 }

@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { agentErrorText, pollBatch } from "../lib/agent";
 import type { AgentMessage, ChatChange } from "../lib/agent";
-import type { Id } from "./usePlanData";
+import type { Id } from "./useGrid";
 
 export interface ChatMessage {
   id: number;

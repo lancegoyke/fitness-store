@@ -3,15 +3,21 @@
 See ``docs/archive/meso/designer-framework-plan.md`` and
 ``frontend/designer/CONTRACT.md``. The template stops rendering the whole UI
 server-side: it now emits only the
-mount point (``#meso-designer-root``) plus the same hydration payloads the
-Alpine build already injected (``meso-plan-data`` / ``meso-chat-thread`` /
-``meso-csrf``), a new ``meso-designer-flags`` payload that replaces the
-template's server-side ``{% if is_sandbox %}`` / ``{% elif can_use_agent %}``
-gate with data the island renders client-side, and the built
-``dist/designer.js`` / ``dist/designer.css`` island bundle in place of
-``meso.js`` / ``alpine.min.js``. These guard the server seam only — the
-island's own rendering behavior is covered by the vitest suite under
+mount point (``#meso-designer-root``) plus the hydration payloads the island
+reads (``meso-grid-data`` / ``meso-chat-thread`` / ``meso-csrf``), a
+``meso-designer-flags`` payload that replaces the template's server-side
+``{% if is_sandbox %}`` / ``{% elif can_use_agent %}`` gate with data the
+island renders client-side, and the built ``dist/designer.js`` /
+``dist/designer.css`` island bundle in place of ``meso.js`` /
+``alpine.min.js``. These guard the server seam only — the island's own
+rendering behavior is covered by the vitest suite under
 ``frontend/designer/``.
+
+Issue #455 phase A5 retired the original ``meso-plan-data`` payload (the
+one-week ``usePlanData`` owner it fed): ``useGrid``/``MesoTable`` reads
+``meso-grid-data`` alone now — ``serialize_plan`` itself is untouched (it's
+still load-bearing for the agent's ``build_context``), only this view's
+extra, now-redundant context key + template block are gone.
 """
 
 import pytest
@@ -71,14 +77,28 @@ class TestIslandMountPoint:
 
 
 class TestPlanDataStillInjected:
-    """The island hydrates from the same payloads the Alpine build used."""
+    """The island's hydration payloads are still present.
 
-    def test_plan_data_chat_thread_and_csrf_still_present(self, client):
+    Issue #455 phase A5 collapsed the island onto ``useGrid`` as its sole
+    data owner and dropped the ``#meso-plan-data`` payload the retired
+    ``usePlanData`` hook fed — this is the regression test for that: the
+    designer page must render ``#meso-grid-data`` and must NOT render
+    ``#meso-plan-data`` (a resurrected context key/template block would
+    silently do nothing since no hook reads it anymore, so this is worth
+    guarding explicitly rather than trusting it stays gone by omission).
+    """
+
+    def test_grid_data_chat_thread_and_csrf_still_present(self, client):
         plan, _, _ = seed_plan()
         body = render_designer(client, plan)
-        assert 'id="meso-plan-data"' in body
+        assert 'id="meso-grid-data"' in body
         assert 'id="meso-chat-thread"' in body
         assert 'id="meso-csrf"' in body
+
+    def test_plan_data_is_gone(self, client):
+        plan, _, _ = seed_plan()
+        body = render_designer(client, plan)
+        assert 'id="meso-plan-data"' not in body
 
 
 class TestDesignerFlagsPayload:

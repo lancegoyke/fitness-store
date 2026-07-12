@@ -157,6 +157,14 @@ export interface GridWeek {
   deload: boolean;
   current: boolean;
   delivered_at: string | null;
+  /** Block-view timeline bars (0-100) — issue #455 phase A5 (serialize_
+   * mesocycle_grid additions; mirrors Week.vol/Week.inten above). Optional
+   * (like Week's) to minimize churn in the many existing GridWeek test
+   * fixtures across this tree that predate this phase and don't set them —
+   * BlockView's barH already treats a missing value as 0 (`w.vol ?? 0`). The
+   * real server payload always includes both. */
+  vol?: number;
+  inten?: number;
 }
 
 export interface GridCell {
@@ -238,6 +246,15 @@ export interface GridHistory {
 }
 
 export interface MesoGrid {
+  /** Issue #455 phase A5: the grid's own plan/group/athlete/phases — the
+   * front-end's ONLY source for these now that the one-week `plan_data`
+   * hydration path is retired. Optional (rather than required) to minimize
+   * churn in useGrid.test.ts's `Partial<MesoGrid>` fixtures that predate
+   * this phase and don't set them. */
+  plan?: PlanSummary;
+  group?: GroupIdentity | null;
+  athlete?: AthleteIdentity | null;
+  phases?: Phase[];
   mesocycle: { id: number; plan_id: number; name: string; week_count: number };
   weeks: GridWeek[];
   days: GridDay[];

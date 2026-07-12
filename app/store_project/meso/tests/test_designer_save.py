@@ -52,8 +52,11 @@ class TestDesignerLoad:
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 200
         body = resp.content.decode()
-        # The serialized plan is injected for the JS to hydrate from.
-        assert 'id="meso-plan-data"' in body
+        # Issue #455 phase A5: the island hydrates from #meso-grid-data alone
+        # now (useGrid is the sole data owner) — serialize_mesocycle_grid's
+        # plan/days additions (step 1) carry the same identifying substrings
+        # #meso-plan-data used to.
+        assert 'id="meso-grid-data"' in body
         assert "Hypertrophy Block" in body
         assert "Box Squat" in body
 

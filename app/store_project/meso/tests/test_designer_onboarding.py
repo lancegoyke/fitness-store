@@ -31,8 +31,9 @@ TSX source instead of the rendered HTML body, mirroring the project's
 existing "no JS runner" pattern of guarding client behavior at the source
 level (previously against ``meso.js``, now against
 ``frontend/designer/src/``) — the island's own rendering behavior has real
-coverage in its vitest suite (``WeekGrid.test.tsx``, ``useCoachmarks.test.ts``,
-``ChatPanel.test.tsx``, ``AthletePreview.test.tsx``).
+coverage in its vitest suite (``MesoTable.test.tsx``, ``useCoachmarks.test.ts``,
+``ChatPanel.test.tsx``, ``AthletePreview.test.tsx``; issue #455 phase A5
+retired the one-week ``WeekGrid`` these checks originally read).
 """
 
 from pathlib import Path
@@ -71,22 +72,24 @@ def render_designer(client, plan):
 class TestCoachmarksRender:
     """Both coachmarks render in the island source.
 
-    The grid one lives in WeekGrid.tsx; the phone-preview one in
-    AthletePreview.tsx — same dismiss plumbing, same first-run purpose.
+    The table one lives in MesoTable.tsx (issue #455 phase A4's re-authored
+    copy; phase A5 deleted WeekGrid.tsx and its "grid" mark); the
+    phone-preview one in AthletePreview.tsx — same dismiss plumbing, same
+    first-run purpose.
     """
 
-    def test_week_grid_renders_the_grid_coachmark(self):
-        tsx = read_island_source("components", "WeekGrid.tsx")
-        assert "The week grid" in tsx  # grid coachmark
+    def test_meso_table_renders_the_table_coachmark(self):
+        tsx = read_island_source("components", "MesoTable.tsx")
+        assert "The block table" in tsx  # table coachmark
 
     def test_athlete_preview_renders_the_phone_coachmark(self):
         tsx = read_island_source("components", "AthletePreview.tsx")
         assert "Preview as your athlete" in tsx
         assert 'dismissCoachmark?.("phone")' in tsx
 
-    def test_grid_coachmark_has_a_dismiss_control(self):
-        tsx = read_island_source("components", "WeekGrid.tsx")
-        assert 'dismissCoachmark("grid")' in tsx
+    def test_table_coachmark_has_a_dismiss_control(self):
+        tsx = read_island_source("components", "MesoTable.tsx")
+        assert 'dismissCoachmark("table")' in tsx
 
 
 class TestAgentSelfExplanation:
@@ -99,12 +102,24 @@ class TestAgentSelfExplanation:
 
 
 class TestStaticChromeReplaced:
-    """The fabricated prototype chrome is gone; the real plan shows instead."""
+    """The fabricated prototype chrome is gone; the real plan shows instead.
+
+    Uses ``rel.create_plan(...)`` (the scaffolded, block-bearing plan every
+    real coach gets), not a bare ``PlanFactory()``. Issue #455 phase A5 made
+    ``#meso-grid-data`` (fed by ``serialize_mesocycle_grid``, which requires
+    a mesocycle) the island's only hydration payload, retiring the separate
+    ``#meso-plan-data`` (fed by ``serialize_plan``, unconditional) that used
+    to carry athlete identity regardless of whether a block existed. A plan
+    with no mesocycle at all doesn't hydrate the island (documented,
+    accepted "shouldn't happen post-scaffold" edge case in
+    ``MesoDesignerView.get_context_data``) — not the case these two tests
+    are about, which is real athlete chrome vs. fabricated prototype chrome.
+    """
 
     def test_real_athlete_identity_renders(self, client):
         athlete = UserFactory(name="Devon Reyes")
         rel = CoachAthleteFactory(athlete=athlete)
-        plan = PlanFactory(relationship=rel, goal="Return to lifting")
+        plan = rel.create_plan(goal="Return to lifting")
         ContraindicationFactory(athlete=athlete, text="R shoulder impingement")
         body = render_designer(client, plan)
         assert "Devon Reyes" in body  # injected for the left rail to hydrate
@@ -116,7 +131,7 @@ class TestStaticChromeReplaced:
         # name / experience / programming-style / macrocycle chrome.
         athlete = UserFactory(name="Devon Reyes")
         rel = CoachAthleteFactory(athlete=athlete)
-        plan = PlanFactory(relationship=rel)
+        plan = rel.create_plan()
         body = render_designer(client, plan)
         assert "Maya" not in body
         assert "avoid deep knee flexion" not in body
@@ -144,9 +159,9 @@ class TestCoachmarkSource:
         for symbol in ("coachmarkVisible", "dismissCoachmark"):
             assert symbol in hook, f"hooks/useCoachmarks.ts should define {symbol}"
 
-    def test_week_grid_wires_coachmark_visibility(self):
-        tsx = read_island_source("components", "WeekGrid.tsx")
-        assert 'coachmarkVisible("grid")' in tsx
+    def test_meso_table_wires_coachmark_visibility(self):
+        tsx = read_island_source("components", "MesoTable.tsx")
+        assert 'coachmarkVisible("table")' in tsx
 
     def test_athlete_preview_wires_coachmark_visibility(self):
         tsx = read_island_source("components", "AthletePreview.tsx")

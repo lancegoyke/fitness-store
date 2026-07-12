@@ -575,12 +575,17 @@ class TestOverrideEndpoint:
 class TestDesignerOverrideEditor:
     """The designer page wires the in-grid click-to-adjust editor.
 
-    The React island gates it to Group mode at runtime (``ExerciseRow``'s
-    ``isGroup`` prop); Phase 2 PR B moved the markup itself from
+    The React island gates it to Group mode at runtime (``MesoTable``'s
+    ``isGroupPlan`` prop); Phase 2 PR B moved the markup itself from
     ``designer.html`` to ``frontend/designer/src/components/``, so this now
     guards the island source from regressing (mirroring the module-docstring
     move in ``test_designer_agent_chat.py``) — the server-side seam is just
     that a group plan still renders (checked below).
+
+    Issue #455 phase A5 retired the one-week ``ExerciseRow.tsx``; the
+    per-cell override affordance now lives in ``MesoTable.tsx`` (the table
+    is week-columns x exercise-rows, so the click target is a cell, not a
+    row).
     """
 
     def test_group_designer_renders(self, client):
@@ -596,9 +601,9 @@ class TestDesignerOverrideEditor:
         from pathlib import Path
 
         src = Path(__file__).resolve().parents[4] / "frontend" / "designer" / "src"
-        exercise_row = (src / "components" / "ExerciseRow.tsx").read_text()
+        meso_table = (src / "components" / "MesoTable.tsx").read_text()
         override_modal = (src / "components" / "OverrideModal.tsx").read_text()
-        # The per-row affordance and the modal the editor methods drive.
-        assert "onOpenOverride" in exercise_row
+        # The per-cell affordance and the modal the editor methods drive.
+        assert "onOpenOverride" in meso_table
         assert "onSave" in override_modal
         assert "if (!override) return null;" in override_modal

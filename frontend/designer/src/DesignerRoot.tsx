@@ -1,7 +1,15 @@
 // DesignerRoot (CONTRACT.md "DesignerRoot") — the Phase 2 PR B island root.
-// Hydrates once from the #meso-plan-data / #meso-chat-thread / #meso-csrf /
-// #meso-designer-flags json_script elements the same way designer.html's
-// init()/hydrateThread() did, composes every hook, and renders the tree.
+//
+// Issue #455 phase A5: the one-week designer (WeekStrip/WeekGrid/DayCard/
+// ExerciseRow + usePlanData/useAutosave/useDeletes/useUndoRedo/useReorder/
+// useOneRmEditor) is retired — the P1 multi-week table (useGrid/MesoTable)
+// is now the ONLY data owner. Hydrates once from the #meso-grid-data /
+// #meso-chat-thread / #meso-csrf / #meso-designer-flags json_script
+// elements: #meso-grid-data is now the hydration GATE (a plan with no
+// mesocycle block at all — documented "shouldn't happen post-scaffold" —
+// renders a blank island rather than a degraded one-week grid; see
+// views.py's MesoDesignerView.get_context_data), not just an optional
+// enhancement layered onto a separate #meso-plan-data payload.
 import { useCallback, useState } from "react";
 import "./designer.css";
 
@@ -10,75 +18,41 @@ import type { DesignerMode } from "./components/TopBar";
 import { LeftRail } from "./components/LeftRail";
 import { ChatPanel } from "./components/ChatPanel";
 import type { DesignerFlags } from "./components/ChatPanel";
-import { WeekGrid } from "./components/WeekGrid";
 import { MesoTable } from "./components/MesoTable";
 import { BlockView } from "./components/BlockView";
 import type { PeriodStyle } from "./components/BlockView";
 import { AthletePreview } from "./components/AthletePreview";
 import { OverrideModal } from "./components/OverrideModal";
 
-import { usePlanData } from "./hooks/usePlanData";
-import type { Id } from "./hooks/usePlanData";
-import { useAutosave } from "./hooks/useAutosave";
-import { useDeletes } from "./hooks/useDeletes";
-import { useUndoRedo } from "./hooks/useUndoRedo";
 import { useOverrideEditor } from "./hooks/useOverrideEditor";
-import { useOneRmEditor } from "./hooks/useOneRmEditor";
-import { useReorder } from "./hooks/useReorder";
 import { useGrid } from "./hooks/useGrid";
+import type { Id } from "./hooks/useGrid";
 import { useTableReorder } from "./hooks/useTableReorder";
+import { useUndoKeyboard } from "./hooks/useUndoKeyboard";
 import { useAgentChat } from "./hooks/useAgentChat";
 import type { ChatMessage } from "./hooks/useAgentChat";
 import { useCoachmarks } from "./hooks/useCoachmarks";
 
-import type {
-  AthleteIdentity,
-  Day,
-  Exercise,
-  GridCell,
-  GridRow,
-  GroupIdentity,
-  HistoryState,
-  MesoGrid,
-  Phase,
-  PlanSummary,
-  Week,
-} from "./lib/api";
+import type { Exercise, GridCell, GridRow, MesoGrid } from "./lib/api";
+import { cycleLabelFromGrid, gridToProgram } from "./lib/grid";
 import { deliverHref as buildDeliverHref } from "./lib/deliver";
 
-// P1 (multi-week table) adds "table" as the DEFAULT view when a mesocycle
-// grid is hydrated — see readHydration()'s gridData/initialView below. The
-// pre-existing "week"/"block"/"athlete" branches are untouched (transitional
-// fallback — see MesoTable.tsx's header).
-type ViewMode = "week" | "block" | "athlete" | "table";
-
-interface HydratedPlanPayload {
-  plan: PlanSummary;
-  group: GroupIdentity | null;
-  athlete: AthleteIdentity | null;
-  program: Day[];
-  weeks: Week[];
-  phases: Phase[];
-  viewing: Id | null;
-  history?: HistoryState;
-}
+// Issue #455 phase A5: the one-week "week" view is gone — the table shows
+// every week as columns at once, so there's no more "viewed week" to land a
+// dedicated week view on. Default is now unconditionally "table" (see
+// readHydration()/Hydrated below — #meso-grid-data is a required hydration
+// gate now, so there's no "grid absent, fall back to week" branch either).
+type ViewMode = "table" | "block" | "athlete";
 
 interface Hydrated {
   planId: Id;
   unit: string;
   csrf: string;
-  group: GroupIdentity | null;
-  athlete: AthleteIdentity | null;
-  program: Day[];
-  weeks: Week[];
-  phases: Phase[];
-  viewing: Id | null;
-  history?: HistoryState;
+  gridData: MesoGrid;
   initialMode: DesignerMode;
   initialMessages: ChatMessage[];
   initialResumeUrl: string | null;
   flags: DesignerFlags;
-  gridData: MesoGrid | null;
 }
 
 // The thread starts with a single orienting greeting — a group-aware opening
@@ -106,23 +80,25 @@ const DEFAULT_FLAGS: DesignerFlags = {
   price_summary: "",
 };
 
-/** Reads the four hydration json_script elements once, mirroring meso.js's
- * init()/hydrateThread(). Absent/unparseable plan data -> null (the
- * no-op-without-a-plan guard ported from init()'s early return). */
+/** Reads the hydration json_script elements once. #meso-grid-data is now the
+ * required gate (absent/unparseable -> null, the no-op-without-a-plan guard
+ * — a plan with no mesocycle block at all is a documented "shouldn't happen
+ * post-scaffold" edge case, issue #455 phase A5); #meso-chat-thread /
+ * #meso-csrf / #meso-designer-flags are each independently tolerant of
+ * absence/parse errors, same as before. */
 function readHydration(): Hydrated | null {
-  const dataEl = document.getElementById("meso-plan-data");
-  if (!dataEl) return null;
+  const gridEl = document.getElementById("meso-grid-data");
+  if (!gridEl) return null;
 
-  let data: HydratedPlanPayload;
+  let gridData: MesoGrid;
   try {
-    data = JSON.parse(dataEl.textContent || "") as HydratedPlanPayload;
+    gridData = JSON.parse(gridEl.textContent || "") as MesoGrid;
   } catch (err) {
-    console.error("Could not parse plan data", err);
+    console.error("Could not parse grid data", err);
     return null;
   }
 
-  const group = data.group ?? null;
-  const athlete = data.athlete ?? null;
+  const group = gridData.group ?? null;
 
   let initialMessages: ChatMessage[] = group ? [GROUP_GREETING] : [DEFAULT_GREETING];
   let initialResumeUrl: string | null = null;
@@ -157,40 +133,20 @@ function readHydration(): Hydrated | null {
     }
   }
 
-  // P1 (multi-week table): optional — absent on plans without a mesocycle
-  // grid yet, same tolerate-absence/parse-error handling as every other
-  // hydration element above.
-  let gridData: MesoGrid | null = null;
-  const gridEl = document.getElementById("meso-grid-data");
-  if (gridEl) {
-    try {
-      gridData = JSON.parse(gridEl.textContent || "") as MesoGrid;
-    } catch (err) {
-      console.error("Could not parse grid data", err);
-    }
-  }
-
   return {
-    planId: data.plan.id,
-    unit: data.plan.unit || "kg",
+    planId: gridData.mesocycle.plan_id,
+    unit: gridData.plan?.unit || "kg",
     csrf,
-    group,
-    athlete,
-    program: data.program,
-    weeks: data.weeks,
-    phases: data.phases,
-    viewing: data.viewing ?? null,
-    history: data.history,
+    gridData,
     initialMode: group ? "group" : "individual",
     initialMessages,
     initialResumeUrl,
     flags,
-    gridData,
   };
 }
 
-/** P5 group: the override editor's `openOverride(ex)` takes an `Exercise`, but
- * the multi-week table works in (GridRow, GridCell) pairs — each cell IS a
+/** The override editor's `openOverride(ex)` takes an `Exercise`, but the
+ * multi-week table works in (GridRow, GridCell) pairs — each cell IS a
  * Prescription. Synthesize the Exercise the editor needs from that pair: the
  * cell's own numbers under the row's block name, carrying `adj`/`adjusts` so
  * the modal preselects the adjusted member and seeds their draft. `id` is the
@@ -213,10 +169,7 @@ function synthesizeCellExercise(row: GridRow, cell: GridCell): Exercise {
 export function DesignerRoot() {
   const [hydrated] = useState<Hydrated | null>(() => readHydration());
   const [mode, setMode] = useState<DesignerMode>(hydrated?.initialMode ?? "individual");
-  // P1: default to the table view once a mesocycle grid is hydrated (it
-  // becomes the coach's primary editing surface); falls back to today's
-  // "week" default on plans with no grid yet.
-  const [view, setView] = useState<ViewMode>(hydrated?.gridData ? "table" : "week");
+  const [view, setView] = useState<ViewMode>("table");
   const [periodStyle, setPeriodStyle] = useState<PeriodStyle>("timeline");
   const [checks, setChecks] = useState<Record<string, boolean>>({});
 
@@ -226,95 +179,33 @@ export function DesignerRoot() {
   const isIndividual = mode === "individual";
   const isGroup = mode === "group";
 
-  // usePlanData is the sole owner of program/weeks/phases (CONTRACT.md rule 1).
-  const planData = usePlanData(
-    planId,
-    csrf,
-    {
-      program: hydrated?.program ?? [],
-      weeks: hydrated?.weeks ?? [],
-      phases: hydrated?.phases ?? [],
-      viewing: hydrated?.viewing ?? null,
-      history: hydrated?.history,
-    },
-    { athlete: hydrated?.athlete ?? null, group: hydrated?.group ?? null },
-  );
-
-  const autosave = useAutosave({
-    planId,
-    csrf,
-    patchExercise: planData.patchExercise,
-    adoptHistory: planData.adoptHistory,
-  });
-  const deletes = useDeletes({
-    planId,
-    csrf,
-    program: planData.program,
-    weeks: planData.weeks,
-    pendingDelete: planData.pendingDelete,
-    setPendingDelete: planData.setPendingDelete,
-    applyPlanData: planData.applyPlanData,
-  });
-  // P1 (multi-week table): a self-contained sibling data owner — the grid is
-  // its own server contract (serialize_mesocycle_grid), not a slice of
-  // usePlanData's program/weeks/phases. Defined here (before useUndoRedo) so
-  // its undo/redo are in scope to override the keyboard shortcut below.
+  // useGrid is the SOLE data owner (issue #455 phase A5 — the one-week
+  // usePlanData sibling is gone). Owns grid/history and every verb that
+  // mutates them; the top bar / left rail / block view / athlete preview all
+  // re-source off `gridState.grid` (plan/group/athlete/phases/weeks/days),
+  // additive fields serialize_mesocycle_grid now carries for exactly this
+  // reason (see serializers.py).
   const gridState = useGrid({ planId, csrf, initialGrid: hydrated?.gridData ?? null });
 
-  const undoRedo = useUndoRedo({
-    planId,
-    csrf,
-    viewedWeekId: planData.viewedWeekId,
-    history: planData.history,
-    applyPlanData: planData.applyPlanData,
-    // P1: the table is a sibling data owner (gridState), not a slice of
-    // planData — the global Ctrl/Cmd+Z shortcut must follow whichever view
-    // is actually on screen, so route it to the grid's own undo/redo while
-    // the table view is active. Falls back to planData's undo/redo
-    // otherwise (unchanged behavior).
-    keyboardUndo: view === "table" ? gridState.undo : undefined,
-    keyboardRedo: view === "table" ? gridState.redo : undefined,
-  });
+  // The global Ctrl/Cmd+Z window shortcut now always routes to the grid's
+  // own undo/redo — there's only one undo/redo owner left, so the
+  // view-conditional routing the retired useUndoRedo needed is gone too.
+  useUndoKeyboard(gridState.undo, gridState.redo);
+
+  // P5 group: the table's own per-cell override editor — the ONLY instance
+  // now (the retired planData-scoped sibling is gone). Its save/clear reply
+  // repaints the grid cell (patchCellAdj) and adopts the grid's own undo
+  // history (adoptGridHistory).
   const overrideEditor = useOverrideEditor({
     planId,
     csrf,
-    group: planData.group,
-    adoptHistory: planData.adoptHistory,
-    patchExercise: planData.patchExercise,
-  });
-  // P5 group: a SECOND override editor scoped to the table's data owner
-  // (gridState) rather than planData — same hook, same modal, but its
-  // save/clear reply repaints the grid cell (patchCellAdj) and adopts the
-  // grid's own undo history. Keeps the two sibling data owners independent
-  // (an adjust made in the table doesn't touch planData's one-week program,
-  // and vice-versa), matching how gridState and planData already diverge.
-  const gridOverrideEditor = useOverrideEditor({
-    planId,
-    csrf,
-    group: planData.group,
+    group: gridState.grid?.group ?? null,
     adoptHistory: gridState.adoptGridHistory,
     patchExercise: gridState.patchCellAdj,
   });
-  const oneRmEditor = useOneRmEditor({
-    planId,
-    csrf,
-    isGroup,
-    adoptHistory: planData.adoptHistory,
-    patchExercise: planData.patchExercise,
-  });
-  const reorder = useReorder({
-    planId,
-    csrf,
-    viewedWeekId: planData.viewedWeekId,
-    setPendingDelete: planData.setPendingDelete,
-    program: planData.program,
-    setProgram: planData.setProgram,
-    applyPlanData: planData.applyPlanData,
-  });
   // Issue #455 phase A2 (drag reordering): the table's own pure drag-event
-  // translator, a sibling of `reorder` above — wired to gridState's two new
-  // structural verbs (reorderExercises/reorderDays), not planData's. See
-  // useTableReorder.ts's header for why this hook owns no state of its own.
+  // translator — wired to gridState's structural verbs
+  // (reorderExercises/reorderDays/moveExerciseToDay).
   const tableReorder = useTableReorder({
     grid: gridState.grid,
     reorderRow: gridState.reorderExercises,
@@ -328,45 +219,17 @@ export function DesignerRoot() {
   });
   const coachmarks = useCoachmarks();
 
-  // P1: the table and the one-week view are two sibling data owners
-  // (gridState vs planData) — switching the primary canvas view between them
-  // must refetch whichever one is being activated, so neither view can show
-  // state left stale by an edit made in the OTHER view. Never fires on
-  // initial mount (only from user action, below).
-  const selectView = useCallback(
-    (v: ViewMode) => {
-      if (v === view) return;
-      if (v === "table") {
-        void gridState.refetchGrid();
-      } else {
-        // Reactivate on the grid's current week — the week planData last
-        // viewed may have been removed in the table (reloadWeek(viewedWeekId)
-        // would 404 and strand a deleted week). Falls back to planData's own
-        // viewed week when there's no grid.
-        const target = gridState.grid
-          ? gridState.grid.weeks.find((w) => w.current)?.id ?? gridState.grid.weeks[0]?.id ?? null
-          : null;
-        void planData.reloadWeek(target ?? undefined);
-      }
-      setView(v);
-    },
-    [view, gridState, planData],
-  );
+  const selectView = useCallback((v: ViewMode) => setView(v), []);
 
   if (!hydrated) return null;
 
   const flags = hydrated.flags;
 
-  // P1: the table view can move the "current" week without planData ever
-  // hearing about it ("Make current" in MesoTable calls gridState.
-  // setCurrentWeek, not planData.setCurrentWeek) — so while the table is the
-  // active view, Deliver must target the GRID's current week, not planData's
-  // (possibly stale) viewedWeekId.
-  const gridCurrentWeekId = gridState.grid
-    ? gridState.grid.weeks.find((w) => w.current)?.id ?? gridState.grid.weeks[0]?.id ?? null
-    : null;
-  const effectiveDeliverHref =
-    view === "table" && gridState.grid ? buildDeliverHref(planId, gridCurrentWeekId) : planData.deliverHref;
+  const grid = gridState.grid;
+  const gridCurrentWeekId = grid ? grid.weeks.find((w) => w.current)?.id ?? grid.weeks[0]?.id ?? null : null;
+  const deliverHref = buildDeliverHref(planId, gridCurrentWeekId);
+  const cycleLabel = cycleLabelFromGrid(grid?.phases ?? [], grid?.weeks ?? []);
+  const athleteProgram = grid ? gridToProgram(grid) : [];
 
   return (
     <div className="meso-designer-root">
@@ -375,20 +238,20 @@ export function DesignerRoot() {
         onSetMode={setMode}
         isIndividual={isIndividual}
         isGroup={isGroup}
-        athlete={planData.athlete}
-        group={planData.group}
-        cycleLabel={planData.cycleLabel}
+        athlete={grid?.athlete ?? null}
+        group={grid?.group ?? null}
+        cycleLabel={cycleLabel}
         onPreviewAsAthlete={() => selectView("athlete")}
-        deliverHref={effectiveDeliverHref}
+        deliverHref={deliverHref}
       />
 
       <div className="meso-designer-body">
         <LeftRail
           isIndividual={isIndividual}
           isGroup={isGroup}
-          athlete={planData.athlete}
-          group={planData.group}
-          phases={planData.phases}
+          athlete={grid?.athlete ?? null}
+          group={grid?.group ?? null}
+          phases={grid?.phases ?? []}
           onOpenBlockView={() => selectView("block")}
         />
 
@@ -411,9 +274,6 @@ export function DesignerRoot() {
               <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "table" ? " is-on" : ""}`} onClick={() => selectView("table")}>
                 Table
               </button>
-              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "week" ? " is-on" : ""}`} onClick={() => selectView("week")}>
-                This week
-              </button>
               <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "block" ? " is-on" : ""}`} onClick={() => selectView("block")}>
                 Periodization
               </button>
@@ -426,12 +286,6 @@ export function DesignerRoot() {
               </button>
             </div>
             <div className="meso-flex-spacer" />
-            {view === "week" && (
-              <div className="meso-flex meso-canvas-autosaved">
-                <div className="meso-canvas-autosaved-dot" />
-                Autosaved · last edit just now
-              </div>
-            )}
           </div>
 
           <div className="meso-canvas-body">
@@ -441,8 +295,8 @@ export function DesignerRoot() {
                 history={gridState.history}
                 busy={gridState.busy}
                 unit={unit}
-                group={planData.group}
-                onOpenOverride={(row, cell) => gridOverrideEditor.openOverride(synthesizeCellExercise(row, cell))}
+                group={grid?.group ?? null}
+                onOpenOverride={(row, cell) => overrideEditor.openOverride(synthesizeCellExercise(row, cell))}
                 onPatchCell={gridState.patchCell}
                 onRenameExercise={gridState.renameExercise}
                 onSetOneRm={gridState.setOneRm}
@@ -466,74 +320,25 @@ export function DesignerRoot() {
               />
             )}
 
-            {view === "week" && (
-              <div className="meso-week-view">
-                <div className="meso-week-view-head">
-                  <div>
-                    <h1 className="meso-week-view-title">{planData.weekHeading}</h1>
-                    <p className="meso-week-view-sub">
-                      {planData.program.length + (planData.program.length === 1 ? " session" : " sessions") + " · tap any cell to edit"}
-                    </p>
-                  </div>
-                </div>
-
-                <WeekGrid
-                  program={planData.program}
-                  isGroup={isGroup}
-                  unit={unit}
-                  pendingDelete={planData.pendingDelete}
-                  deleting={deletes.deleting}
-                  onRequestRemoveDay={deletes.requestRemoveDay}
-                  onConfirmPendingDelete={deletes.confirmPendingDelete}
-                  onCancelPendingDelete={deletes.cancelPendingDelete}
-                  onAddDay={planData.addDay}
-                  onAddExercise={planData.addExercise}
-                  onFieldChange={planData.updateExerciseField}
-                  onCommit={(di, xi) => {
-                    const ex = planData.program[di]?.exercises[xi];
-                    if (ex) autosave.persistRow(ex);
-                  }}
-                  onRemoveExercise={deletes.removeExercise}
-                  onToggleLoadType={autosave.toggleLoadType}
-                  onOpenOverride={overrideEditor.openOverride}
-                  onOpenOneRm={oneRmEditor.openOneRm}
-                  onOneRmChange={oneRmEditor.updateValue}
-                  onOneRmSave={oneRmEditor.saveOneRm}
-                  onOneRmCancel={oneRmEditor.closeOneRm}
-                  oneRmOpenForRow={(ex) => !!oneRmEditor.oneRm && oneRmEditor.oneRm.ex.id === ex.id}
-                  oneRmEditorState={oneRmEditor.oneRm}
-                  coachmarkVisible={coachmarks.coachmarkVisible}
-                  dismissCoachmark={coachmarks.dismissCoachmark}
-                  weeks={planData.weeks}
-                  viewedWeekId={planData.viewedWeekId}
-                  viewedIsCurrent={planData.viewedIsCurrent}
-                  history={planData.history}
-                  undoing={undoRedo.undoing}
-                  onSwitchWeek={planData.switchWeek}
-                  onAddWeek={planData.addWeek}
-                  onMakeCurrent={planData.setCurrentWeek}
-                  onRequestRemoveWeek={deletes.requestRemoveWeek}
-                  onUndo={undoRedo.undo}
-                  onRedo={undoRedo.redo}
-                  onDragEnd={reorder.onDragEnd}
-                  reordering={reorder.reordering}
-                />
-              </div>
-            )}
-
             {view === "block" && (
               <BlockView
-                phases={planData.phases}
-                weeks={planData.weeks}
+                phases={grid?.phases ?? []}
+                weeks={grid?.weeks ?? []}
                 periodStyle={periodStyle}
                 onSetPeriodStyle={setPeriodStyle}
-                onSwitchWeek={planData.switchWeek}
+                // Issue #455 phase A5 product-behavior change: there is no
+                // more one-week "landing" view to preview a week into — the
+                // table already shows every week as columns at once, so a
+                // timeline bar click switches to the table view instead
+                // (ignoring the clicked weekId; scrolling that week's column
+                // into view is a nice-to-have left out of scope here).
+                onSwitchWeek={() => selectView("table")}
               />
             )}
 
             {view === "athlete" && (
               <AthletePreview
-                program={planData.program}
+                program={athleteProgram}
                 unit={unit}
                 checks={checks}
                 onToggleCheck={(k) => setChecks((prev) => ({ ...prev, [k]: !prev[k] }))}
@@ -554,20 +359,6 @@ export function DesignerRoot() {
         onClose={overrideEditor.closeOverride}
         onSave={overrideEditor.saveOverride}
         onClear={overrideEditor.clearOverride}
-      />
-
-      {/* P5 group: the table view's own override modal (grid-scoped editor).
-          Portal-free like its sibling above; only one is ever non-null at a
-          time since each opens from its own view (WeekGrid vs MesoTable). */}
-      <OverrideModal
-        override={gridOverrideEditor.override}
-        overrideHasExisting={gridOverrideEditor.overrideHasExisting}
-        unit={unit}
-        onSelectMember={gridOverrideEditor.selectOverrideMember}
-        onUpdateDraft={gridOverrideEditor.updateDraft}
-        onClose={gridOverrideEditor.closeOverride}
-        onSave={gridOverrideEditor.saveOverride}
-        onClear={gridOverrideEditor.clearOverride}
       />
     </div>
   );

@@ -1,17 +1,42 @@
 # Designer island architecture contract
 
-Binding contract for Phase 2 PR B (`docs/meso/designer-framework-plan.md`,
-Decisions 1+3; scratchpad `phase2-spec.md` "PR B" / `phase2-inventory.md`).
-This is the spec the next agent (red RTL suites) encodes and a later agent
-implements against. It is not code — no hook or component below exists yet
-except `DesignerRoot`'s current PR-A placeholder
-(`frontend/designer/src/DesignerRoot.tsx`), which this port replaces.
+Originally the binding contract for Phase 2 PR B
+(`docs/meso/designer-framework-plan.md`, Decisions 1+3; scratchpad
+`phase2-spec.md` "PR B" / `phase2-inventory.md`) — the spec that port's RTL
+suites encoded and its implementation was built against. That port shipped
+long ago; this document is now a living reference for the *current*
+architecture, kept up to date as the island evolves rather than archived,
+because the next agent working in `frontend/designer/src/` still needs an
+accurate map.
 
-Ported pure logic already lives in `frontend/designer/src/lib/` (`api.ts`,
+**Status (issue #455, phases A1–A5): single data owner.** The island
+originally shipped with two sibling data owners — `usePlanData` (one week
+at a time: `WeekStrip`/`WeekGrid`/`DayCard`/`ExerciseRow`) and a later,
+separately-added `useGrid` (the P1 multi-week table, `MesoTable`) — hydrated
+from two separate JSON payloads (`#meso-plan-data` / `#meso-grid-data`) and
+kept loosely in sync by `DesignerRoot`. Phase A5 deleted the one-week owner
+and every hook that only existed to feed it entirely
+(`usePlanData`/`useAutosave`/`useDeletes`/`useUndoRedo`/`useReorder`/
+`useOneRmEditor`/`useGridNav`, ~5,900 lines of source+spec) and the
+components that rendered it (`WeekStrip`/`WeekGrid`/`DayCard`/
+`ExerciseRow`). **`useGrid` is now `DesignerRoot`'s only data owner,
+island-wide** — `#meso-grid-data` is the only hydration payload, and
+`MesoTable` is the only exercise-grid rendering surface. Sections below
+that document retired hooks/components are marked **RETIRED** and kept
+brief (what replaced them + where), rather than deleted outright, since
+"why does `useGrid.ts`'s header comment keep saying `mirrors useAutosave`"
+is a real question a future reader will have. Full history of the P1–P5
+multi-week build lives in `docs/archive/meso/fixed-selection-plan.md`
+(archived, all 6 phases shipped); A1–A5's own history is issue #455 and its
+linked PRs.
+
+Ported pure logic lives in `frontend/designer/src/lib/` (`api.ts`,
 `agent.ts`, `override.ts`, `oneRm.ts`, `grid.ts`, `coachmarks.ts`, `keys.ts`,
-`deliver.ts`) — every hook below is a thin, stateful wrapper around those
-modules plus `fetch`. `Id` below means `number | string` (server ids are
-numeric; a couple of fixture-era tests used string ids — kept permissive).
+`deliver.ts`) — every surviving hook below is a thin, stateful wrapper
+around those modules plus `fetch`. `Id` below means `number | string`
+(server ids are numeric; a couple of fixture-era tests used string ids —
+kept permissive); it's exported from `hooks/useGrid.ts` now (every other
+hook that used to export it, `usePlanData`, is gone).
 
 ## Hook inventory
 
@@ -20,187 +45,101 @@ specified; `DesignerRoot` composes all of them and threads the results down
 as props (see "Component tree"). Two ownership rules apply project-wide,
 called out inline where they bind:
 
-1. **`usePlanData` is the sole owner of `program`/`weeks`/`phases`.** Every
-   verb that changes the *shape* of the grid (a full re-serialize via
-   `applyPlanData`, or a row-merge push like `addExercise`/`addDay`) lives
-   there, even though the network call itself is a plain `apiPost`. This
-   avoids two hooks racing to set the same array.
-2. **Hooks that finish by patching one row** (`useOverrideEditor`,
-   `useOneRmEditor`) never touch `program` directly — they call a
-   `patchExercise(exId, patch)` callback that `usePlanData` hands them.
+1. **`useGrid` is the sole owner of `grid`/`history`.** Every verb that
+   changes the *shape* of the grid (add/remove day|week|exercise, reorder,
+   move, undo/redo) awaits its POST then calls `refetchGrid()` — a plain GET
+   that re-syncs the whole `grid` object in one `setGrid`. This is the same
+   rule Phase 2 PR B originally wrote for `usePlanData` (retired below); A5
+   just moved which hook it binds to, once there was only one hook left to
+   bind it to.
+2. **Verbs that finish by patching one cell** (`useOverrideEditor`'s
+   `saveOverride`/`clearOverride`, `useGrid`'s own `patchCell`/
+   `renameExercise`/`setOneRm`) don't always go through a full
+   `refetchGrid()` — cell-scoped edits patch just that cell in local state
+   (`patchCellAdj` for an override reply, or the optimistic write built
+   into `patchCell`/`renameExercise`/`setOneRm` themselves) so the UI
+   repaints instantly without waiting on a full-grid network round trip.
+   `useOverrideEditor` itself is data-owner-agnostic (see below) — it
+   writes through whatever `patchExercise`-shaped callback its caller
+   injects (`DesignerRoot` injects `gridState.patchCellAdj`).
 
-### usePlanData
+### useGrid
 
-```ts
-type PendingDelete = { type: "day"; di: number } | { type: "week"; weekId: Id };
+The island's sole data owner (`frontend/designer/src/hooks/useGrid.ts`,
+~650 lines — full shapes there, not reproduced here since the source is
+the single source of truth for something this size). Owns one `grid:
+MesoGrid | null` and `history: GridHistory`, hydrated once from
+`#meso-grid-data` by `DesignerRoot.readHydration()`. Exposes:
 
-function usePlanData(
-  planId: Id,
-  csrf: string,
-  initial: { program: Day[]; weeks: Week[]; phases: Phase[]; viewing: Id | null; history?: HistoryState },
-  identity: { athlete: AthleteIdentity | null; group: GroupIdentity | null },
-): {
-  program: Day[];
-  weeks: Week[];
-  phases: Phase[];
-  viewedWeekId: Id | null;
-  history: HistoryState;
-  athlete: AthleteIdentity | null; // hydrated once, never changed by applyPlanData
-  group: GroupIdentity | null;     // hydrated once, never changed by applyPlanData
-  pendingDelete: PendingDelete | null;
-  setPendingDelete: Dispatch<SetStateAction<PendingDelete | null>>; // handed to useDeletes
+- **`patchCell`/`renameExercise`**: optimistic + fire-and-forget, mirroring
+  the retired `useAutosave`'s semantics below — local state updates
+  immediately, the POST isn't awaited by the caller, and a failure is
+  `console.error`'d rather than rolled back. Each in-flight write is
+  tracked in `pendingWritesRef` so `fillAcrossWeeks`/`setOneRm` can flush
+  them first (both need the source cell's already-committed DB values, so
+  an in-flight edit must land first or they'd read stale data).
+- **`setOneRm`**: unlike the two above, this one IS awaited by its caller
+  (`RowOneRmEditor` in `MesoTable.tsx` drives its own saving/error UI off
+  the returned promise, mirroring the retired `useOneRmEditor.saveOneRm`).
+  Always targets the row's IDENTITY cell (a %1RM has no week dimension),
+  then locally repaints every cell across the grid resolving to the same
+  lift (not just the identity cell) so duplicate-lift rows don't show a
+  stale badge until a full refetch.
+- **`patchCellAdj`**: a pure local repaint, no POST of its own — `useOverrideEditor`
+  already POSTed to `prescription/<id>/override/` and hands back
+  `{adj, adjusts, history}`; `DesignerRoot` routes its `patchExercise` here.
+- **Structural verbs** (`addDay`/`removeDay`, `addWeek`/`removeWeek`/
+  `setCurrentWeek`, `addExercise`/`removeExercise`, `reorderDays`/
+  `reorderExercises`/`moveExerciseToDay`, `undo`/`redo`, `skipCell`/
+  `swapCell`/`fillAcrossWeeks`/`addExerciseThisWeek`): await their POST,
+  then call `refetchGrid()` (a plain GET) to re-sync the whole grid in one
+  `setGrid`. One shared in-flight guard (`busy`) across every structural
+  verb so a double-click can't race two refetches.
+- **`refetchGrid`'s field whitelist**: the GET response is narrowed to
+  `{mesocycle, weeks, days, history}` plus the A5-added `{plan, group,
+  athlete, phases}` — every field `MesoGrid` carries must be explicitly
+  listed here or it silently drops on the next refetch (regression-tested:
+  `useGrid.test.ts` "refetchGrid carries the full payload through").
 
-  applyPlanData(data: PlanEnvelope): void;
-  adoptHistory(data: HistoryCarrier): void;
-  patchExercise(exId: Id, patch: Partial<Exercise>): void;
-  updateExerciseField(dayIndex: number, exIndex: number, field: keyof Exercise, value: string): void;
-  addExercise(dayIndex: number): Promise<void>;
-  addDay(): Promise<void>;
-  switchWeek(weekId: Id): Promise<void>;
-  addWeek(): Promise<void>;
-  setCurrentWeek(weekId: Id): Promise<void>;
+Two group-only cell patch types — `GridCellAdjPatch` (`{adj, adjusts}`) and
+`GridCellOneRmPatch` (`{one_rm, one_rm_source}`) — are the grid analogs of
+the retired `usePlanData`'s `patchExercise(exId, patch)` on the one-week
+path.
 
-  // derived (useMemo off program/weeks/phases/viewedWeekId)
-  currentWeek: Week | null;
-  viewedWeek: Week | null;
-  weekIsViewed(w: Week): boolean;
-  viewedIsCurrent: boolean;
-  currentPhase: Phase | null;
-  cycleLabel: string;
-  weekHeading: string;
-  blockHeading: string;
-  deliverHref: string; // lib/deliver.ts deliverHref(planId, viewedWeekId)
-}
-```
+### RETIRED: usePlanData / useAutosave / useDeletes / useUndoRedo
 
-`applyPlanData(data)` is the central sink, faithfully ported: sets
-`program`/`weeks`/`phases`/`viewedWeekId` (`data.viewing ?? null`) and
-`history` (`data.history ?? EMPTY_HISTORY` from `lib/api.ts`) — it does
-**not** touch `athlete`/`group` (the source never did either; those are
-hydration-time-only). It **always** clears `pendingDelete` (`setPendingDelete(null)`)
-in the same call — this is the "disarm on grid swap" behavior
-(`meso_delete.test.js` "pendingDelete disarms on grid swap"), collapsed
-into `usePlanData` itself instead of a cross-hook callback, since
-`pendingDelete` state is created here (see rule 1's corollary: `useDeletes`
-receives `[pendingDelete, setPendingDelete]` rather than owning the state —
-documented as a deviation below).
+Issue #455 phase A5 deleted these four hooks (and their specs) outright —
+`useGrid` above absorbed every responsibility they had:
 
-`adoptHistory(data)` — if `data.history` is present, adopt it; otherwise a
-no-op. Used directly by `useAutosave.persistRow`'s `.then()`, and by
-`addExercise`/`addDay` internally after their row-merge POST.
-
-`updateExerciseField` is the controlled-input write path: it updates
-`program` immediately (every keystroke, matching Alpine's `x-model`) but
-does **not** persist — `ExerciseRow`'s `onBlur` calls `useAutosave.persistRow`
-separately (matching the source's decoupled `x-model` + `@change`). Same
-split for `toggleLoadType`, which is NOT a `usePlanData` method — see
-`useAutosave` below for why it lives there instead.
-
-`addExercise(dayIndex)` / `addDay()` — POST, push the server's row into
-`program` (day/exercise), `adoptHistory(data)`. `switchWeek`/`addWeek`/
-`setCurrentWeek` all POST/GET then `applyPlanData(data)`, matching the
-source 1:1 (all three no-op on a redundant `switchWeek` to the already-viewed
-week, per `meso.test.js` "week switcher").
-
-**Dropped from the port**: the `!this.live` fixture branches on every one of
-these verbs (a local id via `exSeq`, splicing instead of POSTing). The
-island only ever mounts against a real hydrated plan (see "Non-goals") —
-RTL specs drive these hooks with a mocked `fetch`, not a fixture code path.
-
-### useAutosave
-
-```ts
-function useAutosave(options: {
-  planId: Id;
-  csrf: string;
-  patchExercise: (exId: Id, patch: Partial<Exercise>) => void; // from usePlanData
-  adoptHistory: (data: HistoryCarrier) => void; // from usePlanData
-}): {
-  persistRow(ex: Exercise): void; // fire-and-forget: no-op if ex.id == null
-  toggleLoadType(ex: Exercise): void; // flips load_type via patchExercise, then persistRow
-}
-```
-
-`persistRow(ex)` is a faithful, direct port: POSTs
-`{name, sets, reps, load, load_type: ex.load_type ?? "abs", rpe, note}` to
-`/meso/api/plan/<planId>/prescription/<ex.id>/`, `.then(adoptHistory)`,
-`.catch(err => console.error("Autosave failed", err))`. It is deliberately
-**not** awaited by callers (`ExerciseRow`'s `onBlur` fires it and moves on),
-matching the source's fire-and-forget autosave.
-
-`toggleLoadType` is scoped here rather than in `usePlanData` because in the
-source it's one atomic "flip + immediately persist" call
-(`toggleLoadType(ex) { ex.load_type = ...; return this.persistRow(ex); }`)
-with no intervening controlled-input state — it isn't a per-keystroke edit
-like the grid cells, so it doesn't need `usePlanData`'s `updateExerciseField`
-detour. It still respects rule 1 by writing through the injected
-`patchExercise` instead of touching `program` itself.
-
-### useDeletes
-
-```ts
-function useDeletes(options: {
-  planId: Id;
-  csrf: string;
-  program: Day[];
-  weeks: Week[];
-  pendingDelete: PendingDelete | null;       // lifted from usePlanData
-  setPendingDelete: Dispatch<SetStateAction<PendingDelete | null>>; // lifted from usePlanData
-  applyPlanData: (data: PlanEnvelope) => void; // from usePlanData
-}): {
-  deleting: boolean;
-  removeExercise(di: number, xi: number): Promise<void>;
-  requestRemoveDay(di: number): void;
-  requestRemoveWeek(weekId: Id): void;
-  cancelPendingDelete(): void;
-  confirmPendingDelete(): Promise<void>;
-}
-```
-
-Faithful port of the Phase-0 delete verbs (`meso_delete.test.js`), with one
-structural deviation flagged above: `pendingDelete` state itself is created
-in `usePlanData` (so `applyPlanData` can clear it atomically alongside
-`program`/`weeks`/`history` in one state update, no cross-hook effect
-needed), and `useDeletes` is handed the state pair rather than owning it.
-Every other detail is unchanged: `deleting` is one shared in-flight guard
-across `removeExercise` and `confirmPendingDelete` (a `useRef<boolean>` or
-equivalent synchronous guard, set **before** the awaited fetch so a
-double-click can't race); `confirmPendingDelete` always clears both
-`deleting` and `pendingDelete` in a `finally`, even on failure; day/week
-delete POST to `session/<id>/delete/` / `week/<id>/delete/` and apply the
-full envelope; `removeExercise` POSTs `prescription/<id>/delete/` and
-applies the full envelope (it's a ✓ endpoint, not a row-merge).
-
-### useUndoRedo
-
-```ts
-function useUndoRedo(options: {
-  planId: Id;
-  csrf: string;
-  viewedWeekId: Id | null;
-  history: HistoryState;
-  applyPlanData: (data: PlanEnvelope) => void; // from usePlanData
-}): {
-  undoing: boolean;
-  undo(): Promise<void>;
-  redo(): Promise<void>;
-}
-```
-
-`undo`/`redo` are a faithful port (`meso_undo.test.js`): no-op unless
-`history.can_undo`/`can_redo` and not already `undoing`; POST
-`{week_id: viewedWeekId}` to `undo/`/`redo/`; `applyPlanData(data)` on
-success; `console.error` + swallow on failure; `undoing` cleared in
-`finally`. **Keyboard wiring lives inside this hook**, not `DesignerRoot`:
-a `useEffect` registers one `window.addEventListener("keydown", handler)`
-for the hook's lifetime (cleaned up on unmount — the source's
-`@keydown.window` binding on the root div is equivalent to a window
-listener that lives as long as the page). The handler calls
-`undoKeyIntent(event)` from `lib/keys.ts`; when it returns non-null, calls
-`event.preventDefault()` then `undo()` or `redo()` — the `preventDefault`
-call that `lib/keys.ts` deliberately left out (see that module's docstring)
-happens here, and only on an actual undo/redo keystroke, never on a
-no-op one.
+- **`usePlanData`** owned `program`/`weeks`/`phases`/`viewedWeekId`/
+  `history`/`athlete`/`group`/`pendingDelete` for the one-week view, with
+  `applyPlanData` as its central re-serialize sink and `switchWeek`/
+  `addWeek`/`setCurrentWeek` as its week-management verbs. `useGrid.grid`
+  (now carrying `plan`/`group`/`athlete`/`phases` too, added in A5 step 1)
+  and its `addWeek`/`removeWeek`/`setCurrentWeek` replace it 1:1; the
+  concept of a single "viewed week" is gone — `MesoTable` renders every
+  week as a column simultaneously, so there's nothing to switch between.
+- **`useAutosave`** persisted one exercise row's fields (fire-and-forget,
+  POST on blur) and flipped `load_type`. `useGrid.patchCell`/
+  `renameExercise` are the per-cell equivalent (see above); the load-type
+  toggle is `useGrid`'s own atomic-flip verb, same "commits immediately on
+  click, not per-keystroke" behavior.
+- **`useDeletes`** owned the one-week grid's day/week/exercise
+  arm-then-confirm delete dance, sharing `pendingDelete` state lifted from
+  `usePlanData`. `MesoTable` owns this UI itself now — its own local
+  arm/confirm slot per day/week/exercise (see `MesoTable.tsx`'s header
+  comment on `data-grid-restore`) calls `useGrid`'s remove verbs directly,
+  no shared cross-hook pending-delete state needed since there's only one
+  table, not a table-plus-sibling-view to keep disarmed in sync.
+- **`useUndoRedo`** owned `undo`/`redo` plus the window `keydown` listener
+  that wired them to the keyboard. `useGrid.undo`/`.redo` are the verb
+  equivalent; the keyboard wiring was extracted into its own small hook,
+  **`useUndoKeyboard`** (`hooks/useUndoKeyboard.ts`, ~20 lines) — a
+  stateless `useEffect` that registers one `window.addEventListener`
+  calling `undoKeyIntent` (`lib/keys.ts`, unchanged) and dispatching to
+  whichever `undo`/`redo` callbacks it's given. `DesignerRoot` wires it as
+  `useUndoKeyboard(gridState.undo, gridState.redo)` — no more view-conditional
+  routing between two hooks' undo/redo, since there's only one now.
 
 ### useOverrideEditor
 
@@ -218,8 +157,8 @@ function useOverrideEditor(options: {
   planId: Id;
   csrf: string;
   group: GroupIdentity | null;
-  adoptHistory: (data: HistoryCarrier) => void;      // from usePlanData
-  patchExercise: (exId: Id, patch: Partial<Exercise>) => void; // from usePlanData
+  adoptHistory: (data: HistoryCarrier) => void;      // caller-injected — see below
+  patchExercise: (exId: Id, patch: Partial<Exercise>) => void; // caller-injected — see below
 }): {
   override: OverrideEditorState | null;
   overrideHasExisting: boolean; // lib/override.ts overrideHasExisting(override.ex, override.memberId); false when override is null
@@ -253,75 +192,63 @@ adjusts: data.adjusts ?? []})`, `adoptHistory(data)`, close; on failure,
 editor stays open (`ex` on `program` is untouched either way, matching
 "keeps the editor open ... row unchanged" in `meso.test.js`).
 
-#### P5: per-athlete adjust on the multi-week table (`MesoTable`)
+#### Per-athlete adjust on the multi-week table (`MesoTable`)
 
 The broader multi-week grid subsystem (`useGrid`, `MesoTable`, `GridCell`/
 `GridRow`/`GridDay`/`MesoGrid`) postdates this contract and is specified in
-`docs/archive/meso/fixed-selection-plan.md` (archived — all 6 phases shipped) — only the
-P5 group-adjust slice is pinned here, since it reuses the override machinery above.
+`docs/archive/meso/fixed-selection-plan.md` (archived — all 6 phases shipped)
+— only the group-adjust slice is pinned here, since it reuses the override
+machinery above.
 
 `GridCell` (in `lib/api.ts`) gains two optional group-only fields, emitted
 by `serialize_mesocycle_grid` on a GROUP plan for each cell that has an
 effective adjust (individual plans never carry them, so `cell.adj` is
 `undefined`): `adj?: string | null` — the cell's badge summary (e.g.
 `"MO -10%"` / `"2 adjusts"`) — and `adjusts?: OverrideAdjust[]` — every
-member's stored diff. They mirror `Exercise.adj`/`Exercise.adjusts` on the
-one-week path.
+member's stored diff.
 
 `MesoTable` gains `group: GroupIdentity | null` and
 `onOpenOverride(row: GridRow, cell: GridCell)`. When `group` has members,
 every NON-skipped cell renders the same `.meso-adjust-badge` /
-`.meso-adjust-empty` "+ adjust"/`cell.adj` control `ExerciseRow` uses (testid
+`.meso-adjust-empty` "+ adjust"/`cell.adj` control (testid
 `cell-override-badge-{prescription_id}`); a click hands `(row, cell)` up.
 No control renders for an individual plan (`group === null`) or a skipped cell.
 
 `DesignerRoot` synthesizes an `Exercise` from the `(row, cell)` pair
 (`id: cell.prescription_id`, `name: row.name`, the cell's numbers, plus
-`adj`/`adjusts`) and opens a SECOND, grid-scoped `useOverrideEditor` — same
-hook, same `OverrideModal`, but wired `patchExercise: gridState.patchCellAdj`
-(repaints the cell's `adj`/`adjusts` in place, no grid refetch) and
+`adj`/`adjusts`) and opens `useOverrideEditor` — **its only instance now**
+(issue #455 phase A5 deleted the one-week path's sibling instance, which
+used to wire `patchExercise`/`adoptHistory` to the retired `usePlanData`) —
+wired `patchExercise: gridState.patchCellAdj` (repaints the cell's
+`adj`/`adjusts` in place, no grid refetch) and
 `adoptHistory: gridState.adoptGridHistory` (adopts the reply's
-`serialize_plan_history` into the grid's own undo history). Only one of the
-two override modals is ever open at a time (each opens from its own view).
-`useGrid` exposes `patchCellAdj(cellId, {adj, adjusts})` (a local, POST-free
-cell repaint — the grid analog of `patchExercise`) and `adoptGridHistory`
-(now coercing `string | null` labels so the override reply adopts cleanly).
+`serialize_plan_history` into the grid's own undo history). `useGrid`
+exposes `patchCellAdj(cellId, {adj, adjusts})` (a local, POST-free cell
+repaint — the grid analog of the retired `usePlanData.patchExercise`) and
+`adoptGridHistory` (coercing `string | null` labels so the override reply
+adopts cleanly).
 
-### useOneRmEditor
+### RETIRED: useOneRmEditor
 
-```ts
-interface OneRmEditorState {
-  ex: Exercise;
-  value: string;
-  saving: boolean;
-  error: string;
-}
-
-function useOneRmEditor(options: {
-  planId: Id;
-  csrf: string;
-  isGroup: boolean;
-  adoptHistory: (data: HistoryCarrier) => void;
-  patchExercise: (exId: Id, patch: Partial<Exercise>) => void;
-}): {
-  oneRm: OneRmEditorState | null;
-  openOneRm(ex: Exercise): void;
-  updateValue(value: string): void;
-  closeOneRm(): void;
-  saveOneRm(): Promise<void>;
-}
-```
-
-`openOneRm(ex)` no-ops unless `!isGroup && ex.load_type === "pct"` — a
-group plan's rows use the override editor instead. Seeds
-`value: ex.one_rm || ""`. `closeOneRm` guards mid-save like `closeOverride`.
-`saveOneRm` runs `parseOneRm(value)` from `lib/oneRm.ts`; on `{ok:false}`
-sets `error = "Enter a positive number, or leave blank to clear."`; on
-success POSTs `{value: parsed.value}` to `prescription/<id>/one-rm/`, then
-`patchExercise(ex.id, {one_rm: data.one_rm || "", one_rm_source: data.source || ""})`
-and closes; on failure, `console.error` +
-`error = "Couldn't save that 1RM. Please try again."`, stays open, row
-unchanged.
+Issue #455 phase A3 (predating A5) had already moved the %1RM editor's
+network/patch logic onto `useGrid.setOneRm` (a POST to
+`prescription/<id>/one-rm/` then a local `GridCellOneRmPatch` repaint, no
+grid refetch); A5 deleted the now-fully-superseded `useOneRmEditor` hook
+outright. The inline editor itself lives in **`RowOneRmEditor`**, a
+module-private component inside `MesoTable.tsx` — a hook needs
+`planId`/`csrf`, which would force `MesoTable` to take those directly and
+break the "verbs-as-props" boundary every other control in that file
+honors, so `RowOneRmEditor` owns its own open/value/saving/error `useState`
+locally and calls `parseOneRm` (`lib/oneRm.ts`, unchanged) + `onSetOneRm`
+(→ `useGrid.setOneRm`) directly. A %1RM is a property of the athlete + lift
+IDENTITY (no week dimension), not a per-week cell value — unlike the P5
+per-cell adjust badge, the control is per-ROW: it's shown when ANY live,
+unswapped, non-skipped cell in the row carries a `%` load (a mixed-load row
+— identity week abs, a later week pct — still needs the control), but
+always saves against the row's identity cell. Same UX contract as before: a
+click opens it (group plans use the override editor instead), `parseOneRm`
+failure shows an inline error without posting, success closes the editor
+and repaints the badge.
 
 ### useAgentChat
 
@@ -400,41 +327,46 @@ DesignerRoot
 │   ├── ChatPanel
 │   └── (canvas)
 │       ├── (canvas header: view segmented control + periodStyle control)
-│       ├── WeekGrid (view === "week")
-│       │   └── DayCard[] (one per program day)
-│       │       └── ExerciseRow[] (one per exercise)
+│       ├── MesoTable (view === "table", default)
 │       ├── BlockView (view === "block")
 │       └── AthletePreview (view === "athlete")
 └── OverrideModal (rendered when override !== null; portal-free, fixed overlay like the source)
 ```
 
-`WeekStrip` (week switcher chips + add/make-current/remove/undo/redo) is
-NOT a sibling of `WeekGrid` — in the source it's the strip of controls
-directly above the week grid, inside the same "week view" block, and only
-rendered `x-show="live && weeks.length"`. It is its own component
-(`WeekStrip`) mounted at the top of `WeekGrid`'s render when `view ===
-"week"`, not a top-level tree entry, to keep `WeekGrid` focused on the
-grid itself. The 1RM editor has no standalone component in the tree — it
-renders inline inside `ExerciseRow` (a controlled input + save/cancel,
-exactly where `oneRm.ex.id === ex.id` shows it in the source) since it's
-always anchored to one specific row.
+Issue #455 phase A5 deleted `WeekStrip`/`WeekGrid`/`DayCard`/`ExerciseRow`
+(the one-week-at-a-time tree they formed) entirely — `MesoTable` is the
+canvas's only exercise-grid view now, and it isn't further decomposed into
+child components the way the retired tree was: one file owns the whole
+table (day sub-tables, week columns, row cells, drag handles, the 1RM
+editor, the group-adjust badge), documented in prose in its own header
+comment rather than a component-by-component breakdown here, since (unlike
+the retired tree) there's no multi-file boundary left to document. The week
+switcher (add/make-current/remove) is `MesoTable`'s own `WeekColumnHeader` +
+toolbar, not a standalone component — every week renders as its own table
+column, so there's no separate "switch to a week" verb left, only
+"add/remove/make-current."
 
 ### DesignerRoot
 
 No props (mounted directly by `main.tsx` into `#meso-designer-root`, same
 as PR A). Hydrates once on mount:
 
-- `#meso-plan-data` → `JSON.parse` → `{plan, group, athlete, program, weeks, phases, viewing, history}`. Missing/unparseable → render `null` (the no-op-without-a-plan guard, ported from `init()`'s early return — the bare designer URL redirects server-side before this ever matters in practice).
+- `#meso-grid-data` → `JSON.parse` → `MesoGrid` (`{plan, group, athlete, phases, mesocycle, weeks, days, history}`). **Required hydration gate** — missing/unparseable → render `null` (issue #455 phase A5: this is now the ONLY hydration payload; a plan with no mesocycle block at all is a documented "shouldn't happen post-scaffold" edge case — see `views.py`'s `MesoDesignerView.get_context_data` — that now renders a blank island instead of a degraded one-week grid, since there's no separate `#meso-plan-data` fallback left to render from).
 - `#meso-chat-thread` → `JSON.parse` → `ChatMessage[]`; empty/absent → the default greeting (group-aware: a different opening line when `group` is present, ported from `init()`'s override).
 - `#meso-csrf` → `data-token` attribute → `csrf: string`.
 - `#meso-designer-flags` → `{is_sandbox, can_use_agent, agent_allowance, signup_url, price_summary}` (see below) → passed straight to `ChatPanel`.
 
-Composes every hook above (wiring `patchExercise`/`adoptHistory`/
-`applyPlanData`/`pendingDelete` between them per the ownership rules), owns
-`mode`/`view`/`periodStyle`/`checks` as local `useState` (see "View-state
-rules"), and renders the tree. No prop drilling helper (no context
-provider) — `DesignerRoot` passes hook slices straight down; the tree is
-shallow enough (3-4 levels) that this stays readable.
+Composes `useGrid` (the sole data owner), one `useOverrideEditor` instance
+wired to it, `useTableReorder`, `useUndoKeyboard`, `useAgentChat`, and
+`useCoachmarks`; owns `mode`/`view`/`periodStyle`/`checks` as local
+`useState` (see "View-state rules"); derives `program` for `AthletePreview`
+via `gridToProgram(grid, weekId)` and `cycleLabel` for `TopBar`/`LeftRail`
+via `cycleLabelFromGrid(phases, weeks)` (both pure helpers in `lib/grid.ts`
+added in A5 step 3 — the grid analogs of the retired `usePlanData`'s
+`athleteDay`/`aTotal`/`aDone` view-shaping and `cycleLabel` memo). No prop
+drilling helper (no context provider) — `DesignerRoot` passes hook slices
+straight down; the tree is shallow enough (3-4 levels) that this stays
+readable.
 
 ### TopBar
 
@@ -476,48 +408,39 @@ Testids: `agent-review-link` (existing, unchanged), `agent-composer-input`
 (index-based — chip labels aren't guaranteed unique), `agent-sandbox-cta`,
 `agent-upgrade-cta`, `agent-allowance-note`.
 
-### WeekStrip
+### RETIRED: WeekStrip / WeekGrid / DayCard / ExerciseRow
 
-Props: `{ weeks, viewedWeekId, viewedIsCurrent, pendingDelete, deleting, history, undoing, onSwitchWeek, onAddWeek, onMakeCurrent, onRequestRemoveWeek, onCancelPendingDelete, onConfirmPendingDelete, onUndo, onRedo }`.
-Rendered only when `weeks.length > 0` (the source's `x-show="live &&
-weeks.length"`; `live` itself is dropped per "Non-goals"). Renders the week
-chips (each: label + a live-week dot), "+ Add week", the "Make current"
-affordance (hidden when `viewedIsCurrent`), the remove-week
-arm/confirm/cancel dance, and the undo/redo buttons (`disabled` off
-`undoing`/`history.can_undo`/`history.can_redo`, `title` from
-`history.undo_label`/`redo_label`). Testids: `week-chip-{id}`,
-`add-week-button`, `make-current-button`, `remove-week-button`,
-`confirm-remove-week-button`, `cancel-remove-week-button`, `undo-button`,
-`redo-button`.
+Issue #455 phase A5 deleted all four components outright — the multi-week
+table (`MesoTable`, one `<table>` per training day, week columns across the
+top) replaces the whole one-week-at-a-time tree they formed:
 
-### WeekGrid / DayCard / ExerciseRow
+- **`WeekStrip`** (week switcher chips + add/make-current/remove/undo/redo)
+  → `MesoTable`'s own `WeekColumnHeader` (per-column "Make current"/
+  "Remove"/confirm-cancel controls) + its toolbar's "+ Add week" button.
+  There's no more "switch to a week" verb (`onSwitchWeek`/week chips) —
+  every week already renders as its own column, so there's nothing to
+  switch between; undo/redo moved to `useUndoKeyboard` + `useGrid.undo`/
+  `.redo`, wired at `DesignerRoot`, not a component.
+- **`WeekGrid`** (one week's days, plus the "grid" coachmark) →
+  `MesoTable` itself; its coachmark key is now `"table"` (A4's re-authored
+  copy, not a mechanical port of the old "grid" mark — `COACHMARK_KEYS`
+  dropped `"grid"` in A5 step 6).
+- **`DayCard`** (one day's header + exercise rows) → `MesoTable`'s day
+  sub-tables (one `<table>` per training day, rendered inline, not a
+  separate component).
+- **`ExerciseRow`** (one exercise's controlled inputs, per-field
+  dirty-tracking, load-type toggle, override badge, inline %1RM editor) →
+  `MesoTable`'s per-cell rendering, scoped PER CELL rather than per whole
+  row (`useGrid.patchCell`'s endpoint takes a partial patch, not a
+  whole-row POST like the retired `useAutosave.persistRow`) — the dirty-
+  tracking pattern carries forward (`MesoTable.tsx`'s header comment cites
+  it as "ExerciseRow's dirtySinceFocus pattern"), just re-scoped to a
+  cell's individual fields.
 
-`WeekGrid` props: `{ program, isGroup, pendingDelete, deleting, onRequestRemoveDay, onConfirmPendingDelete, onCancelPendingDelete, onAddDay, ...WeekStrip props }`.
-Renders `WeekStrip`, the grid coachmark (`coachmarkVisible("grid")`/
-`dismissCoachmark("grid")` from `useCoachmarks`, passed down), the
-group-mode banner, one `DayCard` per `program` entry, and "+ Add day"
-(testid `add-day-button`).
-
-`DayCard` props: `{ day, dayIndex, isGroup, pendingDelete, deleting, onRequestRemoveDay, onConfirmPendingDelete, onCancelPendingDelete, onAddExercise, ...ExerciseRow passthrough }`.
-Renders the day header (name/bias/count + remove-day arm/confirm/cancel,
-testids `remove-day-{dayId}`, `confirm-remove-day-{dayId}`,
-`cancel-remove-day-{dayId}`), the column headers, one `ExerciseRow` per
-exercise, and "+ Add exercise" (testid `add-exercise-{dayId}`).
-
-`ExerciseRow` props: `{ ex, dayIndex, exIndex, isGroup, unit, oneRmOpenForRow, oneRmEditorState, onFieldChange(field, value), onCommit(), onRemove(), onToggleLoadType(), onOpenOverride(), onOpenOneRm(), onOneRmChange(value), onOneRmSave(), onOneRmCancel() }`.
-Controlled inputs for name/sets/reps/load/rpe/note (`onChange` →
-`onFieldChange`, `onBlur` → `onCommit`, matching the `x-model` + `@change`
-split noted under `usePlanData`); the load-type toggle button (`loadSuffix`
-from `lib/grid.ts`); the group-mode "+ adjust"/`ex.adj` badge
-(`onOpenOverride`); the individual %1RM badge/inline editor
-(`onOpenOneRm`/`onOneRmChange`/`onOneRmSave`/`onOneRmCancel`, shown only for
-`!isGroup && ex.load_type === "pct"`); the remove-exercise `×` (`onRemove`,
-`disabled={deleting}`). Testids: `exercise-name-{exId}`,
-`exercise-sets-{exId}`, `exercise-reps-{exId}`, `exercise-load-{exId}`,
-`exercise-load-type-{exId}`, `exercise-rpe-{exId}`, `exercise-note-{exId}`,
-`exercise-remove-{exId}`, `override-badge-{exId}`, `one-rm-badge-{exId}`,
-`one-rm-input-{exId}`, `one-rm-save-{exId}`, `one-rm-cancel-{exId}`,
-`one-rm-error-{exId}`.
+None of these four are exhaustively re-documented prop-by-prop here the way
+they were before A5 — `MesoTable.tsx` (one file, ~1,500 lines, extensively
+commented) is the source of truth for its own internal shape now that
+there's no multi-file component boundary left to pin.
 
 ### BlockView
 
@@ -529,14 +452,35 @@ module's documented decision). Testids: `period-style-timeline-button`,
 `period-style-ladder-button`, `period-style-calendar-button`,
 `block-week-{id}` (timeline bars, clickable → `onSwitchWeek`).
 
+`weeks: GridWeek[]` (issue #455 phase A5 — was `Week[]`, sourced from the
+retired `usePlanData`; now straight off `gridState.grid.weeks`).
+`GridWeek` already structurally satisfies `cellOn`/`cellStyle`'s
+`Pick<Week, "current" | "deload">`, and gained its own `vol`/`inten`
+fields (`serialize_mesocycle_grid` additions, A5 step 1) so the timeline's
+`barH(w.vol ?? 0, 156)` bars don't silently render at the floor height — no
+render-logic change in `BlockView.tsx` itself, only the prop type. **Real
+behavior change, not just a wiring swap**: `onSwitchWeek` used to switch
+which week the one-week view showed; with that view gone, `DesignerRoot`
+wires it to `() => selectView("table")` (ignoring the clicked week's id —
+a future "scroll that week's column into view" enhancement is a
+nice-to-have, out of scope for A5) — clicking a timeline bar now just jumps
+to the table, it doesn't scroll to that specific week.
+
 ### AthletePreview
 
-Props: `{ program, unit, checks, onToggleCheck }`. A pure, derived render
-of the phone mock's first day/first-three-lifts view (`athleteDay`/`aTotal`/
-`aDone` — computed as a `useMemo` inside this component or a small
-`lib`-free helper co-located here, since they're view-shaping, not
-network/state logic, and have no existing spec coverage to preserve).
-Testid: `athlete-check-{k}` (`k` = the source's `"a0-{xi}-{i}"` key).
+Props: `{ program, unit, checks, onToggleCheck }` (plus optional
+`coachmarkVisible`/`dismissCoachmark` for the "phone" coachmark). A pure,
+derived render of the phone mock's first day/first-three-lifts view
+(`athleteDay`/`aTotal`/`aDone`, computed as a `useMemo` inside this
+component). Testid: `athlete-check-{k}` (`k` = the source's `"a0-{xi}-{i}"`
+key). Component itself needed **zero** changes for A5 — only its caller
+changed what it passes as `program`: `DesignerRoot` now derives it via
+`gridToProgram(grid, weekId)` (`lib/grid.ts`, added in A5 step 3) — a pure
+transform that walks `grid.days`, picks each row's cell at the resolved
+week (default: `grid.weeks.find(w => w.current)`), resolves the effective
+exercise name as `cell.swap_display || row.name` (mirrors the server's own
+swap-resolution rule), and omits a row with no cell for that week. Replaces
+the retired `usePlanData`'s hydrated `program` array; no server round trip.
 
 ### OverrideModal
 
@@ -598,10 +542,18 @@ changes them):
   `if (this.group) this.mode = "group"` override of the `"individual"`
   default. Freely togglable afterward via `TopBar`'s segmented control;
   nothing else ever changes it programmatically.
-- **`view`** (`"week" | "block" | "athlete"`): default `"week"`. Set by
+- **`view`** (`"table" | "block" | "athlete"`): default `"table"` (issue
+  #455 phase A5 — was `"week"`; the one-week view is gone and
+  `#meso-grid-data` is now a required hydration gate, so there's no more
+  "grid absent, fall back to week" branch to default around either). Set by
   `TopBar`'s "Preview as athlete" (→ `"athlete"`), `LeftRail`'s "Open plan →"
-  (→ `"block"`), and the canvas segmented control (all three). No hook
-  reads or writes it.
+  (→ `"block"`), the canvas segmented control (all three), and `BlockView`'s
+  `onSwitchWeek` (→ `"table"`, ignoring the clicked week's id — see
+  "BlockView" above). No hook reads or writes it. `selectView` itself
+  collapsed to a bare `setView(v)` in A5 — it used to also branch on
+  `gridState.refetchGrid()` vs. `planData.reloadWeek(...)` to paper over the
+  two-owner staleness problem (an edit made in one owner could leave the
+  other stale on switch); with one owner, that problem doesn't exist.
 - **`periodStyle`** (`"timeline" | "ladder" | "calendar"`): default
   `"timeline"`. Set only by `BlockView`'s own segmented control; irrelevant
   outside `view === "block"`.
@@ -614,9 +566,10 @@ changes them):
 - **No fixture mode.** Every hook above talks to the real API
   unconditionally — there is no `live` flag, no `exSeq` id generator, no
   splice-instead-of-POST branch. `DesignerRoot` only ever mounts against a
-  hydrated `#meso-plan-data` payload (or renders nothing); RTL specs drive
-  every hook/component with a mocked global `fetch`, never a parallel
-  in-memory code path. Components are always "live" once rendered.
+  hydrated `#meso-grid-data` payload (or renders nothing — issue #455 phase
+  A5, was `#meso-plan-data`); RTL specs drive every hook/component with a
+  mocked global `fetch`, never a parallel in-memory code path. Components
+  are always "live" once rendered.
 - **Error handling is unchanged in kind**: every failure path stays
   `console.error(...)` + either an inert state (autosave: nothing visible
   changes) or an inline `error` string on the relevant editor's state

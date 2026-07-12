@@ -7,7 +7,7 @@ import { apiPost } from "../lib/api";
 import { overrideDraft, overrideHasExisting, parseOverrideLoadPct } from "../lib/override";
 import type { Exercise, GroupIdentity, GroupMember, HistoryCarrier } from "../lib/api";
 import type { OverrideDraft } from "../lib/override";
-import type { Id } from "./usePlanData";
+import type { Id } from "./useGrid";
 
 export interface OverrideEditorState {
   ex: Exercise;

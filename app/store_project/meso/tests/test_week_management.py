@@ -502,13 +502,14 @@ class TestSessionAddWeekScoping:
 
 
 # ---------------------------------------------------------------------------
-# Designer wiring — the switcher strip is rendered + the JS exposes the verbs
+# Designer wiring — the week switcher is rendered + the JS exposes the verbs
 # (source/render-level, per the test_designer_onboarding.py precedent).
 #
-# Phase 2 PR B moved this wiring from designer.html/meso.js to the React
-# island (frontend/designer/src/hooks/usePlanData.ts,
-# components/WeekStrip.tsx) — repointed below the same way
-# test_designer_agent_chat.py repointed the agent-chat checks.
+# Phase 2 PR B originally moved this wiring from designer.html/meso.js to the
+# React island's usePlanData.ts/WeekStrip.tsx. Issue #455 phase A5 retired
+# those one-week files: the week switcher now lives inside the multi-week
+# table itself (components/MesoTable.tsx's WeekColumnHeader) and the verbs
+# are exposed by hooks/useGrid.ts, the island's sole data owner.
 # ---------------------------------------------------------------------------
 
 
@@ -524,8 +525,8 @@ def _read_island_source(*parts):
 
 class TestSwitcherWiring:
     def test_designer_renders_the_mount_point_for_a_plan_with_weeks(self, client):
-        # The switcher strip itself is client-rendered (WeekStrip.tsx, only
-        # when weeks.length > 0) — the server-side seam is that the plan's
+        # The week switcher itself is client-rendered (MesoTable.tsx, one
+        # column header per week) — the server-side seam is that the plan's
         # weeks are still hydrated into the page for the island to read.
         link = CoachAthleteFactory()
         plan = link.create_plan()
@@ -533,21 +534,20 @@ class TestSwitcherWiring:
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 200
         body = resp.content.decode()
-        assert 'id="meso-plan-data"' in body
+        assert 'id="meso-grid-data"' in body
         assert 'id="meso-designer-root"' in body
 
-    def test_week_strip_wires_all_three_verbs(self):
-        strip = _read_island_source("components", "WeekStrip.tsx")
-        plan_data = _read_island_source("hooks", "usePlanData.ts")
-        # Rendered only when weeks are present (the source's
-        # `x-show="live && weeks.length"`; `live` is dropped per CONTRACT.md).
-        assert "if (!weeks.length) return null;" in strip
-        assert "onSwitchWeek" in strip
-        assert "onAddWeek" in strip
-        assert "onMakeCurrent" in strip
-        assert "weekIsViewed" in plan_data
+    def test_meso_table_wires_all_three_verbs(self):
+        # Every week column renders its own "make current"/"remove" controls
+        # (WeekColumnHeader), and the toolbar renders "+ Add week" once
+        # (mirrors WeekStrip.tsx's pre-A5 three verbs: switch is now simply
+        # rendering every week as a column, so there's no onSwitchWeek left).
+        table = _read_island_source("components", "MesoTable.tsx")
+        assert "onAddWeek" in table
+        assert "onSetCurrentWeek" in table
+        assert "onRemoveWeek" in table
 
-    def test_use_plan_data_exposes_the_week_methods(self):
-        js = _read_island_source("hooks", "usePlanData.ts")
-        for verb in ("switchWeek", "addWeek", "setCurrentWeek", "applyPlanData"):
+    def test_use_grid_exposes_the_week_methods(self):
+        js = _read_island_source("hooks", "useGrid.ts")
+        for verb in ("addWeek", "setCurrentWeek", "removeWeek", "refetchGrid"):
             assert verb in js

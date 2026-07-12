@@ -4,15 +4,37 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BlockView } from "./BlockView";
-import type { Phase, Week } from "../lib/api";
+import type { GridWeek, Phase } from "../lib/api";
 
 const phases: Phase[] = [
   { name: "Accumulation", weeks: "4 wk", state: "done" },
   { name: "Hypertrophy", weeks: "4 wk", state: "current" },
 ];
-const weeks: Week[] = [
-  { id: 1, index: 1, label: "Wk 1", current: true, phase: "Hypertrophy", vol: 80, inten: 60 },
-  { id: 2, index: 2, label: "Wk 2", current: false, phase: "Hypertrophy", vol: 90, inten: 65, deload: true },
+// Issue #455 phase A5: BlockView now takes GridWeek[] (sourced off the
+// grid), not the retired one-week Week[].
+const weeks: GridWeek[] = [
+  {
+    id: 1,
+    index: 1,
+    label: "Wk 1",
+    current: true,
+    phase: "Hypertrophy",
+    deload: false,
+    delivered_at: null,
+    vol: 80,
+    inten: 60,
+  },
+  {
+    id: 2,
+    index: 2,
+    label: "Wk 2",
+    current: false,
+    phase: "Hypertrophy",
+    deload: true,
+    delivered_at: null,
+    vol: 90,
+    inten: 65,
+  },
 ];
 
 function baseProps(overrides: Partial<Parameters<typeof BlockView>[0]> = {}) {
