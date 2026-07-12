@@ -74,18 +74,31 @@ export function cellStyle(
  * AthletePreview's `program` prop, derived from the grid instead of a
  * separately-hydrated one-week payload. Walks `grid.days`, and for each row
  * picks that row's cell at the resolved week (`weekId` if given, else the
- * grid's own current week) — a row with no cell for that week is simply
- * omitted, mirroring `Session.cells()` only ever surfacing live cells
- * server-side. The resolved exercise name is `cell.swap_display || row.name`
- * — the same one-week-swap-overrides-block-identity rule
- * `Prescription.name`'s resolving property applies server-side (models.py).
+ * grid's own current week, else the FIRST week — the same fallback the
+ * server's `current_week(plan)` and `cycleLabelFromGrid` apply, so a block
+ * whose pointer isn't set still previews instead of blanking) — a row with
+ * no cell for that week is simply omitted, mirroring `Session.cells()` only
+ * ever surfacing live cells server-side. A DAY whose resolved week has no
+ * live session (`session_ids` omits the week — a per-week session delete)
+ * is omitted entirely: the athlete won't see that session, so neither
+ * should the preview (the retired `serialize_plan` filtered on the open
+ * week's live sessions the same way). The resolved exercise name is
+ * `cell.swap_display || row.name` — the same
+ * one-week-swap-overrides-block-identity rule `Prescription.name`'s
+ * resolving property applies server-side (models.py).
  */
 export function gridToProgram(grid: MesoGrid, weekId?: number | string): Day[] {
-  const week = weekId != null ? grid.weeks.find((w) => w.id === weekId) : grid.weeks.find((w) => w.current);
+  const week =
+    weekId != null
+      ? grid.weeks.find((w) => w.id === weekId)
+      : (grid.weeks.find((w) => w.current) ?? grid.weeks[0]);
   if (!week) return [];
   const weekKey = String(week.id);
 
-  return grid.days.map((day) => {
+  const days: Day[] = [];
+  for (const day of grid.days) {
+    const sessionId = day.session_ids[weekKey];
+    if (sessionId == null) continue;
     const exercises: Exercise[] = [];
     for (const row of day.rows) {
       const cell = row.cells[weekKey];
@@ -107,14 +120,15 @@ export function gridToProgram(grid: MesoGrid, weekId?: number | string): Day[] {
         one_rm_source: cell.one_rm_source,
       });
     }
-    return {
-      id: day.session_id ?? day.session_slot_id,
+    days.push({
+      id: sessionId,
       n: day.day_number,
       name: day.name,
       bias: day.bias,
       exercises,
-    };
-  });
+    });
+  }
+  return days;
 }
 
 /**

@@ -199,11 +199,51 @@ describe("gridToProgram", () => {
     ]);
   });
 
+  it("falls back to the FIRST week when no grid week is current (Codex A5 review)", () => {
+    // The server's current_week(plan) falls back to the earliest live week;
+    // an unset pointer must not blank the athlete preview when the grid
+    // itself renders fine.
+    const g = grid({ weeks: [week({ id: 1, current: false }), week({ id: 2, current: false })] });
+    const program = gridToProgram(g);
+    expect(program).toHaveLength(1);
+    expect(program[0]!.exercises[0]!.id).toBe(100); // week 1's cell
+  });
+
+  it("omits a day whose resolved week has no live session (session_ids omits the week — Codex A5 review)", () => {
+    // A per-week session delete leaves the slot live for other weeks; the
+    // athlete won't see that day this week, so neither should the preview
+    // (the retired serialize_plan filtered on the open week's live sessions).
+    const g = grid({
+      days: [
+        day({ session_slot_id: 1, session_ids: { "1": 11 }, rows: [row()] }),
+        day({
+          session_slot_id: 2,
+          day_number: 2,
+          name: "Upper",
+          session_id: 99, // display fallback from another week
+          session_ids: {}, // no live session for week 1
+          rows: [row({ exercise_slot_id: 10, cells: { "1": cell({ prescription_id: 200 }) } })],
+        }),
+      ],
+    });
+    const program = gridToProgram(g);
+    expect(program).toHaveLength(1);
+    expect(program[0]!.name).toBe("Lower");
+  });
+
+  it("uses the resolved week's own session id for the preview day, not the display fallback", () => {
+    const g = grid({
+      days: [day({ session_id: 99, session_ids: { "1": 11 } })],
+    });
+    expect(gridToProgram(g)[0]!.id).toBe(11);
+  });
+
   it("resolves the requested weekId instead of the current week when given", () => {
     const g = grid({
       weeks: [week({ id: 1, current: true }), week({ id: 2, current: false })],
       days: [
         day({
+          session_ids: { "1": 11, "2": 12 }, // a live session per live week (real serializer shape)
           rows: [
             row({
               cells: {
