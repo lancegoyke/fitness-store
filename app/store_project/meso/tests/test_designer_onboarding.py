@@ -31,8 +31,9 @@ TSX source instead of the rendered HTML body, mirroring the project's
 existing "no JS runner" pattern of guarding client behavior at the source
 level (previously against ``meso.js``, now against
 ``frontend/designer/src/``) — the island's own rendering behavior has real
-coverage in its vitest suite (``WeekGrid.test.tsx``, ``useCoachmarks.test.ts``,
-``ChatPanel.test.tsx``, ``AthletePreview.test.tsx``).
+coverage in its vitest suite (``MesoTable.test.tsx``, ``useCoachmarks.test.ts``,
+``ChatPanel.test.tsx``, ``AthletePreview.test.tsx``; issue #455 phase A5
+retired the one-week ``WeekGrid`` these checks originally read).
 """
 
 from pathlib import Path
@@ -71,22 +72,24 @@ def render_designer(client, plan):
 class TestCoachmarksRender:
     """Both coachmarks render in the island source.
 
-    The grid one lives in WeekGrid.tsx; the phone-preview one in
-    AthletePreview.tsx — same dismiss plumbing, same first-run purpose.
+    The table one lives in MesoTable.tsx (issue #455 phase A4's re-authored
+    copy; phase A5 deleted WeekGrid.tsx and its "grid" mark); the
+    phone-preview one in AthletePreview.tsx — same dismiss plumbing, same
+    first-run purpose.
     """
 
-    def test_week_grid_renders_the_grid_coachmark(self):
-        tsx = read_island_source("components", "WeekGrid.tsx")
-        assert "The week grid" in tsx  # grid coachmark
+    def test_meso_table_renders_the_table_coachmark(self):
+        tsx = read_island_source("components", "MesoTable.tsx")
+        assert "The block table" in tsx  # table coachmark
 
     def test_athlete_preview_renders_the_phone_coachmark(self):
         tsx = read_island_source("components", "AthletePreview.tsx")
         assert "Preview as your athlete" in tsx
         assert 'dismissCoachmark?.("phone")' in tsx
 
-    def test_grid_coachmark_has_a_dismiss_control(self):
-        tsx = read_island_source("components", "WeekGrid.tsx")
-        assert 'dismissCoachmark("grid")' in tsx
+    def test_table_coachmark_has_a_dismiss_control(self):
+        tsx = read_island_source("components", "MesoTable.tsx")
+        assert 'dismissCoachmark("table")' in tsx
 
 
 class TestAgentSelfExplanation:
@@ -144,9 +147,9 @@ class TestCoachmarkSource:
         for symbol in ("coachmarkVisible", "dismissCoachmark"):
             assert symbol in hook, f"hooks/useCoachmarks.ts should define {symbol}"
 
-    def test_week_grid_wires_coachmark_visibility(self):
-        tsx = read_island_source("components", "WeekGrid.tsx")
-        assert 'coachmarkVisible("grid")' in tsx
+    def test_meso_table_wires_coachmark_visibility(self):
+        tsx = read_island_source("components", "MesoTable.tsx")
+        assert 'coachmarkVisible("table")' in tsx
 
     def test_athlete_preview_wires_coachmark_visibility(self):
         tsx = read_island_source("components", "AthletePreview.tsx")
