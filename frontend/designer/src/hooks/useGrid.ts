@@ -1,5 +1,11 @@
 // useGrid — self-contained state-owning hook for the P1 multi-week table
-// (MesoTable). Owns `grid`/`history` and every verb that mutates it.
+// (MesoTable). Owns `grid`/`history` and every verb that mutates it. Issue
+// #455 phase A5 retired the sibling one-week `usePlanData` owner (and
+// everything that only existed to feed it) — this hook is now DesignerRoot's
+// SOLE data owner island-wide, not just the table's: `grid.plan`/`.group`/
+// `.athlete`/`.phases` (added in A5 step 1) feed TopBar/LeftRail/BlockView/
+// AthletePreview too, via the pure `lib/grid.ts` helpers `gridToProgram`/
+// `cycleLabelFromGrid`.
 //
 // Cell edits (patchCell/renameExercise) are optimistic + fire-and-forget,
 // mirroring useAutosave's semantics (CONTRACT.md "useAutosave") — updated in
@@ -272,8 +278,10 @@ export function useGrid(options: UseGridOptions) {
   // already POSTed to prescription/<id>/override/ and hands back {adj,
   // adjusts, history}; DesignerRoot routes its `patchExercise` here and its
   // `adoptHistory` to adoptGridHistory above. Matches on prescription_id, so
-  // it no-ops harmlessly when the edited row lives on the OTHER data owner
-  // (planData) rather than the grid.
+  // it no-ops harmlessly if the id doesn't resolve to a live cell on this
+  // grid (issue #455 phase A5: there is no other data owner left for it to
+  // belong to instead — this used to also guard against the one-week
+  // planData path, now retired).
   const patchCellAdj = useCallback((cellId: Id, patch: GridCellAdjPatch) => {
     setGrid((prev) => (prev ? updateCellInGrid(prev, cellId, patch) : prev));
   }, []);

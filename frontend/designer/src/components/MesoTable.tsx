@@ -1,8 +1,12 @@
 // MesoTable (P1 multi-week table) — one <table> per training day, exercise
-// rows down the side, WEEK COLUMNS across the top. Becomes the coach's
-// default editing surface; WeekStrip/WeekGrid/DayCard/ExerciseRow (the
-// one-week-at-a-time view) stay reachable as a transitional fallback (they
-// are NOT deleted in this PR).
+// rows down the side, WEEK COLUMNS across the top. THE coach's editing
+// surface — issue #455 phase A5 deleted the one-week-at-a-time view
+// (WeekStrip/WeekGrid/DayCard/ExerciseRow) and every hook that only existed
+// to feed it (usePlanData/useAutosave/useDeletes/useUndoRedo/useReorder/
+// useOneRmEditor/useGridNav); this file's comments below still reference
+// those retired files by name as historical "ported from" / "mirrors"
+// context for where a given pattern originated, not because they still
+// exist in the tree.
 //
 // Per-cell fields commit on blur/Enter, carrying forward ExerciseRow's
 // dirtySinceFocus pattern (CONTRACT.md "ExerciseRow") — but scoped PER CELL,
