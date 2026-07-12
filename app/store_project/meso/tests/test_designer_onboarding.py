@@ -102,12 +102,24 @@ class TestAgentSelfExplanation:
 
 
 class TestStaticChromeReplaced:
-    """The fabricated prototype chrome is gone; the real plan shows instead."""
+    """The fabricated prototype chrome is gone; the real plan shows instead.
+
+    Uses ``rel.create_plan(...)`` (the scaffolded, block-bearing plan every
+    real coach gets), not a bare ``PlanFactory()``. Issue #455 phase A5 made
+    ``#meso-grid-data`` (fed by ``serialize_mesocycle_grid``, which requires
+    a mesocycle) the island's only hydration payload, retiring the separate
+    ``#meso-plan-data`` (fed by ``serialize_plan``, unconditional) that used
+    to carry athlete identity regardless of whether a block existed. A plan
+    with no mesocycle at all doesn't hydrate the island (documented,
+    accepted "shouldn't happen post-scaffold" edge case in
+    ``MesoDesignerView.get_context_data``) — not the case these two tests
+    are about, which is real athlete chrome vs. fabricated prototype chrome.
+    """
 
     def test_real_athlete_identity_renders(self, client):
         athlete = UserFactory(name="Devon Reyes")
         rel = CoachAthleteFactory(athlete=athlete)
-        plan = PlanFactory(relationship=rel, goal="Return to lifting")
+        plan = rel.create_plan(goal="Return to lifting")
         ContraindicationFactory(athlete=athlete, text="R shoulder impingement")
         body = render_designer(client, plan)
         assert "Devon Reyes" in body  # injected for the left rail to hydrate
@@ -119,7 +131,7 @@ class TestStaticChromeReplaced:
         # name / experience / programming-style / macrocycle chrome.
         athlete = UserFactory(name="Devon Reyes")
         rel = CoachAthleteFactory(athlete=athlete)
-        plan = PlanFactory(relationship=rel)
+        plan = rel.create_plan()
         body = render_designer(client, plan)
         assert "Maya" not in body
         assert "avoid deep knee flexion" not in body

@@ -534,7 +534,7 @@ class TestSwitcherWiring:
         resp = client.get(reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 200
         body = resp.content.decode()
-        assert 'id="meso-plan-data"' in body
+        assert 'id="meso-grid-data"' in body
         assert 'id="meso-designer-root"' in body
 
     def test_meso_table_wires_all_three_verbs(self):

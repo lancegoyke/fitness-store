@@ -256,13 +256,16 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         )
         if plan is None:
             raise Http404("Unknown plan")
-        ctx["plan_data"] = serialize_plan(plan)
         # P1 multi-week table (backend): the current block's dense day × row ×
-        # week grid, hydrated alongside ``plan_data`` so the table can render
-        # without a round-trip on first paint. Uses the same block resolution
-        # as ``serialize_plan`` (the current week's mesocycle); left unset for
-        # a plan with no block at all (shouldn't happen post-scaffold, but a
-        # corrupt/legacy row shouldn't 500 the whole designer).
+        # week grid — issue #455 phase A5 made ``useGrid``/``MesoTable`` the
+        # island's sole data owner, so this is now the only hydration payload
+        # the designer needs (``serialize_plan`` itself survives unchanged —
+        # it's still load-bearing for the agent's ``build_context``, see
+        # serializers.py). Uses the same block resolution ``serialize_plan``
+        # used to (the current week's mesocycle); left unset for a plan with
+        # no block at all (shouldn't happen post-scaffold, but a corrupt/
+        # legacy row shouldn't 500 the whole designer — it renders a blank
+        # island instead, per CONTRACT.md).
         mesocycle = _default_grid_mesocycle(plan)
         if mesocycle is not None:
             ctx["grid_data"] = serialize_mesocycle_grid(mesocycle)
