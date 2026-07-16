@@ -51,13 +51,12 @@ def _presc(pk, name, **over):
     row = {
         "id": pk,
         "name": name,
-        "sets": "3",
-        "reps": "10",
-        "load": "60",
-        "load_type": "abs",
-        "rpe": "7",
-        "note": "",
+        "text": "3 x 10, RPE 7, 60",
         "skipped": False,
+        "tempo": "",
+        "rest": "",
+        "note": "",
+        "lines": [],
     }
     row.update(over)
     return row
@@ -96,9 +95,11 @@ class TestDiffWeekSnapshots:
         assert diff["removed_sessions"] == []
         assert diff["week"] == []
 
-    def test_changed_load_is_a_changed_row(self):
-        prev = _snap([_session(1, 1, "Lower", [_presc(10, "Squat", load="100")])])
-        cur = _snap([_session(1, 1, "Lower", [_presc(10, "Squat", load="105")])])
+    def test_changed_text_is_a_changed_row(self):
+        prev = _snap(
+            [_session(1, 1, "Lower", [_presc(10, "Squat", text="4 x 6, 100")])]
+        )
+        cur = _snap([_session(1, 1, "Lower", [_presc(10, "Squat", text="4 x 6, 105")])])
         diff = diff_week_snapshots(cur, prev)
         assert diff["has_changes"] is True
         (sess,) = diff["sessions"]
@@ -106,9 +107,9 @@ class TestDiffWeekSnapshots:
         (changed,) = sess["changed"]
         assert changed["name"] == "Squat"
         (field,) = changed["fields"]
-        assert field["field"] == "load"
-        assert field["before"] == "100"
-        assert field["after"] == "105"
+        assert field["field"] == "text"
+        assert field["before"] == "4 x 6, 100"
+        assert field["after"] == "4 x 6, 105"
 
     def test_swap_is_a_changed_name(self):
         prev = _snap([_session(1, 1, "Lower", [_presc(10, "Back Squat")])])
@@ -127,7 +128,7 @@ class TestDiffWeekSnapshots:
                     1,
                     1,
                     "Lower",
-                    [_presc(10, "Squat"), _presc(11, "RDL", sets="3", reps="8")],
+                    [_presc(10, "Squat"), _presc(11, "RDL", text="3 x 8")],
                 )
             ]
         )
@@ -250,10 +251,24 @@ class TestDiffWeekSnapshots:
         # Skipped in BOTH snapshots → trained in neither delivery, so a numeric
         # edit to it is not an athlete-facing change.
         prev = _snap(
-            [_session(1, 1, "Lower", [_presc(10, "Squat", skipped=True, load="100")])]
+            [
+                _session(
+                    1,
+                    1,
+                    "Lower",
+                    [_presc(10, "Squat", skipped=True, text="4 x 6, 100")],
+                )
+            ]
         )
         cur = _snap(
-            [_session(1, 1, "Lower", [_presc(10, "Squat", skipped=True, load="150")])]
+            [
+                _session(
+                    1,
+                    1,
+                    "Lower",
+                    [_presc(10, "Squat", skipped=True, text="4 x 6, 150")],
+                )
+            ]
         )
         diff = diff_week_snapshots(cur, prev)
         assert diff["sessions"] == []
@@ -311,8 +326,8 @@ class TestDeliverScreenChanges:
     def test_redelivery_after_edit_surfaces_the_change(self):
         plan, week, _, presc = seed_plan(load="111")
         record_delivery(week)
-        presc.load = "222"
-        presc.save(update_fields=["load"])
+        presc.text = "4 x 6, RPE 7, 222"
+        presc.save(update_fields=["text"])
 
         deliver = presenters.deliver_screen(plan)["deliver"]
 
@@ -327,7 +342,7 @@ class TestDeliverScreenChanges:
         (changed,) = sess["changed"]
         assert changed["name"] == "Box Squat"
         fields = {f["field"]: (f["before"], f["after"]) for f in changed["fields"]}
-        assert fields["load"] == ("111", "222")
+        assert fields["text"] == ("4 x 6, RPE 7, 111", "4 x 6, RPE 7, 222")
 
     def test_redelivery_after_skip_surfaces_the_change(self):
         # A one-week skip applied after delivery is athlete-facing (trained
@@ -368,8 +383,8 @@ class TestDeliverScreenChanges:
         session2 = day(week2, day_number=2, name="Upper")
         presc2 = presc_(session2, name="Bench", sets="3", reps="5", load="80")
         record_delivery(week2)
-        presc2.load = "90"
-        presc2.save(update_fields=["load"])
+        presc2.text = "3 x 5, RPE 7, 90"
+        presc2.save(update_fields=["text"])
 
         deliver = presenters.deliver_screen(plan, week=week2)["deliver"]
 
@@ -426,8 +441,8 @@ class TestDeliverScreenRendersDiff:
     def test_redelivery_screen_renders_the_diff(self, client):
         plan, week, _, presc = seed_plan(load="111")
         record_delivery(week)
-        presc.load = "222"
-        presc.save(update_fields=["load"])
+        presc.text = "4 x 6, RPE 7, 222"
+        presc.save(update_fields=["text"])
         client.force_login(plan.relationship.coach)
 
         body = self._screen(client, plan).content.decode()
@@ -446,10 +461,10 @@ class TestDeliverScreenRendersDiff:
         presc2 = presc_(session2, name="Bench", sets="3", reps="5", load="80")
         record_delivery(week1)
         record_delivery(week2)
-        presc1.load = "222"
-        presc1.save(update_fields=["load"])
-        presc2.load = "90"
-        presc2.save(update_fields=["load"])
+        presc1.text = "4 x 6, RPE 7, 222"
+        presc1.save(update_fields=["text"])
+        presc2.text = "3 x 5, RPE 7, 90"
+        presc2.save(update_fields=["text"])
         client.force_login(plan.relationship.coach)
 
         body = self._screen(client, plan).content.decode()

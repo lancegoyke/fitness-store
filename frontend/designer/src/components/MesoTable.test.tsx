@@ -1,10 +1,11 @@
 // Specs for MesoTable (P1 multi-week table) — one <table> per training day,
-// exercise rows down the side, WEEK COLUMNS across the top. Per-cell editing
-// (sets/reps/load+load_type/rpe/rest/note) commits on blur/Enter, carrying
-// forward ExerciseRow's dirtySinceFocus semantics (only actually-typed
-// fields persist). Deload marker/skipped em-dash/swap badge are display-only
-// in P1 — no write UX for swap/skip.
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+// exercise rows down the side, WEEK COLUMNS across the top. Phase 2a
+// (text-first cells): each cell is ONE freeform text input (committed on
+// blur/Enter, carrying forward ExerciseRow's dirtySinceFocus semantics) plus
+// sub-line inputs and a trailing ghost input that mints the next sub-line;
+// Tempo/Notes/Rest are per-ROW columns off the slot. The %1RM editor, the
+// load_type toggle, and the one-week swap UI are retired.
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MesoTable } from "./MesoTable";
 import { tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
@@ -26,17 +27,9 @@ function week(overrides: Partial<GridWeek> = {}): GridWeek {
 function cell(overrides: Partial<GridCell> = {}): GridCell {
   return {
     prescription_id: 100,
-    sets: "3",
-    reps: "5",
-    load: "100",
-    load_type: "abs",
-    rpe: "8",
-    rest: "90",
-    note: "",
+    text: "3 x 5, RPE 8, 100",
     skipped: false,
-    swap_name: "",
-    swap_exercise_id: null,
-    swap_display: "",
+    lines: [],
     ...overrides,
   };
 }
@@ -48,6 +41,9 @@ function row(overrides: Partial<GridRow> = {}): GridRow {
     exercise_id: 55,
     order: 0,
     tags: [],
+    tempo: "",
+    rest: "",
+    note: "",
     cells: { "1": cell() },
     ...overrides,
   };
@@ -98,10 +94,11 @@ function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
     grid: grid(),
     history: HISTORY_NONE,
     busy: false,
-    unit: "kg",
     group: null,
     onOpenOverride: vi.fn(),
     onPatchCell: vi.fn(),
+    onWriteCellLine: vi.fn(),
+    onPatchRowColumns: vi.fn(),
     onRenameExercise: vi.fn(),
     onAddExercise: vi.fn(),
     onRemoveExercise: vi.fn(),
@@ -113,10 +110,8 @@ function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
     onUndo: vi.fn(),
     onRedo: vi.fn(),
     onSkipCell: vi.fn(),
-    onSwapCell: vi.fn(),
     onFillAcrossWeeks: vi.fn(),
     onAddExerciseThisWeek: vi.fn(),
-    onSetOneRm: vi.fn().mockResolvedValue({ one_rm: "", one_rm_source: "" }),
     onMoveExerciseToDay: vi.fn(),
     coachmarkVisible: vi.fn(() => true),
     dismissCoachmark: vi.fn(),
@@ -194,53 +189,40 @@ describe("week columns", () => {
 });
 
 describe("cells", () => {
-  it("renders every editable field's value, including rest", () => {
+  it("renders the cell's freeform text verbatim", () => {
     render(<MesoTable {...baseProps()} />);
-    expect(screen.getByTestId("cell-sets-100")).toHaveValue("3");
-    expect(screen.getByTestId("cell-reps-100")).toHaveValue("5");
-    expect(screen.getByTestId("cell-load-100")).toHaveValue("100");
-    expect(screen.getByTestId("cell-rpe-100")).toHaveValue("8");
-    expect(screen.getByTestId("cell-rest-100")).toHaveValue("90");
-    expect(screen.getByTestId("cell-note-100")).toHaveValue("");
+    expect(screen.getByTestId("cell-text-100")).toHaveValue("3 x 5, RPE 8, 100");
   });
 
-  it("commits only the dirtied field on blur", async () => {
+  it("commits {text} on blur when dirty", async () => {
     const user = userEvent.setup();
     const onPatchCell = vi.fn();
     render(<MesoTable {...baseProps({ onPatchCell })} />);
-    const setsInput = screen.getByTestId("cell-sets-100");
-    await user.clear(setsInput);
-    await user.type(setsInput, "4");
+    const textInput = screen.getByTestId("cell-text-100");
+    await user.clear(textInput);
+    await user.type(textInput, "4 x 6, RPE 9");
     await user.tab();
-    expect(onPatchCell).toHaveBeenCalledWith(100, { sets: "4" });
+    expect(onPatchCell).toHaveBeenCalledWith(100, { text: "4 x 6, RPE 9" });
   });
 
   it("commits on Enter the same as blur", async () => {
     const user = userEvent.setup();
     const onPatchCell = vi.fn();
     render(<MesoTable {...baseProps({ onPatchCell })} />);
-    const noteInput = screen.getByTestId("cell-note-100");
-    await user.type(noteInput, "left knee sore");
+    const textInput = screen.getByTestId("cell-text-100");
+    await user.clear(textInput);
+    await user.type(textInput, "AMRAP");
     await user.keyboard("{Enter}");
-    expect(onPatchCell).toHaveBeenCalledWith(100, { note: "left knee sore" });
+    expect(onPatchCell).toHaveBeenCalledWith(100, { text: "AMRAP" });
   });
 
   it("does not call onPatchCell on a no-op focus+blur (dirtySinceFocus gate)", async () => {
     const user = userEvent.setup();
     const onPatchCell = vi.fn();
     render(<MesoTable {...baseProps({ onPatchCell })} />);
-    await user.click(screen.getByTestId("cell-sets-100"));
+    await user.click(screen.getByTestId("cell-text-100"));
     await user.tab();
     expect(onPatchCell).not.toHaveBeenCalled();
-  });
-
-  it("toggles load_type immediately on click (not gated by blur)", async () => {
-    const user = userEvent.setup();
-    const onPatchCell = vi.fn();
-    render(<MesoTable {...baseProps({ onPatchCell })} />);
-    expect(screen.getByTestId("cell-loadtype-100")).toHaveTextContent("kg");
-    await user.click(screen.getByTestId("cell-loadtype-100"));
-    expect(onPatchCell).toHaveBeenCalledWith(100, { load_type: "pct" });
   });
 
   it("renders a skipped cell as a read-only em-dash with no inputs", () => {
@@ -252,63 +234,198 @@ describe("cells", () => {
       />,
     );
     expect(screen.getByTestId("cell-skipped-100")).toHaveTextContent("—");
-    expect(screen.queryByTestId("cell-sets-100")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cell-text-100")).not.toBeInTheDocument();
+  });
+});
+
+// --- Phase 2a: freeform sub-lines (cell.lines) + the ghost input -----------
+// One input per existing sub-line, edited via onWriteCellLine (upsert by
+// (slot, week, line) — the line may not have a pk yet), plus a trailing
+// ghost input that mints the NEXT line (max existing + 1, or 1) on its first
+// non-blank commit. Blanking an existing line commits "" (clears in place).
+describe("cell sub-lines", () => {
+  const LINES = [
+    { id: 5, line: 1, text: "RPE 8" },
+    { id: 6, line: 2, text: "slow eccentric" },
+  ];
+
+  function linesGrid() {
+    return grid({ days: [day({ rows: [row({ cells: { "1": cell({ lines: LINES }) } })] })] });
+  }
+
+  it("renders one input per existing sub-line, in order, plus the ghost", () => {
+    render(<MesoTable {...baseProps({ grid: linesGrid() })} />);
+    expect(screen.getByTestId("cell-line-100-1")).toHaveValue("RPE 8");
+    expect(screen.getByTestId("cell-line-100-2")).toHaveValue("slow eccentric");
+    expect(screen.getByTestId("cell-line-new-100")).toHaveValue("");
   });
 
-  it("renders a swap badge alongside editable numbers for a swapped cell", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({
-            days: [
-              day({
-                rows: [
-                  row({
-                    cells: {
-                      "1": cell({ swap_name: "Leg Press", swap_exercise_id: 77, swap_display: "Leg Press" }),
-                    },
-                  }),
-                ],
-              }),
-            ],
-          }),
-        })}
-      />,
-    );
-    expect(screen.getByTestId("cell-swap-100")).toHaveTextContent("Leg Press");
-    expect(screen.getByTestId("cell-sets-100")).toBeInTheDocument();
+  it("editing a sub-line commits via onWriteCellLine(slotId, weekId, line, text) on blur", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ grid: linesGrid(), onWriteCellLine })} />);
+    const input = screen.getByTestId("cell-line-100-1");
+    await user.clear(input);
+    await user.type(input, "RPE 9");
+    await user.tab();
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9");
   });
 
-  it("renders the swap badge for a catalog-only swap (swap_name blank, swap_display resolved)", () => {
-    // A catalog swap (swap_exercise_id set) with no free-text swap_name is a
-    // real gap otherwise: the old `cell.swap_name` gate would render NO badge
-    // even though the backend's delivery/logging use the substitute exercise.
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({
-            days: [
-              day({
-                rows: [
-                  row({
-                    cells: {
-                      "1": cell({ swap_name: "", swap_exercise_id: 77, swap_display: "Hack Squat" }),
-                    },
-                  }),
-                ],
-              }),
-            ],
-          }),
-        })}
-      />,
-    );
-    expect(screen.getByTestId("cell-swap-100")).toHaveTextContent("Hack Squat");
-    expect(screen.getByTestId("cell-sets-100")).toBeInTheDocument();
+  it("Enter commits a sub-line the same as blur", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ grid: linesGrid(), onWriteCellLine })} />);
+    const input = screen.getByTestId("cell-line-100-2");
+    await user.clear(input);
+    await user.type(input, "pause at pins");
+    await user.keyboard("{Enter}");
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 2, "pause at pins");
   });
 
-  it("renders no swap badge for a plain cell (no swap_display)", () => {
+  it('blanking an existing sub-line commits "" (clears in place, the row stays)', async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ grid: linesGrid(), onWriteCellLine })} />);
+    await user.clear(screen.getByTestId("cell-line-100-1"));
+    await user.tab();
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "");
+  });
+
+  it("a clean sub-line blur is a no-op (dirty gate)", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ grid: linesGrid(), onWriteCellLine })} />);
+    await user.click(screen.getByTestId("cell-line-100-1"));
+    await user.tab();
+    expect(onWriteCellLine).not.toHaveBeenCalled();
+  });
+
+  it("Escape reverts a sub-line draft without committing", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ grid: linesGrid(), onWriteCellLine })} />);
+    const input = screen.getByTestId("cell-line-100-1");
+    await user.clear(input);
+    await user.type(input, "garbage{Escape}");
+    expect(input).toHaveValue("RPE 8");
+    await user.tab();
+    expect(onWriteCellLine).not.toHaveBeenCalled();
+  });
+
+  it("the ghost input mints the NEXT line (max existing + 1) on a non-blank commit", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ grid: linesGrid(), onWriteCellLine })} />);
+    const ghost = screen.getByTestId("cell-line-new-100");
+    await user.type(ghost, "Cable Crunch");
+    await user.tab();
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 3, "Cable Crunch");
+  });
+
+  it("the ghost mints line 1 when the cell has no sub-lines yet", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ onWriteCellLine })} />); // default fixture: lines []
+    const ghost = screen.getByTestId("cell-line-new-100");
+    await user.type(ghost, "RPE 8");
+    await user.keyboard("{Enter}");
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 8");
+  });
+
+  it("a blank (or blanked-back) ghost commit creates nothing", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ onWriteCellLine })} />);
+    const ghost = screen.getByTestId("cell-line-new-100");
+    await user.type(ghost, "x");
+    await user.clear(ghost);
+    await user.tab();
+    expect(onWriteCellLine).not.toHaveBeenCalled();
+  });
+
+  it("sub-line and ghost inputs carry no data-grid-cell (outside A1 arrow-nav this phase)", () => {
+    render(<MesoTable {...baseProps({ grid: linesGrid() })} />);
+    expect(screen.getByTestId("cell-line-100-1")).not.toHaveAttribute("data-grid-cell");
+    expect(screen.getByTestId("cell-line-new-100")).not.toHaveAttribute("data-grid-cell");
+  });
+});
+
+// --- Phase 2a (D2): per-exercise row columns (Tempo / Notes / Rest) --------
+// Row attributes off the block-shared ExerciseSlot, matching the source
+// spreadsheet layout Exercise | Tempo | weeks… | Notes | Rest — committed
+// via onPatchRowColumns (fire-and-forget, like onPatchCell).
+describe("row columns (tempo / notes / rest)", () => {
+  function colsGrid() {
+    return grid({ days: [day({ rows: [row({ tempo: "31X1", rest: "2 min", note: "brace hard" })] })] });
+  }
+
+  it("renders the Tempo / Notes / Rest column headers", () => {
     render(<MesoTable {...baseProps()} />);
-    expect(screen.queryByTestId("cell-swap-100")).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Tempo" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Notes" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Rest" })).toBeInTheDocument();
+  });
+
+  it("renders the row's tempo/note/rest values", () => {
+    render(<MesoTable {...baseProps({ grid: colsGrid() })} />);
+    expect(screen.getByTestId("row-tempo-9")).toHaveValue("31X1");
+    expect(screen.getByTestId("row-note-9")).toHaveValue("brace hard");
+    expect(screen.getByTestId("row-rest-9")).toHaveValue("2 min");
+  });
+
+  it("commits a dirtied tempo on blur via onPatchRowColumns(slotId, {tempo})", async () => {
+    const user = userEvent.setup();
+    const onPatchRowColumns = vi.fn();
+    render(<MesoTable {...baseProps({ onPatchRowColumns })} />);
+    await user.type(screen.getByTestId("row-tempo-9"), "20X0");
+    await user.tab();
+    expect(onPatchRowColumns).toHaveBeenCalledWith(9, { tempo: "20X0" });
+  });
+
+  it("commits a dirtied note on Enter via onPatchRowColumns(slotId, {note})", async () => {
+    const user = userEvent.setup();
+    const onPatchRowColumns = vi.fn();
+    render(<MesoTable {...baseProps({ onPatchRowColumns })} />);
+    await user.type(screen.getByTestId("row-note-9"), "long hip hinge");
+    await user.keyboard("{Enter}");
+    expect(onPatchRowColumns).toHaveBeenCalledWith(9, { note: "long hip hinge" });
+  });
+
+  it("commits a dirtied rest on blur via onPatchRowColumns(slotId, {rest})", async () => {
+    const user = userEvent.setup();
+    const onPatchRowColumns = vi.fn();
+    render(<MesoTable {...baseProps({ onPatchRowColumns })} />);
+    await user.type(screen.getByTestId("row-rest-9"), "3 min");
+    await user.tab();
+    expect(onPatchRowColumns).toHaveBeenCalledWith(9, { rest: "3 min" });
+  });
+
+  it("a clean focus+blur is a no-op (dirty gate)", async () => {
+    const user = userEvent.setup();
+    const onPatchRowColumns = vi.fn();
+    render(<MesoTable {...baseProps({ grid: colsGrid(), onPatchRowColumns })} />);
+    await user.click(screen.getByTestId("row-tempo-9"));
+    await user.tab();
+    expect(onPatchRowColumns).not.toHaveBeenCalled();
+  });
+
+  it("Escape reverts the draft without committing", async () => {
+    const user = userEvent.setup();
+    const onPatchRowColumns = vi.fn();
+    render(<MesoTable {...baseProps({ grid: colsGrid(), onPatchRowColumns })} />);
+    const input = screen.getByTestId("row-tempo-9");
+    await user.clear(input);
+    await user.type(input, "9999{Escape}");
+    expect(input).toHaveValue("31X1");
+    await user.tab();
+    expect(onPatchRowColumns).not.toHaveBeenCalled();
+  });
+
+  it("row-column inputs carry no data-grid-cell (outside A1 arrow-nav this phase)", () => {
+    render(<MesoTable {...baseProps()} />);
+    expect(screen.getByTestId("row-tempo-9")).not.toHaveAttribute("data-grid-cell");
+    expect(screen.getByTestId("row-note-9")).not.toHaveAttribute("data-grid-cell");
+    expect(screen.getByTestId("row-rest-9")).not.toHaveAttribute("data-grid-cell");
   });
 });
 
@@ -321,304 +438,6 @@ describe("row rename", () => {
     await user.type(nameInput, "!");
     await user.tab();
     expect(onRenameExercise).toHaveBeenCalledWith(9, "Squat!");
-  });
-});
-
-// --- Issue #455 phase A3: per-ROW %1RM badge/editor (name column, 2nd line) ---
-// A %1RM is a property of the athlete + lift IDENTITY (AthleteOneRm has no
-// week dimension), so — unlike the per-cell adjust badge (P5) — this control
-// is per-ROW, reading/writing the row's IDENTITY cell (rowIdentityCellId,
-// shared with row rename). Mirrors ExerciseRow.tsx's one-week %1RM badge
-// (label text, "1RM: "/"1RM ≈ " prefixes, "+ set 1RM").
-describe("row 1RM editor (issue #455 phase A3)", () => {
-  function pctCell(overrides: Partial<GridCell> = {}) {
-    return cell({ load_type: "pct", ...overrides });
-  }
-
-  it('renders "1RM: <val> <unit>" for a manual estimate on an individual pct row', () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell({ one_rm: "140", one_rm_source: "manual" }) } })] })] }),
-        })}
-      />,
-    );
-    expect(screen.getByTestId("row-one-rm-badge-9")).toHaveTextContent("1RM: 140 kg");
-  });
-
-  it('renders "1RM ≈ <val> <unit>" for a logged (derived) estimate', () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell({ one_rm: "140", one_rm_source: "logged" }) } })] })] }),
-        })}
-      />,
-    );
-    expect(screen.getByTestId("row-one-rm-badge-9")).toHaveTextContent("1RM ≈ 140 kg");
-  });
-
-  it('renders "+ set 1RM" when the athlete has no stored estimate', () => {
-    render(<MesoTable {...baseProps({ grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }) })} />);
-    expect(screen.getByTestId("row-one-rm-badge-9")).toHaveTextContent("+ set 1RM");
-  });
-
-  it("renders NO badge for an absolute-load row", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": cell({ load_type: "abs", one_rm: "140" }) } })] })] }),
-        })}
-      />,
-    );
-    expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
-  });
-
-  it("renders NO badge on a group plan, even for a pct row (KEY gating regression: !group, not showAdjust's member-count check)", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          group: group(),
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell({ one_rm: "140" } ) } })] })] }),
-        })}
-      />,
-    );
-    expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
-  });
-
-  it("renders NO badge when the row has no live cell at all", () => {
-    render(<MesoTable {...baseProps({ grid: grid({ days: [day({ rows: [row({ cells: {} })] })] }) })} />);
-    expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
-  });
-
-  it("renders the badge for a MIXED-load row (identity cell abs, a later week pct)", () => {
-    // Codex #455 A3 review: load_type is edited per cell — gating on the
-    // identity cell's own load_type alone hid the row's only 1RM control
-    // when only a later week carries the % load. The save target stays the
-    // identity cell (same lift identity either way).
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({
-            weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
-            days: [
-              day({
-                rows: [
-                  row({
-                    cells: {
-                      "1": cell({ prescription_id: 100, load_type: "abs" }),
-                      "2": pctCell({ prescription_id: 101 }),
-                    },
-                  }),
-                ],
-              }),
-            ],
-          }),
-        })}
-      />,
-    );
-    expect(screen.getByTestId("row-one-rm-badge-9")).toBeInTheDocument();
-  });
-
-  it("renders NO badge when the row's only pct cell is a one-week SWAP (different lift identity)", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({
-            weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
-            days: [
-              day({
-                rows: [
-                  row({
-                    cells: {
-                      "1": cell({ prescription_id: 100, load_type: "abs" }),
-                      "2": pctCell({ prescription_id: 101, swap_name: "Leg Press" }),
-                    },
-                  }),
-                ],
-              }),
-            ],
-          }),
-        })}
-      />,
-    );
-    expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
-  });
-
-  it("Enter in the editor does not save while the table is busy (keyboard path honors the lock)", async () => {
-    const user = userEvent.setup();
-    const onSetOneRm = vi.fn().mockResolvedValue({ one_rm: "140", one_rm_source: "manual" });
-    const props = baseProps({
-      onSetOneRm,
-      grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }),
-    });
-    const { rerender } = render(<MesoTable {...props} />);
-    await user.click(screen.getByTestId("row-one-rm-badge-9"));
-    await user.type(screen.getByTestId("row-one-rm-input-9"), "140");
-    // A structural mutation flips busy while the editor is open.
-    rerender(<MesoTable {...props} busy={true} />);
-    await user.type(screen.getByTestId("row-one-rm-input-9"), "{Enter}");
-    expect(onSetOneRm).not.toHaveBeenCalled();
-  });
-
-  it("renders NO badge when the row's only pct cell is skipped", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({
-            days: [day({ rows: [row({ cells: { "1": pctCell({ skipped: true }) } })] })],
-          }),
-        })}
-      />,
-    );
-    expect(screen.queryByTestId("row-one-rm-badge-9")).not.toBeInTheDocument();
-  });
-
-  it("falls back to a live alternative week's identity cell when week[0] has none for this row", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({
-            weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
-            days: [day({ rows: [row({ cells: { "2": pctCell({ prescription_id: 101 }) } })] })],
-          }),
-        })}
-      />,
-    );
-    expect(screen.getByTestId("row-one-rm-badge-9")).toHaveTextContent("+ set 1RM");
-  });
-
-  it("clicking the badge opens the editor seeded with the current value", async () => {
-    const user = userEvent.setup();
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell({ one_rm: "140" }) } })] })] }),
-        })}
-      />,
-    );
-    await user.click(screen.getByTestId("row-one-rm-badge-9"));
-    expect(screen.getByTestId("row-one-rm-input-9")).toHaveValue("140");
-  });
-
-  it("Enter saves the typed value", async () => {
-    const user = userEvent.setup();
-    const onSetOneRm = vi.fn().mockResolvedValue({ one_rm: "150", one_rm_source: "manual" });
-    render(
-      <MesoTable
-        {...baseProps({
-          onSetOneRm,
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }),
-        })}
-      />,
-    );
-    await user.click(screen.getByTestId("row-one-rm-badge-9"));
-    const input = screen.getByTestId("row-one-rm-input-9");
-    await user.clear(input);
-    await user.type(input, "150{enter}");
-    expect(onSetOneRm).toHaveBeenCalledWith(9, "150");
-  });
-
-  it("Escape cancels without saving", async () => {
-    const user = userEvent.setup();
-    const onSetOneRm = vi.fn();
-    render(
-      <MesoTable
-        {...baseProps({
-          onSetOneRm,
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }),
-        })}
-      />,
-    );
-    await user.click(screen.getByTestId("row-one-rm-badge-9"));
-    const input = screen.getByTestId("row-one-rm-input-9");
-    await user.type(input, "999{escape}");
-    expect(onSetOneRm).not.toHaveBeenCalled();
-    expect(screen.getByTestId("row-one-rm-badge-9")).toBeInTheDocument();
-  });
-
-  it("an invalid value shows an inline error and does not call onSetOneRm", async () => {
-    const user = userEvent.setup();
-    const onSetOneRm = vi.fn();
-    render(
-      <MesoTable
-        {...baseProps({
-          onSetOneRm,
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }),
-        })}
-      />,
-    );
-    await user.click(screen.getByTestId("row-one-rm-badge-9"));
-    const input = screen.getByTestId("row-one-rm-input-9");
-    await user.type(input, "abc");
-    await user.click(screen.getByTestId("row-one-rm-save-9"));
-    expect(screen.getByTestId("row-one-rm-error-9")).toBeInTheDocument();
-    expect(onSetOneRm).not.toHaveBeenCalled();
-  });
-
-  it("a successful save calls onSetOneRm with the ROW id (not the cell id) and closes the editor", async () => {
-    const user = userEvent.setup();
-    const onSetOneRm = vi.fn().mockResolvedValue({ one_rm: "150", one_rm_source: "manual" });
-    render(
-      <MesoTable
-        {...baseProps({
-          onSetOneRm,
-          grid: grid({ days: [day({ rows: [row({ exercise_slot_id: 9, cells: { "1": pctCell({ prescription_id: 100 }) } })] })] }),
-        })}
-      />,
-    );
-    await user.click(screen.getByTestId("row-one-rm-badge-9"));
-    const input = screen.getByTestId("row-one-rm-input-9");
-    await user.clear(input);
-    await user.type(input, "150");
-    await user.click(screen.getByTestId("row-one-rm-save-9"));
-    await waitFor(() => expect(onSetOneRm).toHaveBeenCalledWith(9, "150"));
-    await waitFor(() => expect(screen.queryByTestId("row-one-rm-input-9")).not.toBeInTheDocument());
-  });
-
-  it("a rejected save keeps the editor open with an error", async () => {
-    const user = userEvent.setup();
-    const onSetOneRm = vi.fn().mockRejectedValue(new Error("boom"));
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    render(
-      <MesoTable
-        {...baseProps({
-          onSetOneRm,
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] }),
-        })}
-      />,
-    );
-    await user.click(screen.getByTestId("row-one-rm-badge-9"));
-    const input = screen.getByTestId("row-one-rm-input-9");
-    await user.type(input, "150");
-    await user.click(screen.getByTestId("row-one-rm-save-9"));
-    await waitFor(() => expect(screen.getByTestId("row-one-rm-error-9")).toBeInTheDocument());
-    expect(screen.getByTestId("row-one-rm-input-9")).toBeInTheDocument();
-  });
-
-  it("disables save/cancel while busy", async () => {
-    const user = userEvent.setup();
-    const gridFixture = grid({ days: [day({ rows: [row({ cells: { "1": pctCell() } })] })] });
-    const { rerender } = render(<MesoTable {...baseProps({ grid: gridFixture })} />);
-    await user.click(screen.getByTestId("row-one-rm-badge-9"));
-    // Local state (the open editor) persists across a prop-only re-render of
-    // the same mounted tree — mirrors CellActions' swap-input idiom.
-    rerender(<MesoTable {...baseProps({ busy: true, grid: gridFixture })} />);
-    expect(screen.getByTestId("row-one-rm-save-9")).toBeDisabled();
-    expect(screen.getByTestId("row-one-rm-cancel-9")).toBeDisabled();
-  });
-
-  it("badge and input carry NO data-grid-cell (outside A1 keyboard-nav space)", async () => {
-    const user = userEvent.setup();
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": pctCell({ one_rm: "140" }) } })] })] }),
-        })}
-      />,
-    );
-    expect(screen.getByTestId("row-one-rm-badge-9")).not.toHaveAttribute("data-grid-cell");
-    await user.click(screen.getByTestId("row-one-rm-badge-9"));
-    expect(screen.getByTestId("row-one-rm-input-9")).not.toHaveAttribute("data-grid-cell");
   });
 });
 
@@ -852,7 +671,7 @@ describe("undo/redo toolbar", () => {
   });
 });
 
-// --- P2 exceptions: skip / swap / fill / add-this-week write UX -----------
+// --- P2 exceptions: skip / fill / add-this-week write UX ------------------
 // CONTRACT.md "MesoTable.tsx" — exact data-testids; `id` = prescription_id,
 // `slotId` = session_slot_id, `weekId` = week id.
 
@@ -879,56 +698,6 @@ describe("skip / unskip", () => {
     expect(screen.getByTestId("cell-skipped-100")).toHaveTextContent("—");
     await user.click(screen.getByTestId("cell-unskip-100"));
     expect(onSkipCell).toHaveBeenCalledWith(100, false);
-  });
-});
-
-describe("swap / clear", () => {
-  it("swap: reveals an input, typing a name then saving calls onSwapCell(id, name)", async () => {
-    const user = userEvent.setup();
-    const onSwapCell = vi.fn();
-    render(<MesoTable {...baseProps({ onSwapCell })} />);
-    expect(screen.queryByTestId("cell-swap-input-100")).not.toBeInTheDocument();
-    await user.click(screen.getByTestId("cell-swap-btn-100"));
-    const input = screen.getByTestId("cell-swap-input-100");
-    await user.type(input, "Front Squat");
-    await user.click(screen.getByTestId("cell-swap-save-100"));
-    expect(onSwapCell).toHaveBeenCalledWith(100, "Front Squat");
-  });
-
-  it("swap: Enter in the input also submits", async () => {
-    const user = userEvent.setup();
-    const onSwapCell = vi.fn();
-    render(<MesoTable {...baseProps({ onSwapCell })} />);
-    await user.click(screen.getByTestId("cell-swap-btn-100"));
-    const input = screen.getByTestId("cell-swap-input-100");
-    await user.type(input, "Front Squat{Enter}");
-    expect(onSwapCell).toHaveBeenCalledWith(100, "Front Squat");
-  });
-
-  it('clicking clear on a swapped cell calls onSwapCell(id, "")', async () => {
-    const user = userEvent.setup();
-    const onSwapCell = vi.fn();
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({
-            days: [
-              day({
-                rows: [
-                  row({
-                    cells: { "1": cell({ swap_name: "Leg Press", swap_exercise_id: 77, swap_display: "Leg Press" }) },
-                  }),
-                ],
-              }),
-            ],
-          }),
-          onSwapCell,
-        })}
-      />,
-    );
-    expect(screen.getByTestId("cell-swap-100")).toHaveTextContent("Leg Press");
-    await user.click(screen.getByTestId("cell-swap-clear-100"));
-    expect(onSwapCell).toHaveBeenCalledWith(100, "");
   });
 });
 
@@ -1033,6 +802,9 @@ describe("group per-athlete adjust badge", () => {
 // renders the real table and drives real keyboard events through RTL,
 // mirroring WeekGrid.test.tsx's "Phase 3" block (the one-week precedent).
 //
+// Phase 2a: the per-week editable surface is ONE freeform "text" input, so
+// the horizontal axis is name → week 1 text → week 2 text.
+//
 // Fixture: day 1 (session_slot_id 1) has row 9 "Box Squat" (cells 900/901)
 // and row 10 "RDL" (cells 1000/1001); day 2 (session_slot_id 2) has row 11
 // "Bench" (cells 1100/1101). Two weeks (id 1 "Wk 1", id 2 "Wk 2") so
@@ -1072,23 +844,18 @@ const NAV_GRID: MesoGrid = grid({
 
 describe("keyboard grid navigation", () => {
   describe("data-grid-cell + aria-label", () => {
-    it("stamps data-grid-cell on every field input and the row-name input, keyed by (rowId, weekId, field)", () => {
+    it("stamps data-grid-cell on every text input and the row-name input, keyed by (rowId, weekId, field)", () => {
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       expect(screen.getByTestId("row-name-9")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, null, "name"));
-      expect(screen.getByTestId("cell-sets-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "sets"));
-      expect(screen.getByTestId("cell-reps-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "reps"));
-      expect(screen.getByTestId("cell-load-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "load"));
-      expect(screen.getByTestId("cell-rpe-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "rpe"));
-      expect(screen.getByTestId("cell-rest-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "rest"));
-      expect(screen.getByTestId("cell-note-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "note"));
-      expect(screen.getByTestId("cell-sets-901")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 2, "sets"));
+      expect(screen.getByTestId("cell-text-900")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "text"));
+      expect(screen.getByTestId("cell-text-901")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 2, "text"));
+      expect(screen.getByTestId("cell-text-1100")).toHaveAttribute("data-grid-cell", tableCellDomKey(11, 1, "text"));
     });
 
-    it("gives every field input an aria-label reflecting row/week/field, and the name input its own", () => {
+    it("gives every text input an aria-label reflecting row/week, and the name input its own", () => {
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      expect(screen.getByTestId("cell-sets-900")).toHaveAttribute("aria-label", tableCellAriaLabel("Box Squat", "Wk 1", "sets"));
-      expect(screen.getByTestId("cell-rpe-900")).toHaveAttribute("aria-label", tableCellAriaLabel("Box Squat", "Wk 1", "rpe"));
-      expect(screen.getByTestId("cell-sets-901")).toHaveAttribute("aria-label", tableCellAriaLabel("Box Squat", "Wk 2", "sets"));
+      expect(screen.getByTestId("cell-text-900")).toHaveAttribute("aria-label", tableCellAriaLabel("Box Squat", "Wk 1", "text"));
+      expect(screen.getByTestId("cell-text-901")).toHaveAttribute("aria-label", tableCellAriaLabel("Box Squat", "Wk 2", "text"));
       expect(screen.getByTestId("row-name-9")).toHaveAttribute("aria-label", tableCellAriaLabel("Box Squat", null, "name"));
     });
   });
@@ -1097,7 +864,7 @@ describe("keyboard grid navigation", () => {
     it("exactly one cell (the table's first: row-name) is tabbable on initial render", () => {
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       expect(screen.getByTestId("row-name-9")).toHaveAttribute("tabindex", "0");
-      expect(screen.getByTestId("cell-sets-900")).toHaveAttribute("tabindex", "-1");
+      expect(screen.getByTestId("cell-text-900")).toHaveAttribute("tabindex", "-1");
       expect(screen.getByTestId("row-name-10")).toHaveAttribute("tabindex", "-1");
       expect(screen.getByTestId("row-name-11")).toHaveAttribute("tabindex", "-1");
     });
@@ -1105,90 +872,81 @@ describe("keyboard grid navigation", () => {
     it("focusing another cell moves the roving tabIndex to it", async () => {
       const user = userEvent.setup();
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      await user.click(screen.getByTestId("cell-rpe-1000"));
-      expect(screen.getByTestId("cell-rpe-1000")).toHaveAttribute("tabindex", "0");
+      await user.click(screen.getByTestId("cell-text-1000"));
+      expect(screen.getByTestId("cell-text-1000")).toHaveAttribute("tabindex", "0");
       expect(screen.getByTestId("row-name-9")).toHaveAttribute("tabindex", "-1");
     });
 
     it("roving tabIndex spans multiple day-tables as ONE grid", async () => {
       const user = userEvent.setup();
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      await user.click(screen.getByTestId("cell-load-1000")); // day 1's last row
+      await user.click(screen.getByTestId("cell-text-1000")); // day 1's last row
       await user.keyboard("{ArrowDown}");
-      expect(screen.getByTestId("cell-load-1100")).toHaveFocus(); // day 2's row
-      expect(screen.getByTestId("cell-load-1100")).toHaveAttribute("tabindex", "0");
+      expect(screen.getByTestId("cell-text-1100")).toHaveFocus(); // day 2's row
+      expect(screen.getByTestId("cell-text-1100")).toHaveAttribute("tabindex", "0");
     });
   });
 
   describe("ArrowDown / ArrowUp navigate rows across day-table boundaries", () => {
-    it("ArrowDown moves focus to the same field on the next row within a day", async () => {
+    it("ArrowDown moves focus to the same week's cell on the next row within a day", async () => {
       const user = userEvent.setup();
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      await user.click(screen.getByTestId("cell-sets-900"));
+      await user.click(screen.getByTestId("cell-text-900"));
       await user.keyboard("{ArrowDown}");
-      expect(screen.getByTestId("cell-sets-1000")).toHaveFocus();
+      expect(screen.getByTestId("cell-text-1000")).toHaveFocus();
     });
 
     it("ArrowDown crosses a day-table boundary (last row of day 1 -> first row of day 2)", async () => {
       const user = userEvent.setup();
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      await user.click(screen.getByTestId("cell-load-1000"));
+      await user.click(screen.getByTestId("cell-text-1001"));
       await user.keyboard("{ArrowDown}");
-      expect(screen.getByTestId("cell-load-1100")).toHaveFocus();
+      expect(screen.getByTestId("cell-text-1101")).toHaveFocus();
     });
 
     it("ArrowUp mirrors ArrowDown, crossing day boundaries upward", async () => {
       const user = userEvent.setup();
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      await user.click(screen.getByTestId("cell-rpe-1100"));
+      await user.click(screen.getByTestId("cell-text-1100"));
       await user.keyboard("{ArrowUp}");
-      expect(screen.getByTestId("cell-rpe-1000")).toHaveFocus();
+      expect(screen.getByTestId("cell-text-1000")).toHaveFocus();
     });
   });
 
-  describe("ArrowRight / ArrowLeft move fields only at caret extremes, crossing weeks and the name column", () => {
-    it("ArrowRight at the end of the text moves to the next field within the same week", () => {
+  describe("ArrowRight / ArrowLeft move cells only at caret extremes, crossing weeks and the name column", () => {
+    it("ArrowRight at the end of the text moves to the next week's cell", () => {
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
-      setsInput.focus();
-      setsInput.setSelectionRange(setsInput.value.length, setsInput.value.length);
-      fireEvent.keyDown(setsInput, { key: "ArrowRight" });
-      expect(screen.getByTestId("cell-reps-900")).toHaveFocus();
+      const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
+      textInput.focus();
+      textInput.setSelectionRange(textInput.value.length, textInput.value.length);
+      fireEvent.keyDown(textInput, { key: "ArrowRight" });
+      expect(screen.getByTestId("cell-text-901")).toHaveFocus();
     });
 
-    it("ArrowLeft at the start of the text moves to the previous field within the same week", () => {
+    it("ArrowLeft at the start of the text moves back to the previous week's cell", () => {
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      const repsInput = screen.getByTestId("cell-reps-900") as HTMLInputElement;
-      repsInput.focus();
-      repsInput.setSelectionRange(0, 0);
-      fireEvent.keyDown(repsInput, { key: "ArrowLeft" });
-      expect(screen.getByTestId("cell-sets-900")).toHaveFocus();
+      const textInput = screen.getByTestId("cell-text-901") as HTMLInputElement;
+      textInput.focus();
+      textInput.setSelectionRange(0, 0);
+      fireEvent.keyDown(textInput, { key: "ArrowLeft" });
+      expect(screen.getByTestId("cell-text-900")).toHaveFocus();
     });
 
-    it("ArrowRight at the last field of week 1 crosses into week 2's first field", () => {
-      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      const noteInput = screen.getByTestId("cell-note-900") as HTMLInputElement;
-      noteInput.focus();
-      noteInput.setSelectionRange(noteInput.value.length, noteInput.value.length);
-      fireEvent.keyDown(noteInput, { key: "ArrowRight" });
-      expect(screen.getByTestId("cell-sets-901")).toHaveFocus();
-    });
-
-    it("ArrowRight at the end of the name column moves into week 1's sets field", () => {
+    it("ArrowRight at the end of the name column moves into week 1's text cell", () => {
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       const nameInput = screen.getByTestId("row-name-9") as HTMLInputElement;
       nameInput.focus();
       nameInput.setSelectionRange(nameInput.value.length, nameInput.value.length);
       fireEvent.keyDown(nameInput, { key: "ArrowRight" });
-      expect(screen.getByTestId("cell-sets-900")).toHaveFocus();
+      expect(screen.getByTestId("cell-text-900")).toHaveFocus();
     });
 
-    it("ArrowLeft at the start of week 1's sets field moves back to the name column", () => {
+    it("ArrowLeft at the start of week 1's text cell moves back to the name column", () => {
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
-      setsInput.focus();
-      setsInput.setSelectionRange(0, 0);
-      fireEvent.keyDown(setsInput, { key: "ArrowLeft" });
+      const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
+      textInput.focus();
+      textInput.setSelectionRange(0, 0);
+      fireEvent.keyDown(textInput, { key: "ArrowLeft" });
       expect(screen.getByTestId("row-name-9")).toHaveFocus();
     });
   });
@@ -1198,53 +956,51 @@ describe("keyboard grid navigation", () => {
       const user = userEvent.setup();
       const onPatchCell = vi.fn();
       render(<MesoTable {...baseProps({ grid: NAV_GRID, onPatchCell })} />);
-      const loadInput = screen.getByTestId("cell-load-900");
-      await user.click(loadInput);
+      const textInput = screen.getByTestId("cell-text-900");
+      await user.click(textInput);
       await user.keyboard("{Enter}"); // clean cell: no-op (existing dirty gate)
       expect(onPatchCell).not.toHaveBeenCalled();
-      await user.clear(loadInput);
-      await user.type(loadInput, "150");
+      await user.clear(textInput);
+      await user.type(textInput, "4 x 6");
       await user.keyboard("{Enter}");
-      expect(onPatchCell).toHaveBeenCalledWith(900, { load: "150" });
+      expect(onPatchCell).toHaveBeenCalledWith(900, { text: "4 x 6" });
       expect(onPatchCell).toHaveBeenCalledTimes(1);
-      expect(loadInput).toHaveFocus();
+      expect(textInput).toHaveFocus();
     });
 
-    it("Escape reverts only the focused field's draft, leaving a second dirty field on the same cell untouched", () => {
-      // A per-cell dirty Set (not a per-row boolean) needs per-field removal
-      // — revertField (MesoTable.tsx) is the new code under test here.
-      // fireEvent.change without a prior real .focus() dirties "load"
-      // without giving it real DOM focus, so focusing "sets" next doesn't
-      // trigger a real blur-commit of "load" and contaminate the assertion.
+    it("Escape reverts only the focused cell's draft, leaving a different dirty cell untouched", () => {
+      // fireEvent.change without a prior real .focus() dirties week 2's cell
+      // without giving it real DOM focus, so focusing week 1's next doesn't
+      // trigger a real blur-commit of week 2 and contaminate the assertion.
       const onPatchCell = vi.fn();
       render(<MesoTable {...baseProps({ grid: NAV_GRID, onPatchCell })} />);
-      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
-      const loadInput = screen.getByTestId("cell-load-900") as HTMLInputElement;
+      const w1Input = screen.getByTestId("cell-text-900") as HTMLInputElement;
+      const w2Input = screen.getByTestId("cell-text-901") as HTMLInputElement;
 
-      fireEvent.change(loadInput, { target: { value: "150" } });
+      fireEvent.change(w2Input, { target: { value: "5 x 5" } });
 
-      setsInput.focus();
-      fireEvent.change(setsInput, { target: { value: "9" } });
-      fireEvent.keyDown(setsInput, { key: "Escape" });
+      w1Input.focus();
+      fireEvent.change(w1Input, { target: { value: "9 x 9" } });
+      fireEvent.keyDown(w1Input, { key: "Escape" });
 
-      expect(setsInput).toHaveValue("3"); // reverted to the original cell value
-      expect(loadInput).toHaveValue("150"); // untouched dirty draft survives
+      expect(w1Input).toHaveValue("3 x 5, RPE 8, 100"); // reverted to the original cell value
+      expect(w2Input).toHaveValue("5 x 5"); // untouched dirty draft survives
 
-      fireEvent.blur(setsInput); // commits whatever's still dirty on this cell
-      expect(onPatchCell).toHaveBeenCalledWith(900, { load: "150" });
-      expect(onPatchCell).not.toHaveBeenCalledWith(900, expect.objectContaining({ sets: expect.anything() }));
+      fireEvent.blur(w2Input); // commits whatever's still dirty on that cell
+      expect(onPatchCell).toHaveBeenCalledWith(901, { text: "5 x 5" });
+      expect(onPatchCell).not.toHaveBeenCalledWith(900, expect.anything());
     });
 
-    it("Escape keeps focus on the field and suppresses its next blur-commit", () => {
+    it("Escape keeps focus on the cell and suppresses its next blur-commit", () => {
       const onPatchCell = vi.fn();
       render(<MesoTable {...baseProps({ grid: NAV_GRID, onPatchCell })} />);
-      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
-      setsInput.focus();
-      fireEvent.change(setsInput, { target: { value: "9" } });
-      fireEvent.keyDown(setsInput, { key: "Escape" });
-      expect(setsInput).toHaveValue("3");
-      expect(setsInput).toHaveFocus();
-      fireEvent.blur(setsInput);
+      const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
+      textInput.focus();
+      fireEvent.change(textInput, { target: { value: "9 x 9" } });
+      fireEvent.keyDown(textInput, { key: "Escape" });
+      expect(textInput).toHaveValue("3 x 5, RPE 8, 100");
+      expect(textInput).toHaveFocus();
+      fireEvent.blur(textInput);
       expect(onPatchCell).not.toHaveBeenCalled();
     });
   });
@@ -1259,8 +1015,8 @@ describe("keyboard grid navigation", () => {
           })}
         />,
       );
-      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
-      setsInput.focus();
+      const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
+      textInput.focus();
 
       // Simulates the coach clicking Undo — real DOM focus moves to the
       // (data-grid-restore-marked) button before the refetch resolves.
@@ -1277,21 +1033,21 @@ describe("keyboard grid navigation", () => {
         />,
       );
 
-      expect(screen.getByTestId("cell-sets-900")).toHaveFocus();
+      expect(screen.getByTestId("cell-text-900")).toHaveFocus();
     });
 
-    it("clicking the unmarked load-type toggle across a grid identity change does NOT steal focus", () => {
+    it("focusing an unmarked control (the skip button) across a grid identity change does NOT steal focus", () => {
       const { rerender } = render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
-      const setsInput = screen.getByTestId("cell-sets-900") as HTMLInputElement;
-      setsInput.focus();
+      const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
+      textInput.focus();
 
-      const toggle = screen.getByTestId("cell-loadtype-900") as HTMLButtonElement;
-      toggle.focus(); // the load-type toggle is intentionally NOT data-grid-restore
+      const skipButton = screen.getByTestId("cell-skip-900") as HTMLButtonElement;
+      skipButton.focus(); // the skip button is intentionally NOT data-grid-restore
 
       const NEXT_GRID = grid({ weeks: NAV_GRID.weeks, days: NAV_GRID.days });
       rerender(<MesoTable {...baseProps({ grid: NEXT_GRID })} />);
 
-      expect(toggle).toHaveFocus();
+      expect(skipButton).toHaveFocus();
     });
   });
 });
@@ -1304,7 +1060,7 @@ describe("keyboard grid navigation", () => {
 // MesoTable render (a skipped cell is display-only real-app coverage the
 // hook's own unit tests, mounting bare DOM nodes, can't provide).
 describe("keyboard grid navigation: skidding over a skipped cell (issue #455 review nit)", () => {
-  it("ArrowRight from the prior week's note field skips an entire skipped-week cell and lands on the following week's sets input", () => {
+  it("ArrowRight from the prior week's cell skips an entire skipped-week cell and lands on the following week's text input", () => {
     const SKIP_GRID = grid({
       weeks: [
         week({ id: 1, label: "Wk 1", current: true }),
@@ -1333,16 +1089,16 @@ describe("keyboard grid navigation: skidding over a skipped cell (issue #455 rev
 
     // Sanity: week 2 really is the skipped em-dash display, not an input.
     expect(screen.getByTestId("cell-skipped-901")).toHaveTextContent("—");
-    expect(screen.queryByTestId("cell-sets-901")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cell-text-901")).not.toBeInTheDocument();
 
-    const noteInput = screen.getByTestId("cell-note-900") as HTMLInputElement;
-    noteInput.focus();
-    noteInput.setSelectionRange(noteInput.value.length, noteInput.value.length);
-    fireEvent.keyDown(noteInput, { key: "ArrowRight" });
+    const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
+    textInput.focus();
+    textInput.setSelectionRange(textInput.value.length, textInput.value.length);
+    fireEvent.keyDown(textInput, { key: "ArrowRight" });
 
-    expect(screen.getByTestId("cell-sets-902")).toHaveFocus();
-    expect(screen.getByTestId("cell-sets-902")).toHaveAttribute("tabindex", "0");
-    expect(screen.getByTestId("cell-note-900")).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByTestId("cell-text-902")).toHaveFocus();
+    expect(screen.getByTestId("cell-text-902")).toHaveAttribute("tabindex", "0");
+    expect(screen.getByTestId("cell-text-900")).toHaveAttribute("tabindex", "-1");
   });
 });
 

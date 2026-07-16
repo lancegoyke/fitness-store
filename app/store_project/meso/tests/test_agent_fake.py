@@ -177,14 +177,16 @@ class TestFakeDemoClientPropose:
                         "id": 1,
                         "name": "Lower",
                         "exercises": [
-                            {"id": 11, "name": "Back Squat", "load": "100"},
-                            {"id": 12, "name": "Leg Press", "load": "110"},
+                            {"id": 11, "name": "Back Squat", "text": "3 x 8, 100"},
+                            {"id": 12, "name": "Leg Press", "text": "3 x 10, 110"},
                         ],
                     },
                     {
                         "id": 2,
                         "name": "Upper",
-                        "exercises": [{"id": 21, "name": "Bench Press", "sets": "4"}],
+                        "exercises": [
+                            {"id": 21, "name": "Bench Press", "text": "4 x 5"}
+                        ],
                     },
                 ]
             }
@@ -236,8 +238,8 @@ class TestFakeDemoClientPropose:
                         "id": 2,
                         "name": "Upper",
                         "exercises": [
-                            {"id": 21, "name": "Bench Press", "sets": "4"},
-                            {"id": 22, "name": "Seated Row", "sets": "2"},
+                            {"id": 21, "name": "Bench Press", "text": "4 x 5"},
+                            {"id": 22, "name": "Seated Row", "text": "2 x 12"},
                         ],
                     },
                 ]
@@ -253,9 +255,9 @@ class TestFakeDemoClientPropose:
         assert volume["before"] == "2 sets"
 
     def test_abs_progression_stays_a_bare_number(self):
-        # ``apply`` writes new_load verbatim into the load column, where every
-        # existing row is unitless — a "kg" suffix would be the one odd cell in
-        # the on-camera designer grid.
+        # ``apply`` recomposes new_load into the cell's text, where every
+        # existing cell's load token is unitless — a "kg" suffix would be the
+        # one odd cell in the on-camera designer grid.
         context = {
             "plan": {
                 "program": [
@@ -264,7 +266,7 @@ class TestFakeDemoClientPropose:
                         "name": "Lower",
                         "exercises": [
                             {"id": 11, "name": "Hip Thrust"},
-                            {"id": 12, "name": "Leg Press", "load": "110"},
+                            {"id": 12, "name": "Leg Press", "text": "3 x 10, 110"},
                         ],
                     }
                 ]

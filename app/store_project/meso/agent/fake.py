@@ -15,7 +15,7 @@ camera. No randomness, no network, no ``anthropic`` import.
 
 import re
 
-from ..models import LoadType
+from ..parsing import parse_prescription
 from .validation import _singular
 
 # Candidate swap targets, roughly ordered by how often they're a safe alternative
@@ -132,44 +132,43 @@ def _pick_trim_row(rows, swap_session, used_ids):
     ``new_sets`` derived from one row would silently *increase* any row that
     trains fewer sets (``apply._apply_volume`` writes the same count to every
     row in a session). Wants a row not already edited by the swap/progress,
-    with a parseable count of 2+; rows outside the swap's day are preferred so
-    the batch visibly spans the week.
+    with a parseable count of 2+ (text-first: sets come from parsing the
+    freeform cell); rows outside the swap's day are preferred so the batch
+    visibly spans the week.
     """
     ordered = [r for r in rows if r[0].get("id") != swap_session.get("id")]
     ordered += [r for r in rows if r[0].get("id") == swap_session.get("id")]
     for session, exercise in ordered:
         if exercise.get("id") in used_ids:
             continue
-        try:
-            current = int((exercise.get("sets") or "").strip())
-        except ValueError:
-            continue
-        if current >= 2:
+        parsed = parse_prescription(exercise.get("text") or "") or {}
+        current = parsed.get("sets")
+        if current is not None and current >= 2:
             return session, exercise, current
     return None
 
 
-def _bump_load(load_type, current_load):
-    """A small, defensible progression on ``current_load``, respecting its type.
+def _bump_load(current_load):
+    """A small, defensible progression on ``current_load``, respecting its notation.
 
-    A ``pct`` row is a bare percentage of 1RM — bumped by a couple of points and
-    capped near 100; an ``abs`` row is a plate-loadable weight — bumped by 2.5.
-    Both stay **bare numbers**: ``apply`` writes ``new_load`` verbatim into the
-    prescription's ``load`` column, and every existing row stores loads unitless
-    (the unit lives on the plan) — a suffixed "62.5 kg" would render as the one
-    inconsistent cell in the designer grid. Falls back to a sane default when the
-    current value isn't a plain number (e.g. "BW"), so the demo never emits an
-    unparsable load.
+    ``current_load`` is the parsed load token off the row's freeform text
+    (Phase 2a) — a ``NN%`` token is a percentage of 1RM, bumped by a couple of
+    points and capped near 100 (suffix kept); a bare number is a plate-loadable
+    weight, bumped by 2.5 (kept unitless, matching the cells' own notation).
+    Falls back to a sane default when there's no numeric load to bump (e.g.
+    "BW" or a load-less cell), so the demo never emits an unparsable load.
     """
-    if load_type == LoadType.PERCENT:
+    load = (current_load or "").strip()
+    if load.endswith("%"):
         try:
-            current = float((current_load or "").rstrip("%").strip())
+            current = float(load.rstrip("%").strip())
         except ValueError:
-            return "80"
+            return "80%"
         bumped = min(current + 2, 100)
-        return str(int(bumped)) if bumped == int(bumped) else str(bumped)
+        num = str(int(bumped)) if bumped == int(bumped) else str(bumped)
+        return f"{num}%"
     try:
-        current = float((current_load or "").strip())
+        current = float(load)
     except ValueError:
         return "62.5"
     bumped = current + 2.5
@@ -232,20 +231,19 @@ class FakeDemoClient:
         if progress_row is not None:
             _, progress_exercise = progress_row
             progress_name = progress_exercise.get("name") or "Exercise"
-            load_type = progress_exercise.get("load_type") or LoadType.ABSOLUTE
-            current_load = progress_exercise.get("load") or ""
-            new_load = _bump_load(load_type, current_load)
-            suffix = "%" if load_type == LoadType.PERCENT else ""
+            parsed = parse_prescription(progress_exercise.get("text") or "") or {}
+            current_load = parsed.get("load") or ""
+            new_load = _bump_load(current_load)
             changes.append(
                 {
                     "kind": "progress",
                     "prescription_id": progress_exercise.get("id"),
-                    "title": f"{progress_name} → {new_load}{suffix}",
+                    "title": f"{progress_name} → {new_load}",
                     # before/after are display-only, but the review card renders
                     # its strikethrough → arrow row unconditionally — leaving
                     # them empty shows a dangling arrow on camera.
-                    "before": f"{current_load}{suffix}" if current_load else "",
-                    "after": f"{new_load}{suffix}",
+                    "before": current_load,
+                    "after": new_load,
                     "rationale": (
                         "A small, defensible step up from loads already handled "
                         "comfortably the last couple of sessions."

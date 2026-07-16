@@ -155,7 +155,7 @@ class TestResultsAccess:
         assert resp.status_code == 200
         body = resp.content.decode()
         assert "Not logged yet" in body
-        assert "3×6 @ 70 kg · RPE 7" in body  # the prescribed target still shows
+        assert "3 x 6, RPE 7, 70" in body  # the prescribed target still shows
 
 
 class TestResultsBareRedirect:
@@ -205,7 +205,7 @@ class TestSessionResultsPresenter:
         assert ctx["athlete"]["name"] == "Maya Okonkwo"
         assert ctx["plan_id"] == s.plan.pk
         rows = {r["name"]: r for r in ctx["rows"]}
-        assert rows["Box Squat"]["target"] == "3×6 @ 70 kg · RPE 7"
+        assert rows["Box Squat"]["target"] == "3 x 6, RPE 7, 70"
         assert rows["Box Squat"]["logged"] == "3×6 @ 70 kg"
         assert rows["Box Squat"]["rpe"] == "9"  # the hardest set
         assert rows["Box Squat"]["rpe_state"] == "over"
@@ -269,7 +269,7 @@ class TestSessionResultsPresenter:
         rows = {r["name"]: r for r in ctx["rows"]}
         assert rows["Box Squat"]["logged"] == "—"
         # Targets still render so the coach sees what was prescribed.
-        assert rows["Box Squat"]["target"] == "3×6 @ 70 kg · RPE 7"
+        assert rows["Box Squat"]["target"] == "3 x 6, RPE 7, 70"
 
     def test_load_range_when_loads_vary(self):
         s = seed()
@@ -293,8 +293,8 @@ class TestSessionResultsPresenter:
         """An "AMRAP"-style set cell can't divide by zero — it falls back to logged."""
         s = seed()
         s.rdl.delete()
-        s.squat.sets = "AMRAP"
-        s.squat.save(update_fields=["sets"])
+        s.squat.text = "AMRAP"
+        s.squat.save(update_fields=["text"])
         log_session(s, squat_sets=[("8", "70", "8"), ("6", "70", "9")])
         # Without the fallback this session would read 0% (0 prescribed sets).
         assert session_results(s.session)["summary"]["completion"] == 100

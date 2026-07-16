@@ -18,7 +18,6 @@ from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import PrescriptionFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachSubscription
-from store_project.meso.models import LoadType
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
 from store_project.users.factories import UserFactory
@@ -425,22 +424,23 @@ class TestApplyPayload:
 
 
 def make_percent_plan():
-    """A plan whose single prescription is prescribed as a %1RM (S2 Phase 2a)."""
+    """A plan whose single cell prescribes a %1RM load (text ends in '%')."""
     plan, session, presc = make_plan()
-    presc.load = "75"
-    presc.load_type = LoadType.PERCENT
-    presc.save(update_fields=["load", "load_type"])
+    presc.text = "3 x 10, RPE 7, 75%"
+    presc.save(update_fields=["text"])
     return plan, session, presc
 
 
 class TestPercentProgressBound:
-    """A ``progress`` on a %1RM-typed lift moves a PERCENTAGE (S2 Phase 2a).
+    """A ``progress`` on a %-loaded lift moves a PERCENTAGE (Phase 2a).
 
-    The agent is type-agnostic (it treats ``load`` as an opaque string), so this
-    deterministic backstop keeps a %1RM progression in a sane percent band —
-    stopping the model from turning "75%" into an absolute "180" — and normalizes
-    the stored value to a bare number so the ``%`` suffix isn't doubled. The
-    absolute path is deliberately left unbounded.
+    "Percent-typed" is derived from the target cell's parsed text (its load
+    token ends in ``%``), not a stored enum. The agent is type-agnostic (it
+    treats ``load`` as an opaque string), so this deterministic backstop keeps
+    a %1RM progression in a sane percent band — stopping the model from turning
+    "75%" into an absolute "180" — and normalizes the value to ``NN%`` so the
+    recomposed cell text keeps its percent notation. The absolute path is
+    deliberately left unbounded.
     """
 
     def test_accepts_a_sane_percent(self):
@@ -450,18 +450,18 @@ class TestPercentProgressBound:
             plan,
         )
         assert errors == []
-        assert cleaned["payload"] == {"load": "82"}
+        assert cleaned["payload"] == {"load": "82%"}
 
-    def test_strips_a_percent_sign(self):
-        # The model may echo the '%'; the stored load is normalized to a bare
-        # percent so the designer's suffix isn't doubled.
+    def test_normalizes_a_spaced_percent_sign(self):
+        # The model may echo the '%' with stray spacing; the payload is
+        # normalized to a clean 'NN%' so the recomposed text keeps one suffix.
         plan, _, presc = make_percent_plan()
         cleaned, errors = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="82.5 %"),
             plan,
         )
         assert errors == []
-        assert cleaned["payload"] == {"load": "82.5"}
+        assert cleaned["payload"] == {"load": "82.5%"}
 
     def test_rejects_a_unit_suffixed_load(self):
         # A unit on a %1RM lift is the model converting it to an absolute weight;
@@ -504,7 +504,7 @@ class TestPercentProgressBound:
             plan,
         )
         assert errors == []
-        assert cleaned["payload"] == {"load": "105"}
+        assert cleaned["payload"] == {"load": "105%"}
 
     def test_absolute_progress_is_not_bounded(self):
         # Regression guard: the bound is %1RM-only. An absolute lift can carry a
@@ -519,14 +519,14 @@ class TestPercentProgressBound:
 
 
 class TestPercentAwarePrompt:
-    """The prompt is what teaches the type-agnostic model about %1RM (S2 Phase 2a).
+    """The prompt is what teaches the type-agnostic model about %1RM (Phase 2a).
 
-    A ``load_type`` of ``pct`` means the load is a percent of 1RM; the system
+    A cell's load token ending in ``%`` means a percent of 1RM; the system
     prompt and the ``new_load`` tool field must say so.
     """
 
-    def test_system_prompt_explains_load_type(self):
-        assert "load_type" in client.SYSTEM_PROMPT
+    def test_system_prompt_explains_percent_loads(self):
+        assert "%" in client.SYSTEM_PROMPT
         assert "1RM" in client.SYSTEM_PROMPT
 
     def test_new_load_tool_field_mentions_percent(self):

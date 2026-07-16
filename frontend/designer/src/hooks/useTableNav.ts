@@ -48,21 +48,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FocusEvent, KeyboardEvent } from "react";
 import type { MesoGrid } from "../lib/api";
 
-export type TableColumn = "name" | "sets" | "reps" | "load" | "rpe" | "rest" | "note";
+export type TableColumn = "name" | "text";
 
 /** Editable per-cell fields, visual order (excludes "name" — that's the
- * leading row-identity column, not a per-week field). */
-export const TABLE_FIELDS = ["sets", "reps", "load", "rpe", "rest", "note"] as const;
+ * leading row-identity column, not a per-week field). Phase 2a collapsed the
+ * six structured fields (sets/reps/load/rpe/rest/note) to ONE freeform text
+ * input per (row, week) — sub-line inputs and the per-row Tempo/Notes/Rest
+ * columns are deliberately outside arrow-nav this phase. */
+export const TABLE_FIELDS = ["text"] as const;
 export type EditableField = (typeof TABLE_FIELDS)[number];
 
 export const TABLE_FIELD_LABELS: Record<TableColumn, string> = {
   name: "exercise name",
-  sets: "sets",
-  reps: "reps",
-  load: "load",
-  rpe: "RPE",
-  rest: "rest",
-  note: "note",
+  text: "prescription",
 };
 
 export interface TableCellId {

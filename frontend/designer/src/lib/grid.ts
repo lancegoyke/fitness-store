@@ -10,19 +10,9 @@ export function numeric(v: unknown): boolean {
   return s !== "" && /^[0-9.]+$/.test(s);
 }
 
-/**
- * The Load cell's suffix: "%" for a %1RM row, `unit` for an absolute (or
- * typeless) numeric load, nothing for a non-numeric load ("BW"). The
- * original read `this.unit`; ported as an explicit argument since this is
- * no longer a component method.
- */
-export function loadSuffix(
-  ex: Pick<Exercise, "load" | "load_type"> | null | undefined,
-  unit: string,
-): string {
-  if (!numeric(ex && ex.load)) return "";
-  return ex?.load_type === "pct" ? "%" : unit;
-}
+// `loadSuffix` retired in Phase 2a (text-first cells): there's no typed
+// `load`/`load_type` pair left to suffix — a "%"" or a unit lives inside the
+// freeform prescription text itself.
 
 /** Bar height for the block-view timeline chart, clamped to a 6px floor. */
 export function barH(pct: number, track: number): string {
@@ -82,10 +72,9 @@ export function cellStyle(
  * live session (`session_ids` omits the week — a per-week session delete)
  * is omitted entirely: the athlete won't see that session, so neither
  * should the preview (the retired `serialize_plan` filtered on the open
- * week's live sessions the same way). The resolved exercise name is
- * `cell.swap_display || row.name` — the same
- * one-week-swap-overrides-block-identity rule `Prescription.name`'s
- * resolving property applies server-side (models.py).
+ * week's live sessions the same way). The exercise name is just `row.name`
+ * now — Phase 2a retired the one-week swap fields, so there's no per-cell
+ * display name left to override the block identity.
  */
 export function gridToProgram(grid: MesoGrid, weekId?: number | string): Day[] {
   const week =
@@ -105,19 +94,16 @@ export function gridToProgram(grid: MesoGrid, weekId?: number | string): Day[] {
       if (!cell) continue;
       exercises.push({
         id: cell.prescription_id,
-        name: cell.swap_display || row.name,
-        sets: cell.sets,
-        reps: cell.reps,
-        load: cell.load,
-        load_type: cell.load_type,
-        rpe: cell.rpe,
-        note: cell.note,
+        name: row.name,
+        text: cell.text,
+        lines: cell.lines,
+        tempo: row.tempo,
+        rest: row.rest,
+        note: row.note,
         tag: typeof row.tags[0] === "string" ? row.tags[0] : undefined,
         skipped: cell.skipped,
         adj: cell.adj ?? null,
         adjusts: cell.adjusts ?? [],
-        one_rm: cell.one_rm,
-        one_rm_source: cell.one_rm_source,
       });
     }
     days.push({

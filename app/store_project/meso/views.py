@@ -71,7 +71,6 @@ from .models import CoachSubscription
 from .models import ExerciseSlot
 from .models import GroupMembership
 from .models import InvalidTransition
-from .models import LoadType
 from .models import LoggedSet
 from .models import Mesocycle
 from .models import MesoGroup
@@ -2294,18 +2293,27 @@ def invite_claim(request, token):
 # "non-owner POST → 403"). Children (prescription, session) must belong to that
 # plan, or it's a 404.
 
-# Free-form text cells the grid edits, mapped to their model ``max_length``.
-# ``name``/``exercise`` are NOT here (P0 fixed-lineup cutover): a cell's name
-# resolves from its ``ExerciseSlot`` (block-wide identity) or a one-week
-# ``swap_name`` — neither is writable through this per-cell numbers patch.
+# The one freeform cell field the grid edits (text-first, Phase 2a), with a
+# sanity cap — the model column is unbounded ``TextField``, but a cell is a
+# spreadsheet cell, not a document. ``name``/``exercise`` are NOT here (P0
+# fixed-lineup cutover): a row's name is its ``ExerciseSlot``'s (block-wide
+# identity), handled by ``prescription_patch``'s own ``name`` branch.
 PATCHABLE_FIELDS = {
-    "sets": 32,
-    "reps": 32,
-    "load": 32,
-    "rpe": 32,
-    "rest": 32,
-    "note": 255,
+    "text": 2000,
 }
+
+# Per-EXERCISE row columns (Phase 2a, D2) writable via ``exercise_slot_patch``,
+# mapped to a length cap (``note`` is a TextField; same spreadsheet-cell cap
+# rationale as ``text`` above).
+SLOT_PATCHABLE_FIELDS = {
+    "tempo": 64,
+    "rest": 64,
+    "note": 2000,
+}
+
+# Sub-line stacks are short (an RPE row, a cue or two, logged deviations) —
+# cap the line index so a buggy client can't fabricate a huge stack.
+MAX_CELL_LINE = 20
 
 
 def _coach_plan_or_forbidden(request, plan_id):
@@ -2439,22 +2447,10 @@ def prescription_patch(request, plan_id, pk):
             return HttpResponseBadRequest(f"{field} is too long.")
         updates[field] = value
 
-    # ``load_type`` is an enum, not free text: validate against the whitelist so a
-    # bad value is a 400 (and nothing is persisted), not a stored garbage choice.
-    if "load_type" in payload:
-        load_type = payload["load_type"]
-        if load_type not in LoadType.values:
-            return HttpResponseBadRequest("Invalid load_type.")
-        updates["load_type"] = load_type
-
-    # ``name`` is identity. The row renders the cell's EFFECTIVE name (a one-week
-    # swap, else the block-shared slot's), and the React client echoes it on every
-    # blur — even for a sets/load edit — so treat it as an edit only when it
-    # actually differs from the current effective name. A real rename of a SWAPPED
-    # cell retargets that week's swap; of a normal cell, the block-shared
-    # ``ExerciseSlot`` (the fixed-lineup rename, keeping the P0 designer's inline
-    # name autosave working). This guard is what stops a swapped cell's routine
-    # autosave from renaming the base row for the whole block.
+    # ``name`` is identity — the block-shared ``ExerciseSlot``'s (P0 fixed
+    # lineup; the one-week swap fields are gone, Phase 2a — a substitution is
+    # sub-line text now). The React client echoes the name on every blur, so
+    # treat it as an edit only when it actually differs.
     name_edit = None
     if "name" in payload:
         value = payload["name"]
@@ -2473,15 +2469,8 @@ def prescription_patch(request, plan_id, pk):
                     setattr(cell, field, value)
                 cell.save(update_fields=list(updates))
             if name_edit is not None:
-                if cell.swap_name or cell.swap_exercise_id:
-                    # Editing the shown name of a swapped week edits that week's
-                    # swap only — never the block-shared slot.
-                    cell.swap_name = name_edit
-                    cell.swap_exercise = None
-                    cell.save(update_fields=["swap_name", "swap_exercise"])
-                else:
-                    cell.exercise_slot.name = name_edit
-                    cell.exercise_slot.save(update_fields=["name"])
+                cell.exercise_slot.name = name_edit
+                cell.exercise_slot.save(update_fields=["name"])
             _touch_plan(plan)
     # Row-level reply + refreshed history: this endpoint records an undo action
     # but doesn't re-serialize the plan, so without `history` the client's undo
@@ -2546,12 +2535,11 @@ def _new_block_wide_row(session, *, week_id_only=None):
         mesocycle=session.week.mesocycle, deleted_at__isnull=True
     ):
         skipped = week_id_only is not None and week.pk != week_id_only
+        # A new row's cells start BLANK (Phase 2a): spreadsheet parity — the
+        # coach types whatever notation they use, no seeded numbers.
         cells_by_week[week.pk] = Prescription.objects.create(
             exercise_slot=exercise_slot,
             week=week,
-            sets="3",
-            reps="10",
-            rpe="7",
             skipped=skipped,
         )
     return exercise_slot, cells_by_week
@@ -2696,9 +2684,8 @@ def session_add(request, plan_id):
             session_slot=slot, name="New exercise", order=0
         )
         for w in live_weeks:
-            Prescription.objects.create(
-                exercise_slot=exercise_slot, week=w, sets="3", reps="10", rpe="7"
-            )
+            # Blank starter cell (Phase 2a) — see ``_new_block_wide_row``.
+            Prescription.objects.create(exercise_slot=exercise_slot, week=w)
         _touch_plan(plan)
     # Row-level reply + refreshed history (see prescription_patch).
     return JsonResponse(
@@ -3513,77 +3500,159 @@ def prescription_skip(request, plan_id, pk):
 
 @login_required
 @require_POST
-def prescription_swap(request, plan_id, pk):
-    """Set or clear a cell's one-week free-text swap (P2 exceptions, issue #440).
+def cell_line_write(request, plan_id, slot_id):
+    """Upsert one freeform (week × line) cell of an exercise row (Phase 2a).
 
-    Body ``{"swap_name": "<str>"}`` sets a free-text substitute for just this
-    week (``.strip()``-ed; blank after stripping clears, same as
-    ``{"clear": true}``); over 255 chars is a 400. ``{"clear": true}`` clears
-    it outright. Either way ``swap_exercise`` is cleared — a catalog-linked
-    swap (``swap_exercise_id``) is a DEFERRED follow-up, not this endpoint.
+    The sub-line write path (plan §2.3/§2.6): a row's per-week stack is
+    sparse, so the client addresses a cell by ``(exercise_slot, week, line)``
+    rather than pk — the cell may not exist yet. Body
+    ``{"week_id": <int>, "line": <int>, "text": "<str>"}``; the row is
+    ``get_or_create``d and its text set (blank text clears the sub-line in
+    place — spreadsheet semantics, never a delete). ``line`` 0 is allowed
+    (it's just the prescription line, pre-created by every constructive
+    write, so the get half hits). Line > ``MAX_CELL_LINE`` is a 400.
 
-    TODO(P?): support a catalog ``swap_exercise_id`` swap alongside this
-    free-text one.
+    Replaces the retired one-week ``prescription_swap`` endpoint: a
+    substitution is typed into a sub-line now, not stored as a field.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    cell = _cell_or_404(plan, pk)
+    slot = get_object_or_404(
+        ExerciseSlot,
+        pk=slot_id,
+        session_slot__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        session_slot__deleted_at__isnull=True,
+    )
     payload, bad = _json_object_body(request)
     if bad is not None:
         return bad
 
-    clear = payload.get("clear") is True
-    name = ""
-    if not clear:
-        if "swap_name" not in payload:
-            return JsonResponse(
-                {"ok": False, "error": "swap_name or clear is required."}, status=400
-            )
-        raw_name = payload["swap_name"]
-        if not isinstance(raw_name, str):
-            return JsonResponse(
-                {"ok": False, "error": "swap_name must be a string."}, status=400
-            )
-        if len(raw_name) > 255:
-            return JsonResponse(
-                {"ok": False, "error": "swap_name is too long."}, status=400
-            )
-        name = raw_name.strip()
-        if not name:
-            clear = True  # blank after stripping clears, same as {"clear": true}
+    week_id = payload.get("week_id")
+    if not isinstance(week_id, int) or isinstance(week_id, bool):
+        return JsonResponse(
+            {"ok": False, "error": "week_id must be an integer."}, status=400
+        )
+    week = Week.objects.filter(
+        pk=week_id,
+        mesocycle=slot.session_slot.mesocycle,
+        deleted_at__isnull=True,
+    ).first()
+    if week is None:
+        return JsonResponse(
+            {"ok": False, "error": "week_id must be a live week of this block."},
+            status=400,
+        )
+    line = payload.get("line")
+    if not isinstance(line, int) or isinstance(line, bool) or line < 0:
+        return JsonResponse(
+            {"ok": False, "error": "line must be a non-negative integer."}, status=400
+        )
+    if line > MAX_CELL_LINE:
+        return JsonResponse({"ok": False, "error": "line is too large."}, status=400)
+    text = payload.get("text")
+    if not isinstance(text, str):
+        return JsonResponse(
+            {"ok": False, "error": "text must be a string."}, status=400
+        )
+    if len(text) > PATCHABLE_FIELDS["text"]:
+        return JsonResponse({"ok": False, "error": "text is too long."}, status=400)
 
-    # The block-shared slot's name, not ``cell.name`` — that resolves THROUGH
-    # the very swap this label is describing setting/clearing.
-    slot_name = cell.exercise_slot.name
     with transaction.atomic():
-        if clear:
-            record_plan_action(plan, f"Cleared swap on {slot_name}")
-            cell.swap_name = ""
-            cell.swap_exercise = None
-        else:
-            record_plan_action(plan, f"Swapped {slot_name} → {name}")
-            cell.swap_name = name
-            cell.swap_exercise = None
-        cell.save(update_fields=["swap_name", "swap_exercise"])
+        record_plan_action(plan, f"Edited {slot.name or 'exercise'}")
+        cell, _created = Prescription.objects.get_or_create(
+            exercise_slot=slot, week=week, line=line
+        )
+        cell.text = text
+        cell.save(update_fields=["text"])
         _touch_plan(plan)
-    return JsonResponse({"ok": True, "history": serialize_plan_history(plan)})
+    return JsonResponse(
+        {
+            "ok": True,
+            "cell": {
+                "id": cell.pk,
+                "exercise_slot_id": slot.pk,
+                "week_id": week.pk,
+                "line": cell.line,
+                "text": cell.text,
+            },
+            "history": serialize_plan_history(plan),
+        }
+    )
 
 
-# Numeric fields "fill across weeks" copies — mirrors PATCHABLE_FIELDS minus
-# ``load_type`` (an enum, not free text, but still a per-week number setting).
-_FILL_FIELDS = ["sets", "reps", "load", "load_type", "rpe", "rest", "note"]
+@login_required
+@require_POST
+def exercise_slot_patch(request, plan_id, slot_id):
+    """Patch a row's per-exercise columns — Tempo / Rest / instructions (D2).
+
+    These are block-wide row attributes (one value across every week), so they
+    live on the ``ExerciseSlot``, not a cell. Body: any of
+    ``{"tempo", "rest", "note"}`` as strings (see ``SLOT_PATCHABLE_FIELDS``
+    caps). Unknown keys are ignored, matching ``prescription_patch``.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    slot = get_object_or_404(
+        ExerciseSlot,
+        pk=slot_id,
+        session_slot__mesocycle__plan=plan,
+        deleted_at__isnull=True,
+        session_slot__deleted_at__isnull=True,
+    )
+    payload, bad = _json_object_body(request)
+    if bad is not None:
+        return bad
+
+    updates = {}
+    for field, max_length in SLOT_PATCHABLE_FIELDS.items():
+        if field not in payload:
+            continue
+        value = payload[field]
+        if not isinstance(value, str):
+            return JsonResponse(
+                {"ok": False, "error": f"{field} must be a string."}, status=400
+            )
+        if len(value) > max_length:
+            return JsonResponse(
+                {"ok": False, "error": f"{field} is too long."}, status=400
+            )
+        updates[field] = value
+
+    if updates:
+        with transaction.atomic():
+            record_plan_action(plan, f"Edited {slot.name or 'exercise'}")
+            for field, value in updates.items():
+                setattr(slot, field, value)
+            slot.save(update_fields=list(updates))
+            _touch_plan(plan)
+    return JsonResponse(
+        {
+            "ok": True,
+            "row": {
+                "exercise_slot_id": slot.pk,
+                "tempo": slot.tempo,
+                "rest": slot.rest,
+                "note": slot.note,
+            },
+            "history": serialize_plan_history(plan),
+        }
+    )
 
 
 @login_required
 @require_POST
 def prescription_fill(request, plan_id, pk):
-    """Copy a cell's numeric fields to sibling weeks of the same row (P2, #440).
+    """Copy a cell's text stack to sibling weeks of the same row (P2, #440).
 
     Body OPTIONAL ``{"week_ids": [<int>...]}`` — the target weeks; absent or
     empty means every OTHER live week of this cell's ``exercise_slot``. Copies
-    only ``sets/reps/load/load_type/rpe/rest/note`` — never a target's
-    ``skipped``/``swap_*``, which stay whatever one-week exception they were.
+    the row's whole freeform stack for the source week (line 0 + sub-lines,
+    Phase 2a) — never a target's ``skipped``, which stays whatever one-week
+    exception it was. A target week's stale higher sub-lines are blanked in
+    place (spreadsheet semantics), never deleted.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -3603,22 +3672,44 @@ def prescription_fill(request, plan_id, pk):
                 status=400,
             )
 
-    targets = Prescription.objects.filter(
-        exercise_slot_id=cell.exercise_slot_id, week__deleted_at__isnull=True
-    ).exclude(week_id=cell.week_id)
+    target_weeks = Week.objects.filter(
+        mesocycle=cell.exercise_slot.session_slot.mesocycle,
+        deleted_at__isnull=True,
+    ).exclude(pk=cell.week_id)
     if week_ids:
-        targets = targets.filter(week_id__in=week_ids)
-    targets = list(targets)
+        target_weeks = target_weeks.filter(pk__in=week_ids)
+    target_weeks = list(target_weeks)
+
+    source_lines = {
+        c.line: c.text
+        for c in Prescription.objects.filter(
+            exercise_slot_id=cell.exercise_slot_id, week_id=cell.week_id
+        )
+    }
+    max_source_line = max(source_lines) if source_lines else 0
 
     with transaction.atomic():
         record_plan_action(plan, f"Filled {cell.name} across weeks")
-        for target in targets:
-            for field in _FILL_FIELDS:
-                setattr(target, field, getattr(cell, field))
-            target.save(update_fields=_FILL_FIELDS)
+        for week in target_weeks:
+            for line, text in source_lines.items():
+                target, _created = Prescription.objects.get_or_create(
+                    exercise_slot_id=cell.exercise_slot_id, week=week, line=line
+                )
+                if target.text != text:
+                    target.text = text
+                    target.save(update_fields=["text"])
+            Prescription.objects.filter(
+                exercise_slot_id=cell.exercise_slot_id,
+                week=week,
+                line__gt=max_source_line,
+            ).exclude(text="").update(text="")
         _touch_plan(plan)
     return JsonResponse(
-        {"ok": True, "filled": len(targets), "history": serialize_plan_history(plan)}
+        {
+            "ok": True,
+            "filled": len(target_weeks),
+            "history": serialize_plan_history(plan),
+        }
     )
 
 

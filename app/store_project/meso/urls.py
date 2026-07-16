@@ -249,16 +249,25 @@ urlpatterns = [
         views.prescription_move,
         name="api_prescription_move",
     ),
-    # One-week exceptions: skip / swap / fill-across-weeks (P2, issue #440).
+    # Freeform cell writes (Phase 2a): a sub-line upsert addressed by
+    # (exercise_slot, week, line) — the stack is sparse, so no pk — and the
+    # per-exercise Tempo/Rest/instructions columns on the row itself (D2).
+    path(
+        "api/plan/<int:plan_id>/row/<int:slot_id>/cell/",
+        views.cell_line_write,
+        name="api_cell_line_write",
+    ),
+    path(
+        "api/plan/<int:plan_id>/row/<int:slot_id>/",
+        views.exercise_slot_patch,
+        name="api_exercise_slot_patch",
+    ),
+    # One-week exceptions: skip / fill-across-weeks (P2, issue #440). The swap
+    # endpoint is retired (Phase 2a): a substitution is sub-line text now.
     path(
         "api/plan/<int:plan_id>/prescription/<int:pk>/skip/",
         views.prescription_skip,
         name="api_prescription_skip",
-    ),
-    path(
-        "api/plan/<int:plan_id>/prescription/<int:pk>/swap/",
-        views.prescription_swap,
-        name="api_prescription_swap",
     ),
     path(
         "api/plan/<int:plan_id>/prescription/<int:pk>/fill/",

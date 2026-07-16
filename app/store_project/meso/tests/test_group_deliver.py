@@ -174,8 +174,8 @@ class TestSyncDeliveredPlan:
     def test_resolves_override_for_the_member(self):
         group, plan, [m] = seed_group(member_count=1)
         first = shared_prescriptions(plan)[0]
-        first.load = "100"
-        first.save(update_fields=["load"])
+        first.text = "3 x 10, RPE 7, 100"
+        first.save(update_fields=["text"])
         m.set_override(first, load_pct=90, swap_name="Box Squat")
 
         _, member_weeks = m.sync_delivered_plan(shared_meso(plan))
@@ -188,8 +188,19 @@ class TestSyncDeliveredPlan:
             .cells()
             .get(exercise_slot__order=first.exercise_slot.order)
         )
-        assert materialized.name == "Box Squat"
-        assert materialized.load == "90"  # 90% of 100, round-to-2.5
+        # Text-first: the shared text is mirrored verbatim; the swap and the
+        # load adjust land as extra freeform sub-lines, not field rewrites.
+        assert materialized.text == "3 x 10, RPE 7, 100"
+        sub_lines = list(
+            Prescription.objects.filter(
+                exercise_slot=materialized.exercise_slot,
+                week=member_week,
+                line__gte=1,
+            )
+            .order_by("line")
+            .values_list("text", flat=True)
+        )
+        assert sub_lines == ["Box Squat", "90% of prescribed load"]
 
     def test_override_resolves_per_week(self):
         # An override targets one week's *cell*; only that week's materialized row
@@ -199,13 +210,13 @@ class TestSyncDeliveredPlan:
         meso = shared_meso(plan)
         # The same exercise slot in week 1 (current) and week 2.
         wk1_cell = shared_prescriptions(plan)[0]
-        wk1_cell.load = "100"
-        wk1_cell.save(update_fields=["load"])
+        wk1_cell.text = "3 x 10, RPE 7, 100"
+        wk1_cell.save(update_fields=["text"])
         wk2_cell = Prescription.objects.get(
-            exercise_slot=wk1_cell.exercise_slot, week=week2
+            exercise_slot=wk1_cell.exercise_slot, week=week2, line=0
         )
-        wk2_cell.load = "100"
-        wk2_cell.save(update_fields=["load"])
+        wk2_cell.text = "3 x 10, RPE 7, 100"
+        wk2_cell.save(update_fields=["text"])
         # Override only week 2's cell.
         m.set_override(wk2_cell, load_pct=50)
 
@@ -213,23 +224,31 @@ class TestSyncDeliveredPlan:
 
         by_index = {w.index: w for w in member_weeks}
 
-        def cell_for(week):
-            return (
+        def sub_lines_for(week):
+            cell = (
                 week.sessions.get(
                     session_slot__day_number=wk1_cell.exercise_slot.session_slot.day_number
                 )
                 .cells()
                 .get(exercise_slot__order=wk1_cell.exercise_slot.order)
             )
+            return list(
+                Prescription.objects.filter(
+                    exercise_slot=cell.exercise_slot, week=week, line__gte=1
+                )
+                .exclude(text="")
+                .order_by("line")
+                .values_list("text", flat=True)
+            )
 
-        assert cell_for(by_index[1]).load == "100"  # untouched week
-        assert cell_for(by_index[2]).load == "50"  # 50% of 100 on the overridden week
+        assert sub_lines_for(by_index[1]) == []  # untouched week
+        assert sub_lines_for(by_index[2]) == ["50% of prescribed load"]
 
     def test_unadjusted_member_gets_the_shared_base(self):
         group, plan, [adjusted, plain] = seed_group(member_count=2)
         first = shared_prescriptions(plan)[0]
-        first.load = "100"
-        first.save(update_fields=["load"])
+        first.text = "3 x 10, RPE 7, 100"
+        first.save(update_fields=["text"])
         adjusted.set_override(first, load_pct=80)
 
         _, member_weeks = plain.sync_delivered_plan(shared_meso(plan))
@@ -243,7 +262,14 @@ class TestSyncDeliveredPlan:
             .get(exercise_slot__order=first.exercise_slot.order)
         )
         assert row.name == first.name
-        assert row.load == "100"
+        assert row.text == "3 x 10, RPE 7, 100"
+        assert (
+            not Prescription.objects.filter(
+                exercise_slot=row.exercise_slot, week=plain_week, line__gte=1
+            )
+            .exclude(text="")
+            .exists()
+        )
 
     def test_skipped_shared_cell_stays_skipped_for_the_member(self):
         # A week the coach skipped for the shared lineup must not resurface in an
@@ -296,8 +322,8 @@ class TestSyncDeliveredPlan:
     def test_redelivery_propagates_an_override_change(self):
         group, plan, [m] = seed_group(member_count=1)
         first = shared_prescriptions(plan)[0]
-        first.load = "100"
-        first.save(update_fields=["load"])
+        first.text = "3 x 10, RPE 7, 100"
+        first.save(update_fields=["text"])
         meso = shared_meso(plan)
 
         m.sync_delivered_plan(meso)
@@ -312,7 +338,15 @@ class TestSyncDeliveredPlan:
             .cells()
             .get(exercise_slot__order=first.exercise_slot.order)
         )
-        assert row.load == "50"
+        sub_lines = list(
+            Prescription.objects.filter(
+                exercise_slot=row.exercise_slot, week=member_week, line__gte=1
+            )
+            .exclude(text="")
+            .order_by("line")
+            .values_list("text", flat=True)
+        )
+        assert sub_lines == ["50% of prescribed load"]
 
     def test_dropped_shared_prescription_hides_on_member_week(self):
         group, plan, [m] = seed_group(member_count=1)

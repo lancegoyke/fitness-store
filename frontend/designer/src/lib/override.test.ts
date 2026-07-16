@@ -7,14 +7,14 @@ import { overrideDraft, overrideHasExisting, parseOverrideLoadPct } from "./over
 import type { Exercise } from "./api";
 
 // A shared-program row Maya already adjusts (load 90% of a 100kg base) —
-// mirrors meso.test.js's groupRow() fixture.
+// mirrors meso.test.js's groupRow() fixture. Phase 2a: the base cell is one
+// freeform text string; draft fields seed from the member's stored adjust
+// only, blank otherwise.
 function groupRow(overrides: Partial<Exercise> = {}): Exercise {
   return {
     id: 11,
     name: "Back Squat",
-    sets: "3",
-    reps: "10",
-    load: "100",
+    text: "3 x 10, 100",
     adj: "MO -10%",
     adjusts: [
       {

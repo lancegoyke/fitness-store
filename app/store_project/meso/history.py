@@ -43,10 +43,10 @@ class HistoryUnavailable(Exception):
     — this can only fire (for those rows) if something bypassed soft delete
     (e.g. a raw queryset ``.delete()``). A snapshotted ``Prescription`` cell
     pk going missing does NOT raise this — cells are legitimately hard-deleted
-    by ``restore_plan_snapshot``'s own cleanup (see there), so a missing cell
-    is a best-effort no-op write, not an integrity error. The undo/redo
-    endpoints turn this exception into a 409 "History unavailable" and roll
-    back the whole attempt.
+    by ``restore_plan_snapshot``'s own cleanup and recreated by pk on a later
+    restore (see there), so a missing cell is an upsert, not an integrity
+    error. The undo/redo endpoints turn this exception into a 409 "History
+    unavailable" and roll back the whole attempt.
     """
 
 
@@ -122,6 +122,9 @@ def serialize_plan_snapshot(plan):
                 "name": es.name,
                 "order": es.order,
                 "tags": list(es.tags or []),
+                "tempo": es.tempo,
+                "rest": es.rest,
+                "note": es.note,
                 "deleted_at": _iso(es.deleted_at),
             }
             for es in exercise_slots
@@ -140,16 +143,9 @@ def serialize_plan_snapshot(plan):
                 "pk": c.pk,
                 "exercise_slot_id": c.exercise_slot_id,
                 "week_id": c.week_id,
-                "sets": c.sets,
-                "reps": c.reps,
-                "load": c.load,
-                "load_type": c.load_type,
-                "rpe": c.rpe,
-                "rest": c.rest,
-                "note": c.note,
+                "line": c.line,
+                "text": c.text,
                 "skipped": c.skipped,
-                "swap_exercise_id": c.swap_exercise_id,
-                "swap_name": c.swap_name,
             }
             for c in cells
         ],
@@ -191,15 +187,16 @@ def restore_plan_snapshot(plan, snapshot):
     they carry no ``deleted_at`` of their own — a cell is live iff its
     ``ExerciseSlot`` *and* its ``Week`` are both live, so a cell whose slot or
     week was just soft-deleted above is already hidden without touching the
-    cell row itself. A snapshotted cell pk that's gone from the DB is simply
-    left alone (best-effort — see ``HistoryUnavailable``'s docstring). A cell
-    present in the DB now but *absent* from the snapshot is only a problem
-    when its ``ExerciseSlot`` **and** its ``Week`` are both still live in the
-    snapshot being restored (every constructive write path creates a cell
-    together with whichever of the two — slot or week — is new, so this can
-    only arise from a bug/edge case) — such a stray cell is **hard-deleted**,
-    which is safe precisely because it was never reachable as a snapshotted
-    live (slot, week) pairing in the first place.
+    cell row itself. Snapshotted cells are UPSERTED by pk (Phase 2a): a
+    snapshotted pk gone from the DB is recreated with that exact pk — sub-line
+    cells (``line`` >= 1) are created routinely while editing, and undoing
+    past one's creation hard-deletes it via the stray-cell cleanup below, so
+    redo must revive it verbatim. A cell present in the DB now but *absent*
+    from the snapshot is hard-deleted when its ``ExerciseSlot`` **and** its
+    ``Week`` are both still live in the snapshot being restored (that's a
+    sub-line created after the snapshot — undo removes it; also any bug-made
+    stray), which is safe precisely because the pk-upsert makes a later redo
+    able to recreate it.
 
     ``PrescriptionOverride`` rows are reconciled to the snapshot by natural key
     (create missing, update differing, delete extras) — hard delete is fine
@@ -273,6 +270,9 @@ def restore_plan_snapshot(plan, snapshot):
         exercise_slot.name = row["name"]
         exercise_slot.order = row["order"]
         exercise_slot.tags = list(row["tags"] or [])
+        exercise_slot.tempo = row.get("tempo", "")
+        exercise_slot.rest = row.get("rest", "")
+        exercise_slot.note = row.get("note", "")
         exercise_slot.deleted_at = _parse_dt(row["deleted_at"])
         exercise_slot.save()
 
@@ -283,20 +283,21 @@ def restore_plan_snapshot(plan, snapshot):
         session.deleted_at = _parse_dt(row["deleted_at"])
         session.save()
 
-    for cell in models.Prescription.objects.filter(pk__in=cell_pks):
-        row = cell_rows[cell.pk]
+    # Cells are UPSERTED by pk (Phase 2a): sub-line cells (line >= 1) are
+    # created routinely while editing, and an undo taken before one existed
+    # hard-deletes it below — so redo must be able to RECREATE the exact pk,
+    # not just best-effort skip it (the old behavior, from when cells were
+    # only ever created alongside a new slot/week).
+    existing_cells = {
+        c.pk: c for c in models.Prescription.objects.filter(pk__in=cell_pks)
+    }
+    for pk, row in cell_rows.items():
+        cell = existing_cells.get(pk) or models.Prescription(pk=pk)
         cell.exercise_slot_id = row["exercise_slot_id"]
         cell.week_id = row["week_id"]
-        cell.sets = row["sets"]
-        cell.reps = row["reps"]
-        cell.load = row["load"]
-        cell.load_type = row["load_type"]
-        cell.rpe = row["rpe"]
-        cell.rest = row["rest"]
-        cell.note = row["note"]
+        cell.line = row.get("line", 0)
+        cell.text = row.get("text", "")
         cell.skipped = row["skipped"]
-        cell.swap_exercise_id = row["swap_exercise_id"]
-        cell.swap_name = row["swap_name"]
         cell.save()
 
     # Rows of this plan created *after* the snapshot was taken are absent from

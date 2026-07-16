@@ -167,11 +167,8 @@ try:
             WeekFactory,
             mesocycle=factory.SelfAttribute("..exercise_slot.session_slot.mesocycle"),
         )
-        sets = "3"
-        reps = "10"
-        load = "60"
-        rpe = "7"
-        note = ""
+        line = 0
+        text = "3 x 10, RPE 7, 60"
 
     class WeekDeliveryFactory(DjangoModelFactory):
         class Meta:

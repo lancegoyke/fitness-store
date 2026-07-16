@@ -1,11 +1,10 @@
-// loadSuffix cases ported from frontend/meso.test.js's "load type (%1RM)"
-// describe-block (the loadSuffix-specific its; toggleLoadType/persistRow
-// move to useAutosave, not lib). numeric/barH/cellOn/cellStyle had no direct
-// spec on createMeso() before (exercised only indirectly via the Alpine
-// template) — new specs here pin them to the source read verbatim from
-// meso.js so the port is provably faithful.
+// numeric/barH/cellOn/cellStyle had no direct spec on createMeso() before
+// (exercised only indirectly via the Alpine template) — the specs here pin
+// them to the source read verbatim from meso.js so the port is provably
+// faithful. (loadSuffix retired in Phase 2a with the typed load fields —
+// its cases went with it.)
 import { describe, expect, it } from "vitest";
-import { barH, cellOn, cellStyle, cycleLabelFromGrid, gridToProgram, loadSuffix, numeric } from "./grid";
+import { barH, cellOn, cellStyle, cycleLabelFromGrid, gridToProgram, numeric } from "./grid";
 import type { GridCell, GridDay, GridRow, GridWeek, MesoGrid, Phase } from "./api";
 
 describe("numeric", () => {
@@ -21,24 +20,6 @@ describe("numeric", () => {
     expect(numeric("BW")).toBe(false);
     expect(numeric(null)).toBe(false);
     expect(numeric(undefined)).toBe(false);
-  });
-});
-
-describe("loadSuffix", () => {
-  it("shows the unit for an absolute (or typeless) numeric load", () => {
-    expect(loadSuffix({ load: "100", load_type: "abs" }, "kg")).toBe("kg");
-    expect(loadSuffix({ load: "100" }, "kg")).toBe("kg"); // typeless → absolute
-  });
-
-  it("shows % for a percent load and nothing for non-numeric", () => {
-    expect(loadSuffix({ load: "75", load_type: "pct" }, "lb")).toBe("%");
-    expect(loadSuffix({ load: "BW", load_type: "abs" }, "lb")).toBe("");
-    expect(loadSuffix({ load: "", load_type: "pct" }, "lb")).toBe("");
-  });
-
-  it("handles a null/undefined exercise", () => {
-    expect(loadSuffix(null, "kg")).toBe("");
-    expect(loadSuffix(undefined, "kg")).toBe("");
   });
 });
 
@@ -116,17 +97,9 @@ function week(overrides: Partial<GridWeek> = {}): GridWeek {
 function cell(overrides: Partial<GridCell> = {}): GridCell {
   return {
     prescription_id: 100,
-    sets: "3",
-    reps: "5",
-    load: "100",
-    load_type: "abs",
-    rpe: "8",
-    rest: "90",
-    note: "",
+    text: "3 x 5, RPE 8, 100",
     skipped: false,
-    swap_name: "",
-    swap_exercise_id: null,
-    swap_display: "",
+    lines: [],
     ...overrides,
   };
 }
@@ -138,6 +111,9 @@ function row(overrides: Partial<GridRow> = {}): GridRow {
     exercise_id: 55,
     order: 0,
     tags: [],
+    tempo: "",
+    rest: "",
+    note: "",
     cells: { "1": cell() },
     ...overrides,
   };
@@ -181,18 +157,15 @@ describe("gridToProgram", () => {
           {
             id: 100,
             name: "Squat",
-            sets: "3",
-            reps: "5",
-            load: "100",
-            load_type: "abs",
-            rpe: "8",
+            text: "3 x 5, RPE 8, 100",
+            lines: [],
+            tempo: "",
+            rest: "",
             note: "",
             tag: undefined,
             skipped: false,
             adj: null,
             adjusts: [],
-            one_rm: undefined,
-            one_rm_source: undefined,
           },
         ],
       },
@@ -247,8 +220,8 @@ describe("gridToProgram", () => {
           rows: [
             row({
               cells: {
-                "1": cell({ prescription_id: 100, sets: "3" }),
-                "2": cell({ prescription_id: 200, sets: "5" }),
+                "1": cell({ prescription_id: 100, text: "3 x 5" }),
+                "2": cell({ prescription_id: 200, text: "5 x 5" }),
               },
             }),
           ],
@@ -257,27 +230,47 @@ describe("gridToProgram", () => {
     });
     const program = gridToProgram(g, 2);
     expect(program[0]!.exercises[0]!.id).toBe(200);
-    expect(program[0]!.exercises[0]!.sets).toBe("5");
+    expect(program[0]!.exercises[0]!.text).toBe("5 x 5");
   });
 
-  it("resolves the exercise name to the one-week swap display when swapped", () => {
+  it("uses the row's block name (Phase 2a: the one-week swap fields are gone)", () => {
     const g = grid({
-      days: [
-        day({
-          rows: [row({ name: "Back Squat", cells: { "1": cell({ swap_display: "Front Squat" }) } })],
-        }),
-      ],
-    });
-    const program = gridToProgram(g);
-    expect(program[0]!.exercises[0]!.name).toBe("Front Squat");
-  });
-
-  it("falls back to the row's block name when there's no swap", () => {
-    const g = grid({
-      days: [day({ rows: [row({ name: "Back Squat", cells: { "1": cell({ swap_display: "" }) } })] })],
+      days: [day({ rows: [row({ name: "Back Squat" })] })],
     });
     const program = gridToProgram(g);
     expect(program[0]!.exercises[0]!.name).toBe("Back Squat");
+  });
+
+  it("carries text/lines/tempo/rest/note/skipped onto the derived exercise", () => {
+    const g = grid({
+      days: [
+        day({
+          rows: [
+            row({
+              tempo: "31X1",
+              rest: "2 min",
+              note: "brace hard",
+              cells: {
+                "1": cell({
+                  text: "4 x 6",
+                  lines: [{ id: 5, line: 1, text: "RPE 8" }],
+                  skipped: true,
+                }),
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    const ex = gridToProgram(g)[0]!.exercises[0]!;
+    expect(ex).toMatchObject({
+      text: "4 x 6",
+      lines: [{ id: 5, line: 1, text: "RPE 8" }],
+      tempo: "31X1",
+      rest: "2 min",
+      note: "brace hard",
+      skipped: true,
+    });
   });
 
   it("omits a row with no cell for the resolved week (mirrors session.cells())", () => {

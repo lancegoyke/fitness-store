@@ -4,10 +4,16 @@ The review screen is the human gate; once a coach approves changes, this module
 performs the structured edit each ``ProposedChange`` describes:
 
 - **swap**     → rename the block-shared ``ExerciseSlot`` (every week follows);
-- **progress** → set the prescription's ``load``;
-- **volume**   → set the prescription's set count (``sets``);
+- **progress** → rewrite the cell's freeform text with the new load;
+- **volume**   → rewrite the cell's freeform text with the new set count;
 - **deload**   → flag the target week (``is_deload``);
 - **add**      → create a new exercise row on the target session (the draft verb).
+
+Text-first (Phase 2a): a cell is one freeform ``text`` string, so progress/
+volume applies parse the current text (``parsing.parse_prescription``), swap
+in the proposed component, and recompose (``compose_prescription_text``). A
+cell whose text the parser can't recover structure from is a safe skip, never
+a blind overwrite of the coach's notation.
 
 The edit value lives in ``ProposedChange.payload`` (built deterministically by
 ``agent.validation``). ``apply_batch`` runs every non-rejected change in a single
@@ -23,27 +29,60 @@ from ..models import AgentProposalBatch
 from ..models import ExerciseSlot
 from ..models import Prescription
 from ..models import ProposedChange
+from ..parsing import compose_prescription_text
+from ..parsing import parse_prescription
 from ..serializers import current_week
 
 
-def _apply_prescription_field(change, field, value):
-    """Write ``value`` onto ``field`` of the change's prescription cell.
+def _parsed_bits(cell):
+    """The cell's parsed (sets, reps, rpe, load) as compose-ready strings.
 
-    Only for REAL per-week cell fields (``load``/``sets``/``reps``/``rpe``/
-    ``rest``/``note``) — ``name`` is a read-only resolving property now, so it
-    must never be passed here (a swap writes the cell's ``swap_*`` fields via
-    ``_apply_swap`` instead).
+    Returns ``None`` when the text carries no recoverable sets/reps structure
+    at all (a packed circuit, prose) — callers treat that as "don't touch the
+    coach's notation".
+    """
+    parsed = parse_prescription(cell.text) or {}
+    reps = parsed.get("reps")
+    if reps is None and parsed.get("reps_range"):
+        low, high = parsed["reps_range"]
+        reps = f"{low}-{high}"
+    if reps is None and parsed.get("duration"):
+        reps = parsed["duration"]
+    if reps is not None and parsed.get("unit"):
+        reps = f"{reps} {parsed['unit']}"
+    sets = parsed.get("sets")
+    if cell.text.strip() and sets is None and reps is None:
+        return None
+    return {
+        "sets": "" if sets is None else str(sets),
+        "reps": "" if reps is None else str(reps),
+        "rpe": parsed.get("rpe") or "",
+        "load": parsed.get("load") or "",
+    }
+
+
+def _rewrite_cell(change, component, value):
+    """Recompose the cell's text with one component (``sets``/``load``) replaced.
+
+    The text-first analogue of the old per-field write: parse the current
+    freeform text, substitute the proposed component, and recompose in
+    canonical notation. A cell whose non-empty text yields no structure is a
+    safe skip (``None``) — never overwrite notation the parser can't read.
     """
     presc = change.prescription
     if presc is None or not value:
         return None
-    setattr(presc, field, value)
-    presc.save(update_fields=[field])
-    return {"id": change.pk, "kind": change.kind, "field": field, "value": value}
+    bits = _parsed_bits(presc)
+    if bits is None:
+        return None
+    bits[component] = str(value)
+    presc.text = compose_prescription_text(**bits)
+    presc.save(update_fields=["text"])
+    return {"id": change.pk, "kind": change.kind, "field": component, "value": value}
 
 
 def _apply_volume(change):
-    """Set the new set count.
+    """Set the new set count (recomposed into the cell's text).
 
     A volume change may target one exercise row (set that row) or a whole day
     (set every row in the session) — the validation contract allows either. We
@@ -53,21 +92,27 @@ def _apply_volume(change):
     if not sets:
         return None
     if change.prescription is not None:
-        return _apply_prescription_field(change, "sets", sets)
+        return _rewrite_cell(change, "sets", sets)
     if change.session_id is None:
         return None
     cells = list(change.session.cells())
-    if not cells:
-        return None
+    rewritten = 0
     for cell in cells:
-        cell.sets = sets
-        cell.save(update_fields=["sets"])
+        bits = _parsed_bits(cell)
+        if bits is None:
+            continue
+        bits["sets"] = str(sets)
+        cell.text = compose_prescription_text(**bits)
+        cell.save(update_fields=["text"])
+        rewritten += 1
+    if not rewritten:
+        return None
     return {
         "id": change.pk,
         "kind": change.kind,
         "field": "sets",
         "value": sets,
-        "count": len(cells),
+        "count": rewritten,
     }
 
 
@@ -79,9 +124,9 @@ def _apply_add(change):
     across the whole block, so creating one must keep the dense-grid invariant:
     a ``Prescription`` cell is created for EVERY live week of the mesocycle, not
     just the change's target week. The payload's numbers (sets/reps/load/rpe)
-    land on the target week's cell only; every other week's cell starts blank,
-    same as a coach adding a row by hand. A missing session or name is a safe
-    no-op (reported as skipped), mirroring the other kinds.
+    compose into the target week's cell text only; every other week's cell
+    starts blank, same as a coach adding a row by hand. A missing session or
+    name is a safe no-op (reported as skipped), mirroring the other kinds.
     """
     payload = change.payload or {}
     name = payload.get("name")
@@ -107,10 +152,12 @@ def _apply_add(change):
                 Prescription(
                     exercise_slot=exercise_slot,
                     week=week,
-                    sets=payload.get("sets", ""),
-                    reps=payload.get("reps", ""),
-                    load=payload.get("load", ""),
-                    rpe=payload.get("rpe", ""),
+                    text=compose_prescription_text(
+                        sets=payload.get("sets", ""),
+                        reps=payload.get("reps", ""),
+                        rpe=payload.get("rpe", ""),
+                        load=payload.get("load", ""),
+                    ),
                 )
             )
         else:
@@ -189,9 +236,9 @@ def _apply_swap(change, name):
     Under fixed selection the lineup is shared across every week, so an agent
     swap changes identity on the block-shared ``ExerciseSlot`` — every week's
     cell follows (``Prescription.name`` resolves to the slot). A one-week-only
-    substitute stays the coach's manual exception (a cell ``swap_*``), not an
-    agent verb. A free-text rename severs the slot's catalog link so the row
-    isn't mis-keyed to the old exercise.
+    substitute stays the coach's manual move (typed into a freeform sub-line,
+    Phase 2a), not an agent verb. A free-text rename severs the slot's catalog
+    link so the row isn't mis-keyed to the old exercise.
     """
     presc = change.prescription
     if presc is None or not name:
@@ -200,16 +247,6 @@ def _apply_swap(change, name):
     slot.name = name
     slot.exercise = None
     slot.save(update_fields=["name", "exercise"])
-    # The block grounding serializes each cell's *effective* name, so the model
-    # can target a cell that already carries a one-week ``swap_*`` exception. That
-    # override shadows the slot's name, so without clearing it the reviewed week
-    # would silently keep the old lift while every other week changed. Clear the
-    # target cell's exception so the swap the coach approved shows through here
-    # too; sibling weeks' own exceptions are left untouched (still block-wide).
-    if presc.swap_name or presc.swap_exercise_id:
-        presc.swap_name = ""
-        presc.swap_exercise = None
-        presc.save(update_fields=["swap_name", "swap_exercise"])
     return {"id": change.pk, "kind": change.kind, "field": "name", "value": name}
 
 
@@ -222,7 +259,7 @@ def apply_change(change):
         name = payload.get("name") or change.introduces_exercise
         return _apply_swap(change, name)
     if change.kind == ProposedChange.Kind.PROGRESS:
-        return _apply_prescription_field(change, "load", payload.get("load"))
+        return _rewrite_cell(change, "load", payload.get("load"))
     if change.kind == ProposedChange.Kind.VOLUME:
         return _apply_volume(change)
     if change.kind == ProposedChange.Kind.DELOAD:

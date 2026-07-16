@@ -31,6 +31,7 @@ from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Week
 from store_project.meso.models import WeekDelivery
+from store_project.meso.parsing import parse_prescription
 from store_project.meso.presenters import session_results
 from store_project.meso.serializers import serialize_plan
 from store_project.users.models import User
@@ -165,15 +166,20 @@ class TestSeedCreatesDemo:
         assert current.index == 2
         assert hypertrophy.weeks.get(is_deload=True).index == 4
         # The fixed lineup is DENSE across the whole block (P0 invariant: every
-        # slot × live-week has a cell) — every week materializes the same 3 days,
-        # so no live week is a half-built shell.
+        # slot × live-week has a line-0 cell) — every week materializes the same
+        # 3 days, so no live week is a half-built shell.
         assert current.sessions.count() == 3
-        expected_cells = current.cells.count()
+        expected_cells = current.cells.filter(line=0).count()
         assert expected_cells == 15  # 3 days × 5 rows
         assert Session.objects.filter(week__mesocycle=hypertrophy).count() == 12
         for week in hypertrophy.weeks.all():
             assert week.sessions.count() == 3
-            assert week.cells.count() == expected_cells
+            assert week.cells.filter(line=0).count() == expected_cells
+        # The current week's one freeform sub-line: the Hanging Knee Raise
+        # substitution typed as text (§2.6), not a swap field.
+        assert list(
+            current.cells.filter(line__gte=1).values_list("text", flat=True)
+        ) == ["Cable Crunch"]
 
 
 class TestSeedCreatesGroup:
@@ -284,20 +290,20 @@ class TestSamplePlanRoundTrips:
         assert box_squat["tag"] == "knee-safe"
 
     def test_percent_1rm_prescription_round_trips(self):
-        # The demo squat is prescribed as a % of 1RM (S2), shown once on a fresh
-        # DB and not duplicated on reseed.
+        # The demo squat's cell text carries a % of 1RM load token (S2), shown
+        # once on a fresh DB and not duplicated on reseed.
         seed()
         seed()  # reseed must not spawn a second %1RM row
         plan = Plan.objects.for_coach(User.objects.get(email=COACH_EMAIL)).get()
         data = serialize_plan(plan)
         lower = next(s for s in data["program"] if s["name"] == "Lower")
         box_squat = lower["exercises"][0]
-        assert box_squat["load_type"] == "pct"
+        assert parse_prescription(box_squat["text"])["load"] == "72%"
         percent_rows = [
             ex
             for session in data["program"]
             for ex in session["exercises"]
-            if ex["load_type"] == "pct"
+            if ((parse_prescription(ex["text"]) or {}).get("load") or "").endswith("%")
         ]
         assert len(percent_rows) == 1
 

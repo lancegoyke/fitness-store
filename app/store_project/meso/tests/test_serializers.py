@@ -14,14 +14,12 @@ are intentionally absent here; only the program-schema-owned fields round-trip.
 """
 
 from datetime import date
-from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 from django.utils import timezone
 
 from store_project.exercises.factories import ExerciseFactory
-from store_project.meso.factories import AthleteOneRmFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
@@ -33,6 +31,7 @@ from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
 from store_project.meso.models import Week
+from store_project.meso.parsing import compose_prescription_text
 from store_project.meso.serializers import serialize_athlete_identity
 from store_project.meso.serializers import serialize_group_identity
 from store_project.meso.serializers import serialize_mesocycle_grid
@@ -41,6 +40,7 @@ from store_project.meso.serializers import serialize_plan_history
 
 from ._helpers import day
 from ._helpers import presc
+from ._helpers import sub_line
 
 pytestmark = pytest.mark.django_db
 
@@ -266,18 +266,18 @@ class TestSerializePlan:
             for ex, (name, sets, reps, load, rpe, note, tags) in zip(
                 session["exercises"], ex_specs
             ):
-                # Exactly the designer's keys — no leakage of Phase 3/agent fields.
+                # Exactly the designer's keys (text-first, Phase 2a) — no
+                # leakage of Phase 3/agent fields. tempo/rest/note are the
+                # per-exercise slot columns (D2).
                 expected_keys = {
                     "id",
                     "name",
-                    "sets",
-                    "reps",
-                    "load",
-                    "load_type",
-                    "rpe",
+                    "text",
+                    "skipped",
+                    "tempo",
                     "rest",
                     "note",
-                    "skipped",
+                    "lines",
                 }
                 if tags:
                     expected_keys.add("tag")
@@ -285,10 +285,12 @@ class TestSerializePlan:
                 assert ex["skipped"] is False
                 assert isinstance(ex["id"], int)
                 assert ex["name"] == name
-                assert ex["sets"] == sets
-                assert ex["reps"] == reps
-                assert ex["load"] == load
-                assert ex["rpe"] == rpe
+                # ``presc`` composes the old structured spec into freeform text.
+                assert ex["text"] == compose_prescription_text(
+                    sets=sets, reps=reps, rpe=rpe, load=load
+                )
+                assert ex["lines"] == []
+                assert ex["tempo"] == ""
                 assert ex["rest"] == ""
                 assert ex["note"] == note
                 if tags:
@@ -654,6 +656,10 @@ class TestSerializeMesocycleGrid:
         assert squat["exercise_id"] == f.catalog.pk
         assert squat["order"] == 0
         assert squat["tags"] == ["main"]
+        # Per-exercise columns (Phase 2a, D2) ride the ROW, not the cells.
+        assert squat["tempo"] == ""
+        assert squat["rest"] == "120"
+        assert squat["note"] == "tempo"
 
     def test_cells_are_dense_one_per_live_week(self):
         f = _build_grid_meso()
@@ -661,24 +667,16 @@ class TestSerializeMesocycleGrid:
         squat = result["days"][0]["rows"][0]
         assert set(squat["cells"].keys()) == {str(f.week1.pk), str(f.week2.pk)}
 
-    def test_cell_carries_all_numeric_fields(self):
+    def test_cell_carries_the_text_stack(self):
         f = _build_grid_meso()
         result = serialize_mesocycle_grid(f.meso)
         squat = result["days"][0]["rows"][0]
         cell = squat["cells"][str(f.week1.pk)]
         assert cell == {
             "prescription_id": f.squat_cell1.pk,
-            "sets": "4",
-            "reps": "6",
-            "load": "100",
-            "load_type": f.squat_cell1.load_type,
-            "rpe": "7",
-            "rest": "120",
-            "note": "tempo",
+            "text": "4 x 6, RPE 7, 100",
             "skipped": False,
-            "swap_name": "",
-            "swap_exercise_id": None,
-            "swap_display": "",
+            "lines": [],
         }
 
     def test_deleted_week_is_excluded(self):
@@ -713,54 +711,30 @@ class TestSerializeMesocycleGrid:
         cell = squat["cells"][str(f.week2.pk)]
         assert cell["skipped"] is True
 
-    def test_swap_surfaces_on_the_cell_but_row_name_stays_block_identity(self):
+    def test_substitution_sub_line_rides_the_cells_lines(self):
+        # Phase 2a: a substitution is freeform sub-line text — the grid carries
+        # it in the cell's ``lines`` stack, and the ROW identity stays block-wide.
         f = _build_grid_meso()
-        substitute = ExerciseFactory()
-        f.squat_cell2.swap_exercise = substitute
-        f.squat_cell2.swap_name = "Front Squat"
-        f.squat_cell2.save(update_fields=["swap_exercise", "swap_name"])
+        sub = sub_line(f.squat_cell2, "Front Squat")
         result = serialize_mesocycle_grid(f.meso)
         squat = result["days"][0]["rows"][0]
-        # The ROW identity is unchanged — a swap is a one-week cell exception.
         assert squat["name"] == "Back Squat"
-        swapped_cell = squat["cells"][str(f.week2.pk)]
-        assert swapped_cell["swap_name"] == "Front Squat"
-        assert swapped_cell["swap_exercise_id"] == substitute.pk
-        # Free-text swap_name wins over the catalog swap_exercise for display.
-        assert swapped_cell["swap_display"] == "Front Squat"
-        # The untouched week still reads no swap.
-        assert squat["cells"][str(f.week1.pk)]["swap_name"] == ""
-        assert squat["cells"][str(f.week1.pk)]["swap_exercise_id"] is None
-        assert squat["cells"][str(f.week1.pk)]["swap_display"] == ""
+        assert squat["cells"][str(f.week2.pk)]["lines"] == [
+            {"id": sub.pk, "line": 1, "text": "Front Squat"}
+        ]
+        # The untouched week's stack is empty.
+        assert squat["cells"][str(f.week1.pk)]["lines"] == []
 
-    def test_swap_display_is_free_text_swap_name_when_set(self):
+    def test_blank_sub_line_is_kept_in_the_grid_stack(self):
+        # Unlike athlete-facing serialization, the editor grid keeps a cleared
+        # sub-line in place (blank cell, not a collapsed stack).
         f = _build_grid_meso()
-        f.squat_cell2.swap_name = "Front Squat"
-        f.squat_cell2.save(update_fields=["swap_name"])
+        cleared = sub_line(f.squat_cell1, "")
         result = serialize_mesocycle_grid(f.meso)
         squat = result["days"][0]["rows"][0]
-        cell = squat["cells"][str(f.week2.pk)]
-        assert cell["swap_display"] == "Front Squat"
-
-    def test_swap_display_falls_back_to_swap_exercise_name_for_a_catalog_only_swap(
-        self,
-    ):
-        f = _build_grid_meso()
-        substitute = ExerciseFactory(name="Hack Squat")
-        f.squat_cell2.swap_exercise = substitute
-        f.squat_cell2.swap_name = ""
-        f.squat_cell2.save(update_fields=["swap_exercise", "swap_name"])
-        result = serialize_mesocycle_grid(f.meso)
-        squat = result["days"][0]["rows"][0]
-        cell = squat["cells"][str(f.week2.pk)]
-        # A catalog-only swap (no free-text swap_name) must still surface a
-        # display name — this is the P1 table's "no visible badge" gap: the
-        # coach couldn't tell a catalog swap was active.
-        assert cell["swap_display"] == "Hack Squat"
-        assert cell["swap_exercise_id"] == substitute.pk
-        assert cell["swap_name"] == ""
-        # The ROW identity is still block-wide, unaffected by the swap.
-        assert squat["name"] == "Back Squat"
+        assert squat["cells"][str(f.week1.pk)]["lines"] == [
+            {"id": cleared.pk, "line": 1, "text": ""}
+        ]
 
     def test_history_reuses_serialize_plan_history(self):
         f = _build_grid_meso()
@@ -952,104 +926,30 @@ class TestSerializeMesocycleGridGroupAdj:
         assert "adj" not in cell
 
 
-class TestSerializeMesocycleGridOneRm:
-    """Every individual-plan cell carries the athlete's stored %1RM estimate.
+class TestSerializeMesocycleGridQueries:
+    """The grid stays a fixed number of queries — no N+1 over the block.
 
-    Issue #455 phase A3, mirroring ``serialize_plan``'s single-week attach —
-    ATTACHED UNIFORMLY per cell regardless of ``load_type`` (the pct gate is a
-    frontend concern, MesoTable.tsx / ExerciseRow.tsx). A group plan has no
-    single athlete, so its cells never carry the key.
+    Phase 2a: grid cells no longer carry ``one_rm`` (that A3 overlay — and its
+    query — is gone with the structured %1RM ``load_type``), so the individual
+    budget is the base grid queries plus A5's identity/phases pair:
+    ``plan.mesocycles.all()`` and ``athlete.contraindications.all()``
+    (``plan.athlete`` itself is an already-cached Python object here — the
+    factories build plan/mesocycle from the same in-memory ``rel``).
     """
 
-    def _cell(self, result, *, day_index, row_index, week):
-        return result["days"][day_index]["rows"][row_index]["cells"][str(week.pk)]
-
-    def test_individual_cell_carries_one_rm_and_source_when_stored(self):
+    def test_individual_grid_query_count(self, django_assert_num_queries):
+        # 9 = weeks, session slots, sessions, exercise slots, cells,
+        # 2x PlanAction (serialize_plan_history), mesocycles (phases),
+        # contraindications (serialize_athlete_identity).
         f = _build_grid_meso()
-        AthleteOneRmFactory(
-            athlete=f.plan.athlete, exercise=f.catalog, value=Decimal("140")
-        )
-        result = serialize_mesocycle_grid(f.meso)
-        cell = self._cell(result, day_index=0, row_index=0, week=f.week1)
-        assert cell["one_rm"] == "140"
-        assert cell["one_rm_source"] == "logged"
-
-    def test_lift_with_no_stored_estimate_has_no_one_rm_key(self):
-        f = _build_grid_meso()
-        result = serialize_mesocycle_grid(f.meso)
-        cell = self._cell(result, day_index=0, row_index=0, week=f.week1)
-        assert "one_rm" not in cell
-        assert "one_rm_source" not in cell
-
-    def test_group_grid_cells_never_carry_one_rm(self):
-        # A group plan has no single athlete, so `one_rm_values` is never even
-        # called — seed a matching-identity row on a member to prove that.
-        f = _build_group_grid_meso()
-        AthleteOneRmFactory(
-            athlete=f.membership.relationship.athlete,
-            name="Back Squat",
-            value=Decimal("140"),
-        )
-        result = serialize_mesocycle_grid(f.meso)
-        for day_data in result["days"]:
-            for row in day_data["rows"]:
-                for cell in row["cells"].values():
-                    assert "one_rm" not in cell
-                    assert "one_rm_source" not in cell
-
-    def test_swapped_cell_carries_its_own_resolved_identity_value(self):
-        # KEY regression: a swap changes ``Prescription.exercise_id`` for that
-        # cell only (models.py resolving properties) — the badge must show
-        # THAT identity's estimate, not the row's block identity.
-        f = _build_grid_meso()
-        AthleteOneRmFactory(
-            athlete=f.plan.athlete, exercise=f.catalog, value=Decimal("140")
-        )
-        substitute = ExerciseFactory()
-        AthleteOneRmFactory(
-            athlete=f.plan.athlete, exercise=substitute, value=Decimal("100")
-        )
-        f.squat_cell2.swap_exercise = substitute
-        f.squat_cell2.save(update_fields=["swap_exercise"])
-        result = serialize_mesocycle_grid(f.meso)
-        unswapped = self._cell(result, day_index=0, row_index=0, week=f.week1)
-        swapped = self._cell(result, day_index=0, row_index=0, week=f.week2)
-        assert unswapped["one_rm"] == "140"
-        assert swapped["one_rm"] == "100"
-
-    def test_individual_grid_query_count_is_baseline_plus_one(
-        self, django_assert_num_queries
-    ):
-        # Baseline (no adj/one_rm overlay) is 7: weeks, session slots, sessions,
-        # exercise slots, cells, 2x PlanAction (serialize_plan_history) — this
-        # phase adds exactly ONE query (one_rm_values), establishing the budget.
-        #
-        # Issue #455 phase A5: identity/phases add exactly TWO more —
-        # ``plan.mesocycles.all()`` (phases) and ``athlete.contraindications
-        # .all()`` (serialize_athlete_identity). ``plan.athlete`` itself
-        # (``relationship``/``relationship.athlete``) costs nothing here — both
-        # are already cached Python objects (the factories above construct
-        # ``plan``/``mesocycle`` from the same in-memory ``rel``), same as
-        # ``serialize_plan``'s identical identity calls pay for in practice.
-        f = _build_grid_meso()
-        AthleteOneRmFactory(
-            athlete=f.plan.athlete, exercise=f.catalog, value=Decimal("140")
-        )
-        with django_assert_num_queries(10):
+        with django_assert_num_queries(9):
             serialize_mesocycle_grid(f.meso)
 
-    def test_group_grid_query_count_is_unaffected_by_one_rm(
-        self, django_assert_num_queries
-    ):
-        # A group plan skips one_rm_values entirely (short-circuited on
-        # ``plan.is_group``) — the pre-A5 group baseline (8, incl.
-        # group_adjustments) doesn't pay the one_rm query individual plans do.
-        #
-        # Issue #455 phase A5: identity/phases add exactly THREE more —
-        # ``plan.mesocycles.all()`` (phases), ``group.active_member_users()``,
-        # and one member's ``.contraindications.all()`` (one active member in
-        # ``_build_group_grid_meso``; N+1 over members, same as
-        # ``serialize_group_identity`` already pays for on the one-week path).
+    def test_group_grid_query_count(self, django_assert_num_queries):
+        # The group grid adds group_adjustments (1) plus serialize_group_
+        # identity's active_member_users + one member's contraindications
+        # (one active member in ``_build_group_grid_meso``) in place of the
+        # individual path's single contraindications query.
         f = _build_group_grid_meso()
         with django_assert_num_queries(11):
             serialize_mesocycle_grid(f.meso)

@@ -8,13 +8,16 @@
 // context for where a given pattern originated, not because they still
 // exist in the tree.
 //
-// Per-cell fields commit on blur/Enter, carrying forward ExerciseRow's
-// dirtySinceFocus pattern (CONTRACT.md "ExerciseRow") — but scoped PER CELL,
-// tracking which of a cell's several fields were actually typed into, since
-// useGrid.patchCell's endpoint takes a partial patch (only the dirtied
-// fields), not a whole-row POST like useAutosave.persistRow. The load_type
-// toggle is the one exception: like ExerciseRow's toggleLoadType, it commits
-// immediately on click (an atomic flip, not a per-keystroke draft).
+// Per-cell edits commit on blur/Enter, carrying forward ExerciseRow's
+// dirtySinceFocus pattern (CONTRACT.md "ExerciseRow"). Phase 2a (spreadsheet
+// parity) collapsed the cell's six structured inputs (sets/reps/load+
+// load_type/rpe/rest/note) to ONE freeform text input (`cell.text`, via
+// useGrid.patchCell) plus one input per sub-line of the cell's stack
+// (`cell.lines`, upserted by (week × line) via onWriteCellLine) and a
+// trailing ghost input that mints the next sub-line on its first non-blank
+// commit. Tempo/Notes/Rest moved off the cell onto per-ROW columns
+// (row.tempo/note/rest, committed via onPatchRowColumns), matching the
+// source spreadsheet's Exercise | Tempo | weeks… | Notes | Rest layout.
 //
 // Keyboard grid navigation (issue #455 A1) is owned by useTableNav
 // (../hooks/useTableNav), a sibling of the one-week path's useGridNav —
@@ -37,12 +40,14 @@
 // known cross-browser glitches, unverifiable in jsdom) — a DragOverlay ghost
 // plus `.is-dragging` opacity only.
 //
-// P1: deferred (see docs/archive/meso/fixed-selection-plan.md) — in-cell
-// group override editor / one-rm editor, agent-chat wiring, coachmarks.
-// Swap/skip/add-this-week WRITE UX is P2 — this file only ever DISPLAYS
-// swap_name/skipped. The table's own coachmark landed in issue #455 phase
-// A4 (re-authored copy, not a mechanical port of WeekGrid.tsx's "grid"
-// mark — see this file's coachmarkVisible/dismissCoachmark prop header).
+// Phase 2a RETIRED two whole control clusters from this file: the per-ROW
+// %1RM badge/editor (RowOneRmEditor — a % load is just text now, no typed
+// load to resolve) and the one-week swap badge/menu (a substitution is
+// sub-line text, written like any other line). skip/unskip, fill-across-
+// weeks, add-this-week, move-to-day and the group adjust badge all stay.
+// The table's own coachmark landed in issue #455 phase A4 (re-authored
+// copy, not a mechanical port of WeekGrid.tsx's "grid" mark — see this
+// file's coachmarkVisible/dismissCoachmark prop header).
 import { useEffect, useRef, useState } from "react";
 import {
   DndContext,
@@ -57,19 +62,16 @@ import {
 import type { CollisionDetection, DragEndEvent, DragStartEvent, KeyboardCoordinateGetter } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, GroupIdentity, MesoGrid } from "../lib/api";
-import type { GridCellOneRmPatch, GridCellPatch, Id } from "../hooks/useGrid";
-import { rowIdentityCellId } from "../hooks/useGrid";
+import type { GridCellPatch, GridRowPatch, Id } from "../hooks/useGrid";
 import { useTableNav, tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
-import type { EditableField, UseTableNavResult } from "../hooks/useTableNav";
+import type { UseTableNavResult } from "../hooks/useTableNav";
 import type { TableDragData, TableDragEndEvent } from "../hooks/useTableReorder";
 import { TABLE_DAY_DRAG_PREFIX, tableDayDragId, tableRowDragId, tableRowDragPrefix } from "../lib/tableDragIds";
-import { parseOneRm } from "../lib/oneRm";
 
 export interface MesoTableProps {
   grid: MesoGrid | null;
   history: GridHistory;
   busy: boolean;
-  unit: string;
   // P5 group: the plan's group identity (null for an individual plan). When
   // it has members, every non-skipped cell gains a per-athlete adjust badge
   // (mirroring ExerciseRow's group "+ adjust"/`ex.adj` badge on the one-week
@@ -78,12 +80,14 @@ export interface MesoTableProps {
   group: GroupIdentity | null;
   onOpenOverride(row: GridRow, cell: GridCell): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
+  // Phase 2a: upsert one freeform (week × line) sub-line of a row's stack —
+  // addressed by slot/week/line, not pk, since the line may not exist yet
+  // (useGrid.writeCellLine). Fire-and-forget, like onPatchCell.
+  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
+  // Phase 2a (D2): the per-exercise Tempo/Notes/Rest row columns
+  // (useGrid.patchRowColumns). Fire-and-forget, like onPatchCell.
+  onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
-  // Issue #455 phase A3: the per-ROW %1RM editor's save verb — AWAITED (the
-  // editor drives its own saving/error UI off the promise; see useGrid.setOneRm's
-  // header for why this is awaited, unlike the fire-and-forget onPatchCell/
-  // onRenameExercise above).
-  onSetOneRm(exerciseSlotId: Id, value: string): Promise<GridCellOneRmPatch>;
   // Issue #455 phase A2.5: the per-ROW "Move to…" menu's structural verb —
   // fire-and-forget, mirroring onAddExercise/onRemoveExercise etc. below
   // (useGrid.moveExerciseToDay awaits its own POST + refetch internally).
@@ -97,10 +101,9 @@ export interface MesoTableProps {
   onSetCurrentWeek(weekId: Id): void;
   onUndo(): void;
   onRedo(): void;
-  // P2 exceptions: one-week skip/swap + numbers fill-across-weeks + a
+  // P2 exceptions: one-week skip + text-stack fill-across-weeks + a
   // this-week-only add — CONTRACT.md "MesoTable.tsx — new props".
   onSkipCell(cellId: number, skipped: boolean): void;
-  onSwapCell(cellId: number, swapName: string): void;
   onFillAcrossWeeks(cellId: number): void;
   onAddExerciseThisWeek(day: GridDay, weekId: number): void;
   // Issue #455 phase A2 (drag reordering): optional, with a no-op fallback
@@ -181,154 +184,201 @@ export const tableKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) 
   });
 };
 
-function draftFrom(cell: GridCell): Record<EditableField, string> {
-  return { sets: cell.sets, reps: cell.reps, load: cell.load, rpe: cell.rpe, rest: cell.rest, note: cell.note };
+interface CellSubLineInputProps {
+  cellId: number;
+  line: number;
+  text: string;
+  /** The trailing "next line" input — commits only non-blank (a blank ghost
+   * has nothing to create), and remounts empty via its parent's key once the
+   * optimistic upsert promotes its text to a real `cell.lines` entry. */
+  ghost?: boolean;
+  onWrite(line: number, text: string): void;
+}
+
+/** One freeform sub-line of a cell's stack (Phase 2a) — same dirty-tracking
+ * commit-on-blur/Enter + Escape-revert shape as GridCellEditor's main text
+ * input, but local-only (sub-line inputs are outside useTableNav's arrow
+ * grid this phase, so Escape reverts to the last synced `text` directly).
+ * Blanking an EXISTING line commits "" — the line clears in place (the row
+ * stays), mirroring the server's blank-text upsert. */
+function CellSubLineInput({ cellId, line, text, ghost, onWrite }: CellSubLineInputProps) {
+  const [draft, setDraft] = useState(text);
+  const dirtyRef = useRef(false);
+
+  useEffect(() => {
+    setDraft(text);
+    dirtyRef.current = false;
+  }, [text]);
+
+  function commitIfDirty() {
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
+    if (ghost && draft.trim() === "") return;
+    onWrite(line, draft);
+  }
+
+  return (
+    <input
+      className="meso-cell meso-line-input"
+      data-testid={ghost ? `cell-line-new-${cellId}` : `cell-line-${cellId}-${line}`}
+      aria-label={ghost ? "Add a line" : `Line ${line}`}
+      placeholder={ghost ? "+ line" : "—"}
+      value={draft}
+      onChange={(e) => {
+        dirtyRef.current = true;
+        setDraft(e.target.value);
+      }}
+      onBlur={commitIfDirty}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commitIfDirty();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dirtyRef.current = false;
+          setDraft(text);
+        }
+      }}
+    />
+  );
 }
 
 interface GridCellEditorProps {
   cell: GridCell;
-  unit: string;
   row: GridRow;
   week: GridWeek;
   tableNav: UseTableNavResult;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
+  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
 }
 
-function GridCellEditor({ cell, unit, row, week, tableNav, onPatchCell }: GridCellEditorProps) {
-  const [draft, setDraft] = useState<Record<EditableField, string>>(() => draftFrom(cell));
-  // Per-cell (not per-field) dirty set: on commit, only the fields the coach
-  // actually typed into are sent — an unconditional blur commit would
-  // autosave (and record a no-op undo action for) every field merely tabbed
-  // through.
-  const dirtyRef = useRef<Set<EditableField>>(new Set());
+/** Phase 2a text-first cell: ONE freeform text input for the prescription
+ * line (`cell.text`, committed via onPatchCell — the pk path), then one
+ * CellSubLineInput per existing sub-line (`cell.lines`, upserted by
+ * (week × line) via onWriteCellLine), then a trailing ghost input that mints
+ * the NEXT sub-line (max existing line + 1, or 1) on its first non-blank
+ * commit. Dirty-tracking commit-on-blur/Enter + Escape-revert carries
+ * forward from the retired six-field editor unchanged in kind. */
+function GridCellEditor({ cell, row, week, tableNav, onPatchCell, onWriteCellLine }: GridCellEditorProps) {
+  const [draft, setDraft] = useState(cell.text);
+  const dirtyRef = useRef(false);
 
   // Resync the draft whenever the source of truth changes — our own commit's
   // optimistic update, or an external refetch (undo/redo, another coach
   // action) — never while the coach is mid-edit, since this only runs when
-  // these values actually change.
+  // the value actually changes.
   useEffect(() => {
-    setDraft(draftFrom(cell));
-    dirtyRef.current = new Set();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cell.sets, cell.reps, cell.load, cell.rpe, cell.rest, cell.note]);
-
-  function changed(field: EditableField, value: string) {
-    dirtyRef.current.add(field);
-    setDraft((prev) => ({ ...prev, [field]: value }));
-  }
+    setDraft(cell.text);
+    dirtyRef.current = false;
+  }, [cell.text]);
 
   function commitIfDirty() {
-    if (dirtyRef.current.size === 0) return;
-    const patch: GridCellPatch = {};
-    for (const field of dirtyRef.current) {
-      patch[field] = draft[field];
-    }
-    dirtyRef.current = new Set();
-    onPatchCell(cell.prescription_id, patch);
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
+    onPatchCell(cell.prescription_id, { text: draft });
   }
 
-  // Escape reverts ONLY the focused field's draft — a per-cell dirty Set
-  // needs per-field removal (unlike ExerciseRow's per-row dirtySinceFocus
-  // boolean), so a second, still-dirty field on the same cell survives an
-  // Escape on its sibling untouched.
-  function revertField(field: EditableField, value: string) {
-    dirtyRef.current.delete(field);
-    setDraft((prev) => ({ ...prev, [field]: value }));
+  function revert(value: string) {
+    dirtyRef.current = false;
+    setDraft(value);
   }
 
-  function toggleLoadType() {
-    onPatchCell(cell.prescription_id, { load_type: cell.load_type === "pct" ? "abs" : "pct" });
-  }
-
-  // Every field's useTableNav wiring: same callback shape, keyed by field.
-  function fieldNavProps(field: EditableField) {
-    return tableNav.cellProps(row.exercise_slot_id, week.id, field, {
-      onCommit: commitIfDirty,
-      onRevert: (value) => revertField(field, value),
-    });
-  }
+  const navProps = tableNav.cellProps(row.exercise_slot_id, week.id, "text", {
+    onCommit: commitIfDirty,
+    onRevert: revert,
+  });
 
   const cellId = cell.prescription_id;
+  const lines = cell.lines ?? [];
+  const nextLine = lines.reduce((max, l) => Math.max(max, l.line), 0) + 1;
 
   return (
     <div className="meso-table-cell-editor">
-      <div className="meso-table-cell-setsreps">
-        <input
-          className="meso-cell meso-num-input"
-          data-testid={`cell-sets-${cellId}`}
-          data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "sets")}
-          aria-label={tableCellAriaLabel(row.name, week.label, "sets")}
-          value={draft.sets}
-          onChange={(e) => changed("sets", e.target.value)}
-          onBlur={commitIfDirty}
-          {...fieldNavProps("sets")}
-        />
-        <span className="meso-x-sep">×</span>
-        <input
-          className="meso-cell meso-num-input"
-          data-testid={`cell-reps-${cellId}`}
-          data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "reps")}
-          aria-label={tableCellAriaLabel(row.name, week.label, "reps")}
-          value={draft.reps}
-          onChange={(e) => changed("reps", e.target.value)}
-          onBlur={commitIfDirty}
-          {...fieldNavProps("reps")}
-        />
-      </div>
-      <div className="meso-table-cell-load">
-        <input
-          className="meso-cell meso-num-input"
-          data-testid={`cell-load-${cellId}`}
-          data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "load")}
-          aria-label={tableCellAriaLabel(row.name, week.label, "load")}
-          value={draft.load}
-          onChange={(e) => changed("load", e.target.value)}
-          onBlur={commitIfDirty}
-          {...fieldNavProps("load")}
-        />
-        <button
-          type="button"
-          data-testid={`cell-loadtype-${cellId}`}
-          className="meso-load-toggle"
-          title={cell.load_type === "pct" ? "Load is % of 1RM — tap for absolute" : "Load is absolute — tap for % of 1RM"}
-          aria-label={cell.load_type === "pct" ? "Load type: percent of 1RM" : "Load type: absolute"}
-          onClick={toggleLoadType}
-        >
-          {cell.load_type === "pct" ? "%" : unit}
-        </button>
-      </div>
       <input
-        className="meso-cell meso-num-input"
-        data-testid={`cell-rpe-${cellId}`}
-        data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "rpe")}
-        aria-label={tableCellAriaLabel(row.name, week.label, "rpe")}
-        value={draft.rpe}
-        onChange={(e) => changed("rpe", e.target.value)}
-        onBlur={commitIfDirty}
-        {...fieldNavProps("rpe")}
-      />
-      <input
-        className="meso-cell meso-num-input"
-        data-testid={`cell-rest-${cellId}`}
-        data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "rest")}
-        aria-label={tableCellAriaLabel(row.name, week.label, "rest")}
-        value={draft.rest}
-        onChange={(e) => changed("rest", e.target.value)}
-        onBlur={commitIfDirty}
-        {...fieldNavProps("rest")}
-      />
-      <input
-        className="meso-note"
-        data-testid={`cell-note-${cellId}`}
-        data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "note")}
-        aria-label={tableCellAriaLabel(row.name, week.label, "note")}
+        className="meso-cell meso-text-input"
+        data-testid={`cell-text-${cellId}`}
+        data-grid-cell={tableCellDomKey(row.exercise_slot_id, week.id, "text")}
+        aria-label={tableCellAriaLabel(row.name, week.label, "text")}
         placeholder="—"
-        value={draft.note}
-        onChange={(e) => changed("note", e.target.value)}
+        value={draft}
+        onChange={(e) => {
+          dirtyRef.current = true;
+          setDraft(e.target.value);
+        }}
         onBlur={commitIfDirty}
-        {...fieldNavProps("note")}
+        {...navProps}
+      />
+      {lines.map((l) => (
+        <CellSubLineInput
+          key={l.line}
+          cellId={cellId}
+          line={l.line}
+          text={l.text}
+          onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
+        />
+      ))}
+      <CellSubLineInput
+        key={`ghost-${nextLine}`}
+        cellId={cellId}
+        line={nextLine}
+        text=""
+        ghost
+        onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
       />
     </div>
+  );
+}
+
+interface RowColumnInputProps {
+  row: GridRow;
+  field: "tempo" | "rest" | "note";
+  label: string;
+  onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
+}
+
+/** Phase 2a (D2): one per-exercise row column (Tempo / Notes / Rest) — a row
+ * attribute off the block-shared ExerciseSlot, NOT a per-week cell value.
+ * Same local dirty-tracking commit-on-blur/Enter + Escape-revert shape as
+ * CellSubLineInput above (row columns are outside arrow-nav this phase). */
+function RowColumnInput({ row, field, label, onPatchRowColumns }: RowColumnInputProps) {
+  const synced = row[field];
+  const [draft, setDraft] = useState(synced);
+  const dirtyRef = useRef(false);
+
+  useEffect(() => {
+    setDraft(synced);
+    dirtyRef.current = false;
+  }, [synced]);
+
+  function commitIfDirty() {
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
+    onPatchRowColumns(row.exercise_slot_id, { [field]: draft });
+  }
+
+  return (
+    <input
+      className="meso-cell meso-row-col-input"
+      data-testid={`row-${field}-${row.exercise_slot_id}`}
+      aria-label={`${row.name || "exercise"} — ${label}`}
+      placeholder="—"
+      value={draft}
+      onChange={(e) => {
+        dirtyRef.current = true;
+        setDraft(e.target.value);
+      }}
+      onBlur={commitIfDirty}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commitIfDirty();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dirtyRef.current = false;
+          setDraft(synced);
+        }
+      }}
+    />
   );
 }
 
@@ -336,31 +386,18 @@ interface CellActionsProps {
   cell: GridCell;
   busy: boolean;
   onSkipCell(cellId: number, skipped: boolean): void;
-  onSwapCell(cellId: number, swapName: string): void;
   onFillAcrossWeeks(cellId: number): void;
 }
 
-/** P2 exceptions control cluster for a non-skipped cell — skip / swap
- * (toggle -> inline input -> save, mirroring RowNameEditor/GridCellEditor's
- * commit-on-Enter idiom) / fill-across-weeks (arm -> confirm, mirroring the
- * remove-exercise|day|week arm/confirm pattern above, but scoped locally to
- * this one cell rather than the table-wide `armed` slot since several cells
- * can each have their own swap input or fill-confirm open at once). */
-function CellActions({ cell, busy, onSkipCell, onSwapCell, onFillAcrossWeeks }: CellActionsProps) {
-  const [swapOpen, setSwapOpen] = useState(false);
-  const [swapValue, setSwapValue] = useState("");
+/** P2 exceptions control cluster for a non-skipped cell — skip /
+ * fill-across-weeks (arm -> confirm, mirroring the remove-exercise|day|week
+ * arm/confirm pattern above, but scoped locally to this one cell rather than
+ * the table-wide `armed` slot since several cells can each have their own
+ * fill-confirm open at once). Phase 2a retired the swap control — a
+ * substitution is sub-line text now, typed like any other line. */
+function CellActions({ cell, busy, onSkipCell, onFillAcrossWeeks }: CellActionsProps) {
   const [fillArmed, setFillArmed] = useState(false);
   const cellId = cell.prescription_id;
-
-  function openSwap() {
-    setSwapValue(cell.swap_name);
-    setSwapOpen(true);
-  }
-
-  function submitSwap() {
-    onSwapCell(cellId, swapValue);
-    setSwapOpen(false);
-  }
 
   return (
     <div className="meso-table-cell-actions">
@@ -376,55 +413,14 @@ function CellActions({ cell, busy, onSkipCell, onSwapCell, onFillAcrossWeeks }: 
         Skip
       </button>
 
-      {!swapOpen && (
-        <button
-          type="button"
-          data-testid={`cell-swap-btn-${cellId}`}
-          className="meso-cell-action-btn"
-          disabled={busy}
-          aria-label="Swap exercise this week"
-          title="Swap exercise this week"
-          onClick={openSwap}
-        >
-          Swap
-        </button>
-      )}
-      {swapOpen && (
-        <span className="meso-cell-swap-editor">
-          <input
-            className="meso-cell meso-swap-input"
-            data-testid={`cell-swap-input-${cellId}`}
-            aria-label="Swap exercise name"
-            value={swapValue}
-            onChange={(e) => setSwapValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                submitSwap();
-              }
-            }}
-          />
-          <button
-            type="button"
-            data-testid={`cell-swap-save-${cellId}`}
-            className="meso-confirm-btn"
-            disabled={busy}
-            aria-label="Save swap"
-            onClick={submitSwap}
-          >
-            Save
-          </button>
-        </span>
-      )}
-
       {!fillArmed && (
         <button
           type="button"
           data-testid={`cell-fill-${cellId}`}
           className="meso-cell-action-btn"
           disabled={busy}
-          aria-label="Fill numbers across weeks"
-          title="Copy this week's numbers to every other week"
+          aria-label="Fill across weeks"
+          title="Copy this week's prescription (all lines) to every other week"
           onClick={() => setFillArmed(true)}
         >
           Fill →
@@ -510,168 +506,6 @@ function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
       onBlur={commitIfDirty}
       {...navProps}
     />
-  );
-}
-
-/** The row's identity CELL object (not just its id) — resolves
- * `rowIdentityCellId` (useGrid.ts, shared with row rename) against `row.cells`,
- * which is keyed by WEEK id, not prescription id, so the lookup is a search
- * over the cell VALUES rather than a direct index. Returns undefined when the
- * row has no live cell at all. */
-function rowIdentityCell(weeks: GridWeek[], row: GridRow): GridCell | undefined {
-  const cellId = rowIdentityCellId(weeks, row);
-  if (cellId == null) return undefined;
-  return Object.values(row.cells).find((c) => c.prescription_id === cellId);
-}
-
-interface RowOneRmEditorProps {
-  row: GridRow;
-  cell: GridCell | undefined;
-  unit: string;
-  busy: boolean;
-  onSetOneRm(exerciseSlotId: Id, value: string): Promise<GridCellOneRmPatch>;
-}
-
-/** Issue #455 phase A3 — the per-ROW %1RM badge/editor (name column, 2nd
- * line). A %1RM is a property of the athlete + lift IDENTITY (AthleteOneRm
- * has no week dimension), NOT a per-week cell value — unlike P5's per-cell
- * adjust badge (CellActions/`cell-override-badge-*`), this control reads and
- * writes the row's single IDENTITY cell regardless of which week column the
- * coach is looking at. Local state (CellActions' idiom) rather than a second
- * useOneRmEditor instance — that hook needs planId/csrf, which would force
- * MesoTable to take those directly and break the verbs-as-props boundary
- * every other control here honors. Mirrors ExerciseRow.tsx's one-week %1RM
- * badge/editor (label text, "1RM: "/"1RM ≈ " prefixes, "+ set 1RM",
- * Enter=save/Escape=cancel) — ported, not reused, for the same reason. */
-function RowOneRmEditor({ row, cell, unit, busy, onSetOneRm }: RowOneRmEditorProps) {
-  const [open, setOpen] = useState(false);
-  const [value, setValue] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  // DISPLAY gate: any live, unswapped, non-skipped cell of the row carrying
-  // a % load makes the row 1RM-relevant — load_type is edited PER CELL in
-  // this table, so gating on the identity cell's own load_type alone hides
-  // the only 1RM control from a mixed-load row (identity week abs, a later
-  // week pct — Codex #455 A3 review). The SAVE target stays the identity
-  // cell regardless: all unswapped cells share the row's lift identity, so
-  // any of them keys the same AthleteOneRm row.
-  // Scope cut (A3): a SWAPPED pct cell still gets no control of its own —
-  // its lift identity differs from the row's; server data
-  // (one_rm/one_rm_source) stays correct regardless (see this file's
-  // header / the implementation brief's "Risks" section).
-  const rowHasPct = Object.values(row.cells).some(
-    (c) => c.load_type === "pct" && !c.skipped && c.swap_name === "" && c.swap_exercise_id == null,
-  );
-  if (!cell || !rowHasPct) return null;
-
-  const id = row.exercise_slot_id;
-
-  function openEditor() {
-    setValue(cell!.one_rm || "");
-    setError("");
-    setOpen(true);
-  }
-
-  function cancel() {
-    if (saving) return;
-    setOpen(false);
-    setError("");
-  }
-
-  async function save() {
-    // `busy` too, not just `saving`: the save button is disabled during a
-    // structural mutation/refetch, but Enter in the input reaches here
-    // directly (Codex review) — the keyboard path honors the same lock.
-    if (saving || busy) return;
-    const parsed = parseOneRm(value);
-    if (!parsed.ok) {
-      setError("Enter a positive number, or leave blank to clear.");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    try {
-      await onSetOneRm(id, parsed.value);
-      setSaving(false);
-      setOpen(false);
-    } catch (err) {
-      console.error("1RM save failed", err);
-      setSaving(false);
-      setError("Couldn't save that 1RM. Please try again.");
-    }
-  }
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        data-testid={`row-one-rm-badge-${id}`}
-        data-hover="brighten"
-        className={`meso-onerm-badge${cell.one_rm ? " meso-onerm-badge--set" : ""}`}
-        onClick={openEditor}
-        title={
-          cell.one_rm
-            ? cell.one_rm_source === "manual"
-              ? "Athlete's 1RM (manually set) — tap to edit"
-              : "Athlete's estimated 1RM, from their logged history — tap to edit"
-            : "Set this athlete's 1RM so the % target resolves to a load"
-        }
-      >
-        {cell.one_rm
-          ? (cell.one_rm_source === "manual" ? "1RM: " : "1RM ≈ ") + cell.one_rm + (unit ? " " + unit : "")
-          : "+ set 1RM"}
-      </button>
-    );
-  }
-
-  return (
-    <span className="meso-onerm-editor">
-      <input
-        data-testid={`row-one-rm-input-${id}`}
-        className="meso-onerm-input"
-        type="text"
-        inputMode="decimal"
-        placeholder={unit}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            save();
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            cancel();
-          }
-        }}
-      />
-      <button
-        type="button"
-        data-testid={`row-one-rm-save-${id}`}
-        data-hover="brighten"
-        className="meso-onerm-save"
-        disabled={saving || busy}
-        onClick={save}
-      >
-        save
-      </button>
-      <button
-        type="button"
-        data-testid={`row-one-rm-cancel-${id}`}
-        data-hover="brighten"
-        className="meso-onerm-cancel"
-        disabled={saving || busy}
-        title="Cancel"
-        onClick={cancel}
-      >
-        ×
-      </button>
-      {error && (
-        <span data-testid={`row-one-rm-error-${id}`} className="meso-onerm-error">
-          {error}
-        </span>
-      )}
-    </span>
   );
 }
 
@@ -799,14 +633,7 @@ interface TableRowProps {
   days: GridDay[];
   weeks: GridWeek[];
   busy: boolean;
-  unit: string;
   showAdjust: boolean;
-  // Issue #455 phase A3: gates the per-ROW %1RM badge/editor — `!isGroupPlan`
-  // (see MesoTable()'s computation below), DELIBERATELY NOT `showAdjust`'s
-  // member-count check (`!!(group && members.length)`): coach_set_one_rm
-  // 400s on ANY group plan (member count is irrelevant — a group has no
-  // single athlete), so this must gate on group identity alone.
-  showOneRm: boolean;
   tableNav: UseTableNavResult;
   rowArmed: boolean;
   onArmRow(): void;
@@ -814,11 +641,11 @@ interface TableRowProps {
   onCancelRemoveRow(): void;
   onOpenOverride(row: GridRow, cell: GridCell): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
+  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
+  onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
-  onSetOneRm(exerciseSlotId: Id, value: string): Promise<GridCellOneRmPatch>;
   onMoveExerciseToDay(exerciseSlotId: Id, targetDay: GridDay): void;
   onSkipCell(cellId: number, skipped: boolean): void;
-  onSwapCell(cellId: number, swapName: string): void;
   onFillAcrossWeeks(cellId: number): void;
 }
 
@@ -834,9 +661,7 @@ function TableRow({
   days,
   weeks,
   busy,
-  unit,
   showAdjust,
-  showOneRm,
   tableNav,
   rowArmed,
   onArmRow,
@@ -844,11 +669,11 @@ function TableRow({
   onCancelRemoveRow,
   onOpenOverride,
   onPatchCell,
+  onWriteCellLine,
+  onPatchRowColumns,
   onRenameExercise,
-  onSetOneRm,
   onMoveExerciseToDay,
   onSkipCell,
-  onSwapCell,
   onFillAcrossWeeks,
 }: TableRowProps) {
   const weekKey = currentWeekKey(weeks);
@@ -923,29 +748,21 @@ function TableRow({
             </span>
           )}
         </div>
-        {(showOneRm || showMoveToDay) && (
+        {showMoveToDay && (
           <div className="meso-table-row-tags meso-ex-tags">
-            {showOneRm && (
-              <RowOneRmEditor
-                row={row}
-                cell={rowIdentityCell(weeks, row)}
-                unit={unit}
-                busy={busy}
-                onSetOneRm={onSetOneRm}
-              />
-            )}
-            {showMoveToDay && (
-              <RowMoveToDaySelect
-                row={row}
-                day={day}
-                days={days}
-                weekKey={weekKey}
-                busy={busy}
-                onMoveExerciseToDay={onMoveExerciseToDay}
-              />
-            )}
+            <RowMoveToDaySelect
+              row={row}
+              day={day}
+              days={days}
+              weekKey={weekKey}
+              busy={busy}
+              onMoveExerciseToDay={onMoveExerciseToDay}
+            />
           </div>
         )}
+      </td>
+      <td className="meso-table-row-col meso-table-row-col--tempo">
+        <RowColumnInput row={row} field="tempo" label="tempo" onPatchRowColumns={onPatchRowColumns} />
       </td>
       {weeks.map((week) => {
         const cell = row.cells[String(week.id)];
@@ -972,27 +789,14 @@ function TableRow({
               </>
             ) : (
               <>
-                <GridCellEditor cell={cell} unit={unit} row={row} week={week} tableNav={tableNav} onPatchCell={onPatchCell} />
-                {cell.swap_display && (
-                  <span
-                    className="meso-table-swap-badge"
-                    data-testid={`cell-swap-${cell.prescription_id}`}
-                    title={"Swapped for " + cell.swap_display + " this week"}
-                  >
-                    {cell.swap_display}
-                    <button
-                      type="button"
-                      data-testid={`cell-swap-clear-${cell.prescription_id}`}
-                      className="meso-swap-badge-clear"
-                      disabled={busy}
-                      aria-label="Clear swap"
-                      title="Clear swap"
-                      onClick={() => onSwapCell(cell.prescription_id, "")}
-                    >
-                      ×
-                    </button>
-                  </span>
-                )}
+                <GridCellEditor
+                  cell={cell}
+                  row={row}
+                  week={week}
+                  tableNav={tableNav}
+                  onPatchCell={onPatchCell}
+                  onWriteCellLine={onWriteCellLine}
+                />
                 {showAdjust && (
                   <button
                     type="button"
@@ -1013,7 +817,6 @@ function TableRow({
                   cell={cell}
                   busy={busy}
                   onSkipCell={onSkipCell}
-                  onSwapCell={onSwapCell}
                   onFillAcrossWeeks={onFillAcrossWeeks}
                 />
               </>
@@ -1021,6 +824,12 @@ function TableRow({
           </td>
         );
       })}
+      <td className="meso-table-row-col meso-table-row-col--note">
+        <RowColumnInput row={row} field="note" label="notes" onPatchRowColumns={onPatchRowColumns} />
+      </td>
+      <td className="meso-table-row-col meso-table-row-col--rest">
+        <RowColumnInput row={row} field="rest" label="rest" onPatchRowColumns={onPatchRowColumns} />
+      </td>
     </tr>
   );
 }
@@ -1030,17 +839,16 @@ interface TableDayBlockProps {
   days: GridDay[];
   weeks: GridWeek[];
   busy: boolean;
-  unit: string;
   showAdjust: boolean;
-  showOneRm: boolean;
   tableNav: UseTableNavResult;
   isArmed(type: ArmedKind, id: Id): boolean;
   arm(type: ArmedKind, id: Id): void;
   disarm(): void;
   onOpenOverride(row: GridRow, cell: GridCell): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
+  onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
+  onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
-  onSetOneRm(exerciseSlotId: Id, value: string): Promise<GridCellOneRmPatch>;
   onMoveExerciseToDay(exerciseSlotId: Id, targetDay: GridDay): void;
   onAddExercise(day: GridDay): void;
   onRemoveExercise(exerciseSlotId: Id): void;
@@ -1048,7 +856,6 @@ interface TableDayBlockProps {
   onSetCurrentWeek(weekId: Id): void;
   onRemoveWeek(weekId: Id): void;
   onSkipCell(cellId: number, skipped: boolean): void;
-  onSwapCell(cellId: number, swapName: string): void;
   onFillAcrossWeeks(cellId: number): void;
   onAddExerciseThisWeek(day: GridDay, weekId: number): void;
 }
@@ -1062,17 +869,16 @@ function TableDayBlock({
   days,
   weeks,
   busy,
-  unit,
   showAdjust,
-  showOneRm,
   tableNav,
   isArmed,
   arm,
   disarm,
   onOpenOverride,
   onPatchCell,
+  onWriteCellLine,
+  onPatchRowColumns,
   onRenameExercise,
-  onSetOneRm,
   onMoveExerciseToDay,
   onAddExercise,
   onRemoveExercise,
@@ -1080,7 +886,6 @@ function TableDayBlock({
   onSetCurrentWeek,
   onRemoveWeek,
   onSkipCell,
-  onSwapCell,
   onFillAcrossWeeks,
   onAddExerciseThisWeek,
 }: TableDayBlockProps) {
@@ -1158,6 +963,7 @@ function TableDayBlock({
           <thead>
             <tr>
               <th className="meso-table-exercise-col">Exercise</th>
+              <th className="meso-table-row-col-th">Tempo</th>
               {weeks.map((week) => (
                 <WeekColumnHeader
                   key={week.id}
@@ -1170,6 +976,8 @@ function TableDayBlock({
                   onRemoveWeek={onRemoveWeek}
                 />
               ))}
+              <th className="meso-table-row-col-th">Notes</th>
+              <th className="meso-table-row-col-th">Rest</th>
             </tr>
           </thead>
           <tbody>
@@ -1185,9 +993,7 @@ function TableDayBlock({
                   days={days}
                   weeks={weeks}
                   busy={busy}
-                  unit={unit}
                   showAdjust={showAdjust}
-                  showOneRm={showOneRm}
                   tableNav={tableNav}
                   rowArmed={isArmed("exercise", row.exercise_slot_id)}
                   onArmRow={() => arm("exercise", row.exercise_slot_id)}
@@ -1198,11 +1004,11 @@ function TableDayBlock({
                   onCancelRemoveRow={disarm}
                   onOpenOverride={onOpenOverride}
                   onPatchCell={onPatchCell}
+                  onWriteCellLine={onWriteCellLine}
+                  onPatchRowColumns={onPatchRowColumns}
                   onRenameExercise={onRenameExercise}
-                  onSetOneRm={onSetOneRm}
                   onMoveExerciseToDay={onMoveExerciseToDay}
                   onSkipCell={onSkipCell}
-                  onSwapCell={onSwapCell}
                   onFillAcrossWeeks={onFillAcrossWeeks}
                 />
               ))}
@@ -1233,12 +1039,12 @@ export function MesoTable(props: MesoTableProps) {
     grid,
     history,
     busy,
-    unit,
     group,
     onOpenOverride,
     onPatchCell,
+    onWriteCellLine,
+    onPatchRowColumns,
     onRenameExercise,
-    onSetOneRm,
     onMoveExerciseToDay,
     onAddExercise,
     onRemoveExercise,
@@ -1250,7 +1056,6 @@ export function MesoTable(props: MesoTableProps) {
     onUndo,
     onRedo,
     onSkipCell,
-    onSwapCell,
     onFillAcrossWeeks,
     onAddExerciseThisWeek,
     onDragEnd,
@@ -1266,14 +1071,6 @@ export function MesoTable(props: MesoTableProps) {
   // P5 group: the per-cell adjust badge only exists on a GROUP plan with
   // members — an individual plan carries no `group`, so no cell ever shows it.
   const showAdjust = !!(group && group.members.length);
-
-  // Issue #455 phase A3: the per-ROW %1RM badge/editor exists on an
-  // INDIVIDUAL plan only — DELIBERATELY `!group` rather than showAdjust's
-  // member-count check above. A %1RM belongs to a single athlete
-  // (AthleteOneRm), so coach_set_one_rm 400s on ANY group plan regardless of
-  // member count; gating on member count here (like showAdjust) would try to
-  // open the editor for a 0-member group and hit that 400.
-  const showOneRm = !group;
 
   // Rules of Hooks: called unconditionally, before the `!grid` early return
   // below — useTableNav tolerates a null grid the same way (anchor stays
@@ -1371,8 +1168,9 @@ export function MesoTable(props: MesoTableProps) {
           <div className="meso-coachmark-body">
             <div className="meso-coachmark-title">The block table</div>
             <div className="meso-coachmark-text">
-              Tap any cell — sets, reps, load, RPE, rest, or notes — to edit it; arrow keys move cell to
-              cell, and every change autosaves. Drag a ⠿ handle to reorder exercises or days.
+              Tap any cell and type the prescription — “4 x 6, RPE 9” — with extra lines below it for
+              cues or substitutions; arrow keys move cell to cell, and every change autosaves. Drag a ⠿
+              handle to reorder exercises or days.
             </div>
           </div>
           <button
@@ -1401,17 +1199,16 @@ export function MesoTable(props: MesoTableProps) {
               days={grid.days}
               weeks={grid.weeks}
               busy={busy}
-              unit={unit}
               showAdjust={showAdjust}
-              showOneRm={showOneRm}
               tableNav={tableNav}
               isArmed={isArmed}
               arm={arm}
               disarm={disarm}
               onOpenOverride={onOpenOverride}
               onPatchCell={onPatchCell}
+              onWriteCellLine={onWriteCellLine}
+              onPatchRowColumns={onPatchRowColumns}
               onRenameExercise={onRenameExercise}
-              onSetOneRm={onSetOneRm}
               onMoveExerciseToDay={onMoveExerciseToDay}
               onAddExercise={onAddExercise}
               onRemoveExercise={onRemoveExercise}
@@ -1419,7 +1216,6 @@ export function MesoTable(props: MesoTableProps) {
               onSetCurrentWeek={onSetCurrentWeek}
               onRemoveWeek={onRemoveWeek}
               onSkipCell={onSkipCell}
-              onSwapCell={onSwapCell}
               onFillAcrossWeeks={onFillAcrossWeeks}
               onAddExerciseThisWeek={onAddExerciseThisWeek}
             />

@@ -225,7 +225,7 @@ class TestBareDesignerDeliver:
                     "meso:api_prescription_patch",
                     kwargs={"plan_id": plan.pk, "pk": presc.pk},
                 ),
-                data=json.dumps({"reps": "8"}),
+                data=json.dumps({"text": "3 x 8"}),
                 content_type="application/json",
             )
 

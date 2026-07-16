@@ -25,17 +25,9 @@ function week(overrides: Partial<GridWeek> = {}): GridWeek {
 function cell(overrides: Partial<GridCell> = {}): GridCell {
   return {
     prescription_id: 100,
-    sets: "3",
-    reps: "5",
-    load: "100",
-    load_type: "abs",
-    rpe: "8",
-    rest: "90",
-    note: "",
+    text: "3 x 5, RPE 8, 100",
     skipped: false,
-    swap_name: "",
-    swap_exercise_id: null,
-    swap_display: "",
+    lines: [],
     ...overrides,
   };
 }
@@ -47,6 +39,9 @@ function row(overrides: Partial<GridRow> = {}): GridRow {
     exercise_id: 55,
     order: 0,
     tags: [],
+    tempo: "",
+    rest: "",
+    note: "",
     cells: { "1": cell() },
     ...overrides,
   };
@@ -119,29 +114,32 @@ describe("patchCell", () => {
     ) as unknown as typeof fetch;
 
     act(() => {
-      result.current.patchCell(100, { sets: "4" });
+      result.current.patchCell(100, { text: "4 x 6, RPE 9" });
     });
 
     // Optimistic: reflected immediately, before the fetch resolves.
-    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.sets).toBe("4");
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.text).toBe("4 x 6, RPE 9");
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/prescription/100/");
     expect(opts.method).toBe("POST");
-    expect(sentBody()).toEqual({ sets: "4" });
+    expect(sentBody()).toEqual({ text: "4 x 6, RPE 9" });
 
     await waitFor(() => expect(result.current.history.can_undo).toBe(true));
     expect(result.current.history.undo_label).toBe("Edited Squat");
   });
 
-  it("leaves other cells/fields untouched", () => {
+  it("leaves other cells (and the patched cell's other fields) untouched", () => {
     const { result } = setup(
       grid({
         days: [
           day({
             rows: [
-              row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 100, reps: "5" }) } }),
-              row({ exercise_slot_id: 10, cells: { "1": cell({ prescription_id: 200, sets: "5" }) } }),
+              row({
+                exercise_slot_id: 9,
+                cells: { "1": cell({ prescription_id: 100, text: "3 x 5", lines: [{ id: 5, line: 1, text: "RPE 8" }] }) },
+              }),
+              row({ exercise_slot_id: 10, cells: { "1": cell({ prescription_id: 200, text: "5 x 5" }) } }),
             ],
           }),
         ],
@@ -149,10 +147,13 @@ describe("patchCell", () => {
     );
     globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
     act(() => {
-      result.current.patchCell(100, { sets: "4" });
+      result.current.patchCell(100, { text: "4 x 5" });
     });
-    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]).toMatchObject({ sets: "4", reps: "5" });
-    expect(result.current.grid?.days[0]?.rows[1]?.cells["1"]).toMatchObject({ sets: "5" });
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]).toMatchObject({
+      text: "4 x 5",
+      lines: [{ id: 5, line: 1, text: "RPE 8" }],
+    });
+    expect(result.current.grid?.days[0]?.rows[1]?.cells["1"]).toMatchObject({ text: "5 x 5" });
   });
 
   it("console.errors on failure without rolling back the optimistic update", async () => {
@@ -161,16 +162,19 @@ describe("patchCell", () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("boom")) as unknown as typeof fetch;
 
     act(() => {
-      result.current.patchCell(100, { note: "left knee sore" });
+      result.current.patchCell(100, { text: "AMRAP" });
     });
 
     await waitFor(() => expect(console.error).toHaveBeenCalled());
-    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.note).toBe("left knee sore");
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.text).toBe("AMRAP");
   });
 });
 
 describe("renameExercise", () => {
-  it("POSTs {name} to the row's FIRST live week's (non-swapped) cell, optimistically updating row.name", async () => {
+  it("POSTs {name} to the row's FIRST live week's cell (the identity cell), optimistically updating row.name", async () => {
+    // Phase 2a: the one-week swap fields are gone, so identity is always the
+    // block-shared slot's — the first live week's cell is the stable target
+    // (prescription_patch's `name` branch renames the slot).
     const { result } = setup(
       grid({
         weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
@@ -182,44 +186,6 @@ describe("renameExercise", () => {
                 name: "Squat",
                 cells: {
                   "1": cell({ prescription_id: 100 }),
-                  "2": cell({ prescription_id: 101, swap_name: "Leg Press", swap_exercise_id: 77 }),
-                },
-              }),
-            ],
-          }),
-        ],
-      }),
-    );
-    globalThis.fetch = vi.fn().mockResolvedValue(
-      res({ ok: true, history: { can_undo: true, can_redo: false, undo_label: "Renamed Squat", redo_label: "" } }),
-    ) as unknown as typeof fetch;
-
-    act(() => {
-      result.current.renameExercise(9, "Front Squat");
-    });
-
-    expect(result.current.grid?.days[0]?.rows[0]?.name).toBe("Front Squat");
-    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(url).toBe("/meso/api/plan/7/prescription/100/"); // week[0]'s cell, not the swapped week[1] one
-    expect(JSON.parse(opts.body as string)).toEqual({ name: "Front Squat" });
-    await waitFor(() => expect(result.current.history.undo_label).toBe("Renamed Squat"));
-  });
-
-  it("retargets to the first NON-swapped cell when week[0]'s cell is itself the swap", async () => {
-    // prescription_patch treats a `name` edit on a swapped cell as editing
-    // the one-week swap, not the block ExerciseSlot.name — so renaming must
-    // never target week[0]'s cell when THAT week is the swapped one.
-    const { result } = setup(
-      grid({
-        weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
-        days: [
-          day({
-            rows: [
-              row({
-                exercise_slot_id: 9,
-                name: "Squat",
-                cells: {
-                  "1": cell({ prescription_id: 100, swap_name: "Leg Press", swap_exercise_id: 77 }),
                   "2": cell({ prescription_id: 101 }),
                 },
               }),
@@ -238,124 +204,50 @@ describe("renameExercise", () => {
 
     expect(result.current.grid?.days[0]?.rows[0]?.name).toBe("Front Squat");
     const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(url).toBe("/meso/api/plan/7/prescription/101/"); // week[1]'s (unswapped) cell, not the swapped week[0] one
+    expect(url).toBe("/meso/api/plan/7/prescription/100/"); // week[0]'s cell
     expect(JSON.parse(opts.body as string)).toEqual({ name: "Front Squat" });
     await waitFor(() => expect(result.current.history.undo_label).toBe("Renamed Squat"));
   });
 });
 
-describe("setOneRm (issue #455 phase A3)", () => {
-  it("flushes a pending rename before POSTing one-rm/, so the 1RM never keys under the old lift name", async () => {
-    // Codex #455 A3 review: the server keys a MANUAL 1RM off the
-    // prescription's RESOLVED name at POST time. A just-blurred free-text
-    // rename whose autosave is still in flight must land first, or the
-    // value is stored under the OLD identity and vanishes on refetch.
-    const { result } = setup();
-    let resolveRename!: (v: unknown) => void;
-    const fetchMock = vi.fn();
-    fetchMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveRename = resolve;
-        }),
-    );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+// --- Phase 2a text-first: sub-line writes + per-row columns ----------------
+// Both are optimistic + fire-and-forget, mirroring patchCell's semantics
+// above — local repaint immediately, POST not awaited, no rollback.
 
-    // Kick off the rename autosave (fire-and-forget) — POST now in flight.
-    act(() => {
-      result.current.renameExercise(9, "Front Squat");
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    // Save a 1RM while the rename is still unresolved.
-    let saveDone!: Promise<unknown>;
-    act(() => {
-      saveDone = result.current.setOneRm(9, "140");
-    });
-
-    // Blocked on flushPendingWrites(): the one-rm/ POST must not be out yet.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    fetchMock.mockResolvedValueOnce(res({ ok: true, one_rm: "140", source: "manual" }));
-    await act(async () => {
-      resolveRename(res({ ok: true }));
-      await saveDone;
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/"); // the rename
-    expect(fetchMock.mock.calls[1]![0]).toBe("/meso/api/plan/7/prescription/100/one-rm/"); // only after
-  });
-
-  it("repaints every cell sharing the lift identity, not just the target (duplicate lift across days)", async () => {
-    // AthleteOneRm is keyed athlete+lift — the same free-text "Squat" on two
-    // days shares one server record, so a save from day 1 must repaint day
-    // 2's badge too or it shows stale until a full refetch (Codex review).
-    const { result } = setup(
-      grid({
-        days: [
-          day({
-            session_slot_id: 1,
-            rows: [
-              row({ exercise_slot_id: 9, name: "Squat", exercise_id: null, cells: { "1": cell({ prescription_id: 100 }) } }),
-            ],
-          }),
-          day({
-            session_slot_id: 2,
-            session_ids: { "1": 22 },
-            rows: [
-              row({ exercise_slot_id: 10, name: "squat ", exercise_id: null, cells: { "1": cell({ prescription_id: 200 }) } }),
-              row({ exercise_slot_id: 11, name: "Bench", exercise_id: null, cells: { "1": cell({ prescription_id: 300 }) } }),
-            ],
-          }),
-        ],
-      }),
-    );
-    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true, one_rm: "140", source: "manual" })) as unknown as typeof fetch;
-
-    await act(async () => {
-      await result.current.setOneRm(9, "140");
-    });
-
-    const days = result.current.grid!.days;
-    expect(days[0]!.rows[0]!.cells["1"]!.one_rm).toBe("140"); // the target
-    expect(days[1]!.rows[0]!.cells["1"]!.one_rm).toBe("140"); // same lift ("squat " folds to squat)
-    expect(days[1]!.rows[1]!.cells["1"]!.one_rm).toBeUndefined(); // different lift untouched
-  });
-
-  it("POSTs {value} to the row's identity cell and locally patches one_rm/one_rm_source, without refetching", async () => {
+describe("writeCellLine", () => {
+  it("POSTs {week_id, line, text} to row/{slotId}/cell/, optimistically inserting the new sub-line, adopting history", async () => {
     const { result } = setup();
     globalThis.fetch = vi.fn().mockResolvedValue(
-      res({ ok: true, one_rm: "140", source: "manual" }),
+      res({ ok: true, history: { can_undo: true, can_redo: false, undo_label: "Edited Squat", redo_label: "" } }),
     ) as unknown as typeof fetch;
 
-    let patch: { one_rm?: string; one_rm_source?: string } | undefined;
-    await act(async () => {
-      patch = await result.current.setOneRm(9, "140");
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "RPE 8");
     });
 
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    // Optimistic: the sub-line appears immediately, before the fetch resolves.
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([{ line: 1, text: "RPE 8" }]);
     const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(url).toBe("/meso/api/plan/7/prescription/100/one-rm/");
+    expect(url).toBe("/meso/api/plan/7/row/9/cell/");
     expect(opts.method).toBe("POST");
-    expect(sentBody()).toEqual({ value: "140" });
-    expect(patch).toEqual({ one_rm: "140", one_rm_source: "manual" });
-    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.one_rm).toBe("140");
-    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.one_rm_source).toBe("manual");
+    expect(sentBody()).toEqual({ week_id: 1, line: 1, text: "RPE 8" });
+    await waitFor(() => expect(result.current.history.undo_label).toBe("Edited Squat"));
   });
 
-  it("targets the first NON-swapped week when week[0]'s cell is itself the swap", async () => {
+  it("updates an existing sub-line in place (id preserved), keeping line order", () => {
     const { result } = setup(
       grid({
-        weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
         days: [
           day({
             rows: [
               row({
-                exercise_slot_id: 9,
                 cells: {
-                  "1": cell({ prescription_id: 100, swap_name: "Leg Press", swap_exercise_id: 77 }),
-                  "2": cell({ prescription_id: 101 }),
+                  "1": cell({
+                    lines: [
+                      { id: 5, line: 1, text: "RPE 8" },
+                      { id: 6, line: 2, text: "slow eccentric" },
+                    ],
+                  }),
                 },
               }),
             ],
@@ -363,39 +255,106 @@ describe("setOneRm (issue #455 phase A3)", () => {
         ],
       }),
     );
-    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true, one_rm: "100", source: "logged" })) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
 
-    await act(async () => {
-      await result.current.setOneRm(9, "100");
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "RPE 9");
     });
 
-    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(url).toBe("/meso/api/plan/7/prescription/101/one-rm/"); // week[1]'s (unswapped) cell, not the swapped week[0] one
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([
+      { id: 5, line: 1, text: "RPE 9" },
+      { id: 6, line: 2, text: "slow eccentric" },
+    ]);
   });
 
-  it("rethrows on a rejected save, leaving the grid unchanged", async () => {
-    const { result } = setup();
-    globalThis.fetch = vi.fn().mockResolvedValue(res({}, false, 400)) as unknown as typeof fetch;
-
-    await expect(
-      act(async () => {
-        await result.current.setOneRm(9, "abc");
+  it("inserts a new line in line order between existing ones", () => {
+    const { result } = setup(
+      grid({
+        days: [day({ rows: [row({ cells: { "1": cell({ lines: [{ id: 6, line: 3, text: "cue" }] }) } })] })],
       }),
-    ).rejects.toThrow();
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
 
-    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.one_rm).toBeUndefined();
-  });
-
-  it("leaves history untouched after a save (coach_set_one_rm records no plan action)", async () => {
-    const { result } = setup();
-    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true, one_rm: "140", source: "manual" })) as unknown as typeof fetch;
-
-    const before = result.current.history;
-    await act(async () => {
-      await result.current.setOneRm(9, "140");
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "RPE 8");
     });
 
-    expect(result.current.history).toBe(before);
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([
+      { line: 1, text: "RPE 8" },
+      { id: 6, line: 3, text: "cue" },
+    ]);
+  });
+
+  it("line 0 updates cell.text locally (the prescription line, no sub-line entry)", () => {
+    const { result } = setup();
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.writeCellLine(9, 1, 0, "4 x 6");
+    });
+
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.text).toBe("4 x 6");
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([]);
+    expect(sentBody()).toEqual({ week_id: 1, line: 0, text: "4 x 6" });
+  });
+
+  it("console.errors on failure without rolling back the optimistic update", async () => {
+    const { result } = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("boom")) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "RPE 8");
+    });
+
+    await waitFor(() => expect(console.error).toHaveBeenCalled());
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([{ line: 1, text: "RPE 8" }]);
+  });
+});
+
+describe("patchRowColumns", () => {
+  it("POSTs the partial patch to row/{slotId}/, optimistically updating the row columns, adopting history", async () => {
+    const { result } = setup();
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      res({ ok: true, history: { can_undo: true, can_redo: false, undo_label: "Edited Squat", redo_label: "" } }),
+    ) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.patchRowColumns(9, { tempo: "31X1" });
+    });
+
+    expect(result.current.grid?.days[0]?.rows[0]?.tempo).toBe("31X1");
+    const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(url).toBe("/meso/api/plan/7/row/9/");
+    expect(opts.method).toBe("POST");
+    expect(sentBody()).toEqual({ tempo: "31X1" });
+    await waitFor(() => expect(result.current.history.undo_label).toBe("Edited Squat"));
+  });
+
+  it("patches only the given columns, leaving the others untouched", () => {
+    const { result } = setup(
+      grid({ days: [day({ rows: [row({ tempo: "20X0", rest: "2 min", note: "brace hard" })] })] }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.patchRowColumns(9, { rest: "3 min" });
+    });
+
+    expect(result.current.grid?.days[0]?.rows[0]).toMatchObject({ tempo: "20X0", rest: "3 min", note: "brace hard" });
+  });
+
+  it("console.errors on failure without rolling back the optimistic update", async () => {
+    const { result } = setup();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("boom")) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.patchRowColumns(9, { note: "left knee sore" });
+    });
+
+    await waitFor(() => expect(console.error).toHaveBeenCalled());
+    expect(result.current.grid?.days[0]?.rows[0]?.note).toBe("left knee sore");
   });
 });
 
@@ -1013,55 +972,6 @@ describe("skipCell", () => {
   });
 });
 
-describe("swapCell", () => {
-  it('sends {swap_name} to prescription/{cellId}/swap/ for a non-blank name, then refetches', async () => {
-    const { result } = setup();
-    globalThis.fetch = vi
-      .fn()
-      .mockResolvedValueOnce(res({ ok: true }))
-      .mockResolvedValueOnce(
-        res({
-          ok: true,
-          ...grid({
-            days: [
-              day({
-                rows: [row({ cells: { "1": cell({ swap_name: "Front Squat", swap_display: "Front Squat" }) } })],
-              }),
-            ],
-          }),
-        }),
-      ) as unknown as typeof fetch;
-
-    await act(async () => {
-      await result.current.swapCell(100, "Front Squat");
-    });
-
-    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/swap/");
-    expect(calls[0]![1].method).toBe("POST");
-    expect(JSON.parse(calls[0]![1].body as string)).toEqual({ swap_name: "Front Squat" });
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
-    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.swap_display).toBe("Front Squat");
-  });
-
-  it("sends {clear:true} for a blank name", async () => {
-    const { result } = setup();
-    globalThis.fetch = vi
-      .fn()
-      .mockResolvedValueOnce(res({ ok: true }))
-      .mockResolvedValueOnce(res({ ok: true, ...grid() })) as unknown as typeof fetch;
-
-    await act(async () => {
-      await result.current.swapCell(100, "");
-    });
-
-    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[0]![0]).toBe("/meso/api/plan/7/prescription/100/swap/");
-    expect(sentBody()).toEqual({ clear: true });
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
-  });
-});
-
 describe("fillAcrossWeeks", () => {
   it("POSTs {} to prescription/{cellId}/fill/, then refetches the grid", async () => {
     const { result } = setup();
@@ -1098,7 +1008,7 @@ describe("fillAcrossWeeks", () => {
 
     // Kick off the cell autosave (fire-and-forget) — its POST is now in flight.
     act(() => {
-      result.current.patchCell(100, { sets: "4" });
+      result.current.patchCell(100, { text: "4 x 5" });
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
@@ -1166,7 +1076,7 @@ describe("concurrency guard covers the new P2 verbs", () => {
     let second!: Promise<void>;
     act(() => {
       first = result.current.skipCell(100, true);
-      second = result.current.swapCell(100, "Leg Press");
+      second = result.current.fillAcrossWeeks(100);
     });
 
     expect(result.current.busy).toBe(true);

@@ -281,13 +281,13 @@ class TestEditGateIndividual:
         client.force_login(coach)
         resp = client.post(
             _patch_url(plan, presc),
-            data=json.dumps({"sets": "9"}),
+            data=json.dumps({"text": "9 x 9"}),
             content_type="application/json",
         )
         assert resp.status_code == 402
         assert resp.json()["over_limit"] is True
         presc.refresh_from_db()
-        assert presc.sets != "9"
+        assert presc.text != "9 x 9"
 
     def test_within_cap_free_coach_can_patch(self, client):
         coach = UserFactory()
@@ -296,12 +296,12 @@ class TestEditGateIndividual:
         client.force_login(coach)
         resp = client.post(
             _patch_url(plan, presc),
-            data=json.dumps({"sets": "9"}),
+            data=json.dumps({"text": "9 x 9"}),
             content_type="application/json",
         )
         assert resp.status_code == 200
         presc.refresh_from_db()
-        assert presc.sets == "9"
+        assert presc.text == "9 x 9"
 
     def test_over_limit_coach_cannot_deliver(self, client):
         coach = UserFactory()

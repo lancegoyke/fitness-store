@@ -1,9 +1,9 @@
-"""The ``Prescription`` cell's resolving identity, esp. one-week swap semantics.
+"""The ``Prescription`` cell's resolving identity (text-first, Phase 2a).
 
-A cell inherits identity from its ``ExerciseSlot`` unless a one-week swap is set.
-A swap replaces identity WHOLESALE — a free-text swap (``swap_name`` only) of a
-catalog-backed row must not keep resolving to the original catalog exercise, or
-logs/1RM keying and catalog-linked checks would mis-attribute the substituted week.
+A cell always inherits identity from its block-shared ``ExerciseSlot`` — the
+one-week ``swap_*`` override is gone. A substitution is freeform sub-line text
+now (plan §2.6), which never changes the row's resolving identity: logs/1RM
+keying and catalog-linked checks stay on the slot for every week.
 """
 
 import pytest
@@ -15,6 +15,7 @@ from store_project.meso.factories import WeekFactory
 
 from ._helpers import day
 from ._helpers import presc
+from ._helpers import sub_line
 
 pytestmark = pytest.mark.django_db
 
@@ -28,37 +29,35 @@ def _cell_on_catalog_slot():
     return presc(session, name="Back Squat", exercise=catalog), catalog
 
 
-class TestCellSwapIdentity:
-    def test_no_swap_uses_the_slot_identity(self):
+class TestCellIdentityDelegatesToSlot:
+    def test_cell_uses_the_slot_identity(self):
         cell, catalog = _cell_on_catalog_slot()
         assert cell.name == "Back Squat"
         assert cell.exercise_id == catalog.pk
         assert cell.is_catalog_linked is True
 
-    def test_free_text_swap_drops_the_slots_catalog_link(self):
-        # A one-week free-text swap of a catalog-backed row is NOT the original
-        # exercise — it must not fall back to the slot's catalog identity.
+    def test_slot_rename_resolves_through_the_cell(self):
+        # Identity is block-wide: renaming the slot renames every week's cell.
         cell, catalog = _cell_on_catalog_slot()
-        assert cell.exercise_id == catalog.pk  # baseline
+        cell.exercise_slot.name = "Front Squat"
+        cell.exercise_slot.save(update_fields=["name"])
 
-        cell.swap_name = "Goblet Squat"
-        cell.save(update_fields=["swap_name"])
+        cell.refresh_from_db()
+        assert cell.name == "Front Squat"
+        assert cell.exercise_id == catalog.pk  # catalog link untouched
 
-        assert cell.name == "Goblet Squat"
-        assert cell.exercise is None
-        assert cell.exercise_id is None
-        assert cell.is_catalog_linked is False
+    def test_a_substitution_sub_line_leaves_identity_alone(self):
+        # Phase 2a: a substitution is freeform sub-line text, never an identity
+        # override — the row (and even the sub-line cell itself) still resolves
+        # to the slot, so logs/1RM keying can't mis-attribute the week.
+        cell, catalog = _cell_on_catalog_slot()
+        sub = sub_line(cell, "Goblet Squat")
 
-    def test_catalog_swap_resolves_to_the_swap_exercise(self):
-        cell, _ = _cell_on_catalog_slot()
-        substitute = ExerciseFactory()
-
-        cell.swap_exercise = substitute
-        cell.save(update_fields=["swap_exercise"])
-
-        assert cell.exercise_id == substitute.pk
-        assert cell.name == substitute.name
+        assert cell.name == "Back Squat"
+        assert cell.exercise_id == catalog.pk
         assert cell.is_catalog_linked is True
+        assert sub.name == "Back Squat"
+        assert sub.exercise_id == catalog.pk
 
 
 class TestSkippedCellsAreNotTrainable:

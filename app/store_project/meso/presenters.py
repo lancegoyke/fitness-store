@@ -11,7 +11,6 @@ until those surfaces grow their own slices.
 
 import math
 from collections import defaultdict
-from types import SimpleNamespace
 
 from django.db.models import Count
 from django.urls import reverse
@@ -26,7 +25,6 @@ from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachSubscription
-from .models import LoadType
 from .models import Plan
 from .models import SessionLog
 from .models import TourEvent
@@ -736,29 +734,19 @@ def coach_style(coach):
 RPE_FLAG_THRESHOLD = 1.0
 
 
-def _load_label(prescription, unit=None):
-    """The prescribed load with its suffix — "70 kg", "75%", or "BW".
+def _text_label(text):
+    """A one-line display label for a freeform cell's text (Phase 2a).
 
-    A %1RM load (``LoadType.PERCENT``) gets a ``%`` suffix; an absolute numeric
-    load gets ``unit`` when one is given; a non-numeric load ("BW") carries no
-    suffix (a percentage can't apply to "BW").
+    The coach's own notation IS the target label now — verbatim, with a
+    multi-line cell folded to `` · `` separators; "—" for a blank cell.
     """
-    load = prescription.load
-    if not load or _num(load) is None:
-        return load
-    if prescription.load_type == LoadType.PERCENT:
-        return f"{load}%"
-    return f"{load} {unit}" if unit else load
+    parts = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return " · ".join(parts) or "—"
 
 
-def _results_target_label(prescription, unit):
-    """The prescribed target, e.g. "3×6 @ 70 kg · RPE 7" (no unit for "BW")."""
-    label = f"{prescription.sets or '—'}×{prescription.reps or '—'}"
-    if prescription.load:
-        label += f" @ {_load_label(prescription, unit)}"
-    if prescription.rpe and prescription.rpe != "—":
-        label += f" · RPE {prescription.rpe}"
-    return label
+def _results_target_label(prescription):
+    """The prescribed target — the cell's freeform text, verbatim."""
+    return _text_label(prescription.text)
 
 
 def _logged_label(logged_sets, unit):
@@ -788,12 +776,14 @@ def _logged_label(logged_sets, unit):
 def _worst_rep_shortfall(prescription, logged_sets):
     """The biggest rep miss vs the prescribed reps, as ``(deficit, set_number)``.
 
-    Only meaningful when the prescribed reps are a plain number (not "AMRAP" /
-    "8-10"); returns None otherwise, or when every logged set met the target.
+    Only meaningful when the prescribed reps parse to a plain number (not
+    "AMRAP" / "8-10" — text-first, the reps come from parsing the freeform
+    cell); returns None otherwise, or when every logged set met the target.
     Catches the case a set-count check misses — all sets done, but reps fell
     short on one (e.g. a 3×12 logged as 12, 12, 9).
     """
-    target_reps = _num(prescription.reps)
+    parsed = prescription.parsed() or {}
+    target_reps = _num(parsed.get("reps"))
     if target_reps is None:
         return None
     worst = None
@@ -816,13 +806,14 @@ def _exercise_result(prescription, logged_sets, unit):
     set shortfall, a rep shortfall (the prescribed reps missed on a set), then a
     meaningful RPE overshoot.
     """
-    target_rpe = _num(prescription.rpe)
+    parsed = prescription.parsed() or {}
+    target_rpe = _num(parsed.get("rpe"))
     logged_rpes = [_num(s.rpe) for s in logged_sets if _num(s.rpe) is not None]
     top_rpe = max(logged_rpes) if logged_rpes else None
     overshoot = (
         top_rpe - target_rpe if top_rpe is not None and target_rpe is not None else None
     )
-    prescribed_n = _prescribed_set_count(prescription.sets)
+    prescribed_n = _prescribed_set_count(prescription)
     logged_n = len(logged_sets)
     rep_short = _worst_rep_shortfall(prescription, logged_sets)
     if prescribed_n and 0 < logged_n < prescribed_n:
@@ -837,7 +828,7 @@ def _exercise_result(prescription, logged_sets, unit):
         note = ""
     row = {
         "name": prescription.name,
-        "target": _results_target_label(prescription, unit),
+        "target": _results_target_label(prescription),
         "logged": _logged_label(logged_sets, unit) if logged_sets else "—",
         "rpe": _fmt_num(top_rpe) if top_rpe is not None else "—",
         "rpe_state": "over" if overshoot is not None and overshoot > 0 else "on",
@@ -850,7 +841,8 @@ def _avg_rpe_delta(prescriptions, sets_by_prescription):
     """Mean (logged − target) RPE across comparable sets, signed; "—" if none."""
     deltas = []
     for prescription in prescriptions:
-        target = _num(prescription.rpe)
+        parsed = prescription.parsed() or {}
+        target = _num(parsed.get("rpe"))
         if target is None:
             continue
         for s in sets_by_prescription.get(prescription.pk, []):
@@ -915,7 +907,7 @@ def session_results(session):
     logged_total = 0
     for p in prescriptions:
         logged_n = len(sets_by_prescription.get(p.pk, []))
-        prescribed_total += _prescribed_set_count(p.sets) or logged_n
+        prescribed_total += _prescribed_set_count(p) or logged_n
         logged_total += logged_n
     completion = (
         min(round(100 * logged_total / prescribed_total), 100)
@@ -987,35 +979,27 @@ def _athlete_session_row(session, *, done):
     }
 
 
-def _cell_summary(cell, unit):
+def _cell_summary(cell):
     """A read-only prescription summary for one athlete-table cell.
 
     Reads a ``serialize_mesocycle_grid`` cell dict (the athlete table is
-    transformed from that coach grid, not from ``Prescription`` rows) and reuses
-    the results screen's target label so the athlete reads the same "4×8 @ 100 kg
-    · RPE 8" shape everywhere. A ``%1RM`` load carries ``%``; an absolute one the
-    plan's ``unit``; "BW" no suffix.
+    transformed from that coach grid, not from ``Prescription`` rows): the
+    freeform ``text`` verbatim (Phase 2a), with any non-blank sub-lines folded
+    in after it so the athlete sees the whole stack.
     """
-    return _results_target_label(
-        SimpleNamespace(
-            sets=cell["sets"],
-            reps=cell["reps"],
-            load=cell["load"],
-            load_type=cell["load_type"],
-            rpe=cell["rpe"],
-        ),
-        unit,
-    )
+    parts = [cell["text"]]
+    parts.extend(line["text"] for line in cell.get("lines", ()))
+    return _text_label("\n".join(p for p in parts if p and p.strip()))
 
 
-def _athlete_block_grid(block, delivered_week_ids, focus_week_id, unit):
+def _athlete_block_grid(block, delivered_week_ids, focus_week_id):
     """The athlete's read-only multi-week table, transformed from the coach grid.
 
     Reuses ``serialize_mesocycle_grid`` (one dense query set for the whole block —
     no N+1 per cell) and strips it to what a read-only table needs: columns
     filtered to the *delivered* weeks, each cell reduced to a display summary
-    (em-dash rendered by the template when ``skipped``; the swapped exercise name
-    surfaced), and every coach-editing internal (history / ``*_id`` /
+    (the freeform text stack; em-dash rendered by the template when
+    ``skipped``), and every coach-editing internal (history / ``*_id`` /
     ``prescription_id`` / ``session_id``) dropped. The focus (current) week's
     column is flagged (``current``) so the template can highlight it.
     """
@@ -1055,9 +1039,8 @@ def _athlete_block_grid(block, delivered_week_ids, focus_week_id, unit):
                     {
                         "present": True,
                         "current": current,
-                        "summary": _cell_summary(cell, unit),
+                        "summary": _cell_summary(cell),
                         "skipped": cell["skipped"],
-                        "swap": cell["swap_display"],
                     }
                 )
             if has_trainable:
@@ -1243,7 +1226,7 @@ def athlete_home(user, focus_week_id=None):
                 "focus_index": focus.index,
                 "delivered_at": focus.delivered_at,
                 "sessions": sessions,
-                "grid": _athlete_block_grid(block, delivered_ids, focus.pk, plan.unit),
+                "grid": _athlete_block_grid(block, delivered_ids, focus.pk),
                 "week_chip_groups": week_chip_groups,
                 "chip_count": len(plan_delivered_weeks),
                 "next_week": next_week,
@@ -1314,16 +1297,16 @@ def _next_delivered_week(plan_delivered_weeks, focus):
     }
 
 
-def _prescribed_set_count(sets_text):
-    """How many set rows a prescription's ``sets`` cell asks for, or 0.
+def _prescribed_set_count(prescription):
+    """How many set rows a prescription's cell asks for, or 0.
 
-    ``sets`` is free text — "3" is a plain count, but "3-4"/"AMRAP" aren't. We
-    only expand a plain integer; the caller falls back to a default otherwise.
+    Text-first (Phase 2a): the count comes from parsing the freeform cell —
+    "3 x 12" is a plain count of 3, but "AMRAP" or a packed circuit parses to
+    none; the caller falls back to a default otherwise.
     """
-    try:
-        return max(int(str(sets_text).strip()), 0)
-    except (TypeError, ValueError):
-        return 0
+    parsed = prescription.parsed() or {}
+    sets = parsed.get("sets")
+    return max(sets, 0) if isinstance(sets, int) else 0
 
 
 def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
@@ -1336,7 +1319,7 @@ def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
     render unconditionally so a stray large ``set_number`` can never balloon the
     page (the log endpoint also rejects set numbers above its own ceiling).
     """
-    prescribed = _prescribed_set_count(prescription.sets) or default
+    prescribed = _prescribed_set_count(prescription) or default
     logged_numbers = [n for (pid, n) in logged if pid == prescription.pk]
     count = max(min(prescribed, cap), max(logged_numbers, default=0), 1)
     count = min(count, hard_cap)
@@ -1355,19 +1338,16 @@ def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
     return rows
 
 
-def _target_label(prescription):
+def _target_label(prescription, lines=()):
     """The prescribed target shown above a logger's set rows.
 
-    Carries the coach's full prescription — sets×reps plus load and RPE when set
-    — so the athlete sees what to aim for before entering what they did, e.g.
-    "3 × 6 · 70 · RPE 7".
+    The coach's freeform cell text, verbatim (Phase 2a) — what they typed IS
+    the target, e.g. "4 x 6, RPE 9, 225" — with any non-blank sub-lines
+    folded in after it (`` · ``-joined) so the whole stack reads as one line.
     """
-    parts = [f"{prescription.sets or '—'} × {prescription.reps or '—'}"]
-    if prescription.load:
-        parts.append(_load_label(prescription))
-    if prescription.rpe:
-        parts.append(f"RPE {prescription.rpe}")
-    return " · ".join(parts)
+    parts = [prescription.text]
+    parts.extend(line.text for line in lines)
+    return _text_label("\n".join(p for p in parts if p and p.strip()))
 
 
 def athlete_session(session, athlete):
@@ -1390,6 +1370,12 @@ def athlete_session(session, athlete):
     done = log is not None and log.status == SessionLog.Status.DONE
     week = session.week
     prescriptions = list(session.trainable_cells())
+    # The rows' freeform sub-lines (Phase 2a) — folded into each target label
+    # below so the athlete sees the whole stack (an RPE row, cues), not just
+    # the prescription line.
+    lines_by_slot = defaultdict(list)
+    for line_cell in session.line_cells():
+        lines_by_slot[line_cell.exercise_slot_id].append(line_cell)
     # The athlete's persisted, log-derived 1RM per lift (in this plan's unit) — the
     # %1RM logger seeds its suggested bar load from it (no manual estimate needed).
     one_rm_map = one_rm_values(athlete, prescriptions, week.mesocycle.plan.unit)
@@ -1413,8 +1399,8 @@ def athlete_session(session, athlete):
         "one_rm_url": reverse("meso:athlete_set_one_rm", kwargs={"pk": session.pk}),
         "exercises": [
             {
-                **serialize_prescription(p),
-                "target": _target_label(p),
+                **serialize_prescription(p, lines_by_slot.get(p.exercise_slot_id, ())),
+                "target": _target_label(p, lines_by_slot.get(p.exercise_slot_id, ())),
                 # The stored 1RM as a bare number string ("140"), or "" — the
                 # client appends the unit and may layer a typed override on top.
                 "one_rm": _one_rm_label(one_rm_map.get(p.pk)),
@@ -1459,10 +1445,10 @@ def athlete_log_payload(session_ctx):
                 "id": e["id"],
                 "name": e["name"],
                 "target": e["target"],
-                # The structured load + its type so the client knows which rows are
-                # %1RM (and the percent value) to offer the estimated-1RM helper.
-                "load": e["load"],
-                "load_type": e["load_type"],
+                # The freeform cell text (Phase 2a) — the client recovers a
+                # %1RM target from it (its "NN%" token) to offer the
+                # estimated-1RM helper (`percentTarget` in meso_athlete.js).
+                "text": e["text"],
                 # The persisted 1RM ("140"/"") + its source — a manual value seeds
                 # the input; a log-derived one is the suggested-load default shown
                 # as a placeholder.

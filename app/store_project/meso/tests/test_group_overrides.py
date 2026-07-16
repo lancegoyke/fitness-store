@@ -188,41 +188,49 @@ class TestSetOverride:
 class TestResolvePrescription:
     def test_none_override_yields_base(self):
         presc = PrescriptionFactory(
-            exercise_slot__name="Back Squat", sets="3", reps="10", load="100", rpe="7"
+            exercise_slot__name="Back Squat", text="3 x 10, RPE 7, 100"
         )
         resolved = serializers.resolve_prescription(presc, None)
         assert resolved["name"] == "Back Squat"
-        assert resolved["load"] == "100"
+        assert resolved["text"] == "3 x 10, RPE 7, 100"
+        assert resolved["extra_lines"] == []
 
-    def test_swap_replaces_name(self):
+    def test_swap_replaces_name_and_adds_extra_line(self):
         presc = PrescriptionFactory(exercise_slot__name="Back Squat")
         override = PrescriptionOverride(swap_name="Box Squat")
-        assert serializers.resolve_prescription(presc, override)["name"] == "Box Squat"
-
-    def test_load_pct_scales_numeric_load_rounded_to_2_5(self):
-        presc = PrescriptionFactory(load="100")
-        override = PrescriptionOverride(load_pct=90)
-        assert serializers.resolve_prescription(presc, override)["load"] == "90"
-
-    def test_load_pct_rounds_half_up_like_the_designer(self):
-        # 112.5 @ 90% = 101.25 → 40.5 half-steps. The designer's Math.round rounds
-        # the half up to 102.5; Python's banker's round would give 100, so the
-        # resolver must match the UI here.
-        presc = PrescriptionFactory(load="112.5")
-        override = PrescriptionOverride(load_pct=90)
-        assert serializers.resolve_prescription(presc, override)["load"] == "102.5"
-
-    def test_load_pct_leaves_non_numeric_load_unchanged(self):
-        presc = PrescriptionFactory(load="BW")
-        override = PrescriptionOverride(load_pct=90)
-        assert serializers.resolve_prescription(presc, override)["load"] == "BW"
-
-    def test_volume_overrides_sets_and_reps(self):
-        presc = PrescriptionFactory(sets="3", reps="10")
-        override = PrescriptionOverride(sets="2", reps="8")
         resolved = serializers.resolve_prescription(presc, override)
-        assert resolved["sets"] == "2"
-        assert resolved["reps"] == "8"
+        assert resolved["name"] == "Box Squat"
+        assert "Box Squat" in resolved["extra_lines"]
+
+    def test_load_pct_becomes_extra_line_leaving_text_alone(self):
+        # Text-first: freeform text is never token-scaled — a load adjust
+        # renders as a plain-language extra line instead.
+        presc = PrescriptionFactory(text="3 x 10, RPE 7, 100")
+        override = PrescriptionOverride(load_pct=90)
+        resolved = serializers.resolve_prescription(presc, override)
+        assert resolved["text"] == "3 x 10, RPE 7, 100"
+        assert "90% of prescribed load" in resolved["extra_lines"]
+
+    def test_noop_load_pct_adds_no_extra_line(self):
+        presc = PrescriptionFactory(text="3 x 10, RPE 7, 100")
+        override = PrescriptionOverride(load_pct=100)
+        assert serializers.resolve_prescription(presc, override)["extra_lines"] == []
+
+    def test_note_becomes_extra_line(self):
+        presc = PrescriptionFactory(text="3 x 10")
+        override = PrescriptionOverride(note="tempo 3-1-1")
+        resolved = serializers.resolve_prescription(presc, override)
+        assert "tempo 3-1-1" in resolved["extra_lines"]
+
+    def test_volume_override_recomposes_text(self):
+        presc = PrescriptionFactory(text="3 x 10, RPE 7, 100")
+        override = PrescriptionOverride(sets="2", reps="8")
+        assert serializers.resolve_prescription(presc, override)["text"] == "2 x 8"
+
+    def test_partial_volume_override_fills_missing_half_from_base(self):
+        presc = PrescriptionFactory(text="3 x 10, RPE 7, 100")
+        override = PrescriptionOverride(sets="2")
+        assert serializers.resolve_prescription(presc, override)["text"] == "2 x 10"
 
 
 class TestOverrideAdjLabel:

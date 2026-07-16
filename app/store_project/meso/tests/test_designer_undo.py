@@ -7,10 +7,14 @@ endpoint records ONE ``PlanAction`` (stack ``undo``, monotonically increasing
 state taken BEFORE the mutation). ``POST api/plan/<id>/undo/`` pops the max-seq
 undo row, pushes the mirror-image redo row (same seq+label, snapshot = current
 state), and restores the popped snapshot; ``redo/`` is the mirror (pops the
-min-seq redo row). Restore only ever flips fields and ``deleted_at`` — nothing
-is hard-deleted or recreated, so an undone add redoes onto the SAME pk and an
-undone day-delete resurfaces with its athlete's ``SessionLog``/``LoggedSet``
-rows untouched. ``serialize_plan`` grows a ``history`` key so the designer's
+min-seq redo row). Restore only ever flips fields and ``deleted_at`` on the
+identity rows — nothing is hard-deleted or recreated, so an undone add redoes
+onto the SAME pk and an undone day-delete resurfaces with its athlete's
+``SessionLog``/``LoggedSet`` rows untouched. The one exception (text-first,
+Phase 2a) is the ``Prescription`` cell, which has no ``deleted_at``: snapshots
+carry ``{pk, exercise_slot_id, week_id, line, text, skipped}`` and restore
+UPSERTS cells by pk — an after-snapshot sub-line is hard-deleted by undo and
+recreated verbatim (same pk) by redo. ``serialize_plan`` grows a ``history`` key so the designer's
 buttons stay accurate after every ``applyPlanData``.
 
 Covers, per the Phase 1 spec:
@@ -161,7 +165,7 @@ class TestRecording:
         client.force_login(plan.relationship.coach)
 
         # 1. prescription_patch
-        patch(client, plan, cell, load="75")
+        patch(client, plan, cell, text="4 x 6, RPE 7, 75")
         assert undo_actions(plan).count() == 1
 
         # 2. session_add_exercise
@@ -239,17 +243,21 @@ class TestRecording:
     def test_patch_snapshot_captures_pre_mutation_prescription_values(self, client):
         # P0 fixed-lineup cutover: the snapshot splits the old per-week
         # ``prescriptions`` rows into a block-shared ``exercise_slots`` (row
-        # identity — name/deleted_at) and per-week ``cells`` (numbers) row.
+        # identity — name/deleted_at) and per-week ``cells`` rows — text-first
+        # (Phase 2a): {pk, exercise_slot_id, week_id, line, text, skipped}.
         plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, cell, load="90", rpe="9")
+        patch(client, plan, cell, text="4 x 6, RPE 9, 90")
 
         action = undo_actions(plan).get()
         cell_rows = action.snapshot["cells"]
         entry = next(r for r in cell_rows if r["pk"] == cell.pk)
         # The snapshot holds the state BEFORE the mutation.
-        assert entry["load"] == "70"
-        assert entry["rpe"] == "7"
+        assert entry["text"] == "4 x 6, RPE 7, 70"
+        assert entry["exercise_slot_id"] == cell.exercise_slot_id
+        assert entry["week_id"] == cell.week_id
+        assert entry["line"] == 0
+        assert entry["skipped"] is False
 
         slot_rows = action.snapshot["exercise_slots"]
         slot_entry = next(r for r in slot_rows if r["pk"] == cell.exercise_slot_id)
@@ -306,9 +314,9 @@ class TestUndoPrescriptionPatch:
     def test_undo_restores_prior_cell_values_and_returns_envelope(self, client):
         plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, cell, load="75", rpe="8", note="felt easy")
+        patch(client, plan, cell, text="4 x 6, RPE 8, 75")
         cell.refresh_from_db()
-        assert cell.load == "75"  # sanity: the edit landed
+        assert cell.text == "4 x 6, RPE 8, 75"  # sanity: the edit landed
 
         popped = undo_actions(plan).get()
         resp = client.post(undo_url(plan))
@@ -321,9 +329,7 @@ class TestUndoPrescriptionPatch:
         assert body["history"]["can_undo"] is False
 
         cell.refresh_from_db()
-        assert cell.load == "70"
-        assert cell.rpe == "7"
-        assert cell.note == ""
+        assert cell.text == "4 x 6, RPE 7, 70"
 
         # The popped undo row moved to the redo stack with the SAME seq + label.
         assert undo_actions(plan).count() == 0
@@ -334,7 +340,7 @@ class TestUndoPrescriptionPatch:
     def test_undo_bumps_plan_modified(self, client):
         plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, cell, load="75")
+        patch(client, plan, cell, text="4 x 6, RPE 7, 75")
         plan.refresh_from_db()
         before = plan.modified
         resp = client.post(undo_url(plan))
@@ -415,26 +421,48 @@ class TestUndoAddExercise:
         assert ExerciseSlot.objects.count() == rows_after_add
 
 
+class TestSubLineUndoRedo:
+    def test_undo_removes_a_new_sub_line_and_redo_recreates_the_same_pk(self, client):
+        # Sub-line cells are the one row kind restore hard-deletes (the
+        # stray-cell cleanup: no ``deleted_at`` of their own, slot and week
+        # both live) — so redo must UPSERT the snapshotted pk back verbatim.
+        plan, week, session, cell = seed_plan()
+        client.force_login(plan.relationship.coach)
+        resp = post_json(
+            client,
+            reverse(
+                "meso:api_cell_line_write",
+                kwargs={"plan_id": plan.pk, "slot_id": cell.exercise_slot_id},
+            ),
+            {"week_id": week.pk, "line": 1, "text": "RPE 8"},
+        )
+        assert resp.status_code == 200
+        sub_pk = resp.json()["cell"]["id"]
+
+        assert client.post(undo_url(plan)).status_code == 200
+        assert not Prescription.objects.filter(pk=sub_pk).exists()
+
+        assert client.post(redo_url(plan)).status_code == 200
+        revived = Prescription.objects.get(pk=sub_pk)
+        assert revived.exercise_slot_id == cell.exercise_slot_id
+        assert revived.week_id == week.pk
+        assert revived.line == 1
+        assert revived.text == "RPE 8"
+
+
 class TestRoundTrip:
     def test_edit_undo_redo_leaves_db_identical_to_post_edit(self, client):
         plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, cell, load="82.5", rpe="8", note="top set")
+        patch(client, plan, cell, text="4 x 6, RPE 8, 82.5")
         cell.refresh_from_db()
         # A cell (P0 fixed-lineup cutover) has no ``deleted_at`` of its own —
         # only the fields this endpoint can patch round-trip here.
-        post_edit = (
-            cell.name,
-            cell.sets,
-            cell.reps,
-            cell.load,
-            cell.rpe,
-            cell.note,
-        )
+        post_edit = (cell.name, cell.text, cell.skipped)
 
         assert client.post(undo_url(plan)).status_code == 200
         cell.refresh_from_db()
-        assert cell.load == "70"  # sanity: the undo actually reverted
+        assert cell.text == "4 x 6, RPE 7, 70"  # sanity: the undo actually reverted
 
         resp = client.post(redo_url(plan))
         assert resp.status_code == 200
@@ -443,14 +471,7 @@ class TestRoundTrip:
         assert _envelope_keys(body)
 
         cell.refresh_from_db()
-        assert (
-            cell.name,
-            cell.sets,
-            cell.reps,
-            cell.load,
-            cell.rpe,
-            cell.note,
-        ) == post_edit
+        assert (cell.name, cell.text, cell.skipped) == post_edit
         # The stacks mirror back: one undoable action again, nothing redoable.
         assert undo_actions(plan).count() == 1
         assert redo_actions(plan).count() == 0
@@ -462,12 +483,12 @@ class TestRedoInvalidation:
     def test_fresh_mutation_after_undo_clears_the_redo_stack(self, client):
         plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, cell, load="75")
+        patch(client, plan, cell, text="4 x 6, RPE 7, 75")
         assert client.post(undo_url(plan)).status_code == 200
         assert redo_actions(plan).count() == 1
 
         # A fresh mutation forks history — the redo stack is dropped.
-        patch(client, plan, cell, rpe="9")
+        patch(client, plan, cell, text="4 x 6, RPE 9, 75")
         assert redo_actions(plan).count() == 0
 
         resp = client.post(redo_url(plan))
@@ -502,10 +523,10 @@ class TestHistoryCap:
         plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
 
-        patch(client, plan, cell, load="1")
+        patch(client, plan, cell, text="4 x 6, 1")
         first_seq = undo_actions(plan).get().seq
         for i in range(2, 56):  # 54 more → 55 total
-            patch(client, plan, cell, load=str(i))
+            patch(client, plan, cell, text=f"4 x 6, {i}")
 
         seqs = sorted(undo_actions(plan).values_list("seq", flat=True))
         assert len(seqs) == 50
@@ -544,8 +565,10 @@ class TestBatchApplyUndo:
         assert resp.status_code == 200
         assert resp.json()["applied"] == 2
         cell.refresh_from_db()
+        # Swap = block-wide slot rename; progress = the cell's text recomposed
+        # with the new load (text-first, Phase 2a).
         assert cell.name == "Front Squat"
-        assert cell.load == "85"
+        assert cell.text == "4 x 6, RPE 7, 85"
 
         # ONE action for the whole batch, labelled as an agent apply.
         actions = list(undo_actions(plan))
@@ -557,7 +580,7 @@ class TestBatchApplyUndo:
         # Every change the batch applied is reverted by the single undo.
         cell.refresh_from_db()
         assert cell.name == "Box Squat"
-        assert cell.load == "70"
+        assert cell.text == "4 x 6, RPE 7, 70"
 
 
 # ---------------------------------------------------------------------------
@@ -676,7 +699,7 @@ class TestViewedWeekPreservation:
         link, plan, week1, week2 = _two_week_plan()
         cell = list(week1.sessions.first().cells())[0]
         client.force_login(link.coach)
-        patch(client, plan, cell, load="99")
+        patch(client, plan, cell, text="3 x 10, 99")
 
         resp = post_json(client, undo_url(plan), {"week_id": week2.pk})
         assert resp.status_code == 200
@@ -684,7 +707,7 @@ class TestViewedWeekPreservation:
         # The coach was viewing week 2 — the reply keeps them there.
         assert body["viewing"] == week2.pk
         cell.refresh_from_db()
-        assert cell.load == ""  # the scaffolded row's pre-edit load
+        assert cell.text == ""  # the scaffolded row's pre-edit blank cell
 
     def test_undo_falls_back_to_current_when_the_viewed_week_was_un_created(
         self, client
@@ -714,7 +737,7 @@ class TestRestoreConflict:
     def test_hard_deleted_snapshot_row_makes_undo_a_409(self, client):
         plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, cell, load="75")
+        patch(client, plan, cell, text="4 x 6, RPE 7, 75")
 
         # Simulate history rot: something hard-deleted a snapshotted row out
         # from under the op-log (bypassing soft delete via the queryset). A
@@ -748,7 +771,7 @@ class TestSerializePlanHistory:
     def test_after_an_edit_can_undo_is_true_with_a_label(self, client):
         plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        patch(client, plan, cell, load="75")
+        patch(client, plan, cell, text="4 x 6, RPE 7, 75")
 
         history = serialize_plan(plan)["history"]
         assert history["can_undo"] is True
@@ -796,7 +819,7 @@ class TestPartialResponseHistory:
     def test_prescription_patch_reply_includes_history(self, client):
         plan, week, session, cell = seed_plan()
         client.force_login(plan.relationship.coach)
-        body = patch(client, plan, cell, load="75").json()
+        body = patch(client, plan, cell, text="4 x 6, RPE 7, 75").json()
         assert body["history"]["can_undo"] is True
         assert body["history"]["undo_label"]
 
@@ -848,7 +871,7 @@ class TestActionLabelClamp:
         cell.exercise_slot.name = long_name
         cell.exercise_slot.save(update_fields=["name"])
         client.force_login(plan.relationship.coach)
-        resp = patch(client, plan, cell, load="75")
+        resp = patch(client, plan, cell, text="4 x 6, RPE 7, 75")
         assert resp.status_code == 200
         label = undo_actions(plan).order_by("-seq").first().label
         assert len(label) <= 80
@@ -874,16 +897,16 @@ class TestRestoreAfterMembershipRemoved:
         assert resp.status_code == 200
 
         # A later edit snapshots state WITH the override in it…
-        original_load = cell.load
-        resp = patch(client, plan, cell, load="80")
+        original_text = cell.text
+        resp = patch(client, plan, cell, text="3 x 10, RPE 7, 80")
         assert resp.status_code == 200
         # …then the member leaves (membership + its overrides hard-delete).
         membership.delete()
 
-        # Undo of that edit restores the load — and quietly skips the
+        # Undo of that edit restores the text — and quietly skips the
         # departed member's override instead of 500ing on the dead FK.
         resp = client.post(undo_url(plan))
         assert resp.status_code == 200
         cell.refresh_from_db()
-        assert cell.load == original_load
+        assert cell.text == original_text
         assert not PrescriptionOverride.objects.filter(prescription=cell).exists()

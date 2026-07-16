@@ -27,25 +27,19 @@ import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, MesoGrid } from
 
 export type Id = number | string;
 
-/** The cell fields the coach can type into (rest is new in P1). Everything
- * else on GridCell — prescription_id/skipped/swap_* — is server-derived,
- * display-only in P1 (never sent back in a patch). */
-export type GridCellPatch = Partial<
-  Pick<GridCell, "sets" | "reps" | "load" | "load_type" | "rpe" | "rest" | "note">
->;
+/** The one cell field the coach types into (text-first, Phase 2a). Everything
+ * else on GridCell — prescription_id/skipped/lines — is server-derived or
+ * written through its own verb (writeCellLine), never this patch. */
+export type GridCellPatch = Partial<Pick<GridCell, "text">>;
+
+/** The per-exercise row columns (Phase 2a, D2) writable via patchRowColumns. */
+export type GridRowPatch = Partial<Pick<GridRow, "tempo" | "rest" | "note">>;
 
 /** P5 group: the adj/adjusts a group override save/clear returns for one cell
  * — patched into that cell (matched by prescription_id) so its adjust badge
  * repaints without a full grid refetch. The grid analog of usePlanData's
  * `patchExercise({adj, adjusts})` on the single-week path. */
 export type GridCellAdjPatch = Pick<GridCell, "adj" | "adjusts">;
-
-/** Issue #455 phase A3: the one_rm/one_rm_source a coach_set_one_rm save
- * returns — patched into the row's identity cell (matched by
- * prescription_id) so its %1RM badge repaints without a full grid refetch.
- * The grid analog of GridCellAdjPatch above / useOneRmEditor's
- * `patchExercise({one_rm, one_rm_source})` on the single-week path. */
-export type GridCellOneRmPatch = Pick<GridCell, "one_rm" | "one_rm_source">;
 
 /** Any payload carrying a fresh plan history — accepts BOTH the grid
  * endpoints' `GridHistory` (string labels) AND the override editor's
@@ -92,20 +86,13 @@ function firstWeekCellId(grid: MesoGrid | null, row: GridRow | undefined): Id | 
   return row.cells[String(firstWeek.id)]?.prescription_id;
 }
 
-/** The row's IDENTITY cell: the first live week's cell that is NOT a one-week
- * swap. Shared by rename (prescription_patch only rewrites the block
- * ExerciseSlot.name for an unswapped cell) and setOneRm below (a %1RM is a
- * property of the ROW's block identity, not a swapped week's substitute
- * lift — see setOneRm's header). Falls back to the first week's cell if
- * every week is swapped (rare) — best-effort. Exported so MesoTable can
- * derive the identity cell to READ (`cell.one_rm`/`one_rm_source`) without
- * duplicating this rule. */
+/** The row's IDENTITY cell: the first live week's cell. (Phase 2a: the
+ * one-week swap fields are gone — identity is always the block-shared
+ * slot's, so any cell of the row identifies it; the first live week's is the
+ * stable pick.) Used by rename (prescription_patch's `name` branch rewrites
+ * the block ExerciseSlot.name). */
 export function rowIdentityCellId(weeks: GridWeek[], row: GridRow | undefined): Id | undefined {
   if (!row) return undefined;
-  for (const week of weeks) {
-    const c = row.cells[String(week.id)];
-    if (c && c.swap_name === "" && c.swap_exercise_id == null) return c.prescription_id;
-  }
   const first = weeks[0];
   return first ? row.cells[String(first.id)]?.prescription_id : undefined;
 }
@@ -142,49 +129,50 @@ function updateCellInGrid(grid: MesoGrid, cellId: Id, patch: Partial<GridCell>):
   };
 }
 
-/** The lift identity a cell RESOLVES to, mirroring the server's
- * `_exercise_key`/`key_str` rule exactly (serializers.py/one_rm.py):
- * `"id:<pk>"` for a catalog-linked lift, `"name:<trimmed lower>"` for free
- * text; a one-week swap overrides the row's block identity for that cell. */
-export function liftIdentityOfCell(row: GridRow, c: GridCell): string {
-  const swapped = c.swap_name !== "" || c.swap_exercise_id != null;
-  const exerciseId = swapped ? c.swap_exercise_id : row.exercise_id;
-  const name = swapped ? c.swap_name : row.name;
-  return exerciseId != null ? `id:${exerciseId}` : `name:${(name || "").trim().toLowerCase()}`;
+function updateRowInGrid(grid: MesoGrid, exerciseSlotId: Id, patch: Partial<GridRow>): MesoGrid {
+  return {
+    ...grid,
+    days: grid.days.map((day) => ({
+      ...day,
+      rows: day.rows.map((row) =>
+        row.exercise_slot_id === exerciseSlotId ? { ...row, ...patch } : row,
+      ),
+    })),
+  };
 }
 
-/** Patch every cell in the grid whose resolved lift identity matches —
- * an AthleteOneRm is keyed athlete+lift, not per cell, so a save from one
- * row must repaint the SAME lift's badge everywhere it appears (duplicate
- * lifts across days, or a swap resolving to another row's lift). */
-function updateCellsByLiftIdentity(grid: MesoGrid, identity: string, patch: Partial<GridCell>): MesoGrid {
+/** Immutably set one (week × line) sub-line's text on a row — updates an
+ * existing entry or inserts a new one in line order (the optimistic local
+ * mirror of the server's get_or_create upsert in `cell_line_write`). */
+function updateCellLineInGrid(
+  grid: MesoGrid,
+  exerciseSlotId: Id,
+  weekId: Id,
+  line: number,
+  text: string,
+): MesoGrid {
   return {
     ...grid,
     days: grid.days.map((day) => ({
       ...day,
       rows: day.rows.map((row) => {
-        let changed = false;
-        const cells: Record<string, GridCell> = {};
-        for (const [weekId, c] of Object.entries(row.cells)) {
-          if (liftIdentityOfCell(row, c) === identity) {
-            changed = true;
-            cells[weekId] = { ...c, ...patch };
-          } else {
-            cells[weekId] = c;
-          }
+        if (row.exercise_slot_id !== exerciseSlotId) return row;
+        const key = String(weekId);
+        const cell = row.cells[key];
+        if (!cell) return row;
+        if (line === 0) {
+          return { ...row, cells: { ...row.cells, [key]: { ...cell, text } } };
         }
-        return changed ? { ...row, cells } : row;
+        const lines = [...(cell.lines ?? [])];
+        const idx = lines.findIndex((l) => l.line === line);
+        if (idx >= 0) {
+          lines[idx] = { ...lines[idx]!, text };
+        } else {
+          lines.push({ line, text });
+          lines.sort((a, b) => a.line - b.line);
+        }
+        return { ...row, cells: { ...row.cells, [key]: { ...cell, lines } } };
       }),
-    })),
-  };
-}
-
-function updateRowNameInGrid(grid: MesoGrid, exerciseSlotId: Id, name: string): MesoGrid {
-  return {
-    ...grid,
-    days: grid.days.map((day) => ({
-      ...day,
-      rows: day.rows.map((row) => (row.exercise_slot_id === exerciseSlotId ? { ...row, name } : row)),
     })),
   };
 }
@@ -291,7 +279,7 @@ export function useGrid(options: UseGridOptions) {
       const row = findRow(grid, exerciseSlotId);
       const cellId = rowIdentityCellId(grid?.weeks ?? [], row);
       if (cellId == null) return;
-      setGrid((prev) => (prev ? updateRowNameInGrid(prev, exerciseSlotId, name) : prev));
+      setGrid((prev) => (prev ? updateRowInGrid(prev, exerciseSlotId, { name }) : prev));
       const write = apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/`, { name }, csrf)
         .then((data) => adoptGridHistory(data as GridHistoryCarrier))
         .catch((err) => console.error("Rename exercise failed", err));
@@ -301,48 +289,44 @@ export function useGrid(options: UseGridOptions) {
     [grid, planId, csrf, adoptGridHistory],
   );
 
-  // Issue #455 phase A3: the %1RM editor's save verb — AWAITED (unlike
-  // patchCell/renameExercise's fire-and-forget autosave) so RowOneRmEditor
-  // (MesoTable.tsx) can drive its own saving/error UI off the promise, mirror-
-  // ing useOneRmEditor.saveOneRm on the single-week path. A %1RM is a
-  // property of the athlete + lift identity (AthleteOneRm has NO week
-  // dimension), so it always targets the row's IDENTITY cell (rowIdentityCellId
-  // — shared with renameExercise above), never the cell the coach happens to
-  // be looking at. Patches the result LOCALLY (updateCellInGrid, patchCellAdj's
-  // precedent) — no refetchGrid (nothing structural changed) and no
-  // adoptGridHistory (coach_set_one_rm does not record_plan_action, so the
-  // reply carries no `history`).
-  const setOneRm = useCallback(
-    async (exerciseSlotId: Id, value: string): Promise<GridCellOneRmPatch> => {
-      const row = findRow(grid, exerciseSlotId);
-      const cellId = rowIdentityCellId(grid?.weeks ?? [], row);
-      if (cellId == null) throw new Error("No cell to set a 1RM against.");
-      // A just-blurred free-text rename may still be in flight — the server
-      // keys a MANUAL 1RM off the prescription's RESOLVED name, so saving
-      // before the rename lands would store it under the OLD lift identity
-      // (Codex #455 A3 review). Same flush fillAcrossWeeks uses.
-      await flushPendingWrites();
-      const data = await apiPost<{ one_rm?: string; source?: string }>(
-        `/meso/api/plan/${planId}/prescription/${cellId}/one-rm/`,
-        { value },
-        csrf,
-      );
-      const patch: GridCellOneRmPatch = { one_rm: data.one_rm ?? "", one_rm_source: data.source ?? "" };
-      // The server record is keyed athlete+LIFT, not per cell — repaint every
-      // cell resolving to the same lift (duplicate lifts across days would
-      // otherwise show stale badges until a full refetch — Codex review).
-      const targetCell = Object.values(row!.cells).find((c) => c.prescription_id === cellId);
-      const identity = targetCell ? liftIdentityOfCell(row!, targetCell) : null;
+  // Phase 2a: write one freeform (week × line) sub-line of a row's stack —
+  // addressed by (exercise_slot, week, line), not pk, since a sub-line cell
+  // may not exist yet (the server upserts via `cell_line_write`). Same
+  // optimistic fire-and-forget shape as patchCell: local repaint immediately,
+  // POST not awaited, failure console.error'd. Line 0 routes here too when
+  // the caller has no pk handy, though patchCell (by pk) is the normal line-0
+  // path.
+  const writeCellLine = useCallback(
+    (exerciseSlotId: Id, weekId: Id, line: number, text: string) => {
       setGrid((prev) =>
-        prev
-          ? identity != null
-            ? updateCellsByLiftIdentity(prev, identity, patch)
-            : updateCellInGrid(prev, cellId, patch)
-          : prev,
+        prev ? updateCellLineInGrid(prev, exerciseSlotId, weekId, line, text) : prev,
       );
-      return patch;
+      const write = apiPost(
+        `/meso/api/plan/${planId}/row/${exerciseSlotId}/cell/`,
+        { week_id: weekId, line, text },
+        csrf,
+      )
+        .then((data) => adoptGridHistory(data as GridHistoryCarrier))
+        .catch((err) => console.error("Cell line write failed", err));
+      pendingWritesRef.current.add(write);
+      write.finally(() => pendingWritesRef.current.delete(write));
     },
-    [grid, planId, csrf, flushPendingWrites],
+    [planId, csrf, adoptGridHistory],
+  );
+
+  // Phase 2a (D2): the per-exercise Tempo/Rest/instructions columns — row
+  // attributes on the block-shared ExerciseSlot, written through
+  // `exercise_slot_patch`. Same optimistic fire-and-forget shape as patchCell.
+  const patchRowColumns = useCallback(
+    (exerciseSlotId: Id, patch: GridRowPatch) => {
+      setGrid((prev) => (prev ? updateRowInGrid(prev, exerciseSlotId, patch) : prev));
+      const write = apiPost(`/meso/api/plan/${planId}/row/${exerciseSlotId}/`, patch, csrf)
+        .then((data) => adoptGridHistory(data as GridHistoryCarrier))
+        .catch((err) => console.error("Row columns autosave failed", err));
+      pendingWritesRef.current.add(write);
+      write.finally(() => pendingWritesRef.current.delete(write));
+    },
+    [planId, csrf, adoptGridHistory],
   );
 
   const addExercise = useCallback(
@@ -527,11 +511,13 @@ export function useGrid(options: UseGridOptions) {
     [grid, planId, csrf, runStructural, refetchGrid],
   );
 
-  // --- P2 exceptions: skip / swap / fill / add-this-week -----------------
+  // --- P2 exceptions: skip / fill / add-this-week -------------------------
   // Same STRUCTURAL shape as add/removeExercise|Day|Week above — the grid
   // (not just one cell) can change shape/content in ways only the server
-  // knows (swap_display is server-resolved, add-this-week creates a new
+  // knows (fill rewrites whole stacks, add-this-week creates a new
   // slot+cells) so these await their POST then refetch, sharing busyRef.
+  // (The one-week swap verb is gone — Phase 2a: a substitution is sub-line
+  // text, written through writeCellLine above.)
 
   const skipCell = useCallback(
     (cellId: number, skipped: boolean) =>
@@ -540,21 +526,6 @@ export function useGrid(options: UseGridOptions) {
           await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/skip/`, { skipped }, csrf);
         } catch (err) {
           console.error("Skip cell failed", err);
-          return;
-        }
-        await refetchGrid();
-      }),
-    [planId, csrf, runStructural, refetchGrid],
-  );
-
-  const swapCell = useCallback(
-    (cellId: number, swapName: string) =>
-      runStructural(async () => {
-        const body = swapName.trim() ? { swap_name: swapName } : { clear: true };
-        try {
-          await apiPost(`/meso/api/plan/${planId}/prescription/${cellId}/swap/`, body, csrf);
-        } catch (err) {
-          console.error("Swap cell failed", err);
           return;
         }
         await refetchGrid();
@@ -634,7 +605,8 @@ export function useGrid(options: UseGridOptions) {
     patchCellAdj,
     adoptGridHistory,
     renameExercise,
-    setOneRm,
+    writeCellLine,
+    patchRowColumns,
     addExercise,
     removeExercise,
     addDay,
@@ -646,7 +618,6 @@ export function useGrid(options: UseGridOptions) {
     reorderDays,
     moveExerciseToDay,
     skipCell,
-    swapCell,
     fillAcrossWeeks,
     addExerciseThisWeek,
     undo,

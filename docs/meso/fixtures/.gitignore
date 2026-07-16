@@ -1,0 +1,11 @@
+# Lance's own filled workbook and its full parsed dump: large personal data, and the
+# JSON is re-derivable from the .xlsx via explore_sheet.py. Persisted locally so it
+# survives a context clear, but kept out of git. Both are re-fetchable via the Drive
+# connector (personal Google account) from the fileIds recorded in memory.
+lance-program.xlsx
+sheet-dump.json
+
+# Never commit raw third-party client workbooks. The anonymized derivative
+# (templates/annotated-program-sample.xlsx) is what belongs in git.
+private/
+client-402688260*

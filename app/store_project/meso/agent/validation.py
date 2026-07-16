@@ -19,7 +19,6 @@ import re
 
 from ..models import CoachAthlete
 from ..models import GroupMembership
-from ..models import LoadType
 from ..models import Prescription
 from ..models import PrescriptionOverride
 from ..models import Session
@@ -70,10 +69,9 @@ _APPLY_FIELD = {
 }
 
 # An ``add`` builds a whole new prescription, so it carries several fields rather
-# than the single value the other kinds set, as (prescription field, tool field,
-# model ``max_length``). ``name`` is required (it falls back to
-# introduces_exercise, like a swap); the rest are optional row columns. A new row
-# is an absolute-load row, so ``load_type`` is left at the model default.
+# than the single value the other kinds set, as (component, tool field, length
+# cap). ``name`` is required (it falls back to introduces_exercise, like a
+# swap); the rest compose into the new row's freeform cell text (Phase 2a).
 _ADD_FIELDS = (
     ("name", "new_name", 255),
     ("sets", "new_sets", 32),
@@ -423,15 +421,19 @@ def clean_change(raw, plan, *, forbidden=None):
                     payload["load_pct"] = load_pct
     cleaned["payload"] = payload
 
-    # %1RM bound — a progress on a percent-typed lift moves a PERCENTAGE. The
-    # model treats ``load`` as an opaque string, so this requires a clean percent
-    # in a sane band (rejecting both an absolute-looking "180" and a unit-suffixed
-    # "100 lb" the model wrongly converted) and normalizes a valid one to a bare
-    # number so the designer's ``%`` suffix isn't doubled. Keyed on the *target
-    # row's* type; an absolute lift is left unbounded as before.
+    # %1RM bound — a progress on a lift currently prescribed as a percent moves
+    # a PERCENTAGE. Text-first (Phase 2a): "percent-typed" is derived from the
+    # target cell's parsed text (its load token ends in ``%``), not a stored
+    # enum. Requires a clean percent in a sane band (rejecting both an
+    # absolute-looking "180" and a unit-suffixed "100 lb" the model wrongly
+    # converted) and normalizes a valid one to ``NN%`` so the recomposed cell
+    # text keeps its percent notation. An absolute lift is left unbounded as
+    # before.
     load_value = payload.get("load")
     if kind == "progress" and presc is not None and load_value:
-        if presc.load_type == LoadType.PERCENT:
+        parsed = presc.parsed() or {}
+        current_load = parsed.get("load") or ""
+        if current_load.endswith("%"):
             pct = _percent_load(load_value)
             if pct is None:
                 errors.append(
@@ -443,7 +445,7 @@ def clean_change(raw, plan, *, forbidden=None):
                     f"(expected 1–{MAX_PERCENT_1RM}%)"
                 )
             else:
-                payload["load"] = _fmt_percent(pct)
+                payload["load"] = f"{_fmt_percent(pct)}%"
 
     # Contraindication backstop — only a movement-introducing change is screened
     # (a volume/progress edit that *mentions* a flagged movement, e.g. "overhead

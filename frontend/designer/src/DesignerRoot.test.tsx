@@ -79,20 +79,15 @@ function gridPayload(overrides: Record<string, unknown> = {}) {
             exercise_id: 55,
             order: 0,
             tags: [],
+            tempo: "",
+            rest: "",
+            note: "",
             cells: {
               "1": {
                 prescription_id: 100,
-                sets: "3",
-                reps: "5",
-                load: "100",
-                load_type: "abs",
-                rpe: "8",
-                rest: "90",
-                note: "",
+                text: "3 x 5, RPE 8, 100",
                 skipped: false,
-                swap_name: "",
-                swap_exercise_id: null,
-                swap_display: "",
+                lines: [],
               },
             },
           },
@@ -264,6 +259,49 @@ describe("table view (issue #455 phase A5: the only view left besides periodizat
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/undo/", expect.anything()));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/grid/"));
+  });
+});
+
+// Phase 2a text-first wiring: the ghost sub-line input routes through
+// gridState.writeCellLine (POST row/<slot>/cell/) and a row-column edit
+// through gridState.patchRowColumns (POST row/<slot>/) — pinned here because
+// MesoTable only reaches those verbs through DesignerRoot's wiring.
+describe("Phase 2a: sub-line + row-column wiring", () => {
+  function mountIsland() {
+    jsonScript("meso-grid-data", gridPayload());
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    render(<DesignerRoot />);
+    return fetchMock;
+  }
+
+  it("committing the ghost sub-line input POSTs {week_id, line, text} to row/<slot>/cell/", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mountIsland();
+
+    await user.type(screen.getByTestId("cell-line-new-100"), "RPE 8");
+    await user.tab();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/row/9/cell/", expect.anything()));
+    const call = fetchMock.mock.calls.find((c) => c[0] === "/meso/api/plan/7/row/9/cell/")!;
+    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({ week_id: 1, line: 1, text: "RPE 8" });
+    // The optimistic repaint promotes the ghost's text to a real sub-line input.
+    expect(screen.getByTestId("cell-line-100-1")).toHaveValue("RPE 8");
+  });
+
+  it("committing a Tempo edit POSTs the partial patch to row/<slot>/", async () => {
+    const user = userEvent.setup();
+    const fetchMock = mountIsland();
+
+    await user.type(screen.getByTestId("row-tempo-9"), "31X1");
+    await user.tab();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/row/9/", expect.anything()));
+    const call = fetchMock.mock.calls.find((c) => c[0] === "/meso/api/plan/7/row/9/")!;
+    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({ tempo: "31X1" });
   });
 });
 
