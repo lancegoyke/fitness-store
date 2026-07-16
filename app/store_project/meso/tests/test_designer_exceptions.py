@@ -1,31 +1,22 @@
-"""P2 — Exceptions (RED, issue #440): skip / swap / add-this-week / fill.
+"""P2 — Exceptions (issue #440): skip / add-this-week / fill.
 
-Model fields (``Prescription.skipped``/``.swap_exercise``/``.swap_name``)
-already exist from P0; the grid serializer already emits them read-only; the
-undo snapshot already captures/restores them. P2 adds the coach WRITE UX for
-one-week exceptions — four backend endpoints, no migrations, no serializer
-changes (see ``docs/archive/meso/fixed-selection-plan.md`` + the P2 contract):
+Text-first (Phase 2a): the one-week ``prescription_swap`` endpoint (and the
+``swap_*`` cell fields) are retired — a substitution is freeform sub-line text
+now (``api_cell_line_write``, covered in ``test_designer_save.py``). What
+remains here is the coach WRITE UX for the surviving exceptions:
 
 - ``session_add_exercise`` extended with an optional ``week_id`` body key
   (add-this-week — the new row lands trained only on that week, skipped on
   every other live week of the block);
 - ``prescription_skip`` — toggles a cell's one-week ``skipped`` exception;
-- ``prescription_swap`` — sets/clears a cell's one-week free-text swap;
-- ``prescription_fill`` — copies a cell's numeric fields across sibling weeks
-  of the same block-shared row, leaving their ``skipped``/``swap_*`` alone.
+- ``prescription_fill`` — copies a cell's whole freeform text stack (line 0 +
+  sub-lines) across sibling weeks of the same block-shared row, blanking a
+  target's stale higher lines in place and leaving its ``skipped`` alone.
 
 These tests assert only OBSERVABLE state: response status/``ok``, DB fields
 after ``refresh_from_db()``, and reflection through a follow-up GET to
 ``api_mesocycle_grid``. For ``history`` we only assert the key is present —
 never its internal shape (that's ``test_designer_undo.py``'s job).
-
-RED: none of ``api_prescription_skip``/``api_prescription_swap``/
-``api_prescription_fill`` exist yet, so most of these fail with
-``NoReverseMatch``; the ``week_id``-scoped add-this-week cases fail because
-the view doesn't honor ``week_id`` yet (either a 400 that shouldn't happen, or
-every created cell landing unskipped). The no-``week_id`` regression test is
-expected to PASS already — that's the byte-identical unscoped behavior P2
-must not disturb.
 """
 
 import json
@@ -44,6 +35,7 @@ from store_project.users.factories import UserFactory
 
 from ._helpers import day
 from ._helpers import presc
+from ._helpers import sub_line
 
 pytestmark = pytest.mark.django_db
 
@@ -95,12 +87,6 @@ def post_json(client, url, payload):
 def skip_url(plan, cell):
     return reverse(
         "meso:api_prescription_skip", kwargs={"plan_id": plan.pk, "pk": cell.pk}
-    )
-
-
-def swap_url(plan, cell):
-    return reverse(
-        "meso:api_prescription_swap", kwargs={"plan_id": plan.pk, "pk": cell.pk}
     )
 
 
@@ -219,87 +205,6 @@ class TestPrescriptionSkip:
 
 
 # ---------------------------------------------------------------------------
-# B2 — prescription_swap
-# ---------------------------------------------------------------------------
-
-
-class TestPrescriptionSwap:
-    def test_swap_sets_swap_name_and_clears_swap_exercise(self, client):
-        plan, meso, week, session, cell = seed_plan()
-        client.force_login(plan.relationship.coach)
-
-        resp = post_json(client, swap_url(plan, cell), {"swap_name": "Front Squat"})
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["ok"] is True
-        assert "history" in body
-        cell.refresh_from_db()
-        assert cell.swap_name == "Front Squat"
-        assert cell.swap_exercise_id is None
-        grid_cell = _grid_cell(client, plan, cell.exercise_slot_id, week.pk)
-        assert grid_cell["swap_display"] == "Front Squat"
-
-    def test_swap_name_is_stripped(self, client):
-        plan, meso, week, session, cell = seed_plan()
-        client.force_login(plan.relationship.coach)
-
-        resp = post_json(client, swap_url(plan, cell), {"swap_name": "  Hack Squat  "})
-
-        assert resp.status_code == 200
-        cell.refresh_from_db()
-        assert cell.swap_name == "Hack Squat"
-
-    def test_swap_clear_via_clear_flag(self, client):
-        plan, meso, week, session, cell = seed_plan()
-        cell.swap_name = "Goblet Squat"
-        cell.save(update_fields=["swap_name"])
-        client.force_login(plan.relationship.coach)
-
-        resp = post_json(client, swap_url(plan, cell), {"clear": True})
-
-        assert resp.status_code == 200
-        assert resp.json()["ok"] is True
-        cell.refresh_from_db()
-        assert cell.swap_name == ""
-        assert cell.swap_exercise_id is None
-        grid_cell = _grid_cell(client, plan, cell.exercise_slot_id, week.pk)
-        assert grid_cell["swap_display"] == ""
-
-    def test_swap_clear_via_blank_swap_name(self, client):
-        plan, meso, week, session, cell = seed_plan()
-        cell.swap_name = "Goblet Squat"
-        cell.save(update_fields=["swap_name"])
-        client.force_login(plan.relationship.coach)
-
-        resp = post_json(client, swap_url(plan, cell), {"swap_name": "   "})
-
-        assert resp.status_code == 200
-        cell.refresh_from_db()
-        assert cell.swap_name == ""
-        assert cell.swap_exercise_id is None
-
-    def test_swap_name_over_255_chars_is_400(self, client):
-        plan, meso, week, session, cell = seed_plan()
-        client.force_login(plan.relationship.coach)
-
-        resp = post_json(client, swap_url(plan, cell), {"swap_name": "x" * 256})
-
-        assert resp.status_code == 400
-        assert resp.json()["ok"] is False
-        cell.refresh_from_db()
-        assert cell.swap_name == ""  # unchanged
-
-    def test_get_not_allowed(self, client):
-        plan, meso, week, session, cell = seed_plan()
-        client.force_login(plan.relationship.coach)
-
-        resp = client.get(swap_url(plan, cell))
-
-        assert resp.status_code == 405
-
-
-# ---------------------------------------------------------------------------
 # B0 — session_add_exercise extended with week_id (add-this-week)
 # ---------------------------------------------------------------------------
 
@@ -373,15 +278,11 @@ class TestAddExerciseThisWeek:
 
 
 class TestPrescriptionFill:
-    def test_fill_copies_numeric_fields_to_the_other_week_by_default(self, client):
+    def test_fill_copies_the_text_stack_to_the_other_week_by_default(self, client):
         plan, meso, week1, week2, session, cell1, cell2 = seed_two_week_plan()
-        cell1.sets = "5"
-        cell1.reps = "3"
-        cell1.load = "80"
-        cell1.rpe = "9"
-        cell1.rest = "180"
-        cell1.note = "top set"
-        cell1.save()
+        cell1.text = "5 x 3, RPE 9, 80"
+        cell1.save(update_fields=["text"])
+        sub = sub_line(cell1, "belt on")  # a sub-line rides the stack too
         client.force_login(plan.relationship.coach)
 
         resp = client.post(fill_url(plan, cell1))  # no body -> defaults to all others
@@ -392,32 +293,42 @@ class TestPrescriptionFill:
         assert body["filled"] == 1
         assert "history" in body
         cell2.refresh_from_db()
-        assert cell2.sets == "5"
-        assert cell2.reps == "3"
-        assert cell2.load == "80"
-        assert cell2.rpe == "9"
-        assert cell2.rest == "180"
-        assert cell2.note == "top set"
+        assert cell2.text == "5 x 3, RPE 9, 80"
+        copied_sub = Prescription.objects.get(
+            exercise_slot_id=cell1.exercise_slot_id, week=week2, line=sub.line
+        )
+        assert copied_sub.text == "belt on"
         grid_cell = _grid_cell(client, plan, cell1.exercise_slot_id, week2.pk)
-        assert grid_cell["sets"] == "5"
-        assert grid_cell["load"] == "80"
+        assert grid_cell["text"] == "5 x 3, RPE 9, 80"
+        assert [line["text"] for line in grid_cell["lines"]] == ["belt on"]
 
-    def test_fill_leaves_a_siblings_skipped_and_swap_flags_alone(self, client):
+    def test_fill_blanks_a_targets_stale_higher_lines_in_place(self, client):
+        # The target week carries a sub-line the source lacks — fill blanks it
+        # (spreadsheet semantics), never deletes the row.
+        plan, meso, week1, week2, session, cell1, cell2 = seed_two_week_plan()
+        stale = sub_line(cell2, "old cue")
+        client.force_login(plan.relationship.coach)
+
+        resp = client.post(fill_url(plan, cell1))
+
+        assert resp.status_code == 200
+        stale.refresh_from_db()  # same pk — blanked, not deleted
+        assert stale.text == ""
+
+    def test_fill_leaves_a_siblings_skipped_alone(self, client):
         plan, meso, week1, week2, session, cell1, cell2 = seed_two_week_plan()
         cell2.skipped = True
-        cell2.swap_name = "Goblet Squat"
-        cell2.save(update_fields=["skipped", "swap_name"])
-        cell1.load = "85"
-        cell1.save(update_fields=["load"])
+        cell2.save(update_fields=["skipped"])
+        cell1.text = "4 x 6, RPE 7, 85"
+        cell1.save(update_fields=["text"])
         client.force_login(plan.relationship.coach)
 
         resp = client.post(fill_url(plan, cell1))
 
         assert resp.status_code == 200
         cell2.refresh_from_db()
-        assert cell2.load == "85"  # numbers still copied
-        assert cell2.skipped is True  # exception flags untouched
-        assert cell2.swap_name == "Goblet Squat"
+        assert cell2.text == "4 x 6, RPE 7, 85"  # text still copied
+        assert cell2.skipped is True  # the one-week exception untouched
 
     def test_fill_with_explicit_week_ids_targets_only_those_weeks(self, client):
         plan, meso, week1, week2, session, cell1, cell2 = seed_two_week_plan()
@@ -425,13 +336,10 @@ class TestPrescriptionFill:
         cell3 = presc(
             exercise_slot=cell1.exercise_slot,
             week=week3,
-            sets="3",
-            reps="10",
-            load="60",
-            rpe="7",
+            text="3 x 10, RPE 7, 60",
         )
-        cell1.load = "88"
-        cell1.save(update_fields=["load"])
+        cell1.text = "4 x 6, RPE 7, 88"
+        cell1.save(update_fields=["text"])
         client.force_login(plan.relationship.coach)
 
         resp = post_json(client, fill_url(plan, cell1), {"week_ids": [week3.pk]})
@@ -439,9 +347,9 @@ class TestPrescriptionFill:
         assert resp.status_code == 200
         assert resp.json()["filled"] == 1
         cell3.refresh_from_db()
-        assert cell3.load == "88"
+        assert cell3.text == "4 x 6, RPE 7, 88"
         cell2.refresh_from_db()
-        assert cell2.load == "70"  # untouched — not a targeted week
+        assert cell2.text == "4 x 6, RPE 7, 70"  # untouched — not a targeted week
 
     def test_get_not_allowed(self, client):
         plan, meso, week, session, cell = seed_plan()
@@ -488,7 +396,7 @@ class TestOwnershipAndBilling:
         _, _, _, _, other_cell = seed_plan()  # belongs to a different plan
         client.force_login(plan.relationship.coach)
 
-        resp = post_json(client, swap_url(plan, other_cell), {"swap_name": "X"})
+        resp = post_json(client, skip_url(plan, other_cell), {"skipped": True})
 
         assert resp.status_code == 404
 

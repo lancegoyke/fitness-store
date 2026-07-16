@@ -1,7 +1,10 @@
 // Specs for AthletePreview (CONTRACT.md "AthletePreview") — the phone mock's
 // first-day/first-three-lifts view. Ported from meso.js's athleteDay/aTotal/
 // aDone getters (now computed inside this component per the contract, since
-// they're view-shaping with no existing lib coverage).
+// they're view-shaping with no existing lib coverage). Phase 2a (text-first
+// cells): the prescription is one freeform string plus optional sub-lines —
+// no sets count to fan set rows out from, so the mock shows ONE loggable row
+// per lift (key "a0-<xi>-0") with the verbatim text as its target.
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AthletePreview } from "./AthletePreview";
@@ -14,8 +17,8 @@ function program(): Day[] {
       n: 1,
       name: "Lower · Quad bias",
       exercises: [
-        { id: 1, name: "Back Squat", sets: "3", reps: "5", load: "100", load_type: "abs" },
-        { id: 2, name: "Leg Press", sets: "2", reps: "10", load: "75", load_type: "pct" },
+        { id: 1, name: "Back Squat", text: "3 x 5, 100" },
+        { id: 2, name: "Leg Press", text: "2 x 10, 75%", lines: [{ line: 1, text: "RPE 8" }] },
       ],
     },
   ];
@@ -32,16 +35,31 @@ function baseProps(overrides: Partial<Parameters<typeof AthletePreview>[0]> = {}
 }
 
 describe("AthletePreview", () => {
-  it("renders the first day's first three lifts with per-set rows", () => {
+  it("renders the first day's lifts with one loggable row each, keyed a0-<xi>-0", () => {
     render(<AthletePreview {...baseProps()} />);
     expect(screen.getByText("Back Squat")).toBeInTheDocument();
     expect(screen.getByText("Leg Press")).toBeInTheDocument();
-    // Squat: 3 sets → keys a0-0-0, a0-0-1, a0-0-2.
     expect(screen.getByTestId("athlete-check-a0-0-0")).toBeInTheDocument();
-    expect(screen.getByTestId("athlete-check-a0-0-2")).toBeInTheDocument();
-    // Leg Press: 2 sets → keys a0-1-0, a0-1-1.
     expect(screen.getByTestId("athlete-check-a0-1-0")).toBeInTheDocument();
-    expect(screen.getByTestId("athlete-check-a0-1-1")).toBeInTheDocument();
+  });
+
+  it("renders the prescription text verbatim as the target", () => {
+    render(<AthletePreview {...baseProps()} />);
+    expect(screen.getByText("target 3 x 5, 100")).toBeInTheDocument();
+    expect(screen.getByText("target 2 x 10, 75%")).toBeInTheDocument();
+  });
+
+  it("renders a lift's sub-lines under its head, skipping blank ones", () => {
+    const p = program();
+    p[0]!.exercises[1]!.lines = [
+      { line: 1, text: "RPE 8" },
+      { line: 2, text: "   " }, // blank sub-line: cleared in place, not shown
+      { line: 3, text: "sub: Cable Crunch" },
+    ];
+    render(<AthletePreview {...baseProps({ program: p })} />);
+    expect(screen.getByTestId("athlete-line-2-0")).toHaveTextContent("RPE 8");
+    expect(screen.getByTestId("athlete-line-2-1")).toHaveTextContent("sub: Cable Crunch");
+    expect(screen.queryByTestId("athlete-line-2-2")).not.toBeInTheDocument();
   });
 
   it("renders nothing (empty) when the current week has no sessions yet", () => {
@@ -62,7 +80,7 @@ describe("AthletePreview", () => {
     const done = screen.getByTestId("athlete-check-a0-0-0");
     // The done indicator renders a check glyph; assert it differs from an
     // undone row's rendering rather than assuming a specific DOM shape.
-    const undone = screen.getByTestId("athlete-check-a0-0-1");
+    const undone = screen.getByTestId("athlete-check-a0-1-0");
     expect(done.innerHTML).not.toBe(undone.innerHTML);
   });
 
@@ -71,10 +89,7 @@ describe("AthletePreview", () => {
     p[0]!.exercises.push({
       id: 3,
       name: "Leg Curl",
-      sets: "3",
-      reps: "12",
-      load: "40",
-      load_type: "abs",
+      text: "3 x 12, 40",
       skipped: true,
     });
     render(<AthletePreview {...baseProps({ program: p })} />);
@@ -86,8 +101,8 @@ describe("AthletePreview", () => {
   it("only considers the first three exercises of the first day", () => {
     const p = program();
     p[0]!.exercises.push(
-      { id: 3, name: "Leg Curl", sets: "3", reps: "12", load: "40", load_type: "abs" },
-      { id: 4, name: "Calf Raise", sets: "3", reps: "15", load: "20", load_type: "abs" },
+      { id: 3, name: "Leg Curl", text: "3 x 12, 40" },
+      { id: 4, name: "Calf Raise", text: "3 x 15, 20" },
     );
     render(<AthletePreview {...baseProps({ program: p })} />);
     expect(screen.getByText("Back Squat")).toBeInTheDocument();

@@ -14,7 +14,7 @@ const members: GroupMember[] = [
 ];
 
 function ex(overrides: Partial<Exercise> = {}): Exercise {
-  return { id: 11, name: "Back Squat", sets: "3", reps: "10", load: "100", load_type: "abs", ...overrides };
+  return { id: 11, name: "Back Squat", text: "3 x 10, 100", ...overrides };
 }
 
 function draft(overrides: Partial<OverrideDraft> = {}): OverrideDraft {
@@ -32,7 +32,6 @@ function baseProps(overrides: Partial<Parameters<typeof OverrideModal>[0]> = {})
       error: "",
     },
     overrideHasExisting: true,
-    unit: "kg",
     onSelectMember: vi.fn(),
     onUpdateDraft: vi.fn(),
     onClose: vi.fn(),
@@ -53,6 +52,16 @@ describe("OverrideModal", () => {
     expect(screen.getByText("Back Squat")).toBeInTheDocument();
     expect(screen.getByTestId("override-member-a1")).toBeInTheDocument();
     expect(screen.getByTestId("override-member-a2")).toBeInTheDocument();
+  });
+
+  it("shows the shared prescription text verbatim in the header meta (Phase 2a)", () => {
+    render(<OverrideModal {...baseProps()} />);
+    expect(screen.getByText(/shared 3 x 10, 100/)).toBeInTheDocument();
+  });
+
+  it("falls back to an em-dash for a blank shared prescription", () => {
+    render(<OverrideModal {...baseProps({ override: { ...baseProps().override!, ex: ex({ text: "" }) } })} />);
+    expect(screen.getByText(/shared —/)).toBeInTheDocument();
   });
 
   it("selects a member via onSelectMember", async () => {

@@ -58,8 +58,7 @@ class TestApplyChange:
 
     def test_swap_is_block_wide(self):
         # P4: an agent swap renames the block-shared ``ExerciseSlot``, so EVERY
-        # week's cell follows (``Prescription.name`` resolves to the slot). It is
-        # a slot rename, NOT a one-week cell ``swap_name`` write.
+        # week's cell follows (``Prescription.name`` resolves to the slot).
         plan, session, cell_w1 = make_plan()  # week 1 (current)
         week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2)
         day(week2, session_slot=session.session_slot)
@@ -77,36 +76,7 @@ class TestApplyChange:
         cell_w2 = Prescription.objects.get(pk=cell_w2.pk)
         assert cell_w1.name == "Front Squat"
         assert cell_w2.name == "Front Squat"  # block-wide
-        assert cell_w1.swap_name == ""  # slot rename, NOT a cell swap
         assert cell_w1.exercise_slot.name == "Front Squat"
-
-    def test_swap_clears_target_cells_one_week_exception(self):
-        # If the reviewed cell already carried a one-week ``swap_*`` exception, a
-        # block-wide swap clears it so the new lift shows through on THIS week too
-        # — otherwise the reviewed week would silently keep the old override while
-        # every other week changed. Sibling weeks' own exceptions are preserved.
-        plan, session, cell_w1 = make_plan()  # week 1 (current)
-        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2)
-        day(week2, session_slot=session.session_slot)
-        cell_w2 = presc(
-            exercise_slot=cell_w1.exercise_slot, week=week2, swap_name="Leg Press"
-        )
-        cell_w1.swap_name = "Hack Squat"
-        cell_w1.save(update_fields=["swap_name"])
-        change = ProposedChangeFactory(
-            batch=_batch(plan),
-            kind=ProposedChange.Kind.SWAP,
-            prescription=cell_w1,
-            payload={"name": "Front Squat"},
-        )
-        agent_apply.apply_change(change)
-
-        cell_w1 = Prescription.objects.get(pk=cell_w1.pk)
-        cell_w2 = Prescription.objects.get(pk=cell_w2.pk)
-        assert cell_w1.swap_name == ""  # target exception cleared
-        assert cell_w1.name == "Front Squat"  # shows the block-wide identity
-        assert cell_w2.swap_name == "Leg Press"  # sibling exception preserved
-        assert cell_w2.name == "Leg Press"
 
     def test_swap_severs_catalog_link(self):
         # A free-text rename severs the slot's catalog FK so the row isn't
@@ -124,7 +94,9 @@ class TestApplyChange:
         cell.exercise_slot.refresh_from_db()
         assert cell.exercise_slot.exercise is None
 
-    def test_progress_sets_load(self):
+    def test_progress_rewrites_the_cells_load(self):
+        # Text-first: a progress parses the cell's text, swaps the load, and
+        # recomposes — the helper's default cell is "3 x 10, RPE 7, 60".
         plan, _, presc = make_plan()
         change = ProposedChangeFactory(
             batch=_batch(plan),
@@ -134,10 +106,10 @@ class TestApplyChange:
         )
         agent_apply.apply_change(change)
         presc.refresh_from_db()
-        assert presc.load == "92.5 kg"
+        assert presc.text == "3 x 10, RPE 7, 92.5 kg"
 
-    def test_volume_sets_set_count(self):
-        plan, _, presc = make_plan()  # factory default sets == "3"
+    def test_volume_rewrites_the_cells_set_count(self):
+        plan, _, presc = make_plan()  # default cell "3 x 10, RPE 7, 60"
         change = ProposedChangeFactory(
             batch=_batch(plan),
             kind=ProposedChange.Kind.VOLUME,
@@ -146,7 +118,7 @@ class TestApplyChange:
         )
         agent_apply.apply_change(change)
         presc.refresh_from_db()
-        assert presc.sets == "4"
+        assert presc.text == "4 x 10, RPE 7, 60"
 
     def test_volume_targeting_a_session_sets_all_rows(self):
         # A volume change may target a whole day (session) rather than one row;
@@ -163,8 +135,8 @@ class TestApplyChange:
         result = agent_apply.apply_change(change)
         first_presc.refresh_from_db()
         presc2.refresh_from_db()
-        assert first_presc.sets == "4"
-        assert presc2.sets == "4"
+        assert first_presc.text == "4 x 10, RPE 7, 60"
+        assert presc2.text == "4 x 10, RPE 7, 60"
         assert result["count"] == 2
 
     def test_deload_flags_the_current_week(self):
@@ -199,10 +171,10 @@ class TestApplyChange:
             prescription=presc,
             payload={},
         )
-        before = presc.load
+        before = presc.text
         assert agent_apply.apply_change(change) is None
         presc.refresh_from_db()
-        assert presc.load == before
+        assert presc.text == before
 
     def test_add_creates_a_new_prescription_on_the_session(self):
         # ``add`` is the verb that lets the agent draft a program: it creates a
@@ -225,9 +197,7 @@ class TestApplyChange:
 
         added = session.cells().last()
         assert added.name == "Romanian Deadlift"
-        assert added.sets == "3"
-        assert added.reps == "8-10"
-        assert added.rpe == "7"
+        assert added.text == "3 x 8-10, RPE 7"
         assert added.exercise_slot.order > presc.exercise_slot.order
         assert result["kind"] == ProposedChange.Kind.ADD
         assert session.cells().count() == 2

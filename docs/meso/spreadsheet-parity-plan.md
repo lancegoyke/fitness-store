@@ -1,6 +1,6 @@
 # Meso — spreadsheet parity by simplification
 
-**Status:** proposed · started 2026-07-16
+**Status:** Phase 2a (text-first cell) built 2026-07-16 · started 2026-07-16
 **Owner:** Lance
 **North star:** make writing a program in Meso as fast and frictionless as writing it
 in a Google Sheet — keyboard-driven, freeform, one grid — then extend to tracking,
@@ -293,7 +293,23 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
    Deliverable: the model change, the removals list, and the open decisions below.
 2. **Phase 2 — Build the simplifications.**
    - 2a **Text-first cell** — model + migration (structured fields → `text` +
-     `parse_prescription`); keep undo/redo.
+     `parse_prescription`); keep undo/redo. **✅ Built 2026-07-16** (branch
+     `meso/2a-text-first-cell`): `Prescription` = `(exercise_slot, week, line,
+     text, skipped)` — line 0 = the prescription, lines 1+ = freeform sub-rows;
+     `swap_*`/`load_type`/per-week `rest`/`note` retired (swap/skip/notes are
+     text per §2.6, `skipped` kept per §2.1); `ExerciseSlot` gained the
+     per-exercise `tempo`/`rest`/`note` columns (D2); new `parsing.py`
+     (`parse_prescription` + `compose_prescription_text`, corpus-tested);
+     migrations `0038`/`0039` compose existing cells into Lance-notation text,
+     hoist rest, convert `WeekDelivery` payloads, and **wipe the undo/redo
+     stacks** (old snapshots capture retired columns); undo/redo itself now
+     upserts cells by pk so sub-line edits round-trip. New endpoints:
+     `cell_line_write` (sub-line upsert by slot/week/line) and
+     `exercise_slot_patch` (tempo/rest/note); `prescription_swap` and the
+     designer's %1RM editor + `load_type` toggle removed. The table renders
+     one text input per week cell + the sub-line stack + Tempo/Notes/Rest row
+     columns. Group overrides resolve as text interim (volume recomposed,
+     swap/note/load% as extra sub-lines) until 2c removes them.
    - 2b **All-weeks grid + keyboard flow** — weeks side-by-side; arrows/Tab/Enter
      navigation; Enter-adds-row, add-week, `Ctrl-C`/`Ctrl-V` duplicate-forward
      (this also *is* the ad-hoc log mode — starting a session = add/duplicate a

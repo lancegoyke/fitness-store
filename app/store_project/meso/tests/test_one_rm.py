@@ -37,7 +37,6 @@ from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AthleteOneRm
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachSubscription
-from store_project.meso.models import LoadType
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
@@ -383,7 +382,7 @@ class TestLogEndpointRefreshesOneRm:
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete,
-            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         client.force_login(athlete)
         resp = post_log(
@@ -505,9 +504,7 @@ class TestPresenterThreading:
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete,
-            prescriptions=[
-                {"name": "Back Squat", "load": "75", "load_type": LoadType.PERCENT}
-            ],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         AthleteOneRmFactory(athlete=athlete, name="Back Squat", value=Decimal("140"))
         ctx = presenters.athlete_session(session, athlete)
@@ -517,9 +514,7 @@ class TestPresenterThreading:
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete,
-            prescriptions=[
-                {"name": "Back Squat", "load": "75", "load_type": LoadType.PERCENT}
-            ],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         AthleteOneRmFactory(athlete=athlete, name="Back Squat", value=Decimal("142.5"))
         ctx = presenters.athlete_session(session, athlete)
@@ -530,7 +525,7 @@ class TestPresenterThreading:
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete,
-            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         ctx = presenters.athlete_session(session, athlete)
         assert ctx["exercises"][0]["one_rm"] == ""
@@ -541,9 +536,7 @@ class TestSerializerThreading:
         athlete = UserFactory()
         plan, _, (squat,) = make_session(
             athlete,
-            prescriptions=[
-                {"name": "Back Squat", "load": "75", "load_type": LoadType.PERCENT}
-            ],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         AthleteOneRmFactory(athlete=athlete, name="Back Squat", value=Decimal("140"))
         data = serialize_plan(plan)
@@ -556,7 +549,7 @@ class TestSerializerThreading:
         meso = MesocycleFactory(plan=group_plan, order=0)
         week = WeekFactory(mesocycle=meso, index=1, is_current=True)
         session = day(week, day_number=1)
-        build_presc(session, order=0, name="Back Squat", load_type=LoadType.PERCENT)
+        build_presc(session, order=0, name="Back Squat", text="3 x 5, 75%")
         data = serialize_plan(group_plan)
         assert "one_rm" not in data["program"][0]["exercises"][0]
 
@@ -786,7 +779,7 @@ class TestSetOneRmEndpoint:
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete,
-            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         client.force_login(athlete)
         resp = post_one_rm(client, session, {"prescription": squat.pk, "value": "160"})
@@ -802,7 +795,7 @@ class TestSetOneRmEndpoint:
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete,
-            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         client.force_login(athlete)
         post_one_rm(client, session, {"prescription": squat.pk, "value": "160"})
@@ -817,7 +810,7 @@ class TestSetOneRmEndpoint:
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete,
-            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         client.force_login(athlete)
         post_one_rm(client, session, {"prescription": squat.pk, "value": "200"})
@@ -890,9 +883,7 @@ class TestPresenterCarriesSource:
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete,
-            prescriptions=[
-                {"name": "Back Squat", "load": "75", "load_type": LoadType.PERCENT}
-            ],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         AthleteOneRmFactory(
             athlete=athlete,
@@ -912,7 +903,7 @@ class TestPresenterCarriesSource:
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete,
-            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         ctx = presenters.athlete_session(session, athlete)
         assert ctx["exercises"][0]["one_rm_source"] == ""
@@ -946,7 +937,7 @@ class TestCoachSetOneRmEndpoint:
         plan, _, (squat,) = make_session(
             athlete,
             coach=coach,
-            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         client.force_login(coach)
         resp = post_coach_one_rm(client, plan, squat, {"value": "150"})
@@ -966,7 +957,7 @@ class TestCoachSetOneRmEndpoint:
             athlete,
             coach=coach,
             unit=Unit.POUNDS,
-            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         client.force_login(coach)
         post_coach_one_rm(client, plan, squat, {"value": "315"})
@@ -979,7 +970,7 @@ class TestCoachSetOneRmEndpoint:
         plan, session, (squat,) = make_session(
             athlete,
             coach=coach,
-            prescriptions=[{"name": "Back Squat", "load_type": LoadType.PERCENT}],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         # A logged set means clearing the manual value reverts to the estimate.
         log_session(athlete, session, [(squat, 1, "1", "120", "9")])
@@ -1012,9 +1003,7 @@ class TestCoachSetOneRmEndpoint:
         meso = MesocycleFactory(plan=group_plan, order=0)
         week = WeekFactory(mesocycle=meso, index=1, is_current=True)
         session = day(week, day_number=1)
-        squat = build_presc(
-            session, order=0, name="Back Squat", load_type=LoadType.PERCENT
-        )
+        squat = build_presc(session, order=0, name="Back Squat", text="3 x 5, 75%")
         client.force_login(coach)
         resp = post_coach_one_rm(client, group_plan, squat, {"value": "150"})
         assert resp.status_code == 400
@@ -1062,9 +1051,7 @@ class TestSerializerCarriesSource:
         athlete = UserFactory()
         plan, _, (squat,) = make_session(
             athlete,
-            prescriptions=[
-                {"name": "Back Squat", "load": "75", "load_type": LoadType.PERCENT}
-            ],
+            prescriptions=[{"name": "Back Squat", "text": "3 x 5, 75%"}],
         )
         AthleteOneRmFactory(
             athlete=athlete,

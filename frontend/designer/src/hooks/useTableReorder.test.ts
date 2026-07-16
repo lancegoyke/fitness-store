@@ -64,17 +64,9 @@ function week(overrides: Partial<GridWeek> = {}): GridWeek {
 function cell(overrides: Partial<GridCell> = {}): GridCell {
   return {
     prescription_id: 100,
-    sets: "3",
-    reps: "5",
-    load: "100",
-    load_type: "abs",
-    rpe: "8",
-    rest: "90",
-    note: "",
+    text: "3 x 5, RPE 8, 100",
     skipped: false,
-    swap_name: "",
-    swap_exercise_id: null,
-    swap_display: "",
+    lines: [],
     ...overrides,
   };
 }
@@ -86,6 +78,9 @@ function row(overrides: Partial<GridRow> = {}): GridRow {
     exercise_id: 55,
     order: 0,
     tags: [],
+    tempo: "",
+    rest: "",
+    note: "",
     cells: { "1": cell() },
     ...overrides,
   };

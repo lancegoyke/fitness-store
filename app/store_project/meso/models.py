@@ -12,6 +12,7 @@ relationship (N1). Roles are marked by the presence of a ``CoachProfile`` /
 """
 
 import uuid
+from collections import defaultdict
 from datetime import timedelta
 
 from django.conf import settings
@@ -25,19 +26,6 @@ from django.utils.translation import gettext_lazy as _
 class Unit(models.TextChoices):
     KILOGRAMS = "kg", _("Kilograms")
     POUNDS = "lb", _("Pounds")
-
-
-class LoadType(models.TextChoices):
-    """What a prescription's Load *number* means (units & RPE/%1RM slice, S2).
-
-    ``ABSOLUTE`` — a weight in the plan's ``Unit`` (kg/lb); the default, so every
-    existing row keeps reading exactly as before. ``PERCENT`` — a percentage of
-    1RM, rendered with a ``%`` suffix instead of the unit. RPE is orthogonal (its
-    own column, and coexists with either load type).
-    """
-
-    ABSOLUTE = "abs", _("Absolute load")
-    PERCENT = "pct", _("% of 1RM")
 
 
 class InvalidTransition(Exception):
@@ -1137,10 +1125,11 @@ class CoachSubscription(models.Model):
 #
 # ``SessionSlot``/``ExerciseSlot`` are the mesocycle's fixed lineup — the day and
 # exercise-row *identity*, shared across every week of the block. ``Prescription``
-# is a per-week cell of pure numbers (sets/reps/load/rpe/rest/note) plus a
-# one-week exception (``skipped``/``swap_*``); its resolving properties
-# (``name``/``exercise``/``exercise_id``/``tags``) fall through to the slot
-# unless a one-week swap overrides them, so read sites keep working unchanged.
+# is a per-week cell of freeform TEXT (Phase 2a spreadsheet parity: ``line`` 0 =
+# the prescription, lines 1+ = optional sub-rows) plus the one-week ``skipped``
+# exception; structure is derived on demand by ``parsing.parse_prescription``.
+# Its resolving properties (``name``/``exercise``/``exercise_id``/``tags``)
+# delegate to the slot, so read sites keep working unchanged.
 # ``ExerciseSlot``/``Prescription`` together replace the old per-week
 # ``ExercisePrescription`` row (retired). ``ExerciseSlot.exercise`` links to the
 # catalog ``Exercise`` when one matches and falls back to free text otherwise
@@ -1363,9 +1352,7 @@ class Plan(models.Model):
             exercise_slot = ExerciseSlot.objects.create(
                 session_slot=slot, name="New exercise", order=0
             )
-            Prescription.objects.create(
-                exercise_slot=exercise_slot, week=week, sets="3", reps="10", rpe="7"
-            )
+            Prescription.objects.create(exercise_slot=exercise_slot, week=week)
         return self
 
 
@@ -1402,11 +1389,11 @@ class Mesocycle(models.Model):
         Since the P0 fixed-lineup cutover, ``SessionSlot``/``ExerciseSlot`` are
         block-level identity **shared** across every week, so a new week never
         deep-copies sessions/exercise rows — it just adds a ``Session`` instance
-        per live slot and a ``Prescription`` cell per live exercise slot, with the
-        cell's *numbers* (sets/reps/load/load_type/rpe/rest/note) carried forward
-        from the latest live week as a starting point the coach then tweaks. Each
-        new cell starts clean — ``skipped``/``swap_*`` (one-week exceptions) are
-        never carried forward. The new week is a **non-current, undelivered
+        per live slot and ``Prescription`` cells per live exercise slot, with the
+        row's freeform *text* (the whole line stack — prescription line plus any
+        sub-lines, Phase 2a) carried forward from the latest live week as a
+        starting point the coach then tweaks. Each new cell starts clean —
+        ``skipped`` (a one-week exception) is never carried forward. The new week is a **non-current, undelivered
         draft**: adding a future week never changes what's live or what delivery
         targets — making a week the deliver target is the separate
         ``week_set_current`` action. ``week_count`` grows to stay >= the highest
@@ -1447,9 +1434,7 @@ class Mesocycle(models.Model):
             exercise_slot = ExerciseSlot.objects.create(
                 session_slot=slot, name="New exercise", order=0
             )
-            Prescription.objects.create(
-                exercise_slot=exercise_slot, week=week, sets="3", reps="10", rpe="7"
-            )
+            Prescription.objects.create(exercise_slot=exercise_slot, week=week)
         else:
             live_slots = list(
                 self.session_slots.filter(deleted_at__isnull=True).order_by(
@@ -1459,33 +1444,30 @@ class Mesocycle(models.Model):
             Session.objects.bulk_create(
                 [Session(week=week, session_slot=slot) for slot in live_slots]
             )
-            source_cells_by_slot = {
-                cell.exercise_slot_id: cell
-                for cell in Prescription.objects.filter(
-                    week=source, exercise_slot__deleted_at__isnull=True
-                )
-            }
+            # The whole line stack carries forward (Phase 2a): line 0's
+            # prescription text plus any sub-lines (the RPE row, cues) — the
+            # coach then tweaks the new column. ``skipped`` (a one-week
+            # exception) never carries.
+            source_cells = defaultdict(dict)
+            for cell in Prescription.objects.filter(
+                week=source, exercise_slot__deleted_at__isnull=True
+            ):
+                source_cells[cell.exercise_slot_id][cell.line] = cell.text
             live_exercise_slots = ExerciseSlot.objects.filter(
                 session_slot__in=live_slots, deleted_at__isnull=True
             )
             new_cells = []
             for exercise_slot in live_exercise_slots:
-                src_cell = source_cells_by_slot.get(exercise_slot.pk)
-                new_cells.append(
-                    Prescription(
-                        exercise_slot=exercise_slot,
-                        week=week,
-                        sets=src_cell.sets if src_cell else "",
-                        reps=src_cell.reps if src_cell else "",
-                        load=src_cell.load if src_cell else "",
-                        load_type=(
-                            src_cell.load_type if src_cell else LoadType.ABSOLUTE
-                        ),
-                        rpe=src_cell.rpe if src_cell else "",
-                        rest=src_cell.rest if src_cell else "",
-                        note=src_cell.note if src_cell else "",
+                lines = source_cells.get(exercise_slot.pk) or {0: ""}
+                for line, text in lines.items():
+                    new_cells.append(
+                        Prescription(
+                            exercise_slot=exercise_slot,
+                            week=week,
+                            line=line,
+                            text=text,
+                        )
                     )
-                )
             if new_cells:
                 Prescription.objects.bulk_create(new_cells)
         if week.index > self.week_count:
@@ -1573,6 +1555,14 @@ class ExerciseSlot(models.Model):
     # Tags describe identity, so they live here (moved off the old
     # per-week ``ExercisePrescription.tags``).
     tags = models.JSONField(_("Tags"), default=list, blank=True)
+    # Spreadsheet-parity per-EXERCISE columns (Phase 2a, plan §2.2 / D2):
+    # Tempo (``201``/``ISO``/``DYN``) and Rest (``60s``/``2-3m``/``PRN``) are
+    # per-row in every template generation, not per-week — they moved here off
+    # the old per-week cell. ``note`` is the per-exercise instructions/cues
+    # column (the templates' merged Coach Comment — "where the how-to lives").
+    tempo = models.CharField(_("Tempo"), max_length=64, blank=True)
+    rest = models.CharField(_("Rest"), max_length=64, blank=True)
+    note = models.TextField(_("Instructions"), blank=True)
     # Soft delete (designer framework Phase 0) — see ``Week.deleted_at``. Removes
     # this exercise row from the whole block at once (all weeks).
     deleted_at = models.DateTimeField(
@@ -1803,20 +1793,43 @@ class Session(models.Model):
         return self.session_slot.order
 
     def cells(self):
-        """This week's live exercise-row cells for this day, in row order.
+        """This week's live line-0 (prescription) cells for this day, in row order.
 
         Replaces the old ``session.prescriptions`` related manager: a cell
         lives iff its ``ExerciseSlot`` is live (the week is already pinned by
         ``self.week``, which is assumed live — callers already filter weeks).
+        Line 0 only — one cell per exercise row, which is what every "a row's
+        cell this week" caller (logging, snapshots, reorder id-sets) means;
+        the freeform sub-lines (Phase 2a) come from ``line_cells``.
         """
         return (
             Prescription.objects.filter(
                 week=self.week,
                 exercise_slot__session_slot=self.session_slot,
                 exercise_slot__deleted_at__isnull=True,
+                line=0,
             )
             .select_related("exercise_slot")
             .order_by("exercise_slot__order")
+        )
+
+    def line_cells(self):
+        """This week's live sub-line cells (line >= 1) for this day, stack order.
+
+        The freeform per-week sub-rows beneath each prescription (Phase 2a,
+        plan §2.3/§2.6): RPE rows, cues, logged deviations. Blank-text rows
+        are kept (a cleared sub-line is a blank cell, not a deleted row) —
+        serializers drop them at render time.
+        """
+        return (
+            Prescription.objects.filter(
+                week=self.week,
+                exercise_slot__session_slot=self.session_slot,
+                exercise_slot__deleted_at__isnull=True,
+                line__gte=1,
+            )
+            .select_related("exercise_slot")
+            .order_by("exercise_slot__order", "line")
         )
 
     def trainable_cells(self):
@@ -1832,22 +1845,33 @@ class Session(models.Model):
 
 
 class Prescription(models.Model):
-    """A CELL = one ``ExerciseSlot`` (fixed row) × one ``Week``. Per-week numbers.
+    """A CELL = one ``ExerciseSlot`` row × one ``Week`` × one ``line`` of text.
 
-    Replaces the old per-week ``ExercisePrescription``: this holds only what
-    varies week to week (``sets``/``reps``/``load``/``rpe``/``rest``/``note``)
-    plus the one-week exceptions — ``skipped`` (the em-dash "not trained this
-    week" cell) and a one-week ``swap_*`` (a substitute lift for just this
-    week). There is deliberately **no** ``deleted_at`` here: a cell lives iff
-    its slot *and* its week are both live — "not trained this week" is
-    ``skipped=True``, not a delete (keeps the grid dense and undo simple).
+    The spreadsheet-parity cutover (Phase 2a, docs/meso/spreadsheet-parity-plan.md
+    §2): a cell stops being seven structured fields and becomes ONE freeform
+    ``text`` string (``4 x 6, RPE 9, 225`` / ``3 x 12-15`` / ``AMRAP`` — whatever
+    the coach types). Structure is *derived on demand* by
+    ``parsing.parse_prescription`` — never persisted as truth.
 
-    The resolving properties below are what keep every existing read site
-    (``serialize_prescription``, ``one_rm`` keying, ``_exercise_key``, …)
-    working unchanged: a cell has no identity of its own — it inherits the
-    slot's, unless a one-week swap overrides it. Any site that *writes*
-    ``.name``/``.exercise`` must instead write the slot (a block-wide identity
-    change) or this cell's ``swap_*`` (a one-week change).
+    ``line`` orders a vertical stack of per-week cells within an exercise row:
+    line 0 is the sets/reps prescription, lines 1+ are optional freeform
+    sub-rows (the templates' per-week RPE row, logged execution, an in-cell
+    substitution, a note — §2.3/§2.6; nothing is hardcoded to "RPE"). Each
+    (line × week) cell is independently filled or empty; the old structured
+    ``swap_*``/per-week ``note`` collapse into these sub-lines as plain text.
+
+    ``skipped`` survives as the one structured per-week exception (§2.1): the
+    em-dash "not trained this week" cell, which athlete surfaces must exclude
+    from logging — distinct from the row not existing at all.
+
+    There is deliberately **no** ``deleted_at`` here: a cell lives iff its slot
+    *and* its week are both live; clearing a sub-line = blanking its ``text``
+    (spreadsheet semantics), not deleting the row — keeps undo simple.
+
+    Identity is entirely the slot's now (the one-week ``swap_*`` override is
+    gone — a substitution is text in a sub-line): the resolving properties
+    below just delegate, keeping read sites (``one_rm`` keying,
+    ``_exercise_key``, …) working unchanged.
     """
 
     exercise_slot = models.ForeignKey(
@@ -1862,76 +1886,46 @@ class Prescription(models.Model):
         related_name="cells",
         verbose_name=_("Week"),
     )
-    sets = models.CharField(_("Sets"), max_length=32, blank=True)
-    reps = models.CharField(_("Reps"), max_length=32, blank=True)
-    load = models.CharField(_("Load"), max_length=32, blank=True)
-    # What ``load`` means: an absolute weight (the plan's unit) or a % of 1RM (S2).
-    load_type = models.CharField(
-        _("Load type"), max_length=3, choices=LoadType, default=LoadType.ABSOLUTE
-    )
-    rpe = models.CharField(_("RPE"), max_length=32, blank=True)
-    rest = models.CharField(_("Rest"), max_length=32, blank=True)
-    note = models.CharField(_("Note"), max_length=255, blank=True)
+    # Position in the exercise's vertical stack: 0 = the prescription line,
+    # 1+ = freeform sub-rows (RPE, cues, logged deviations, …).
+    line = models.PositiveIntegerField(_("Line"), default=0)
+    text = models.TextField(_("Text"), blank=True)
     # Per-week exception: this week's cell is a deliberate skip (renders as an
-    # em-dash), distinct from the row not existing at all.
+    # em-dash), distinct from the row not existing at all. Applies to the
+    # exercise × week, so it is only ever meaningful on line 0.
     skipped = models.BooleanField(_("Skipped"), default=False)
-    # Per-week exception: a one-week substitute lift, catalog-linked or free
-    # text — mirrors the slot's ``exercise``/``name`` hybrid (B4).
-    swap_exercise = models.ForeignKey(
-        "exercises.Exercise",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="meso_cell_swaps",
-        verbose_name=_("Swap exercise"),
-    )
-    swap_name = models.CharField(_("Swap name"), max_length=255, blank=True)
 
     class Meta:
-        ordering = ["exercise_slot__order"]
+        ordering = ["exercise_slot__order", "line"]
         verbose_name = "Prescription"
         verbose_name_plural = "Prescriptions"
         constraints = [
             models.UniqueConstraint(
-                fields=["exercise_slot", "week"], name="unique_cell_slot_week"
+                fields=["exercise_slot", "week", "line"],
+                name="unique_cell_slot_week_line",
             ),
         ]
 
     def __str__(self):
         return self.name
 
+    def parsed(self):
+        """Best-effort derived structure for this cell's text (never raises)."""
+        from .parsing import parse_prescription
+
+        return parse_prescription(self.text)
+
     @property
     def name(self):
-        """This week's effective name: a one-week swap, else the slot's."""
-        if self.swap_name:
-            return self.swap_name
-        if self.swap_exercise_id:
-            return self.swap_exercise.name
+        """The row's name — always the slot's (identity is never per-week now)."""
         return self.exercise_slot.name
 
     @property
     def exercise(self):
-        """This week's effective catalog exercise.
-
-        A one-week swap replaces identity WHOLESALE — it never falls back to the
-        slot's catalog exercise. A catalog swap resolves to its own exercise; a
-        free-text swap (``swap_name`` with no ``swap_exercise``) has no catalog
-        link at all, so this returns ``None`` rather than the original lift.
-        Falling back to the slot here would mis-key logs/1RM and mis-flag the
-        substituted week as catalog-linked.
-        """
-        if self.swap_exercise_id:
-            return self.swap_exercise
-        if self.swap_name:
-            return None
         return self.exercise_slot.exercise
 
     @property
     def exercise_id(self):
-        if self.swap_exercise_id:
-            return self.swap_exercise_id
-        if self.swap_name:
-            return None
         return self.exercise_slot.exercise_id
 
     @property
@@ -1941,7 +1935,7 @@ class Prescription(models.Model):
 
     @property
     def is_catalog_linked(self):
-        """True when this week's effective exercise is a catalog ``Exercise`` (B4)."""
+        """True when this row is backed by a catalog ``Exercise`` (B4)."""
         return self.exercise_id is not None
 
 
@@ -2608,9 +2602,10 @@ class GroupMembership(models.Model):
         block-wide; live ``ExerciseSlot``s onto each (matched by ``(slot,
         order)``); and, for **every** live source week, upserts a member
         ``Week`` (matched by ``index``) and a ``Prescription`` cell per exercise
-        slot on that week — a swap override becomes the cell's ``swap_name``
-        (block identity stays the shared slot's); load/sets/reps/note overrides
-        become the cell's numbers. Each member week's ``is_current`` MIRRORS its
+        slot on that week — the member's cell carries the *resolved* freeform
+        text (Phase 2a): a volume/load override folds into line 0's text, and a
+        swap or note override becomes an extra freeform sub-line (block
+        identity stays the shared slot's). Each member week's ``is_current`` MIRRORS its
         source week's pointer, but **only on this member's very first
         materialization** (issue #456) — the moment their plan is created, so
         the athlete's home opens on the same week the coach was pointing at
@@ -2803,15 +2798,15 @@ class GroupMembership(models.Model):
             src_exercise_slots = [
                 es for es in src_slot.exercise_slots.all() if es.deleted_at is None
             ]
-            # One query for every live source cell of this day's rows across the
-            # whole block, grouped by ``(exercise_slot, week)`` so the per-week
-            # upsert below reads it without a per-cell query.
-            src_cells_by_key = {
-                (c.exercise_slot_id, c.week_id): c
-                for c in Prescription.objects.filter(
-                    exercise_slot__in=src_exercise_slots, week__in=src_weeks
-                )
-            }
+            # One query for every live source cell (all lines) of this day's rows
+            # across the whole block, grouped ``(exercise_slot, week) -> {line:
+            # cell}`` so the per-week upsert below reads it without a per-cell
+            # query.
+            src_cells_by_key = defaultdict(dict)
+            for c in Prescription.objects.filter(
+                exercise_slot__in=src_exercise_slots, week__in=src_weeks
+            ):
+                src_cells_by_key[(c.exercise_slot_id, c.week_id)][c.line] = c
             for src_es in src_exercise_slots:
                 member_es, _ = ExerciseSlot.objects.update_or_create(
                     session_slot=member_slot,
@@ -2820,43 +2815,69 @@ class GroupMembership(models.Model):
                         "name": src_es.name,
                         "exercise": src_es.exercise,
                         "tags": list(src_es.tags or []),
+                        "tempo": src_es.tempo,
+                        "rest": src_es.rest,
+                        "note": src_es.note,
                         "deleted_at": None,
                     },
                 )
                 for src_week, member_week in week_pairs:
-                    src_cell = src_cells_by_key.get((src_es.pk, src_week.pk))
-                    if src_cell is None:
+                    src_lines = src_cells_by_key.get((src_es.pk, src_week.pk))
+                    if not src_lines:
                         # No cell for this week yet (shouldn't normally happen —
-                        # every live slot gets a blank cell per live week — but
-                        # skip defensively rather than materialize a bad row).
+                        # every live slot gets a blank line-0 cell per live week
+                        # — but skip defensively rather than materialize a bad
+                        # row).
                         continue
+                    line_zero = src_lines.get(0)
                     # An override targets a specific *cell* (one week), so it
-                    # resolves per week: the same exercise slot in another week
-                    # gets the shared base unless it too carries an override.
+                    # resolves per week (text model, Phase 2a): the resolved
+                    # line-0 text folds in a volume override; a swap or note
+                    # override becomes an extra freeform sub-line (§2.6 —
+                    # per-week identity/notes are text, not fields).
                     resolved = resolve_prescription(
-                        src_cell, overrides.get(src_cell.pk)
+                        line_zero, overrides.get(line_zero.pk) if line_zero else None
                     )
-                    # A swap means the effective name no longer matches the slot's.
-                    swapped = resolved["name"] != src_es.name
                     Prescription.objects.update_or_create(
                         exercise_slot=member_es,
                         week=member_week,
+                        line=0,
                         defaults={
-                            "sets": resolved["sets"],
-                            "reps": resolved["reps"],
-                            "load": resolved["load"],
-                            "load_type": resolved["load_type"],
-                            "rpe": resolved["rpe"],
-                            "rest": src_cell.rest,
-                            "note": resolved["note"],
+                            "text": resolved["text"],
                             # A week the coach skipped for the shared lineup stays
                             # skipped for every member — don't resurrect it per
                             # athlete.
-                            "skipped": src_cell.skipped,
-                            "swap_name": resolved["name"] if swapped else "",
-                            "swap_exercise": None,
+                            "skipped": line_zero.skipped if line_zero else False,
                         },
                     )
+                    # Mirror the source sub-lines verbatim, then the override's
+                    # extra lines (swap name / note) after them; blank any stale
+                    # higher member lines from a previous sync (spreadsheet
+                    # semantics: a cleared sub-line is a blank cell, not a
+                    # deleted row).
+                    extra_lines = list(resolved.get("extra_lines", []))
+                    max_src_line = max(src_lines) if src_lines else 0
+                    for line, src_cell in src_lines.items():
+                        if line == 0:
+                            continue
+                        Prescription.objects.update_or_create(
+                            exercise_slot=member_es,
+                            week=member_week,
+                            line=line,
+                            defaults={"text": src_cell.text},
+                        )
+                    for offset, extra in enumerate(extra_lines, start=1):
+                        Prescription.objects.update_or_create(
+                            exercise_slot=member_es,
+                            week=member_week,
+                            line=max_src_line + offset,
+                            defaults={"text": extra},
+                        )
+                    Prescription.objects.filter(
+                        exercise_slot=member_es,
+                        week=member_week,
+                        line__gt=max_src_line + len(extra_lines),
+                    ).exclude(text="").update(text="")
             # Soft-delete member exercise rows dropped from this day's source
             # lineup (matched by the same (slot, order) natural key).
             member_slot.exercise_slots.exclude(

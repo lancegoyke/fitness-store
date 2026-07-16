@@ -208,25 +208,25 @@ class TestPerAthleteEditEndpoints:
         client.force_login(coach)
         resp = client.post(
             _patch_url(kept, kept_presc),
-            data=json.dumps({"sets": "9"}),
+            data=json.dumps({"text": "9 x 9"}),
             content_type="application/json",
         )
         assert resp.status_code == 200
         kept_presc.refresh_from_db()
-        assert kept_presc.sets == "9"
+        assert kept_presc.text == "9 x 9"
 
     def test_over_limit_cannot_patch_suspended_plan(self, client):
         coach, _, (suspended, suspended_presc) = _over_limit_coach_two_plans()
         client.force_login(coach)
         resp = client.post(
             _patch_url(suspended, suspended_presc),
-            data=json.dumps({"sets": "9"}),
+            data=json.dumps({"text": "9 x 9"}),
             content_type="application/json",
         )
         assert resp.status_code == 402
         assert resp.json()["over_limit"] is True
         suspended_presc.refresh_from_db()
-        assert suspended_presc.sets != "9"
+        assert suspended_presc.text != "9 x 9"
 
     def test_over_limit_can_deliver_kept_plan(self, client):
         coach, (kept, _), _ = _over_limit_coach_two_plans()

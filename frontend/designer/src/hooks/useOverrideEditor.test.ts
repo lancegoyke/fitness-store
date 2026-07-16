@@ -35,9 +35,7 @@ function groupRow(overrides: Partial<Exercise> = {}): Exercise {
   return {
     id: 11,
     name: "Back Squat",
-    sets: "3",
-    reps: "10",
-    load: "100",
+    text: "3 x 10, 100",
     adj: "MO -10%",
     adjusts: [
       { id: "a1", name: "Maya Okonkwo", initials: "MO", label: "-10%", swap: "", load_pct: 90, sets: "", reps: "", note: "" },

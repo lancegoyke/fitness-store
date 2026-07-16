@@ -1321,3 +1321,29 @@ _(Append dated entries here as decisions land.)_
   `test_billing_phase6.py` removed); 1582 project pytest green, ruff + DjHTML +
   `makemigrations --check` clean. Full detail in [`billing-plan.md`](./billing-plan.md)
   (D14 / Phase 7). **No autonomous billing backlog remains** (annual deferred).
+- 2026-07-16 — **Spreadsheet parity Phase 2a: the text-first cell shipped
+  (migrations `0038`/`0039`).** A `Prescription` cell is now one freeform
+  `text` string per `(exercise_slot, week, line)` — line 0 = the prescription
+  (`4 x 6, RPE 9, 225`), lines 1+ = freeform sub-rows (the templates' RPE row,
+  cues, logged deviations, substitutions) — with structure derived on demand by
+  the new `parsing.parse_prescription` (never persisted as truth). Retired:
+  `sets`/`reps`/`load`/`load_type`/`rpe` + per-week `rest`/`note` +
+  `swap_exercise`/`swap_name` (a swap/skip/note is typed text per plan §2.6;
+  the structured `skipped` em-dash flag stays per §2.1), the `LoadType` enum,
+  the `prescription_swap` endpoint, and the designer's %1RM editor/`load_type`
+  toggle (D5 defers %1RM; athlete-side 1RM endpoints stay). Added:
+  `ExerciseSlot.tempo/rest/note` (per-exercise columns, D2), `cell_line_write`
+  (sub-line upsert addressed by slot/week/line) + `exercise_slot_patch`
+  endpoints, and blank starter cells (spreadsheet semantics — a cleared
+  sub-line is blank text, never a deleted row). The migration composes every
+  existing cell into Lance-notation text, hoists rest to the row (modal value;
+  divergent weeks keep theirs inline), converts `WeekDelivery` payloads, and
+  **wipes the `PlanAction` undo/redo stacks** (old snapshots capture retired
+  columns and can't replay); `restore_plan_snapshot` now UPSERTS cells by pk so
+  redo can revive deleted sub-lines. Group overrides (until 2c removes them,
+  D1) resolve as text: volume recomposes line 0 via the parser; swap/note/
+  load-% become extra sub-lines on the member's materialized copy. Agent
+  progress/volume applies parse-and-recompose the cell text (unparseable
+  notation = safe skip); the %1RM progression guard keys off the target cell's
+  parsed `%` load. Full design in
+  [`spreadsheet-parity-plan.md`](./spreadsheet-parity-plan.md) §2/§6.

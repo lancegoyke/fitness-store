@@ -34,24 +34,29 @@ def initials(name):
     return (parts[0][0] + parts[-1][0]).upper()
 
 
-def serialize_prescription(cell):
-    """One exercise row in a session's grid.
+def serialize_prescription(cell, lines=()):
+    """One exercise row in a session's grid (text-first, Phase 2a).
 
-    ``cell`` is a ``Prescription`` — a fixed ``ExerciseSlot`` row × this
-    ``Week``. Its resolving properties (``name``/``tags``) already fold in a
-    one-week swap, so this body reads unchanged from the old per-week model.
+    ``cell`` is the row's line-0 ``Prescription`` — a fixed ``ExerciseSlot``
+    row × this ``Week``; ``text`` is the freeform prescription verbatim.
+    ``lines`` are the row's optional sub-line cells for the same week (the
+    per-week RPE row, cues, logged deviations — plan §2.3/§2.6), rendered as
+    content only (blank sub-lines dropped). ``tempo``/``rest``/``note`` are
+    the per-EXERCISE columns off the slot (D2).
     """
     data = {
         "id": cell.pk,
         "name": cell.name,
-        "sets": cell.sets,
-        "reps": cell.reps,
-        "load": cell.load,
-        "load_type": cell.load_type,
-        "rpe": cell.rpe,
-        "rest": cell.rest,
-        "note": cell.note,
+        "text": cell.text,
         "skipped": cell.skipped,
+        "tempo": cell.exercise_slot.tempo,
+        "rest": cell.exercise_slot.rest,
+        "note": cell.exercise_slot.note,
+        "lines": [
+            {"line": line.line, "text": line.text}
+            for line in lines
+            if line.text.strip()
+        ],
     }
     # The designer renders a single `tag`; the model stores a list.
     if cell.tags:
@@ -163,12 +168,18 @@ def serialize_session(session):
     endpoints exactly. Athlete-facing surfaces use ``trainable_cells()`` instead,
     so a skipped lift is never presented as loggable.
     """
+    lines_by_slot = defaultdict(list)
+    for line_cell in session.line_cells():
+        lines_by_slot[line_cell.exercise_slot_id].append(line_cell)
     return {
         "id": session.pk,
         "n": session.day_number,
         "name": session.name,
         "bias": session.bias,
-        "exercises": [serialize_prescription(c) for c in session.cells()],
+        "exercises": [
+            serialize_prescription(c, lines_by_slot.get(c.exercise_slot_id, ()))
+            for c in session.cells()
+        ],
     }
 
 
@@ -256,17 +267,17 @@ def serialize_week_snapshot(week):
 
 
 # Prescription fields a coach cares about when reviewing "what changed", with the
-# label the deliver screen shows. ``name`` first so a swap reads as the headline
-# change; ``tag`` last (it's only present when the row carries one).
+# label the deliver screen shows. ``name`` first so a rename reads as the headline
+# change; ``tag`` last (it's only present when the row carries one). Text-first
+# (Phase 2a): the freeform cell + its sub-lines replace the old per-field diffs;
+# ``lines`` compares as content-only ``{line, text}`` dicts.
 _PRESCRIPTION_DIFF_FIELDS = (
     ("name", "Exercise"),
-    ("sets", "Sets"),
-    ("reps", "Reps"),
-    ("load", "Load"),
-    ("load_type", "Load type"),
-    ("rpe", "RPE"),
+    ("text", "Prescription"),
+    ("lines", "Sub-lines"),
+    ("tempo", "Tempo"),
     ("rest", "Rest"),
-    ("note", "Note"),
+    ("note", "Instructions"),
     # A one-week skip (P2) is athlete-facing: applying/lifting it changes what she
     # trains that week, so it diffs like any other field (rendered on/off, not the
     # boolean "— → True" a |default fallback gives).
@@ -286,11 +297,23 @@ _WEEK_DIFF_FIELDS = (
 def _prescription_label(presc):
     """A compact one-line label for an added/removed exercise row."""
     name = presc.get("name") or "Exercise"
-    sets = presc.get("sets")
-    reps = presc.get("reps")
-    if sets and reps:
-        return f"{name} {sets}×{reps}"
+    text = (presc.get("text") or "").strip()
+    if text:
+        return f"{name} {text.splitlines()[0]}"
     return name
+
+
+def _display_value(value):
+    """A diff value as the deliver screen renders it.
+
+    The ``lines`` field (Phase 2a) is a list of ``{line, text}`` dicts —
+    folded to a `` / ``-joined string of its non-blank texts so the template's
+    generic before → after rendering stays readable; scalars pass through.
+    """
+    if isinstance(value, list):
+        texts = [(v.get("text", "") if isinstance(v, dict) else str(v)) for v in value]
+        return " / ".join(t for t in texts if t and t.strip())
+    return value
 
 
 def _diff_fields(before, after, fields):
@@ -300,7 +323,14 @@ def _diff_fields(before, after, fields):
         old = before.get(key)
         new = after.get(key)
         if old != new:
-            out.append({"field": key, "label": label, "before": old, "after": new})
+            out.append(
+                {
+                    "field": key,
+                    "label": label,
+                    "before": _display_value(old),
+                    "after": _display_value(new),
+                }
+            )
     return out
 
 
@@ -638,60 +668,47 @@ def current_week(plan, week=None):
 # renders these as a per-row ``adj`` badge driven by the real diffs.
 
 
-def resolve_load(load, load_pct, *, load_type=None):
-    """Scale a numeric ``load`` by ``load_pct``, rounded to its natural step.
-
-    An **absolute** load rounds to the nearest 2.5, mirroring the designer's
-    ``round25`` so a coach-set per-athlete % lands on a loadable plate. A
-    **%1RM** load (``LoadType.PERCENT``) isn't plate-constrained, so it rounds to
-    the nearest 0.5% instead — 80% @ 90% is 72%, not 72.5%. A non-numeric base
-    ("BW") or an absent ``load_pct`` is returned unchanged.
-    """
-    if load_pct is None:
-        return load
-    base = _num(load)
-    if base is None:
-        return load
-    scaled = base * load_pct / 100
-    # Both round a half *up* (``int(x + 0.5)``) to match the designer's
-    # ``Math.round``; the scaled value is non-negative (load_pct ≥ 1), so the
-    # truncating ``int`` floors to the same result. A %1RM uses a 0.5% step (no
-    # plate constraint); an absolute load uses the 2.5 plate step.
-    if load_type == models.LoadType.PERCENT:
-        return _fmt_num(int(scaled * 2 + 0.5) / 2)
-    return _fmt_num(int(scaled / 2.5 + 0.5) * 2.5)
-
-
 def resolve_prescription(cell, override):
-    """A member's effective row = the shared prescription cell + their override diff.
+    """A member's effective row = the shared line-0 cell + their override diff.
 
-    ``cell`` is a ``Prescription`` (a fixed ``ExerciseSlot`` row × this
-    ``Week``); its resolving properties already fold in any one-week swap, so
-    this body is unchanged from the old per-week model. ``override`` of
-    ``None`` yields the shared base unchanged. A swap replaces the name;
-    ``load_pct`` scales the load; ``sets``/``reps``/``note`` override the
-    shared volume/note when set. RPE is not per-athlete in this slice.
+    Text-first interim (Phase 2a, until §3.1 removes the group subsystem in
+    2c): the shared prescription is one freeform ``text`` cell, so an override
+    resolves as text too. A volume override (``sets``/``reps``) recomposes
+    line 0 — the parse layer fills in whichever half the override leaves blank
+    from the shared text. A swap or note override becomes an ``extra_lines``
+    entry (per §2.6 a substitution/note is a freeform sub-line, not a field);
+    a ``load_pct`` adjust is rendered as a plain-language extra line rather
+    than scaling a token inside freeform text.
+
+    ``cell`` may be ``None`` (a defensive caller with no line-0 cell) —
+    resolves to a blank base.
     """
     base = {
-        "name": cell.name,
-        "sets": cell.sets,
-        "reps": cell.reps,
-        "load": cell.load,
-        # A load % scales the *number*; the load's meaning (abs/%1RM) is unchanged.
-        "load_type": cell.load_type,
-        "rpe": cell.rpe,
-        "note": cell.note,
+        "name": cell.name if cell is not None else "",
+        "text": cell.text if cell is not None else "",
+        "extra_lines": [],
     }
-    if override is None:
+    if override is None or cell is None:
         return base
+    from .parsing import parse_prescription
+
+    text = cell.text
+    if override.sets or override.reps:
+        parsed = parse_prescription(cell.text) or {}
+        sets = override.sets or parsed.get("sets") or "?"
+        reps = override.reps or parsed.get("reps") or "?"
+        text = f"{sets} x {reps}"
+    extra_lines = []
+    if override.swap_name:
+        extra_lines.append(override.swap_name)
+    if override.load_pct is not None and override.load_pct != 100:
+        extra_lines.append(f"{override.load_pct}% of prescribed load")
+    if override.note:
+        extra_lines.append(override.note)
     return {
-        "name": override.swap_name or cell.name,
-        "sets": override.sets or cell.sets,
-        "reps": override.reps or cell.reps,
-        "load": resolve_load(cell.load, override.load_pct, load_type=cell.load_type),
-        "load_type": cell.load_type,
-        "rpe": cell.rpe,
-        "note": override.note or cell.note,
+        "name": override.swap_name or base["name"],
+        "text": text,
+        "extra_lines": extra_lines,
     }
 
 
@@ -1023,42 +1040,32 @@ def serialize_mesocycle_grid(mesocycle):
     for exercise_slot in exercise_slots:
         rows_by_slot[exercise_slot.session_slot_id].append(exercise_slot)
 
-    # One query for every live cell in the block, grouped by (slot, week) so
-    # each row's dense ``cells`` map is built without a per-row lookup.
-    # ``select_related("swap_exercise")`` lets swap_display resolve a
-    # catalog-only swap's name below without a per-cell query;
-    # ``select_related("exercise_slot")`` does the same for ``one_rm_values``
-    # below — it reads each cell's RESOLVING ``.exercise_id``/``.name``
-    # properties (models.py), which fall back to ``self.exercise_slot`` for an
-    # unswapped cell and would otherwise be an N+1 (one query per cell).
-    cells_by_key = {
-        (cell.exercise_slot_id, cell.week_id): cell
-        for cell in models.Prescription.objects.filter(
+    # One query for every live cell in the block — all lines — grouped by
+    # (slot, week) into ``{line-0 cell, sub-line list}`` so each row's dense
+    # ``cells`` map is built without a per-row lookup.
+    # ``select_related("exercise_slot")`` keeps the resolving
+    # ``.exercise_id``/``.name`` property reads (adj keying below) from being
+    # an N+1 (one query per cell).
+    cells_by_key = {}
+    lines_by_key = defaultdict(list)
+    for cell in (
+        models.Prescription.objects.filter(
             exercise_slot_id__in=exercise_slot_ids, week_id__in=week_ids
-        ).select_related("swap_exercise", "exercise_slot")
-    }
+        )
+        .select_related("exercise_slot")
+        .order_by("line")
+    ):
+        if cell.line == 0:
+            cells_by_key[(cell.exercise_slot_id, cell.week_id)] = cell
+        else:
+            lines_by_key[(cell.exercise_slot_id, cell.week_id)].append(cell)
 
     # A GROUP plan carries the per-athlete adjust overlay on each cell (P5): the
     # same per-row ``adj`` badge ``serialize_plan``'s single-week ``program``
     # shows, driven by the members' real override diffs — one query over the
-    # block's cells, keyed by prescription pk. An individual plan has no members,
-    # so its cells get no ``adj`` keys.
+    # block's line-0 cells, keyed by prescription pk. An individual plan has no
+    # members, so its cells get no ``adj`` keys.
     adj_map = group_adjustments(plan, cells_by_key.values()) if plan.is_group else {}
-
-    # The athlete's persisted %1RM estimate (issue #455 phase A3) — mirrors
-    # ``serialize_plan``'s single-week attach exactly (local import: ``one_rm``
-    # imports this module). Attached to EVERY live cell regardless of
-    # ``load_type`` — the pct gate is a frontend concern (MesoTable.tsx /
-    # ExerciseRow.tsx), and ``Prescription.exercise_id``/``.name`` are
-    # swap-resolving properties, so a swapped cell's own identity is read
-    # automatically. A group plan has no single athlete, so its cells never
-    # carry the key.
-    if not plan.is_group:
-        from .one_rm import one_rm_values
-
-        one_rm_map = one_rm_values(plan.athlete, cells_by_key.values(), plan.unit)
-    else:
-        one_rm_map = {}
 
     days = []
     for slot in session_slots:
@@ -1069,29 +1076,19 @@ def serialize_mesocycle_grid(mesocycle):
                 cell = cells_by_key.get((exercise_slot.pk, week.pk))
                 if cell is None:
                     continue
-                # The resolved one-week swap display name: free-text
-                # swap_name if set, else the swapped catalog exercise's name,
-                # else "" (no swap) — the table needs this to show a badge
-                # for catalog-only swaps too (swap_name blank).
-                if cell.swap_name:
-                    swap_display = cell.swap_name
-                elif cell.swap_exercise_id:
-                    swap_display = cell.swap_exercise.name
-                else:
-                    swap_display = ""
                 cell_data = {
                     "prescription_id": cell.pk,
-                    "sets": cell.sets,
-                    "reps": cell.reps,
-                    "load": cell.load,
-                    "load_type": cell.load_type,
-                    "rpe": cell.rpe,
-                    "rest": cell.rest,
-                    "note": cell.note,
+                    "text": cell.text,
                     "skipped": cell.skipped,
-                    "swap_name": cell.swap_name,
-                    "swap_exercise_id": cell.swap_exercise_id,
-                    "swap_display": swap_display,
+                    # The row's freeform sub-line stack for this week (Phase
+                    # 2a): id included so the table can patch a sub-line by pk;
+                    # blank sub-lines are kept here (unlike athlete-facing
+                    # serialization) so the editor can show a cleared line
+                    # in place rather than collapsing the stack.
+                    "lines": [
+                        {"id": lc.pk, "line": lc.line, "text": lc.text}
+                        for lc in lines_by_key.get((exercise_slot.pk, week.pk), [])
+                    ],
                 }
                 # The per-athlete adjust overlay (group plans only) — set exactly
                 # as ``serialize_plan``'s adj-merge does: only when the cell has an
@@ -1101,10 +1098,6 @@ def serialize_mesocycle_grid(mesocycle):
                 if entry:
                     cell_data["adj"] = entry["adj"]
                     cell_data["adjusts"] = entry["adjusts"]
-                one_rm = one_rm_map.get(cell.pk)
-                if one_rm is not None:
-                    cell_data["one_rm"] = _fmt_num(one_rm.value)
-                    cell_data["one_rm_source"] = one_rm.source
                 cells[str(week.pk)] = cell_data
             rows.append(
                 {
@@ -1113,6 +1106,11 @@ def serialize_mesocycle_grid(mesocycle):
                     "exercise_id": exercise_slot.exercise_id,
                     "order": exercise_slot.order,
                     "tags": list(exercise_slot.tags or []),
+                    # Per-exercise columns (Phase 2a, D2): Tempo / Rest /
+                    # instructions live on the row, not per week.
+                    "tempo": exercise_slot.tempo,
+                    "rest": exercise_slot.rest,
+                    "note": exercise_slot.note,
                     "cells": cells,
                 }
             )

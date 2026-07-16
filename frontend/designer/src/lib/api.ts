@@ -32,15 +32,27 @@ export interface OverrideAdjust {
   note: string;
 }
 
-/** One exercise row (a Prescription) as the grid renders/edits it. */
+/** One freeform sub-line of a cell's stack (Phase 2a text-first). */
+export interface CellLine {
+  /** Present on the multi-week grid payload (patch-by-pk); absent on the
+   * athlete-facing single-week shape. */
+  id?: number;
+  line: number;
+  text: string;
+}
+
+/** One exercise row (a Prescription) as the grid renders/edits it.
+ *
+ * Phase 2a (spreadsheet parity): the structured sets/reps/load/rpe fields are
+ * gone — a cell is one freeform `text` string plus optional sub-`lines`;
+ * `tempo`/`rest`/`note` are per-exercise row columns off the slot. */
 export interface Exercise {
   id: number | string;
   name: string;
-  sets: string;
-  reps: string;
-  load: string;
-  load_type?: "abs" | "pct" | string;
-  rpe?: string;
+  text: string;
+  lines?: CellLine[];
+  tempo?: string;
+  rest?: string;
   note?: string;
   tag?: string;
   last?: string;
@@ -48,9 +60,6 @@ export interface Exercise {
   adj?: string | null;
   /** Group mode: every member's stored diff on this row. */
   adjusts?: OverrideAdjust[];
-  /** Individual mode, %1RM rows only. */
-  one_rm?: string;
-  one_rm_source?: string;
   /** P2 one-week exception: this week's Prescription was skipped (not
    * trained). Serialized by `serialize_prescription`/`serialize_session`
    * (serializers.py) on the single-week path — mirrors `GridCell.skipped`
@@ -169,21 +178,12 @@ export interface GridWeek {
 
 export interface GridCell {
   prescription_id: number;
-  sets: string;
-  reps: string;
-  load: string;
-  load_type: "abs" | "pct";
-  rpe: string;
-  rest: string;
-  note: string;
+  /** The freeform prescription text, verbatim (Phase 2a text-first). */
+  text: string;
   skipped: boolean;
-  swap_name: string;
-  swap_exercise_id: number | null;
-  /** Resolved one-week swap display name: `swap_name` if free-text, else the
-   * swapped catalog exercise's name, else "" (no swap). A catalog-only swap
-   * (swap_exercise_id set, swap_name blank) needs this to render a badge —
-   * swap_name alone is blank for that case. */
-  swap_display: string;
+  /** The row's freeform sub-line stack for this week (line >= 1), blank
+   * lines included so the editor can show a cleared line in place. */
+  lines: CellLine[];
   /** P5 group: this cell's per-athlete adjust badge summary (e.g. "MO -10%"
    * or "2 adjusts"), or absent when no member has an effective adjust here.
    * Only attached for a GROUP plan (serialize_mesocycle_grid) — individual
@@ -193,23 +193,19 @@ export interface GridCell {
   /** P5 group: every member's stored diff on this cell (drives the override
    * editor's member dots + draft). Present alongside `adj`; absent otherwise. */
   adjusts?: OverrideAdjust[];
-  /** Issue #455 phase A3: the athlete's persisted %1RM estimate for THIS
-   * cell's resolved lift identity (swap-aware — a swapped cell reads its own
-   * identity's estimate, not the row's block identity). Individual-plan-only
-   * (server attaches uniformly per cell, regardless of `load_type`; absent
-   * for a group plan and when the athlete has no stored estimate). */
-  one_rm?: string;
-  one_rm_source?: string;
 }
 
 export interface GridRow {
   exercise_slot_id: number;
-  /** The BLOCK identity (not swap-resolved) — a swapped cell shows its own
-   * `swap_name` alongside this. */
+  /** The block-shared row identity (a substitution is sub-line text now). */
   name: string;
   exercise_id: number | null;
   order: number;
   tags: unknown[];
+  /** Per-exercise columns (Phase 2a, D2): Tempo / Rest / instructions. */
+  tempo: string;
+  rest: string;
+  note: string;
   /** One cell per live week, keyed by `String(week.id)`. */
   cells: Record<string, GridCell>;
 }

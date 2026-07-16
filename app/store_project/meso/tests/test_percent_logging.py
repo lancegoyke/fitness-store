@@ -1,12 +1,11 @@
 """Units & RPE/%1RM slice (S2) Phase 2b — athlete %1RM logging ergonomics.
 
-Phase 1 gave the prescription a first-class ``load_type`` (``abs``/``pct``) and the
-athlete already sees a ``%`` target (``_target_label``). The remaining gap is
-*ergonomics*: a %1RM target is an intensity, not a weight, so the athlete still
-has to convert "75%" into a bar load by hand. This phase threads the structured
-load type + the plan's unit into the logger payload so the client can offer an
-estimated-1RM helper (% ⇄ load). The maths itself lives in ``meso_athlete.js``
-(Vitest); these tests pin the **data contract** the client hydrates from.
+A %1RM target is an intensity, not a weight, so the athlete still has to
+convert "75%" into a bar load by hand. This phase threads the plan's unit and
+the freeform cell text (Phase 2a — the client recovers a %1RM target from its
+"NN%" token) into the logger payload so the client can offer an estimated-1RM
+helper (% ⇄ load). The maths itself lives in ``meso_athlete.js`` (Vitest);
+these tests pin the **data contract** the client hydrates from.
 
 No model change — a ``LoggedSet`` still records the *actual* (absolute) weight,
 and the athlete's estimated 1RM lives client-side (localStorage), the same
@@ -20,7 +19,6 @@ from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import WeekFactory
-from store_project.meso.models import LoadType
 from store_project.meso.models import Plan
 from store_project.meso.models import Unit
 from store_project.meso.tests._helpers import day
@@ -38,15 +36,7 @@ def seed_session(unit=Unit.KILOGRAMS):
     week = WeekFactory(mesocycle=meso, index=1, is_current=True)
     session = day(week, day_number=1, name="Lower")
     absolute = presc(session, name="Back Squat", sets="4", reps="6", load="70", order=0)
-    percent = presc(
-        session,
-        name="Front Squat",
-        sets="3",
-        reps="5",
-        load="75",
-        load_type=LoadType.PERCENT,
-        order=1,
-    )
+    percent = presc(session, name="Front Squat", text="3 x 5, 75%", order=1)
     return plan, session, absolute, percent
 
 
@@ -57,23 +47,23 @@ class TestAthleteSessionUnit:
         assert ctx["unit"] == Unit.POUNDS
 
 
-class TestLogPayloadLoadType:
+class TestLogPayloadPercentText:
     def test_payload_carries_unit(self):
         plan, session, _, _ = seed_session()
         ctx = presenters.athlete_session(session, plan.relationship.athlete)
         payload = presenters.athlete_log_payload(ctx)
         assert payload["unit"] == Unit.KILOGRAMS
 
-    def test_payload_exercises_carry_load_and_load_type(self):
+    def test_payload_exercises_carry_the_cell_text(self):
+        # Text-first (Phase 2a): the client recovers a %1RM target from the
+        # cell's own text (its "NN%" token), so the payload carries it verbatim.
         plan, session, absolute, percent = seed_session()
         ctx = presenters.athlete_session(session, plan.relationship.athlete)
         payload = presenters.athlete_log_payload(ctx)
         by_id = {e["id"]: e for e in payload["exercises"]}
 
         abs_row = by_id[absolute.pk]
-        assert abs_row["load"] == "70"
-        assert abs_row["load_type"] == LoadType.ABSOLUTE
+        assert abs_row["text"] == "4 x 6, RPE 7, 70"
 
         pct_row = by_id[percent.pk]
-        assert pct_row["load"] == "75"
-        assert pct_row["load_type"] == LoadType.PERCENT
+        assert pct_row["text"] == "3 x 5, 75%"

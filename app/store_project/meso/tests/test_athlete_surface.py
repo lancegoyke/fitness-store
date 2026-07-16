@@ -37,6 +37,7 @@ from store_project.meso.models import SessionSlot
 from store_project.meso.models import Week
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc as make_presc
+from store_project.meso.tests._helpers import sub_line
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -84,7 +85,7 @@ def seed_block(
     coach=None,
     athlete=None,
     skip_first=False,
-    swap_second="",
+    sub_second="",
     third_delivered=False,
 ):
     """A three-week block of ONE day × ONE exercise row (P3 athlete multi-week).
@@ -94,7 +95,8 @@ def seed_block(
     each week's column is identifiable. Weeks 1 & 2 are delivered (the whole
     block delivers at once); week 2 is the athlete's ``is_current`` week; week 3
     is left undelivered unless ``third_delivered`` (a week the coach is still
-    building — invisible to the athlete).
+    building — invisible to the athlete). ``sub_second`` adds a freeform
+    sub-line (e.g. a substitution) beneath week 2's cell.
     """
     coach = coach or UserFactory()
     athlete = athlete or UserFactory()
@@ -130,15 +132,9 @@ def seed_block(
         rpe="7",
         skipped=skip_first,
     )
-    c2 = make_presc(
-        exercise_slot=ex,
-        week=w2,
-        sets="4",
-        reps="8",
-        load="101",
-        rpe="8",
-        swap_name=swap_second,
-    )
+    c2 = make_presc(exercise_slot=ex, week=w2, sets="4", reps="8", load="101", rpe="8")
+    if sub_second:
+        sub_line(c2, sub_second)
     c3 = make_presc(exercise_slot=ex, week=w3, sets="4", reps="8", load="131", rpe="8")
     return SimpleNamespace(
         coach=coach,
@@ -320,11 +316,11 @@ class TestAthleteHome:
         b = seed_block()
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
-        # A column per delivered week (labels + their distinct per-week loads).
+        # A column per delivered week (labels + their distinct per-week text).
         assert "Wk 1" in body
         assert "Wk 2" in body
-        assert "71 kg" in body  # week-1 cell summary
-        assert "101 kg" in body  # week-2 cell summary
+        assert "4 x 8, RPE 7, 71" in body  # week-1 cell summary (verbatim text)
+        assert "4 x 8, RPE 8, 101" in body  # week-2 cell summary
 
     def test_undelivered_week_is_not_a_column(self, client):
         """A week the coach hasn't delivered yet never becomes an athlete column."""
@@ -332,7 +328,7 @@ class TestAthleteHome:
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
         assert "Wk 3" not in body
-        assert "131 kg" not in body  # its cell is never rendered
+        assert "RPE 8, 131" not in body  # its cell is never rendered
 
     def test_home_focuses_the_current_delivered_week(self, client):
         """The home opens to ``is_current``: only its sessions are tappable rows.
@@ -352,16 +348,16 @@ class TestAthleteHome:
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
         assert "—" in body  # em-dash present
-        assert "71 kg" not in body  # the skipped week shows no numbers
-        assert "101 kg" in body  # the other delivered week still does
+        assert "RPE 7, 71" not in body  # the skipped week shows no text
+        assert "RPE 8, 101" in body  # the other delivered week still does
 
-    def test_swapped_cell_shows_the_swapped_name(self, client):
-        """A one-week swap surfaces the swapped exercise's name in its cell."""
-        b = seed_block(swap_second="Front Squat")
+    def test_substitution_sub_line_shows_in_the_cell(self, client):
+        """A substitution sub-line folds into that week's cell summary."""
+        b = seed_block(sub_second="Front Squat")
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
-        assert "Front Squat" in body  # the swap
-        assert "Box Squat" in body  # the underlying slot row still labels the row
+        assert "Front Squat" in body  # the substitution sub-line
+        assert "Box Squat" in body  # the slot row still labels the row
 
     def test_multiple_current_weeks_focus_the_latest_delivered(self, client):
         """The home opens to the newest delivered week when several are current.
@@ -891,8 +887,8 @@ class TestAthleteSession:
         body = resp.content.decode()
         assert "Box Squat" in body
         assert "Lower" in body
-        # The prescribed target is visible.
-        assert "6" in body
+        # The prescribed target is the cell's freeform text, verbatim.
+        assert "4 x 6, RPE 7, 70" in body
 
     def test_404_for_other_athlete(self, client):
         s = seed()

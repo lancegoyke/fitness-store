@@ -3,7 +3,6 @@
 // were getters on createMeso() (meso.js); ported here as a useMemo since
 // they're view-shaping with no existing lib coverage (CONTRACT.md).
 import { useMemo } from "react";
-import { numeric } from "../lib/grid";
 import type { Day } from "../lib/api";
 
 export interface AthletePreviewProps {
@@ -28,6 +27,8 @@ interface AthleteExerciseRow {
   id: number | string;
   name: string;
   target: string;
+  /** The cell's freeform sub-lines (RPE rows, cues, substitutions as text). */
+  lines: string[];
   rows: AthleteSetRow[];
 }
 
@@ -45,20 +46,27 @@ export function AthletePreview({
     // A skipped exercise (P2 one-week exception) isn't trained this week — the
     // real athlete surface filters these server-side, so the coach's preview
     // must not show a lift the athlete won't actually see.
+    // Phase 2a text-first: the prescription is one freeform string (plus
+    // optional sub-lines) — there's no sets count left to fan set rows out
+    // from, so the mock shows one loggable row per lift with the verbatim
+    // text as its target ("4 x 6, RPE 9, 225" reads as-written, same as the
+    // source spreadsheet).
     return day.exercises
       .filter((x) => !x.skipped)
       .slice(0, 3)
       .map((x, xi) => {
-        const setN = parseInt(x.sets, 10) || 3;
-        const rows: AthleteSetRow[] = [];
-        for (let i = 0; i < setN; i++) {
-          const k = "a0-" + xi + "-" + i;
-          const target = x.reps + " × " + (numeric(x.load) ? x.load + (x.load_type === "pct" ? "%" : " " + unit) : x.load);
-          rows.push({ k, n: i + 1, target, done: !!checks[k] });
-        }
-        return { id: x.id, name: x.name, target: x.sets + "×" + x.reps, rows };
+        const target = x.text || "—";
+        const k = "a0-" + xi + "-0";
+        const lines = (x.lines ?? []).map((l) => l.text).filter((t) => t.trim() !== "");
+        return {
+          id: x.id,
+          name: x.name,
+          target,
+          lines,
+          rows: [{ k, n: 1, target, done: !!checks[k] }],
+        };
       });
-  }, [program, unit, checks]);
+  }, [program, checks]);
 
   const aTotal = athleteDay.reduce((acc, e) => acc + e.rows.length, 0);
   const aDone = athleteDay.reduce((acc, e) => acc + e.rows.filter((r) => r.done).length, 0);
@@ -116,6 +124,11 @@ export function AthletePreview({
                   <div className="meso-phone-exercise-name">{ae.name}</div>
                   <div className="meso-mono meso-phone-exercise-target">{"target " + ae.target}</div>
                 </div>
+                {ae.lines.map((line, li) => (
+                  <div key={li} className="meso-phone-exercise-line" data-testid={`athlete-line-${ae.id}-${li}`}>
+                    {line}
+                  </div>
+                ))}
                 {ae.rows.map((r) => (
                   <div key={r.k} className="meso-phone-set-row">
                     <div className="meso-mono meso-phone-set-n">{r.n}</div>

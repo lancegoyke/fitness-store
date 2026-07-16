@@ -231,7 +231,7 @@
                             <td style="position:sticky;left:0;z-index:1;padding:7px 10px;font-weight:700;color:var(--ink);background:var(--surface);border-top:1px solid var(--line);">{{ row.name }}</td>
                             {% for c in row.cells %}
                               <td style="padding:7px 10px;color:var(--ink);border-top:1px solid var(--line);{% if c.current %}background:var(--soft);{% endif %}">
-                                {% if not c.present %}<span style="color:var(--dim);">·</span>{% elif c.skipped %}<span style="color:var(--dim);">—</span>{% else %}{% if c.swap %}<span style="display:block;color:var(--accent-deep);font-weight:700;">{{ c.swap }}</span>{% endif %}{{ c.summary }}{% endif %}
+                                {% if not c.present %}<span style="color:var(--dim);">·</span>{% elif c.skipped %}<span style="color:var(--dim);">—</span>{% else %}{{ c.summary }}{% endif %}
                               </td>
                             {% endfor %}
                           </tr>

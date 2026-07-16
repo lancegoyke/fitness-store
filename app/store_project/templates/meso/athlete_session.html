@@ -73,7 +73,7 @@
                 <span x-text="unit"></span>
               </label>
               <span class="meso-row-meta meso-mono" x-show="usingDerivedOneRm(ex)" x-cloak x-text="'from your logs'" style="color:var(--dim);"></span>
-              <span class="meso-row-meta meso-mono" style="color:var(--accent);font-weight:700;" x-show="suggestedLoad(ex)" x-cloak x-text="ex.load + '% ≈ ' + suggestedLoad(ex)"></span>
+              <span class="meso-row-meta meso-mono" style="color:var(--accent);font-weight:700;" x-show="suggestedLoad(ex)" x-cloak x-text="percentTarget(ex) + '% ≈ ' + suggestedLoad(ex)"></span>
             </div>
           </template>
         </div>

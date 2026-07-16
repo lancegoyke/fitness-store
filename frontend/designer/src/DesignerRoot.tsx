@@ -148,19 +148,16 @@ function readHydration(): Hydrated | null {
 /** The override editor's `openOverride(ex)` takes an `Exercise`, but the
  * multi-week table works in (GridRow, GridCell) pairs — each cell IS a
  * Prescription. Synthesize the Exercise the editor needs from that pair: the
- * cell's own numbers under the row's block name, carrying `adj`/`adjusts` so
- * the modal preselects the adjusted member and seeds their draft. `id` is the
- * cell's `prescription_id` — the same id the override reply patches back. */
+ * cell's freeform text under the row's block name, carrying `adj`/`adjusts`
+ * so the modal preselects the adjusted member and seeds their draft (from
+ * the member's stored adjust only — Phase 2a: the base cell has no
+ * structured sets/reps left to seed from). `id` is the cell's
+ * `prescription_id` — the same id the override reply patches back. */
 function synthesizeCellExercise(row: GridRow, cell: GridCell): Exercise {
   return {
     id: cell.prescription_id,
     name: row.name,
-    sets: cell.sets,
-    reps: cell.reps,
-    load: cell.load,
-    load_type: cell.load_type,
-    rpe: cell.rpe,
-    note: cell.note,
+    text: cell.text,
     adj: cell.adj ?? null,
     adjusts: cell.adjusts ?? [],
   };
@@ -294,12 +291,12 @@ export function DesignerRoot() {
                 grid={gridState.grid}
                 history={gridState.history}
                 busy={gridState.busy}
-                unit={unit}
                 group={grid?.group ?? null}
                 onOpenOverride={(row, cell) => overrideEditor.openOverride(synthesizeCellExercise(row, cell))}
                 onPatchCell={gridState.patchCell}
+                onWriteCellLine={gridState.writeCellLine}
+                onPatchRowColumns={gridState.patchRowColumns}
                 onRenameExercise={gridState.renameExercise}
-                onSetOneRm={gridState.setOneRm}
                 onMoveExerciseToDay={gridState.moveExerciseToDay}
                 onAddExercise={gridState.addExercise}
                 onRemoveExercise={gridState.removeExercise}
@@ -311,7 +308,6 @@ export function DesignerRoot() {
                 onUndo={gridState.undo}
                 onRedo={gridState.redo}
                 onSkipCell={gridState.skipCell}
-                onSwapCell={gridState.swapCell}
                 onFillAcrossWeeks={gridState.fillAcrossWeeks}
                 onAddExerciseThisWeek={gridState.addExerciseThisWeek}
                 onDragEnd={tableReorder.onDragEnd}
@@ -353,7 +349,6 @@ export function DesignerRoot() {
       <OverrideModal
         override={overrideEditor.override}
         overrideHasExisting={overrideEditor.overrideHasExisting}
-        unit={unit}
         onSelectMember={overrideEditor.selectOverrideMember}
         onUpdateDraft={overrideEditor.updateDraft}
         onClose={overrideEditor.closeOverride}

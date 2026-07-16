@@ -3,14 +3,12 @@
 // only when override !== null. Backdrop click + Escape both call onClose
 // (which internally guards on `saving`, per useOverrideEditor).
 import { useEffect } from "react";
-import { numeric } from "../lib/grid";
 import type { OverrideEditorState } from "../hooks/useOverrideEditor";
 import type { OverrideDraft } from "../lib/override";
 
 export interface OverrideModalProps {
   override: OverrideEditorState | null;
   overrideHasExisting: boolean;
-  unit: string;
   onSelectMember(memberId: string): void;
   onUpdateDraft(patch: Partial<OverrideDraft>): void;
   onClose(): void;
@@ -19,7 +17,7 @@ export interface OverrideModalProps {
 }
 
 export function OverrideModal(props: OverrideModalProps) {
-  const { override, overrideHasExisting, unit, onSelectMember, onUpdateDraft, onClose, onSave, onClear } = props;
+  const { override, overrideHasExisting, onSelectMember, onUpdateDraft, onClose, onSave, onClear } = props;
 
   useEffect(() => {
     if (!override) return;
@@ -45,8 +43,9 @@ export function OverrideModal(props: OverrideModalProps) {
           <div className="meso-modal-eyebrow">Per-athlete adjust</div>
           <div className="meso-modal-title">{ex.name}</div>
           <div className="meso-modal-meta meso-mono">
-            shared {ex.sets}×{ex.reps}
-            {numeric(ex.load) && <span>{" · " + ex.load + (ex.load_type === "pct" ? "%" : " " + unit)}</span>}
+            {/* Phase 2a text-first: the shared prescription is one freeform
+               string, shown verbatim (no structured sets/reps/load left). */}
+            shared {ex.text || "—"}
           </div>
         </div>
 
@@ -96,7 +95,7 @@ export function OverrideModal(props: OverrideModalProps) {
               <input
                 data-testid="override-sets-input"
                 className="meso-field-input meso-mono meso-field-input--center"
-                placeholder={ex.sets}
+                placeholder="—"
                 value={draft.sets}
                 onChange={(e) => onUpdateDraft({ sets: e.target.value })}
               />
@@ -104,7 +103,7 @@ export function OverrideModal(props: OverrideModalProps) {
               <input
                 data-testid="override-reps-input"
                 className="meso-field-input meso-mono meso-field-input--center"
-                placeholder={ex.reps}
+                placeholder="—"
                 value={draft.reps}
                 onChange={(e) => onUpdateDraft({ reps: e.target.value })}
               />

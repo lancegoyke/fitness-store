@@ -31,8 +31,9 @@ multi-week build lives in `docs/archive/meso/fixed-selection-plan.md`
 linked PRs.
 
 Ported pure logic lives in `frontend/designer/src/lib/` (`api.ts`,
-`agent.ts`, `override.ts`, `oneRm.ts`, `grid.ts`, `coachmarks.ts`, `keys.ts`,
-`deliver.ts`) — every surviving hook below is a thin, stateful wrapper
+`agent.ts`, `override.ts`, `grid.ts`, `coachmarks.ts`, `keys.ts`,
+`deliver.ts` — `oneRm.ts` was deleted in Phase 2a with the %1RM editor) —
+every surviving hook below is a thin, stateful wrapper
 around those modules plus `fetch`. `Id` below means `number | string`
 (server ids are numeric; a couple of fixture-era tests used string ids —
 kept permissive); it's exported from `hooks/useGrid.ts` now (every other
@@ -54,11 +55,11 @@ called out inline where they bind:
    bind it to.
 2. **Verbs that finish by patching one cell** (`useOverrideEditor`'s
    `saveOverride`/`clearOverride`, `useGrid`'s own `patchCell`/
-   `renameExercise`/`setOneRm`) don't always go through a full
-   `refetchGrid()` — cell-scoped edits patch just that cell in local state
-   (`patchCellAdj` for an override reply, or the optimistic write built
-   into `patchCell`/`renameExercise`/`setOneRm` themselves) so the UI
-   repaints instantly without waiting on a full-grid network round trip.
+   `renameExercise`/`writeCellLine`/`patchRowColumns`) don't always go
+   through a full `refetchGrid()` — cell-scoped edits patch just that cell
+   in local state (`patchCellAdj` for an override reply, or the optimistic
+   write built into the verbs themselves) so the UI repaints instantly
+   without waiting on a full-grid network round trip.
    `useOverrideEditor` itself is data-owner-agnostic (see below) — it
    writes through whatever `patchExercise`-shaped callback its caller
    injects (`DesignerRoot` injects `gridState.patchCellAdj`).
@@ -75,36 +76,46 @@ MesoGrid | null` and `history: GridHistory`, hydrated once from
   the retired `useAutosave`'s semantics below — local state updates
   immediately, the POST isn't awaited by the caller, and a failure is
   `console.error`'d rather than rolled back. Each in-flight write is
-  tracked in `pendingWritesRef` so `fillAcrossWeeks`/`setOneRm` can flush
-  them first (both need the source cell's already-committed DB values, so
-  an in-flight edit must land first or they'd read stale data).
-- **`setOneRm`**: unlike the two above, this one IS awaited by its caller
-  (`RowOneRmEditor` in `MesoTable.tsx` drives its own saving/error UI off
-  the returned promise, mirroring the retired `useOneRmEditor.saveOneRm`).
-  Always targets the row's IDENTITY cell (a %1RM has no week dimension),
-  then locally repaints every cell across the grid resolving to the same
-  lift (not just the identity cell) so duplicate-lift rows don't show a
-  stale badge until a full refetch.
+  tracked in `pendingWritesRef` so `fillAcrossWeeks` can flush them first
+  (fill copies the source cell's already-committed DB values, so an
+  in-flight edit must land first or it'd read stale data). Phase 2a:
+  `patchCell`'s only patchable field is `text` — the cell IS one freeform
+  string now (`GridCellPatch = Partial<Pick<GridCell, "text">>`).
+- **`writeCellLine(exerciseSlotId, weekId, line, text)`** (Phase 2a): upserts
+  one freeform (week × line) sub-line of a row's stack — addressed by
+  slot/week/line, not pk, since the line may not exist yet (POST
+  `row/<slot>/cell/` `{week_id, line, text}`, the server's `cell_line_write`
+  get_or_create). Same optimistic fire-and-forget shape as `patchCell`;
+  line 0 updates `cell.text` locally, blank text clears a line in place.
+- **`patchRowColumns(exerciseSlotId, {tempo?, rest?, note?})`** (Phase 2a,
+  D2): the per-exercise Tempo/Rest/instructions row columns — attributes of
+  the block-shared ExerciseSlot (POST `row/<slot>/`, the server's
+  `exercise_slot_patch`). Same optimistic fire-and-forget shape.
+- **RETIRED in Phase 2a: `setOneRm`** — the %1RM editor is gone (a % load
+  is just prescription text now; see "RETIRED: useOneRmEditor /
+  RowOneRmEditor" below), and with it `GridCellOneRmPatch`.
 - **`patchCellAdj`**: a pure local repaint, no POST of its own — `useOverrideEditor`
   already POSTed to `prescription/<id>/override/` and hands back
   `{adj, adjusts, history}`; `DesignerRoot` routes its `patchExercise` here.
 - **Structural verbs** (`addDay`/`removeDay`, `addWeek`/`removeWeek`/
   `setCurrentWeek`, `addExercise`/`removeExercise`, `reorderDays`/
   `reorderExercises`/`moveExerciseToDay`, `undo`/`redo`, `skipCell`/
-  `swapCell`/`fillAcrossWeeks`/`addExerciseThisWeek`): await their POST,
-  then call `refetchGrid()` (a plain GET) to re-sync the whole grid in one
-  `setGrid`. One shared in-flight guard (`busy`) across every structural
-  verb so a double-click can't race two refetches.
+  `fillAcrossWeeks`/`addExerciseThisWeek` — `swapCell` retired in Phase 2a:
+  a substitution is sub-line text now, written through `writeCellLine`):
+  await their POST, then call `refetchGrid()` (a plain GET) to re-sync the
+  whole grid in one `setGrid`. One shared in-flight guard (`busy`) across
+  every structural verb so a double-click can't race two refetches.
+  `fillAcrossWeeks` copies the WHOLE text stack (line 0 + sub-lines) of the
+  source week to every other week server-side.
 - **`refetchGrid`'s field whitelist**: the GET response is narrowed to
   `{mesocycle, weeks, days, history}` plus the A5-added `{plan, group,
   athlete, phases}` — every field `MesoGrid` carries must be explicitly
   listed here or it silently drops on the next refetch (regression-tested:
   `useGrid.test.ts` "refetchGrid carries the full payload through").
 
-Two group-only cell patch types — `GridCellAdjPatch` (`{adj, adjusts}`) and
-`GridCellOneRmPatch` (`{one_rm, one_rm_source}`) — are the grid analogs of
-the retired `usePlanData`'s `patchExercise(exId, patch)` on the one-week
-path.
+One group-only cell patch type — `GridCellAdjPatch` (`{adj, adjusts}`) — is
+the grid analog of the retired `usePlanData`'s `patchExercise(exId, patch)`
+on the one-week path (`GridCellOneRmPatch` went with `setOneRm` in Phase 2a).
 
 ### RETIRED: usePlanData / useAutosave / useDeletes / useUndoRedo
 
@@ -215,8 +226,10 @@ every NON-skipped cell renders the same `.meso-adjust-badge` /
 No control renders for an individual plan (`group === null`) or a skipped cell.
 
 `DesignerRoot` synthesizes an `Exercise` from the `(row, cell)` pair
-(`id: cell.prescription_id`, `name: row.name`, the cell's numbers, plus
-`adj`/`adjusts`) and opens `useOverrideEditor` — **its only instance now**
+(`id: cell.prescription_id`, `name: row.name`, `text: cell.text`, plus
+`adj`/`adjusts` — Phase 2a: no structured numbers left, so the override
+draft's sets/reps fields seed from the member's stored adjust only, blank
+otherwise) and opens `useOverrideEditor` — **its only instance now**
 (issue #455 phase A5 deleted the one-week path's sibling instance, which
 used to wire `patchExercise`/`adoptHistory` to the retired `usePlanData`) —
 wired `patchExercise: gridState.patchCellAdj` (repaints the cell's
@@ -228,27 +241,19 @@ repaint — the grid analog of the retired `usePlanData.patchExercise`) and
 `adoptGridHistory` (coercing `string | null` labels so the override reply
 adopts cleanly).
 
-### RETIRED: useOneRmEditor
+### RETIRED: useOneRmEditor / RowOneRmEditor
 
-Issue #455 phase A3 (predating A5) had already moved the %1RM editor's
-network/patch logic onto `useGrid.setOneRm` (a POST to
-`prescription/<id>/one-rm/` then a local `GridCellOneRmPatch` repaint, no
-grid refetch); A5 deleted the now-fully-superseded `useOneRmEditor` hook
-outright. The inline editor itself lives in **`RowOneRmEditor`**, a
-module-private component inside `MesoTable.tsx` — a hook needs
-`planId`/`csrf`, which would force `MesoTable` to take those directly and
-break the "verbs-as-props" boundary every other control in that file
-honors, so `RowOneRmEditor` owns its own open/value/saving/error `useState`
-locally and calls `parseOneRm` (`lib/oneRm.ts`, unchanged) + `onSetOneRm`
-(→ `useGrid.setOneRm`) directly. A %1RM is a property of the athlete + lift
-IDENTITY (no week dimension), not a per-week cell value — unlike the P5
-per-cell adjust badge, the control is per-ROW: it's shown when ANY live,
-unswapped, non-skipped cell in the row carries a `%` load (a mixed-load row
-— identity week abs, a later week pct — still needs the control), but
-always saves against the row's identity cell. Same UX contract as before: a
-click opens it (group plans use the override editor instead), `parseOneRm`
-failure shows an inline error without posting, success closes the editor
-and repaints the badge.
+Issue #455 phase A3 moved the %1RM editor's network/patch logic onto
+`useGrid.setOneRm`; A5 deleted the superseded `useOneRmEditor` hook and
+left the inline editor in **`RowOneRmEditor`**, a module-private component
+inside `MesoTable.tsx`. **Phase 2a (text-first cells) retired that too**:
+with `load`/`load_type` gone from the cell, there is no typed `%` load left
+for the front-end to gate a 1RM control on — a "75%" is just prescription
+text, and resolving it against the athlete's 1RM is the server's job at
+delivery/logging time (the athlete-side 1RM endpoints and
+`coach_set_one_rm` survive unchanged backend-side). `RowOneRmEditor`,
+`useGrid.setOneRm`, `GridCellOneRmPatch`, and `lib/oneRm.ts` (+ specs) were
+all deleted.
 
 ### useAgentChat
 
@@ -431,11 +436,18 @@ top) replaces the whole one-week-at-a-time tree they formed:
 - **`ExerciseRow`** (one exercise's controlled inputs, per-field
   dirty-tracking, load-type toggle, override badge, inline %1RM editor) →
   `MesoTable`'s per-cell rendering, scoped PER CELL rather than per whole
-  row (`useGrid.patchCell`'s endpoint takes a partial patch, not a
-  whole-row POST like the retired `useAutosave.persistRow`) — the dirty-
-  tracking pattern carries forward (`MesoTable.tsx`'s header comment cites
-  it as "ExerciseRow's dirtySinceFocus pattern"), just re-scoped to a
-  cell's individual fields.
+  row — the dirty-tracking pattern carries forward (`MesoTable.tsx`'s
+  header comment cites it as "ExerciseRow's dirtySinceFocus pattern").
+  Phase 2a (text-first cells) then collapsed the cell's six structured
+  inputs to ONE freeform text input (`cell.text`, via `useGrid.patchCell`)
+  plus one input per sub-line of the cell's stack (`cell.lines`, upserted
+  via `writeCellLine`) and a trailing ghost input that mints the next
+  sub-line (max existing line + 1, or 1) on its first non-blank commit;
+  Tempo/Notes/Rest moved off the cell onto per-ROW column inputs
+  (`row.tempo`/`note`/`rest`, via `patchRowColumns`), matching the source
+  spreadsheet's Exercise | Tempo | weeks… | Notes | Rest layout. The
+  load-type toggle, the %1RM editor, and the one-week swap badge/menu are
+  retired.
 
 None of these four are exhaustively re-documented prop-by-prop here the way
 they were before A5 — `MesoTable.tsx` (one file, ~1,500 lines, extensively
@@ -477,14 +489,17 @@ key). Component itself needed **zero** changes for A5 — only its caller
 changed what it passes as `program`: `DesignerRoot` now derives it via
 `gridToProgram(grid, weekId)` (`lib/grid.ts`, added in A5 step 3) — a pure
 transform that walks `grid.days`, picks each row's cell at the resolved
-week (default: `grid.weeks.find(w => w.current)`), resolves the effective
-exercise name as `cell.swap_display || row.name` (mirrors the server's own
-swap-resolution rule), and omits a row with no cell for that week. Replaces
-the retired `usePlanData`'s hydrated `program` array; no server round trip.
+week (default: `grid.weeks.find(w => w.current)`), and omits a row with no
+cell for that week. Replaces the retired `usePlanData`'s hydrated `program`
+array; no server round trip. Phase 2a: the derived `Exercise` is the new
+text-first shape (`name` is just `row.name` — the one-week swap fields are
+gone — plus `text`/`lines` off the cell and `tempo`/`rest`/`note` off the
+row), and the phone mock renders the prescription text verbatim with ONE
+loggable row per lift (no sets count left to fan set rows out from).
 
 ### OverrideModal
 
-Props: `{ override, overrideHasExisting, unit, onSelectMember, onUpdateDraft, onClose, onSave, onClear }`. Rendered only when `override !== null`.
+Props: `{ override, overrideHasExisting, onSelectMember, onUpdateDraft, onClose, onSave, onClear }` (`unit` dropped in Phase 2a — the header meta shows the shared prescription text verbatim instead of composed sets×reps·load). Rendered only when `override !== null`.
 Backdrop click and Escape both call `onClose` (which internally guards on
 `saving`, per `useOverrideEditor`). Testids: `override-member-{memberId}`,
 `override-swap-input`, `override-load-pct-input`, `override-sets-input`,

@@ -97,7 +97,10 @@ class TestDeliver:
         assert len(sessions) == 1
         assert sessions[0]["name"] == "Lower"
         exercises = sessions[0]["exercises"]
-        assert any(e["name"] == "Box Squat" and e["load"] == "70" for e in exercises)
+        assert any(
+            e["name"] == "Box Squat" and e["text"] == "4 x 6, RPE 7, 70"
+            for e in exercises
+        )
 
     def test_deliver_stamps_the_whole_block_not_just_current(self, client):
         # P3 block delivery: sending a plan releases the whole mesocycle, so a

@@ -363,9 +363,18 @@ function createLogger() {
     },
 
     // ---- %1RM ergonomics (S2 Phase 2b) ----
-    // A %1RM-prescribed lift: the target Load is a percent of 1RM, not a weight.
+    // Text-first cells (Phase 2a): the prescription is one freeform string
+    // ("4 x 6, RPE 7, 72%"), so the percent target is recovered from the text
+    // — the first "NN%" token — instead of the retired load/load_type fields.
+    percentTarget(ex) {
+      if (!ex || !ex.text) return null;
+      const m = /(\d+(?:\.\d+)?)\s*%/.exec(ex.text);
+      return m ? m[1] : null;
+    },
+
+    // A %1RM-prescribed lift: its text carries a percent-of-1RM target.
     isPercentLift(ex) {
-      return !!ex && ex.load_type === "pct";
+      return this.percentTarget(ex) != null;
     },
 
     // The 1RM to size a suggested load from: the athlete's typed per-device
@@ -388,7 +397,7 @@ function createLogger() {
     // 1RM is known (neither derived nor typed) yet.
     suggestedLoad(ex) {
       if (!this.isPercentLift(ex)) return "";
-      const load = loadForPercent(this.effectiveOneRm(ex), ex.load);
+      const load = loadForPercent(this.effectiveOneRm(ex), this.percentTarget(ex));
       if (load == null) return "";
       return fmtNum(load) + (this.unit ? " " + this.unit : "");
     },

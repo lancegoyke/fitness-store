@@ -5,6 +5,11 @@
 // over a variable-width week axis (see useTableNav.ts's header for the
 // sibling-not-shared rationale).
 //
+// Phase 2a (text-first cells) collapsed the per-week editable surface from
+// six structured fields to ONE freeform "text" input, so the horizontal
+// axis is now name → week 1 text → week 2 text → … (sub-line inputs and
+// the per-row Tempo/Notes/Rest columns are outside arrow-nav this phase).
+//
 // Fixture: day 1 (session_slot_id 1) has rows 9, 10; day 2 (session_slot_id
 // 2) has row 11 — flattened row order (day-major/row-minor): (9), (10),
 // (11). Two weeks (id 1 "Wk 1", id 2 "Wk 2") so ArrowRight/Left week-
@@ -32,17 +37,9 @@ function week(overrides: Partial<GridWeek> = {}): GridWeek {
 function cell(overrides: Partial<GridCell> = {}): GridCell {
   return {
     prescription_id: 100,
-    sets: "3",
-    reps: "5",
-    load: "100",
-    load_type: "abs",
-    rpe: "8",
-    rest: "90",
-    note: "",
+    text: "3 x 5, RPE 8, 100",
     skipped: false,
-    swap_name: "",
-    swap_exercise_id: null,
-    swap_display: "",
+    lines: [],
     ...overrides,
   };
 }
@@ -58,6 +55,9 @@ function row(id: number, weekIds: number[], overrides: Partial<GridRow> = {}): G
     exercise_id: id + 1000,
     order: 0,
     tags: [],
+    tempo: "",
+    rest: "",
+    note: "",
     cells,
     ...overrides,
   };
@@ -209,7 +209,7 @@ afterEach(() => {
 describe("pure helpers", () => {
   describe("tableCellDomKey", () => {
     it("joins rowId, weekId, and field with colons", () => {
-      expect(tableCellDomKey(9, 2, "sets")).toBe("9:2:sets");
+      expect(tableCellDomKey(9, 2, "text")).toBe("9:2:text");
     });
 
     it("uses the 'row' sentinel for a null weekId (the name column)", () => {
@@ -219,8 +219,7 @@ describe("pure helpers", () => {
 
   describe("tableCellAriaLabel", () => {
     it("builds '<name> — <week label> — <field label>' for a week field", () => {
-      expect(tableCellAriaLabel("Box Squat", "Wk 2", "sets")).toBe("Box Squat — Wk 2 — sets");
-      expect(tableCellAriaLabel("Box Squat", "Wk 2", "rpe")).toBe("Box Squat — Wk 2 — RPE");
+      expect(tableCellAriaLabel("Box Squat", "Wk 2", "text")).toBe("Box Squat — Wk 2 — prescription");
     });
 
     it("labels the name column as '<name> — exercise name' regardless of weekLabel", () => {
@@ -228,7 +227,7 @@ describe("pure helpers", () => {
     });
 
     it("falls back to 'exercise' when the row has no name yet", () => {
-      expect(tableCellAriaLabel("", "Wk 1", "sets")).toBe("exercise — Wk 1 — sets");
+      expect(tableCellAriaLabel("", "Wk 1", "text")).toBe("exercise — Wk 1 — prescription");
     });
   });
 });
@@ -244,28 +243,28 @@ describe("anchor + roving tabindex", () => {
     mountCells(GRID);
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
     expect(result.current.cellProps(9, null, "name", NOOP_CALLBACKS).tabIndex).toBe(0);
-    expect(result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).tabIndex).toBe(-1);
+    expect(result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).tabIndex).toBe(-1);
     expect(result.current.cellProps(10, null, "name", NOOP_CALLBACKS).tabIndex).toBe(-1);
-    expect(result.current.cellProps(11, 2, "note", NOOP_CALLBACKS).tabIndex).toBe(-1);
+    expect(result.current.cellProps(11, 2, "text", NOOP_CALLBACKS).tabIndex).toBe(-1);
   });
 
   it("focusing another cell moves the roving 0 to it", () => {
     const cells = mountCells(GRID);
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
     act(() => {
-      result.current.cellProps(10, 2, "load", NOOP_CALLBACKS).onFocus(focusEvent(cells[tableCellDomKey(10, 2, "load")]!));
+      result.current.cellProps(10, 2, "text", NOOP_CALLBACKS).onFocus(focusEvent(cells[tableCellDomKey(10, 2, "text")]!));
     });
-    expect(result.current.anchor).toEqual({ rowId: 10, weekId: 2, field: "load" });
-    expect(result.current.cellProps(10, 2, "load", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.anchor).toEqual({ rowId: 10, weekId: 2, field: "text" });
+    expect(result.current.cellProps(10, 2, "text", NOOP_CALLBACKS).tabIndex).toBe(0);
     expect(result.current.cellProps(9, null, "name", NOOP_CALLBACKS).tabIndex).toBe(-1);
   });
 
   it("cell identity is (rowId, weekId, field), never an index — the same field on a different row/week is a different cell", () => {
     mountCells(GRID);
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    expect(result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).tabIndex).toBe(-1);
-    expect(result.current.cellProps(9, 2, "sets", NOOP_CALLBACKS).tabIndex).toBe(-1);
-    expect(result.current.cellProps(10, 1, "sets", NOOP_CALLBACKS).tabIndex).toBe(-1);
+    expect(result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).tabIndex).toBe(-1);
+    expect(result.current.cellProps(9, 2, "text", NOOP_CALLBACKS).tabIndex).toBe(-1);
+    expect(result.current.cellProps(10, 1, "text", NOOP_CALLBACKS).tabIndex).toBe(-1);
   });
 });
 
@@ -273,44 +272,44 @@ describe("ArrowDown / ArrowUp", () => {
   it("ArrowDown moves focus to the same (weekId, field) on the next row within a day", () => {
     const cells = mountCells(GRID);
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowDown", cells[tableCellDomKey(9, 1, "sets")]!);
+    const event = keyEvent("ArrowDown", cells[tableCellDomKey(9, 1, "text")]!);
     act(() => {
-      result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(10, 1, "sets")]);
+    expect(document.activeElement).toBe(cells[tableCellDomKey(10, 1, "text")]);
     expect(event.preventDefault).toHaveBeenCalled();
-    expect(result.current.anchor).toEqual({ rowId: 10, weekId: 1, field: "sets" });
+    expect(result.current.anchor).toEqual({ rowId: 10, weekId: 1, field: "text" });
   });
 
   it("ArrowDown crosses a day-table boundary (last row of day 1 -> first row of day 2)", () => {
     const cells = mountCells(GRID);
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowDown", cells[tableCellDomKey(10, 2, "load")]!);
+    const event = keyEvent("ArrowDown", cells[tableCellDomKey(10, 2, "text")]!);
     act(() => {
-      result.current.cellProps(10, 2, "load", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(10, 2, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(11, 2, "load")]);
+    expect(document.activeElement).toBe(cells[tableCellDomKey(11, 2, "text")]);
   });
 
   it("ArrowDown at the very last row is a no-op but still preventDefault", () => {
     const cells = mountCells(GRID);
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowDown", cells[tableCellDomKey(11, 2, "note")]!);
+    const event = keyEvent("ArrowDown", cells[tableCellDomKey(11, 2, "text")]!);
     act(() => {
-      result.current.cellProps(11, 2, "note", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(11, 2, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
     expect(event.preventDefault).toHaveBeenCalled();
-    expect(result.current.anchor).toEqual({ rowId: 11, weekId: 2, field: "note" });
+    expect(result.current.anchor).toEqual({ rowId: 11, weekId: 2, field: "text" });
   });
 
   it("ArrowUp mirrors ArrowDown, crossing day boundaries upward", () => {
     const cells = mountCells(GRID);
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowUp", cells[tableCellDomKey(11, 1, "rpe")]!);
+    const event = keyEvent("ArrowUp", cells[tableCellDomKey(11, 1, "text")]!);
     act(() => {
-      result.current.cellProps(11, 1, "rpe", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(11, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(10, 1, "rpe")]);
+    expect(document.activeElement).toBe(cells[tableCellDomKey(10, 1, "text")]);
     expect(event.preventDefault).toHaveBeenCalled();
   });
 
@@ -337,62 +336,36 @@ describe("ArrowDown / ArrowUp", () => {
 });
 
 describe("ArrowRight / ArrowLeft (caret-conditional)", () => {
-  it("ArrowRight at the end of the text moves to the next field within the same week", () => {
+  it("ArrowRight at the end of the text moves to the next week's text cell (no special-case)", () => {
     const cells = mountCells(GRID);
-    const setsInput = cells[tableCellDomKey(9, 1, "sets")]!;
-    setsInput.value = "42";
-    setsInput.setSelectionRange(2, 2); // caret at end (value.length === 2)
+    const textInput = cells[tableCellDomKey(9, 1, "text")]!;
+    textInput.value = "4 x 6";
+    textInput.setSelectionRange(5, 5); // caret at end (value.length === 5)
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowRight", setsInput);
+    const event = keyEvent("ArrowRight", textInput);
     act(() => {
-      result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "reps")]);
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 2, "text")]);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 2, field: "text" });
+  });
+
+  it("ArrowLeft at the start of the text moves back to the previous week's text cell", () => {
+    const cells = mountCells(GRID);
+    const textInput = cells[tableCellDomKey(9, 2, "text")]!;
+    textInput.value = "3 x 5";
+    textInput.setSelectionRange(0, 0); // caret at start
+    const { result } = renderHook(() => useTableNav({ grid: GRID }));
+    const event = keyEvent("ArrowLeft", textInput);
+    act(() => {
+      result.current.cellProps(9, 2, "text", NOOP_CALLBACKS).onKeyDown(event);
+    });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "text")]);
     expect(event.preventDefault).toHaveBeenCalled();
   });
 
-  it("ArrowLeft at the start of the text moves to the previous field within the same week", () => {
-    const cells = mountCells(GRID);
-    const repsInput = cells[tableCellDomKey(9, 1, "reps")]!;
-    repsInput.value = "5";
-    repsInput.setSelectionRange(0, 0); // caret at start
-    const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowLeft", repsInput);
-    act(() => {
-      result.current.cellProps(9, 1, "reps", NOOP_CALLBACKS).onKeyDown(event);
-    });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "sets")]);
-    expect(event.preventDefault).toHaveBeenCalled();
-  });
-
-  it("ArrowRight at the last field of week 1 crosses into week 2's first field (no special-case)", () => {
-    const cells = mountCells(GRID);
-    const noteInput = cells[tableCellDomKey(9, 1, "note")]!;
-    noteInput.value = "";
-    noteInput.setSelectionRange(0, 0);
-    const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowRight", noteInput);
-    act(() => {
-      result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).onKeyDown(event);
-    });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 2, "sets")]);
-    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 2, field: "sets" });
-  });
-
-  it("ArrowLeft at the first field of week 2 crosses back into week 1's last field", () => {
-    const cells = mountCells(GRID);
-    const setsInput = cells[tableCellDomKey(9, 2, "sets")]!;
-    setsInput.value = "3";
-    setsInput.setSelectionRange(0, 0);
-    const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowLeft", setsInput);
-    act(() => {
-      result.current.cellProps(9, 2, "sets", NOOP_CALLBACKS).onKeyDown(event);
-    });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "note")]);
-  });
-
-  it("ArrowRight at the end of the name column moves to week 1's sets field", () => {
+  it("ArrowRight at the end of the name column moves to week 1's text cell", () => {
     const cells = mountCells(GRID);
     const nameInput = cells[tableCellDomKey(9, null, "name")]!;
     nameInput.value = "Ex 9";
@@ -402,49 +375,49 @@ describe("ArrowRight / ArrowLeft (caret-conditional)", () => {
     act(() => {
       result.current.cellProps(9, null, "name", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "sets")]);
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "text")]);
   });
 
-  it("ArrowLeft at the start of week 1's sets field moves back to the name column", () => {
+  it("ArrowLeft at the start of week 1's text cell moves back to the name column", () => {
     const cells = mountCells(GRID);
-    const setsInput = cells[tableCellDomKey(9, 1, "sets")]!;
-    setsInput.value = "3";
-    setsInput.setSelectionRange(0, 0);
+    const textInput = cells[tableCellDomKey(9, 1, "text")]!;
+    textInput.value = "3 x 5";
+    textInput.setSelectionRange(0, 0);
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowLeft", setsInput);
+    const event = keyEvent("ArrowLeft", textInput);
     act(() => {
-      result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
     expect(document.activeElement).toBe(cells[tableCellDomKey(9, null, "name")]);
   });
 
   it("ArrowRight mid-text does NOT move focus or preventDefault (native caret move wins)", () => {
     const cells = mountCells(GRID);
-    const setsInput = cells[tableCellDomKey(9, 1, "sets")]!;
-    setsInput.value = "4200";
-    setsInput.setSelectionRange(2, 2); // caret in the middle
-    setsInput.focus();
+    const textInput = cells[tableCellDomKey(9, 1, "text")]!;
+    textInput.value = "4 x 6, RPE 9";
+    textInput.setSelectionRange(4, 4); // caret in the middle
+    textInput.focus();
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowRight", setsInput);
+    const event = keyEvent("ArrowRight", textInput);
     act(() => {
-      result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(setsInput);
+    expect(document.activeElement).toBe(textInput);
     expect(event.preventDefault).not.toHaveBeenCalled();
   });
 
   it("ArrowLeft with a non-collapsed selection does NOT move focus", () => {
     const cells = mountCells(GRID);
-    const repsInput = cells[tableCellDomKey(9, 1, "reps")]!;
-    repsInput.value = "5";
-    repsInput.setSelectionRange(0, 1); // a selection, not a collapsed caret
-    repsInput.focus();
+    const textInput = cells[tableCellDomKey(9, 1, "text")]!;
+    textInput.value = "3 x 5";
+    textInput.setSelectionRange(0, 1); // a selection, not a collapsed caret
+    textInput.focus();
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowLeft", repsInput);
+    const event = keyEvent("ArrowLeft", textInput);
     act(() => {
-      result.current.cellProps(9, 1, "reps", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(repsInput);
+    expect(document.activeElement).toBe(textInput);
     expect(event.preventDefault).not.toHaveBeenCalled();
   });
 
@@ -462,18 +435,18 @@ describe("ArrowRight / ArrowLeft (caret-conditional)", () => {
     expect(event.preventDefault).not.toHaveBeenCalled();
   });
 
-  it("no wrap at an absolute extreme: ArrowRight at the end of the very last column (note, week 2, row 9) is a pure no-op", () => {
+  it("no wrap at an absolute extreme: ArrowRight at the end of the very last column (text, week 2, row 9) is a pure no-op", () => {
     const cells = mountCells(GRID);
-    const noteInput = cells[tableCellDomKey(9, 2, "note")]!;
-    noteInput.value = "";
-    noteInput.setSelectionRange(0, 0);
-    noteInput.focus();
+    const textInput = cells[tableCellDomKey(9, 2, "text")]!;
+    textInput.value = "";
+    textInput.setSelectionRange(0, 0);
+    textInput.focus();
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowRight", noteInput);
+    const event = keyEvent("ArrowRight", textInput);
     act(() => {
-      result.current.cellProps(9, 2, "note", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 2, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(noteInput);
+    expect(document.activeElement).toBe(textInput);
     expect(event.preventDefault).not.toHaveBeenCalled();
   });
 });
@@ -481,74 +454,74 @@ describe("ArrowRight / ArrowLeft (caret-conditional)", () => {
 describe("Enter (commit) / Escape (revert)", () => {
   it("Enter calls the cell's onCommit, preventDefaults, and does not move focus", () => {
     const cells = mountCells(GRID);
-    cells[tableCellDomKey(9, 1, "load")]!.focus();
+    cells[tableCellDomKey(9, 1, "text")]!.focus();
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
     const onCommit = vi.fn();
-    const event = keyEvent("Enter", cells[tableCellDomKey(9, 1, "load")]!);
+    const event = keyEvent("Enter", cells[tableCellDomKey(9, 1, "text")]!);
     act(() => {
-      result.current.cellProps(9, 1, "load", { ...NOOP_CALLBACKS, onCommit }).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", { ...NOOP_CALLBACKS, onCommit }).onKeyDown(event);
     });
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(event.preventDefault).toHaveBeenCalled();
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "load")]);
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "text")]);
   });
 
   it("Escape reverts to the focus-time value via onRevert, preventDefaults, and keeps focus", () => {
     const cells = mountCells(GRID);
-    const loadInput = cells[tableCellDomKey(9, 1, "load")]!;
-    loadInput.value = "100";
+    const textInput = cells[tableCellDomKey(9, 1, "text")]!;
+    textInput.value = "3 x 5";
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
     const onRevert = vi.fn();
     const callbacks = { ...NOOP_CALLBACKS, onRevert };
-    loadInput.focus();
+    textInput.focus();
     act(() => {
-      result.current.cellProps(9, 1, "load", callbacks).onFocus(focusEvent(loadInput));
+      result.current.cellProps(9, 1, "text", callbacks).onFocus(focusEvent(textInput));
     });
-    loadInput.value = "999";
-    const event = keyEvent("Escape", loadInput);
+    textInput.value = "9 x 9";
+    const event = keyEvent("Escape", textInput);
     act(() => {
-      result.current.cellProps(9, 1, "load", callbacks).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", callbacks).onKeyDown(event);
     });
-    expect(onRevert).toHaveBeenCalledWith("100");
+    expect(onRevert).toHaveBeenCalledWith("3 x 5");
     expect(event.preventDefault).toHaveBeenCalled();
-    expect(document.activeElement).toBe(loadInput);
+    expect(document.activeElement).toBe(textInput);
   });
 
   it("Escape without a prior focus call reverts to the DOM value at keydown time", () => {
     const cells = mountCells(GRID);
-    const rpeInput = cells[tableCellDomKey(9, 1, "rpe")]!;
-    rpeInput.value = "8";
+    const textInput = cells[tableCellDomKey(9, 1, "text")]!;
+    textInput.value = "4 x 6";
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
     const onRevert = vi.fn();
-    const event = keyEvent("Escape", rpeInput);
+    const event = keyEvent("Escape", textInput);
     act(() => {
-      result.current.cellProps(9, 1, "rpe", { ...NOOP_CALLBACKS, onRevert }).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", { ...NOOP_CALLBACKS, onRevert }).onKeyDown(event);
     });
-    expect(onRevert).toHaveBeenCalledWith("8");
+    expect(onRevert).toHaveBeenCalledWith("4 x 6");
   });
 
   it("Enter resets the Escape baseline to the committed value", () => {
     const cells = mountCells(GRID);
-    const loadInput = cells[tableCellDomKey(9, 1, "load")]!;
-    loadInput.value = "100";
+    const textInput = cells[tableCellDomKey(9, 1, "text")]!;
+    textInput.value = "3 x 5";
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
     const onCommit = vi.fn();
     const onRevert = vi.fn();
     const callbacks = { ...NOOP_CALLBACKS, onCommit, onRevert };
-    loadInput.focus();
+    textInput.focus();
     act(() => {
-      result.current.cellProps(9, 1, "load", callbacks).onFocus(focusEvent(loadInput));
+      result.current.cellProps(9, 1, "text", callbacks).onFocus(focusEvent(textInput));
     });
-    loadInput.value = "150";
+    textInput.value = "4 x 6";
     act(() => {
-      result.current.cellProps(9, 1, "load", callbacks).onKeyDown(keyEvent("Enter", loadInput));
+      result.current.cellProps(9, 1, "text", callbacks).onKeyDown(keyEvent("Enter", textInput));
     });
     expect(onCommit).toHaveBeenCalledTimes(1);
-    loadInput.value = "175";
+    textInput.value = "5 x 3";
     act(() => {
-      result.current.cellProps(9, 1, "load", callbacks).onKeyDown(keyEvent("Escape", loadInput));
+      result.current.cellProps(9, 1, "text", callbacks).onKeyDown(keyEvent("Escape", textInput));
     });
-    expect(onRevert).toHaveBeenCalledWith("150");
+    expect(onRevert).toHaveBeenCalledWith("4 x 6");
   });
 });
 
@@ -570,35 +543,35 @@ describe("undo/redo bypass + native keys", () => {
   it.each(["Home", "End", "PageUp", "PageDown", "a", "Tab"])("%s is not preventDefault'd", (key) => {
     const cells = mountCells(GRID);
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent(key, cells[tableCellDomKey(9, 1, "sets")]!);
+    const event = keyEvent(key, cells[tableCellDomKey(9, 1, "text")]!);
     act(() => {
-      result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
     expect(event.preventDefault).not.toHaveBeenCalled();
   });
 
   it("Shift+ArrowDown is not intercepted", () => {
     const cells = mountCells(GRID);
-    cells[tableCellDomKey(9, 1, "sets")]!.focus();
+    cells[tableCellDomKey(9, 1, "text")]!.focus();
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    const event = keyEvent("ArrowDown", cells[tableCellDomKey(9, 1, "sets")]!, { shiftKey: true });
+    const event = keyEvent("ArrowDown", cells[tableCellDomKey(9, 1, "text")]!, { shiftKey: true });
     act(() => {
-      result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
     expect(event.preventDefault).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "sets")]);
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "text")]);
   });
 
   it("Ctrl+ArrowLeft at the caret boundary is not intercepted", () => {
     const cells = mountCells(GRID);
-    const input = cells[tableCellDomKey(9, 1, "sets")]!;
-    input.value = "3";
+    const input = cells[tableCellDomKey(9, 1, "text")]!;
+    input.value = "3 x 5";
     input.focus();
     input.setSelectionRange(0, 0);
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
     const event = keyEvent("ArrowLeft", input, { ctrlKey: true });
     act(() => {
-      result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(input);
@@ -611,14 +584,14 @@ describe("focus restoration across a grid swap", () => {
     const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
       initialProps: { grid: GRID },
     });
-    focus(result.current, cells, 9, 1, "sets");
+    focus(result.current, cells, 9, 1, "text");
 
     const NEXT = grid({ days: [day(1, [row(9, [1, 2], { name: "Box Squat" }), row(10, [1, 2])]), day(2, [row(11, [1, 2])])] });
     cells = resyncCells(NEXT);
     act(() => rerender({ grid: NEXT }));
 
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "sets")]);
-    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "sets" });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "text")]);
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "text" });
   });
 
   it("tier 2a: falls back to the first row of the same day (name column) when the row is gone but the day survives", () => {
@@ -626,7 +599,7 @@ describe("focus restoration across a grid swap", () => {
     const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
       initialProps: { grid: GRID },
     });
-    focus(result.current, cells, 9, 1, "sets");
+    focus(result.current, cells, 9, 1, "text");
 
     // Day 1 survives (id 1) but row 9 is gone; row 10 remains.
     const NEXT = grid({ days: [day(1, [row(10, [1, 2])]), day(2, [row(11, [1, 2])])] });
@@ -642,15 +615,15 @@ describe("focus restoration across a grid swap", () => {
     const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
       initialProps: { grid: GRID },
     });
-    focus(result.current, cells, 9, 2, "sets");
+    focus(result.current, cells, 9, 2, "text");
 
     // Week 2 is removed; both rows survive on week 1 only.
     const NEXT = grid({ weeks: [week({ id: 1, label: "Wk 1" })], days: [day(1, [row(9, [1]), row(10, [1])]), day(2, [row(11, [1])])] });
     cells = resyncCells(NEXT);
     act(() => rerender({ grid: NEXT }));
 
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "sets")]);
-    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "sets" });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "text")]);
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "text" });
   });
 
   it("post-tier guard: skids forward off a surviving-but-hollow coordinate (skip on the focused cell)", () => {
@@ -659,22 +632,22 @@ describe("focus restoration across a grid swap", () => {
     // anymore. Tier 1 alone would strand the anchor there — no rendered
     // cell would hold tabIndex=0 and the table would drop out of the tab
     // order. The guard skids to the nearest rendered column of the row
-    // (forward first: week 2's sets).
+    // (forward first: week 2's text).
     let cells = mountCells(GRID);
     const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
       initialProps: { grid: GRID },
     });
-    focus(result.current, cells, 9, 1, "sets");
+    focus(result.current, cells, 9, 1, "text");
 
     const NEXT = grid({ days: [day(1, [row(9, [2]), row(10, [1, 2])]), day(2, [row(11, [1, 2])])] });
     document.querySelectorAll("[data-grid-cell]").forEach((n) => n.remove());
     cells = mountCellsWithHoles(NEXT);
     act(() => rerender({ grid: NEXT }));
 
-    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 2, field: "sets" });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 2, "sets")]);
-    expect(result.current.cellProps(9, 2, "sets", NOOP_CALLBACKS).tabIndex).toBe(0);
-    expect(result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).tabIndex).toBe(-1);
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 2, field: "text" });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 2, "text")]);
+    expect(result.current.cellProps(9, 2, "text", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).tabIndex).toBe(-1);
   });
 
   it("post-tier guard: skids backward when everything after the hollow coordinate is holes too", () => {
@@ -682,19 +655,19 @@ describe("focus restoration across a grid swap", () => {
     const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
       initialProps: { grid: GRID },
     });
-    focus(result.current, cells, 9, 2, "sets");
+    focus(result.current, cells, 9, 2, "text");
 
     // Row 9 keeps only week 1 — the focused week-2 coordinate and every
     // column after it are gone, so the guard scans backward and lands on
-    // week 1's trailing note field (the nearest rendered column).
+    // week 1's text cell (the nearest rendered column).
     const NEXT = grid({ days: [day(1, [row(9, [1]), row(10, [1, 2])]), day(2, [row(11, [1, 2])])] });
     document.querySelectorAll("[data-grid-cell]").forEach((n) => n.remove());
     cells = mountCellsWithHoles(NEXT);
     act(() => rerender({ grid: NEXT }));
 
-    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "note" });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "note")]);
-    expect(result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "text" });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "text")]);
+    expect(result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).tabIndex).toBe(0);
   });
 
   it("tier 3: falls back to the table's first cell when the day itself is gone", () => {
@@ -702,7 +675,7 @@ describe("focus restoration across a grid swap", () => {
     const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
       initialProps: { grid: GRID },
     });
-    focus(result.current, cells, 11, 1, "sets"); // day 2's row
+    focus(result.current, cells, 11, 1, "text"); // day 2's row
 
     // Day 2 (id 2) is gone entirely; only day 1 remains.
     const NEXT = grid({ days: [day(1, [row(9, [1, 2]), row(10, [1, 2])])] });
@@ -754,7 +727,7 @@ describe("focus restoration across a grid swap", () => {
     const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
       initialProps: { grid: GRID },
     });
-    focus(result.current, cells, 9, 1, "sets");
+    focus(result.current, cells, 9, 1, "text");
     composer.focus();
 
     const NEXT = grid({ days: [day(1, [row(10, [1, 2])]), day(2, [row(11, [1, 2])])] });
@@ -771,7 +744,7 @@ describe("focus restoration across a grid swap", () => {
     const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
       initialProps: { grid: GRID },
     });
-    focus(result.current, cells, 9, 1, "sets");
+    focus(result.current, cells, 9, 1, "text");
     toggle.focus();
 
     const NEXT = grid({ days: [day(1, [row(9, [1, 2], { name: "Box Squat" }), row(10, [1, 2])]), day(2, [row(11, [1, 2])])] });
@@ -789,7 +762,7 @@ describe("focus restoration across a grid swap", () => {
     const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g }), {
       initialProps: { grid: GRID },
     });
-    focus(result.current, cells, 9, 1, "sets");
+    focus(result.current, cells, 9, 1, "text");
     undoButton.focus();
 
     const NEXT = grid({ days: [day(1, [row(10, [1, 2])]), day(2, [row(11, [1, 2])])] });
@@ -802,27 +775,27 @@ describe("focus restoration across a grid swap", () => {
 
 describe("holes (missing DOM cells)", () => {
   it("arrowing onto a hole doesn't throw and doesn't move activeElement", () => {
-    // Mount only row 9's name + week 1 cells — week 2 is a total hole (as
+    // Mount only row 9's name + week 1 cell — week 2 is a total hole (as
     // add-this-week rows and skipped-cell display leave gaps in the real
     // app; MesoTable's own <td/> with no GridCellEditor is the same shape).
     const nameInput = document.createElement("input");
     nameInput.setAttribute("data-grid-cell", tableCellDomKey(9, null, "name"));
     document.body.appendChild(nameInput);
-    const noteInput = document.createElement("input");
-    noteInput.value = "";
-    noteInput.setAttribute("data-grid-cell", tableCellDomKey(9, 1, "note"));
-    document.body.appendChild(noteInput);
-    // Week 2's "sets" cell is intentionally never mounted.
+    const textInput = document.createElement("input");
+    textInput.value = "";
+    textInput.setAttribute("data-grid-cell", tableCellDomKey(9, 1, "text"));
+    document.body.appendChild(textInput);
+    // Week 2's "text" cell is intentionally never mounted.
 
     const { result } = renderHook(() => useTableNav({ grid: GRID }));
-    noteInput.focus();
-    const event = keyEvent("ArrowRight", noteInput);
+    textInput.focus();
+    const event = keyEvent("ArrowRight", textInput);
     expect(() => {
       act(() => {
-        result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).onKeyDown(event);
+        result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
       });
     }).not.toThrow();
-    expect(document.activeElement).toBe(noteInput);
+    expect(document.activeElement).toBe(textInput);
   });
 });
 
@@ -842,18 +815,18 @@ describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom 
     });
     const cells = mountCellsWithHoles(HOLE_GRID);
     const { result } = renderHook(() => useTableNav({ grid: HOLE_GRID }));
-    const noteInput = cells[tableCellDomKey(9, 1, "note")]!;
-    noteInput.setSelectionRange(0, 0);
-    const event = keyEvent("ArrowRight", noteInput);
+    const textInput = cells[tableCellDomKey(9, 1, "text")]!;
+    textInput.setSelectionRange(textInput.value.length, textInput.value.length);
+    const event = keyEvent("ArrowRight", textInput);
     act(() => {
-      result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 3, "sets")]);
-    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 3, field: "sets" });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 3, "text")]);
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 3, field: "text" });
     expect(event.preventDefault).toHaveBeenCalled();
     // (5) invariant: the anchor addresses a real node holding tabIndex 0.
-    expect(result.current.cellProps(9, 3, "sets", NOOP_CALLBACKS).tabIndex).toBe(0);
-    expect(result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).tabIndex).toBe(-1);
+    expect(result.current.cellProps(9, 3, "text", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).tabIndex).toBe(-1);
   });
 
   it("(2) ArrowRight when everything to the right is holes leaves the anchor/focus unchanged, but still preventDefaults", () => {
@@ -865,18 +838,18 @@ describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom 
     });
     const cells = mountCellsWithHoles(HOLE_GRID);
     const { result } = renderHook(() => useTableNav({ grid: HOLE_GRID }));
-    const noteInput = cells[tableCellDomKey(9, 1, "note")]!;
-    noteInput.focus();
-    noteInput.setSelectionRange(0, 0);
-    const event = keyEvent("ArrowRight", noteInput);
+    const textInput = cells[tableCellDomKey(9, 1, "text")]!;
+    textInput.focus();
+    textInput.setSelectionRange(textInput.value.length, textInput.value.length);
+    const event = keyEvent("ArrowRight", textInput);
     act(() => {
-      result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(noteInput);
-    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "note" });
+    expect(document.activeElement).toBe(textInput);
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "text" });
     expect(event.preventDefault).toHaveBeenCalled();
     // (5) invariant: the anchor still addresses the real node it started at.
-    expect(result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).tabIndex).toBe(0);
   });
 
   it("(3) ArrowLeft mirrors (1): skips the entire missing week backwards, landing on the previous rendered cell", () => {
@@ -886,18 +859,18 @@ describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom 
     });
     const cells = mountCellsWithHoles(HOLE_GRID);
     const { result } = renderHook(() => useTableNav({ grid: HOLE_GRID }));
-    const setsInput = cells[tableCellDomKey(9, 3, "sets")]!;
-    setsInput.setSelectionRange(0, 0);
-    const event = keyEvent("ArrowLeft", setsInput);
+    const textInput = cells[tableCellDomKey(9, 3, "text")]!;
+    textInput.setSelectionRange(0, 0);
+    const event = keyEvent("ArrowLeft", textInput);
     act(() => {
-      result.current.cellProps(9, 3, "sets", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 3, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "note")]);
-    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "note" });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(9, 1, "text")]);
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "text" });
     expect(event.preventDefault).toHaveBeenCalled();
     // (5) invariant.
-    expect(result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).tabIndex).toBe(0);
-    expect(result.current.cellProps(9, 3, "sets", NOOP_CALLBACKS).tabIndex).toBe(-1);
+    expect(result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.cellProps(9, 3, "text", NOOP_CALLBACKS).tabIndex).toBe(-1);
   });
 
   it("(4) ArrowDown skips a row whose cell at (weekId, field) is unrendered, landing on the next row that has it", () => {
@@ -908,17 +881,17 @@ describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom 
     });
     const cells = mountCellsWithHoles(HOLE_GRID);
     const { result } = renderHook(() => useTableNav({ grid: HOLE_GRID }));
-    const event = keyEvent("ArrowDown", cells[tableCellDomKey(9, 1, "sets")]!);
+    const event = keyEvent("ArrowDown", cells[tableCellDomKey(9, 1, "text")]!);
     act(() => {
-      result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).onKeyDown(event);
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(event);
     });
-    expect(document.activeElement).toBe(cells[tableCellDomKey(11, 1, "sets")]);
-    expect(result.current.anchor).toEqual({ rowId: 11, weekId: 1, field: "sets" });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(11, 1, "text")]);
+    expect(result.current.anchor).toEqual({ rowId: 11, weekId: 1, field: "text" });
     expect(event.preventDefault).toHaveBeenCalled();
     // (5) invariant: row 10 (skipped over, never had this cell) never became
     // the anchor; row 11 (the real landing) holds the roving tabIndex 0.
-    expect(result.current.cellProps(11, 1, "sets", NOOP_CALLBACKS).tabIndex).toBe(0);
-    expect(result.current.cellProps(9, 1, "sets", NOOP_CALLBACKS).tabIndex).toBe(-1);
+    expect(result.current.cellProps(11, 1, "text", NOOP_CALLBACKS).tabIndex).toBe(0);
+    expect(result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).tabIndex).toBe(-1);
   });
 
   it("(5) invariant holds across a repeated skid in both horizontal directions: the anchor always addresses an existing, tabIndex-0 node", () => {
@@ -937,20 +910,20 @@ describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom 
       expect(result.current.cellProps(a.rowId, a.weekId, a.field, NOOP_CALLBACKS).tabIndex).toBe(0);
     }
 
-    const noteInput = cells[tableCellDomKey(9, 1, "note")]!;
-    noteInput.setSelectionRange(0, 0);
+    const w1Input = cells[tableCellDomKey(9, 1, "text")]!;
+    w1Input.setSelectionRange(w1Input.value.length, w1Input.value.length);
     act(() => {
-      result.current.cellProps(9, 1, "note", NOOP_CALLBACKS).onKeyDown(keyEvent("ArrowRight", noteInput));
+      result.current.cellProps(9, 1, "text", NOOP_CALLBACKS).onKeyDown(keyEvent("ArrowRight", w1Input));
     });
-    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 3, field: "sets" });
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 3, field: "text" });
     assertAnchorIsReal();
 
-    const setsInput = cells[tableCellDomKey(9, 3, "sets")]!;
-    setsInput.setSelectionRange(0, 0);
+    const w3Input = cells[tableCellDomKey(9, 3, "text")]!;
+    w3Input.setSelectionRange(0, 0);
     act(() => {
-      result.current.cellProps(9, 3, "sets", NOOP_CALLBACKS).onKeyDown(keyEvent("ArrowLeft", setsInput));
+      result.current.cellProps(9, 3, "text", NOOP_CALLBACKS).onKeyDown(keyEvent("ArrowLeft", w3Input));
     });
-    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "note" });
+    expect(result.current.anchor).toEqual({ rowId: 9, weekId: 1, field: "text" });
     assertAnchorIsReal();
   });
 });

@@ -489,7 +489,7 @@ def _ensure_demo_overrides(group, memberships):
     if week is None:
         return
     prescriptions = list(
-        Prescription.objects.filter(week=week)
+        Prescription.objects.filter(week=week, line=0)
         .select_related("exercise_slot__session_slot")
         .order_by("exercise_slot__session_slot__order", "exercise_slot__order")
     )

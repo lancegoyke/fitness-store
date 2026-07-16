@@ -28,7 +28,6 @@ from store_project.meso.factories import GroupMembershipFactory
 from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
-from store_project.meso.models import LoadType
 from store_project.meso.models import PrescriptionOverride
 from store_project.meso.models import Session
 from store_project.meso.models import Week
@@ -85,8 +84,7 @@ class TestAppendWeek:
         first_cell.exercise_slot.name = "Back Squat"
         first_cell.exercise_slot.tags = ["main"]
         first_cell.exercise_slot.save()
-        first_cell.load = "100"
-        first_cell.load_type = LoadType.PERCENT
+        first_cell.text = "3 x 5, 100%"
         first_cell.save()
 
         new_week = meso.append_week()
@@ -111,8 +109,7 @@ class TestAppendWeek:
         assert copied.pk != first_cell.pk
         assert copied.exercise_slot_id == first_cell.exercise_slot_id
         assert copied.name == "Back Squat"
-        assert copied.load == "100"
-        assert copied.load_type == LoadType.PERCENT
+        assert copied.text == "3 x 5, 100%"
         assert copied.tags == ["main"]
 
     def test_new_week_is_not_current_or_delivered(self):
@@ -262,12 +259,12 @@ class TestWeekViewEndpoint:
         week2 = meso.append_week()
         # Day/row identity (``SessionSlot``/``ExerciseSlot``) is block-shared
         # now, so the only P0-correct way to tell week1's and week2's *served
-        # program* apart is by their per-week cell numbers, not a name.
+        # program* apart is by their per-week cell text, not a name.
         cell1 = list(week1.sessions.order_by("session_slot__order").first().cells())[0]
-        cell1.load = "101"
+        cell1.text = "3 x 10, 101"
         cell1.save()
         cell2 = list(week2.sessions.order_by("session_slot__order").first().cells())[0]
-        cell2.load = "202"
+        cell2.text = "3 x 10, 202"
         cell2.save()
         return link, plan, week1, week2
 
@@ -278,9 +275,9 @@ class TestWeekViewEndpoint:
         assert resp.status_code == 200
         body = resp.json()
         assert body["viewing"] == week2.pk
-        loads = [ex["load"] for d in body["program"] for ex in d["exercises"]]
-        assert "202" in loads
-        assert "101" not in loads
+        texts = [ex["text"] for d in body["program"] for ex in d["exercises"]]
+        assert "3 x 10, 202" in texts
+        assert "3 x 10, 101" not in texts
         # Both days are still block-shared, so the same two day slots show up
         # for either week — this is the P0 semantics, not a stale assertion.
         assert len(body["program"]) == 2

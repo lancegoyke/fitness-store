@@ -204,7 +204,7 @@ class PrescriptionInline(admin.TabularInline):
 
     model = Prescription
     extra = 0
-    raw_id_fields = ("exercise_slot", "swap_exercise")
+    raw_id_fields = ("exercise_slot",)
 
 
 @admin.register(Week)
@@ -242,21 +242,17 @@ class PrescriptionAdmin(admin.ModelAdmin):
         "name",
         "exercise_slot",
         "week",
-        "sets",
-        "reps",
-        "load",
-        "load_type",
-        "rpe",
-        "rest",
+        "line",
+        "text",
         "skipped",
         "is_catalog_linked",
     )
-    list_filter = ("load_type", "skipped")
+    list_filter = ("skipped", "line")
     # ``name``/``is_catalog_linked`` are resolving properties, not DB columns —
-    # search/filter against the real fields instead (``swap_name`` or the
-    # slot's own ``name``).
-    search_fields = ("swap_name", "exercise_slot__name")
-    raw_id_fields = ("exercise_slot", "week", "swap_exercise")
+    # search/filter against the real fields instead (the cell's own ``text`` or
+    # the slot's ``name``).
+    search_fields = ("text", "exercise_slot__name")
+    raw_id_fields = ("exercise_slot", "week")
 
 
 class LoggedSetInline(admin.TabularInline):

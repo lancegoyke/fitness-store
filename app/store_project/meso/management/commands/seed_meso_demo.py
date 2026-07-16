@@ -42,7 +42,6 @@ from store_project.meso.models import CoachProfile
 from store_project.meso.models import CoachSubscription
 from store_project.meso.models import Contraindication
 from store_project.meso.models import ExerciseSlot
-from store_project.meso.models import LoadType
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import MesoGroup
@@ -126,14 +125,13 @@ ATHLETES = [
 # lineup — a ``SessionSlot`` (day) per entry, each with an ordered
 # ``"exercises"`` list — an ``ExerciseSlot`` (row) per entry — expressed
 # **once per block**, since identity (name/bias/tags/catalog link/order) is
-# now shared across every week. ``"weeks"`` are the block's ``Week`` columns;
-# only a week that carries a ``"cells"`` dict materializes ``Session`` +
-# ``Prescription`` rows — ``{day_number: [<row-numbers>, ...]}``, one dict of
-# per-week numbers (sets/reps/load/rpe/rest/note + the rare skip/swap
-# exception) per row, in the same order as that day's ``"exercises"`` — so
-# only the current week (Wk 2) materializes sessions, mirroring how the
-# designer renders one week at a time; the other blocks are
-# planned-length-only (week_count, no ``"days"``/``"weeks"``).
+# now shared across every week; ``tempo``/``rest``/``note`` (the per-exercise
+# columns, Phase 2a / D2) ride each exercise entry. ``"weeks"`` are the
+# block's ``Week`` columns; a week that carries a ``"cells"`` dict sets its
+# freeform cell text — ``{day_number: [<cell>, ...]}``, one dict per row in
+# that day's ``"exercises"`` order, each ``{"text": "<freeform>",
+# "skipped": bool, "lines": ["<sub-line>", ...]}`` (all optional) — the other
+# blocks are planned-length-only (week_count, no ``"days"``/``"weeks"``).
 SAMPLE_PLAN = {
     "title": "Hypertrophy Block",
     "goal": "Hypertrophy",
@@ -149,13 +147,17 @@ SAMPLE_PLAN = {
                     "name": "Lower",
                     "bias": "Quad bias · knee-safe",
                     "exercises": [
-                        # Prescribed as a % of 1RM (S2) — the demo row that
-                        # shows the %-vs-unit Load typing.
-                        {"name": "Box Squat (to parallel)", "tags": ["knee-safe"]},
-                        {"name": "Bulgarian Split Squat (DB)"},
-                        {"name": "Leg Press (controlled ROM)"},
-                        {"name": "Seated Leg Curl"},
-                        {"name": "Standing Calf Raise"},
+                        # Prescribed as a % of 1RM in its cell text — the demo
+                        # row that shows percent notation parsing.
+                        {
+                            "name": "Box Squat (to parallel)",
+                            "tags": ["knee-safe"],
+                            "rest": "2 min",
+                        },
+                        {"name": "Bulgarian Split Squat (DB)", "rest": "90s"},
+                        {"name": "Leg Press (controlled ROM)", "rest": "90s"},
+                        {"name": "Seated Leg Curl", "rest": "60s"},
+                        {"name": "Standing Calf Raise", "rest": "45s"},
                     ],
                 },
                 {
@@ -163,11 +165,19 @@ SAMPLE_PLAN = {
                     "name": "Upper",
                     "bias": "Push / pull",
                     "exercises": [
-                        {"name": "Incline DB Press"},
-                        {"name": "Chest-Supported Row"},
-                        {"name": "Lat Pulldown"},
-                        {"name": "DB Shoulder Press"},
-                        {"name": "Cable Lateral Raise"},
+                        {
+                            "name": "Incline DB Press",
+                            "rest": "2 min",
+                            "note": "monitor shoulder",
+                        },
+                        {"name": "Chest-Supported Row", "rest": "90s"},
+                        {"name": "Lat Pulldown", "rest": "75s"},
+                        {
+                            "name": "DB Shoulder Press",
+                            "rest": "90s",
+                            "note": "neutral grip",
+                        },
+                        {"name": "Cable Lateral Raise", "rest": "60s"},
                     ],
                 },
                 {
@@ -175,11 +185,20 @@ SAMPLE_PLAN = {
                     "name": "Posterior",
                     "bias": "Hinge",
                     "exercises": [
-                        {"name": "Trap-Bar Deadlift"},
-                        {"name": "Hip Thrust"},
-                        {"name": "Romanian Deadlift (3-1-1)"},
-                        {"name": "Reverse Lunge (DB)", "tags": ["knee-safe"]},
-                        {"name": "Hanging Knee Raise"},
+                        {"name": "Trap-Bar Deadlift", "rest": "3 min"},
+                        {"name": "Hip Thrust", "rest": "2 min", "tempo": "311"},
+                        {
+                            "name": "Romanian Deadlift (3-1-1)",
+                            "rest": "90s",
+                            "note": "tempo eccentric",
+                        },
+                        {
+                            "name": "Reverse Lunge (DB)",
+                            "tags": ["knee-safe"],
+                            "rest": "60s",
+                            "note": "knee-monitored",
+                        },
+                        {"name": "Hanging Knee Raise", "rest": "45s"},
                     ],
                 },
             ],
@@ -201,120 +220,31 @@ SAMPLE_PLAN = {
                     "is_current": True,
                     "cells": {
                         1: [
-                            {
-                                "sets": "4",
-                                "reps": "6",
-                                "load": "72",
-                                "load_type": LoadType.PERCENT,
-                                "rpe": "7",
-                                "rest": "2 min",
-                            },
-                            {
-                                "sets": "3",
-                                "reps": "10",
-                                "load": "18",
-                                "rpe": "7",
-                                "rest": "90s",
-                            },
-                            {
-                                "sets": "3",
-                                "reps": "12",
-                                "load": "110",
-                                "rpe": "8",
-                                "rest": "90s",
-                            },
-                            {
-                                "sets": "3",
-                                "reps": "12",
-                                "load": "41",
-                                "rpe": "8",
-                                "rest": "60s",
-                            },
-                            {
-                                "sets": "4",
-                                "reps": "15",
-                                "load": "60",
-                                "rpe": "—",
-                                "rest": "45s",
-                            },
+                            {"text": "4 x 6, RPE 7, 72%"},
+                            {"text": "3 x 10, RPE 7, 18"},
+                            {"text": "3 x 12, RPE 8, 110"},
+                            {"text": "3 x 12, RPE 8, 41"},
+                            {"text": "4 x 15, 60"},
                         ],
                         2: [
-                            {
-                                "sets": "4",
-                                "reps": "8",
-                                "load": "24",
-                                "rpe": "7",
-                                "rest": "2 min",
-                                "note": "monitor shoulder",
-                            },
-                            {
-                                "sets": "4",
-                                "reps": "10",
-                                "load": "27",
-                                "rpe": "7",
-                                "rest": "90s",
-                            },
-                            {
-                                "sets": "3",
-                                "reps": "12",
-                                "load": "52",
-                                "rpe": "8",
-                                "rest": "75s",
-                            },
-                            {
-                                "sets": "3",
-                                "reps": "10",
-                                "load": "16",
-                                "rpe": "7",
-                                "rest": "90s",
-                                "note": "neutral grip",
-                            },
+                            {"text": "4 x 8, RPE 7, 24"},
+                            {"text": "4 x 10, RPE 7, 27"},
+                            {"text": "3 x 12, RPE 8, 52"},
+                            {"text": "3 x 10, RPE 7, 16"},
                             # A one-week exception: shoulder felt off, so this
                             # row is skipped for Wk 2 only (the em-dash cell) —
                             # not logged, so it's safe to demo here.
                             {"skipped": True},
                         ],
                         3: [
-                            {
-                                "sets": "4",
-                                "reps": "6",
-                                "load": "92.5",
-                                "rpe": "7",
-                                "rest": "3 min",
-                            },
-                            {
-                                "sets": "3",
-                                "reps": "10",
-                                "load": "80",
-                                "rpe": "8",
-                                "rest": "2 min",
-                            },
-                            {
-                                "sets": "3",
-                                "reps": "8",
-                                "load": "60",
-                                "rpe": "7",
-                                "rest": "90s",
-                                "note": "tempo eccentric",
-                            },
-                            {
-                                "sets": "3",
-                                "reps": "12",
-                                "load": "14",
-                                "rpe": "—",
-                                "rest": "60s",
-                                "note": "knee-monitored",
-                            },
-                            # A one-week swap: a substitute lift for Wk 2 only
+                            {"text": "4 x 6, RPE 7, 92.5"},
+                            {"text": "3 x 10, RPE 8, 80"},
+                            {"text": "3 x 8, RPE 7, 60"},
+                            {"text": "3 x 12, 14"},
+                            # A one-week substitution, freeform-style (§2.6):
+                            # the substitute movement typed into a sub-line
                             # (block identity stays "Hanging Knee Raise").
-                            {
-                                "sets": "3",
-                                "reps": "12",
-                                "load": "BW",
-                                "rpe": "—",
-                                "rest": "45s",
-                                "swap_name": "Cable Crunch",
-                            },
+                            {"text": "3 x 12, BW", "lines": ["Cable Crunch"]},
                         ],
                     },
                 },
@@ -415,25 +345,28 @@ def build_block(mesocycle, block_spec):
     - ``"days"``: the block's fixed lineup, expressed **once** — each entry is
       a ``SessionSlot`` (``day_number``/``name``/``bias``/``order``) with an
       ordered ``"exercises"`` list, each an ``ExerciseSlot`` row
-      (``name``/``exercise``/``tags``, identity only — no numbers);
+      (``name``/``exercise``/``tags`` plus the per-exercise ``tempo``/``rest``/
+      ``note`` columns, Phase 2a / D2);
     - ``"weeks"``: the block's ``Week`` columns (``index``/``phase``/``volume``/
       ``intensity``/``is_deload``/``is_current``). EVERY listed week materializes
-      the full fixed lineup — a ``Session`` per day and a ``Prescription`` cell
-      per row (invariant: every slot × live-week has a cell) — so the block is
-      dense. A week may carry a ``"cells"`` dict (``{day_number: [<row-numbers>,
-      ...]}``, one numbers-dict per row in that day's ``"exercises"`` order) to
-      set its numbers; a week without one gets blank cells (the lineup, no
-      numbers). Each row-numbers dict may carry ``sets``/``reps``/``load``/
-      ``load_type``/``rpe``/``rest``/``note`` and the rare per-week exceptions
-      ``skipped``/``swap_name``. Blocks with no ``"weeks"`` stay
-      planned-length-only (``week_count``, no ``Week`` rows).
+      the full fixed lineup — a ``Session`` per day and a line-0 ``Prescription``
+      cell per row (invariant: every slot × live-week has a cell) — so the block
+      is dense. A week may carry a ``"cells"`` dict (``{day_number: [<cell>,
+      ...]}``, one dict per row in that day's ``"exercises"`` order) setting each
+      cell's freeform ``"text"``, the one-week ``"skipped"`` exception, and
+      optional ``"lines"`` (sub-line text strings, materialized at line 1+); a
+      week without one gets blank cells (the lineup, no text). Blocks with no
+      ``"weeks"`` stay planned-length-only (``week_count``, no ``Week`` rows).
 
     Idempotent on the P0 natural keys — ``SessionSlot`` by ``(mesocycle,
     day_number)``, ``ExerciseSlot`` by ``(session_slot, order)``, ``Week`` by
-    ``(mesocycle, index)``, ``Prescription`` cell by ``(exercise_slot, week)`` —
-    so re-running a seeder never duplicates rows even if called more than once.
-    Returns ``{index: Week}`` so a caller (e.g. the sample-log step) can look a
-    materialized week back up without re-querying.
+    ``(mesocycle, index)``, ``Prescription`` cell by ``(exercise_slot, week,
+    line)`` — so re-running a seeder never duplicates rows even if called more
+    than once. Returns ``{index: Week}`` so a caller (e.g. the sample-log step)
+    can look a materialized week back up without re-querying.
+
+    This is also the Phase-3 importer's target hook (plan §5): a parsed Google
+    Sheet template maps onto exactly this dict shape.
     """
     slots_by_day = {}
     rows_by_day = {}
@@ -458,6 +391,9 @@ def build_block(mesocycle, block_spec):
                     "name": ex["name"],
                     "exercise": ex.get("exercise"),
                     "tags": ex.get("tags", []),
+                    "tempo": ex.get("tempo", ""),
+                    "rest": ex.get("rest", ""),
+                    "note": ex.get("note", ""),
                 },
             )
             rows.append(row)
@@ -486,24 +422,25 @@ def build_block(mesocycle, block_spec):
         cells_spec = week_spec.get("cells", {})
         for day_number, slot in slots_by_day.items():
             Session.objects.update_or_create(week=week, session_slot=slot)
-            row_numbers = cells_spec.get(day_number, [])
+            row_cells = cells_spec.get(day_number, [])
             for order, row in enumerate(rows_by_day.get(day_number, [])):
-                numbers = row_numbers[order] if order < len(row_numbers) else {}
+                cell = row_cells[order] if order < len(row_cells) else {}
                 Prescription.objects.update_or_create(
                     exercise_slot=row,
                     week=week,
+                    line=0,
                     defaults={
-                        "sets": numbers.get("sets", ""),
-                        "reps": numbers.get("reps", ""),
-                        "load": numbers.get("load", ""),
-                        "load_type": numbers.get("load_type", LoadType.ABSOLUTE),
-                        "rpe": numbers.get("rpe", ""),
-                        "rest": numbers.get("rest", ""),
-                        "note": numbers.get("note", ""),
-                        "skipped": numbers.get("skipped", False),
-                        "swap_name": numbers.get("swap_name", ""),
+                        "text": cell.get("text", ""),
+                        "skipped": cell.get("skipped", False),
                     },
                 )
+                for line, line_text in enumerate(cell.get("lines", []), start=1):
+                    Prescription.objects.update_or_create(
+                        exercise_slot=row,
+                        week=week,
+                        line=line,
+                        defaults={"text": line_text},
+                    )
     return weeks_by_index
 
 
@@ -774,7 +711,7 @@ class Command(BaseCommand):
         if week is None:
             return
         prescriptions = list(
-            Prescription.objects.filter(week=week)
+            Prescription.objects.filter(week=week, line=0)
             .select_related("exercise_slot__session_slot")
             .order_by("exercise_slot__session_slot__order", "exercise_slot__order")
         )

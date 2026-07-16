@@ -382,8 +382,8 @@ describe("isPercentLift / suggestedLoad / setImpliedOneRm", () => {
     const c = createLogger();
     c.unit = "kg";
     c.exercises = [
-      { id: 1, load: "75", load_type: "pct", e1rm: "120", set_rows: [] },
-      { id: 2, load: "70", load_type: "abs", e1rm: "", set_rows: [] },
+      { id: 1, text: "3 x 5, 75%", e1rm: "120", set_rows: [] },
+      { id: 2, text: "3 x 10, 70", e1rm: "", set_rows: [] },
     ];
     return c;
   }
@@ -422,15 +422,14 @@ describe("server-derived 1RM (effectiveOneRm / usingDerivedOneRm)", () => {
   }
 
   it("uses the server's derived 1RM when no value is typed", () => {
-    const c = logger({ load: "75", load_type: "pct", one_rm: "120", e1rm: "" });
+    const c = logger({ text: "3 x 5, 75%", one_rm: "120", e1rm: "" });
     expect(c.effectiveOneRm(c.exercises[0])).toBe("120");
     expect(c.suggestedLoad(c.exercises[0])).toBe("90 kg"); // 75% of 120
   });
 
   it("lets a typed estimate override the derived value", () => {
     const c = logger({
-      load: "75",
-      load_type: "pct",
+      text: "3 x 5, 75%",
       one_rm: "120",
       e1rm: "200",
     });
@@ -440,8 +439,7 @@ describe("server-derived 1RM (effectiveOneRm / usingDerivedOneRm)", () => {
 
   it("falls back to derived when the typed value is non-numeric", () => {
     const c = logger({
-      load: "75",
-      load_type: "pct",
+      text: "3 x 5, 75%",
       one_rm: "120",
       e1rm: "abc",
     });
@@ -449,7 +447,7 @@ describe("server-derived 1RM (effectiveOneRm / usingDerivedOneRm)", () => {
   });
 
   it("flags when the suggestion is sized off the derived 1RM", () => {
-    const c = logger({ load: "75", load_type: "pct", one_rm: "120", e1rm: "" });
+    const c = logger({ text: "3 x 5, 75%", one_rm: "120", e1rm: "" });
     expect(c.usingDerivedOneRm(c.exercises[0])).toBe(true);
     c.exercises[0].e1rm = "200";
     expect(c.usingDerivedOneRm(c.exercises[0])).toBe(false);
@@ -470,8 +468,7 @@ describe("server-derived 1RM (effectiveOneRm / usingDerivedOneRm)", () => {
         exercises: [
           {
             id: 7,
-            load: "75",
-            load_type: "pct",
+            text: "3 x 5, 75%",
             one_rm: "142.5",
             one_rm_source: "logged",
             set_rows: [],
@@ -498,8 +495,7 @@ describe("server-derived 1RM (effectiveOneRm / usingDerivedOneRm)", () => {
         exercises: [
           {
             id: 7,
-            load: "75",
-            load_type: "pct",
+            text: "3 x 5, 75%",
             one_rm: "150",
             one_rm_source: "manual",
             set_rows: [],
@@ -657,8 +653,7 @@ describe("pre-Phase-2 override migration", () => {
         exercises: [
           {
             id: 7,
-            load: "75",
-            load_type: "pct",
+            text: "3 x 5, 75%",
             one_rm: "",
             one_rm_source: "",
             set_rows: [],
@@ -697,8 +692,7 @@ describe("pre-Phase-2 override migration", () => {
         exercises: [
           {
             id: 7,
-            load: "75",
-            load_type: "pct",
+            text: "3 x 5, 75%",
             one_rm: "200",
             one_rm_source: "manual",
             set_rows: [],
