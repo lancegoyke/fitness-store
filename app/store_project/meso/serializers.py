@@ -454,6 +454,29 @@ def serialize_session_log(log):
     }
 
 
+def serialize_new_record(record):
+    """A ``personal_records.NewRecord`` as the display dict the PR surface reads.
+
+    Formats the raw Epley e1RM floats into number strings the client renders
+    verbatim — so it never re-rounds and can't disagree with the pinned server
+    value — rounded to the 2-decimal convention the stored ``AthleteOneRm``
+    display already uses (``_fmt_num`` trims a trailing ``.0``). ``is_first`` is a
+    first-ever lift (no prior best to beat); ``delta`` is the gain over the
+    previous best, absent on a first PR.
+    """
+    value = round(record.value, 2)
+    previous = round(record.previous, 2) if record.previous is not None else None
+    return {
+        "key": record.key,
+        "name": record.name,
+        "unit": record.unit,
+        "value": _fmt_num(value),
+        "previous": _fmt_num(previous) if previous is not None else None,
+        "delta": _fmt_num(round(value - previous, 2)) if previous is not None else None,
+        "is_first": record.previous is None,
+    }
+
+
 def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
     """A compact summary of the athlete's most recent logged sessions on this plan.
 

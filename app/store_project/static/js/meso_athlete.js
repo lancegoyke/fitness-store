@@ -88,6 +88,7 @@ function createLogger() {
     saved: false,
     error: false,
     queued: false, // a save is stashed locally, waiting for the network
+    newRecords: [], // PRs the last save beat (Phase 4c) — the celebration toast
     _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
 
     init() {
@@ -180,6 +181,13 @@ function createLogger() {
       row.done = !row.done;
     },
 
+    // One PR line for the celebration toast (Phase 4c). The server preformatted
+    // the numbers (value/delta), so this only assembles them — never re-rounds.
+    prLabel(pr) {
+      const base = pr.name + " — " + pr.value + " " + pr.unit;
+      return pr.is_first ? base + " (first best)" : base + " (+" + pr.delta + ")";
+    },
+
     // A row is worth sending if it's checked or carries any entry.
     rowFilled(r) {
       return (
@@ -222,6 +230,7 @@ function createLogger() {
       this.saved = false;
       this.error = false;
       this.queued = false;
+      this.newRecords = []; // clear any prior toast; this save recomputes it
       const payload = this.buildPayload(markDone);
       // Reflect the intended status locally right away so the UI is responsive
       // whether the request lands now or after a sync.
@@ -258,6 +267,9 @@ function createLogger() {
         const data = await res.json();
         this.status = data.log.status;
         this.syncFromLog(data.log);
+        // Any lift this (done) save beat — the server already filtered to DONE, so
+        // a "Save progress" comes back empty and shows no toast.
+        this.newRecords = data.new_records || [];
         this.saved = true;
         // Key the tour nudge off the log status the *server* persisted, not the
         // button pressed (#451): the self-variant "results" step advances on a
@@ -342,6 +354,7 @@ function createLogger() {
             const data = await res.json();
             this.status = data.log.status;
             this.syncFromLog(data.log);
+            this.newRecords = data.new_records || []; // a PR beaten offline still lands
             flushedMine = true;
           } catch (e) {
             /* synced server-side regardless; UI reconciles on next load */

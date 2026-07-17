@@ -82,9 +82,11 @@ from .models import SessionLog
 from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
+from .personal_records import new_records_in
 from .serializers import current_week
 from .serializers import serialize_chat_thread
 from .serializers import serialize_mesocycle_grid
+from .serializers import serialize_new_record
 from .serializers import serialize_plan
 from .serializers import serialize_plan_history
 from .serializers import serialize_prescription
@@ -1412,7 +1414,17 @@ def athlete_log_session(request, pk):
     # under *another* coach — never skips the step. A no-op unless parked on
     # results.
     meso_tour.advance_self_step_if_complete(request.user, "results")
-    return JsonResponse({"ok": True, "log": serialize_session_log(log)})
+    # Phase 4c: the lifts in this session that beat the athlete's prior best, so
+    # the logger can celebrate a PR the instant it's logged. Pure detection off
+    # the just-committed rows — DONE-only, so a "Save progress" draft returns [].
+    new_records = new_records_in(log)
+    return JsonResponse(
+        {
+            "ok": True,
+            "log": serialize_session_log(log),
+            "new_records": [serialize_new_record(r) for r in new_records],
+        }
+    )
 
 
 @login_required

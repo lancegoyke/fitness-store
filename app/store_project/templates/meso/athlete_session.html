@@ -45,6 +45,26 @@
       <span class="meso-row-meta">sets logged — fill in what you did, then log the session.</span>
     </div>
 
+    <!-- New-PR celebration (Phase 4c): populated from the log response; dismissible. -->
+    <template x-if="newRecords.length">
+      <div class="meso-card meso-card--pad" x-cloak
+           style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid color-mix(in srgb,var(--accent) 30%,var(--surface));background:color-mix(in srgb,var(--accent) 12%,var(--surface));">
+        <span style="font-size:20px;line-height:1.2;flex:0 0 auto;">🎉</span>
+        <div style="flex:1;min-width:0;line-height:1.45;">
+          <div style="font-size:14px;font-weight:800;letter-spacing:-0.01em;color:var(--accent-deep);">
+            New PR<span x-show="newRecords.length > 1">s</span>!
+          </div>
+          <div class="meso-row-meta meso-mono">
+            <template x-for="pr in newRecords" :key="pr.key">
+              <span style="display:block;color:var(--ink);" x-text="prLabel(pr)"></span>
+            </template>
+          </div>
+        </div>
+        <button type="button" @click="newRecords = []" aria-label="Dismiss"
+                class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;flex:0 0 auto;">&times;</button>
+      </div>
+    </template>
+
     {% if show_first_log_hint %}
       <!-- First-log coachmark (first-time UX Phase 4): server-driven, shown only
            to a first-ever logger; meso_onboarding.js persists a manual dismiss. -->
