@@ -182,6 +182,17 @@
   vertical-align: top;
 }
 
+/* Tempo / Notes / Rest inputs sit directly in their <td> (unlike the week
+   cells, whose inputs stretch to width inside a flex editor). Pin them to the
+   cell width, or they keep a text input's intrinsic ~177px width and overflow
+   the compact columns — which also dragged the :focus-visible outline well
+   past the actual cell (the highlight looked far larger than the cell). */
+.meso-row-col-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 /* A plain sticky table-cell (NOT display:flex — that would detach it from the
    row's height, so a tall sub-line row in a week column would leave this
    cell's bottom border misaligned). Its width comes from .meso-col-exercise;
