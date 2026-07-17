@@ -61,7 +61,7 @@
 // only once a landable target is found (so tabbing off the table's last
 // cell hands focus to the browser's native order — the grid is not a focus
 // trap). Sub-line stops skid by LINE too: moving horizontally from line L
-// lands on the target cell's nearest stop at-or-above it (its ghost when the
+// lands on the target cell's largest stop at-or-below it (its ghost when the
 // stack is shorter — the spreadsheet's merged-cell feel), never on a line
 // that doesn't render.
 import { useEffect, useMemo, useRef, useState } from "react";
