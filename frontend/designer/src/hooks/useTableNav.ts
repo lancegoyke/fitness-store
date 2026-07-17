@@ -122,6 +122,12 @@ export interface UseTableNavResult {
     callbacks: TableCellCallbacks,
     line?: number,
   ): TableCellBindings;
+  /** Reset a cell's Escape baseline after an out-of-band commit that KEEPS
+   * focus — the multi-line stack paste. Mirrors what the Enter handler does
+   * for its own commit: without it, Escape after a paste would roll the UI
+   * back PAST the committed write, desyncing it from the server. (Blur
+   * commits don't need this — the next focus reseeds the baseline.) */
+  setRevertBaseline(rowId: number, weekId: number | null, field: TableColumn, value: string, line?: number): void;
 }
 
 export interface UseTableNavOptions {
@@ -645,5 +651,9 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
     return { tabIndex, onFocus, onKeyDown };
   }
 
-  return { anchor, cellProps };
+  function setRevertBaseline(rowId: number, weekId: number | null, field: TableColumn, value: string, line = 0) {
+    focusValuesRef.current[tableCellDomKey(rowId, weekId, field, line)] = value;
+  }
+
+  return { anchor, cellProps, setRevertBaseline };
 }

@@ -431,6 +431,16 @@ describe("cell stack copy/paste", () => {
     expect(onWriteCellLine).not.toHaveBeenCalled();
   });
 
+  it("Escape after a multi-line paste reverts to the pasted head, never past the commit", () => {
+    render(<MesoTable {...baseProps({ grid: linesGrid() })} />);
+    const input = screen.getByTestId("cell-text-100") as HTMLInputElement;
+    input.focus(); // seeds the Escape baseline with the pre-paste text
+    fireEvent.paste(input, { clipboardData: clipboard("4 x 6\nRPE 9") });
+    expect(input).toHaveValue("4 x 6");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(input).toHaveValue("4 x 6"); // the committed paste IS the baseline now
+  });
+
   it("single-line paste stays native caret insertion (no stack write)", () => {
     const onPatchCell = vi.fn();
     const onWriteCellLine = vi.fn();

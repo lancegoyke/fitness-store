@@ -339,6 +339,10 @@ function GridCellEditor({ cell, row, week, tableNav, onPatchCell, onWriteCellLin
     dirtyRef.current = false;
     setDraft(head);
     onPatchCell(cellId, { text: head });
+    // The pasted head is committed while focus stays here — it's the new
+    // Escape baseline (same rule as the Enter handler's), or Escape would
+    // roll the UI back past the commit.
+    tableNav.setRevertBaseline(row.exercise_slot_id, week.id, "text", head);
     rest.forEach((text, i) => onWriteCellLine(row.exercise_slot_id, week.id, i + 1, text));
     // Blank any existing line beyond the pasted stack so the result equals
     // the source cell (a cleared line stays rendered in place — Phase 2a's
