@@ -53,9 +53,6 @@
 // sub-line text, written like any other line). skip/unskip, fill-across-
 // weeks, add-this-week and move-to-day all stay. (The per-cell group
 // adjust badge went with the group subsystem itself.)
-// The table's own coachmark landed in issue #455 phase A4 (re-authored
-// copy, not a mechanical port of WeekGrid.tsx's "grid" mark — see this
-// file's coachmarkVisible/dismissCoachmark prop header).
 import { useEffect, useRef, useState } from "react";
 import type { ClipboardEvent } from "react";
 import {
@@ -113,11 +110,6 @@ export interface MesoTableProps {
   // MesoTable.test.tsx's existing baseProps() (which never sets it) keeps
   // passing untouched.
   onDragEnd?(event: TableDragEndEvent): void;
-  // Issue #455 phase A4: the table's own first-run coachmark — same
-  // useCoachmarks hook slice WeekGrid.tsx takes for its "grid" mark
-  // (lib/coachmarks.ts's COACHMARK_KEYS now carries a "table" entry too).
-  coachmarkVisible(key: string): boolean;
-  dismissCoachmark(key: string): void;
 }
 
 /** The single arm/confirm slot — mirrors usePlanData's PendingDelete
@@ -1102,8 +1094,6 @@ export function MesoTable(props: MesoTableProps) {
     onFillAcrossWeeks,
     onAddExerciseThisWeek,
     onDragEnd,
-    coachmarkVisible,
-    dismissCoachmark,
   } = props;
 
   const [armed, setArmed] = useState<Armed>(null);
@@ -1213,28 +1203,6 @@ export function MesoTable(props: MesoTableProps) {
           + Add week
         </button>
       </div>
-
-      {coachmarkVisible("table") && (
-        <div className="meso-flex meso-coachmark">
-          <div className="meso-coachmark-body">
-            <div className="meso-coachmark-title">The block table</div>
-            <div className="meso-coachmark-text">
-              Tap any cell and type the prescription — “4 x 6, RPE 9” — with extra lines below it for
-              cues or substitutions; arrows, Tab and Enter move cell to cell (Enter at the bottom of a
-              day adds a row), and every change autosaves. Drag a ⠿ handle to reorder exercises or days.
-            </div>
-          </div>
-          <button
-            type="button"
-            data-hover="rail"
-            className="meso-coachmark-dismiss"
-            aria-label="Dismiss tip"
-            onClick={() => dismissCoachmark("table")}
-          >
-            ×
-          </button>
-        </div>
-      )}
 
       <DndContext
         sensors={sensors}

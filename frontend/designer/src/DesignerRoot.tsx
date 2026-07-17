@@ -237,8 +237,6 @@ export function DesignerRoot() {
                 onFillAcrossWeeks={gridState.fillAcrossWeeks}
                 onAddExerciseThisWeek={gridState.addExerciseThisWeek}
                 onDragEnd={tableReorder.onDragEnd}
-                coachmarkVisible={coachmarks.coachmarkVisible}
-                dismissCoachmark={coachmarks.dismissCoachmark}
               />
             )}
 

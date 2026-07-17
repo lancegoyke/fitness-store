@@ -12,7 +12,9 @@
    them, so they moved here rather than being deleted. */
 
 .meso-table-view {
-  padding-bottom: 8px;
+  /* Consistent gutters so the toolbar and day cards don't sit flush against
+     the canvas edges (designer-simplify). */
+  padding: 18px 20px 24px;
 }
 
 .meso-table-toolbar {

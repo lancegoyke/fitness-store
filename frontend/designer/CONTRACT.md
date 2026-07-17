@@ -347,10 +347,11 @@ top) replaces the whole one-week-at-a-time tree they formed:
   every week already renders as its own column, so there's nothing to
   switch between; undo/redo moved to `useUndoKeyboard` + `useGrid.undo`/
   `.redo`, wired at `DesignerRoot`, not a component.
-- **`WeekGrid`** (one week's days, plus the "grid" coachmark) →
-  `MesoTable` itself; its coachmark key is now `"table"` (A4's re-authored
-  copy, not a mechanical port of the old "grid" mark — `COACHMARK_KEYS`
-  dropped `"grid"` in A5 step 6).
+- **`WeekGrid`** (one week's days) → `MesoTable` itself. It once carried a
+  "table" first-run coachmark (A4); designer-simplify removed that info alert
+  (the block grid should be self-evident; tips will live in a dedicated help
+  affordance later), so `COACHMARK_KEYS` is now just `["phone"]` — `"grid"`
+  went with the one-week view in A5, `"table"` with this cleanup.
 - **`DayCard`** (one day's header + exercise rows) → `MesoTable`'s day
   sub-tables (one `<table>` per training day, rendered inline, not a
   separate component).
