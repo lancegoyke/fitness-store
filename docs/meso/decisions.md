@@ -1468,8 +1468,19 @@ _(Append dated entries here as decisions land.)_
   rows/`END OF WEEK` footers — unknown structure is reported, never raised.
   `manage.py meso_import_template <xlsx>... --owner <email> [--title]`
   wraps it: ONE template plan, one `Mesocycle` per file in argument order
-  (101→102→103 = one 3-block plan), atomic, idempotent on (owner, title)
-  re-run, with a per-file days/exercises/weeks/cells + skipped-rows summary.
+  (101→102→103 = one 3-block plan), atomic, with a per-file
+  days/exercises/weeks/cells + skipped-rows summary. **A same-title re-run
+  fully REBUILDS the tree** (Codex review finding): the workbook is the
+  source of truth for a template, so re-importing must also *remove* what
+  the source no longer has (a shrunk family, a deleted exercise row, a
+  shortened sub-line stack, a dropped week) and may legitimately clobber
+  designer edits — an upsert-only re-run left that stale programming in
+  place. The rebuild deletes the plan's mesocycles (the whole tree
+  cascades) and wipes the plan's `PlanAction` undo/redo stacks — their
+  plan-wide snapshots reference the deleted pks and would resurrect ghost
+  rows on undo (the 0038/0039 wipe precedent). Chosen over a surgical
+  prune: simpler, semantics-clean, and pk stability buys nothing for a
+  library object with no athlete logs or deliveries hanging off it.
   Validated end-to-end over the five raw fixtures (now all committed:
   `docs/meso/fixtures/templates/{101,102,103,402,601}.xlsx`): 7 days each,
   22/22/22/19/13 exercises, 96/100/100/72/40 non-empty cells. Deliberately

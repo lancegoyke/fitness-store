@@ -12,8 +12,10 @@ real (anonymized) fixtures under ``docs/meso/fixtures/templates/``:
   102 RPE sub-row folded as per-week sub-lines, 601's separator + packed
   circuit/EDT rows;
 - the command: single-file import builds the tree, a 3-file family imports
-  as ONE plan with 3 ordered blocks, re-running updates in place (no
-  duplicates), and an unknown ``--owner`` errors cleanly.
+  as ONE plan with 3 ordered blocks, re-running REBUILDS in place (no
+  duplicates — and no stale leftovers when the source shrinks: fewer files,
+  a dropped exercise row, a shortened sub-line stack; the undo stack is
+  wiped with the old tree), and an unknown ``--owner`` errors cleanly.
 """
 
 from pathlib import Path
@@ -25,6 +27,7 @@ from django.core.management import call_command
 from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import Plan
+from store_project.meso.models import PlanAction
 from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionSlot
@@ -276,6 +279,104 @@ class TestImportCommand:
             ).count()
             == 19 * 4
         )
+
+    def test_rerun_with_fewer_files_drops_stale_blocks(self):
+        # A re-import is a full REBUILD (the workbook is the source of truth):
+        # shrinking a 3-file family to one file must not leave the other two
+        # blocks behind.
+        owner = UserFactory()
+        call_command(
+            "meso_import_template",
+            str(FIXTURES / "101.xlsx"),
+            str(FIXTURES / "102.xlsx"),
+            str(FIXTURES / "103.xlsx"),
+            owner=owner.email,
+            title="Base 1-3",
+        )
+        call_command(
+            "meso_import_template",
+            str(FIXTURES / "402.xlsx"),
+            owner=owner.email,
+            title="Base 1-3",
+        )
+        plan = Plan.objects.get(is_template=True, owner=owner)
+        blocks = list(Mesocycle.objects.filter(plan=plan))
+        assert [(b.order, b.name) for b in blocks] == [(0, "402")]
+        assert (
+            ExerciseSlot.objects.filter(session_slot__mesocycle__plan=plan).count()
+            == 19
+        )
+
+    def test_rerun_removes_rows_the_source_dropped(self, monkeypatch):
+        # Deleting an exercise row from the workbook must delete it from the
+        # template on re-import — not leave a stale row upserts never touch.
+        owner = UserFactory()
+        call_command(
+            "meso_import_template", str(FIXTURES / "402.xlsx"), owner=owner.email
+        )
+        shrunk = parse("402")
+        dropped = shrunk.block_spec["days"][0]["exercises"].pop()  # E) ... row
+        for week in shrunk.block_spec["weeks"]:
+            week["cells"][1].pop()
+        monkeypatch.setattr(
+            "store_project.meso.management.commands.meso_import_template"
+            ".parse_workbook",
+            lambda path: shrunk,
+        )
+        call_command(
+            "meso_import_template", str(FIXTURES / "402.xlsx"), owner=owner.email
+        )
+        plan = Plan.objects.get(is_template=True, owner=owner)
+        slots = ExerciseSlot.objects.filter(session_slot__mesocycle__plan=plan)
+        assert slots.count() == 18
+        assert not slots.filter(name=dropped["name"]).exists()
+
+    def test_rerun_drops_shortened_sub_line_stacks(self, monkeypatch):
+        # 102's RPE row imports as line-1 Prescriptions; a source without the
+        # RPE row must come back sub-line-free on re-import.
+        owner = UserFactory()
+        call_command(
+            "meso_import_template", str(FIXTURES / "102.xlsx"), owner=owner.email
+        )
+        plan = Plan.objects.get(is_template=True, owner=owner)
+        sub_lines = Prescription.objects.filter(
+            exercise_slot__session_slot__mesocycle__plan=plan, line__gte=1
+        )
+        assert sub_lines.exists()
+        shrunk = parse("102")
+        for week in shrunk.block_spec["weeks"]:
+            for cells in week["cells"].values():
+                for cell in cells:
+                    cell["lines"] = []
+        monkeypatch.setattr(
+            "store_project.meso.management.commands.meso_import_template"
+            ".parse_workbook",
+            lambda path: shrunk,
+        )
+        call_command(
+            "meso_import_template", str(FIXTURES / "102.xlsx"), owner=owner.email
+        )
+        plan.refresh_from_db()
+        assert not Prescription.objects.filter(
+            exercise_slot__session_slot__mesocycle__plan=plan, line__gte=1
+        ).exists()
+
+    def test_rerun_clears_the_undo_stack(self):
+        # The rebuild deletes the old tree, so the plan-wide PlanAction
+        # snapshots reference dead pks — replaying one would resurrect ghost
+        # rows. A re-import wipes the stacks (the 0038/0039 precedent).
+        owner = UserFactory()
+        call_command(
+            "meso_import_template", str(FIXTURES / "402.xlsx"), owner=owner.email
+        )
+        plan = Plan.objects.get(is_template=True, owner=owner)
+        PlanAction.objects.create(
+            plan=plan, stack=PlanAction.Stack.UNDO, seq=1, label="edit", snapshot={}
+        )
+        call_command(
+            "meso_import_template", str(FIXTURES / "402.xlsx"), owner=owner.email
+        )
+        assert not PlanAction.objects.filter(plan=plan).exists()
 
     def test_unknown_owner_errors_cleanly(self):
         with pytest.raises(CommandError, match="No user with email"):

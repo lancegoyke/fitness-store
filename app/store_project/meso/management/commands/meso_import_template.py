@@ -11,9 +11,20 @@ Each ``.xlsx`` becomes one ``Mesocycle`` (in argument order — a template
 ``sheet_import.parse_workbook`` and materialized by the same
 ``seed_meso_demo.build_block`` the demo seeders use. The plan is a
 **template** (``is_template=True``, no relationship, ``owner`` = the coach's
-library, §3.4), resolved by ``(owner, title, is_template)`` so a re-run with
-the same title updates in place (``build_block`` is idempotent on the P0
-natural keys — never duplicates).
+library, §3.4), resolved by ``(owner, title, is_template)``.
+
+**A re-run with the same title fully REBUILDS the program tree.** The
+workbook is the source of truth for a template, so re-importing replaces
+everything — including rows the source no longer has (a 3-file family
+re-imported as one file, a deleted exercise row, a shortened sub-line
+stack, a removed week) *and* any designer edits made since the last import.
+An upsert-only re-run would leave that stale programming in place while
+reporting success. Concretely: the plan's mesocycles are deleted (the
+whole SessionSlot/ExerciseSlot/Week/Session/Prescription tree cascades)
+and rebuilt from the parsed specs, and the plan's undo/redo stacks
+(``PlanAction``) are wiped — their plan-wide snapshots reference the
+deleted pks and would resurrect ghosts on undo (the same reason migrations
+``0038``/``0039`` wiped stacks when snapshots became unreplayable).
 """
 
 from django.core.management.base import BaseCommand
@@ -75,12 +86,23 @@ class Command(BaseCommand):
             is_template=True,
             defaults={"relationship": None, "status": Plan.Status.ACTIVE},
         )
+        if not created:
+            # Full rebuild (see module docstring): the workbook is the source
+            # of truth, so a re-import must also REMOVE what the source no
+            # longer has — an upsert would leave stale blocks/rows/weeks/
+            # sub-lines behind. Deleting the mesocycles cascades the whole
+            # tree; the undo/redo stacks go with it (their plan-wide
+            # snapshots reference the deleted pks — replaying one would
+            # resurrect ghost rows).
+            plan.mesocycles.all().delete()
+            plan.actions.all().delete()
 
         for order, (path, block) in enumerate(parsed):
-            mesocycle, _ = Mesocycle.objects.update_or_create(
+            mesocycle = Mesocycle.objects.create(
                 plan=plan,
                 order=order,
-                defaults={"name": block.tab, "week_count": block.week_count},
+                name=block.tab,
+                week_count=block.week_count,
             )
             build_block(mesocycle, block.block_spec)
             self.stdout.write(
