@@ -1946,6 +1946,14 @@ class Prescription(models.Model):
     # em-dash), distinct from the row not existing at all. Applies to the
     # exercise × week, so it is only ever meaningful on line 0.
     skipped = models.BooleanField(_("Skipped"), default=False)
+    # The athlete authored this cell's current text via their own tracking
+    # surface (Phase 4a). It keeps the cell OUT of the coach's undo/redo
+    # snapshot machinery: an athlete's freeform sub-line write records no
+    # ``PlanAction``, and a coach undo/redo must never overwrite or hard-delete
+    # it (``history.py``). A coach edit to the same cell reclaims it (flips this
+    # back to ``False``), folding it into coach history again. Existing cells
+    # are coach-authored, so the default is ``False`` and no backfill is needed.
+    athlete_authored = models.BooleanField(_("Athlete authored"), default=False)
 
     class Meta:
         ordering = ["exercise_slot__order", "line"]

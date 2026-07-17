@@ -81,7 +81,12 @@ def serialize_plan_snapshot(plan):
         session_slot__mesocycle__plan=plan
     )
     sessions = models.Session.objects.filter(week__mesocycle__plan=plan)
-    cells = models.Prescription.objects.filter(week__mesocycle__plan=plan)
+    # Athlete-authored cells (Phase 4a) are invisible to the coach's undo/redo:
+    # the athlete's own tracking sub-lines record no ``PlanAction`` and must
+    # never be reverted by a coach undo, so they're excluded from capture.
+    cells = models.Prescription.objects.filter(
+        week__mesocycle__plan=plan, athlete_authored=False
+    )
     return {
         "weeks": [
             {
@@ -265,6 +270,13 @@ def restore_plan_snapshot(plan, snapshot):
     }
     for pk, row in cell_rows.items():
         cell = existing_cells.get(pk) or models.Prescription(pk=pk)
+        # Never overwrite an athlete-authored cell (Phase 4a), even when an
+        # OLDER snapshot still holds a coach version of that same pk (a
+        # capture-only exclusion would let this restore clobber the athlete's
+        # later edit). The authority is the CURRENT DB row's flag, not the
+        # snapshot's — the snapshot never carries athlete cells at all.
+        if cell.athlete_authored:
+            continue
         cell.exercise_slot_id = row["exercise_slot_id"]
         cell.week_id = row["week_id"]
         cell.line = row.get("line", 0)
@@ -309,7 +321,7 @@ def restore_plan_snapshot(plan, snapshot):
         week__mesocycle__plan=plan,
         exercise_slot_id__in=live_exercise_slot_pks_in_snapshot,
         week_id__in=live_week_pks_in_snapshot,
-    ).exclude(pk__in=cell_pks).delete()
+    ).exclude(pk__in=cell_pks).exclude(athlete_authored=True).delete()
 
 
 def record_plan_action(plan, label):

@@ -1,6 +1,6 @@
 # Meso — spreadsheet parity by simplification
 
-**Status:** 3b built 2026-07-17 (template library UI) · Phase 3 built 2026-07-17 (import + validate) · Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · next: Later-phase extensions (tracking → PRs → agent)
+**Status:** 4a built 2026-07-17 (athlete tracking — sub-lines) · 3b built 2026-07-17 (template library UI) · Phase 3 built 2026-07-17 (import + validate) · Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · next: Later-phase extensions (PRs → agent)
 **Owner:** Lance
 **North star:** make writing a program in Meso as fast and frictionless as writing it
 in a Google Sheet — keyboard-driven, freeform, one grid — then extend to tracking,
@@ -439,6 +439,25 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
 4. **Later — Extensions.** Tracking (already `LoggedSet`), data retention (snapshots),
    **personal records** (parse layer + prescribed-vs-performed), then the **agent**
    as the main feature, grounded on the parse layer + the FAQ heuristics.
+   **4a — Athlete tracking (freeform sub-lines) ✅ Built 2026-07-17** (branch
+   `meso/4a-athlete-tracking`): the athlete's delivered session gains an
+   *editable* sub-line stack beneath each exercise (§2.4/§2.6) —
+   `POST /meso/api/me/session/<id>/cell/` (`athlete_cell_write`) upserts the
+   same `(exercise_slot × week × line)` cell the coach's `cell_line_write`
+   addresses, saved on blur. It mirrors `athlete_log_session`'s discipline:
+   athlete-scoped (foreign/archived/unknown → flat 404), **no billing gate**
+   (the coach's over-limit freeze never touches the athlete's own tracking),
+   the body fully validated before any write, an idempotent upsert, and it
+   advances `is_current` forward-only. **Undo-isolation:** every athlete write
+   stamps `Prescription.athlete_authored=True` and records **no** `PlanAction`
+   — the flag keeps the cell out of the coach's undo/redo snapshot machinery
+   (snapshot capture excludes it, restore never overwrites/hard-deletes it —
+   keyed on the CURRENT DB row's flag, so an older coach snapshot can't clobber
+   a later athlete edit), so a coach undo can never revert or delete an
+   athlete's note. A coach edit to the same cell (`cell_line_write`) **reclaims**
+   it (flips the flag back to `False`), folding it into coach history again.
+   Presenter threads `sub_lines` + `cell_url`; `target` folds line 0 only so
+   the now-editable stack isn't double-displayed. Migration `0042`.
 
 ---
 

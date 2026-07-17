@@ -1467,6 +1467,88 @@ def athlete_set_one_rm(request, pk):
     )
 
 
+@login_required
+@require_POST
+def athlete_cell_write(request, pk):
+    """Upsert one freeform sub-line cell the athlete authored (Phase 4a).
+
+    The athlete's editable tracking stack beneath each exercise: body
+    ``{"exercise_id": <int>, "line": <int>, "text": "<str>"}`` upserts the
+    (exercise_slot × week × line) cell the coach's ``cell_line_write`` also
+    addresses — but stamps it ``athlete_authored=True`` so it stays OUT of the
+    coach's undo/redo snapshot machinery (a coach undo must never revert or
+    hard-delete an athlete's note; see ``history.py``).
+
+    Mirrors ``athlete_log_session``'s discipline: athlete-scoped by
+    ``_athlete_session_or_404`` (foreign/archived/unknown → flat 404), NO
+    billing gate (the coach's over-limit freeze doesn't touch the athlete's own
+    tracking), the body fully validated before any write (a bad request is a
+    400 that persists nothing), and the write is an idempotent upsert. It
+    records NO ``PlanAction`` and advances ``is_current`` forward-only, exactly
+    like logging. ``line`` 0 is rejected (that's the coach's prescription line),
+    as is ``line`` > ``MAX_CELL_LINE``; blank text clears the sub-line in place.
+    """
+    session = _athlete_session_or_404(request.user, pk)
+    plan = session.week.mesocycle.plan
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("Malformed JSON.")
+    if not isinstance(payload, dict):
+        return HttpResponseBadRequest("Expected a JSON object.")
+
+    # ``bool`` is an ``int`` subclass — reject it so ``true`` isn't an id/line.
+    exercise_id = payload.get("exercise_id")
+    if not isinstance(exercise_id, int) or isinstance(exercise_id, bool):
+        return HttpResponseBadRequest("exercise_id must be an integer.")
+    # The exercise's line-0 cell must live in THIS session (parity with
+    # ``athlete_set_one_rm``): a foreign id — even a valid one — is a 400.
+    line_zero = {p.pk: p for p in session.cells()}
+    if exercise_id not in line_zero:
+        return HttpResponseBadRequest("exercise_id must be one of this session's.")
+    slot = line_zero[exercise_id].exercise_slot
+
+    line = payload.get("line")
+    if (
+        not isinstance(line, int)
+        or isinstance(line, bool)
+        or not 1 <= line <= MAX_CELL_LINE
+    ):
+        return HttpResponseBadRequest(
+            f"line must be an integer between 1 and {MAX_CELL_LINE}."
+        )
+
+    text = payload.get("text")
+    if not isinstance(text, str):
+        return HttpResponseBadRequest("text must be a string.")
+    if len(text) > PATCHABLE_FIELDS["text"]:
+        return HttpResponseBadRequest("text is too long.")
+
+    with transaction.atomic():
+        cell, _created = Prescription.objects.get_or_create(
+            exercise_slot=slot, week=session.week, line=line
+        )
+        cell.text = text
+        cell.athlete_authored = True
+        cell.save(update_fields=["text", "athlete_authored"])
+        # The athlete moving their own position advances the live-week pointer
+        # forward-only — no ``PlanAction`` (parity with ``athlete_log_session``).
+        session.week.advance_current_week()
+        _touch_plan(plan)
+    return JsonResponse(
+        {
+            "ok": True,
+            "cell": {
+                "id": cell.pk,
+                "exercise_slot_id": slot.pk,
+                "week_id": session.week_id,
+                "line": cell.line,
+                "text": cell.text,
+            },
+        }
+    )
+
+
 def _clean_logged_sets(raw_sets, session):
     """Validate the posted ``sets`` against this session, or return a 400.
 
@@ -3286,7 +3368,10 @@ def cell_line_write(request, plan_id, slot_id):
             exercise_slot=slot, week=week, line=line
         )
         cell.text = text
-        cell.save(update_fields=["text"])
+        # A coach edit reclaims an athlete-authored cell (Phase 4a) back into
+        # coach history — from here on it's snapshotted and undoable again.
+        cell.athlete_authored = False
+        cell.save(update_fields=["text", "athlete_authored"])
         _touch_plan(plan)
     return JsonResponse(
         {

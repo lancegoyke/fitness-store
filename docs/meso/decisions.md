@@ -1487,3 +1487,36 @@ _(Append dated entries here as decisions land.)_
   NOT built: a template-library UI, a "new from template" button, and any
   template-awareness on athlete surfaces (they're relationship-rooted;
   a guard test proves templates never appear there). 2183 pytest green.
+- 2026-07-17 — **Built (spreadsheet parity 4a): athlete tracking via freeform
+  sub-lines — undo-isolated from the coach (parity plan §2.4/§2.6, phase 4).**
+  The athlete's delivered session gains an *editable* sub-line stack beneath
+  each exercise: `POST /meso/api/me/session/<id>/cell/` (`athlete_cell_write`)
+  upserts the same `(exercise_slot × week × line)` cell the coach's
+  `cell_line_write` addresses, saved on blur. **Decision — the undo
+  interaction:** athlete sub-line writes record **no** `PlanAction` (the
+  athlete moving/annotating their own training is not a coach designer edit and
+  must not enter the coach's undo stack — same principle as
+  `advance_current_week` and `athlete_log_session`), and each write stamps the
+  new flag **`Prescription.athlete_authored=True`** to keep the cell out of the
+  coach's undo/redo snapshot machinery entirely. Without the flag a coach undo
+  WOULD clobber athlete writes — `serialize_plan_snapshot` captures every cell
+  by pk and `restore_plan_snapshot` upserts every snapshotted cell's text and
+  hard-deletes any live cell absent from the snapshot, so an athlete note made
+  after the coach's last snapshot would be reverted or deleted (silent data
+  loss). Three `history.py` guards close it: snapshot capture excludes
+  `athlete_authored=True`; restore's upsert skips any pk whose **CURRENT DB
+  row** is athlete-authored (not the snapshot's flag — an older coach snapshot
+  still holding a coach version of that pk must not overwrite a later athlete
+  edit); the stray-cell hard-delete excludes athlete-authored. A coach edit to
+  the same cell (`cell_line_write`) **reclaims** it — flips `athlete_authored`
+  back to `False`, folding it into coach history again. The coach still sees
+  athlete lines live (the designer reads cells via `serialize_plan`, not
+  snapshots). The endpoint mirrors `athlete_log_session`: athlete-scoped
+  (foreign/archived/unknown → flat 404), **no billing gate** (the coach's
+  over-limit freeze never touches the athlete's own tracking), body validated
+  before any write (line 0 and line > `MAX_CELL_LINE` are 400s; blank text
+  clears in place), idempotent upsert, and it **advances `is_current`
+  forward-only**. Presenter threads per-exercise `sub_lines` + `cell_url` and
+  folds only line 0 into the read-only `target` so the editable stack isn't
+  double-displayed. Migration `0042` (additive boolean, no backfill —
+  existing cells are coach-authored). Full meso suite green (1976).
