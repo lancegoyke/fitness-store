@@ -1,4 +1,4 @@
-"""Seed the Meso coach-side demo: a coach, athletes, relationships, a plan.
+"""Seed the Meso coach-side demo: a coach, athletes, relationships, plans.
 
 Phase 5 of the persistence slice (``docs/archive/meso/persistence-plan.md``) retires the
 client-side mock for the coach-side screens. This command stands up the same
@@ -9,17 +9,24 @@ database renders the roster, athlete profile, and designer from actual data:
 - five demo **athletes** (the prototype's Maya / Devon / Priya / Marcus / Lena)
   as ``User`` rows with ``AthleteProfile`` + global ``Contraindication`` rows;
 - an **active** ``CoachAthlete`` link per athlete (coach-invited, accepted);
-- one sample **Plan** for Maya — the full fixed-lineup hierarchy
-  (``Mesocycle → SessionSlot → ExerciseSlot`` identity + ``Week → Prescription``
-  per-week cells) reproducing the designer's fixture grid, so ``serialize_plan``
-  round-trips it straight into the designer.
+- **full programs for three of them** (Maya / Devon / Priya — Marcus and Lena
+  stay plan-less) — every mesocycle block (Base/GPP → Hypertrophy → Strength →
+  Peak/Test) built with a fixed lineup (``Mesocycle → SessionSlot →
+  ExerciseSlot`` identity) **and** real per-week prescription text in every
+  week (``Week → Prescription`` cells), reproducing the designer's fixture
+  grid so ``serialize_plan`` round-trips it straight into the designer.
 
-The command is **idempotent**: re-running ``get_or_create``s every row, so it
-never duplicates. ``--delete`` tears the demo back down (the demo athletes and,
-by cascade, their links and plans) for a clean re-seed. Maya's current-week
-"Lower" session is delivered and **logged** so the coach's results screen and
-the designer's "last time" column light up off real data (athlete slice Phase
-3); the review screen renders real agent batches once a proposal is run.
+The command is **idempotent**: re-running ``get_or_create``s/``update_or_create``s
+every row, so it never duplicates. ``--delete`` tears the demo back down (the
+demo athletes and, by cascade, their links and plans) for a clean re-seed.
+Each client has exactly one ``is_current`` (live) week; every week strictly
+before it is delivered **and logged** — a real multi-week training history —
+while every week after it is built but left undelivered/unlogged, so the
+"future" of the program looks unfinished on purpose. Maya's current-week
+"Lower" session additionally carries her original hand-authored log
+(``SAMPLE_LOG``) so the coach's results screen and the designer's "last time"
+column light up off real data (athlete slice Phase 3); the review screen
+renders real agent batches once a proposal is run.
 """
 
 from datetime import date
@@ -48,6 +55,8 @@ from store_project.meso.models import SessionSlot
 from store_project.meso.models import Unit
 from store_project.meso.models import Week
 from store_project.meso.one_rm import refresh_one_rms
+from store_project.meso.parsing import compose_prescription_text
+from store_project.meso.parsing import parse_prescription
 from store_project.users.models import User
 
 DEFAULT_COACH_EMAIL = "lancegoyke@gmail.com"
@@ -66,7 +75,9 @@ COACH_AVOID = (
 
 # The five demo athletes (the prototype's roster). ``trained_months`` and
 # ``age`` are stored as derived dates so the profile screen reads them back the
-# way the mock did ("14 mo trained", "34").
+# way the mock did ("14 mo trained", "34"). Three (Maya/Devon/Priya) get a full
+# program below (``PLANS``); Marcus and Lena stay plan-less on purpose (the
+# roster's "no plan yet" state).
 ATHLETES = [
     {
         "slug": "maya",
@@ -115,154 +126,693 @@ ATHLETES = [
     },
 ]
 
-# Maya's sample plan — the designer's fixture grid, as real rows. P0
-# fixed-lineup shape: each mesocycle's ``"days"`` is the block's fixed
-# lineup — a ``SessionSlot`` (day) per entry, each with an ordered
-# ``"exercises"`` list — an ``ExerciseSlot`` (row) per entry — expressed
-# **once per block**, since identity (name/bias/tags/catalog link/order) is
-# now shared across every week; ``tempo``/``rest``/``note`` (the per-exercise
-# columns, Phase 2a / D2) ride each exercise entry. ``"weeks"`` are the
-# block's ``Week`` columns; a week that carries a ``"cells"`` dict sets its
-# freeform cell text — ``{day_number: [<cell>, ...]}``, one dict per row in
-# that day's ``"exercises"`` order, each ``{"text": "<freeform>",
-# "skipped": bool, "lines": ["<sub-line>", ...]}`` (all optional) — the other
-# blocks are planned-length-only (week_count, no ``"days"``/``"weeks"``).
+
+# ---------------------------------------------------------------------------
+# Progressive-week generator — turns a compact per-exercise "scheme" (starting
+# sets/reps/RPE/load + a weekly load step) into real per-week cell text for
+# every week of a block, so authoring three full programs stays a data
+# problem, not a hand-typed-text problem. Only Maya's Hypertrophy block (the
+# original fixture grid, preserved byte-for-byte on its current week) skips
+# this and stays hand-authored below.
+# ---------------------------------------------------------------------------
+
+# A phase's default sets/reps/RPE and where its working load sits relative to
+# an exercise's authored ``ref_load`` (a demo-authored "moderately heavy"
+# number, not a literal 1RM) — the classic base→hypertrophy→strength→peak
+# rep-range/intensity progression, so the same lift lineup can be reused
+# across a client's blocks with each block's own rep zone.
+_PHASE_TABLE = {
+    "base": {"sets": 3, "reps": 12, "rpe": 6.5, "pct": 0.55, "step_pct": 0.02},
+    "hypertrophy": {"sets": 4, "reps": 9, "rpe": 7.5, "pct": 0.68, "step_pct": 0.02},
+    "strength": {"sets": 4, "reps": 5, "rpe": 8, "pct": 0.82, "step_pct": 0.015},
+    "peak": {"sets": 3, "reps": 3, "rpe": 8.5, "pct": 0.90, "step_pct": 0.02},
+}
+
+# Per-``kind`` starting/step volume+intensity for the block's ``Week`` columns
+# (display-only strip metrics, not derived from the cells).
+_BLOCK_TUNING = {
+    "base": {
+        "volume_start": 65,
+        "volume_step": 8,
+        "intensity_start": 55,
+        "intensity_step": 3,
+    },
+    "hypertrophy": {
+        "volume_start": 70,
+        "volume_step": 10,
+        "intensity_start": 62,
+        "intensity_step": 4,
+    },
+    "strength": {
+        "volume_start": 60,
+        "volume_step": 6,
+        "intensity_start": 75,
+        "intensity_step": 4,
+    },
+    "peak": {
+        "volume_start": 50,
+        "volume_step": 10,
+        "intensity_start": 85,
+        "intensity_step": 4,
+    },
+}
+
+_UNSET = object()
+
+
+def _scheme_for_phase(
+    ref_load, kind, *, sets=_UNSET, reps=_UNSET, rpe=_UNSET, load_pct=False
+):
+    """A per-exercise ``scheme`` dict for one training phase (``_PHASE_TABLE`` key).
+
+    ``ref_load`` is a demo-authored "moderately heavy" working number (kg) for
+    the lift — ``None`` for a bodyweight/unloaded move, which yields a
+    constant ``"BW"`` load regardless of phase. ``sets``/``reps``/``rpe``
+    override the phase's default for one exercise (pass ``rpe=None`` to force
+    *no* RPE on an accessory row); ``load_pct`` marks a %1RM-notation row
+    (Maya's Box Squat convention) rather than an absolute kg number.
+    """
+    table = _PHASE_TABLE[kind]
+    resolved_sets = table["sets"] if sets is _UNSET else sets
+    resolved_reps = table["reps"] if reps is _UNSET else reps
+    if ref_load is None:
+        return {
+            "sets": resolved_sets,
+            "reps": resolved_reps,
+            "rpe": None if rpe is _UNSET else rpe,
+            "load": "BW",
+            "load_step": 0,
+            "load_pct": False,
+        }
+    return {
+        "sets": resolved_sets,
+        "reps": resolved_reps,
+        "rpe": table["rpe"] if rpe is _UNSET else rpe,
+        "load": round(ref_load * table["pct"], 1),
+        "load_step": round(ref_load * table["step_pct"], 2),
+        "load_pct": load_pct,
+    }
+
+
+def _step_load(load, step, n):
+    """``load`` advanced by ``step`` × ``n`` weeks, as canonical cell text.
+
+    A non-numeric load (``"BW"``) is held constant — bodyweight doesn't
+    progress by adding plates. Whole numbers drop their trailing ``.0``
+    (``"70"``, not ``"70.0"``), matching the coach's own notation.
+    """
+    if load is None:
+        return None
+    try:
+        value = round(float(load) + step * n, 1)
+    except (TypeError, ValueError):
+        return load
+    if value == int(value):
+        value = int(value)
+    return str(value)
+
+
+def _ease_rpe(rpe):
+    """A deload week's RPE — ~1.5 easier than the work-week target, floored at 5."""
+    value = max(5.0, float(rpe) - 1.5)
+    if value == int(value):
+        return str(int(value))
+    return str(value)
+
+
+def _week_cell(scheme, week_index, *, deload_index=None):
+    """One exercise's cell (``{"text": ...}``) for one week of its block.
+
+    ``week_index`` is 1-based within the block; a deload week (``week_index
+    == deload_index``) trims a set, eases RPE, and resets load back to the
+    block's starting point rather than tapering off an already-progressed
+    number. ``scheme`` absent (``None``/``{}``) yields a blank cell.
+    """
+    if not scheme:
+        return {}
+    is_deload = deload_index is not None and week_index == deload_index
+    sets = scheme["sets"]
+    reps = scheme["reps"]
+    rpe = scheme.get("rpe")
+    load = scheme.get("load")
+    step = scheme.get("load_step", 0)
+    if is_deload:
+        sets = max(2, sets - 1)
+        load = _step_load(load, step, 0)
+        if rpe is not None:
+            rpe = _ease_rpe(rpe)
+    else:
+        load = _step_load(load, step, week_index - 1)
+    return {
+        "text": compose_prescription_text(
+            sets=sets,
+            reps=reps,
+            rpe="" if rpe is None else rpe,
+            load="" if load is None else load,
+            load_pct=scheme.get("load_pct", False),
+        )
+    }
+
+
+def _cells_for_week(days, week_index, *, deload_index=None):
+    """The block's full ``{day_number: [cell, ...]}`` grid for one week."""
+    return {
+        day["day_number"]: [
+            _week_cell(ex.get("scheme"), week_index, deload_index=deload_index)
+            for ex in day["exercises"]
+        ]
+        for day in days
+    }
+
+
+def _progressive_weeks(
+    days,
+    *,
+    count,
+    phase,
+    deload_index=None,
+    current_index=None,
+    start_index=1,
+    volume_start=60,
+    volume_step=8,
+    intensity_start=60,
+    intensity_step=4,
+    phase_overrides=None,
+):
+    """Auto-generate ``count`` ``Week`` specs (index/phase/…/cells) for a block.
+
+    ``phase_overrides`` (``{index: label}``) renames one non-deload week's
+    phase label (e.g. Peak/Test's week 2 reading "Test" instead of "Peak").
+    """
+    phase_overrides = phase_overrides or {}
+    weeks = []
+    for offset in range(count):
+        index = start_index + offset
+        is_deload = deload_index is not None and index == deload_index
+        is_current = current_index is not None and index == current_index
+        if is_deload:
+            volume = max(35, volume_start - 15)
+            intensity = min(95, intensity_start + intensity_step)
+            week_phase = "Deload"
+        else:
+            volume = min(100, volume_start + volume_step * offset)
+            intensity = min(95, intensity_start + intensity_step * offset)
+            week_phase = phase_overrides.get(index, phase)
+        weeks.append(
+            {
+                "index": index,
+                "phase": week_phase,
+                "volume": volume,
+                "intensity": intensity,
+                "is_deload": is_deload,
+                "is_current": is_current,
+                "cells": _cells_for_week(days, index, deload_index=deload_index),
+            }
+        )
+    return weeks
+
+
+def _ex(
+    name, ref_load, kind, *, rest="90s", tags=None, note="", tempo="", **scheme_kwargs
+):
+    """One ``ExerciseSlot`` row (identity + per-exercise columns) + its scheme."""
+    entry = {"name": name, "rest": rest}
+    if tags:
+        entry["tags"] = tags
+    if note:
+        entry["note"] = note
+    if tempo:
+        entry["tempo"] = tempo
+    entry["scheme"] = _scheme_for_phase(ref_load, kind, **scheme_kwargs)
+    return entry
+
+
+def _client_days(day_templates, kind):
+    """Materialize one phase's ``"days"`` lineup from compact templates.
+
+    ``day_templates`` = ``[(day_number, name, bias, [(ex_name, ref_load,
+    kwargs), ...]), ...]`` — the same lineup reused across a client's blocks,
+    one call per block's ``kind`` (phase), so the exercise selection is
+    authored once and the rep/load zone changes per block.
+    """
+    return [
+        {
+            "day_number": day_number,
+            "name": name,
+            "bias": bias,
+            "exercises": [
+                _ex(ex_name, ref_load, kind, **kw)
+                for ex_name, ref_load, kw in exercises
+            ],
+        }
+        for day_number, name, bias, exercises in day_templates
+    ]
+
+
+def _block(
+    name,
+    order,
+    days,
+    *,
+    kind,
+    count,
+    phase,
+    deload_index=None,
+    current_index=None,
+    phase_overrides=None,
+):
+    """One ``SAMPLE_PLAN``-mesocycle-shaped block spec, fully built."""
+    tuning = _BLOCK_TUNING[kind]
+    return {
+        "name": name,
+        "order": order,
+        "week_count": count,
+        "days": days,
+        "weeks": _progressive_weeks(
+            days,
+            count=count,
+            phase=phase,
+            deload_index=deload_index,
+            current_index=current_index,
+            phase_overrides=phase_overrides,
+            **tuning,
+        ),
+    }
+
+
+def _client_block(
+    name,
+    order,
+    day_templates,
+    *,
+    kind,
+    count,
+    phase,
+    deload_index=None,
+    current_index=None,
+    phase_overrides=None,
+):
+    """``_block`` from a client's day templates for one phase ``kind``."""
+    return _block(
+        name,
+        order,
+        _client_days(day_templates, kind),
+        kind=kind,
+        count=count,
+        phase=phase,
+        deload_index=deload_index,
+        current_index=current_index,
+        phase_overrides=phase_overrides,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Maya's plan — the designer's original fixture grid. P0 fixed-lineup shape:
+# each mesocycle's ``"days"`` is the block's fixed lineup — a ``SessionSlot``
+# (day) per entry, each with an ordered ``"exercises"`` list — an
+# ``ExerciseSlot`` (row) per entry — expressed **once per block**, since
+# identity (name/bias/tags/catalog link/order) is shared across every week;
+# ``tempo``/``rest``/``note`` (the per-exercise columns, Phase 2a / D2) ride
+# each exercise entry. ``"weeks"`` are the block's ``Week`` columns; a week
+# that carries a ``"cells"`` dict sets its freeform cell text —
+# ``{day_number: [<cell>, ...]}``, one dict per row in that day's
+# ``"exercises"`` order, each ``{"text": "<freeform>", "skipped": bool,
+# "lines": ["<sub-line>", ...]}`` (all optional).
+#
+# Her Hypertrophy block's **current week (index 2) is preserved verbatim** —
+# many tests assert its exact cell text — while weeks 1/3/4 (previously blank)
+# now carry real progressive text generated from the same per-exercise
+# ``scheme``s (added as an extra, build_block-ignored key on each exercise
+# entry below). Her other three blocks (Base/GPP, Strength, Peak/Test) are
+# newly built in full via the generic generator above, respecting her L-knee /
+# no-impact contraindications throughout.
+# ---------------------------------------------------------------------------
+
+_HYPERTROPHY_DAYS = [
+    {
+        "day_number": 1,
+        "name": "Lower",
+        "bias": "Quad bias · knee-safe",
+        "exercises": [
+            # Prescribed as a % of 1RM in its cell text — the demo row that
+            # shows percent notation parsing.
+            {
+                "name": "Box Squat (to parallel)",
+                "tags": ["knee-safe"],
+                "rest": "2 min",
+                "scheme": {
+                    "sets": 4,
+                    "reps": 6,
+                    "rpe": 7,
+                    "load": 70,
+                    "load_step": 1,
+                    "load_pct": True,
+                },
+            },
+            {
+                "name": "Bulgarian Split Squat (DB)",
+                "rest": "90s",
+                "scheme": {"sets": 3, "reps": 10, "rpe": 7, "load": 16, "load_step": 2},
+            },
+            {
+                "name": "Leg Press (controlled ROM)",
+                "rest": "90s",
+                "scheme": {
+                    "sets": 3,
+                    "reps": 12,
+                    "rpe": 8,
+                    "load": 102,
+                    "load_step": 4,
+                },
+            },
+            {
+                "name": "Seated Leg Curl",
+                "rest": "60s",
+                "scheme": {"sets": 3, "reps": 12, "rpe": 8, "load": 37, "load_step": 2},
+            },
+            {
+                "name": "Standing Calf Raise",
+                "rest": "45s",
+                "scheme": {
+                    "sets": 4,
+                    "reps": 15,
+                    "rpe": None,
+                    "load": 55,
+                    "load_step": 2.5,
+                },
+            },
+        ],
+    },
+    {
+        "day_number": 2,
+        "name": "Upper",
+        "bias": "Push / pull",
+        "exercises": [
+            {
+                "name": "Incline DB Press",
+                "rest": "2 min",
+                "note": "monitor shoulder",
+                "scheme": {"sets": 4, "reps": 8, "rpe": 7, "load": 22, "load_step": 1},
+            },
+            {
+                "name": "Chest-Supported Row",
+                "rest": "90s",
+                "scheme": {"sets": 4, "reps": 10, "rpe": 7, "load": 25, "load_step": 1},
+            },
+            {
+                "name": "Lat Pulldown",
+                "rest": "75s",
+                "scheme": {"sets": 3, "reps": 12, "rpe": 8, "load": 48, "load_step": 2},
+            },
+            {
+                "name": "DB Shoulder Press",
+                "rest": "90s",
+                "note": "neutral grip",
+                "scheme": {"sets": 3, "reps": 10, "rpe": 7, "load": 14, "load_step": 1},
+            },
+            {
+                "name": "Cable Lateral Raise",
+                "rest": "60s",
+                "scheme": {
+                    "sets": 3,
+                    "reps": 12,
+                    "rpe": 8,
+                    "load": 9,
+                    "load_step": 0.5,
+                },
+            },
+        ],
+    },
+    {
+        "day_number": 3,
+        "name": "Posterior",
+        "bias": "Hinge",
+        "exercises": [
+            {
+                "name": "Trap-Bar Deadlift",
+                "rest": "3 min",
+                "scheme": {
+                    "sets": 4,
+                    "reps": 6,
+                    "rpe": 7,
+                    "load": 85,
+                    "load_step": 3.5,
+                },
+            },
+            {
+                "name": "Hip Thrust",
+                "rest": "2 min",
+                "tempo": "311",
+                "scheme": {
+                    "sets": 3,
+                    "reps": 10,
+                    "rpe": 8,
+                    "load": 73,
+                    "load_step": 3.5,
+                },
+            },
+            {
+                "name": "Romanian Deadlift (3-1-1)",
+                "rest": "90s",
+                "note": "tempo eccentric",
+                "scheme": {"sets": 3, "reps": 8, "rpe": 7, "load": 54, "load_step": 3},
+            },
+            {
+                "name": "Reverse Lunge (DB)",
+                "tags": ["knee-safe"],
+                "rest": "60s",
+                "note": "knee-monitored",
+                "scheme": {
+                    "sets": 3,
+                    "reps": 12,
+                    "rpe": None,
+                    "load": 12,
+                    "load_step": 1,
+                },
+            },
+            {
+                "name": "Hanging Knee Raise",
+                "rest": "45s",
+                "scheme": {
+                    "sets": 3,
+                    "reps": 12,
+                    "rpe": None,
+                    "load": "BW",
+                    "load_step": 0,
+                },
+            },
+        ],
+    },
+]
+
+# Maya's Base/GPP lineup — deliberately DIFFERENT movement names than her
+# Hypertrophy block (general-prep substitutes, not the same lifts at a lighter
+# load): Base/GPP is fully logged history (it's entirely before her current
+# week), so reusing a Hypertrophy lift name here would feed those lighter
+# prep-phase loads into the *same* derived-1RM identity as her real Hypertrophy
+# logs and drag it down — separate names keep the two blocks' histories from
+# colliding. Still fully knee-safe / no-impact throughout.
+_MAYA_PREP_DAY_TEMPLATES = [
+    (
+        1,
+        "Lower Prep",
+        "General prep · knee-safe",
+        [
+            ("Goblet Squat (box)", 32, {"tags": ["knee-safe"], "rest": "2 min"}),
+            ("Step-Up (low box)", 14, {"tags": ["knee-safe"], "rest": "90s"}),
+            (
+                "Machine Leg Extension (partial ROM)",
+                45,
+                {"tags": ["knee-safe"], "rest": "60s"},
+            ),
+            ("Prone Hamstring Curl", 30, {"rest": "60s"}),
+            ("Seated Calf Raise", 40, {"rest": "45s", "rpe": None}),
+        ],
+    ),
+    (
+        2,
+        "Upper Prep",
+        "General prep",
+        [
+            ("Flat DB Press", 20, {"rest": "2 min"}),
+            ("Seated Cable Row", 40, {"rest": "90s"}),
+            ("Assisted Pull-Up", 20, {"rest": "75s"}),
+            ("Half-Kneeling DB Press", 12, {"rest": "90s"}),
+            ("Band Pull-Apart", None, {"rest": "45s", "rpe": None}),
+        ],
+    ),
+    (
+        3,
+        "Posterior Prep",
+        "Hinge · knee-safe",
+        [
+            ("Glute Bridge (bilateral)", 50, {"tags": ["knee-safe"], "rest": "2 min"}),
+            ("Cable Pull-Through", 35, {"rest": "90s"}),
+            ("Back Extension", None, {"rest": "60s", "rpe": None}),
+            ("Side-Lying Hip Abduction", 8, {"rest": "45s"}),
+            ("Dead Bug (loaded)", None, {"rest": "45s", "rpe": None}),
+        ],
+    ),
+]
+
+# Maya's Strength / Peak-Test lineup — her Hypertrophy block's own lifts,
+# reused at a heavier/lower-rep zone. Safe to share names with the Hypertrophy
+# block (unlike Base/GPP above): both these blocks fall AFTER her current week,
+# so neither is ever logged — no history to collide with.
+_MAYA_MAIN_DAY_TEMPLATES = [
+    (
+        1,
+        "Lower",
+        "Quad bias · knee-safe",
+        [
+            (
+                "Box Squat (to parallel)",
+                100,
+                {"tags": ["knee-safe"], "rest": "2 min", "load_pct": True},
+            ),
+            ("Bulgarian Split Squat (DB)", 20, {"rest": "90s"}),
+            ("Leg Press (controlled ROM)", 115, {"rest": "90s"}),
+            ("Seated Leg Curl", 42, {"rest": "60s"}),
+            ("Standing Calf Raise", 60, {"rest": "45s", "rpe": None}),
+        ],
+    ),
+    (
+        2,
+        "Upper",
+        "Push / pull",
+        [
+            ("Incline DB Press", 25, {"rest": "2 min"}),
+            ("Chest-Supported Row", 28, {"rest": "90s"}),
+            ("Lat Pulldown", 52, {"rest": "75s"}),
+            ("DB Shoulder Press", 16, {"rest": "90s"}),
+            ("Cable Lateral Raise", 10, {"rest": "60s", "rpe": None}),
+        ],
+    ),
+    (
+        3,
+        "Posterior",
+        "Hinge",
+        [
+            ("Trap-Bar Deadlift", 95, {"rest": "3 min"}),
+            ("Hip Thrust", 80, {"tempo": "311", "rest": "2 min"}),
+            ("Romanian Deadlift (3-1-1)", 60, {"rest": "90s"}),
+            ("Reverse Lunge (DB)", 14, {"tags": ["knee-safe"], "rest": "60s"}),
+            ("Hanging Knee Raise", None, {"rest": "45s", "rpe": None}),
+        ],
+    ),
+]
+
+# Maya's Hypertrophy "weeks" — index/phase/volume/intensity/is_deload/
+# is_current are UNCHANGED from the original fixture; week 2 (current) keeps
+# its exact original ``cells`` dict verbatim (the Box Squat ``72%`` row, the
+# ``{"skipped": True}`` cell, the ``Cable Crunch`` sub-line) — many tests
+# assert this precisely. Weeks 1/3/4 gain generated ``cells`` (previously
+# blank).
+_HYPERTROPHY_WEEKS = [
+    {
+        "index": 1,
+        "phase": "Accum",
+        "volume": 70,
+        "intensity": 62,
+        "is_deload": False,
+        "is_current": False,
+        "cells": _cells_for_week(_HYPERTROPHY_DAYS, 1, deload_index=4),
+    },
+    {
+        "index": 2,
+        "phase": "Accum",
+        "volume": 85,
+        "intensity": 68,
+        "is_deload": False,
+        "is_current": True,
+        "cells": {
+            1: [
+                {"text": "4 x 6, RPE 7, 72%"},
+                {"text": "3 x 10, RPE 7, 18"},
+                {"text": "3 x 12, RPE 8, 110"},
+                {"text": "3 x 12, RPE 8, 41"},
+                {"text": "4 x 15, 60"},
+            ],
+            2: [
+                {"text": "4 x 8, RPE 7, 24"},
+                {"text": "4 x 10, RPE 7, 27"},
+                {"text": "3 x 12, RPE 8, 52"},
+                {"text": "3 x 10, RPE 7, 16"},
+                # A one-week exception: shoulder felt off, so this row is
+                # skipped for Wk 2 only (the em-dash cell) — not logged, so
+                # it's safe to demo here.
+                {"skipped": True},
+            ],
+            3: [
+                {"text": "4 x 6, RPE 7, 92.5"},
+                {"text": "3 x 10, RPE 8, 80"},
+                {"text": "3 x 8, RPE 7, 60"},
+                {"text": "3 x 12, 14"},
+                # A one-week substitution, freeform-style (§2.6): the
+                # substitute movement typed into a sub-line (block identity
+                # stays "Hanging Knee Raise").
+                {"text": "3 x 12, BW", "lines": ["Cable Crunch"]},
+            ],
+        },
+    },
+    {
+        "index": 3,
+        "phase": "Accum",
+        "volume": 100,
+        "intensity": 73,
+        "is_deload": False,
+        "is_current": False,
+        "cells": _cells_for_week(_HYPERTROPHY_DAYS, 3, deload_index=4),
+    },
+    {
+        "index": 4,
+        "phase": "Deload",
+        "volume": 55,
+        "intensity": 70,
+        "is_deload": True,
+        "is_current": False,
+        "cells": _cells_for_week(_HYPERTROPHY_DAYS, 4, deload_index=4),
+    },
+]
+
 SAMPLE_PLAN = {
     "title": "Hypertrophy Block",
     "goal": "Hypertrophy",
     "mesocycles": [
-        {"name": "Base / GPP", "order": 0, "week_count": 4},
+        _client_block(
+            "Base / GPP",
+            0,
+            _MAYA_PREP_DAY_TEMPLATES,
+            kind="base",
+            count=4,
+            phase="Prep",
+            deload_index=4,
+        ),
         {
             "name": "Hypertrophy",
             "order": 1,
             "week_count": 4,
-            "days": [
-                {
-                    "day_number": 1,
-                    "name": "Lower",
-                    "bias": "Quad bias · knee-safe",
-                    "exercises": [
-                        # Prescribed as a % of 1RM in its cell text — the demo
-                        # row that shows percent notation parsing.
-                        {
-                            "name": "Box Squat (to parallel)",
-                            "tags": ["knee-safe"],
-                            "rest": "2 min",
-                        },
-                        {"name": "Bulgarian Split Squat (DB)", "rest": "90s"},
-                        {"name": "Leg Press (controlled ROM)", "rest": "90s"},
-                        {"name": "Seated Leg Curl", "rest": "60s"},
-                        {"name": "Standing Calf Raise", "rest": "45s"},
-                    ],
-                },
-                {
-                    "day_number": 2,
-                    "name": "Upper",
-                    "bias": "Push / pull",
-                    "exercises": [
-                        {
-                            "name": "Incline DB Press",
-                            "rest": "2 min",
-                            "note": "monitor shoulder",
-                        },
-                        {"name": "Chest-Supported Row", "rest": "90s"},
-                        {"name": "Lat Pulldown", "rest": "75s"},
-                        {
-                            "name": "DB Shoulder Press",
-                            "rest": "90s",
-                            "note": "neutral grip",
-                        },
-                        {"name": "Cable Lateral Raise", "rest": "60s"},
-                    ],
-                },
-                {
-                    "day_number": 3,
-                    "name": "Posterior",
-                    "bias": "Hinge",
-                    "exercises": [
-                        {"name": "Trap-Bar Deadlift", "rest": "3 min"},
-                        {"name": "Hip Thrust", "rest": "2 min", "tempo": "311"},
-                        {
-                            "name": "Romanian Deadlift (3-1-1)",
-                            "rest": "90s",
-                            "note": "tempo eccentric",
-                        },
-                        {
-                            "name": "Reverse Lunge (DB)",
-                            "tags": ["knee-safe"],
-                            "rest": "60s",
-                            "note": "knee-monitored",
-                        },
-                        {"name": "Hanging Knee Raise", "rest": "45s"},
-                    ],
-                },
-            ],
-            "weeks": [
-                {
-                    "index": 1,
-                    "phase": "Accum",
-                    "volume": 70,
-                    "intensity": 62,
-                    "is_deload": False,
-                    "is_current": False,
-                },
-                {
-                    "index": 2,
-                    "phase": "Accum",
-                    "volume": 85,
-                    "intensity": 68,
-                    "is_deload": False,
-                    "is_current": True,
-                    "cells": {
-                        1: [
-                            {"text": "4 x 6, RPE 7, 72%"},
-                            {"text": "3 x 10, RPE 7, 18"},
-                            {"text": "3 x 12, RPE 8, 110"},
-                            {"text": "3 x 12, RPE 8, 41"},
-                            {"text": "4 x 15, 60"},
-                        ],
-                        2: [
-                            {"text": "4 x 8, RPE 7, 24"},
-                            {"text": "4 x 10, RPE 7, 27"},
-                            {"text": "3 x 12, RPE 8, 52"},
-                            {"text": "3 x 10, RPE 7, 16"},
-                            # A one-week exception: shoulder felt off, so this
-                            # row is skipped for Wk 2 only (the em-dash cell) —
-                            # not logged, so it's safe to demo here.
-                            {"skipped": True},
-                        ],
-                        3: [
-                            {"text": "4 x 6, RPE 7, 92.5"},
-                            {"text": "3 x 10, RPE 8, 80"},
-                            {"text": "3 x 8, RPE 7, 60"},
-                            {"text": "3 x 12, 14"},
-                            # A one-week substitution, freeform-style (§2.6):
-                            # the substitute movement typed into a sub-line
-                            # (block identity stays "Hanging Knee Raise").
-                            {"text": "3 x 12, BW", "lines": ["Cable Crunch"]},
-                        ],
-                    },
-                },
-                {
-                    "index": 3,
-                    "phase": "Accum",
-                    "volume": 100,
-                    "intensity": 73,
-                    "is_deload": False,
-                    "is_current": False,
-                },
-                {
-                    "index": 4,
-                    "phase": "Deload",
-                    "volume": 55,
-                    "intensity": 70,
-                    "is_deload": True,
-                    "is_current": False,
-                },
-            ],
+            "days": _HYPERTROPHY_DAYS,
+            "weeks": _HYPERTROPHY_WEEKS,
         },
-        {"name": "Strength", "order": 2, "week_count": 4},
-        {"name": "Peak / Test", "order": 3, "week_count": 2},
+        _client_block(
+            "Strength",
+            2,
+            _MAYA_MAIN_DAY_TEMPLATES,
+            kind="strength",
+            count=4,
+            phase="Int",
+            deload_index=4,
+        ),
+        _client_block(
+            "Peak / Test",
+            3,
+            _MAYA_MAIN_DAY_TEMPLATES,
+            kind="peak",
+            count=2,
+            phase="Peak",
+            phase_overrides={2: "Test"},
+        ),
     ],
 }
 
@@ -288,6 +838,208 @@ SAMPLE_LOG = {
         "Seated Leg Curl": [("12", "41", "8"), ("12", "41", "8"), ("9", "41", "8.5")],
         "Standing Calf Raise": [("15", "60", "")] * 4,
     },
+}
+
+
+# ---------------------------------------------------------------------------
+# Devon's plan — R shoulder, neutral-grip pressing only (6 months trained:
+# still building his base). Every lift is either neutral-grip or has no
+# shoulder-pressing component at all. Current week: Strength block, week 2 of
+# 4 — Base/GPP + Hypertrophy fully behind him (logged history), Strength wk1
+# behind him too, Strength wk3/4 + Peak/Test still ahead (built, undelivered).
+# ---------------------------------------------------------------------------
+
+_DEVON_DAY_TEMPLATES = [
+    (
+        1,
+        "Push (neutral-grip)",
+        "Press · shoulder-safe",
+        [
+            (
+                "Neutral-Grip DB Bench Press",
+                26,
+                {"tags": ["shoulder-safe"], "rest": "2 min"},
+            ),
+            (
+                "Landmine Press (single-arm)",
+                20,
+                {"rest": "90s", "note": "neutral grip"},
+            ),
+            (
+                "Seated DB Shoulder Press (neutral grip)",
+                16,
+                {"rest": "90s", "note": "neutral grip"},
+            ),
+            ("Cable Tricep Pushdown", 24, {"rest": "60s", "rpe": None}),
+        ],
+    ),
+    (
+        2,
+        "Pull",
+        "Row / pulldown",
+        [
+            ("Neutral-Grip Lat Pulldown", 48, {"rest": "2 min"}),
+            ("Chest-Supported Row (neutral grip)", 28, {"rest": "90s"}),
+            ("Face Pull", 16, {"rest": "60s", "note": "shoulder health", "rpe": None}),
+            ("DB Curl", 12, {"rest": "60s"}),
+        ],
+    ),
+    (
+        3,
+        "Legs",
+        "Squat / hinge",
+        [
+            ("Goblet Squat", 26, {"rest": "2 min"}),
+            ("Romanian Deadlift", 50, {"rest": "2 min"}),
+            ("Walking Lunge (DB)", 14, {"rest": "90s"}),
+            ("Leg Curl", 30, {"rest": "60s"}),
+            ("Standing Calf Raise", 46, {"rest": "45s", "rpe": None}),
+        ],
+    ),
+]
+
+DEVON_PLAN = {
+    "title": "Shoulder-Smart Strength",
+    "goal": "General Strength",
+    "mesocycles": [
+        _client_block(
+            "Base / GPP",
+            0,
+            _DEVON_DAY_TEMPLATES,
+            kind="base",
+            count=4,
+            phase="Prep",
+            deload_index=4,
+        ),
+        _client_block(
+            "Hypertrophy",
+            1,
+            _DEVON_DAY_TEMPLATES,
+            kind="hypertrophy",
+            count=4,
+            phase="Accum",
+            deload_index=4,
+        ),
+        _client_block(
+            "Strength",
+            2,
+            _DEVON_DAY_TEMPLATES,
+            kind="strength",
+            count=4,
+            phase="Int",
+            deload_index=4,
+            current_index=2,
+        ),
+        _client_block(
+            "Peak / Test",
+            3,
+            _DEVON_DAY_TEMPLATES,
+            kind="peak",
+            count=2,
+            phase="Peak",
+            phase_overrides={2: "Test"},
+        ),
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
+# Priya's plan — no contraindications, 72 months trained: an advanced,
+# heavier barbell-first program. Current week: Hypertrophy block, week 3 of 4
+# — Base/GPP fully behind her plus Hypertrophy wk1/2 (logged history);
+# Hypertrophy wk4 (deload) + Strength + Peak/Test still ahead (built,
+# undelivered) — two whole future blocks past her current one.
+# ---------------------------------------------------------------------------
+
+_PRIYA_DAY_TEMPLATES = [
+    (
+        1,
+        "Squat Day",
+        "Squat + accessories",
+        [
+            ("Back Squat", 145, {"rest": "3 min"}),
+            ("Front Squat", 100, {"rest": "2 min"}),
+            ("Barbell Walking Lunge", 60, {"rest": "90s"}),
+            ("Leg Curl", 55, {"rest": "60s"}),
+            ("Standing Calf Raise", 90, {"rest": "45s", "rpe": None}),
+        ],
+    ),
+    (
+        2,
+        "Bench Day",
+        "Press + pull",
+        [
+            ("Bench Press", 100, {"rest": "3 min"}),
+            ("Weighted Pull-Up", 25, {"rest": "2 min"}),
+            ("Overhead Press", 55, {"rest": "2 min"}),
+            ("Barbell Row", 80, {"rest": "90s"}),
+            ("Face Pull", 20, {"rest": "60s", "rpe": None}),
+        ],
+    ),
+    (
+        3,
+        "Deadlift Day",
+        "Hinge + posterior chain",
+        [
+            ("Conventional Deadlift", 165, {"rest": "3 min"}),
+            ("Romanian Deadlift", 115, {"rest": "2 min"}),
+            ("Hip Thrust", 130, {"rest": "90s"}),
+            ("Glute Ham Raise", None, {"rest": "60s"}),
+            ("Hanging Leg Raise", None, {"rest": "45s", "rpe": None}),
+        ],
+    ),
+]
+
+PRIYA_PLAN = {
+    "title": "Advanced Strength Cycle",
+    "goal": "Strength",
+    "mesocycles": [
+        _client_block(
+            "Base / GPP",
+            0,
+            _PRIYA_DAY_TEMPLATES,
+            kind="base",
+            count=4,
+            phase="Prep",
+            deload_index=4,
+        ),
+        _client_block(
+            "Hypertrophy",
+            1,
+            _PRIYA_DAY_TEMPLATES,
+            kind="hypertrophy",
+            count=4,
+            phase="Accum",
+            deload_index=4,
+            current_index=3,
+        ),
+        _client_block(
+            "Strength",
+            2,
+            _PRIYA_DAY_TEMPLATES,
+            kind="strength",
+            count=4,
+            phase="Int",
+            deload_index=4,
+        ),
+        _client_block(
+            "Peak / Test",
+            3,
+            _PRIYA_DAY_TEMPLATES,
+            kind="peak",
+            count=2,
+            phase="Peak",
+            phase_overrides={2: "Test"},
+        ),
+    ],
+}
+
+#: Athlete slug → plan spec, for the three clients with a full program.
+#: Marcus and Lena (in ``ATHLETES`` but not here) stay plan-less.
+PLANS = {
+    "maya": SAMPLE_PLAN,
+    "devon": DEVON_PLAN,
+    "priya": PRIYA_PLAN,
 }
 
 
@@ -430,8 +1182,44 @@ def build_block(mesocycle, block_spec):
     return weeks_by_index
 
 
+def _logged_sets_from_cells(log, prescriptions):
+    """``LoggedSet`` rows derived from each cell's parsed prescription text.
+
+    Best-effort, mirroring ``parsing.parse_prescription``'s own contract (never
+    raises): a cell that doesn't fully parse still logs one set with whatever
+    reps/load/rpe *did* parse (blank where it didn't) rather than crashing — a
+    %1RM load token (``"72%"``, no absolute bar weight) logs with a blank load.
+    """
+    rows = []
+    for prescription in prescriptions:
+        parsed = parse_prescription(prescription.text) or {}
+        sets_count = parsed.get("sets") or 1
+        reps = parsed.get("reps")
+        if reps is None:
+            reps_range = parsed.get("reps_range")
+            reps_text = f"{reps_range[0]}-{reps_range[1]}" if reps_range else ""
+        else:
+            reps_text = str(reps)
+        load = parsed.get("load") or ""
+        if load.endswith("%"):
+            load = ""  # a %1RM token isn't a bar weight — leave blank, not crash
+        rpe = parsed.get("rpe") or ""
+        for set_number in range(1, sets_count + 1):
+            rows.append(
+                LoggedSet(
+                    session_log=log,
+                    prescription=prescription,
+                    set_number=set_number,
+                    reps=reps_text,
+                    load=load,
+                    rpe=rpe,
+                )
+            )
+    return rows
+
+
 class Command(BaseCommand):
-    help = "Seed the Meso coach-side demo (coach, athletes, relationships, a plan)."
+    help = "Seed the Meso coach-side demo (coach, athletes, relationships, plans)."
 
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
@@ -458,9 +1246,12 @@ class Command(BaseCommand):
         for spec in ATHLETES:
             athlete = self._ensure_athlete(spec, today)
             self._ensure_link(coach, athlete)
-            if spec["slug"] == "maya":
-                plan = self._ensure_plan(coach, athlete)
-                self._ensure_log(athlete, plan, today)
+            plan_spec = PLANS.get(spec["slug"])
+            if plan_spec is not None:
+                plan = self._ensure_plan(coach, athlete, plan_spec)
+                self._log_plan_history(athlete, plan, today)
+                if spec["slug"] == "maya":
+                    self._ensure_log(athlete, plan, today)
         self._ensure_pending_invite(coach)
         self._ensure_pending_request(coach)
         self._ensure_past_athlete(coach, today)
@@ -468,8 +1259,10 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"✓ Meso demo seeded for {coach.email}: "
-                f"{len(ATHLETES)} athletes, 1 sample plan, 1 logged session, "
-                "1 pending invite, 1 pending request, 1 past athlete."
+                f"{len(ATHLETES)} athletes, {len(PLANS)} clients with full "
+                "programs (every block built, one logged multi-week history "
+                "each through their current week), 1 pending invite, "
+                "1 pending request, 1 past athlete."
             )
         )
 
@@ -635,9 +1428,9 @@ class Command(BaseCommand):
         )
         return link
 
-    # -- the sample plan --------------------------------------------------
+    # -- a client's sample plan --------------------------------------------
 
-    def _ensure_plan(self, coach, athlete):
+    def _ensure_plan(self, coach, athlete, plan_spec):
         link = CoachAthlete.objects.get(coach=coach, athlete=athlete)
         # ``update_or_create`` restores the demo plan to ``active`` (and the
         # seeded goal/unit) on every run — a stale draft/archived plan would
@@ -645,20 +1438,42 @@ class Command(BaseCommand):
         # targets non-archived plans.
         plan, _ = Plan.objects.update_or_create(
             relationship=link,
-            title=SAMPLE_PLAN["title"],
+            title=plan_spec["title"],
             defaults={
-                "goal": SAMPLE_PLAN["goal"],
+                "goal": plan_spec["goal"],
                 "status": Plan.Status.ACTIVE,
                 "unit": Unit.KILOGRAMS,
             },
         )
-        if plan.mesocycles.exists():
-            # Hierarchy already built — leave any coach edits to the demo grid
-            # intact rather than clobbering them on reseed.
-            self.stdout.write(f"  - sample plan '{plan.title}' present; ensured active")
-            return plan
+        # A *complete* hierarchy is left intact — a reseed preserves any coach
+        # edits to the demo grid rather than clobbering them. A *partial* one is
+        # torn down and rebuilt: a DB seeded by an earlier version of this
+        # command has the mesocycle rows but only the Hypertrophy block was ever
+        # materialized (the others were planned-length-only), so a bare
+        # ``mesocycles.exists()`` check would let that stale shape survive an
+        # in-place upgrade. Compare the built shape to the spec instead.
+        expected_mesocycles = len(plan_spec["mesocycles"])
+        expected_weeks = sum(len(m.get("weeks", [])) for m in plan_spec["mesocycles"])
+        built_mesocycles = plan.mesocycles.count()
+        built_weeks = Week.objects.filter(
+            mesocycle__plan=plan, deleted_at__isnull=True
+        ).count()
+        if built_mesocycles:
+            if (
+                built_mesocycles == expected_mesocycles
+                and built_weeks == expected_weeks
+            ):
+                self.stdout.write(
+                    f"  - sample plan '{plan.title}' present; ensured active"
+                )
+                return plan
+            # Stale / partial hierarchy — rebuild it from the current spec.
+            plan.mesocycles.all().delete()
+            self.stdout.write(
+                f"  - sample plan '{plan.title}' was partial; rebuilding hierarchy"
+            )
 
-        for meso_spec in SAMPLE_PLAN["mesocycles"]:
+        for meso_spec in plan_spec["mesocycles"]:
             mesocycle = Mesocycle.objects.create(
                 plan=plan,
                 name=meso_spec["name"],
@@ -668,6 +1483,79 @@ class Command(BaseCommand):
             build_block(mesocycle, meso_spec)
         self.stdout.write(f"  - built sample plan '{plan.title}' for {athlete.name}")
         return plan
+
+    # -- logged history: every week strictly before the current one -------
+
+    def _log_plan_history(self, athlete, plan, today):
+        """Deliver + log every week of ``plan`` strictly before its current week.
+
+        Walks the plan's live weeks in program order (mesocycle order, then
+        week index). Every week before the flagged ``is_current`` week gets
+        every one of its (non-skipped) prescriptions logged as a completed
+        session — a real multi-week training history — dated further into the
+        past the earlier it falls in the program. The current week itself is
+        stamped delivered here too (never logged here: Maya's hand-authored
+        current-week Day-1 log is layered on separately by ``_ensure_log``;
+        Devon/Priya's current week is simply delivered, per the demo's design).
+        Weeks after current are left alone on purpose — built, but neither
+        delivered nor logged.
+
+        Idempotent: a week's ``SessionLog``s are (re)created only when absent
+        (mirrors ``_ensure_log``'s create-if-absent contract), so a reseed
+        never duplicates the history.
+        """
+        live_weeks = list(
+            Week.objects.filter(mesocycle__plan=plan, deleted_at__isnull=True)
+            .select_related("mesocycle")
+            .order_by("mesocycle__order", "index")
+        )
+        current = next((w for w in live_weeks if w.is_current), None)
+        if current is None:
+            return
+        current_key = (current.mesocycle.order, current.index)
+        total = len(live_weeks)
+        logged_prescriptions = []
+        logged_weeks = 0
+        for position, week in enumerate(live_weeks):
+            if (week.mesocycle.order, week.index) >= current_key:
+                continue
+            weeks_ago = total - position
+            if week.delivered_at is None:
+                week.delivered_at = timezone.now()
+                week.save(update_fields=["delivered_at"])
+            logged_weeks += 1
+            for session in week.sessions.filter(deleted_at__isnull=True).select_related(
+                "session_slot"
+            ):
+                log, created = SessionLog.objects.get_or_create(
+                    session=session,
+                    athlete=athlete,
+                    defaults={
+                        "status": SessionLog.Status.DONE,
+                        "date": today
+                        - timedelta(weeks=weeks_ago)
+                        + timedelta(days=(session.day_number - 1) * 2),
+                    },
+                )
+                prescriptions = list(session.trainable_cells())
+                logged_prescriptions.extend(prescriptions)
+                if not created and log.sets.exists():
+                    continue
+                log.sets.all().delete()
+                LoggedSet.objects.bulk_create(
+                    _logged_sets_from_cells(log, prescriptions)
+                )
+
+        if current.delivered_at is None:
+            current.delivered_at = timezone.now()
+            current.save(update_fields=["delivered_at"])
+        if logged_prescriptions:
+            refresh_one_rms(athlete, logged_prescriptions, plan.unit)
+        if logged_weeks:
+            self.stdout.write(
+                f"  - logged {logged_weeks} weeks of history for {athlete.name} "
+                f"(through {current.mesocycle.name} wk{current.index})"
+            )
 
     # -- the sample logged session ----------------------------------------
 
