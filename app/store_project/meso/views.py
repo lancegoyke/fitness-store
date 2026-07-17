@@ -3639,7 +3639,10 @@ def template_use(request, plan_id):
 
     Only serves templates the requester owns (``editable_by`` + ``is_template``
     → 404 for a foreign or non-template plan). A missing / non-numeric / foreign
-    ``relationship`` creates nothing and flashes back to the library. The copy
+    ``relationship`` creates nothing and flashes back to the library — as does a
+    soft-suspended (over-seat-limit, D6) link, which the library never offers, so
+    its presence in a POST is a stale/forged form; the suspended-id exclusion
+    mirrors ``plan_batch_deliver`` so a frozen client can't be started. The copy
     is written in one explicit ``transaction.atomic()`` (``ATOMIC_REQUESTS`` is
     inert here).
     """
@@ -3657,6 +3660,7 @@ def template_use(request, plan_id):
             CoachAthlete.objects.for_coach(request.user)
             .active()
             .filter(pk=rel_id)
+            .exclude(pk__in=billing_access.suspended_athlete_ids(request.user))
             .select_related("athlete")
             .first()
         )
