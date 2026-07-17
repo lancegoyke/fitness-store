@@ -49,7 +49,13 @@
 
 .meso-table {
   border-collapse: collapse;
-  width: 100%;
+  /* Fixed layout keyed off the <colgroup>'s explicit widths (set inline from
+     COL_WIDTHS in MesoTable, along with the table's own summed width) so every
+     day's table shares the exact same column geometry: columns align
+     column-for-column across days, and row separators stay continuous even
+     when a cell grows tall with sub-lines. The table scrolls horizontally
+     inside .meso-table-scroll when its width exceeds the canvas. */
+  table-layout: fixed;
 }
 
 .meso-table-exercise-col {
@@ -112,26 +118,21 @@
   vertical-align: top;
 }
 
+/* A plain sticky table-cell (NOT display:flex — that would detach it from the
+   row's height, so a tall sub-line row in a week column would leave this
+   cell's bottom border misaligned). Its width comes from .meso-col-exercise;
+   the inner .meso-table-row-name-row lays out the handle / name / remove-×. */
 .meso-table-row-name-col {
   position: sticky;
   left: 0;
   z-index: 1;
   background: var(--surface);
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-  min-width: 160px;
 }
 
 .meso-table-row-name-row {
   display: flex;
   align-items: center;
   gap: 4px;
-}
-
-.meso-table-cell {
-  min-width: 190px;
 }
 
 .meso-table-cell-editor {

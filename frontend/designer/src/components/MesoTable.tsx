@@ -74,6 +74,15 @@ import type { UseTableNavResult } from "../hooks/useTableNav";
 import type { TableDragData, TableDragEndEvent } from "../hooks/useTableReorder";
 import { TABLE_DAY_DRAG_PREFIX, tableDayDragId, tableRowDragId, tableRowDragPrefix } from "../lib/tableDragIds";
 
+// Fixed column widths (px), the single source for every day's <table> so the
+// columns align across days (with table-layout: fixed). Exercise is wide
+// enough to read a full exercise name; Tempo and Rest are compact. The cols
+// AND the table's own width are set from this so the fixed layout is exact.
+const COL_WIDTHS = { exercise: 264, tempo: 66, week: 150, notes: 150, rest: 66 };
+function tableWidthFor(weekCount: number): number {
+  return COL_WIDTHS.exercise + COL_WIDTHS.tempo + weekCount * COL_WIDTHS.week + COL_WIDTHS.notes + COL_WIDTHS.rest;
+}
+
 export interface MesoTableProps {
   grid: MesoGrid | null;
   busy: boolean;
@@ -900,7 +909,24 @@ function TableDayBlock({
       </div>
 
       <div className="meso-table-scroll">
-        <table className="meso-table" data-testid={`meso-day-table-${day.session_slot_id}`}>
+        <table
+          className="meso-table"
+          style={{ width: tableWidthFor(weeks.length) }}
+          data-testid={`meso-day-table-${day.session_slot_id}`}
+        >
+          {/* Shared fixed column geometry so every day's table aligns column-
+              for-column (table-layout: fixed keys off these widths, not
+              content, so separators line up across days and tall sub-line
+              rows). */}
+          <colgroup>
+            <col style={{ width: COL_WIDTHS.exercise }} />
+            <col style={{ width: COL_WIDTHS.tempo }} />
+            {weeks.map((week) => (
+              <col key={week.id} style={{ width: COL_WIDTHS.week }} />
+            ))}
+            <col style={{ width: COL_WIDTHS.notes }} />
+            <col style={{ width: COL_WIDTHS.rest }} />
+          </colgroup>
           <thead>
             <tr>
               <th className="meso-table-exercise-col">Exercise</th>
