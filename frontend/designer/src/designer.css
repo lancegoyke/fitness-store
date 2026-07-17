@@ -7,7 +7,7 @@
    no single file gets unwieldy; all are pulled in from here. */
 @import "./styles/designer-root.css";
 @import "./styles/designer-topbar.css";
-@import "./styles/designer-rail.css";
+@import "./styles/designer-sidebar.css";
 @import "./styles/designer-chat.css";
 @import "./styles/designer-grid.css";
 @import "./styles/designer-mesotable.css";

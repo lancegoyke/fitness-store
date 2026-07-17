@@ -69,26 +69,18 @@ def render_designer(client, plan):
 
 
 class TestCoachmarksRender:
-    """Both coachmarks render in the island source.
+    """The phone-preview coachmark renders in the island source.
 
-    The table one lives in MesoTable.tsx (issue #455 phase A4's re-authored
-    copy; phase A5 deleted WeekGrid.tsx and its "grid" mark); the
-    phone-preview one in AthletePreview.tsx — same dismiss plumbing, same
-    first-run purpose.
+    designer-simplify removed the table coachmark (MesoTable.tsx's "The block
+    table" info alert — the block grid should be self-evident; onboarding tips
+    will get a dedicated help affordance later). The phone-preview one in
+    AthletePreview.tsx stays — same dismiss plumbing, same first-run purpose.
     """
-
-    def test_meso_table_renders_the_table_coachmark(self):
-        tsx = read_island_source("components", "MesoTable.tsx")
-        assert "The block table" in tsx  # table coachmark
 
     def test_athlete_preview_renders_the_phone_coachmark(self):
         tsx = read_island_source("components", "AthletePreview.tsx")
         assert "Preview as your athlete" in tsx
         assert 'dismissCoachmark?.("phone")' in tsx
-
-    def test_table_coachmark_has_a_dismiss_control(self):
-        tsx = read_island_source("components", "MesoTable.tsx")
-        assert 'dismissCoachmark("table")' in tsx
 
 
 class TestAgentSelfExplanation:
@@ -157,10 +149,6 @@ class TestCoachmarkSource:
             assert symbol in lib, f"lib/coachmarks.ts should define {symbol}"
         for symbol in ("coachmarkVisible", "dismissCoachmark"):
             assert symbol in hook, f"hooks/useCoachmarks.ts should define {symbol}"
-
-    def test_meso_table_wires_coachmark_visibility(self):
-        tsx = read_island_source("components", "MesoTable.tsx")
-        assert 'coachmarkVisible("table")' in tsx
 
     def test_athlete_preview_wires_coachmark_visibility(self):
         tsx = read_island_source("components", "AthletePreview.tsx")

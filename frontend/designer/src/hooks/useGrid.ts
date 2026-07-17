@@ -449,45 +449,6 @@ export function useGrid(options: UseGridOptions) {
   // Issue #455 phase A2.5 (menu-based cross-day move): closes the parity gap
   // A2's drag scope deliberately left out (separate <table> containers +
   // sticky columns = high dnd-kit risk — see useTableReorder.ts's header).
-  // Same STRUCTURAL shape as reorderExercises/reorderDays above: await the
-  // POST, then refetch the whole grid, sharing busyRef. `prescription_move`
-  // (views.py) re-points the cell's exercise_slot.session_slot BLOCK-WIDE
-  // (every week follows the move), so both the source cell and the target
-  // session_id must resolve off the row's/day's CURRENT week only — never
-  // GridDay.session_id, which can silently be a fallback to a different week
-  // (the same lesson useTableReorder.ts's rowReorder/dayReorder encode for
-  // A2). A no-op (no fetch) when the row has no live cell for the current
-  // week, or the target day has no live session for it either.
-  const moveExerciseToDay = useCallback(
-    (exerciseSlotId: Id, targetDay: GridDay) =>
-      runStructural(async () => {
-        const weekId = currentWeekId(grid);
-        if (weekId == null) return;
-        const weekKey = String(weekId);
-        const row = findRow(grid, exerciseSlotId);
-        const cellId = row?.cells[weekKey]?.prescription_id;
-        if (cellId == null) return;
-        const sessionId = targetDay.session_ids[weekKey];
-        if (sessionId == null) return;
-        // Append at the end of the target day's CURRENT week rows — mirrors
-        // useTableReorder's liveRows filter / the server's own
-        // session.cells() query for the viewed week.
-        const index = targetDay.rows.filter((r) => r.cells[weekKey]).length;
-        try {
-          await apiPost(
-            `/meso/api/plan/${planId}/prescription/${cellId}/move/`,
-            { session_id: sessionId, index },
-            csrf,
-          );
-        } catch (err) {
-          console.error("Move exercise to day failed", err);
-          return;
-        }
-        await refetchGrid();
-      }),
-    [grid, planId, csrf, runStructural, refetchGrid],
-  );
-
   // --- P2 exceptions: skip / fill / add-this-week -------------------------
   // Same STRUCTURAL shape as add/removeExercise|Day|Week above — the grid
   // (not just one cell) can change shape/content in ways only the server
@@ -591,7 +552,6 @@ export function useGrid(options: UseGridOptions) {
     setCurrentWeek,
     reorderExercises,
     reorderDays,
-    moveExerciseToDay,
     skipCell,
     fillAcrossWeeks,
     addExerciseThisWeek,

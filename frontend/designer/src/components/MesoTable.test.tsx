@@ -73,12 +73,9 @@ function grid(overrides: Partial<MesoGrid> = {}): MesoGrid {
   };
 }
 
-const HISTORY_NONE = { can_undo: false, can_redo: false, undo_label: "", redo_label: "" };
-
 function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
   return {
     grid: grid(),
-    history: HISTORY_NONE,
     busy: false,
     onPatchCell: vi.fn(),
     onWriteCellLine: vi.fn(),
@@ -91,14 +88,9 @@ function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
     onAddWeek: vi.fn(),
     onRemoveWeek: vi.fn(),
     onSetCurrentWeek: vi.fn(),
-    onUndo: vi.fn(),
-    onRedo: vi.fn(),
     onSkipCell: vi.fn(),
     onFillAcrossWeeks: vi.fn(),
     onAddExerciseThisWeek: vi.fn(),
-    onMoveExerciseToDay: vi.fn(),
-    coachmarkVisible: vi.fn(() => true),
-    dismissCoachmark: vi.fn(),
     ...overrides,
   };
 }
@@ -118,31 +110,6 @@ describe("layout", () => {
 
   it("renders nothing when grid is null", () => {
     const { container } = render(<MesoTable {...baseProps({ grid: null })} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-});
-
-// Issue #455 phase A4 — the table coachmark. Mirrors WeekGrid.test.tsx's
-// "shows the grid coachmark.../hides the grid coachmark..." pair structurally,
-// against the new "table" key (lib/coachmarks.ts's COACHMARK_KEYS).
-describe("coachmark (issue #455 phase A4)", () => {
-  it("shows the table coachmark when coachmarkVisible('table') is true, dismiss wired", async () => {
-    const user = userEvent.setup();
-    const dismissCoachmark = vi.fn();
-    render(<MesoTable {...baseProps({ dismissCoachmark })} />);
-    expect(screen.getByText("The block table")).toBeInTheDocument();
-    expect(screen.getByText(/every change autosaves/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /dismiss/i }));
-    expect(dismissCoachmark).toHaveBeenCalledWith("table");
-  });
-
-  it("hides the table coachmark when dismissed", () => {
-    render(<MesoTable {...baseProps({ coachmarkVisible: vi.fn(() => false) })} />);
-    expect(screen.queryByText("The block table")).not.toBeInTheDocument();
-  });
-
-  it("renders nothing (including the coachmark) when grid is null", () => {
-    const { container } = render(<MesoTable {...baseProps({ grid: null, coachmarkVisible: vi.fn(() => true) })} />);
     expect(container).toBeEmptyDOMElement();
   });
 });
@@ -529,113 +496,6 @@ describe("row rename", () => {
 
 // --- Issue #455 phase A2.5: menu-based cross-day move (row-name column,
 // 2nd line, alongside the A3 %1RM badge) --------------------------------
-// Closes the parity gap A2's drag scope deliberately left out (cross-day row
-// drag — separate <table> containers + sticky columns = high dnd-kit risk).
-// Only rendered on a MULTI-day grid, and only for a row with a live cell for
-// the CURRENT week (the only week `prescription_move`'s block-wide re-point
-// can key off).
-describe("move to day (issue #455 phase A2.5)", () => {
-  function twoDayGrid(overrides: Partial<MesoGrid> = {}) {
-    return grid({
-      days: [
-        day({
-          session_slot_id: 1,
-          name: "Lower",
-          day_number: 1,
-          session_id: 11,
-          session_ids: { "1": 11 },
-          rows: [row({ exercise_slot_id: 9, name: "Squat", cells: { "1": cell({ prescription_id: 100 }) } })],
-        }),
-        day({
-          session_slot_id: 2,
-          name: "Upper",
-          day_number: 2,
-          session_id: 22,
-          session_ids: { "1": 22 },
-          rows: [],
-        }),
-      ],
-      ...overrides,
-    });
-  }
-
-  it("renders a select with one option per OTHER day when the grid has more than one day", () => {
-    render(<MesoTable {...baseProps({ grid: twoDayGrid() })} />);
-    expect(screen.getByTestId("row-move-day-9")).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "D2 · Upper" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Lower/ })).not.toBeInTheDocument(); // no self-option
-  });
-
-  it("hides the select for a single-day grid", () => {
-    render(<MesoTable {...baseProps()} />); // default fixture has exactly one day
-    expect(screen.queryByTestId("row-move-day-9")).not.toBeInTheDocument();
-  });
-
-  it("hides the select when the row has no current-week cell", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: twoDayGrid({
-            days: [
-              day({ session_slot_id: 1, rows: [row({ exercise_slot_id: 9, cells: {} })] }),
-              day({ session_slot_id: 2, session_id: 22, session_ids: { "1": 22 }, rows: [] }),
-            ],
-          }),
-        })}
-      />,
-    );
-    expect(screen.queryByTestId("row-move-day-9")).not.toBeInTheDocument();
-  });
-
-  it("disables the option for a target day lacking a current-week session id", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: twoDayGrid({
-            days: [
-              day({
-                session_slot_id: 1,
-                rows: [row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 100 }) } })],
-              }),
-              day({ session_slot_id: 2, name: "Upper", day_number: 2, session_ids: {}, rows: [] }),
-            ],
-          }),
-        })}
-      />,
-    );
-    const option = screen.getByRole("option", { name: "D2 · Upper" }) as HTMLOptionElement;
-    expect(option.disabled).toBe(true);
-  });
-
-  it("choosing a day calls onMoveExerciseToDay with the row's exercise_slot_id and the chosen day", async () => {
-    const user = userEvent.setup();
-    const onMoveExerciseToDay = vi.fn();
-    render(<MesoTable {...baseProps({ grid: twoDayGrid(), onMoveExerciseToDay })} />);
-    await user.selectOptions(screen.getByTestId("row-move-day-9"), "2");
-    expect(onMoveExerciseToDay).toHaveBeenCalledWith(9, expect.objectContaining({ session_slot_id: 2 }));
-  });
-
-  it("resets the select to the placeholder after choosing", async () => {
-    const user = userEvent.setup();
-    render(<MesoTable {...baseProps({ grid: twoDayGrid() })} />);
-    const select = screen.getByTestId("row-move-day-9") as HTMLSelectElement;
-    await user.selectOptions(select, "2");
-    expect(select.value).toBe("");
-  });
-
-  it("disables the select while busy", () => {
-    render(<MesoTable {...baseProps({ grid: twoDayGrid(), busy: true })} />);
-    expect(screen.getByTestId("row-move-day-9")).toBeDisabled();
-  });
-
-  it("carries no data-grid-cell/data-grid-restore (outside A1 keyboard-nav space, not an Undo/etc. restore target)", () => {
-    render(<MesoTable {...baseProps({ grid: twoDayGrid() })} />);
-    const select = screen.getByTestId("row-move-day-9");
-    expect(select).not.toHaveAttribute("data-grid-cell");
-    expect(select).not.toHaveAttribute("data-grid-restore");
-  });
-});
-
 describe("remove exercise (arm -> confirm)", () => {
   it("arms then confirms, calling onRemoveExercise", async () => {
     const user = userEvent.setup();
@@ -705,6 +565,36 @@ describe("weeks: make-current / remove (arm -> confirm)", () => {
     expect(screen.queryByTestId("make-current-1")).not.toBeInTheDocument();
     expect(screen.queryByTestId("remove-week-1")).not.toBeInTheDocument();
   });
+
+  // designer-simplify: a week spans every day, so its lifecycle controls live
+  // ONCE in the mesocycle-level WeekManagerStrip above the day tables — never
+  // inside a day. The week LABEL column still appears per day (so the grid
+  // stays column-aligned), but it carries no controls.
+  it("renders the week make-current/remove controls once (in the week strip), not in any day-table", () => {
+    render(
+      <MesoTable
+        {...baseProps({
+          grid: grid({
+            weeks: [week({ id: 1, current: true }), week({ id: 2, label: "Wk 2", current: false })],
+            days: [day({ session_slot_id: 1, name: "Lower" }), day({ session_slot_id: 2, name: "Upper" })],
+          }),
+        })}
+      />,
+    );
+    // both day tables render, and each still shows the Wk 2 label column…
+    expect(screen.getByTestId("meso-day-table-1")).toBeInTheDocument();
+    expect(screen.getByTestId("meso-day-table-2")).toBeInTheDocument();
+    expect(screen.getAllByTestId("week-col-2")).toHaveLength(2);
+    // …but the controls appear exactly once, in the strip's week pill, and the
+    // label column headers are not inside that pill.
+    expect(screen.getAllByTestId("make-current-2")).toHaveLength(1);
+    expect(screen.getAllByTestId("remove-week-2")).toHaveLength(1);
+    const pill = screen.getByTestId("week-pill-2");
+    expect(pill).toContainElement(screen.getByTestId("make-current-2"));
+    // the current week (1) shows a badge, not make-current.
+    expect(screen.queryByTestId("make-current-1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("week-pill-1")).toHaveTextContent(/current/i);
+  });
 });
 
 describe("add affordances", () => {
@@ -720,40 +610,6 @@ describe("add affordances", () => {
     expect(onAddDay).toHaveBeenCalledTimes(1);
     await user.click(screen.getByTestId("add-week"));
     expect(onAddWeek).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("undo/redo toolbar", () => {
-  it("reflects history.can_undo/can_redo and calls onUndo/onRedo", async () => {
-    const user = userEvent.setup();
-    const onUndo = vi.fn();
-    const onRedo = vi.fn();
-    render(
-      <MesoTable
-        {...baseProps({
-          history: { can_undo: true, can_redo: false, undo_label: "Edited Squat", redo_label: "" },
-          onUndo,
-          onRedo,
-        })}
-      />,
-    );
-    expect(screen.getByTestId("grid-undo")).not.toBeDisabled();
-    expect(screen.getByTestId("grid-redo")).toBeDisabled();
-    await user.click(screen.getByTestId("grid-undo"));
-    expect(onUndo).toHaveBeenCalledTimes(1);
-  });
-
-  it("disables both buttons while busy", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          history: { can_undo: true, can_redo: true, undo_label: "x", redo_label: "y" },
-          busy: true,
-        })}
-      />,
-    );
-    expect(screen.getByTestId("grid-undo")).toBeDisabled();
-    expect(screen.getByTestId("grid-redo")).toBeDisabled();
   });
 });
 
@@ -1134,32 +990,20 @@ describe("keyboard grid navigation", () => {
   });
 
   describe("data-grid-restore integration", () => {
-    it("refocuses the replacement cell after a fresh grid identity from a data-grid-restore control (Undo)", () => {
-      const { rerender } = render(
-        <MesoTable
-          {...baseProps({
-            grid: NAV_GRID,
-            history: { can_undo: true, can_redo: false, undo_label: "Edited", redo_label: "" },
-          })}
-        />,
-      );
+    it("refocuses the replacement cell after a fresh grid identity from a data-grid-restore control (+ Add week)", () => {
+      const { rerender } = render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
       textInput.focus();
 
-      // Simulates the coach clicking Undo — real DOM focus moves to the
-      // (data-grid-restore-marked) button before the refetch resolves.
-      const undoButton = screen.getByTestId("grid-undo") as HTMLButtonElement;
-      undoButton.focus();
+      // Simulates the coach clicking a data-grid-restore control (+ Add week;
+      // Undo/Redo now live in the top bar but carry the same marker) — real DOM
+      // focus moves to the button before the grid re-renders, and the marker
+      // lets useTableNav refocus the grid's replacement cell.
+      const restoreControl = screen.getByTestId("add-week") as HTMLButtonElement;
+      restoreControl.focus();
 
       const NEXT_GRID = grid({ weeks: NAV_GRID.weeks, days: NAV_GRID.days });
-      rerender(
-        <MesoTable
-          {...baseProps({
-            grid: NEXT_GRID,
-            history: { can_undo: false, can_redo: true, undo_label: "", redo_label: "Edited" },
-          })}
-        />,
-      );
+      rerender(<MesoTable {...baseProps({ grid: NEXT_GRID })} />);
 
       expect(screen.getByTestId("cell-text-900")).toHaveFocus();
     });

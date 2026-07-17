@@ -14,7 +14,7 @@ import { useCallback, useState } from "react";
 import "./designer.css";
 
 import { TopBar } from "./components/TopBar";
-import { LeftRail } from "./components/LeftRail";
+import { AthleteMeta } from "./components/AthleteMeta";
 import { ChatPanel } from "./components/ChatPanel";
 import type { DesignerFlags } from "./components/ChatPanel";
 import { MesoTable } from "./components/MesoTable";
@@ -39,7 +39,7 @@ import { deliverHref as buildDeliverHref } from "./lib/deliver";
 // dedicated week view on. Default is now unconditionally "table" (see
 // readHydration()/Hydrated below — #meso-grid-data is a required hydration
 // gate now, so there's no "grid absent, fall back to week" branch either).
-type ViewMode = "table" | "block" | "athlete";
+export type ViewMode = "table" | "block" | "athlete";
 
 interface Hydrated {
   planId: Id;
@@ -132,6 +132,9 @@ function readHydration(): Hydrated | null {
 export function DesignerRoot() {
   const [hydrated] = useState<Hydrated | null>(() => readHydration());
   const [view, setView] = useState<ViewMode>("table");
+  // Sidebar (athlete metadata + agent) is visible by default; the coach can
+  // collapse it from the top bar to hand the full width to the grid.
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [periodStyle, setPeriodStyle] = useState<PeriodStyle>("timeline");
   const [checks, setChecks] = useState<Record<string, boolean>>({});
 
@@ -154,7 +157,7 @@ export function DesignerRoot() {
 
   // Issue #455 phase A2 (drag reordering): the table's own pure drag-event
   // translator — wired to gridState's structural verbs
-  // (reorderExercises/reorderDays/moveExerciseToDay).
+  // (reorderExercises/reorderDays).
   const tableReorder = useTableReorder({
     grid: gridState.grid,
     reorderRow: gridState.reorderExercises,
@@ -183,63 +186,48 @@ export function DesignerRoot() {
   return (
     <div className="meso-designer-root">
       <TopBar
-        athlete={grid?.athlete ?? null}
+        view={view}
+        onSelectView={selectView}
         cycleLabel={cycleLabel}
-        onPreviewAsAthlete={() => selectView("athlete")}
         deliverHref={deliverHref}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((open) => !open)}
+        canUndo={!gridState.busy && gridState.history.can_undo}
+        canRedo={!gridState.busy && gridState.history.can_redo}
+        undoLabel={gridState.history.undo_label}
+        redoLabel={gridState.history.redo_label}
+        onUndo={gridState.undo}
+        onRedo={gridState.redo}
       />
 
       <div className="meso-designer-body">
-        <LeftRail
-          athlete={grid?.athlete ?? null}
-          phases={grid?.phases ?? []}
-          onOpenBlockView={() => selectView("block")}
-        />
+        <div className={`meso-sidebar${sidebarOpen ? "" : " meso-sidebar--collapsed"}`}>
+          <AthleteMeta athlete={grid?.athlete ?? null} />
 
-        <ChatPanel
-          messages={agentChat.messages}
-          agentTyping={agentChat.agentTyping}
-          chips={agentChat.chips}
-          inputText={agentChat.inputText}
-          onInputChange={agentChat.setInputText}
-          onInputKey={agentChat.onInputKey}
-          onSend={agentChat.onSend}
-          onChip={agentChat.onChip}
-          threadRef={agentChat.threadRef}
-          flags={flags}
-        />
+          <ChatPanel
+            messages={agentChat.messages}
+            agentTyping={agentChat.agentTyping}
+            chips={agentChat.chips}
+            inputText={agentChat.inputText}
+            onInputChange={agentChat.setInputText}
+            onInputKey={agentChat.onInputKey}
+            onSend={agentChat.onSend}
+            onChip={agentChat.onChip}
+            threadRef={agentChat.threadRef}
+            flags={flags}
+          />
+        </div>
 
         <div className="meso-canvas">
-          <div className="meso-canvas-header">
-            <div className="meso-seg">
-              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "table" ? " is-on" : ""}`} onClick={() => selectView("table")}>
-                Table
-              </button>
-              <button type="button" className={`meso-seg-btn meso-seg-btn--v${view === "block" ? " is-on" : ""}`} onClick={() => selectView("block")}>
-                Periodization
-              </button>
-              <button
-                type="button"
-                className={`meso-seg-btn meso-seg-btn--v${view === "athlete" ? " is-on" : ""}`}
-                onClick={() => selectView("athlete")}
-              >
-                Athlete view
-              </button>
-            </div>
-            <div className="meso-flex-spacer" />
-          </div>
-
           <div className="meso-canvas-body">
             {view === "table" && (
               <MesoTable
                 grid={gridState.grid}
-                history={gridState.history}
                 busy={gridState.busy}
                 onPatchCell={gridState.patchCell}
                 onWriteCellLine={gridState.writeCellLine}
                 onPatchRowColumns={gridState.patchRowColumns}
                 onRenameExercise={gridState.renameExercise}
-                onMoveExerciseToDay={gridState.moveExerciseToDay}
                 onAddExercise={gridState.addExercise}
                 onRemoveExercise={gridState.removeExercise}
                 onAddDay={gridState.addDay}
@@ -247,14 +235,10 @@ export function DesignerRoot() {
                 onAddWeek={gridState.addWeek}
                 onRemoveWeek={gridState.removeWeek}
                 onSetCurrentWeek={gridState.setCurrentWeek}
-                onUndo={gridState.undo}
-                onRedo={gridState.redo}
                 onSkipCell={gridState.skipCell}
                 onFillAcrossWeeks={gridState.fillAcrossWeeks}
                 onAddExerciseThisWeek={gridState.addExerciseThisWeek}
                 onDragEnd={tableReorder.onDragEnd}
-                coachmarkVisible={coachmarks.coachmarkVisible}
-                dismissCoachmark={coachmarks.dismissCoachmark}
               />
             )}
 

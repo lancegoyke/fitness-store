@@ -3,11 +3,13 @@
 // reactive dismissed-map + `coachmarkVisible` derivation moves to
 // useCoachmarks — these are the two storage-facing primitives it calls.
 
-/** The dismissible region notes on the designer (phone preview / multi-week
- * table — the table note added by issue #455 phase A4). "grid" (the
- * retired one-week WeekGrid's coachmark) is gone as of issue #455 phase A5,
- * which deleted the whole one-week view it annotated. */
-export const COACHMARK_KEYS = ["phone", "table"] as const;
+/** The dismissible region notes on the designer. Only the phone-preview note
+ * remains: the "table" note (issue #455 phase A4) was removed with the
+ * designer-simplify cleanup — the block grid should be self-evident, and
+ * onboarding tips will live in a dedicated help affordance later. "grid" (the
+ * retired one-week WeekGrid's coachmark) went with the one-week view in
+ * issue #455 phase A5. */
+export const COACHMARK_KEYS = ["phone"] as const;
 
 /**
  * The localStorage key for one region note's dismissal — namespaced under

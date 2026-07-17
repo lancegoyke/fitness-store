@@ -1,19 +1,50 @@
-// TopBar (CONTRACT.md "TopBar") — ported 1:1 from designer.html's top bar
-// (lines ~42-98): brand/back-link, athlete identity chip, cycle label,
-// preview/review/deliver actions. (The individual/group mode segmented
-// control went with the group subsystem — the designer is single-mode now.)
-import type { AthleteIdentity } from "../lib/api";
+// TopBar (CONTRACT.md "TopBar") — brand/back-link, the sidebar toggle, the
+// view segmented control (Table / Periodization / Athlete view), the cycle
+// label chip, and the review/deliver actions. designer-simplify: the athlete
+// identity chip moved to the sidebar's AthleteMeta (it was a duplicate of the
+// rail's), the standalone "Preview as athlete" button was dropped (the
+// segmented "Athlete view" is the one canonical switch), and the canvas's own
+// 49px segmented-control band folded up here.
+import type { ViewMode } from "../DesignerRoot";
 
 export interface TopBarProps {
-  athlete: AthleteIdentity | null;
+  view: ViewMode;
+  onSelectView(view: ViewMode): void;
   cycleLabel: string;
-  onPreviewAsAthlete(): void;
   deliverHref: string;
+  sidebarOpen: boolean;
+  onToggleSidebar(): void;
+  // Undo/redo live here (global, Ctrl+Z-backed editor actions) rather than in
+  // the grid's own toolbar. data-grid-restore is preserved on each button so
+  // clicking it returns focus to the grid's anchor cell (see useTableNav).
+  canUndo: boolean;
+  canRedo: boolean;
+  undoLabel: string | null;
+  redoLabel: string | null;
+  onUndo(): void;
+  onRedo(): void;
 }
 
-export function TopBar(props: TopBarProps) {
-  const { athlete, cycleLabel, onPreviewAsAthlete, deliverHref } = props;
+const VIEW_TABS: { id: ViewMode; label: string }[] = [
+  { id: "table", label: "Table" },
+  { id: "block", label: "Periodization" },
+  { id: "athlete", label: "Athlete view" },
+];
 
+export function TopBar({
+  view,
+  onSelectView,
+  cycleLabel,
+  deliverHref,
+  sidebarOpen,
+  onToggleSidebar,
+  canUndo,
+  canRedo,
+  undoLabel,
+  redoLabel,
+  onUndo,
+  onRedo,
+}: TopBarProps) {
   return (
     <div className="meso-topbar">
       <a href="/meso/" title="Back to roster" className="meso-topbar-brand">
@@ -24,16 +55,32 @@ export function TopBar(props: TopBarProps) {
       </a>
       <div className="meso-topbar-divider" />
 
-      <div className="meso-identity-slot">
-        {athlete && (
-          <div className="meso-identity">
-            <div className="meso-identity-avatar">{athlete.initials}</div>
-            <div className="meso-identity-info">
-              <div className="meso-identity-name">{athlete.name}</div>
-              {athlete.goal && <div className="meso-identity-goal">{athlete.goal}</div>}
-            </div>
-          </div>
-        )}
+      <button
+        type="button"
+        data-testid="sidebar-toggle"
+        className="meso-sidebar-toggle"
+        aria-pressed={sidebarOpen}
+        aria-label={sidebarOpen ? "Hide athlete & agent panel" : "Show athlete & agent panel"}
+        title={sidebarOpen ? "Hide panel" : "Show panel"}
+        onClick={onToggleSidebar}
+      >
+        {sidebarOpen ? "‹" : "›"}
+      </button>
+
+      <div className="meso-seg" role="tablist" aria-label="Designer view">
+        {VIEW_TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={view === t.id}
+            data-testid={`view-tab-${t.id}`}
+            className={`meso-seg-btn${view === t.id ? " is-on" : ""}`}
+            onClick={() => onSelectView(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
       <div className="meso-flex-spacer" />
@@ -44,9 +91,32 @@ export function TopBar(props: TopBarProps) {
           <span>{cycleLabel}</span>
         </div>
       )}
-      <button type="button" data-testid="preview-athlete-button" data-hover="rail" className="meso-btn-rail" onClick={onPreviewAsAthlete}>
-        Preview as athlete
-      </button>
+      <div className="meso-topbar-iconbtns">
+        <button
+          type="button"
+          data-testid="grid-undo"
+          data-grid-restore=""
+          className="meso-topbar-iconbtn"
+          disabled={!canUndo}
+          aria-label="Undo"
+          title={undoLabel ? "Undo: " + undoLabel : "Undo"}
+          onClick={onUndo}
+        >
+          ↺
+        </button>
+        <button
+          type="button"
+          data-testid="grid-redo"
+          data-grid-restore=""
+          className="meso-topbar-iconbtn"
+          disabled={!canRedo}
+          aria-label="Redo"
+          title={redoLabel ? "Redo: " + redoLabel : "Redo"}
+          onClick={onRedo}
+        >
+          ↻
+        </button>
+      </div>
       <a data-testid="review-link" href="/meso/review/" data-hover="rail" className="meso-btn-rail">
         Review changes
       </a>

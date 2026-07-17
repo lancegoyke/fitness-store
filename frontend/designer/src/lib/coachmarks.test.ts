@@ -18,8 +18,8 @@ describe("storageKey", () => {
 });
 
 describe("COACHMARK_KEYS", () => {
-  it("lists the designer region notes — 'grid' (the retired one-week WeekGrid) is gone as of issue #455 phase A5", () => {
-    expect(COACHMARK_KEYS).toEqual(["phone", "table"]);
+  it("lists the designer region notes — only 'phone' remains ('table' removed with designer-simplify; 'grid' retired in #455 A5)", () => {
+    expect(COACHMARK_KEYS).toEqual(["phone"]);
   });
 });
 

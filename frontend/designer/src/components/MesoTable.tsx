@@ -53,9 +53,6 @@
 // sub-line text, written like any other line). skip/unskip, fill-across-
 // weeks, add-this-week and move-to-day all stay. (The per-cell group
 // adjust badge went with the group subsystem itself.)
-// The table's own coachmark landed in issue #455 phase A4 (re-authored
-// copy, not a mechanical port of WeekGrid.tsx's "grid" mark — see this
-// file's coachmarkVisible/dismissCoachmark prop header).
 import { useEffect, useRef, useState } from "react";
 import type { ClipboardEvent } from "react";
 import {
@@ -70,16 +67,24 @@ import {
 } from "@dnd-kit/core";
 import type { CollisionDetection, DragEndEvent, DragStartEvent, KeyboardCoordinateGetter } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, MesoGrid } from "../lib/api";
+import type { GridCell, GridDay, GridRow, GridWeek, MesoGrid } from "../lib/api";
 import type { GridCellPatch, GridRowPatch, Id } from "../hooks/useGrid";
 import { useTableNav, tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
 import type { UseTableNavResult } from "../hooks/useTableNav";
 import type { TableDragData, TableDragEndEvent } from "../hooks/useTableReorder";
 import { TABLE_DAY_DRAG_PREFIX, tableDayDragId, tableRowDragId, tableRowDragPrefix } from "../lib/tableDragIds";
 
+// Fixed column widths (px), the single source for every day's <table> so the
+// columns align across days (with table-layout: fixed). Exercise is wide
+// enough to read a full exercise name; Tempo and Rest are compact. The cols
+// AND the table's own width are set from this so the fixed layout is exact.
+const COL_WIDTHS = { exercise: 264, tempo: 66, week: 150, notes: 150, rest: 66 };
+function tableWidthFor(weekCount: number): number {
+  return COL_WIDTHS.exercise + COL_WIDTHS.tempo + weekCount * COL_WIDTHS.week + COL_WIDTHS.notes + COL_WIDTHS.rest;
+}
+
 export interface MesoTableProps {
   grid: MesoGrid | null;
-  history: GridHistory;
   busy: boolean;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   // Phase 2a: upsert one freeform (week × line) sub-line of a row's stack —
@@ -90,10 +95,6 @@ export interface MesoTableProps {
   // (useGrid.patchRowColumns). Fire-and-forget, like onPatchCell.
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
-  // Issue #455 phase A2.5: the per-ROW "Move to…" menu's structural verb —
-  // fire-and-forget, mirroring onAddExercise/onRemoveExercise etc. below
-  // (useGrid.moveExerciseToDay awaits its own POST + refetch internally).
-  onMoveExerciseToDay(exerciseSlotId: Id, targetDay: GridDay): void;
   onAddExercise(day: GridDay): void;
   onRemoveExercise(exerciseSlotId: Id): void;
   onAddDay(): void;
@@ -101,8 +102,6 @@ export interface MesoTableProps {
   onAddWeek(): void;
   onRemoveWeek(weekId: Id): void;
   onSetCurrentWeek(weekId: Id): void;
-  onUndo(): void;
-  onRedo(): void;
   // P2 exceptions: one-week skip + text-stack fill-across-weeks + a
   // this-week-only add — CONTRACT.md "MesoTable.tsx — new props".
   onSkipCell(cellId: number, skipped: boolean): void;
@@ -113,11 +112,6 @@ export interface MesoTableProps {
   // MesoTable.test.tsx's existing baseProps() (which never sets it) keeps
   // passing untouched.
   onDragEnd?(event: TableDragEndEvent): void;
-  // Issue #455 phase A4: the table's own first-run coachmark — same
-  // useCoachmarks hook slice WeekGrid.tsx takes for its "grid" mark
-  // (lib/coachmarks.ts's COACHMARK_KEYS now carries a "table" entry too).
-  coachmarkVisible(key: string): boolean;
-  dismissCoachmark(key: string): void;
 }
 
 /** The single arm/confirm slot — mirrors usePlanData's PendingDelete
@@ -240,7 +234,7 @@ function CellSubLineInput({ cellId, rowId, weekId, line, text, ghost, tableNav, 
 
   return (
     <input
-      className="meso-cell meso-line-input"
+      className={`meso-cell meso-line-input${ghost ? " meso-line-input--ghost" : ""}`}
       data-testid={ghost ? `cell-line-new-${cellId}` : `cell-line-${cellId}-${line}`}
       data-grid-cell={tableCellDomKey(rowId, weekId, "text", line)}
       aria-label={ghost ? "Add a line" : `Line ${line}`}
@@ -575,73 +569,6 @@ function RowNameEditor({ row, tableNav, onRename }: RowNameEditorProps) {
   );
 }
 
-/** The row's live cell key for the grid's CURRENT week (`grid.weeks.find(w
- * => w.current)`, falling back to `weeks[0]` — same "current week" notion
- * useGrid.ts's own local `currentWeekId` helper uses for every structural
- * verb), or undefined if the grid carries no weeks at all. Shared by
- * RowMoveToDaySelect below to gate the row's own visibility and to look up
- * each target day's current-week session id — `prescription_move`'s
- * block-wide re-point can only key off THIS week (see useGrid.moveExerciseToDay's
- * header). */
-function currentWeekKey(weeks: GridWeek[]): string | undefined {
-  const id = (weeks.find((w) => w.current) ?? weeks[0])?.id;
-  return id == null ? undefined : String(id);
-}
-
-interface RowMoveToDaySelectProps {
-  row: GridRow;
-  day: GridDay;
-  days: GridDay[];
-  weekKey: string | undefined;
-  busy: boolean;
-  onMoveExerciseToDay(exerciseSlotId: Id, targetDay: GridDay): void;
-}
-
-/** Issue #455 phase A2.5 — a menu-based cross-day move, closing the parity
- * gap A2's drag scope deliberately left out (separate <table> containers +
- * sticky columns = high dnd-kit risk; see useTableReorder.ts's header). Row-
- * name column, 2nd line, alongside RowOneRmEditor — only rendered on a
- * multi-day grid, and only when this row has a live cell for the CURRENT
- * week (the only week the server's block-wide re-point can key off). Local
- * `value` state, mirroring every other row-local toggle in this file
- * (CellActions/AddThisWeekControl) — resets to the placeholder itself on
- * every choice rather than depending on a parent re-render to force it back. */
-function RowMoveToDaySelect({ row, day, days, weekKey, busy, onMoveExerciseToDay }: RowMoveToDaySelectProps) {
-  const [value, setValue] = useState("");
-
-  if (days.length <= 1) return null;
-  if (weekKey == null || !row.cells[weekKey]) return null;
-
-  const otherDays = days.filter((d) => d.session_slot_id !== day.session_slot_id);
-  const id = row.exercise_slot_id;
-
-  return (
-    <select
-      data-testid={`row-move-day-${id}`}
-      className="meso-move-day-select"
-      aria-label={`Move ${row.name || "exercise"} to another day`}
-      value={value}
-      disabled={busy}
-      onChange={(e) => {
-        const raw = e.target.value;
-        setValue("");
-        if (!raw) return;
-        const target = otherDays.find((d) => String(d.session_slot_id) === raw);
-        if (target) onMoveExerciseToDay(id, target);
-      }}
-    >
-      <option value="" disabled>
-        Move to…
-      </option>
-      {otherDays.map((d) => (
-        <option key={d.session_slot_id} value={String(d.session_slot_id)} disabled={d.session_ids[weekKey] == null}>
-          {d.name ? `D${d.day_number} · ${d.name}` : `Day ${d.day_number}`}
-        </option>
-      ))}
-    </select>
-  );
-}
-
 interface AddThisWeekControlProps {
   day: GridDay;
   weeks: GridWeek[];
@@ -696,7 +623,6 @@ function AddThisWeekControl({ day, weeks, busy, onAddExerciseThisWeek }: AddThis
 interface TableRowProps {
   row: GridRow;
   day: GridDay;
-  days: GridDay[];
   weeks: GridWeek[];
   busy: boolean;
   tableNav: UseTableNavResult;
@@ -708,7 +634,6 @@ interface TableRowProps {
   onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
-  onMoveExerciseToDay(exerciseSlotId: Id, targetDay: GridDay): void;
   onSkipCell(cellId: number, skipped: boolean): void;
   onFillAcrossWeeks(cellId: number): void;
 }
@@ -722,7 +647,6 @@ interface TableRowProps {
 function TableRow({
   row,
   day,
-  days,
   weeks,
   busy,
   tableNav,
@@ -734,12 +658,9 @@ function TableRow({
   onWriteCellLine,
   onPatchRowColumns,
   onRenameExercise,
-  onMoveExerciseToDay,
   onSkipCell,
   onFillAcrossWeeks,
 }: TableRowProps) {
-  const weekKey = currentWeekKey(weeks);
-  const showMoveToDay = days.length > 1;
   const dragData: TableDragData = {
     type: "row",
     daySlotId: day.session_slot_id,
@@ -809,20 +730,7 @@ function TableRow({
               </button>
             </span>
           )}
-        </div>
-        {showMoveToDay && (
-          <div className="meso-table-row-tags meso-ex-tags">
-            <RowMoveToDaySelect
-              row={row}
-              day={day}
-              days={days}
-              weekKey={weekKey}
-              busy={busy}
-              onMoveExerciseToDay={onMoveExerciseToDay}
-            />
-          </div>
-        )}
-      </td>
+        </div>      </td>
       <td className="meso-table-row-col meso-table-row-col--tempo">
         <RowColumnInput row={row} field="tempo" label="tempo" tableNav={tableNav} onPatchRowColumns={onPatchRowColumns} />
       </td>
@@ -882,7 +790,6 @@ function TableRow({
 
 interface TableDayBlockProps {
   day: GridDay;
-  days: GridDay[];
   weeks: GridWeek[];
   busy: boolean;
   tableNav: UseTableNavResult;
@@ -893,12 +800,9 @@ interface TableDayBlockProps {
   onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
   onRenameExercise(exerciseSlotId: Id, name: string): void;
-  onMoveExerciseToDay(exerciseSlotId: Id, targetDay: GridDay): void;
   onAddExercise(day: GridDay): void;
   onRemoveExercise(exerciseSlotId: Id): void;
   onRemoveDay(day: GridDay): void;
-  onSetCurrentWeek(weekId: Id): void;
-  onRemoveWeek(weekId: Id): void;
   onSkipCell(cellId: number, skipped: boolean): void;
   onFillAcrossWeeks(cellId: number): void;
   onAddExerciseThisWeek(day: GridDay, weekId: number): void;
@@ -910,7 +814,6 @@ interface TableDayBlockProps {
  * `.is-dragging` opacity, no CSS.Transform on the block itself. */
 function TableDayBlock({
   day,
-  days,
   weeks,
   busy,
   tableNav,
@@ -921,12 +824,9 @@ function TableDayBlock({
   onWriteCellLine,
   onPatchRowColumns,
   onRenameExercise,
-  onMoveExerciseToDay,
   onAddExercise,
   onRemoveExercise,
   onRemoveDay,
-  onSetCurrentWeek,
-  onRemoveWeek,
   onSkipCell,
   onFillAcrossWeeks,
   onAddExerciseThisWeek,
@@ -1001,22 +901,30 @@ function TableDayBlock({
       </div>
 
       <div className="meso-table-scroll">
-        <table className="meso-table" data-testid={`meso-day-table-${day.session_slot_id}`}>
+        <table
+          className="meso-table"
+          style={{ width: tableWidthFor(weeks.length) }}
+          data-testid={`meso-day-table-${day.session_slot_id}`}
+        >
+          {/* Shared fixed column geometry so every day's table aligns column-
+              for-column (table-layout: fixed keys off these widths, not
+              content, so separators line up across days and tall sub-line
+              rows). */}
+          <colgroup>
+            <col style={{ width: COL_WIDTHS.exercise }} />
+            <col style={{ width: COL_WIDTHS.tempo }} />
+            {weeks.map((week) => (
+              <col key={week.id} style={{ width: COL_WIDTHS.week }} />
+            ))}
+            <col style={{ width: COL_WIDTHS.notes }} />
+            <col style={{ width: COL_WIDTHS.rest }} />
+          </colgroup>
           <thead>
             <tr>
               <th className="meso-table-exercise-col">Exercise</th>
               <th className="meso-table-row-col-th">Tempo</th>
               {weeks.map((week) => (
-                <WeekColumnHeader
-                  key={week.id}
-                  week={week}
-                  armed={isArmed("week", week.id)}
-                  busy={busy}
-                  onArm={() => arm("week", week.id)}
-                  onDisarm={disarm}
-                  onSetCurrentWeek={onSetCurrentWeek}
-                  onRemoveWeek={onRemoveWeek}
-                />
+                <WeekColumnHeader key={week.id} week={week} />
               ))}
               <th className="meso-table-row-col-th">Notes</th>
               <th className="meso-table-row-col-th">Rest</th>
@@ -1032,7 +940,6 @@ function TableDayBlock({
                   key={row.exercise_slot_id}
                   row={row}
                   day={day}
-                  days={days}
                   weeks={weeks}
                   busy={busy}
                   tableNav={tableNav}
@@ -1047,7 +954,6 @@ function TableDayBlock({
                   onWriteCellLine={onWriteCellLine}
                   onPatchRowColumns={onPatchRowColumns}
                   onRenameExercise={onRenameExercise}
-                  onMoveExerciseToDay={onMoveExerciseToDay}
                   onSkipCell={onSkipCell}
                   onFillAcrossWeeks={onFillAcrossWeeks}
                 />
@@ -1077,13 +983,11 @@ function TableDayBlock({
 export function MesoTable(props: MesoTableProps) {
   const {
     grid,
-    history,
     busy,
     onPatchCell,
     onWriteCellLine,
     onPatchRowColumns,
     onRenameExercise,
-    onMoveExerciseToDay,
     onAddExercise,
     onRemoveExercise,
     onAddDay,
@@ -1091,14 +995,10 @@ export function MesoTable(props: MesoTableProps) {
     onAddWeek,
     onRemoveWeek,
     onSetCurrentWeek,
-    onUndo,
-    onRedo,
     onSkipCell,
     onFillAcrossWeeks,
     onAddExerciseThisWeek,
     onDragEnd,
-    coachmarkVisible,
-    dismissCoachmark,
   } = props;
 
   const [armed, setArmed] = useState<Armed>(null);
@@ -1168,68 +1068,16 @@ export function MesoTable(props: MesoTableProps) {
 
   return (
     <div className="meso-table-view" data-testid="meso-table-view">
-      <div className="meso-table-toolbar">
-        <button
-          type="button"
-          data-testid="grid-undo"
-          data-hover="rail"
-          data-grid-restore=""
-          className="meso-week-strip-btn"
-          disabled={busy || !history.can_undo}
-          aria-label="Undo"
-          title={history.undo_label ? "Undo: " + history.undo_label : "Undo"}
-          onClick={onUndo}
-        >
-          ↺ Undo
-        </button>
-        <button
-          type="button"
-          data-testid="grid-redo"
-          data-hover="rail"
-          data-grid-restore=""
-          className="meso-week-strip-btn"
-          disabled={busy || !history.can_redo}
-          aria-label="Redo"
-          title={history.redo_label ? "Redo: " + history.redo_label : "Redo"}
-          onClick={onRedo}
-        >
-          Redo ↻
-        </button>
-        <div className="meso-flex-spacer" />
-        <button
-          type="button"
-          data-testid="add-week"
-          data-hover="add"
-          data-grid-restore=""
-          className="meso-week-strip-btn meso-week-strip-btn--dashed"
-          disabled={busy}
-          onClick={onAddWeek}
-        >
-          + Add week
-        </button>
-      </div>
-
-      {coachmarkVisible("table") && (
-        <div className="meso-flex meso-coachmark">
-          <div className="meso-coachmark-body">
-            <div className="meso-coachmark-title">The block table</div>
-            <div className="meso-coachmark-text">
-              Tap any cell and type the prescription — “4 x 6, RPE 9” — with extra lines below it for
-              cues or substitutions; arrows, Tab and Enter move cell to cell (Enter at the bottom of a
-              day adds a row), and every change autosaves. Drag a ⠿ handle to reorder exercises or days.
-            </div>
-          </div>
-          <button
-            type="button"
-            data-hover="rail"
-            className="meso-coachmark-dismiss"
-            aria-label="Dismiss tip"
-            onClick={() => dismissCoachmark("table")}
-          >
-            ×
-          </button>
-        </div>
-      )}
+      <WeekManagerStrip
+        weeks={grid.weeks}
+        busy={busy}
+        isArmed={isArmed}
+        arm={arm}
+        disarm={disarm}
+        onSetCurrentWeek={onSetCurrentWeek}
+        onRemoveWeek={onRemoveWeek}
+        onAddWeek={onAddWeek}
+      />
 
       <DndContext
         sensors={sensors}
@@ -1242,7 +1090,6 @@ export function MesoTable(props: MesoTableProps) {
             <TableDayBlock
               key={day.session_slot_id}
               day={day}
-              days={grid.days}
               weeks={grid.weeks}
               busy={busy}
               tableNav={tableNav}
@@ -1253,12 +1100,9 @@ export function MesoTable(props: MesoTableProps) {
               onWriteCellLine={onWriteCellLine}
               onPatchRowColumns={onPatchRowColumns}
               onRenameExercise={onRenameExercise}
-              onMoveExerciseToDay={onMoveExerciseToDay}
               onAddExercise={onAddExercise}
               onRemoveExercise={onRemoveExercise}
               onRemoveDay={onRemoveDay}
-              onSetCurrentWeek={onSetCurrentWeek}
-              onRemoveWeek={onRemoveWeek}
               onSkipCell={onSkipCell}
               onFillAcrossWeeks={onFillAcrossWeeks}
               onAddExerciseThisWeek={onAddExerciseThisWeek}
@@ -1286,15 +1130,13 @@ export function MesoTable(props: MesoTableProps) {
 
 interface WeekColumnHeaderProps {
   week: GridWeek;
-  armed: boolean;
-  busy: boolean;
-  onArm(): void;
-  onDisarm(): void;
-  onSetCurrentWeek(weekId: Id): void;
-  onRemoveWeek(weekId: Id): void;
 }
 
-function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek, onRemoveWeek }: WeekColumnHeaderProps) {
+/** A week column's header — just the label + deload marker + current-week
+ * highlight. The lifecycle controls (make-current / remove) live in the
+ * WeekManagerStrip above the day tables (designer-simplify), never inside a
+ * day, since a week spans every day. */
+function WeekColumnHeader({ week }: WeekColumnHeaderProps) {
   return (
     <th
       data-testid={`week-col-${week.id}`}
@@ -1309,34 +1151,51 @@ function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek
           </span>
         )}
       </div>
-      {!week.current && (
-        <div className="meso-table-week-controls">
-          <button
-            type="button"
-            data-testid={`make-current-${week.id}`}
-            data-grid-restore=""
-            className="meso-week-strip-btn meso-week-strip-btn--accent"
-            disabled={busy}
-            title="Make this the athlete's week — their home and today's session anchor on it"
-            onClick={() => onSetCurrentWeek(week.id)}
-          >
-            Make current
-          </button>
-          {!armed && (
-            <button
-              type="button"
-              data-testid={`remove-week-${week.id}`}
-              data-grid-restore=""
-              className="meso-week-strip-btn"
-              disabled={busy}
-              aria-label="Remove this week"
-              title="Remove this week"
-              onClick={onArm}
-            >
-              Remove
-            </button>
-          )}
-          {armed && (
+    </th>
+  );
+}
+
+interface WeekManagerStripProps {
+  weeks: GridWeek[];
+  busy: boolean;
+  isArmed(type: ArmedKind, id: Id): boolean;
+  arm(type: ArmedKind, id: Id): void;
+  disarm(): void;
+  onSetCurrentWeek(weekId: Id): void;
+  onRemoveWeek(weekId: Id): void;
+  onAddWeek(): void;
+}
+
+/** The mesocycle-level week manager, above the day tables (designer-simplify):
+ * one pill per week with make-current + remove (arm→confirm), plus "+ Add
+ * week". A week spans every training day, so its lifecycle belongs here once —
+ * not repeated in, or tied to, any single day's table header. The current
+ * week's pill is highlighted; its column in each day table is highlighted to
+ * match. Buttons keep `data-grid-restore` so a click returns focus to the
+ * grid's anchor cell (see useTableNav). */
+function WeekManagerStrip({ weeks, busy, isArmed, arm, disarm, onSetCurrentWeek, onRemoveWeek, onAddWeek }: WeekManagerStripProps) {
+  return (
+    <div className="meso-week-strip" role="group" aria-label="Weeks">
+      <span className="meso-week-strip-heading">Weeks</span>
+      {weeks.map((week) => (
+        <div
+          key={week.id}
+          data-testid={`week-pill-${week.id}`}
+          aria-current={week.current ? "true" : undefined}
+          className={`meso-week-pill${week.current ? " meso-week-pill--current" : ""}`}
+        >
+          <span className="meso-week-pill-label">
+            {week.label}
+            {week.deload && (
+              <span aria-label="Deload week" title="Deload week" className="meso-table-deload-marker">
+                {" "}
+                ▽
+              </span>
+            )}
+          </span>
+          {week.current ? (
+            <span className="meso-week-pill-badge">current</span>
+          ) : isArmed("week", week.id) ? (
             <span className="meso-week-strip-confirm">
               <button
                 type="button"
@@ -1347,7 +1206,7 @@ function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek
                 aria-label="Confirm remove week"
                 onClick={() => {
                   onRemoveWeek(week.id);
-                  onDisarm();
+                  disarm();
                 }}
               >
                 Confirm?
@@ -1359,14 +1218,51 @@ function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek
                 className="meso-week-strip-btn"
                 disabled={busy}
                 aria-label="Cancel remove week"
-                onClick={onDisarm}
+                onClick={disarm}
               >
                 Cancel
               </button>
             </span>
+          ) : (
+            <>
+              <button
+                type="button"
+                data-testid={`make-current-${week.id}`}
+                data-grid-restore=""
+                className="meso-week-pill-make-current"
+                disabled={busy}
+                title="Make this the athlete's week — their home and today's session anchor on it"
+                onClick={() => onSetCurrentWeek(week.id)}
+              >
+                Make current
+              </button>
+              <button
+                type="button"
+                data-testid={`remove-week-${week.id}`}
+                data-grid-restore=""
+                className="meso-week-pill-x"
+                disabled={busy}
+                aria-label="Remove this week"
+                title="Remove this week"
+                onClick={() => arm("week", week.id)}
+              >
+                ×
+              </button>
+            </>
           )}
         </div>
-      )}
-    </th>
+      ))}
+      <button
+        type="button"
+        data-testid="add-week"
+        data-hover="add"
+        data-grid-restore=""
+        className="meso-week-strip-btn meso-week-strip-btn--dashed"
+        disabled={busy}
+        onClick={onAddWeek}
+      >
+        + Add week
+      </button>
+    </div>
   );
 }
