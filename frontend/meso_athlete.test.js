@@ -709,3 +709,117 @@ describe("pre-Phase-2 override migration", () => {
     expect(localStorage.getItem("meso-e1rm")).toBe(null); // still cleared
   });
 });
+
+// ---- freeform sub-line tracking (Phase 4a) ----
+// Under each exercise the athlete keeps an editable sub-line stack — a free
+// input per line, saved on blur to the per-cell endpoint. `saveCell` POSTs one
+// (exercise_id, line, text) cell (modeled on `_postOneRm`: graceful on network
+// failure, the typed value stays in-session), and `addLine` appends an empty
+// sub-line up to MAX_CELL_LINE. Hydration threads `cell_url` + each exercise's
+// `sub_lines` off the log payload.
+
+const CELL_URL = "/meso/api/me/session/42/cell/";
+
+function cellLogger(overrides = {}) {
+  const c = createLogger();
+  c.cellUrl = CELL_URL;
+  c.csrf = "tok";
+  c.exercises = [
+    { id: 1, sub_lines: [{ line: 1, text: "RPE 8" }], set_rows: [] },
+  ];
+  return Object.assign(c, overrides);
+}
+
+describe("saveCell", () => {
+  it("posts {exercise_id, line, text} to the cell url with the CSRF header", async () => {
+    const c = cellLogger();
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { id: 5, line: 1, text: "RPE 8" } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      CELL_URL,
+      expect.objectContaining({ method: "POST" }),
+    );
+    const opts = global.fetch.mock.calls[0][1];
+    expect(opts.headers["X-CSRFToken"]).toBe("tok");
+    expect(JSON.parse(opts.body)).toEqual({
+      exercise_id: 1,
+      line: 1,
+      text: "RPE 8",
+    });
+  });
+
+  it("is graceful when the network is unreachable — no throw, value kept", async () => {
+    const c = cellLogger();
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1); // must not throw
+    expect(c.exercises[0].sub_lines[0].text).toBe("RPE 8"); // retained in-session
+  });
+
+  it("posts a blank text (clear semantics)", async () => {
+    const c = cellLogger({
+      exercises: [{ id: 1, sub_lines: [{ line: 2, text: "" }], set_rows: [] }],
+    });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { id: 9, line: 2, text: "" } } }),
+    );
+    await c.saveCell(c.exercises[0], 2);
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({
+      exercise_id: 1,
+      line: 2,
+      text: "",
+    });
+  });
+});
+
+describe("addLine", () => {
+  it("appends an empty sub-line and stops at MAX_CELL_LINE", () => {
+    const c = cellLogger({
+      exercises: [{ id: 1, sub_lines: [], set_rows: [] }],
+    });
+    for (let i = 0; i < 25; i++) c.addLine(c.exercises[0]);
+    const lines = c.exercises[0].sub_lines;
+    expect(lines[0]).toEqual({ line: 1, text: "" });
+    expect(lines.length).toBe(20); // capped at MAX_CELL_LINE
+    expect(lines[lines.length - 1].line).toBe(20);
+  });
+});
+
+describe("sub-line hydration", () => {
+  it("hydrates cellUrl and each exercise's sub_lines from the payload", () => {
+    document.body.innerHTML =
+      '<span id="meso-csrf" data-token="tok"></span>' +
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        one_rm_url: ONE_RM_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        unit: "kg",
+        exercises: [
+          {
+            id: 7,
+            text: "3 x 5",
+            one_rm: "",
+            one_rm_source: "",
+            sub_lines: [{ line: 1, text: "RPE 8" }],
+            set_rows: [],
+          },
+          {
+            id: 8,
+            text: "3 x 10",
+            one_rm: "",
+            one_rm_source: "",
+            set_rows: [],
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    expect(c.cellUrl).toBe(CELL_URL);
+    expect(c.exercises[0].sub_lines).toEqual([{ line: 1, text: "RPE 8" }]);
+    expect(c.exercises[1].sub_lines).toEqual([]); // defaulted so x-for is safe
+  });
+});
