@@ -30,7 +30,9 @@ from .models import SessionLog
 from .models import TourEvent
 from .models import Week
 from .models import WeekDelivery
+from .one_rm import key_str
 from .one_rm import one_rm_values
+from .personal_records import new_records_in
 from .serializers import _fmt_num
 from .serializers import _num
 from .serializers import _phase_states
@@ -40,6 +42,7 @@ from .serializers import diff_week_snapshots
 from .serializers import initials
 from .serializers import serialize_mesocycle
 from .serializers import serialize_mesocycle_grid
+from .serializers import serialize_new_record
 from .serializers import serialize_prescription
 from .serializers import serialize_proposed_change
 from .serializers import serialize_week_snapshot
@@ -824,6 +827,16 @@ def session_results(session):
     ]
     rows = [row for row, _ in results]
 
+    # New personal records (Phase 4c): lifts in this logged session that beat the
+    # athlete's prior best e1RM — DONE-only, so a pending draft or unlogged session
+    # yields none. Flag the matching row (by the same B4 lift identity the engine
+    # keys on) so the coach sees which lift PR'd, and hand the list to the summary
+    # for the celebration callout.
+    new_records = new_records_in(log) if log is not None else []
+    pr_keys = {r.key for r in new_records}
+    for row, p in zip(rows, prescriptions):
+        row["pr"] = key_str(p.exercise_id, p.name) in pr_keys
+
     # Completion = logged sets / prescribed sets. A free-form set cell ("AMRAP",
     # "3-4") has no integer target, so fall back to what was logged for that row
     # — it neither divides by zero nor skews the ratio with an empty denominator.
@@ -863,6 +876,7 @@ def session_results(session):
             "flag": flag,
             "flag_count": len(flagged),
             "logged_state": log is not None,
+            "new_records": [serialize_new_record(r) for r in new_records],
         },
     }
 

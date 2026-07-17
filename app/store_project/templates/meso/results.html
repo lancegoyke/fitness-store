@@ -51,6 +51,19 @@
       </div>
     {% endif %}
 
+    <!-- new personal records (Phase 4c) -->
+    {% if summary.new_records %}
+      <div class="meso-card meso-card--pad" style="margin-bottom:14px;display:flex;gap:11px;align-items:flex-start;background:color-mix(in srgb,var(--accent) 12%,var(--surface));border-color:color-mix(in srgb,var(--accent) 30%,var(--surface));">
+        <span style="font-size:18px;line-height:1.2;flex:0 0 auto;">🎉</span>
+        <div style="line-height:1.45;">
+          <div style="font-size:13px;font-weight:700;color:var(--accent-deep);">New PR{{ summary.new_records|length|pluralize }} this session</div>
+          <div style="font-size:12.5px;color:var(--ink);">
+            {% for pr in summary.new_records %}<span class="meso-mono">{{ pr.name }} — {{ pr.value }} {{ pr.unit }}{% if pr.is_first %} (first){% else %} (+{{ pr.delta }}){% endif %}</span>{% if not forloop.last %} · {% endif %}{% endfor %}
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
     <!-- per-exercise results -->
     <div class="meso-card" data-tour="results-main">
       <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,1.1fr) 56px minmax(0,1.3fr);gap:10px;padding:9px 18px;background:var(--rail);border-bottom:1px solid var(--line-2);font-size:10px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--dim);">
@@ -58,7 +71,7 @@
       </div>
       {% for r in rows %}
         <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,1.1fr) 56px minmax(0,1.3fr);gap:10px;padding:11px 18px;border-bottom:1px solid var(--line-2);align-items:center;">
-          <div style="font-size:13.5px;font-weight:600;letter-spacing:-0.01em;">{{ r.name }}</div>
+          <div style="font-size:13.5px;font-weight:600;letter-spacing:-0.01em;">{{ r.name }}{% if r.pr %} <span class="meso-badge meso-badge--accent" style="padding:1px 6px;font-size:9.5px;vertical-align:middle;">PR</span>{% endif %}</div>
           <div class="meso-mono" style="font-size:11.5px;color:var(--dim);">{{ r.target }}</div>
           <div class="meso-mono" style="font-size:12px;{% if r.rpe_state == 'over' %}color:var(--warn);font-weight:600;{% endif %}">{{ r.logged }}</div>
           <div style="text-align:center;">
