@@ -30,16 +30,6 @@
   color: var(--accent-deep);
   flex: 0 0 auto;
 }
-.meso-rail-avatar--group {
-  color: var(--accent-deep);
-}
-.meso-rail-group-glyph {
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--accent-deep);
-  border-radius: 4px;
-  display: block;
-}
 .meso-rail-name {
   font-size: 15px;
   font-weight: 700;
@@ -80,9 +70,6 @@
   flex-direction: column;
   gap: 6px;
 }
-.meso-rail-list--tight {
-  gap: 4px;
-}
 .meso-rail-empty {
   font-size: 12px;
   color: var(--dim);
@@ -109,48 +96,6 @@
   color: var(--warn);
   font-weight: 600;
   line-height: 1.3;
-}
-.meso-participant-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  font-weight: 500;
-}
-.meso-participant-avatar {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #eef0f2;
-  font-size: 9px;
-  font-weight: 700;
-  color: var(--dim);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-.meso-participant-avatar--lead {
-  background: var(--soft);
-  color: var(--accent-deep);
-}
-.meso-flag-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 9px;
-  border-radius: 7px;
-  background: var(--warn-soft);
-  border: 1px solid color-mix(in srgb, var(--warn) 22%, #fff);
-  font-size: 11.5px;
-  color: var(--warn);
-  font-weight: 600;
-}
-.meso-flag-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--warn);
 }
 .meso-rail-divider {
   height: 1px;

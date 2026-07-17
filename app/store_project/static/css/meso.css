@@ -196,11 +196,6 @@ button.meso-card,
   background: var(--soft);
   box-shadow: inset 0 0 0 1px var(--soft-line);
 }
-.meso .meso-note:focus {
-  background: var(--soft);
-  box-shadow: inset 0 0 0 1px var(--soft-line);
-  color: var(--ink);
-}
 .meso .meso-phone-input:focus {
   border-color: var(--soft-line);
   background: var(--surface);
@@ -216,10 +211,6 @@ button.meso-card,
    of the element default (block). */
 .meso .meso-flex {
   display: flex;
-}
-
-.meso .meso-inline-block {
-  display: inline-block;
 }
 
 /* Segmented controls (mode / view / period toggles). The prototype rendered an
@@ -476,9 +467,6 @@ button.meso-card:hover {
 .meso-grid {
   display: grid;
   gap: 14px;
-}
-.meso-grid--2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .meso-grid--3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
