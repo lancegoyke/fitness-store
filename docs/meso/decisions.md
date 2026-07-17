@@ -1520,3 +1520,35 @@ _(Append dated entries here as decisions land.)_
   folds only line 0 into the read-only `target` so the editable stack isn't
   double-displayed. Migration `0042` (additive boolean, no backfill —
   existing cells are coach-authored). Full meso suite green (1976).
+- 2026-07-17 — **Built (spreadsheet parity 4b): personal records — derivation
+  (parity plan §6, phase 4).** First slice of the parse-layer /
+  prescribed-vs-performed thread. **Decision — the performed source (the "live"
+  D4 call):** personal records ride on the **structured `LoggedSet` performed
+  record, NOT parsed free text** (Lance, 2026-07-17: keep a structured
+  representation of a logged/performed set — PRs are easier to manage off it).
+  The two athlete write-paths that coexisted since 4a — structured `LoggedSet`
+  and freeform sub-lines — are hereby role-split: `LoggedSet` is the performed
+  store PRs read; sub-lines stay as notes/annotations for now. **Decision — the
+  parse pipeline (when/into-what, previously never pinned):** free text parses
+  **at commit time into a `LoggedSet`** (not lazily on read as `parse_prescription`
+  does today), collapsing the two entry paths into one structured store — but
+  that pipeline is a deliberate *later* slice; 4b ships PRs on the already-populated
+  `LoggedSet` at zero parsing risk. The estimated-1RM number already exists
+  (`AthleteOneRm` + `one_rm.derive_one_rm_values`); 4b adds what makes a *record*:
+  **provenance** (which logged set/date achieved the best) and **new-PR
+  detection**. New pure module `personal_records.py` (derive-on-read, nothing
+  persisted — a `PersonalRecord` table is a later slice): `personal_records(
+  athlete, *, unit)` → best e1RM per lift with provenance;
+  `new_records_in(session_log)` → pure detection (no writes, no `PlanAction`) vs
+  the prior best **excluding the session under test** (first-ever log = a PR, not
+  a self-tie). Reuses `one_rm.epley_one_rm` verbatim + the B4 identity
+  (`one_rm.key_str` → `serializers._exercise_key`); DONE-only, unit-scoped exactly
+  as `derive_one_rm_values`. **Seam** (`_best_per_lift` over normalized
+  `_PerformedSet` tuples; `_performed_sets` the sole `LoggedSet`→tuple bridge) so
+  the future parse-at-commit feed drives the same computation with no rework.
+  Backend-only, no UI (the PR surface is the next slice), no migration (stays
+  `0042`). 14 pinned tests (Epley tie, provenance, identity keying, unit scoping,
+  DONE-only, non-numeric skipped, new-PR true/false/tie/exclude-self). Full meso
+  suite green (1991). Athlete session viewer judged good as-is; the **program
+  designer needs a separate UX-cleanup pass** (overloaded layout + an unnecessary
+  current-week selector) — handed to its own session.

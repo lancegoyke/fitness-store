@@ -1,6 +1,6 @@
 # Meso — spreadsheet parity by simplification
 
-**Status:** 4a built 2026-07-17 (athlete tracking — sub-lines) · 3b built 2026-07-17 (template library UI) · Phase 3 built 2026-07-17 (import + validate) · Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · next: Later-phase extensions (PRs → agent)
+**Status:** 4b built 2026-07-17 (personal records — derivation) · 4a built 2026-07-17 (athlete tracking — sub-lines) · 3b built 2026-07-17 (template library UI) · Phase 3 built 2026-07-17 (import + validate) · Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · next: PR surface (athlete/coach) + parse-at-commit pipeline → agent
 **Owner:** Lance
 **North star:** make writing a program in Meso as fast and frictionless as writing it
 in a Google Sheet — keyboard-driven, freeform, one grid — then extend to tracking,
@@ -458,6 +458,29 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
    it (flips the flag back to `False`), folding it into coach history again.
    Presenter threads `sub_lines` + `cell_url`; `target` folds line 0 only so
    the now-editable stack isn't double-displayed. Migration `0042`.
+   **4b — Personal records (derivation) ✅ Built 2026-07-17** (branch
+   `meso/4b-personal-records`): the parse-layer / prescribed-vs-performed thread
+   starts with the **source decision settled** — personal records ride on the
+   **structured `LoggedSet` performed record, not parsed free text** (Lance,
+   2026-07-17: "keep a structured representation of a logged/performed set; PRs
+   are easier off it"). The estimated-1RM *number* already exists
+   (`AthleteOneRm` + `one_rm.derive_one_rm_values`); this backend-only slice adds
+   the two things that make a *record* rather than a bare number. New pure module
+   `personal_records.py` (derive-on-read, nothing persisted — a `PersonalRecord`
+   table is a deliberate later slice): `personal_records(athlete, *, unit)` →
+   best Epley e1RM per lift **with provenance** (winning `LoggedSet` id, date,
+   reps/load), and `new_records_in(session_log)` → **pure detection** (no writes,
+   no `PlanAction`) of lifts in a just-logged session that beat the athlete's
+   prior best, compared against the best **excluding the session under test** (so
+   a first-ever log is a PR, not a tie against itself). Reuses the pinned
+   `one_rm.epley_one_rm` verbatim and the B4 identity (`one_rm.key_str` →
+   `serializers._exercise_key`); the scan is DONE-only and unit-scoped exactly as
+   `derive_one_rm_values`. **Seam:** `_best_per_lift` consumes normalized
+   `_PerformedSet` tuples and `_performed_sets` is the only `LoggedSet`→tuple
+   bridge, so a future **parse-at-commit** feed (free text → structured set at
+   write time — the agreed model, D4-live below) can drive the same computation
+   with no rework. 14 pinned tests; no migration (stays `0042`); no UI (the PR
+   surface is the next slice). Full meso suite green (1991).
 
 ---
 
@@ -475,7 +498,14 @@ as a separate sub-row (below).
   the RPE row is just line 1, and further cue/note lines are allowed — nothing is
   special-cased. **Arbitrary sub-lines CONFIRMED (2026-07-16):** any number of freeform
   lines may sit beneath an exercise, not locked to RPE.
-- **D4 — Prescription vs performed → CONFIRMED defer** the split to the PR phase.
+- **D4 — Prescription vs performed → RESOLVED (2026-07-17, the "live" call).**
+  Deferred at design time; settled when the PR phase started. Performed data
+  lives in a **structured record (`LoggedSet`)**, and personal records derive
+  from it — *not* from parsed free text (Lance: keep a structured logged/performed
+  set; PRs are easier off it). The freeform sub-lines (4a) stay as notes for now.
+  The agreed convergence: free text is an *input* that **parses at commit time
+  into a `LoggedSet`** (not lazily on read), collapsing the two entry paths into
+  one structured store — its own later slice; 4b already leaves the seam for it.
 - **D5 — `%1RM` / `AthleteOneRm` → CONFIRMED defer.**
 - **D6 — Deliver → CONFIRMED** live-edits + one-time notify; keep `WeekDelivery`
   snapshots for history/retention (not as a gate).
