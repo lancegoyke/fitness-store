@@ -1,6 +1,6 @@
 # Meso — spreadsheet parity by simplification
 
-**Status:** Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · next: Phase 3 (import + validate)
+**Status:** Phase 3 built 2026-07-17 (import + validate) · Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · next: iterate on template UX gaps / Later-phase extensions
 **Owner:** Lance
 **North star:** make writing a program in Meso as fast and frictionless as writing it
 in a Google Sheet — keyboard-driven, freeform, one grid — then extend to tracking,
@@ -394,7 +394,35 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
      comments referencing the dead classes updated in place; dist rebuilt
      (designer.css 22.3 kB).
 3. **Phase 3 — Import + validate.** Importer over 3–5 templates → surface UX
-   limitations → iterate.
+   limitations → iterate. **✅ Built 2026-07-17** (branch
+   `meso/3-import-validate`): **template plans are first-class** (§3.4) —
+   `Plan.is_template` + `Plan.owner` (the coach's library; a check constraint
+   keeps templates relationship-less), `__str__`/`.coach` no longer crash on a
+   relationship-less plan (the 2c Codex finding), and
+   `is_editable_by`/`editable_by` grant the template's owner, so the owner
+   edits a template **in the same designer grid** (identity chip shows the
+   template's title + "Template"; deliver bounces back to the designer, the
+   deliver/agent/1RM endpoints refuse cleanly — batch-deliver FROM a template
+   works at the endpoint level, no UI yet). **The importer:**
+   `meso/sheet_import.py` (openpyxl, new dependency) parses a Drive-exported
+   template workbook into the exact `build_block` spec — visible-program-tab
+   selection (102's hidden legacy tab skipped), per-Day header rows resolved
+   by **label** (columns drift), exercise blocks by the B-column **merge
+   extents** (name/tempo/coach-comment/rest merged down the block; blank
+   set-detail log rows skipped), the newer templates' RPE row folded as
+   per-week **sub-lines**, verbatim cells (float tempos coerced `201.0`→
+   `201`), 601's `Rest 5 minutes` separators as cell-less freeform rows and
+   its EDT/circuit packed cells as one row each; banners/`Date:`/`END OF
+   WEEK` chrome skipped + reported, unknown structure never raises.
+   `manage.py meso_import_template <xlsx>... --owner <email> [--title]`
+   builds ONE template plan, one `Mesocycle` per file in order (the
+   101→102→103 family = one 3-block plan), idempotent by
+   (owner, title) re-run. Validated over all five raw fixtures
+   (`docs/meso/fixtures/templates/{101,102,103,402,601}.xlsx`, now all
+   committed): 7 days each; 22/22/22/19/13 exercises; 96/100/100/72/40
+   cells; every skip accounted for (banner + date rows + footer).
+   Deferred: a template-library UI and a "new from template" button — the
+   designer URL + batch-deliver endpoint are the only doors for now.
 4. **Later — Extensions.** Tracking (already `LoggedSet`), data retention (snapshots),
    **personal records** (parse layer + prescribed-vs-performed), then the **agent**
    as the main feature, grounded on the parse layer + the FAQ heuristics.

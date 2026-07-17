@@ -1433,3 +1433,46 @@ _(Append dated entries here as decisions land.)_
   skip/swap cluster label, the day-card drag mirror) were rewritten in
   place. Verification: the sweep re-run reports 0 dead classes; dist
   rebuilt (designer.css 22.3 kB); 530 vitest + 2138 pytest green.
+- 2026-07-17 — **Built (spreadsheet parity Phase 3): import + validate —
+  template plans + the workbook importer (parity plan §5, §3.4).** This
+  resolves the deferred Q2 "template library" as designed: a template is a
+  **`Plan` with `is_template=True`, no relationship, and an `owner`** (the
+  coach whose library it belongs to; new FK `related_name="template_plans"`,
+  migration `0041`, plus a check constraint `template_plan_has_no_relationship`
+  — a template can never carry a relationship). The relationship-less crash
+  paths are fixed (closing the 2c-era Codex finding on the nullable FK):
+  `Plan.__str__` falls back to the bare title ("… (template)"), `Plan.coach`
+  returns the `owner` when there's no relationship (may be None — callers
+  beware), and `is_editable_by` / `PlanQuerySet.editable_by` grant the
+  template's owner — so the owner opens and edits a template **in the same
+  designer grid** (no second editor): `serialize_athlete_identity` shows the
+  template's own title + "Template" in the identity chip, the deliver screen
+  bounces a template back to the designer, and `plan_deliver` /
+  `agent_propose` / `coach_set_one_rm` refuse cleanly (no athlete to nudge /
+  ground on / own a 1RM). `plan_batch_deliver` **works from a template** at
+  the endpoint level (each pick gets an independent `duplicate_for` copy) but
+  has no screen — noted as the gap. **The importer:** `meso/sheet_import.py`
+  (pure **openpyxl** — a new runtime dependency) parses a Drive-exported
+  template workbook into the exact `build_block` spec (`ParsedBlock` =
+  block_spec + tab/week-count/skipped-row report): picks the visible program
+  tab (header row carrying `Exercise` + `Week N` labels — 102's hidden legacy
+  tab and 101's Athlete/Warm Up/FAQ/Periodization tabs are passed over),
+  resolves columns from header **labels** per Day section (letters drift),
+  reads exercise blocks by the name column's **merge extents** (name/tempo/
+  coach-comment→`note`/rest are merged down the block; the blank set-detail
+  log rows inside are skipped; float tempos coerce `201.0`→`"201"`), folds
+  any non-empty week-column row inside a block (the newer templates' RPE row)
+  into per-week **sub-lines** (line 1+), imports full-width in-grid
+  separators (601's `Rest 5 minutes`) as cell-less freeform rows and packed
+  EDT/circuit cells verbatim as one row, and skips + reports banners/`Date:`
+  rows/`END OF WEEK` footers — unknown structure is reported, never raised.
+  `manage.py meso_import_template <xlsx>... --owner <email> [--title]`
+  wraps it: ONE template plan, one `Mesocycle` per file in argument order
+  (101→102→103 = one 3-block plan), atomic, idempotent on (owner, title)
+  re-run, with a per-file days/exercises/weeks/cells + skipped-rows summary.
+  Validated end-to-end over the five raw fixtures (now all committed:
+  `docs/meso/fixtures/templates/{101,102,103,402,601}.xlsx`): 7 days each,
+  22/22/22/19/13 exercises, 96/100/100/72/40 non-empty cells. Deliberately
+  NOT built: a template-library UI, a "new from template" button, and any
+  template-awareness on athlete surfaces (they're relationship-rooted;
+  a guard test proves templates never appear there). 2183 pytest green.
