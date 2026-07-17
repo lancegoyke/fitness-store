@@ -18,12 +18,17 @@ RED-phase spec tests: these fail until 3b is implemented (NoReverseMatch on the
 new URL names / missing views), not on setup.
 """
 
+from datetime import timedelta
+
 import pytest
 from django.core import mail
 from django.urls import reverse
+from django.utils import timezone
 
+from store_project.meso.billing import access
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import PlanFactory
+from store_project.meso.models import CoachAthlete
 from store_project.meso.models import Plan
 from store_project.meso.models import WeekDelivery
 from store_project.users.factories import UserFactory
@@ -47,6 +52,32 @@ def coach_with_client():
     coach = UserFactory()
     rel = CoachAthleteFactory(coach=coach, athlete=UserFactory())
     return coach, rel
+
+
+def _aged_link(coach, days_ago):
+    """An active ``CoachAthlete`` for ``coach``, back-dated for a stable age.
+
+    ``created_at`` is ``auto_now_add`` → a raw ``.update`` is the only way to set
+    it; the oldest-kept suspension rule (D6) turns on this order.
+    """
+    link = CoachAthleteFactory(coach=coach, athlete=UserFactory())
+    CoachAthlete.objects.filter(pk=link.pk).update(
+        created_at=timezone.now() - timedelta(days=days_ago)
+    )
+    link.refresh_from_db()
+    return link
+
+
+def _over_limit_coach():
+    """A free coach over the seat cap (FREE_SEAT_LIMIT=1).
+
+    The oldest link is kept live, the newest is soft-suspended (D6 freeze).
+    """
+    coach = UserFactory()
+    kept = _aged_link(coach, days_ago=30)
+    suspended = _aged_link(coach, days_ago=1)
+    assert access.is_over_limit(coach) is True
+    return coach, kept, suspended
 
 
 def library_url():
@@ -300,3 +331,79 @@ class TestBatchDeliverFromTemplate:
 
         assert resp.status_code == 302
         assert resp.url == reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk})
+
+
+class TestTemplateUseSuspension:
+    """Finding 1 — ``template_use`` must honour the D6 soft-suspension freeze.
+
+    A soft-suspended (over-seat-limit) relationship is never offered in the UI,
+    so its presence in a POST is a stale/forged form; it must behave exactly like
+    a foreign/invalid pick (flash + redirect to the library, nothing created) and
+    must NOT start a live ACTIVE plan for a frozen client.
+    """
+
+    def test_suspended_relationship_creates_nothing(self, client):
+        coach, _kept, suspended = _over_limit_coach()
+        tpl, _ = template_plan(coach, title="Base Block")
+        client.force_login(coach)
+
+        resp = client.post(use_url(tpl), {"relationship": suspended.pk})
+
+        assert resp.status_code == 302
+        assert resp.url == library_url()
+        assert suspended.plans.count() == 0
+        assert Plan.objects.filter(is_template=False).count() == 0
+
+    def test_kept_relationship_still_works_for_over_limit_coach(self, client):
+        # Guard: the over-limit coach keeps starting templates for their oldest
+        # (non-suspended) client — template_use gates on the target, not coarsely.
+        coach, kept, _suspended = _over_limit_coach()
+        tpl, _ = template_plan(coach, title="Base Block")
+        client.force_login(coach)
+
+        resp = client.post(use_url(tpl), {"relationship": kept.pk})
+
+        copy = kept.plans.get()
+        assert copy.is_template is False
+        assert copy.status == Plan.Status.ACTIVE
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:designer_plan", kwargs={"plan_id": copy.pk})
+
+
+class TestBatchDeliverFromTemplateSuspension:
+    """Finding 2 — batch-deliver from a TEMPLATE is per-target, not coarse-frozen.
+
+    A template plan has no relationship, so the old ``can_edit_plan`` fell back to
+    the coach-wide freeze and 402'd an over-limit coach entirely. D6 gates at the
+    copy targets instead: an over-limit coach delivers from a template to their
+    kept clients while suspended targets are dropped.
+    """
+
+    def test_over_limit_coach_delivers_only_to_kept_client(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach, kept, suspended = _over_limit_coach()
+        tpl, _ = template_plan(coach, title="Squat Base")
+        client.force_login(coach)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = client.post(
+                batch_deliver_url(tpl),
+                {"relationships": [kept.pk, suspended.pk]},
+            )
+
+        # Exactly one copy — for the kept client only; the suspended target is dropped.
+        assert kept.plans.count() == 1
+        assert suspended.plans.count() == 0
+        assert Plan.objects.filter(is_template=False).count() == 1
+        assert kept.plans.get().status == Plan.Status.ACTIVE
+        assert resp.status_code == 302
+        assert resp.url == library_url()
+
+    def test_can_edit_plan_true_for_template_while_coach_frozen(self):
+        # Unit: a template plan is never billing-frozen, even for an over-limit
+        # coach whose coarse ``can_edit`` is False (templates aren't seats).
+        coach, _kept, _suspended = _over_limit_coach()
+        tpl, _ = template_plan(coach, title="Base Block")
+        assert access.can_edit(coach) is False
+        assert access.can_edit_plan(tpl) is True
