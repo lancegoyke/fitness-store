@@ -1,0 +1,75 @@
+{% extends "meso/_meso_base.html" %}
+
+{% block title %}Templates · Meso{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Coach workspace</p>
+        <h1 class="meso-h1">Templates</h1>
+        <p class="meso-sub">Reusable programs you own. Open one in the designer, start a live copy for a client, or deliver a copy to several at once.</p>
+      </div>
+      <div class="meso-spacer"></div>
+      <a class="meso-btn meso-btn--ghost" href="{% url 'meso:roster' %}">← Back to roster</a>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:18px;max-width:640px;">
+
+      {% if not templates %}
+        <div class="meso-card meso-card--pad">
+          <p class="meso-sub" style="margin:0;">No templates yet. Import a program library with the <code>meso_import_template</code> management command.</p>
+        </div>
+      {% else %}
+        <div class="meso-card">
+          <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
+            <p class="meso-eyebrow" style="margin:0;">Your templates</p>
+            <div class="meso-spacer"></div>
+            <span class="meso-row-meta">{{ templates|length }} template{{ templates|length|pluralize }}</span>
+          </div>
+          {% for t in templates %}
+            <div class="meso-row" style="cursor:default;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+              <div style="min-width:0;flex:1;">
+                <div class="meso-row-name">
+                  <a href="{% url 'meso:designer_plan' plan_id=t.pk %}" style="text-decoration:none;color:inherit;">{{ t.title }}</a>
+                </div>
+                <div class="meso-row-meta">{{ t.block_count }} block{{ t.block_count|pluralize }} · {{ t.week_count }} week{{ t.week_count|pluralize }}</div>
+              </div>
+              {% if clients %}
+                <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end;">
+                  <!-- Start for client (working copy): one live, undelivered plan. -->
+                  <form method="post" action="{% url 'meso:template_use' plan_id=t.pk %}" style="margin:0;display:flex;gap:6px;align-items:center;">
+                    {% csrf_token %}
+                    <select name="relationship" aria-label="Client">
+                      {% for c in clients %}
+                        <option value="{{ c.id }}">{{ c.name }}</option>
+                      {% endfor %}
+                    </select>
+                    <button type="submit" class="meso-btn meso-btn--ghost" style="padding:5px 10px;font-size:12px;">Start for client</button>
+                  </form>
+                  <!-- Batch deliver: a delivered copy per picked client (2c). -->
+                  <details style="margin:0;">
+                    <summary class="meso-row-meta" style="cursor:pointer;color:var(--accent);">Batch deliver a copy…</summary>
+                    <form method="post" action="{% url 'meso:plan_batch_deliver' plan_id=t.pk %}" style="margin:8px 0 0;">
+                      {% csrf_token %}
+                      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;">
+                        {% for c in clients %}
+                          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
+                            <input type="checkbox" name="relationships" value="{{ c.id }}">
+                            <span>{{ c.name }}</span>
+                          </label>
+                        {% endfor %}
+                      </div>
+                      <button type="submit" class="meso-btn" style="padding:5px 10px;font-size:12px;">Deliver copies</button>
+                    </form>
+                  </details>
+                </div>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+    </div>
+  </div>
+{% endblock %}

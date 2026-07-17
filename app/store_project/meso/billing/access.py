@@ -226,9 +226,17 @@ def can_edit_plan(plan):
     only when *its own* relationship is soft-suspended, so an over-limit coach
     keeps full control of their oldest ``FREE_SEAT_LIMIT`` athletes' plans and
     is blocked only on the suspended ones. Defended at the mutating endpoints,
-    not just the UI. A relationship-less plan (none exist today; templates may
-    reintroduce them) falls back to the coarse coach-wide freeze.
+    not just the UI.
+
+    A **template** plan is never billing-frozen: a template holds no seat, so
+    an over-limit coach keeps editing (and delivering *from*) their own
+    templates. Billing bites at the copy targets instead — both ``template_use``
+    and ``plan_batch_deliver`` exclude soft-suspended relationships, so a frozen
+    client can't be started or delivered to. Any other relationship-less plan
+    falls back to the coarse coach-wide freeze.
     """
+    if plan.is_template:
+        return True
     if plan.relationship_id is None:
         return can_edit(plan.coach)
     return plan.relationship_id not in suspended_athlete_ids(plan.coach)

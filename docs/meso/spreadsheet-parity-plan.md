@@ -1,6 +1,6 @@
 # Meso — spreadsheet parity by simplification
 
-**Status:** Phase 3 built 2026-07-17 (import + validate) · Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · next: iterate on template UX gaps / Later-phase extensions
+**Status:** 3b built 2026-07-17 (template library UI) · Phase 3 built 2026-07-17 (import + validate) · Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · next: Later-phase extensions (tracking → PRs → agent)
 **Owner:** Lance
 **North star:** make writing a program in Meso as fast and frictionless as writing it
 in a Google Sheet — keyboard-driven, freeform, one grid — then extend to tracking,
@@ -421,8 +421,21 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
    (`docs/meso/fixtures/templates/{101,102,103,402,601}.xlsx`, now all
    committed): 7 days each; 22/22/22/19/13 exercises; 96/100/100/72/40
    cells; every skip accounted for (banner + date rows + footer).
-   Deferred: a template-library UI and a "new from template" button — the
-   designer URL + batch-deliver endpoint are the only doors for now.
+   ~~Deferred: a template-library UI and a "new from template" button — the
+   designer URL + batch-deliver endpoint are the only doors for now.~~
+   **3b — template library UI ✅ Built 2026-07-17** (branch
+   `meso/3b-template-library-ui`): `/meso/templates/` (`TemplateLibraryView`,
+   login-gated, "Templates" link on the roster) lists the coach's owned
+   templates alphabetically — each opens in the designer and, when the coach
+   has active clients, offers **"Start for client"** (`template_use`, POST-only:
+   deep-copies via `duplicate_for` into a live ACTIVE *undelivered* working
+   plan — no snapshot, no nudge; batch-deliver stays the notify door — then
+   lands in the copy's designer) and **batch deliver** (the 2c endpoint;
+   a template source now redirects back to the library). Billing (D6):
+   suspended relationships are excluded as copy targets at both endpoints,
+   and `can_edit_plan` exempts templates from the coarse coach-wide freeze —
+   templates hold no seat; billing bites at the copy targets (both Codex
+   review findings).
 4. **Later — Extensions.** Tracking (already `LoggedSet`), data retention (snapshots),
    **personal records** (parse layer + prescribed-vs-performed), then the **agent**
    as the main feature, grounded on the parse layer + the FAQ heuristics.
