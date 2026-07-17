@@ -73,6 +73,13 @@ urlpatterns = [
         views.athlete_set_one_rm,
         name="athlete_set_one_rm",
     ),
+    # Athlete freeform sub-line tracking (Phase 4a): upsert one (slot × week ×
+    # line) cell the athlete authored — undo-isolated from the coach.
+    path(
+        "api/me/session/<int:pk>/cell/",
+        views.athlete_cell_write,
+        name="athlete_cell_write",
+    ),
     # Athlete PWA (Phase 4b — S7): manifest + service worker + offline shell.
     # Served as views (not static files) so the worker has a stable /meso/-scoped
     # URL the hashing static pipeline can't give it.

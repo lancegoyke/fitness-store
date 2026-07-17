@@ -98,6 +98,17 @@
             </button>
           </div>
         </template>
+        <div style="padding:9px 16px 11px;">
+          <div class="meso-row-meta meso-mono" style="margin-bottom:6px;">your notes</div>
+          <template x-for="l in ex.sub_lines" :key="l.line">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <input class="meso-phone-input" x-model="l.text" @blur="saveCell(ex, l.line)" placeholder="RPE, cues, how it felt…" inputmode="text"
+                     style="flex:1;min-width:0;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 8px;outline:none;color:var(--ink);" />
+              <span class="meso-row-meta meso-mono" style="color:var(--warn);white-space:nowrap;" x-show="l.saveError" x-cloak>couldn&#8217;t save</span>
+            </div>
+          </template>
+          <button type="button" @click="addLine(ex)" :disabled="ex.sub_lines.length >= 20" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:12px;">+ add a line</button>
+        </div>
       </div>
     </template>
 

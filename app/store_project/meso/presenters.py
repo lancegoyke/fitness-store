@@ -1248,6 +1248,17 @@ def athlete_session(session, athlete):
     lines_by_slot = defaultdict(list)
     for line_cell in session.line_cells():
         lines_by_slot[line_cell.exercise_slot_id].append(line_cell)
+
+    def _sub_lines(slot_id):
+        # The row's editable tracking stack (Phase 4a): its line>=1 cells for
+        # this week as ``[{line, text}]``. Blank cells are dropped from the
+        # display (a cleared sub-line is a blank cell, not a deleted row).
+        return [
+            {"line": line_cell.line, "text": line_cell.text}
+            for line_cell in lines_by_slot.get(slot_id, ())
+            if line_cell.text.strip()
+        ]
+
     # The athlete's persisted, log-derived 1RM per lift (in this plan's unit) — the
     # %1RM logger seeds its suggested bar load from it (no manual estimate needed).
     one_rm_map = one_rm_values(athlete, prescriptions, week.mesocycle.plan.unit)
@@ -1272,7 +1283,12 @@ def athlete_session(session, athlete):
         "exercises": [
             {
                 **serialize_prescription(p, lines_by_slot.get(p.exercise_slot_id, ())),
-                "target": _target_label(p, lines_by_slot.get(p.exercise_slot_id, ())),
+                # ``target`` folds LINE 0 only now — the sub-line stack is
+                # editable (``sub_lines``), so folding it into the read-only
+                # target too would double-display it (Phase 4a).
+                "target": _target_label(p),
+                # The editable per-week tracking stack the athlete writes to.
+                "sub_lines": _sub_lines(p.exercise_slot_id),
                 # The stored 1RM as a bare number string ("140"), or "" — the
                 # client appends the unit and may layer a typed override on top.
                 "one_rm": _one_rm_label(one_rm_map.get(p.pk)),
@@ -1309,6 +1325,10 @@ def athlete_log_payload(session_ctx):
         "log_url": session_ctx["log_url"],
         # Where a manually-entered 1RM is persisted server-side (Phase 2).
         "one_rm_url": session_ctx["one_rm_url"],
+        # Where the athlete's freeform sub-line cells are upserted (Phase 4a).
+        "cell_url": reverse(
+            "meso:athlete_cell_write", kwargs={"pk": session_ctx["id"]}
+        ),
         "status": session_ctx["status"],
         # The unit lets the %1RM helper render a suggested bar load (S2 Phase 2b).
         "unit": session_ctx["unit"],
@@ -1328,6 +1348,9 @@ def athlete_log_payload(session_ctx):
                 "one_rm_source": e.get("one_rm_source", ""),
                 "note": e.get("note", ""),
                 "tag": e.get("tag", ""),
+                # The editable tracking stack (Phase 4a) — the client hydrates a
+                # freeform sub-line input per entry, saved on blur.
+                "sub_lines": e.get("sub_lines", []),
                 "set_rows": e["set_rows"],
             }
             for e in session_ctx["exercises"]

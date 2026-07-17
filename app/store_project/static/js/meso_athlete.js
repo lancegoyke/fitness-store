@@ -70,10 +70,16 @@ function notifyTourRefresh() {
   }
 }
 
+// The athlete's freeform sub-line stack per exercise is capped at this many
+// lines (matches the server's MAX_CELL_LINE) so `addLine` can't fabricate an
+// unbounded stack.
+const MAX_CELL_LINE = 20;
+
 function createLogger() {
   return {
     logUrl: "",
     oneRmUrl: "", // where a manually-entered 1RM is persisted server-side (Phase 2)
+    cellUrl: "", // where the athlete's freeform sub-line cells are upserted (Phase 4a)
     csrf: "",
     status: "pending",
     unit: "", // the plan's load unit (kg/lb), for the %1RM helper
@@ -96,9 +102,15 @@ function createLogger() {
       }
       this.logUrl = data.log_url;
       this.oneRmUrl = data.one_rm_url || "";
+      this.cellUrl = data.cell_url || "";
       this.status = data.status;
       this.unit = data.unit || "";
       this.exercises = data.exercises || [];
+      // Default the freeform tracking stack (Phase 4a) so the template's
+      // `x-for` over `ex.sub_lines` is safe even for an exercise with none.
+      for (const ex of this.exercises) {
+        if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
+      }
       // Each exercise carries the athlete's persisted 1RM (`one_rm`) and its
       // `one_rm_source`. A `manual` value is the athlete's own number — it seeds
       // the editable `e1rm` input. A `logged` value is auto-derived from their
@@ -465,6 +477,50 @@ function createLogger() {
         ex.e1rm = "";
         ex.one_rm = data.one_rm || "";
       }
+    },
+
+    // ---- freeform sub-line tracking (Phase 4a) ----
+    // The athlete keeps an editable stack beneath each exercise — a free input
+    // per line, saved on blur. `addLine` appends an empty sub-line (capped at
+    // MAX_CELL_LINE); `saveCell` upserts one (exercise_id, line, text) cell.
+
+    // Append an empty sub-line to the exercise's stack, up to MAX_CELL_LINE.
+    addLine(ex) {
+      if (!ex) return;
+      if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
+      // Number off the MAX existing line, not the length: a sparse stack (the
+      // server dropped a cleared line but kept a later one) would otherwise
+      // fabricate a duplicate line number, breaking Alpine keys and `saveCell`
+      // targeting. The cap is against that max too.
+      const maxLine = ex.sub_lines.reduce((m, l) => Math.max(m, l.line || 0), 0);
+      if (maxLine >= MAX_CELL_LINE) return;
+      ex.sub_lines.push({ line: maxLine + 1, text: "" });
+    },
+
+    // POST one exercise's sub-line cell. Modeled on `_postOneRm`: best-effort,
+    // an unreachable network or an error leaves the typed value in-session and
+    // retries on the next blur. Blank text clears the cell in place (the server
+    // never deletes a sub-line).
+    async saveCell(ex, line) {
+      if (!this.cellUrl || !ex) return;
+      const entry = (ex.sub_lines || []).find((l) => l.line === line);
+      const text = entry ? entry.text || "" : "";
+      if (entry) entry.saveError = false;
+      let res;
+      try {
+        res = await fetch(this.cellUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": this.csrf,
+          },
+          body: JSON.stringify({ exercise_id: ex.id, line, text }),
+        });
+      } catch (netErr) {
+        if (entry) entry.saveError = true;
+        return; // offline — keep the in-session value; next blur re-attempts
+      }
+      if (entry && (res.redirected || !res.ok)) entry.saveError = true;
     },
   };
 }
