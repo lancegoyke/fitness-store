@@ -1150,18 +1150,33 @@ class PlanQuerySet(models.QuerySet):
     def editable_by(self, user):
         """Plans this coach may open + edit in the designer.
 
-        The designer + autosave surface. Same set as ``for_coach`` since the
-        group subsystem was removed (parity plan §3.1 / D1); kept as its own
-        gate because the designer endpoints all route through it.
+        The designer + autosave surface: plans coached over an *active*
+        relationship (``for_coach``), plus the coach's own template plans
+        (parity plan §3.4 — a template is edited in the same grid, no second
+        editor). Kept as its own gate because the designer endpoints all
+        route through it.
         """
-        return self.for_coach(user)
+        return self.filter(
+            models.Q(
+                relationship__coach=user,
+                relationship__status=CoachAthlete.Status.ACTIVE,
+            )
+            | models.Q(is_template=True, owner=user)
+        )
 
     def active(self):
         return self.filter(status=Plan.Status.ACTIVE)
 
 
 class Plan(models.Model):
-    """A periodized training plan rooted at one coach↔athlete ``relationship`` (D-a)."""
+    """A periodized training plan rooted at one coach↔athlete ``relationship`` (D-a).
+
+    A **template** plan (parity plan §3.4) is a ``Plan`` with
+    ``is_template=True``, no ``relationship`` (no athlete), and an ``owner`` —
+    the coach whose library it belongs to. Templates are edited in the same
+    designer grid as any plan; "new from template" / batch-deliver is a deep
+    copy (``duplicate_for``).
+    """
 
     class Status(models.TextChoices):
         DRAFT = "draft", _("Draft")
@@ -1173,6 +1188,18 @@ class Plan(models.Model):
         on_delete=models.CASCADE,
         related_name="plans",
         verbose_name=_("Relationship"),
+        null=True,
+        blank=True,
+    )
+    # Template plans (parity plan §3.4): a reusable program with no athlete.
+    # ``owner`` is the coach whose template library it belongs to; regular
+    # relationship plans leave it NULL (their coach rides the relationship).
+    is_template = models.BooleanField(_("Template"), default=False)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="template_plans",
+        verbose_name=_("Owner"),
         null=True,
         blank=True,
     )
@@ -1194,13 +1221,35 @@ class Plan(models.Model):
         ordering = ["-created"]
         verbose_name = "Plan"
         verbose_name_plural = "Plans"
+        constraints = [
+            # A template plan has no relationship — it belongs to its owner's
+            # library, not to an athlete (parity plan §3.4).
+            models.CheckConstraint(
+                condition=(
+                    models.Q(is_template=False) | models.Q(relationship__isnull=True)
+                ),
+                name="template_plan_has_no_relationship",
+            ),
+        ]
 
     def __str__(self):
-        return f"{self.title} ({self.athlete.display_name()})"
+        athlete = self.athlete
+        if athlete is None:
+            # Template plans (and any relationship-less row) have no athlete
+            # to name — fall back to the bare title rather than crash.
+            return f"{self.title} (template)" if self.is_template else self.title
+        return f"{self.title} ({athlete.display_name()})"
 
     @property
     def coach(self):
-        """The coach who owns this plan, via the relationship."""
+        """The coach who owns this plan.
+
+        Via the relationship for a regular plan; a template plan's coach is
+        its ``owner``. May be ``None`` for a relationship-less row with no
+        owner — callers beware.
+        """
+        if self.relationship_id is None:
+            return self.owner
         return self.relationship.coach
 
     @property
@@ -1213,9 +1262,12 @@ class Plan(models.Model):
     def is_editable_by(self, user):
         """Whether ``user`` (a coach) may open + edit this plan in the designer.
 
-        Editable by its coach over an *active* relationship. Mirrors
+        Editable by its coach over an *active* relationship; a template plan
+        is editable by its ``owner`` (no relationship required, §3.4). Mirrors
         ``PlanQuerySet.editable_by`` for a single fetched plan.
         """
+        if self.is_template:
+            return self.owner_id == user.id
         return (
             self.relationship_id is not None
             and self.relationship.coach_id == user.id
