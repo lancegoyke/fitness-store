@@ -3412,6 +3412,9 @@ def coach_set_one_rm(request, plan_id, pk):
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
+    # A 1RM belongs to an athlete; a template plan has none (parity plan §3.4).
+    if plan.athlete is None:
+        return HttpResponseBadRequest("A template plan has no athlete 1RM.")
     prescription = _cell_or_404(plan, pk)
     try:
         payload = json.loads(request.body or "{}")
@@ -3455,6 +3458,10 @@ def plan_deliver(request, plan_id):
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
+    # A template plan has no athlete to nudge (parity plan §3.4) — deliver a
+    # COPY to clients instead (``plan_batch_deliver`` works from a template).
+    if plan.is_template:
+        return HttpResponseBadRequest("A template has no athlete to deliver to.")
     # An empty body (the bare deliver button) means "no week_id" — target the
     # live week's block, as before; a present-but-malformed body is a 400, not a
     # silent delivery of the wrong block.
@@ -3674,6 +3681,20 @@ def agent_propose(request, plan_id):
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
         return forbidden
+    # The agent grounds on the plan's athlete (contraindications, logs); a
+    # template plan has none (parity plan §3.4), so there's nothing to ground
+    # on — refuse cleanly rather than crash building the context.
+    if plan.is_template:
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": (
+                    "The agent needs an athlete to program for — "
+                    "open a client's plan to use it."
+                ),
+            },
+            status=400,
+        )
     # Sandbox gate (S3): the sandbox never calls Anthropic — the agent is the
     # one capability held back, gated behind creating a real account. Checked
     # before any metering/API-key work so a throwaway visitor never reserves a
@@ -4189,6 +4210,19 @@ class DeliverView(LoginRequiredMixin, TemplateView):
                 messages.info(request, "Pick an athlete to deliver a program.")
                 return redirect("meso:roster")
             return redirect("meso:deliver_plan", plan_id=plan.pk)
+        # A template plan has no athlete to deliver to (parity plan §3.4) —
+        # bounce back to the designer instead of a confusing 404. (Fanning
+        # copies out to clients FROM a template works at the endpoint level —
+        # ``plan_batch_deliver`` — but has no screen yet.)
+        template = Plan.objects.filter(
+            pk=kwargs["plan_id"], is_template=True, owner=request.user
+        ).first()
+        if template is not None:
+            messages.info(
+                request,
+                "Templates aren't delivered — deliver a client's copy instead.",
+            )
+            return redirect("meso:designer_plan", plan_id=template.pk)
         return super().get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
