@@ -524,6 +524,8 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         ctx["athlete"] = athlete
         ctx["macrocycle"] = program["macrocycle"]
         ctx["results_summary"] = program["results_summary"]
+        # The athlete's standing bests, in this link's plan unit (Phase 4d).
+        ctx["personal_records"] = presenters.coach_personal_records(link)
         ctx["coach_style"] = presenters.coach_style(self.request.user)
         # Whether to offer "Draft with AI" on the create CTA — the same agent
         # allowance gate the endpoint enforces (the draft *is* an agent run).
@@ -1256,6 +1258,8 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         # Pending coach links (N4 Phase 2): invites awaiting my reply + requests
         # I've sent + the request-a-coach form all live on this surface.
         ctx["pending"] = presenters.athlete_pending(self.request.user)
+        # The athlete's standing bests, in their current plan's unit (Phase 4d).
+        ctx["personal_records"] = presenters.athlete_personal_records(self.request.user)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
         # First-log coachmark (Phase 4): only when there's a session to tap
