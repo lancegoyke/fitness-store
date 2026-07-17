@@ -447,7 +447,16 @@ top) replaces the whole one-week-at-a-time tree they formed:
   (`row.tempo`/`note`/`rest`, via `patchRowColumns`), matching the source
   spreadsheet's Exercise | Tempo | weeks… | Notes | Rest layout. The
   load-type toggle, the %1RM editor, and the one-week swap badge/menu are
-  retired.
+  retired. Phase 2b (spreadsheet keyboard flow) then pulled ALL of these
+  inputs into `useTableNav`'s axes: cell identity is
+  `(rowId, weekId, field, line)` — sub-lines and the ghost are vertical
+  stops, Tempo/Notes/Rest are horizontal columns, Tab walks the row,
+  Enter commits + moves down (appending a row at a day's last stop via
+  `useTableNav`'s `onAppendRow`, wired to `useGrid.addExercise`), and the
+  prescription input carries cell-stack copy/paste (collapsed-selection
+  Ctrl-C copies the stack; multi-line paste replaces it through
+  `patchCell` + `writeCellLine`). See `useTableNav.ts`'s header for the
+  axis rules.
 
 None of these four are exhaustively re-documented prop-by-prop here the way
 they were before A5 — `MesoTable.tsx` (one file, ~1,500 lines, extensively

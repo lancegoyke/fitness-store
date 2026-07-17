@@ -1,6 +1,6 @@
 # Meso — spreadsheet parity by simplification
 
-**Status:** Phase 2a (text-first cell) built 2026-07-16 · started 2026-07-16
+**Status:** Phase 2b (keyboard flow) built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16
 **Owner:** Lance
 **North star:** make writing a program in Meso as fast and frictionless as writing it
 in a Google Sheet — keyboard-driven, freeform, one grid — then extend to tracking,
@@ -313,7 +313,29 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
    - 2b **All-weeks grid + keyboard flow** — weeks side-by-side; arrows/Tab/Enter
      navigation; Enter-adds-row, add-week, `Ctrl-C`/`Ctrl-V` duplicate-forward
      (this also *is* the ad-hoc log mode — starting a session = add/duplicate a
-     week/workout).
+     week/workout). **✅ Built 2026-07-16** (branch `meso/2b-grid-keyboard-flow`;
+     frontend-only — weeks-side-by-side and add-week-with-carry-forward already
+     existed from the A-series/2a): `useTableNav`'s cell identity gained a
+     **line** — each week cell's sub-line stack (existing lines + the trailing
+     ghost) is a run of vertical stops, so **ArrowDown from a prescription steps
+     into its stack** (D3's "RPE row reached by arrow-down" made literal — the
+     ghost is a stop, so minting the RPE line never needs the mouse); the
+     per-row **Tempo/Notes/Rest columns joined the horizontal axis** (name →
+     tempo → weeks… → notes → rest, the sheet's order); **Tab/Shift+Tab** walk
+     that axis unconditionally, wrapping between rows (arrows still defer to
+     the caret at text boundaries); **Enter = commit + move down one stop**,
+     and at a day's LAST stop it **appends an exercise row** to that day
+     (Enter never crosses a day boundary; a fully-blank row never appends —
+     the blank check reads the DOM so an uncommitted draft counts as content;
+     after the refetch, focus lands on the new row at the column Enter came
+     from); horizontal moves from a sub-line **clamp to the target cell's
+     nearest stop** (a shorter stack lands on its ghost — the merged-cell
+     feel). **`Ctrl-C`/`Ctrl-V` = cell-stack copy/paste** on the prescription
+     input: copy with nothing selected copies the whole stack newline-joined
+     (a real selection stays native); pasting multi-line text replaces the
+     stack (line 0 + sub-lines, longer old lines blanked); single-line paste
+     stays native. No backend changes — appends reuse `session_add_exercise`,
+     paste reuses `prescription_patch`/`cell_line_write`.
    - 2c **Remove `MesoGroup`** → batch-deliver + client list.
    - 2d **Deliver → live + notify** — repurpose snapshots.
    - 2e **UI cleanup** — strip the chrome the above obsoletes.
