@@ -5,10 +5,14 @@ database renders the roster / profile / designer from actual data (no more
 client-side fixtures). These tests cover the command's contract:
 
 - it creates the coach (+ profile), the five athletes (+ profiles +
-  contraindications), an active link each, and Maya's sample plan;
-- the sample plan round-trips through ``serialize_plan`` to the designer's
+  contraindications), an active link each, and full programs for three of
+  them (Maya / Devon / Priya — Marcus and Lena stay plan-less);
+- Maya's sample plan round-trips through ``serialize_plan`` to the designer's
   expected shape (3 sessions in the current week, a 4-week strip, a 4-block
-  macrocycle with done/current/next/future states);
+  macrocycle with done/current/next/future states) — her Hypertrophy block's
+  current week (index 2) is preserved verbatim (the original fixture grid);
+- Devon's and Priya's plans are each fully built (every block, every week)
+  with exactly one current week and a logged multi-week history before it;
 - it is idempotent (re-running never duplicates); and
 - ``--delete`` tears the demo back down without touching the coach.
 """
@@ -27,6 +31,7 @@ from store_project.meso.models import Mesocycle
 from store_project.meso.models import Plan
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
+from store_project.meso.models import Week
 from store_project.meso.parsing import parse_prescription
 from store_project.meso.presenters import session_results
 from store_project.meso.serializers import serialize_plan
@@ -35,10 +40,13 @@ from store_project.users.models import User
 pytestmark = pytest.mark.django_db
 
 COACH_EMAIL = "coach@example.test"
+MAYA_EMAIL = "maya.okonkwo@example.com"
+DEVON_EMAIL = "devon.reyes@example.com"
+PRIYA_EMAIL = "priya.nair@example.com"
 ATHLETE_EMAILS = [
-    "maya.okonkwo@example.com",
-    "devon.reyes@example.com",
-    "priya.nair@example.com",
+    MAYA_EMAIL,
+    DEVON_EMAIL,
+    PRIYA_EMAIL,
     "marcus.tan@example.com",
     "lena.kovic@example.com",
 ]
@@ -46,6 +54,11 @@ ATHLETE_EMAILS = [
 
 def seed(**options):
     call_command("seed_meso_demo", coach_email=COACH_EMAIL, **options)
+
+
+def _plan_for(coach, athlete_email):
+    """The one plan ``seed_meso_demo`` built for this athlete (of the coach's 3)."""
+    return Plan.objects.for_coach(coach).get(relationship__athlete__email=athlete_email)
 
 
 class TestSeedCreatesDemo:
@@ -143,18 +156,29 @@ class TestSeedCreatesDemo:
         seed(delete=True)
         assert not User.objects.filter(email="alum@example.com").exists()
 
-    def test_creates_one_sample_plan(self):
+    def test_creates_three_sample_plans(self):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
         plans = Plan.objects.for_coach(coach)
-        assert plans.count() == 1
-        plan = plans.get()
-        assert plan.athlete.email == "maya.okonkwo@example.com"
-        assert plan.status == Plan.Status.ACTIVE
+        assert plans.count() == 3
+        athlete_emails = {plan.athlete.email for plan in plans}
+        assert athlete_emails == {MAYA_EMAIL, DEVON_EMAIL, PRIYA_EMAIL}
+        assert all(plan.status == Plan.Status.ACTIVE for plan in plans)
+        # Marcus and Lena stay plan-less.
+        assert (
+            not Plan.objects.for_coach(coach)
+            .filter(
+                relationship__athlete__email__in=[
+                    "marcus.tan@example.com",
+                    "lena.kovic@example.com",
+                ]
+            )
+            .exists()
+        )
 
     def test_sample_plan_hierarchy(self):
         seed()
-        plan = Plan.objects.for_coach(User.objects.get(email=COACH_EMAIL)).get()
+        plan = _plan_for(User.objects.get(email=COACH_EMAIL), MAYA_EMAIL)
         assert plan.mesocycles.count() == 4
         hypertrophy = plan.mesocycles.get(name="Hypertrophy")
         assert hypertrophy.weeks.count() == 4
@@ -181,7 +205,7 @@ class TestSeedCreatesDemo:
 class TestSamplePlanRoundTrips:
     def test_serializes_to_designer_shape(self):
         seed()
-        plan = Plan.objects.for_coach(User.objects.get(email=COACH_EMAIL)).get()
+        plan = _plan_for(User.objects.get(email=COACH_EMAIL), MAYA_EMAIL)
         data = serialize_plan(plan)
 
         assert data["plan"]["title"] == "Hypertrophy Block"
@@ -197,7 +221,7 @@ class TestSamplePlanRoundTrips:
 
     def test_knee_safe_tag_round_trips(self):
         seed()
-        plan = Plan.objects.for_coach(User.objects.get(email=COACH_EMAIL)).get()
+        plan = _plan_for(User.objects.get(email=COACH_EMAIL), MAYA_EMAIL)
         data = serialize_plan(plan)
         lower = next(s for s in data["program"] if s["name"] == "Lower")
         box_squat = lower["exercises"][0]
@@ -209,7 +233,7 @@ class TestSamplePlanRoundTrips:
         # once on a fresh DB and not duplicated on reseed.
         seed()
         seed()  # reseed must not spawn a second %1RM row
-        plan = Plan.objects.for_coach(User.objects.get(email=COACH_EMAIL)).get()
+        plan = _plan_for(User.objects.get(email=COACH_EMAIL), MAYA_EMAIL)
         data = serialize_plan(plan)
         lower = next(s for s in data["program"] if s["name"] == "Lower")
         box_squat = lower["exercises"][0]
@@ -232,7 +256,7 @@ class TestSeedLogsASession:
 
     def _lower_session(self):
         coach = User.objects.get(email=COACH_EMAIL)
-        plan = Plan.objects.for_coach(coach).get()
+        plan = _plan_for(coach, MAYA_EMAIL)
         return Session.objects.get(
             week__mesocycle__plan=plan,
             week__mesocycle__name="Hypertrophy",
@@ -244,7 +268,7 @@ class TestSeedLogsASession:
         seed()
         session = self._lower_session()
         assert session.week.delivered_at is not None  # visibility gate stamped
-        maya = User.objects.get(email="maya.okonkwo@example.com")
+        maya = User.objects.get(email=MAYA_EMAIL)
         log = SessionLog.objects.get(session=session, athlete=maya)
         assert log.status == SessionLog.Status.DONE
         assert log.sets.count() == 17  # 4 + 3 + 3 + 3 + 4
@@ -264,7 +288,7 @@ class TestSeedLogsASession:
     def test_log_lights_the_designer_last_column(self):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
-        plan = Plan.objects.for_coach(coach).get()
+        plan = _plan_for(coach, MAYA_EMAIL)
         lower = next(s for s in serialize_plan(plan)["program"] if s["name"] == "Lower")
         box_squat = lower["exercises"][0]
         assert box_squat["last"] == "4×6 · 70kg · RPE8.5"
@@ -272,9 +296,11 @@ class TestSeedLogsASession:
     def test_log_derives_a_one_rm_for_the_percent_row(self):
         # Box Squat is a %1RM row; the seed derives Maya's 1RM from her logged
         # session (Epley of 70 × 6 = 84) so the coach sees it on the designer row.
+        # Her historical Hypertrophy wk1 log (also a %1RM row) and her separately
+        # named Base/GPP-block history don't contribute a competing estimate.
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
-        plan = Plan.objects.for_coach(coach).get()
+        plan = _plan_for(coach, MAYA_EMAIL)
         lower = next(s for s in serialize_plan(plan)["program"] if s["name"] == "Lower")
         assert lower["exercises"][0]["one_rm"] == "84"
 
@@ -282,9 +308,109 @@ class TestSeedLogsASession:
         seed()
         seed()
         session = self._lower_session()
-        maya = User.objects.get(email="maya.okonkwo@example.com")
+        maya = User.objects.get(email=MAYA_EMAIL)
         assert SessionLog.objects.filter(session=session, athlete=maya).count() == 1
         assert LoggedSet.objects.filter(session_log__session=session).count() == 17
+
+
+class TestDevonAndPriyaPrograms:
+    """Devon and Priya each get a full program too (parity with Maya's).
+
+    Every block (Base/GPP → Hypertrophy → Strength → Peak/Test) is built with
+    a fixed lineup and real per-week prescription text in every week; exactly
+    one week is ``is_current``; every week strictly before it is delivered and
+    logged (a real multi-week history), and nothing after it is.
+    """
+
+    @pytest.mark.parametrize(
+        "email", [DEVON_EMAIL, PRIYA_EMAIL], ids=["devon", "priya"]
+    )
+    def test_plan_is_active_with_all_blocks_built(self, email):
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        plan = _plan_for(coach, email)
+        assert plan.status == Plan.Status.ACTIVE
+        assert plan.mesocycles.count() == 4
+        for mesocycle in plan.mesocycles.all():
+            weeks = list(mesocycle.weeks.all())
+            assert weeks  # every block is fully built, not planned-length-only
+            for week in weeks:
+                assert week.sessions.exists()
+                # Every row of every day has real (non-blank) prescription text.
+                assert all(
+                    cell.text.strip()
+                    for cell in week.cells.filter(line=0)
+                    if not cell.skipped
+                )
+
+    @pytest.mark.parametrize(
+        "email", [DEVON_EMAIL, PRIYA_EMAIL], ids=["devon", "priya"]
+    )
+    def test_plan_has_exactly_one_current_week(self, email):
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        plan = _plan_for(coach, email)
+        current_weeks = Week.objects.filter(mesocycle__plan=plan, is_current=True)
+        assert current_weeks.count() == 1
+
+    @pytest.mark.parametrize(
+        "email", [DEVON_EMAIL, PRIYA_EMAIL], ids=["devon", "priya"]
+    )
+    def test_weeks_before_current_are_delivered_and_logged(self, email):
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        athlete = User.objects.get(email=email)
+        plan = _plan_for(coach, email)
+        weeks = list(
+            Week.objects.filter(mesocycle__plan=plan)
+            .select_related("mesocycle")
+            .order_by("mesocycle__order", "index")
+        )
+        current = next(w for w in weeks if w.is_current)
+        current_key = (current.mesocycle.order, current.index)
+        before = [w for w in weeks if (w.mesocycle.order, w.index) < current_key]
+        after = [w for w in weeks if (w.mesocycle.order, w.index) > current_key]
+        assert before  # meaningful history exists
+        assert after  # a future, unbuilt-looking tail exists too
+        for week in before:
+            assert week.delivered_at is not None
+        earliest = before[0]
+        logs = SessionLog.objects.filter(
+            session__week=earliest, athlete=athlete, status=SessionLog.Status.DONE
+        )
+        assert logs.exists()
+        assert LoggedSet.objects.filter(session_log__in=logs).count() > 0
+        # The current week is delivered too, but nothing after it is.
+        assert current.delivered_at is not None
+        for week in after:
+            assert week.delivered_at is None
+            assert not SessionLog.objects.filter(
+                session__week=week, athlete=athlete
+            ).exists()
+
+    @pytest.mark.parametrize(
+        "email", [DEVON_EMAIL, PRIYA_EMAIL], ids=["devon", "priya"]
+    )
+    def test_reseed_does_not_duplicate_the_history(self, email):
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        plan = _plan_for(coach, email)
+        before_counts = (
+            SessionLog.objects.filter(session__week__mesocycle__plan=plan).count(),
+            LoggedSet.objects.filter(
+                session_log__session__week__mesocycle__plan=plan
+            ).count(),
+        )
+        assert before_counts[0] > 0  # history was actually created
+
+        seed()
+        after_counts = (
+            SessionLog.objects.filter(session__week__mesocycle__plan=plan).count(),
+            LoggedSet.objects.filter(
+                session_log__session__week__mesocycle__plan=plan
+            ).count(),
+        )
+        assert after_counts == before_counts
 
 
 class TestIdempotent:
@@ -297,13 +423,13 @@ class TestIdempotent:
         # ended past athlete (the relationship-history surface).
         assert CoachAthlete.objects.for_coach(coach).active().count() == 5
         assert CoachAthlete.objects.for_coach(coach).count() == 7
-        assert Plan.objects.for_coach(coach).count() == 1
-        # Children are not re-created on a second run (the individual sample plan).
+        assert Plan.objects.for_coach(coach).count() == 3
+        # Children are not re-created on a second run (3 clients × 4 blocks).
         assert (
             Mesocycle.objects.filter(plan__in=Plan.objects.for_coach(coach)).count()
-            == 4
+            == 12
         )
-        maya = User.objects.get(email="maya.okonkwo@example.com")
+        maya = User.objects.get(email=MAYA_EMAIL)
         assert maya.contraindications.count() == 2
 
     def test_rerun_preserves_existing_coach_password(self):
@@ -328,7 +454,7 @@ class TestReseedReconciles:
     def test_reactivates_an_ended_link(self):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
-        maya = User.objects.get(email="maya.okonkwo@example.com")
+        maya = User.objects.get(email=MAYA_EMAIL)
         link = CoachAthlete.objects.get(coach=coach, athlete=maya)
         link.end()  # ended → also archives the plan
         assert not link.is_active
@@ -340,7 +466,7 @@ class TestReseedReconciles:
     def test_restores_an_archived_sample_plan(self):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
-        plan = Plan.objects.for_coach(coach).get()
+        plan = _plan_for(coach, MAYA_EMAIL)
         plan.status = Plan.Status.ARCHIVED
         plan.save(update_fields=["status"])
 
@@ -353,12 +479,33 @@ class TestReseedReconciles:
     def test_rebuilds_a_plan_missing_its_hierarchy(self):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
-        plan = Plan.objects.for_coach(coach).get()  # the individual sample plan
+        plan = _plan_for(coach, MAYA_EMAIL)  # the individual sample plan
         plan.mesocycles.all().delete()  # stale plan row with no children
         assert plan.mesocycles.count() == 0
 
         seed()
         assert plan.mesocycles.count() == 4
+
+    def test_rebuilds_a_partially_built_plan(self):
+        # A DB seeded by an earlier version of the command left every block but
+        # Hypertrophy planned-length-only (mesocycle rows, no Week/Session/
+        # Prescription). A bare ``mesocycles.exists()`` guard would skip the
+        # upgrade and strand that partial shape; the reseed must top it up so
+        # every block is materialized.
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        plan = _plan_for(coach, MAYA_EMAIL)
+        # Mimic the old partial shape: drop the weeks of every non-Hypertrophy
+        # block (leaving the mesocycle rows in place).
+        stale = plan.mesocycles.exclude(name="Hypertrophy")
+        Week.objects.filter(mesocycle__in=stale).delete()
+        assert not Week.objects.filter(mesocycle__in=stale).exists()
+
+        seed()
+        for mesocycle in plan.mesocycles.all():
+            assert mesocycle.weeks.exists()  # every block materialized again
+            for week in mesocycle.weeks.all():
+                assert week.sessions.exists()
 
 
 class TestDelete:
@@ -370,3 +517,35 @@ class TestDelete:
         assert CoachAthlete.objects.for_coach(coach).count() == 0
         assert Plan.objects.for_coach(coach).count() == 0
         assert Contraindication.objects.count() == 0
+
+    def test_delete_removes_all_three_clients_plans_and_logs(self):
+        seed()
+        # Sanity: all three clients actually got a plan + logged history first.
+        assert (
+            Plan.objects.filter(
+                relationship__athlete__email__in=[MAYA_EMAIL, DEVON_EMAIL, PRIYA_EMAIL]
+            ).count()
+            == 3
+        )
+        assert (
+            SessionLog.objects.filter(
+                athlete__email__in=[MAYA_EMAIL, DEVON_EMAIL, PRIYA_EMAIL]
+            ).count()
+            > 0
+        )
+
+        seed(delete=True)
+        assert not Plan.objects.filter(
+            relationship__athlete__email__in=[MAYA_EMAIL, DEVON_EMAIL, PRIYA_EMAIL]
+        ).exists()
+        assert not Mesocycle.objects.filter(
+            plan__relationship__athlete__email__in=[
+                MAYA_EMAIL,
+                DEVON_EMAIL,
+                PRIYA_EMAIL,
+            ]
+        ).exists()
+        assert not SessionLog.objects.filter(
+            athlete__email__in=[MAYA_EMAIL, DEVON_EMAIL, PRIYA_EMAIL]
+        ).exists()
+        assert not LoggedSet.objects.exists()
