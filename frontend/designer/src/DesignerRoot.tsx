@@ -157,7 +157,7 @@ export function DesignerRoot() {
 
   // Issue #455 phase A2 (drag reordering): the table's own pure drag-event
   // translator — wired to gridState's structural verbs
-  // (reorderExercises/reorderDays/moveExerciseToDay).
+  // (reorderExercises/reorderDays).
   const tableReorder = useTableReorder({
     grid: gridState.grid,
     reorderRow: gridState.reorderExercises,
@@ -192,6 +192,12 @@ export function DesignerRoot() {
         deliverHref={deliverHref}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
+        canUndo={!gridState.busy && gridState.history.can_undo}
+        canRedo={!gridState.busy && gridState.history.can_redo}
+        undoLabel={gridState.history.undo_label}
+        redoLabel={gridState.history.redo_label}
+        onUndo={gridState.undo}
+        onRedo={gridState.redo}
       />
 
       <div className="meso-designer-body">
@@ -217,13 +223,11 @@ export function DesignerRoot() {
             {view === "table" && (
               <MesoTable
                 grid={gridState.grid}
-                history={gridState.history}
                 busy={gridState.busy}
                 onPatchCell={gridState.patchCell}
                 onWriteCellLine={gridState.writeCellLine}
                 onPatchRowColumns={gridState.patchRowColumns}
                 onRenameExercise={gridState.renameExercise}
-                onMoveExerciseToDay={gridState.moveExerciseToDay}
                 onAddExercise={gridState.addExercise}
                 onRemoveExercise={gridState.removeExercise}
                 onAddDay={gridState.addDay}
@@ -231,8 +235,6 @@ export function DesignerRoot() {
                 onAddWeek={gridState.addWeek}
                 onRemoveWeek={gridState.removeWeek}
                 onSetCurrentWeek={gridState.setCurrentWeek}
-                onUndo={gridState.undo}
-                onRedo={gridState.redo}
                 onSkipCell={gridState.skipCell}
                 onFillAcrossWeeks={gridState.fillAcrossWeeks}
                 onAddExerciseThisWeek={gridState.addExerciseThisWeek}

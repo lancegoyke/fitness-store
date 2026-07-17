@@ -15,6 +15,12 @@ function baseProps(overrides: Partial<Parameters<typeof TopBar>[0]> = {}) {
     deliverHref: "/meso/deliver/7/?week=2",
     sidebarOpen: true,
     onToggleSidebar: vi.fn(),
+    canUndo: true,
+    canRedo: false,
+    undoLabel: "Edited Squat" as string | null,
+    redoLabel: null as string | null,
+    onUndo: vi.fn(),
+    onRedo: vi.fn(),
     ...overrides,
   };
 }
@@ -56,6 +62,21 @@ describe("TopBar", () => {
   it("no longer renders the duplicate athlete identity chip / Preview button", () => {
     render(<TopBar {...baseProps()} />);
     expect(screen.queryByTestId("preview-athlete-button")).not.toBeInTheDocument();
+  });
+
+  it("renders undo/redo, reflecting can-undo/can-redo, and fires the handlers", async () => {
+    const user = userEvent.setup();
+    const onUndo = vi.fn();
+    const onRedo = vi.fn();
+    render(<TopBar {...baseProps({ canUndo: true, canRedo: false, onUndo, onRedo })} />);
+    const undo = screen.getByTestId("grid-undo");
+    const redo = screen.getByTestId("grid-redo");
+    expect(undo).toBeEnabled();
+    expect(redo).toBeDisabled();
+    // data-grid-restore is preserved so focus returns to the grid after undo.
+    expect(undo).toHaveAttribute("data-grid-restore");
+    await user.click(undo);
+    expect(onUndo).toHaveBeenCalledTimes(1);
   });
 
   it("renders the cycle label chip only when non-empty", () => {

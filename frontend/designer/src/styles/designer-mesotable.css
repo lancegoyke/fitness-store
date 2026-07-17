@@ -130,28 +130,6 @@
   gap: 4px;
 }
 
-/* Issue #455 phase A2.5: the "Move to…" menu — the row-name column's 2nd
- * line. No new layout rule for the line itself: the element carries
- * `.meso-ex-tags` (designer-grid.css, unscoped) alongside
- * `.meso-table-row-tags` for its box layout — true reuse rather than a
- * duplicate ruleset. The menu is kept visually small/quiet, not a full
- * form control. */
-.meso-move-day-select {
-  appearance: none;
-  font: inherit;
-  font-size: 10.5px;
-  color: var(--dim);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 1px 4px;
-  cursor: pointer;
-}
-.meso-move-day-select:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
 .meso-table-cell {
   min-width: 190px;
 }
@@ -231,9 +209,8 @@
 }
 
 /* The sticky exercise column stays quiet while typing: the per-row remove ×
-   fades in on row hover/focus (space reserved, so the name doesn't jump), and
-   the "Move to…" menu appears only then too. The remove confirm-pair, once
-   armed, always shows (it isn't gated). */
+   fades in on row hover/focus (space reserved, so the name doesn't jump). The
+   remove confirm-pair, once armed, always shows (it isn't gated). */
 .meso-table-row-name-col .meso-remove-x {
   opacity: 0;
   pointer-events: none;
@@ -243,17 +220,6 @@
 .meso-table tbody tr:focus-within .meso-table-row-name-col .meso-remove-x {
   opacity: 1;
   pointer-events: auto;
-}
-.meso-table-row-name-col .meso-table-row-tags {
-  display: none;
-}
-.meso-table tbody tr:hover .meso-table-row-name-col .meso-table-row-tags,
-.meso-table
-  tbody
-  tr:focus-within
-  .meso-table-row-name-col
-  .meso-table-row-tags {
-  display: flex;
 }
 
 /* P2: per-day "add this week only" toggle + week picker, alongside the

@@ -92,9 +92,10 @@ MesoGrid | null` and `history: GridHistory`, hydrated once from
   RowOneRmEditor" below), and with it `GridCellOneRmPatch`.
 - **Structural verbs** (`addDay`/`removeDay`, `addWeek`/`removeWeek`/
   `setCurrentWeek`, `addExercise`/`removeExercise`, `reorderDays`/
-  `reorderExercises`/`moveExerciseToDay`, `undo`/`redo`, `skipCell`/
-  `fillAcrossWeeks`/`addExerciseThisWeek` — `swapCell` retired in Phase 2a:
-  a substitution is sub-line text now, written through `writeCellLine`):
+  `reorderExercises`, `undo`/`redo`, `skipCell`/
+  `fillAcrossWeeks`/`addExerciseThisWeek` — `swapCell` retired in Phase 2a
+  (a substitution is sub-line text now, written through `writeCellLine`);
+  `moveExerciseToDay` removed in designer-simplify with the "Move to…" menu):
   await their POST, then call `refetchGrid()` (a plain GET) to re-sync the
   whole grid in one `setGrid`. One shared in-flight guard (`busy`) across
   every structural verb so a double-click can't race two refetches.
@@ -289,15 +290,20 @@ readable.
 
 ### TopBar
 
-Props: `{ view, onSelectView, cycleLabel, deliverHref, sidebarOpen, onToggleSidebar }`.
+Props: `{ view, onSelectView, cycleLabel, deliverHref, sidebarOpen, onToggleSidebar, canUndo, canRedo, undoLabel, redoLabel, onUndo, onRedo }`.
 Renders the Meso logo/back-link, the sidebar collapse toggle, the view
 segmented control (Table / Periodization / Athlete view), the cycle label
-chip, "Review changes", and "Deliver". designer-simplify: the athlete
-identity chip moved to `AthleteMeta` (it duplicated the rail's), the
-standalone "Preview as athlete" button was dropped (the segmented "Athlete
-view" is the one canonical switch), and the canvas's 49px view-control band
-folded up here. Testids: `sidebar-toggle` (`aria-pressed={sidebarOpen}`),
+chip, the Undo/Redo icon buttons, "Review changes", and "Deliver".
+designer-simplify: the athlete identity chip moved to `AthleteMeta` (it
+duplicated the rail's), the standalone "Preview as athlete" button was dropped
+(the segmented "Athlete view" is the one canonical switch), the canvas's 49px
+view-control band folded up here, and Undo/Redo moved out of the grid toolbar
+into the top bar (they're global, Ctrl+Z-backed editor actions; each keeps its
+`data-grid-restore` marker so a click returns focus to the grid's anchor cell —
+see `useTableNav`). `DesignerRoot` folds `busy` into `canUndo`/`canRedo`.
+Testids: `sidebar-toggle` (`aria-pressed={sidebarOpen}`),
 `view-tab-{table|block|athlete}` (`aria-selected` marks the active view),
+`grid-undo`/`grid-redo` (`disabled` when `!canUndo`/`!canRedo`),
 `deliver-link` (`href={deliverHref}`), `review-link`.
 
 ### AthleteMeta
@@ -342,11 +348,13 @@ top) replaces the whole one-week-at-a-time tree they formed:
 
 - **`WeekStrip`** (week switcher chips + add/make-current/remove/undo/redo)
   → `MesoTable`'s own `WeekColumnHeader` (per-column "Make current"/
-  "Remove"/confirm-cancel controls) + its toolbar's "+ Add week" button.
-  There's no more "switch to a week" verb (`onSwitchWeek`/week chips) —
-  every week already renders as its own column, so there's nothing to
-  switch between; undo/redo moved to `useUndoKeyboard` + `useGrid.undo`/
-  `.redo`, wired at `DesignerRoot`, not a component.
+  "Remove"/confirm-cancel controls, rendered once on the first day block in
+  designer-simplify) + its toolbar's "+ Add week" button (the toolbar's only
+  control now). There's no more "switch to a week" verb (`onSwitchWeek`/week
+  chips) — every week already renders as its own column, so there's nothing to
+  switch between; undo/redo are the keyboard `useUndoKeyboard` +
+  `useGrid.undo`/`.redo`, and the visible ↺/↻ buttons moved to `TopBar`
+  (designer-simplify) — `MesoTable` no longer takes `history`/`onUndo`/`onRedo`.
 - **`WeekGrid`** (one week's days) → `MesoTable` itself. It once carried a
   "table" first-run coachmark (A4); designer-simplify removed that info alert
   (the block grid should be self-evident; tips will live in a dedicated help

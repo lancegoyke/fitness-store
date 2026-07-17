@@ -67,6 +67,37 @@
   color: var(--ink);
 }
 
+/* Undo / Redo icon buttons in the top bar (moved out of the grid toolbar). */
+.meso-topbar-iconbtns {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.meso-topbar-iconbtn {
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 7px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+.meso-topbar-iconbtn:hover:not(:disabled) {
+  background: var(--soft);
+}
+.meso-topbar-iconbtn:disabled {
+  color: var(--dim);
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* View segmented control (Table / Periodization / Athlete view), folded up
    from the old 49px canvas header into the top bar. */
 .meso-seg {

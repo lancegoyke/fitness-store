@@ -14,6 +14,15 @@ export interface TopBarProps {
   deliverHref: string;
   sidebarOpen: boolean;
   onToggleSidebar(): void;
+  // Undo/redo live here (global, Ctrl+Z-backed editor actions) rather than in
+  // the grid's own toolbar. data-grid-restore is preserved on each button so
+  // clicking it returns focus to the grid's anchor cell (see useTableNav).
+  canUndo: boolean;
+  canRedo: boolean;
+  undoLabel: string | null;
+  redoLabel: string | null;
+  onUndo(): void;
+  onRedo(): void;
 }
 
 const VIEW_TABS: { id: ViewMode; label: string }[] = [
@@ -22,7 +31,20 @@ const VIEW_TABS: { id: ViewMode; label: string }[] = [
   { id: "athlete", label: "Athlete view" },
 ];
 
-export function TopBar({ view, onSelectView, cycleLabel, deliverHref, sidebarOpen, onToggleSidebar }: TopBarProps) {
+export function TopBar({
+  view,
+  onSelectView,
+  cycleLabel,
+  deliverHref,
+  sidebarOpen,
+  onToggleSidebar,
+  canUndo,
+  canRedo,
+  undoLabel,
+  redoLabel,
+  onUndo,
+  onRedo,
+}: TopBarProps) {
   return (
     <div className="meso-topbar">
       <a href="/meso/" title="Back to roster" className="meso-topbar-brand">
@@ -69,6 +91,32 @@ export function TopBar({ view, onSelectView, cycleLabel, deliverHref, sidebarOpe
           <span>{cycleLabel}</span>
         </div>
       )}
+      <div className="meso-topbar-iconbtns">
+        <button
+          type="button"
+          data-testid="grid-undo"
+          data-grid-restore=""
+          className="meso-topbar-iconbtn"
+          disabled={!canUndo}
+          aria-label="Undo"
+          title={undoLabel ? "Undo: " + undoLabel : "Undo"}
+          onClick={onUndo}
+        >
+          ↺
+        </button>
+        <button
+          type="button"
+          data-testid="grid-redo"
+          data-grid-restore=""
+          className="meso-topbar-iconbtn"
+          disabled={!canRedo}
+          aria-label="Redo"
+          title={redoLabel ? "Redo: " + redoLabel : "Redo"}
+          onClick={onRedo}
+        >
+          ↻
+        </button>
+      </div>
       <a data-testid="review-link" href="/meso/review/" data-hover="rail" className="meso-btn-rail">
         Review changes
       </a>
