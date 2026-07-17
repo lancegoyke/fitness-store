@@ -102,8 +102,6 @@ export function gridToProgram(grid: MesoGrid, weekId?: number | string): Day[] {
         note: row.note,
         tag: typeof row.tags[0] === "string" ? row.tags[0] : undefined,
         skipped: cell.skipped,
-        adj: cell.adj ?? null,
-        adjusts: cell.adjusts ?? [],
       });
     }
     days.push({

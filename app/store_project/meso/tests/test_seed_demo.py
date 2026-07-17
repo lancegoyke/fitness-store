@@ -24,13 +24,9 @@ from store_project.meso.models import CoachProfile
 from store_project.meso.models import Contraindication
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
-from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
-from store_project.meso.models import PrescriptionOverride
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
-from store_project.meso.models import Week
-from store_project.meso.models import WeekDelivery
 from store_project.meso.parsing import parse_prescription
 from store_project.meso.presenters import session_results
 from store_project.meso.serializers import serialize_plan
@@ -182,87 +178,6 @@ class TestSeedCreatesDemo:
         ) == ["Cable Crunch"]
 
 
-class TestSeedCreatesGroup:
-    def test_creates_demo_group_with_members(self):
-        seed()
-        coach = User.objects.get(email=COACH_EMAIL)
-        group = MesoGroup.objects.for_coach(coach).get()
-        assert group.name == "Tue/Thu Strength Squad"
-        assert group.focus == "Strength"
-        member_emails = {u.email for u in group.active_member_users()}
-        assert member_emails == {
-            "devon.reyes@example.com",
-            "priya.nair@example.com",
-            "marcus.tan@example.com",
-        }
-
-    def test_creates_a_shared_group_program(self):
-        # Groups Phase 2a: the demo group gets a shared plan (rooted at the group)
-        # with a usable scaffold so the group designer renders off real rows.
-        seed()
-        coach = User.objects.get(email=COACH_EMAIL)
-        group = MesoGroup.objects.for_coach(coach).get()
-        plan = group.shared_plan()
-        assert plan is not None
-        assert plan.group_id == group.pk
-        assert plan.relationship_id is None
-        assert Session.objects.filter(week__mesocycle__plan=plan).exists()
-
-    def test_reseed_does_not_duplicate_shared_program(self):
-        seed()
-        seed()
-        coach = User.objects.get(email=COACH_EMAIL)
-        group = MesoGroup.objects.for_coach(coach).get()
-        assert group.plans.count() == 1
-
-    def test_seeds_per_athlete_overrides(self):
-        # Groups Phase 3: the demo group's shared program carries a couple of
-        # per-athlete auto-adjusts so a fresh DB renders the designer's adj badge.
-        seed()
-        coach = User.objects.get(email=COACH_EMAIL)
-        group = MesoGroup.objects.for_coach(coach).get()
-        assert PrescriptionOverride.objects.filter(membership__group=group).exists()
-
-    def test_reseed_does_not_duplicate_overrides(self):
-        seed()
-        coach = User.objects.get(email=COACH_EMAIL)
-        group = MesoGroup.objects.for_coach(coach).get()
-        count = PrescriptionOverride.objects.filter(membership__group=group).count()
-        seed()
-        assert (
-            PrescriptionOverride.objects.filter(membership__group=group).count()
-            == count
-        )
-
-    def test_delivers_a_materialized_plan_to_each_member(self):
-        # Groups Phase 4: the demo group's shared week is delivered, so each member
-        # gets a resolved, delivered individual plan on their own athlete surface.
-        seed()
-        coach = User.objects.get(email=COACH_EMAIL)
-        group = MesoGroup.objects.for_coach(coach).get()
-        materialized = Plan.objects.filter(source_group=group)
-        assert materialized.count() == 3
-        for plan in materialized:
-            assert Week.objects.filter(
-                mesocycle__plan=plan, delivered_at__isnull=False
-            ).exists()
-
-    def test_reseed_does_not_redeliver(self):
-        seed()
-        coach = User.objects.get(email=COACH_EMAIL)
-        group = MesoGroup.objects.for_coach(coach).get()
-        deliveries = WeekDelivery.objects.filter(
-            week__mesocycle__plan__source_group=group
-        ).count()
-        seed()
-        assert (
-            WeekDelivery.objects.filter(
-                week__mesocycle__plan__source_group=group
-            ).count()
-            == deliveries
-        )
-
-
 class TestSamplePlanRoundTrips:
     def test_serializes_to_designer_shape(self):
         seed()
@@ -383,17 +298,13 @@ class TestIdempotent:
         assert CoachAthlete.objects.for_coach(coach).active().count() == 5
         assert CoachAthlete.objects.for_coach(coach).count() == 7
         assert Plan.objects.for_coach(coach).count() == 1
-        # Children are not re-created on a second run (the individual sample plan;
-        # ``for_coach`` excludes the group-delivery snapshots seeded in Phase 4).
+        # Children are not re-created on a second run (the individual sample plan).
         assert (
             Mesocycle.objects.filter(plan__in=Plan.objects.for_coach(coach)).count()
             == 4
         )
         maya = User.objects.get(email="maya.okonkwo@example.com")
         assert maya.contraindications.count() == 2
-        # One group with its three members, not duplicated.
-        group = MesoGroup.objects.for_coach(coach).get()
-        assert len(group.active_member_users()) == 3
 
     def test_rerun_preserves_existing_coach_password(self):
         existing = User.objects.create(
@@ -429,8 +340,6 @@ class TestReseedReconciles:
     def test_restores_an_archived_sample_plan(self):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
-        # The individual sample plan — ``for_coach`` excludes the group-delivery
-        # snapshots seeded in Phase 4 (which also hang off the coach's links).
         plan = Plan.objects.for_coach(coach).get()
         plan.status = Plan.Status.ARCHIVED
         plan.save(update_fields=["status"])
@@ -451,18 +360,6 @@ class TestReseedReconciles:
         seed()
         assert plan.mesocycles.count() == 4
 
-    def test_restores_an_archived_group(self):
-        seed()
-        coach = User.objects.get(email=COACH_EMAIL)
-        group = MesoGroup.objects.for_coach(coach).get()
-        group.status = MesoGroup.Status.ARCHIVED
-        group.save(update_fields=["status"])
-
-        seed()
-        group.refresh_from_db()
-        assert group.status == MesoGroup.Status.ACTIVE
-        assert group in MesoGroup.objects.for_coach(coach).active()
-
 
 class TestDelete:
     def test_delete_removes_demo_but_keeps_coach(self):
@@ -473,4 +370,3 @@ class TestDelete:
         assert CoachAthlete.objects.for_coach(coach).count() == 0
         assert Plan.objects.for_coach(coach).count() == 0
         assert Contraindication.objects.count() == 0
-        assert MesoGroup.objects.for_coach(coach).count() == 0

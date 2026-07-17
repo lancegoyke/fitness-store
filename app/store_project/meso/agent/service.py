@@ -63,74 +63,20 @@ def _coach_style(coach):
     return {"tags": profile.programming_style or [], "avoid": profile.avoid_rules}
 
 
-def _group_context(group):
-    """Group grounding (groups agent — the group agent edits a group's program).
-
-    A group plan has no single athlete, so the agent grounds on the *group*: its
-    name/focus, each active member (with a stable ``member_id`` the agent targets
-    a per-athlete ``adjust`` by, Phase 2) and their own active contraindications,
-    and — most importantly for a *shared* edit's safety — the **folded** set of
-    every member's contraindications. A shared row trains everyone, so the agent
-    must honor the union; the deterministic backstop (``validation.forbidden_terms``)
-    folds the same way. A per-member adjust is screened against that one member's
-    constraints instead (``validation.member_forbidden_terms``).
-    """
-    # One query with the contraindication prefetch (mirrors ``active_member_users``
-    # scoping). The membership pk is the ``member_id`` an ``adjust`` change targets.
-    memberships = (
-        group.memberships.select_related("relationship", "relationship__athlete")
-        .prefetch_related("relationship__athlete__contraindications")
-        .filter(
-            relationship__coach=group.coach,
-            relationship__status=models.CoachAthlete.Status.ACTIVE,
-        )
-        .order_by("relationship__athlete__name", "relationship__athlete__email")
-    )
-    member_data = []
-    folded = set()
-    for membership in memberships:
-        user = membership.relationship.athlete
-        texts = [c.text for c in user.contraindications.all() if c.active]
-        folded.update(texts)
-        member_data.append(
-            {
-                "member_id": membership.pk,
-                "name": user.display_name(),
-                "contraindications": texts,
-            }
-        )
-    return {
-        "name": group.name,
-        "focus": group.focus or "",
-        "member_count": len(member_data),
-        "members": member_data,
-        # The union the shared program must honor — every member's constraints.
-        "contraindications": sorted(folded),
-    }
-
-
 def build_context(plan):
     """Everything the model is grounded on, as a JSON-serializable dict.
 
-    An **individual** plan grounds on its one athlete (profile, contraindications,
-    recent logs). A **group** plan grounds on the group instead (members + the
-    contraindications folded across them); there is no single athlete log stream,
-    so ``recent_logs`` is empty for a group.
-
-    Both paths carry the whole current **block** (``serialize_agent_block``): every
-    live week of the plan's current mesocycle with its full session/cell grid and
-    per-week volume/intensity/phase/current flags, so the agent programs
-    progression across the block, not one week in isolation (P4).
+    Grounds on the plan's one athlete (profile, contraindications, recent logs)
+    plus the whole current **block** (``serialize_agent_block``): every live week
+    of the plan's current mesocycle with its full session/cell grid and per-week
+    volume/intensity/phase/current flags, so the agent programs progression
+    across the block, not one week in isolation (P4).
     """
     context = {
         "plan": serializers.serialize_plan(plan),
         "coach_style": _coach_style(plan.coach),
         "block": serializers.serialize_agent_block(plan),
     }
-    if plan.is_group:
-        context["group"] = _group_context(plan.group)
-        context["recent_logs"] = []
-        return context
     context["athlete"] = {
         "name": plan.athlete.display_name(),
         "contraindications": [
@@ -267,7 +213,7 @@ def run_proposal_job(batch_id, *, client=None):
     ``(batch, rejected)``.
     """
     batch = models.AgentProposalBatch.objects.select_related(
-        "plan", "plan__relationship", "plan__relationship__athlete", "plan__group"
+        "plan", "plan__relationship", "plan__relationship__athlete"
     ).get(pk=batch_id)
     try:
         client = client or client_module.get_default_client()

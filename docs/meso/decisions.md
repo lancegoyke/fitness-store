@@ -1347,3 +1347,34 @@ _(Append dated entries here as decisions land.)_
   notation = safe skip); the %1RM progression guard keys off the target cell's
   parsed `%` load. Full design in
   [`spreadsheet-parity-plan.md`](./spreadsheet-parity-plan.md) §2/§6.
+- 2026-07-16 — **2c built: the group subsystem is REMOVED, replaced by
+  batch-deliver (D1, parity plan §3.1; migration `meso.0040`).** Deleted
+  wholesale: `MesoGroup`/`GroupMembership`/`PrescriptionOverride`,
+  `Plan.group`/`source_group` + the XOR/singleton constraints (a
+  `relationship` is the only plan root now; `editable_by` == `for_coach`),
+  `deliver_block`/`sync_delivered_plan` (the fan-out materializer), the
+  override endpoint + the designer's override editor/`adj` overlay, the group
+  designer mode (the island is single-mode; `group`/`adj`/`adjusts` left the
+  grid payload), the group agent surface (`Kind.ADJUST`,
+  `ProposedChange.membership`, `Trigger.GROUP`, `_group_context`, the member
+  framing + adjust tool schema), history's override snapshots, usage-report
+  group attribution (`is_group` dropped; every client row is an athlete), the
+  roster Groups card, the demo "group" segment, the "groups" tour step (self
+  tour = 7 steps), and the seeded demo group. ~211 group tests deleted; 18
+  shared suites de-grouped. The migration's data step deletes the shared
+  group plans (relationship NULL — demo-only in practice); a member's
+  materialized group-delivery plan keeps its relationship root and survives
+  as an ordinary individual plan — exactly the new model. Historical
+  `trigger="group"`/`kind="adjust"` ledger rows are left untouched (choices
+  aren't DB-enforced; rewriting would falsify usage history).
+  **The replacement:** `Plan.duplicate_for(relationship)` deep-copies the
+  live tree (whole line stacks incl. sub-lines/`skipped`, tempo/rest/note,
+  tags, catalog FKs; `is_current` mirrored; `delivered_at` reset; soft-deleted
+  rows stay behind) and `plan_batch_deliver` (form POST from the deliver
+  screen's new "Also deliver a copy to…" card) fans out one independent,
+  live-editable ACTIVE copy per picked client — stamped + `WeekDelivery`
+  snapshotted + block-nudged exactly like an individual deliver, own-athlete/
+  foreign/seat-suspended picks dropped, the whole batch in one explicit
+  `transaction.atomic()` (ATOMIC_REQUESTS is inert). The optional saved
+  client list ("one-click class deliver") is deferred until real use demands
+  it. Follow-up debt for 2e: dead group CSS in the designer stylesheets.

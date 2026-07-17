@@ -28,7 +28,6 @@ from store_project.meso import one_rm as meso_one_rm
 from store_project.meso import presenters
 from store_project.meso.factories import AthleteOneRmFactory
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
@@ -543,16 +542,6 @@ class TestSerializerThreading:
         row = data["program"][0]["exercises"][0]
         assert row["one_rm"] == "140"
 
-    def test_group_plan_has_no_one_rm(self):
-        # A group plan has no single athlete, so the per-athlete 1RM does not apply.
-        group_plan = GroupPlanFactory(status=Plan.Status.ACTIVE)
-        meso = MesocycleFactory(plan=group_plan, order=0)
-        week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-        session = day(week, day_number=1)
-        build_presc(session, order=0, name="Back Squat", text="3 x 5, 75%")
-        data = serialize_plan(group_plan)
-        assert "one_rm" not in data["program"][0]["exercises"][0]
-
 
 # -- the backfill data migration -------------------------------------------
 
@@ -995,19 +984,6 @@ class TestCoachSetOneRmEndpoint:
         resp = post_coach_one_rm(client, plan, squat, {"value": value})
         assert resp.status_code == 400
         assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
-
-    def test_group_plan_is_400(self, client):
-        # A group plan has no single athlete, so a 1RM does not apply.
-        coach = UserFactory()
-        group_plan = GroupPlanFactory(status=Plan.Status.ACTIVE, group__coach=coach)
-        meso = MesocycleFactory(plan=group_plan, order=0)
-        week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-        session = day(week, day_number=1)
-        squat = build_presc(session, order=0, name="Back Squat", text="3 x 5, 75%")
-        client.force_login(coach)
-        resp = post_coach_one_rm(client, group_plan, squat, {"value": "150"})
-        assert resp.status_code == 400
-        assert not AthleteOneRm.objects.exists()
 
     def test_foreign_coach_is_403(self, client):
         plan, _, (squat,) = make_session(

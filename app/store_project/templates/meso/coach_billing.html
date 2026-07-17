@@ -101,7 +101,7 @@
           {% for row in breakdown %}
             <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line-2);">
               <span class="meso-row-name" style="min-width:0;">
-                {% if row.is_group %}<span class="meso-badge meso-badge--muted"><i></i>group</span> {% endif %}{{ row.label }}
+                {{ row.label }}
               </span>
               <div class="meso-spacer"></div>
               <span class="meso-row-meta">{{ row.runs }} run{{ row.runs|pluralize }}</span>

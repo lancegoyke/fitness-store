@@ -17,9 +17,9 @@ These tests cover:
 - the **agent gate** (``can_use_agent``) at ``agent_propose`` — a free coach
   passes while within their monthly allowance and gets a 402 (no drafting batch)
   once it's exhausted (S6 Phase 5 metering); a paid/comped coach is unlimited;
-- the **D6 edit/deliver block** (``can_edit``) at the autosave / deliver / group
-  endpoints — an over-limit coach gets a 402 (API) or a flashed redirect (group
-  forms) and nothing is mutated; a within-cap free coach is unaffected;
+- the **D6 edit/deliver block** (``can_edit``) at the autosave / deliver
+  endpoints — an over-limit coach gets a 402 and nothing is mutated; a
+  within-cap free coach is unaffected;
 - the **local trial-start endpoint** — a coach starts the no-card trial,
   single-use, non-coach bounced;
 - the **paywall UI** — the roster billing card's CTAs + the designer's agent
@@ -37,9 +37,7 @@ from store_project.meso.billing import access
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachSubscriptionFactory
-from store_project.meso.factories import GroupMembershipFactory
 from store_project.meso.factories import MesocycleFactory
-from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AgentProposalBatch
@@ -329,30 +327,6 @@ class TestEditGateIndividual:
         assert resp.status_code == 402
         batch.refresh_from_db()
         assert batch.status == AgentProposalBatch.Status.PENDING  # not applied
-
-
-class TestEditGateGroup:
-    def test_over_limit_coach_cannot_design_group(self, client):
-        coach = UserFactory()
-        group = MesoGroupFactory(coach=coach)
-        GroupMembershipFactory(group=group)
-        GroupMembershipFactory(group=group)  # two active members → over the cap
-        assert access.is_over_limit(coach) is True
-        client.force_login(coach)
-        resp = client.post(reverse("meso:group_design", kwargs={"pk": group.pk}))
-        assert resp.status_code == 302
-        assert resp.url == reverse("meso:group", kwargs={"pk": group.pk})
-        assert group.shared_plan() is None  # nothing created
-
-    def test_over_limit_coach_cannot_group_deliver(self, client):
-        coach = UserFactory()
-        group = MesoGroupFactory(coach=coach)
-        GroupMembershipFactory(group=group)
-        GroupMembershipFactory(group=group)
-        client.force_login(coach)
-        resp = client.post(reverse("meso:group_deliver", kwargs={"pk": group.pk}))
-        assert resp.status_code == 302
-        assert resp.url == reverse("meso:group", kwargs={"pk": group.pk})
 
 
 # ---------------------------------------------------------------------------

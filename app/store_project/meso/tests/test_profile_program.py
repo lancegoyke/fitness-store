@@ -8,7 +8,7 @@ since the athlete slice, so the data is finally there. These pin the read-side
 that lights the block up:
 
 - it keys off the athlete's most recently *delivered* week (the same week the
-  roster meter measures), spanning individual + group-delivery snapshots;
+  roster meter measures);
 - ``has_program`` is gated on a *measurable* delivered week, so an athlete with
   nothing delivered honestly falls back to the create / in-progress empty state;
 - ``status`` prefers the most actionable signal (needs_review > drafting >
@@ -25,7 +25,6 @@ from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
-from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
@@ -49,7 +48,6 @@ def make_plan(
     done=1,
     goal="Squat 405",
     status=Plan.Status.ACTIVE,
-    source_group=None,
 ):
     """A plan under ``rel`` whose ``delivered_block``-th block holds the live week.
 
@@ -59,9 +57,6 @@ def make_plan(
     Returns ``(plan, delivered_week)``.
     """
     plan = PlanFactory(relationship=rel, status=status, goal=goal)
-    if source_group is not None:
-        plan.source_group = source_group
-        plan.save(update_fields=["source_group"])
     delivered = None
     for i, name in enumerate(blocks):
         meso = MesocycleFactory(plan=plan, name=name, order=i, week_count=4)
@@ -291,39 +286,6 @@ class TestResultsSummary:
             session=session, athlete=UserFactory(), status=SessionLog.Status.DONE
         )
         assert presenters.profile_program(rel, None)["results_summary"] is None
-
-    def test_skips_a_group_snapshot_session(self):
-        # A group snapshot's session isn't openable via ``ResultsView`` (it scopes
-        # through ``for_coach``, individual-only), so the card must not link to it.
-        coach = UserFactory()
-        rel = CoachAthleteFactory(coach=coach)
-        group = MesoGroupFactory(coach=coach)
-        _, week = make_plan(
-            rel, sessions=1, done=1, source_group=group, goal="Group block"
-        )
-        program = presenters.profile_program(rel, None)
-        # The block still lights up off the delivered snapshot...
-        assert program["athlete"]["has_program"] is True
-        # ...but the latest-session card is hidden (no openable individual log).
-        assert program["results_summary"] is None
-
-
-# -- a group-delivery snapshot ---------------------------------------------
-
-
-class TestGroupSnapshot:
-    def test_block_lights_up_off_a_group_snapshot(self):
-        # An athlete with no individual plan but a delivered group snapshot still
-        # has a program; the goal falls back to the snapshot's.
-        coach = UserFactory()
-        rel = CoachAthleteFactory(coach=coach)
-        group = MesoGroupFactory(coach=coach)
-        make_plan(rel, goal="Group hypertrophy", source_group=group)
-        assert rel.working_plan() is None  # the snapshot is not an editable plan
-        athlete = presenters.profile_program(rel, rel.working_plan())["athlete"]
-        assert athlete["has_program"] is True
-        assert athlete["goals"] == ["Group hypertrophy"]
-        assert athlete["status"] == "delivered"
 
 
 # -- the rendered page -----------------------------------------------------

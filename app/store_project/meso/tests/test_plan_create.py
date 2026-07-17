@@ -71,7 +71,6 @@ class TestScaffoldAndCreatePlan:
         plan = link.create_plan()
 
         assert plan.relationship_id == link.pk
-        assert plan.group_id is None
         assert plan.status == Plan.Status.DRAFT
         # One block, one current week, two training days, one starter row each.
         mesos = list(plan.mesocycles.all())
@@ -116,58 +115,6 @@ class TestScaffoldAndCreatePlan:
         plan.status = Plan.Status.ARCHIVED
         plan.save(update_fields=["status"])
         assert link.working_plan() is None
-
-    def test_working_plan_excludes_materialized_group_plan(self):
-        """A group-delivery snapshot (``source_group`` set) is not the working plan.
-
-        It's rooted at the relationship but athlete-facing only — the designer 404s
-        on it — so it must never be returned (matches ``for_coach``/``editable_by``).
-        """
-        from store_project.meso.factories import MesoGroupFactory
-        from store_project.meso.factories import PlanFactory
-
-        link = CoachAthleteFactory()
-        group = MesoGroupFactory(coach=link.coach)
-        materialized = PlanFactory(relationship=link, group=None, source_group=group)
-        # Only a materialized snapshot exists → no editable working plan.
-        assert link.working_plan() is None
-        # And a real individual plan still wins over the snapshot.
-        real = link.create_plan()
-        assert link.working_plan() == real
-        assert materialized.source_group_id == group.pk
-
-    def test_plan_create_ignores_materialized_and_makes_a_real_plan(self, client):
-        """plan_create builds an editable draft even when a snapshot exists."""
-        from store_project.meso.factories import MesoGroupFactory
-        from store_project.meso.factories import PlanFactory
-
-        link = CoachAthleteFactory()
-        group = MesoGroupFactory(coach=link.coach)
-        PlanFactory(relationship=link, group=None, source_group=group)
-        client.force_login(link.coach)
-        resp = client.post(_plan_new_url(link.athlete))
-        assert resp.status_code == 302
-        real = link.working_plan()
-        assert real is not None
-        assert real.source_group_id is None
-        # The redirect lands on the editable plan, not the snapshot.
-        assert resp.url == reverse("meso:designer_plan", kwargs={"plan_id": real.pk})
-
-    def test_group_create_shared_plan_still_scaffolds(self):
-        """Regression guard for the refactor: the group path is unchanged."""
-        from store_project.meso.factories import MesoGroupFactory
-
-        group = MesoGroupFactory()
-        plan = group.create_shared_plan()
-        assert plan.group_id == group.pk
-        assert plan.relationship_id is None
-        meso = plan.mesocycles.get()
-        week = meso.weeks.get()
-        assert week.is_current is True
-        sessions = list(week.sessions.all())
-        assert len(sessions) == 2
-        for session in sessions:
-            assert session.cells().count() == 1
 
 
 # ---------------------------------------------------------------------------

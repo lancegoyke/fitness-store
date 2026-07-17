@@ -14,13 +14,10 @@ try:
     from .models import CoachSubscription
     from .models import Contraindication
     from .models import ExerciseSlot
-    from .models import GroupMembership
     from .models import LoggedSet
     from .models import Mesocycle
-    from .models import MesoGroup
     from .models import Plan
     from .models import Prescription
-    from .models import PrescriptionOverride
     from .models import ProposedChange
     from .models import Session
     from .models import SessionLog
@@ -153,8 +150,8 @@ try:
         blocks, and ``unique(exercise_slot, week)`` plus every read site that
         joins a cell back to its slot's mesocycle would misbehave on a
         mismatched pair. Wired via ``factory.SelfAttribute("..exercise_slot...")``
-        inside the ``week`` SubFactory, mirroring ``GroupMembershipFactory``'s
-        same-coach wiring elsewhere in this module. Callers building a whole
+        inside the ``week`` SubFactory, mirroring ``SessionFactory``'s
+        same-mesocycle wiring above. Callers building a whole
         grid should still pass an explicit shared ``week=`` (or ``exercise_slot=``
         on an existing slot) so every cell in the fixture lands on the same week.
         """
@@ -222,53 +219,6 @@ try:
         load = "60"
         rpe = "7"
 
-    class MesoGroupFactory(DjangoModelFactory):
-        class Meta:
-            model = MesoGroup
-
-        coach = factory.SubFactory(UserFactory)
-        name = factory.Sequence(lambda n: f"Group {n}")
-        focus = "Hypertrophy"
-        status = MesoGroup.Status.ACTIVE
-
-    class GroupMembershipFactory(DjangoModelFactory):
-        class Meta:
-            model = GroupMembership
-
-        group = factory.SubFactory(MesoGroupFactory)
-        # The link's coach defaults to the group's coach so the membership is
-        # same-coach-consistent without the caller wiring it up.
-        relationship = factory.SubFactory(
-            CoachAthleteFactory,
-            coach=factory.SelfAttribute("..group.coach"),
-            status=CoachAthlete.Status.ACTIVE,
-        )
-
-    class GroupPlanFactory(PlanFactory):
-        """A plan rooted at a ``MesoGroup`` — a group's shared program (S1 Phase 2).
-
-        Overrides ``PlanFactory``'s individual ``relationship`` to ``None`` and
-        roots the plan at a group instead (the ``XOR`` root constraint).
-        """
-
-        relationship = None
-        group = factory.SubFactory(MesoGroupFactory)
-
-    class PrescriptionOverrideFactory(DjangoModelFactory):
-        """A member's auto-adjust over a shared prescription (S1 Phase 3).
-
-        Callers pass a same-group ``membership`` + ``prescription`` explicitly (the
-        same-group invariant ``set_override``/``clean`` enforce); the SubFactory
-        defaults only exist so the factory is constructible.
-        """
-
-        class Meta:
-            model = PrescriptionOverride
-
-        membership = factory.SubFactory(GroupMembershipFactory)
-        prescription = factory.SubFactory(PrescriptionFactory)
-        load_pct = 90
-
     class AthleteOneRmFactory(DjangoModelFactory):
         """An athlete's persisted, log-derived 1RM for a lift (S2 follow-up).
 
@@ -308,9 +258,6 @@ except ImportError:
     class PlanFactory:
         pass
 
-    class GroupPlanFactory:
-        pass
-
     class MesocycleFactory:
         pass
 
@@ -339,15 +286,6 @@ except ImportError:
         pass
 
     class AgentProposalBatchFactory:
-        pass
-
-    class MesoGroupFactory:
-        pass
-
-    class GroupMembershipFactory:
-        pass
-
-    class PrescriptionOverrideFactory:
         pass
 
     class ProposedChangeFactory:

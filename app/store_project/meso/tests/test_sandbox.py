@@ -52,7 +52,6 @@ from store_project.meso import tour
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import CoachSubscription
-from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
 from store_project.meso.models import SandboxSession
 from store_project.users.factories import UserFactory
@@ -198,7 +197,7 @@ def _sandbox_coach():
 
     ``create_sandbox`` itself starts empty (#430 Phase 2 — the guided tour
     populates it step by step); the tests below are about guard/UI behavior
-    *on top of* a populated demo workspace (Maya's plan, the group, ...), not
+    *on top of* a populated demo workspace (Maya's plan, ...), not
     about the empty-start/tour behavior itself, so this loads the full demo
     explicitly (mirroring the pre-Phase-2 fixture these tests were written
     against) and marks the tour complete — exactly what the real ``tour_skip``
@@ -383,11 +382,9 @@ class TestSandboxSignupView:
 
 def _sandbox_individual_plan(coach):
     """The seeded individual plan (Maya's) on the sandbox coach's own demo data."""
-    return (
-        Plan.objects.filter(relationship__coach=coach, relationship__is_demo=True)
-        .exclude(source_group__isnull=False)
-        .first()
-    )
+    return Plan.objects.filter(
+        relationship__coach=coach, relationship__is_demo=True
+    ).first()
 
 
 # ---------------------------------------------------------------------------
@@ -469,8 +466,8 @@ class TestDraftGuard:
         coach = _sandbox_coach()
         client.force_login(coach)
 
-        # Lena is seeded with no plan (only Maya gets one; the other three are
-        # group members with a *shared* plan) — a fresh target for plan_create.
+        # Only Maya is seeded with a plan — any other demo athlete is a fresh
+        # target for plan_create.
         fresh_link = next(
             link
             for link in CoachAthlete.objects.for_coach(coach).filter(is_demo=True)
@@ -910,7 +907,6 @@ class TestExpireSandboxes:
         # The leak trap: the demo athletes are SEPARATE User rows with no FK
         # cascade from the coach — a cascade-only sweep would orphan all five.
         assert not User.objects.filter(pk__in=athlete_ids).exists()
-        assert not MesoGroup.objects.filter(coach_id=user.pk).exists()
         assert SandboxSession.objects.count() == 0
         assert CoachProfile.objects.filter(user_id=user.pk).count() == 0
 

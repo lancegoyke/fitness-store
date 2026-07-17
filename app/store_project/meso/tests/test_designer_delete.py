@@ -23,10 +23,7 @@ Covers, per ``docs/archive/meso/designer-framework-plan.md`` Phase 0:
 - every existing lookup that must become soft-delete-aware once a row can be
   hidden without being gone (``prescription_patch``, ``session_add_exercise``,
   ``week_view``, ``week_set_current``, ``plan_deliver``, ``week_add`` after a
-  delete, ``Mesocycle.append_week``, ``serialize_week_snapshot``);
-- group plans: the group coach can delete on the shared program, and
-  ``GroupMembership.sync_delivered_plan`` never materializes a soft-deleted
-  source row onto a member's plan.
+  delete, ``Mesocycle.append_week``, ``serialize_week_snapshot``).
 """
 
 import json
@@ -37,11 +34,8 @@ from django.utils import timezone
 
 from store_project.meso import presenters
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import GroupMembershipFactory
-from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
-from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
@@ -74,17 +68,6 @@ def seed_plan(coach=None, athlete=None):
     session = day(week, day_number=1, name="Lower")
     cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return plan, week, session, cell
-
-
-def seed_group_plan():
-    """A minimal owned group plan with one current week → session → prescription cell."""
-    group = MesoGroupFactory()
-    plan = GroupPlanFactory(group=group, title="Squad Block", status=Plan.Status.ACTIVE)
-    meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = day(week, day_number=1, name="Lower")
-    cell = presc(session, name="Box Squat")
-    return group, plan, week, session, cell
 
 
 def _two_week_plan():
@@ -592,140 +575,6 @@ class TestSerializeWeekSnapshotSoftDelete:
         ex_ids = [e["id"] for s in snapshot["sessions"] for e in s["exercises"]]
         assert doomed_cell.pk not in ex_ids
         assert keep_cell.pk in ex_ids
-
-
-# ---------------------------------------------------------------------------
-# Group plans
-# ---------------------------------------------------------------------------
-
-
-class TestGroupPlanDelete:
-    def test_group_coach_can_delete_prescription_and_session(self, client):
-        group, plan, week, session, cell = seed_group_plan()
-        client.force_login(group.coach)
-
-        presc_resp = client.post(
-            reverse(
-                "meso:api_prescription_delete",
-                kwargs={"plan_id": plan.pk, "pk": cell.pk},
-            )
-        )
-        assert presc_resp.status_code == 200
-        cell.exercise_slot.refresh_from_db()
-        assert cell.exercise_slot.deleted_at is not None
-
-        session_resp = client.post(
-            reverse(
-                "meso:api_session_delete", kwargs={"plan_id": plan.pk, "pk": session.pk}
-            )
-        )
-        assert session_resp.status_code == 200
-        session.refresh_from_db()
-        assert session.deleted_at is not None
-
-    def test_sync_delivered_plan_skips_soft_deleted_source_rows(self, client):
-        group, plan, week, session, cell = seed_group_plan()
-        survivor = day(week, day_number=2, name="Upper")
-        presc(survivor, name="Bench")
-        membership = GroupMembershipFactory(group=group)
-
-        client.force_login(group.coach)
-        resp = client.post(
-            reverse(
-                "meso:api_session_delete", kwargs={"plan_id": plan.pk, "pk": session.pk}
-            )
-        )
-        assert resp.status_code == 200
-
-        member_plan, member_weeks = membership.sync_delivered_plan(week.mesocycle)
-        member_week = member_weeks[0]
-        day_numbers = [s.day_number for s in member_week.sessions.all()]
-        assert session.day_number not in day_numbers
-        assert survivor.day_number in day_numbers
-
-
-class TestGroupRedeliverySoftDelete:
-    """Re-delivering after a shared-program delete must not destroy member logs.
-
-    ``sync_delivered_plan`` reconciles the member's materialized plan against
-    the live source rows; a source row the coach soft-deleted must *hide* the
-    member's copy (flag flip), never hard-delete it — ``SessionLog.session``
-    cascades, so a hard delete erases the member's logged history on the next
-    delivery. A source row that comes back (Phase 1 undo) revives the member's
-    hidden copy in place, same pk.
-    """
-
-    def test_redelivery_hides_member_session_and_keeps_its_logs(self, client):
-        group, plan, week, session, cell = seed_group_plan()
-        membership = GroupMembershipFactory(group=group)
-        _, member_weeks = membership.sync_delivered_plan(week.mesocycle)
-        member_week = member_weeks[0]
-        member_session = member_week.sessions.get(
-            session_slot__day_number=session.day_number
-        )
-        member_cell = list(member_session.cells())[0]
-        athlete = membership.relationship.athlete
-        log = SessionLogFactory(session=member_session, athlete=athlete)
-        logged_set = LoggedSetFactory(session_log=log, prescription=member_cell)
-
-        client.force_login(group.coach)
-        resp = client.post(
-            reverse(
-                "meso:api_session_delete", kwargs={"plan_id": plan.pk, "pk": session.pk}
-            )
-        )
-        assert resp.status_code == 200
-        membership.sync_delivered_plan(week.mesocycle)
-
-        member_session.refresh_from_db()
-        assert member_session.deleted_at is not None
-        log.refresh_from_db()
-        assert log.session_id == member_session.pk
-        logged_set.refresh_from_db()
-        assert logged_set.session_log_id == log.pk
-
-        # Simulate Phase 1 undo: the source day returns (its identity is the
-        # block-shared SessionSlot, cascaded onto its rows/sessions by
-        # ``session_delete``) → the member's hidden copy is revived in place
-        # (same pk, flag cleared), not recreated.
-        source_slot = session.session_slot
-        source_slot.deleted_at = None
-        source_slot.save(update_fields=["deleted_at"])
-        source_slot.exercise_slots.update(deleted_at=None)
-        source_slot.sessions.update(deleted_at=None)
-        membership.sync_delivered_plan(week.mesocycle)
-        member_session.refresh_from_db()
-        assert member_session.deleted_at is None
-        assert (
-            member_week.sessions.filter(
-                session_slot__day_number=session.day_number
-            ).count()
-            == 1
-        )
-
-    def test_redelivery_hides_member_prescription_rows(self, client):
-        group, plan, week, session, cell = seed_group_plan()
-        extra = presc(session, name="Curl", order=7)
-        membership = GroupMembershipFactory(group=group)
-        _, member_weeks = membership.sync_delivered_plan(week.mesocycle)
-        member_week = member_weeks[0]
-        member_session = member_week.sessions.get(
-            session_slot__day_number=session.day_number
-        )
-        member_extra = next(c for c in member_session.cells() if c.name == "Curl")
-
-        client.force_login(group.coach)
-        resp = client.post(
-            reverse(
-                "meso:api_prescription_delete",
-                kwargs={"plan_id": plan.pk, "pk": extra.pk},
-            )
-        )
-        assert resp.status_code == 200
-        membership.sync_delivered_plan(week.mesocycle)
-
-        member_extra.exercise_slot.refresh_from_db()
-        assert member_extra.exercise_slot.deleted_at is not None
 
 
 class TestDeliverScreenSoftDelete:

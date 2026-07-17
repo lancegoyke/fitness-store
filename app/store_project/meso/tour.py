@@ -3,7 +3,7 @@
 Phase 1 (``docs/meso/demo-onboarding-tour-plan.md``) split ``demo.load_demo``
 into idempotent, per-feature segment loaders. Phase 2 drove them one at a time
 from an in-app guided tour for the anonymous sandbox. Phase 3 extends the same
-eight steps to a real, authenticated coach with an empty workspace: instead of
+steps to a real, authenticated coach with an empty workspace: instead of
 loading fake demo athletes, they're guided to add *themselves* as an athlete
 and program for themselves (O5) — the self-coaching variant.
 
@@ -46,14 +46,13 @@ from . import demo as meso_demo
 from .billing import access as billing_access
 from .models import CoachAthlete
 from .models import CoachProfile
-from .models import MesoGroup
 from .models import SessionLog
 from .models import TourEvent
 from .models import Week
 
 logger = logging.getLogger(__name__)
 
-#: The 8-step tour (O2/O3), shared across audiences. ``url_name``/``anchor``
+#: The 7-step tour (O2/O3), shared across audiences. ``url_name``/``anchor``
 #: are the step's "Take me there" target + spotlighted control — the same
 #: physical page/control regardless of variant (``finish`` is the one
 #: exception: the self variant overrides ``anchor`` in its own sub-dict,
@@ -182,28 +181,6 @@ STEPS = [
         },
     },
     {
-        "key": "groups",
-        "url_name": "meso:roster",
-        "anchor": "roster-groups",
-        "sandbox": {
-            "title": "Program a whole group at once",
-            "body": "Groups share one program with per-athlete auto-adjusts — "
-            "build it once, tune it per person.",
-            "body_done": "Sample group added — one shared program with "
-            "per-athlete auto-adjusts, built once and tuned per person.",
-            "segment": "group",
-            "action_label": "Add a sample group",
-        },
-        "self": {
-            "title": "Program a whole group at once",
-            "body": "Groups share one program with per-athlete auto-adjusts — "
-            "built for when you're coaching several athletes together. Coaching "
-            "just yourself for now? Skip this one.",
-            "body_done": "Your group exists — one shared program with per-athlete "
-            "auto-adjusts, built once and tuned per person.",
-        },
-    },
-    {
         "key": "agent",
         "url_name": "meso:designer",
         "anchor": "designer-root",
@@ -270,7 +247,6 @@ _HAS_PREDICATES = {
     "program": meso_demo.has_program,
     "delivery": meso_demo.has_delivery,
     "log": meso_demo.has_log,
-    "group": meso_demo.has_group,
 }
 
 #: sandbox segment name → the step ``key`` that offers it (Phase 4 funnel
@@ -474,16 +450,16 @@ def _sandbox_step_fields(step, user, *, has_demo=False):
 # The self mirrors of the sandbox ``demo.has_*`` predicates (which are
 # ``is_demo``-scoped by contract, so they can't be reused here). Same shape —
 # cheap ``exists()``, derived from data (O7) — but scoped to the coach's own
-# self-coaching data: the ``is_self`` link's individual plan, the coach's own
-# logs, and their real (non-demo) groups. They give the deliver/results/groups
-# self steps the ``loaded`` completion signal the sandbox already had (#441 P3-5).
+# self-coaching data: the ``is_self`` link's individual plan and the coach's
+# own logs. They give the deliver/results self steps the ``loaded`` completion
+# signal the sandbox already had (#441 P3-5).
 
 
 def _active_self_working_plan(user):
     """The current working plan on the coach's *active* self-link, or ``None``.
 
     The single source of "the coach's own plan right now". ``working_plan``
-    already drops archived plans and group-materialized trees, and ``.active()``
+    already drops archived plans, and ``.active()``
     drops an *ended* self-link — so the deliver/results predicates below never
     read a stale delivered/logged week from a self-link the coach has since
     removed (which ``CoachAthlete.end()`` archives but leaves ``is_self`` set).
@@ -530,20 +506,11 @@ def _self_has_log(user):
     )
 
 
-def _self_has_group(coach):
-    """Whether the coach has created a real (non-demo) group (self mirror).
-
-    Mirrors ``demo.has_group`` but non-demo: a demo group (loaded by the sandbox
-    ``group`` segment) must not read as the coach's own real group.
-    """
-    return MesoGroup.objects.filter(coach=coach).exclude(is_demo=True).exists()
-
-
 def _self_context(user):
     """One-shot facts every dynamic self-variant step needs (computed once per call).
 
     The welcome/designer/agent steps key off the self-link / working-plan /
-    agent-allowance state, and the deliver/results/groups steps off their own
+    agent-allowance state, and the deliver/results steps off their own
     completion predicates, so all of it is read once per ``build_config`` call
     rather than re-queried per step.
     """
@@ -556,7 +523,6 @@ def _self_context(user):
         "has_plan": working_plan is not None,
         "has_delivery": _self_has_delivery(user),
         "has_log": _self_has_log(user),
-        "has_group": _self_has_group(user),
         "can_use_agent": billing_access.can_use_agent(user),
         # Cheap to resolve unconditionally (no query) — used only once a
         # self-link exists, but harmless to compute either way.
@@ -571,7 +537,6 @@ def _self_context(user):
 _SELF_LOADED_BY_STEP = {
     "deliver": "has_delivery",
     "results": "has_log",
-    "groups": "has_group",
 }
 
 #: self step key → the completion predicate its action-completion advance must
@@ -580,7 +545,7 @@ _SELF_LOADED_BY_STEP = {
 #: logger can save a ``pending`` draft — so the advance may only fire once the
 #: coach's *own* step data exists, matching the ``loaded`` display (Codex #441
 #: P3-5). Steps whose action can only produce the coach's own data
-#: (welcome/designer/groups/agent) need no gate — their endpoint implies it.
+#: (welcome/designer/agent) need no gate — their endpoint implies it.
 _SELF_ADVANCE_PREDICATE = {
     "deliver": _self_has_delivery,
     "results": _self_has_log,
@@ -626,8 +591,8 @@ def _self_step_fields(step, ctx):
       (mirrors the roster's "Draft with AI" gate); any other combination
       falls back to the generic ``locked_body``, no ``loaded`` concept.
 
-    The three action-goal steps whose action is taken on the *real* spotlighted
-    control — ``deliver``/``results``/``groups`` — carry a data-derived
+    The two action-goal steps whose action is taken on the *real* spotlighted
+    control — ``deliver``/``results`` — carry a data-derived
     ``loaded`` flag (``_SELF_LOADED_BY_STEP``) and swap to their ``body_done``
     once complete, but never offer a typed ``action`` (#441 P3-5). ``profile``
     and ``finish`` stay static copy with no action or ``loaded`` — the driver

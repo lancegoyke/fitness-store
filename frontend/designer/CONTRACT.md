@@ -31,8 +31,9 @@ multi-week build lives in `docs/archive/meso/fixed-selection-plan.md`
 linked PRs.
 
 Ported pure logic lives in `frontend/designer/src/lib/` (`api.ts`,
-`agent.ts`, `override.ts`, `grid.ts`, `coachmarks.ts`, `keys.ts`,
-`deliver.ts` — `oneRm.ts` was deleted in Phase 2a with the %1RM editor) —
+`agent.ts`, `grid.ts`, `coachmarks.ts`, `keys.ts`, `deliver.ts` —
+`oneRm.ts` was deleted in Phase 2a with the %1RM editor; `override.ts`
+went with the group subsystem) —
 every surviving hook below is a thin, stateful wrapper
 around those modules plus `fetch`. `Id` below means `number | string`
 (server ids are numeric; a couple of fixture-era tests used string ids —
@@ -53,16 +54,11 @@ called out inline where they bind:
    rule Phase 2 PR B originally wrote for `usePlanData` (retired below); A5
    just moved which hook it binds to, once there was only one hook left to
    bind it to.
-2. **Verbs that finish by patching one cell** (`useOverrideEditor`'s
-   `saveOverride`/`clearOverride`, `useGrid`'s own `patchCell`/
-   `renameExercise`/`writeCellLine`/`patchRowColumns`) don't always go
-   through a full `refetchGrid()` — cell-scoped edits patch just that cell
-   in local state (`patchCellAdj` for an override reply, or the optimistic
-   write built into the verbs themselves) so the UI repaints instantly
-   without waiting on a full-grid network round trip.
-   `useOverrideEditor` itself is data-owner-agnostic (see below) — it
-   writes through whatever `patchExercise`-shaped callback its caller
-   injects (`DesignerRoot` injects `gridState.patchCellAdj`).
+2. **Verbs that finish by patching one cell** (`useGrid`'s `patchCell`/
+   `renameExercise`/`writeCellLine`/`patchRowColumns`) don't go through a
+   full `refetchGrid()` — cell-scoped edits patch just that cell in local
+   state (the optimistic write built into the verbs themselves) so the UI
+   repaints instantly without waiting on a full-grid network round trip.
 
 ### useGrid
 
@@ -94,9 +90,6 @@ MesoGrid | null` and `history: GridHistory`, hydrated once from
 - **RETIRED in Phase 2a: `setOneRm`** — the %1RM editor is gone (a % load
   is just prescription text now; see "RETIRED: useOneRmEditor /
   RowOneRmEditor" below), and with it `GridCellOneRmPatch`.
-- **`patchCellAdj`**: a pure local repaint, no POST of its own — `useOverrideEditor`
-  already POSTed to `prescription/<id>/override/` and hands back
-  `{adj, adjusts, history}`; `DesignerRoot` routes its `patchExercise` here.
 - **Structural verbs** (`addDay`/`removeDay`, `addWeek`/`removeWeek`/
   `setCurrentWeek`, `addExercise`/`removeExercise`, `reorderDays`/
   `reorderExercises`/`moveExerciseToDay`, `undo`/`redo`, `skipCell`/
@@ -108,14 +101,10 @@ MesoGrid | null` and `history: GridHistory`, hydrated once from
   `fillAcrossWeeks` copies the WHOLE text stack (line 0 + sub-lines) of the
   source week to every other week server-side.
 - **`refetchGrid`'s field whitelist**: the GET response is narrowed to
-  `{mesocycle, weeks, days, history}` plus the A5-added `{plan, group,
-  athlete, phases}` — every field `MesoGrid` carries must be explicitly
+  `{mesocycle, weeks, days, history}` plus the A5-added `{plan, athlete,
+  phases}` — every field `MesoGrid` carries must be explicitly
   listed here or it silently drops on the next refetch (regression-tested:
   `useGrid.test.ts` "refetchGrid carries the full payload through").
-
-One group-only cell patch type — `GridCellAdjPatch` (`{adj, adjusts}`) — is
-the grid analog of the retired `usePlanData`'s `patchExercise(exId, patch)`
-on the one-week path (`GridCellOneRmPatch` went with `setOneRm` in Phase 2a).
 
 ### RETIRED: usePlanData / useAutosave / useDeletes / useUndoRedo
 
@@ -126,7 +115,7 @@ Issue #455 phase A5 deleted these four hooks (and their specs) outright —
   `history`/`athlete`/`group`/`pendingDelete` for the one-week view, with
   `applyPlanData` as its central re-serialize sink and `switchWeek`/
   `addWeek`/`setCurrentWeek` as its week-management verbs. `useGrid.grid`
-  (now carrying `plan`/`group`/`athlete`/`phases` too, added in A5 step 1)
+  (now carrying `plan`/`athlete`/`phases` too, added in A5 step 1)
   and its `addWeek`/`removeWeek`/`setCurrentWeek` replace it 1:1; the
   concept of a single "viewed week" is gone — `MesoTable` renders every
   week as a column simultaneously, so there's nothing to switch between.
@@ -152,94 +141,19 @@ Issue #455 phase A5 deleted these four hooks (and their specs) outright —
   `useUndoKeyboard(gridState.undo, gridState.redo)` — no more view-conditional
   routing between two hooks' undo/redo, since there's only one now.
 
-### useOverrideEditor
+### RETIRED: useOverrideEditor / OverrideModal / lib/override.ts
 
-```ts
-interface OverrideEditorState {
-  ex: Exercise;
-  members: GroupMember[];
-  memberId: string;
-  draft: OverrideDraft; // lib/override.ts
-  saving: boolean;
-  error: string;
-}
-
-function useOverrideEditor(options: {
-  planId: Id;
-  csrf: string;
-  group: GroupIdentity | null;
-  adoptHistory: (data: HistoryCarrier) => void;      // caller-injected — see below
-  patchExercise: (exId: Id, patch: Partial<Exercise>) => void; // caller-injected — see below
-}): {
-  override: OverrideEditorState | null;
-  overrideHasExisting: boolean; // lib/override.ts overrideHasExisting(override.ex, override.memberId); false when override is null
-  openOverride(ex: Exercise): void;
-  selectOverrideMember(memberId: string): void;
-  updateDraft(patch: Partial<OverrideDraft>): void;
-  closeOverride(): void;
-  saveOverride(): Promise<void>;
-  clearOverride(): Promise<void>;
-}
-```
-
-`openOverride(ex)` no-ops (leaves `override` null) unless `group` is
-non-null and has members — faithful port of the "no-op outside group mode
-or with no members" spec. Member selection on open picks the first member
-whose id appears in `ex.adjusts` (falls back to `members[0].id`) — ported
-verbatim from the source's `adjusted`/`memberId` logic — then seeds
-`draft` via `overrideDraft(ex, memberId)`. `selectOverrideMember` re-derives
-`draft` the same way and clears `error`. `closeOverride` no-ops while
-`saving` (guards the mid-save dismiss the source protects against — Escape
-and a backdrop click both route through it in `OverrideModal`).
-`saveOverride` runs `parseOverrideLoadPct(draft.load_pct)`; on `{ok:false}`
-sets `error = "Load % must be a whole number from 1 to 200."` and returns
-without posting; on success POSTs the full diff
-(`{athlete, swap, load_pct, sets, reps, note}`, all trimmed) to
-`prescription/<id>/override/`. `clearOverride` POSTs
-`{athlete: memberId, clear: true}`. Both funnel through the same internal
-submit path: on success, `patchExercise(ex.id, {adj: data.adj ?? null,
-adjusts: data.adjusts ?? []})`, `adoptHistory(data)`, close; on failure,
-`console.error`, `error = "Couldn't save that adjust. Please try again."`,
-editor stays open (`ex` on `program` is untouched either way, matching
-"keeps the editor open ... row unchanged" in `meso.test.js`).
-
-#### Per-athlete adjust on the multi-week table (`MesoTable`)
-
-The broader multi-week grid subsystem (`useGrid`, `MesoTable`, `GridCell`/
-`GridRow`/`GridDay`/`MesoGrid`) postdates this contract and is specified in
-`docs/archive/meso/fixed-selection-plan.md` (archived — all 6 phases shipped)
-— only the group-adjust slice is pinned here, since it reuses the override
-machinery above.
-
-`GridCell` (in `lib/api.ts`) gains two optional group-only fields, emitted
-by `serialize_mesocycle_grid` on a GROUP plan for each cell that has an
-effective adjust (individual plans never carry them, so `cell.adj` is
-`undefined`): `adj?: string | null` — the cell's badge summary (e.g.
-`"MO -10%"` / `"2 adjusts"`) — and `adjusts?: OverrideAdjust[]` — every
-member's stored diff.
-
-`MesoTable` gains `group: GroupIdentity | null` and
-`onOpenOverride(row: GridRow, cell: GridCell)`. When `group` has members,
-every NON-skipped cell renders the same `.meso-adjust-badge` /
-`.meso-adjust-empty` "+ adjust"/`cell.adj` control (testid
-`cell-override-badge-{prescription_id}`); a click hands `(row, cell)` up.
-No control renders for an individual plan (`group === null`) or a skipped cell.
-
-`DesignerRoot` synthesizes an `Exercise` from the `(row, cell)` pair
-(`id: cell.prescription_id`, `name: row.name`, `text: cell.text`, plus
-`adj`/`adjusts` — Phase 2a: no structured numbers left, so the override
-draft's sets/reps fields seed from the member's stored adjust only, blank
-otherwise) and opens `useOverrideEditor` — **its only instance now**
-(issue #455 phase A5 deleted the one-week path's sibling instance, which
-used to wire `patchExercise`/`adoptHistory` to the retired `usePlanData`) —
-wired `patchExercise: gridState.patchCellAdj` (repaints the cell's
-`adj`/`adjusts` in place, no grid refetch) and
-`adoptHistory: gridState.adoptGridHistory` (adopts the reply's
-`serialize_plan_history` into the grid's own undo history). `useGrid`
-exposes `patchCellAdj(cellId, {adj, adjusts})` (a local, POST-free cell
-repaint — the grid analog of the retired `usePlanData.patchExercise`) and
-`adoptGridHistory` (coercing `string | null` labels so the override reply
-adopts cleanly).
+The MesoGroup subsystem (group plans, per-athlete overrides) was removed
+outright — backend and frontend together (2026-07, the spreadsheet-parity
+pivot; see `docs/meso/spreadsheet-parity-plan.md`). The grid payload no
+longer carries `group`, cells no longer carry `adj`/`adjusts`, and the
+`prescription/<id>/override/` endpoint is gone, so the whole override
+editing surface was deleted with it: `useOverrideEditor`, `OverrideModal`,
+`lib/override.ts` (+ specs), `MesoTable`'s per-cell adjust badge and its
+`group`/`onOpenOverride` props, `useGrid.patchCellAdj`/`GridCellAdjPatch`,
+and the `GroupIdentity`/`GroupMember`/`OverrideAdjust` types in
+`lib/api.ts`. The designer is single-mode (individual) now — the top bar's
+individual/group segmented control and the group identity rails went too.
 
 ### RETIRED: useOneRmEditor / RowOneRmEditor
 
@@ -335,15 +249,14 @@ DesignerRoot
 │       ├── MesoTable (view === "table", default)
 │       ├── BlockView (view === "block")
 │       └── AthletePreview (view === "athlete")
-└── OverrideModal (rendered when override !== null; portal-free, fixed overlay like the source)
 ```
 
 Issue #455 phase A5 deleted `WeekStrip`/`WeekGrid`/`DayCard`/`ExerciseRow`
 (the one-week-at-a-time tree they formed) entirely — `MesoTable` is the
 canvas's only exercise-grid view now, and it isn't further decomposed into
 child components the way the retired tree was: one file owns the whole
-table (day sub-tables, week columns, row cells, drag handles, the 1RM
-editor, the group-adjust badge), documented in prose in its own header
+table (day sub-tables, week columns, row cells, drag handles), documented
+in prose in its own header
 comment rather than a component-by-component breakdown here, since (unlike
 the retired tree) there's no multi-file boundary left to document. The week
 switcher (add/make-current/remove) is `MesoTable`'s own `WeekColumnHeader` +
@@ -356,14 +269,14 @@ column, so there's no separate "switch to a week" verb left, only
 No props (mounted directly by `main.tsx` into `#meso-designer-root`, same
 as PR A). Hydrates once on mount:
 
-- `#meso-grid-data` → `JSON.parse` → `MesoGrid` (`{plan, group, athlete, phases, mesocycle, weeks, days, history}`). **Required hydration gate** — missing/unparseable → render `null` (issue #455 phase A5: this is now the ONLY hydration payload; a plan with no mesocycle block at all is a documented "shouldn't happen post-scaffold" edge case — see `views.py`'s `MesoDesignerView.get_context_data` — that now renders a blank island instead of a degraded one-week grid, since there's no separate `#meso-plan-data` fallback left to render from).
-- `#meso-chat-thread` → `JSON.parse` → `ChatMessage[]`; empty/absent → the default greeting (group-aware: a different opening line when `group` is present, ported from `init()`'s override).
+- `#meso-grid-data` → `JSON.parse` → `MesoGrid` (`{plan, athlete, phases, mesocycle, weeks, days, history}`). **Required hydration gate** — missing/unparseable → render `null` (issue #455 phase A5: this is now the ONLY hydration payload; a plan with no mesocycle block at all is a documented "shouldn't happen post-scaffold" edge case — see `views.py`'s `MesoDesignerView.get_context_data` — that now renders a blank island instead of a degraded one-week grid, since there's no separate `#meso-plan-data` fallback left to render from).
+- `#meso-chat-thread` → `JSON.parse` → `ChatMessage[]`; empty/absent → the default greeting.
 - `#meso-csrf` → `data-token` attribute → `csrf: string`.
 - `#meso-designer-flags` → `{is_sandbox, can_use_agent, agent_allowance, signup_url, price_summary}` (see below) → passed straight to `ChatPanel`.
 
-Composes `useGrid` (the sole data owner), one `useOverrideEditor` instance
-wired to it, `useTableReorder`, `useUndoKeyboard`, `useAgentChat`, and
-`useCoachmarks`; owns `mode`/`view`/`periodStyle`/`checks` as local
+Composes `useGrid` (the sole data owner), `useTableReorder`,
+`useUndoKeyboard`, `useAgentChat`, and `useCoachmarks`; owns
+`view`/`periodStyle`/`checks` as local
 `useState` (see "View-state rules"); derives `program` for `AthletePreview`
 via `gridToProgram(grid, weekId)` and `cycleLabel` for `TopBar`/`LeftRail`
 via `cycleLabelFromGrid(phases, weeks)` (both pure helpers in `lib/grid.ts`
@@ -375,19 +288,18 @@ readable.
 
 ### TopBar
 
-Props: `{ mode, onSetMode(mode), isIndividual, isGroup, athlete, group, cycleLabel, onPreviewAsAthlete, deliverHref }`.
-Renders the Meso logo/back-link, the individual/group identity chip, the
-mode segmented control, the cycle label chip, "Preview as athlete", and
-(individual-only) "Review changes" + "Deliver"; group plans show the
-"Deliver to all · soon" chip instead — ported 1:1 from the `x-show`
-conditionals. Testids: `mode-individual-button`, `mode-group-button`,
+Props: `{ athlete, cycleLabel, onPreviewAsAthlete, deliverHref }`.
+Renders the Meso logo/back-link, the athlete identity chip, the cycle
+label chip, "Preview as athlete", "Review changes", and "Deliver". (The
+individual/group mode segmented control and the group "Deliver to all ·
+soon" chip went with the group subsystem.) Testids:
 `preview-athlete-button`, `deliver-link` (`href={deliverHref}`),
 `review-link`.
 
 ### LeftRail
 
-Props: `{ isIndividual, isGroup, athlete, group, phases, onOpenBlockView }`.
-Renders the athlete/group identity block and the macrocycle phase list;
+Props: `{ athlete, phases, onOpenBlockView }`.
+Renders the athlete identity block and the macrocycle phase list;
 "Open plan →" calls `onOpenBlockView` (sets `view = "block"` in
 `DesignerRoot`). Testid: `open-block-view-button`.
 
@@ -506,15 +418,6 @@ gone — plus `text`/`lines` off the cell and `tempo`/`rest`/`note` off the
 row), and the phone mock renders the prescription text verbatim with ONE
 loggable row per lift (no sets count left to fan set rows out from).
 
-### OverrideModal
-
-Props: `{ override, overrideHasExisting, onSelectMember, onUpdateDraft, onClose, onSave, onClear }` (`unit` dropped in Phase 2a — the header meta shows the shared prescription text verbatim instead of composed sets×reps·load). Rendered only when `override !== null`.
-Backdrop click and Escape both call `onClose` (which internally guards on
-`saving`, per `useOverrideEditor`). Testids: `override-member-{memberId}`,
-`override-swap-input`, `override-load-pct-input`, `override-sets-input`,
-`override-reps-input`, `override-note-input`, `override-clear-button`,
-`override-cancel-button`, `override-save-button`, `override-error`.
-
 ## `meso-designer-flags` payload
 
 A new `json_script` context payload the server view must add — replacing
@@ -561,11 +464,6 @@ today (the client gate is UX, not the enforcement).
 Local `useState` in `DesignerRoot`, all client-only (no server round trip
 changes them):
 
-- **`mode`** (`"individual" | "group"`): initial value is `"group"` if the
-  hydrated plan has a `group`, else `"individual"` — ported from `init()`'s
-  `if (this.group) this.mode = "group"` override of the `"individual"`
-  default. Freely togglable afterward via `TopBar`'s segmented control;
-  nothing else ever changes it programmatically.
 - **`view`** (`"table" | "block" | "athlete"`): default `"table"` (issue
   #455 phase A5 — was `"week"`; the one-week view is gone and
   `#meso-grid-data` is now a required hydration gate, so there's no more
@@ -595,10 +493,9 @@ changes them):
   mocked global `fetch`, never a parallel in-memory code path. Components
   are always "live" once rendered.
 - **Error handling is unchanged in kind**: every failure path stays
-  `console.error(...)` + either an inert state (autosave: nothing visible
-  changes) or an inline `error` string on the relevant editor's state
-  (override/1RM). No toast library, no error boundary beyond React's
-  default, no retry/backoff — a failed save just leaves the editor open for
+  `console.error(...)` + an inert state (autosave: nothing visible
+  changes). No toast library, no error boundary beyond React's
+  default, no retry/backoff — a failed save just leaves the input for
   the coach to retry by hand, exactly as today.
 - **Not ported** (confirmed dead by the inventory, already dropped from
   `lib/`): `accent`, `theme`, `onDeliver()`/`delivered` toast (unreachable —

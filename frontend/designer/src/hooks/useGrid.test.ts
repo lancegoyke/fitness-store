@@ -670,16 +670,15 @@ describe("refetchGrid", () => {
     expect(result.current.grid?.mesocycle.name).toBe("Block 1");
   });
 
-  // Issue #455 phase A5 regression: plan/group/athlete/phases are now the
+  // Issue #455 phase A5 regression: plan/athlete/phases are now the
   // front-end's ONLY source for the top bar / left rail / block view (the
   // one-week plan_data owner that used to carry them is gone) — a refetch
   // that silently dropped them would blank that chrome after the very next
   // structural edit (add day, add week, undo, ...).
-  it("carries the new plan/group/athlete/phases fields through a refetch", async () => {
+  it("carries the new plan/athlete/phases fields through a refetch", async () => {
     const { result } = setup();
     const data = grid({
       plan: { id: 7, title: "Renamed plan", status: "active", unit: "kg" },
-      group: null,
       athlete: { name: "Devon Reyes", initials: "DR", goal: "Strength", contraindications: [] },
       phases: [{ name: "Hypertrophy", weeks: "4 wk", state: "current" }],
     });
@@ -690,7 +689,6 @@ describe("refetchGrid", () => {
     });
 
     expect(result.current.grid?.plan).toEqual(data.plan);
-    expect(result.current.grid?.group).toEqual(data.group);
     expect(result.current.grid?.athlete).toEqual(data.athlete);
     expect(result.current.grid?.phases).toEqual(data.phases);
   });

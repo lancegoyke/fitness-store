@@ -9,8 +9,8 @@ shape, so Phase 3 can hydrate the designer from the DB instead of fixtures.
 
 This test seeds Maya's hypertrophy block — the same data the prototype hard-codes
 — and asserts the serializer reproduces the designer's shape. Fields that are
-derived from *other* slices (``last`` from logged sets, ``adj`` from the agent)
-are intentionally absent here; only the program-schema-owned fields round-trip.
+derived from *other* slices (``last`` from logged sets) are intentionally
+absent here; only the program-schema-owned fields round-trip.
 """
 
 from datetime import date
@@ -33,7 +33,6 @@ from store_project.meso.models import Unit
 from store_project.meso.models import Week
 from store_project.meso.parsing import compose_prescription_text
 from store_project.meso.serializers import serialize_athlete_identity
-from store_project.meso.serializers import serialize_group_identity
 from store_project.meso.serializers import serialize_mesocycle_grid
 from store_project.meso.serializers import serialize_plan
 from store_project.meso.serializers import serialize_plan_history
@@ -297,7 +296,6 @@ class TestSerializePlan:
                     assert ex["tag"] == tags[0]
                 # Derived in later slices, never emitted by Phase 2.
                 assert "last" not in ex
-                assert "adj" not in ex
 
     def test_phase_state_from_sequence_not_order_arithmetic(self):
         """`next` is the *adjacent* block by position, even with sparse orders.
@@ -575,13 +573,12 @@ class TestSerializeMesocycleGrid:
     def test_top_level_keys(self):
         f = _build_grid_meso()
         result = serialize_mesocycle_grid(f.meso)
-        # Issue #455 phase A5: plan/group/athlete/phases join the grid payload
+        # Issue #455 phase A5: plan/athlete/phases join the grid payload
         # so DesignerRoot can retire the separate one-week `plan_data` owner
         # and hydrate the top bar / left rail / block view straight off the
         # grid (see this class's TestSerializeMesocycleGridIdentity below).
         assert set(result.keys()) == {
             "plan",
-            "group",
             "athlete",
             "phases",
             "mesocycle",
@@ -784,28 +781,16 @@ class TestSerializeMesocycleGrid:
         assert str(f.week1.pk) not in day1_data["session_ids"]
         assert day1_data["session_ids"] == {str(f.week2.pk): f.day1_wk2.pk}
 
-    def test_individual_grid_cells_carry_no_adj_overlay(self):
-        # The per-athlete ``adj`` overlay is a GROUP-only concern; an individual
-        # plan's grid cells never carry ``adj``/``adjusts``.
-        f = _build_grid_meso()
-        result = serialize_mesocycle_grid(f.meso)
-        for day_data in result["days"]:
-            for row in day_data["rows"]:
-                for cell in row["cells"].values():
-                    assert "adj" not in cell
-                    assert "adjusts" not in cell
-
 
 class TestSerializeMesocycleGridIdentity:
-    """Issue #455 phase A5: plan/group/athlete/phases join the grid payload.
+    """Issue #455 phase A5: plan/athlete/phases join the grid payload.
 
     DesignerRoot's top bar / left rail / block view retire the separate
     one-week ``plan_data`` owner (``serialize_plan``) and hydrate straight off
     the grid now. These fields are additive re-uses of the exact helpers
-    ``serialize_plan`` already calls (``serialize_group_identity``/
-    ``serialize_athlete_identity``/``serialize_mesocycle``/``_phase_states``),
-    just scoped to THIS grid's own mesocycle/plan rather than the plan's
-    globally-current week.
+    ``serialize_plan`` already calls (``serialize_athlete_identity``/
+    ``serialize_mesocycle``/``_phase_states``), just scoped to THIS grid's
+    own mesocycle/plan rather than the plan's globally-current week.
     """
 
     def test_plan_summary(self):
@@ -819,19 +804,11 @@ class TestSerializeMesocycleGridIdentity:
             "unit": f.plan.unit,
         }
 
-    def test_individual_plan_carries_athlete_and_no_group(self):
+    def test_individual_plan_carries_athlete(self):
         f = _build_grid_meso()
         result = serialize_mesocycle_grid(f.meso)
-        assert result["group"] is None
         assert result["athlete"] == serialize_athlete_identity(f.plan)
         assert result["athlete"]["name"]  # sanity: a real name, not blank
-
-    def test_group_plan_carries_group_and_no_athlete(self):
-        f = _build_group_grid_meso()
-        result = serialize_mesocycle_grid(f.meso)
-        assert result["athlete"] is None
-        assert result["group"] == serialize_group_identity(f.group)
-        assert result["group"]["name"] == f.group.name
 
     def test_phases_reflect_the_gridded_mesocycle_as_current(self):
         # ``_build_grid_meso`` creates a single mesocycle, so ``phases`` is
@@ -855,77 +832,6 @@ class TestSerializeMesocycleGridIdentity:
         assert [p["state"] for p in result["phases"]] == ["current", "next"]
 
 
-def _build_group_grid_meso():
-    """A one-day, two-row, single-week GROUP block with one member override.
-
-    Day 1 (order 0): Back Squat (order 0, load 100, overridden for the member)
-    + Bench Press (order 1, no override). The member's adjust — a swap + a load %
-    — is the ``adj`` overlay the grid must attach to the overridden cell only.
-    """
-    from store_project.meso.factories import GroupMembershipFactory
-    from store_project.meso.factories import GroupPlanFactory
-    from store_project.meso.factories import MesoGroupFactory
-
-    group = MesoGroupFactory()
-    plan = GroupPlanFactory(group=group, status=Plan.Status.ACTIVE)
-    meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    day1 = day(week, day_number=1, name="Lower", order=0)
-    squat_cell = presc(day1, name="Back Squat", order=0, load="100")
-    bench_cell = presc(day1, name="Bench Press", order=1, load="60")
-    membership = GroupMembershipFactory(group=group)
-    membership.set_override(squat_cell, load_pct=90, swap_name="Box Squat")
-    return SimpleNamespace(
-        group=group,
-        plan=plan,
-        meso=meso,
-        week=week,
-        day1=day1,
-        squat_cell=squat_cell,
-        bench_cell=bench_cell,
-        membership=membership,
-    )
-
-
-class TestSerializeMesocycleGridGroupAdj:
-    """A group plan's grid cells carry the per-athlete ``adj`` overlay (P5).
-
-    The multi-week table must show the same per-row adjust badge the single-week
-    ``serialize_plan`` overlay does — driven by the members' real override diffs —
-    so a coach editing the whole block still sees who diverges from the shared base.
-    """
-
-    def _cell(self, result, *, day_index, row_index, week):
-        return result["days"][day_index]["rows"][row_index]["cells"][str(week.pk)]
-
-    def test_overridden_cell_carries_adj_and_adjusts(self):
-        f = _build_group_grid_meso()
-        result = serialize_mesocycle_grid(f.meso)
-        cell = self._cell(result, day_index=0, row_index=0, week=f.week)
-        assert "adj" in cell
-        assert "adjusts" in cell
-        # The raw stored diff round-trips so the in-grid editor can pre-fill it.
-        adjust = cell["adjusts"][0]
-        assert adjust["swap"] == "Box Squat"
-        assert adjust["load_pct"] == 90
-
-    def test_unadjusted_cell_has_no_adj(self):
-        f = _build_group_grid_meso()
-        result = serialize_mesocycle_grid(f.meso)
-        cell = self._cell(result, day_index=0, row_index=1, week=f.week)
-        assert "adj" not in cell
-        assert "adjusts" not in cell
-
-    def test_dropped_member_leaves_no_adj(self):
-        # ``group_adjustments`` scopes to *active* members — an ended link's adjust
-        # drops off the grid, matching the single-week overlay.
-        f = _build_group_grid_meso()
-        f.membership.relationship.end()
-        result = serialize_mesocycle_grid(f.meso)
-        cell = self._cell(result, day_index=0, row_index=0, week=f.week)
-        assert "adj" not in cell
-
-
 class TestSerializeMesocycleGridQueries:
     """The grid stays a fixed number of queries — no N+1 over the block.
 
@@ -943,13 +849,4 @@ class TestSerializeMesocycleGridQueries:
         # contraindications (serialize_athlete_identity).
         f = _build_grid_meso()
         with django_assert_num_queries(9):
-            serialize_mesocycle_grid(f.meso)
-
-    def test_group_grid_query_count(self, django_assert_num_queries):
-        # The group grid adds group_adjustments (1) plus serialize_group_
-        # identity's active_member_users + one member's contraindications
-        # (one active member in ``_build_group_grid_meso``) in place of the
-        # individual path's single contraindications query.
-        f = _build_group_grid_meso()
-        with django_assert_num_queries(11):
             serialize_mesocycle_grid(f.meso)

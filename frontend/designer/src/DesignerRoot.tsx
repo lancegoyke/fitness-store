@@ -14,7 +14,6 @@ import { useCallback, useState } from "react";
 import "./designer.css";
 
 import { TopBar } from "./components/TopBar";
-import type { DesignerMode } from "./components/TopBar";
 import { LeftRail } from "./components/LeftRail";
 import { ChatPanel } from "./components/ChatPanel";
 import type { DesignerFlags } from "./components/ChatPanel";
@@ -22,9 +21,7 @@ import { MesoTable } from "./components/MesoTable";
 import { BlockView } from "./components/BlockView";
 import type { PeriodStyle } from "./components/BlockView";
 import { AthletePreview } from "./components/AthletePreview";
-import { OverrideModal } from "./components/OverrideModal";
 
-import { useOverrideEditor } from "./hooks/useOverrideEditor";
 import { useGrid } from "./hooks/useGrid";
 import type { Id } from "./hooks/useGrid";
 import { useTableReorder } from "./hooks/useTableReorder";
@@ -33,7 +30,7 @@ import { useAgentChat } from "./hooks/useAgentChat";
 import type { ChatMessage } from "./hooks/useAgentChat";
 import { useCoachmarks } from "./hooks/useCoachmarks";
 
-import type { Exercise, GridCell, GridRow, MesoGrid } from "./lib/api";
+import type { MesoGrid } from "./lib/api";
 import { cycleLabelFromGrid, gridToProgram } from "./lib/grid";
 import { deliverHref as buildDeliverHref } from "./lib/deliver";
 
@@ -49,27 +46,17 @@ interface Hydrated {
   unit: string;
   csrf: string;
   gridData: MesoGrid;
-  initialMode: DesignerMode;
   initialMessages: ChatMessage[];
   initialResumeUrl: string | null;
   flags: DesignerFlags;
 }
 
-// The thread starts with a single orienting greeting — a group-aware opening
-// line when the plan has a group, ported from init()'s override. Real agent
-// turns append live as the coach sends instructions.
+// The thread starts with a single orienting greeting. Real agent turns
+// append live as the coach sends instructions.
 const DEFAULT_GREETING: ChatMessage = {
   id: 1,
   role: "agent",
   text: "Tell me how you'd like to adjust this plan — try “lighten Friday” or “add a deload week.”",
-};
-const GROUP_GREETING: ChatMessage = {
-  id: 1,
-  role: "agent",
-  text:
-    "This is the group's shared program — every member trains off it. Ask me to change it for the whole group, or to " +
-    "adjust one athlete (a swap, a load %, or a volume tweak just for them). I propose changes for you to review and " +
-    "honor every member's contraindications.",
 };
 
 const DEFAULT_FLAGS: DesignerFlags = {
@@ -98,9 +85,7 @@ function readHydration(): Hydrated | null {
     return null;
   }
 
-  const group = gridData.group ?? null;
-
-  let initialMessages: ChatMessage[] = group ? [GROUP_GREETING] : [DEFAULT_GREETING];
+  let initialMessages: ChatMessage[] = [DEFAULT_GREETING];
   let initialResumeUrl: string | null = null;
   const threadEl = document.getElementById("meso-chat-thread");
   if (threadEl) {
@@ -138,34 +123,14 @@ function readHydration(): Hydrated | null {
     unit: gridData.plan?.unit || "kg",
     csrf,
     gridData,
-    initialMode: group ? "group" : "individual",
     initialMessages,
     initialResumeUrl,
     flags,
   };
 }
 
-/** The override editor's `openOverride(ex)` takes an `Exercise`, but the
- * multi-week table works in (GridRow, GridCell) pairs — each cell IS a
- * Prescription. Synthesize the Exercise the editor needs from that pair: the
- * cell's freeform text under the row's block name, carrying `adj`/`adjusts`
- * so the modal preselects the adjusted member and seeds their draft (from
- * the member's stored adjust only — Phase 2a: the base cell has no
- * structured sets/reps left to seed from). `id` is the cell's
- * `prescription_id` — the same id the override reply patches back. */
-function synthesizeCellExercise(row: GridRow, cell: GridCell): Exercise {
-  return {
-    id: cell.prescription_id,
-    name: row.name,
-    text: cell.text,
-    adj: cell.adj ?? null,
-    adjusts: cell.adjusts ?? [],
-  };
-}
-
 export function DesignerRoot() {
   const [hydrated] = useState<Hydrated | null>(() => readHydration());
-  const [mode, setMode] = useState<DesignerMode>(hydrated?.initialMode ?? "individual");
   const [view, setView] = useState<ViewMode>("table");
   const [periodStyle, setPeriodStyle] = useState<PeriodStyle>("timeline");
   const [checks, setChecks] = useState<Record<string, boolean>>({});
@@ -173,13 +138,11 @@ export function DesignerRoot() {
   const planId: Id = hydrated?.planId ?? "";
   const csrf = hydrated?.csrf ?? "";
   const unit = hydrated?.unit ?? "kg";
-  const isIndividual = mode === "individual";
-  const isGroup = mode === "group";
 
   // useGrid is the SOLE data owner (issue #455 phase A5 — the one-week
   // usePlanData sibling is gone). Owns grid/history and every verb that
   // mutates them; the top bar / left rail / block view / athlete preview all
-  // re-source off `gridState.grid` (plan/group/athlete/phases/weeks/days),
+  // re-source off `gridState.grid` (plan/athlete/phases/weeks/days),
   // additive fields serialize_mesocycle_grid now carries for exactly this
   // reason (see serializers.py).
   const gridState = useGrid({ planId, csrf, initialGrid: hydrated?.gridData ?? null });
@@ -189,17 +152,6 @@ export function DesignerRoot() {
   // view-conditional routing the retired useUndoRedo needed is gone too.
   useUndoKeyboard(gridState.undo, gridState.redo);
 
-  // P5 group: the table's own per-cell override editor — the ONLY instance
-  // now (the retired planData-scoped sibling is gone). Its save/clear reply
-  // repaints the grid cell (patchCellAdj) and adopts the grid's own undo
-  // history (adoptGridHistory).
-  const overrideEditor = useOverrideEditor({
-    planId,
-    csrf,
-    group: gridState.grid?.group ?? null,
-    adoptHistory: gridState.adoptGridHistory,
-    patchExercise: gridState.patchCellAdj,
-  });
   // Issue #455 phase A2 (drag reordering): the table's own pure drag-event
   // translator — wired to gridState's structural verbs
   // (reorderExercises/reorderDays/moveExerciseToDay).
@@ -231,12 +183,7 @@ export function DesignerRoot() {
   return (
     <div className="meso-designer-root">
       <TopBar
-        mode={mode}
-        onSetMode={setMode}
-        isIndividual={isIndividual}
-        isGroup={isGroup}
         athlete={grid?.athlete ?? null}
-        group={grid?.group ?? null}
         cycleLabel={cycleLabel}
         onPreviewAsAthlete={() => selectView("athlete")}
         deliverHref={deliverHref}
@@ -244,10 +191,7 @@ export function DesignerRoot() {
 
       <div className="meso-designer-body">
         <LeftRail
-          isIndividual={isIndividual}
-          isGroup={isGroup}
           athlete={grid?.athlete ?? null}
-          group={grid?.group ?? null}
           phases={grid?.phases ?? []}
           onOpenBlockView={() => selectView("block")}
         />
@@ -291,8 +235,6 @@ export function DesignerRoot() {
                 grid={gridState.grid}
                 history={gridState.history}
                 busy={gridState.busy}
-                group={grid?.group ?? null}
-                onOpenOverride={(row, cell) => overrideEditor.openOverride(synthesizeCellExercise(row, cell))}
                 onPatchCell={gridState.patchCell}
                 onWriteCellLine={gridState.writeCellLine}
                 onPatchRowColumns={gridState.patchRowColumns}
@@ -345,16 +287,6 @@ export function DesignerRoot() {
           </div>
         </div>
       </div>
-
-      <OverrideModal
-        override={overrideEditor.override}
-        overrideHasExisting={overrideEditor.overrideHasExisting}
-        onSelectMember={overrideEditor.selectOverrideMember}
-        onUpdateDraft={overrideEditor.updateDraft}
-        onClose={overrideEditor.closeOverride}
-        onSave={overrideEditor.saveOverride}
-        onClear={overrideEditor.clearOverride}
-      />
     </div>
   );
 }

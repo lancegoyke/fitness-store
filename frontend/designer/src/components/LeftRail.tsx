@@ -1,20 +1,17 @@
 // LeftRail (CONTRACT.md "LeftRail") — ported 1:1 from designer.html's left
-// rail (lines ~103-201): athlete/group identity block + macrocycle phase list.
-import type { AthleteIdentity, GroupIdentity, Phase } from "../lib/api";
+// rail (lines ~103-201): athlete identity block + macrocycle phase list.
+import type { AthleteIdentity, Phase } from "../lib/api";
 
 export interface LeftRailProps {
-  isIndividual: boolean;
-  isGroup: boolean;
   athlete: AthleteIdentity | null;
-  group: GroupIdentity | null;
   phases: Phase[];
   onOpenBlockView(): void;
 }
 
-export function LeftRail({ isIndividual, isGroup, athlete, group, phases, onOpenBlockView }: LeftRailProps) {
+export function LeftRail({ athlete, phases, onOpenBlockView }: LeftRailProps) {
   return (
     <div className="meso-left-rail">
-      {isIndividual && athlete && (
+      {athlete && (
         <div className="meso-rail-block">
           <div className="meso-rail-identity">
             <div className="meso-rail-avatar">{athlete.initials}</div>
@@ -43,48 +40,6 @@ export function LeftRail({ isIndividual, isGroup, athlete, group, phases, onOpen
               {!athlete.contraindications.length && <div className="meso-rail-empty">None noted.</div>}
             </div>
           </div>
-        </div>
-      )}
-
-      {isGroup && group && (
-        <div className="meso-rail-block">
-          <div className="meso-rail-identity">
-            <div className="meso-rail-avatar meso-rail-avatar--group">
-              <span className="meso-rail-group-glyph" />
-            </div>
-            <div className="meso-identity-info">
-              <div className="meso-rail-name">{group.name}</div>
-              <div className="meso-identity-goal">
-                {group.member_count + (group.member_count === 1 ? " participant" : " participants") +
-                  (group.focus ? " · " + group.focus : "")}
-              </div>
-            </div>
-          </div>
-          <div className="meso-rail-section">
-            <p className="meso-rail-label">Participants</p>
-            <div className="meso-rail-list meso-rail-list--tight">
-              {group.members.map((m, i) => (
-                <div key={m.id} className="meso-participant-row">
-                  <div className={`meso-participant-avatar${i === 0 ? " meso-participant-avatar--lead" : ""}`}>{m.initials}</div>
-                  <span>{m.name}</span>
-                </div>
-              ))}
-              {!group.members.length && <div className="meso-rail-empty">No active members yet.</div>}
-            </div>
-          </div>
-          {!!group.flags.length && (
-            <div className="meso-rail-section">
-              <p className="meso-rail-label">Flags across group</p>
-              <div className="meso-flex meso-wrap">
-                {group.flags.map((f) => (
-                  <span key={f} className="meso-flag-badge">
-                    <span className="meso-flag-dot" />
-                    <span>{f}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 

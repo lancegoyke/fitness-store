@@ -44,7 +44,7 @@ class RunUsage:
     stop_reason: str = ""
     # Completed Claude calls behind this run. Defaults to 0 (no network) so a
     # scripted/test client doesn't overcount the ledger; ``_extract_usage`` sets it
-    # to 1 for a real response. >1 once group/multi-turn lands.
+    # to 1 for a real response. >1 once multi-turn lands.
     api_calls: int = 0
 
 
@@ -84,12 +84,9 @@ PROPOSE_TOOL = {
         "WHOLE block (every week follows), so it targets any week's "
         "prescription_id. A 'progress', 'volume', or 'deload' acts on the specific "
         "week's row/day you target by id. An 'add' introduces a NEW exercise row "
-        "into a session, so it targets a session_id, not a prescription. For a "
-        "GROUP's shared program you have an extra verb: 'adjust' diverges ONE "
-        "member from the shared row (a per-athlete auto-adjust) — it targets that "
-        "member by member_id plus the shared prescription_id, and the other "
-        "members are unaffected. Honor every active contraindication and the "
-        "coach's avoid-rules — never introduce a movement a contraindication flags."
+        "into a session, so it targets a session_id, not a prescription. Honor "
+        "every active contraindication and the coach's avoid-rules — never "
+        "introduce a movement a contraindication flags."
     ),
     "input_schema": {
         "type": "object",
@@ -114,7 +111,6 @@ PROPOSE_TOOL = {
                                 "volume",
                                 "deload",
                                 "add",
-                                "adjust",
                             ],
                         },
                         "session_id": {
@@ -194,24 +190,6 @@ PROPOSE_TOOL = {
                                 "add only: the RPE target for the new row, e.g. '7'."
                             ),
                         },
-                        "member_id": {
-                            "type": ["integer", "null"],
-                            "description": (
-                                "adjust only (GROUP plans): the member_id (from the "
-                                "group context) of the ONE member this per-athlete "
-                                "auto-adjust applies to. The shared row is unchanged; "
-                                "only this member diverges."
-                            ),
-                        },
-                        "load_pct": {
-                            "type": ["integer", "null"],
-                            "description": (
-                                "adjust only: scale this member's shared load to "
-                                "this percentage — 90 means −10%, 110 means +10%. "
-                                "Omit for no load change (set new_name for a swap "
-                                "and/or new_sets/new_reps for a volume tweak instead)."
-                            ),
-                        },
                     },
                     "required": ["kind", "title", "rationale"],
                 },
@@ -264,31 +242,8 @@ SYSTEM_PROMPT = (
 )
 
 
-_GROUP_FRAMING = (
-    "This is a GROUP's SHARED program — every listed member trains off it. You "
-    "can edit it two ways:\n"
-    "- A SHARED edit (swap/progress/volume/deload/add) changes the shared program "
-    "for EVERYONE — a swap changes that exercise across the WHOLE block, and "
-    "progress/volume/deload act on the week you target by id. Honor every member's "
-    "contraindications (group.contraindications folds them together) — a shared "
-    "movement must be safe for all of them.\n"
-    "- A per-athlete ADJUST diverges ONE member from the shared row (a swap, a "
-    "load %, or a volume tweak just for them). Use it when the instruction is "
-    "about a single athlete or when one member's constraint differs from the "
-    "group. Set member_id to that member's id from group.members, prescription_id "
-    "to the shared row, and the divergence (new_name / load_pct / new_sets / "
-    "new_reps). An adjust only needs to be safe for THAT member.\n"
-    "Prefer a shared edit when the change is for the whole group; reach for an "
-    "adjust only to personalize one member.\n\n"
-)
-
-
 def _user_prompt(context, instruction):
-    # Group framing lives in the volatile user turn (not the cached system prompt)
-    # so individual runs keep their stable, cache-friendly prompt unchanged.
-    framing = _GROUP_FRAMING if "group" in context else ""
     return (
-        f"{framing}"
         "Plan context (JSON):\n"
         f"{json.dumps(context, ensure_ascii=False, sort_keys=True)}\n\n"
         f"Coach instruction:\n{instruction}"

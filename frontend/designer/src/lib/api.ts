@@ -19,19 +19,6 @@ export const EMPTY_HISTORY: HistoryState = {
   redo_label: null,
 };
 
-/** One member's stored per-athlete diff on a shared (group) row. */
-export interface OverrideAdjust {
-  id: string;
-  name?: string;
-  initials?: string;
-  label?: string;
-  swap: string;
-  load_pct: number | null;
-  sets: string;
-  reps: string;
-  note: string;
-}
-
 /** One freeform sub-line of a cell's stack (Phase 2a text-first). */
 export interface CellLine {
   /** Present on the multi-week grid payload (patch-by-pk); absent on the
@@ -56,10 +43,6 @@ export interface Exercise {
   note?: string;
   tag?: string;
   last?: string;
-  /** Group mode: this row's badge summary, e.g. "MO -10%", or null. */
-  adj?: string | null;
-  /** Group mode: every member's stored diff on this row. */
-  adjusts?: OverrideAdjust[];
   /** P2 one-week exception: this week's Prescription was skipped (not
    * trained). Serialized by `serialize_prescription`/`serialize_session`
    * (serializers.py) on the single-week path — mirrors `GridCell.skipped`
@@ -97,22 +80,6 @@ export interface Phase {
   state: "done" | "current" | "next" | "future" | string;
 }
 
-export interface GroupMember {
-  id: string;
-  name: string;
-  initials: string;
-}
-
-/** Group identity for the left rail / top bar (serialize_group_identity). */
-export interface GroupIdentity {
-  id: number | string;
-  name: string;
-  focus?: string;
-  member_count: number;
-  members: GroupMember[];
-  flags: string[];
-}
-
 /** Individual athlete identity for the left rail (serialize_athlete_identity). */
 export interface AthleteIdentity {
   name: string;
@@ -131,13 +98,12 @@ export interface PlanSummary {
 
 /**
  * The full re-serialize payload every ✓-marked endpoint returns (serialize_plan)
- * and applyPlanData adopts wholesale: plan/group/athlete/program/weeks/viewing/
+ * and applyPlanData adopts wholesale: plan/athlete/program/weeks/viewing/
  * phases/history all move together (inventory "Server contract").
  */
 export interface PlanEnvelope {
   ok?: boolean;
   plan?: PlanSummary;
-  group?: GroupIdentity | null;
   athlete?: AthleteIdentity | null;
   program: Day[];
   weeks: Week[];
@@ -184,15 +150,6 @@ export interface GridCell {
   /** The row's freeform sub-line stack for this week (line >= 1), blank
    * lines included so the editor can show a cleared line in place. */
   lines: CellLine[];
-  /** P5 group: this cell's per-athlete adjust badge summary (e.g. "MO -10%"
-   * or "2 adjusts"), or absent when no member has an effective adjust here.
-   * Only attached for a GROUP plan (serialize_mesocycle_grid) — individual
-   * plans never carry it, so `cell.adj` is `undefined` and MesoTable renders
-   * no adjust control. Mirrors `Exercise.adj` on the single-week path. */
-  adj?: string | null;
-  /** P5 group: every member's stored diff on this cell (drives the override
-   * editor's member dots + draft). Present alongside `adj`; absent otherwise. */
-  adjusts?: OverrideAdjust[];
 }
 
 export interface GridRow {
@@ -242,13 +199,12 @@ export interface GridHistory {
 }
 
 export interface MesoGrid {
-  /** Issue #455 phase A5: the grid's own plan/group/athlete/phases — the
+  /** Issue #455 phase A5: the grid's own plan/athlete/phases — the
    * front-end's ONLY source for these now that the one-week `plan_data`
    * hydration path is retired. Optional (rather than required) to minimize
    * churn in useGrid.test.ts's `Partial<MesoGrid>` fixtures that predate
    * this phase and don't set them. */
   plan?: PlanSummary;
-  group?: GroupIdentity | null;
   athlete?: AthleteIdentity | null;
   phases?: Phase[];
   mesocycle: { id: number; plan_id: number; name: string; week_count: number };

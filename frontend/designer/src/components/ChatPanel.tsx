@@ -76,7 +76,6 @@ export function ChatPanel(props: ChatPanelProps) {
                         <div className="meso-change-check">✓</div>
                         <div className="meso-change-body">
                           <div className="meso-change-title">{ch.title}</div>
-                          {ch.member && <div className="meso-change-member">{ch.member}</div>}
                           <div className="meso-change-diff">
                             {ch.before && <span className="meso-change-before">{ch.before}</span>}
                             {ch.before && ch.after && <span> → </span>}

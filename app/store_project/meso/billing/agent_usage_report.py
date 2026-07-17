@@ -226,10 +226,9 @@ class Totals:
 
 @dataclass
 class ClientUsage:
-    """One coach's spend on a single client — an athlete, or a group."""
+    """One coach's spend on a single client (an athlete)."""
 
     label: str
-    is_group: bool
     totals: Totals
 
 
@@ -244,7 +243,6 @@ class ClientRun:
     """
 
     label: str
-    is_group: bool
     runs: int
 
 
@@ -311,15 +309,9 @@ class Report:
 
 
 def _attribution(plan):
-    """``(key, label, is_group)`` for the client a batch's plan serves.
-
-    A group plan attributes to the group (no single athlete); an individual plan to
-    its athlete. ``key`` namespaces the two so an athlete and a group can't collide.
-    """
-    if plan.group_id is not None:
-        return ("group", plan.group_id), f"Group: {plan.group.name}", True
+    """``(key, label)`` for the client a batch's plan serves — its athlete."""
     athlete = plan.relationship.athlete
-    return ("athlete", athlete.id), athlete.display_name(), False
+    return ("athlete", athlete.id), athlete.display_name()
 
 
 def build_report(*, start, end):
@@ -339,7 +331,6 @@ def build_report(*, start, end):
         "coach",
         "plan",
         "plan__relationship__athlete",
-        "plan__group",
     )
 
     totals = Totals()
@@ -365,10 +356,10 @@ def build_report(*, start, end):
             coaches[batch.coach_id] = acc
         acc["totals"].add(batch)
 
-        key, label, is_group = _attribution(batch.plan)
+        key, label = _attribution(batch.plan)
         client = acc["clients"].get(key)
         if client is None:
-            client = ClientUsage(label=label, is_group=is_group, totals=Totals())
+            client = ClientUsage(label=label, totals=Totals())
             acc["clients"][key] = client
         client.totals.add(batch)
 
@@ -459,14 +450,13 @@ def coach_run_breakdown(coach, *, start, end):
     ).select_related(
         "plan",
         "plan__relationship__athlete",
-        "plan__group",
     )
     clients = {}  # key -> ClientRun
     for batch in batches:
-        key, label, is_group = _attribution(batch.plan)
+        key, label = _attribution(batch.plan)
         row = clients.get(key)
         if row is None:
-            row = ClientRun(label=label, is_group=is_group, runs=0)
+            row = ClientRun(label=label, runs=0)
             clients[key] = row
         row.runs += 1
     # Heaviest first; the label tiebreak keeps equal-count rows in a stable order.

@@ -164,8 +164,6 @@ describe("gridToProgram", () => {
             note: "",
             tag: undefined,
             skipped: false,
-            adj: null,
-            adjusts: [],
           },
         ],
       },

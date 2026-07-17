@@ -39,18 +39,15 @@ _FALLBACK_SWAP = "Coach's Choice Alternative"
 def _contraindication_words(context):
     """Movement words the demo must not reintroduce.
 
-    Reads the same contraindication texts the real client is grounded on — an
-    individual plan's ``athlete.contraindications`` or a group plan's folded
-    ``group.contraindications`` (``agent.service.build_context``) — and pulls out
-    plain lowercase words. Deliberately loose (no stemming, no stopword list, a
-    shorter minimum length than ``validation._significant_words``) since this is a
-    *pre-filter* to keep the demo tasteful; the real guardrail
+    Reads the same contraindication texts the real client is grounded on — the
+    plan's ``athlete.contraindications`` (``agent.service.build_context``) — and
+    pulls out plain lowercase words. Deliberately loose (no stemming, no stopword
+    list, a shorter minimum length than ``validation._significant_words``) since
+    this is a *pre-filter* to keep the demo tasteful; the real guardrail
     (``validation.clean_change``) is still the enforced backstop.
     """
     athlete = context.get("athlete") or {}
-    group = context.get("group") or {}
     texts = list(athlete.get("contraindications") or [])
-    texts += list(group.get("contraindications") or [])
     words = set()
     for text in texts:
         cleaned = re.sub(r"[^a-z\s]", " ", text.lower())
@@ -65,19 +62,17 @@ def _contraindication_words(context):
 def _honors_note(context, instruction):
     """The rule the swap honors, straight from the plan's own grounding.
 
-    A real contraindication text (athlete's, else the group's folded list) —
-    the same line the coach sees on the athlete card, so the review gate reads
-    "this respects *her* flag", not boilerplate. Prefer the flag the coach's
-    ``instruction`` is actually about (word overlap — "her knee is cranky"
-    picks the knee flag over an unrelated first-in-list one); ties and
-    no-overlap fall back to the first. Truncated to the model column
-    (``validation._LIMITS``); a plan with no contraindications gets a generic
-    coaching-rule note instead of an empty honors line.
+    A real contraindication text (the athlete's) — the same line the coach sees
+    on the athlete card, so the review gate reads "this respects *her* flag",
+    not boilerplate. Prefer the flag the coach's ``instruction`` is actually
+    about (word overlap — "her knee is cranky" picks the knee flag over an
+    unrelated first-in-list one); ties and no-overlap fall back to the first.
+    Truncated to the model column (``validation._LIMITS``); a plan with no
+    contraindications gets a generic coaching-rule note instead of an empty
+    honors line.
     """
     athlete = context.get("athlete") or {}
-    group = context.get("group") or {}
     texts = list(athlete.get("contraindications") or [])
-    texts += list(group.get("contraindications") or [])
     if not texts:
         return "the plan's movement preferences"
     instruction_words = {
