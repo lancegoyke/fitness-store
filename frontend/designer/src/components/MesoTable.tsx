@@ -240,7 +240,7 @@ function CellSubLineInput({ cellId, rowId, weekId, line, text, ghost, tableNav, 
 
   return (
     <input
-      className="meso-cell meso-line-input"
+      className={`meso-cell meso-line-input${ghost ? " meso-line-input--ghost" : ""}`}
       data-testid={ghost ? `cell-line-new-${cellId}` : `cell-line-${cellId}-${line}`}
       data-grid-cell={tableCellDomKey(rowId, weekId, "text", line)}
       aria-label={ghost ? "Add a line" : `Line ${line}`}
@@ -885,6 +885,9 @@ interface TableDayBlockProps {
   days: GridDay[];
   weeks: GridWeek[];
   busy: boolean;
+  // True only for the first day block — the one that renders the week
+  // lifecycle controls (see WeekColumnHeader.showControls).
+  showWeekControls: boolean;
   tableNav: UseTableNavResult;
   isArmed(type: ArmedKind, id: Id): boolean;
   arm(type: ArmedKind, id: Id): void;
@@ -913,6 +916,7 @@ function TableDayBlock({
   days,
   weeks,
   busy,
+  showWeekControls,
   tableNav,
   isArmed,
   arm,
@@ -1012,6 +1016,7 @@ function TableDayBlock({
                   week={week}
                   armed={isArmed("week", week.id)}
                   busy={busy}
+                  showControls={showWeekControls}
                   onArm={() => arm("week", week.id)}
                   onDisarm={disarm}
                   onSetCurrentWeek={onSetCurrentWeek}
@@ -1238,13 +1243,14 @@ export function MesoTable(props: MesoTableProps) {
         onDragEnd={handleDragEnd}
       >
         <SortableContext items={grid.days.map((d) => tableDayDragId(d.session_slot_id))} strategy={verticalListSortingStrategy}>
-          {grid.days.map((day) => (
+          {grid.days.map((day, dayIndex) => (
             <TableDayBlock
               key={day.session_slot_id}
               day={day}
               days={grid.days}
               weeks={grid.weeks}
               busy={busy}
+              showWeekControls={dayIndex === 0}
               tableNav={tableNav}
               isArmed={isArmed}
               arm={arm}
@@ -1288,13 +1294,17 @@ interface WeekColumnHeaderProps {
   week: GridWeek;
   armed: boolean;
   busy: boolean;
+  // The week is the same across every day's table, so its lifecycle controls
+  // (make-current / remove) render only once — on the first day block
+  // (designer-simplify). Other day tables show just the label + current mark.
+  showControls: boolean;
   onArm(): void;
   onDisarm(): void;
   onSetCurrentWeek(weekId: Id): void;
   onRemoveWeek(weekId: Id): void;
 }
 
-function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek, onRemoveWeek }: WeekColumnHeaderProps) {
+function WeekColumnHeader({ week, armed, busy, showControls, onArm, onDisarm, onSetCurrentWeek, onRemoveWeek }: WeekColumnHeaderProps) {
   return (
     <th
       data-testid={`week-col-${week.id}`}
@@ -1309,7 +1319,7 @@ function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek
           </span>
         )}
       </div>
-      {!week.current && (
+      {showControls && !week.current && (
         <div className="meso-table-week-controls">
           <button
             type="button"
