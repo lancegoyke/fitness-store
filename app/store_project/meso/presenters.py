@@ -33,6 +33,7 @@ from .models import WeekDelivery
 from .one_rm import key_str
 from .one_rm import one_rm_values
 from .personal_records import new_records_in
+from .personal_records import personal_records
 from .serializers import _fmt_num
 from .serializers import _num
 from .serializers import _phase_states
@@ -269,6 +270,70 @@ def profile_program(link, working_plan):
         "macrocycle": macrocycle,
         "results_summary": _profile_results(link),
     }
+
+
+# -- personal records panel (Phase 4d) -------------------------------------
+#
+# The persistent "records book" — best e1RM per lift with provenance — shared by
+# the athlete's training home and the coach's athlete-profile, both fed by the 4b
+# derive-on-read engine (``personal_records``); nothing is persisted. Unit is a
+# per-PLAN property (there is no athlete-level preference), so each host scopes to
+# a single plan's unit rather than pooling kg and lb: the athlete's / this link's
+# most-recently-active plan. An empty row list hides the panel (the templates
+# guard), so a lifter with no numeric-parseable best sees no empty chrome.
+
+
+def _personal_record_rows(athlete, unit):
+    """Best-lift display rows for a records panel — alphabetical by lift.
+
+    Each row carries the estimated 1RM (formatted like the stored ``AthleteOneRm``
+    display via ``_fmt_num``) and the winning set's provenance (reps/load/date).
+    """
+    rows = [
+        {
+            "name": r.name,
+            "e1rm": _fmt_num(round(r.e1rm, 2)),
+            "unit": r.unit,
+            "reps": r.reps,
+            "load": r.load,
+            "date": r.date,
+        }
+        for r in personal_records(athlete, unit=unit).values()
+    ]
+    rows.sort(key=lambda row: row["name"].lower())
+    return rows
+
+
+def _records_unit_plan(plans):
+    """The plan whose unit denominates a records panel — most recently active.
+
+    ``personal_records`` is unit-scoped, so a panel shows one denomination; pick
+    the most-recently-modified non-archived plan (the same "what they're on now"
+    heuristic the home card ordering uses). ``None`` when there's none — the panel
+    is then empty.
+    """
+    return plans.exclude(status=Plan.Status.ARCHIVED).order_by("-modified").first()
+
+
+def athlete_personal_records(user):
+    """The athlete's records panel for their training home (Phase 4d)."""
+    plan = _records_unit_plan(Plan.objects.for_athlete(user))
+    if plan is None:
+        return {"rows": [], "unit": ""}
+    return {"rows": _personal_record_rows(user, plan.unit), "unit": plan.unit}
+
+
+def coach_personal_records(link):
+    """The athlete's records panel for the coach's athlete-profile (Phase 4d).
+
+    The bests are unit-scoped and athlete-global (D4: PRs ride the structured
+    ``LoggedSet``, not per-coach); the coach reaches this only through an active
+    link and sees them in their own plan's unit.
+    """
+    plan = _records_unit_plan(Plan.objects.filter(relationship=link))
+    if plan is None:
+        return {"rows": [], "unit": ""}
+    return {"rows": _personal_record_rows(link.athlete, plan.unit), "unit": plan.unit}
 
 
 def _relative_when(dt):

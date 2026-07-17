@@ -250,6 +250,9 @@
       </div>
     {% endfor %}
 
+    {# Personal records (Phase 4d) — standing bests below the live programs. #}
+    {% include "meso/_pr_list.html" %}
+
     <!-- Self-serve coach signup (S6 Phase 4): the way into the coach surface. -->
     <a class="meso-card meso-card--pad" href="{% url 'meso:become_coach' %}"
        style="display:flex;align-items:center;gap:12px;margin-top:14px;text-decoration:none;color:inherit;border:1px solid var(--line);">

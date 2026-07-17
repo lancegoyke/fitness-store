@@ -1,0 +1,25 @@
+{% comment %}
+Personal records panel (Phase 4d) — shared by the athlete's training home and the
+coach's athlete-profile. Expects `personal_records` = {rows: [...], unit: "kg"},
+each row {name, e1rm, unit, reps, load, date}, best e1RM per lift alphabetical
+(presenters.athlete_personal_records / coach_personal_records). Renders nothing
+when there are no records (a lift with no numeric-parseable best is simply
+absent), so a new surface stays uncluttered.
+{% endcomment %}
+{% if personal_records.rows %}
+  <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
+    <p class="meso-eyebrow">Personal records</p>
+    <div style="display:flex;flex-direction:column;">
+      {% for pr in personal_records.rows %}
+        <div style="padding:8px 0;{% if not forloop.last %}border-bottom:1px solid var(--line-2);{% endif %}">
+          <div style="display:flex;align-items:baseline;gap:10px;">
+            <span style="flex:1;min-width:0;font-size:13px;font-weight:600;letter-spacing:-0.01em;">{{ pr.name }}</span>
+            <span class="meso-mono" style="font-size:13px;font-weight:700;color:var(--accent-deep);white-space:nowrap;">{{ pr.e1rm }} {{ pr.unit }}</span>
+          </div>
+          <div class="meso-row-meta meso-mono">est. 1RM · from {{ pr.reps }}×{{ pr.load }}{% if pr.date %} on {{ pr.date|date:"M j, Y" }}{% endif %}</div>
+        </div>
+      {% endfor %}
+    </div>
+    <p class="meso-row-meta" style="margin-top:8px;">Estimated 1-rep max (Epley) from your logged sets.</p>
+  </div>
+{% endif %}
