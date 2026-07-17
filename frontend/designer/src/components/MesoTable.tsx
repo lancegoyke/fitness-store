@@ -22,8 +22,15 @@
 // Keyboard grid navigation (issue #455 A1) is owned by useTableNav
 // (../hooks/useTableNav), a sibling of the one-week path's useGridNav —
 // instantiated ONCE here, below, and threaded into GridCellEditor/
-// RowNameEditor as a required prop (they're module-private, so there's no
-// INERT-fallback case to support).
+// RowNameEditor/CellSubLineInput/RowColumnInput as a required prop (they're
+// module-private, so there's no INERT-fallback case to support). Phase 2b
+// (spreadsheet keyboard flow) widened its axes to the full sheet: sub-lines
+// are vertical stops (D3's arrow-down RPE row, ghost included), Tempo/
+// Notes/Rest are horizontal columns, Tab walks the row, Enter commits +
+// moves down and appends a row at a day's last stop (wired to onAddExercise
+// via useTableNav's onAppendRow), and the prescription input carries the
+// stack copy/paste handlers (Ctrl-C with no selection copies the whole
+// stack; multi-line paste replaces it — the duplicate-forward primitive).
 //
 // Drag reordering (issue #455 A2) — row + day — is owned by useTableReorder
 // (a sibling of DesignerRoot's instantiation, NOT this file): MesoTable only
@@ -49,6 +56,7 @@
 // copy, not a mechanical port of WeekGrid.tsx's "grid" mark — see this
 // file's coachmarkVisible/dismissCoachmark prop header).
 import { useEffect, useRef, useState } from "react";
+import type { ClipboardEvent } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -186,22 +194,27 @@ export const tableKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) 
 
 interface CellSubLineInputProps {
   cellId: number;
+  rowId: number;
+  weekId: number;
   line: number;
   text: string;
   /** The trailing "next line" input — commits only non-blank (a blank ghost
    * has nothing to create), and remounts empty via its parent's key once the
    * optimistic upsert promotes its text to a real `cell.lines` entry. */
   ghost?: boolean;
+  tableNav: UseTableNavResult;
   onWrite(line: number, text: string): void;
 }
 
 /** One freeform sub-line of a cell's stack (Phase 2a) — same dirty-tracking
  * commit-on-blur/Enter + Escape-revert shape as GridCellEditor's main text
- * input, but local-only (sub-line inputs are outside useTableNav's arrow
- * grid this phase, so Escape reverts to the last synced `text` directly).
+ * input. Phase 2b put sub-lines INSIDE useTableNav's axes (each line is a
+ * vertical stop at (rowId, weekId, "text", line) — including the ghost, so
+ * D3's RPE row is literally "arrow down and type"), so Enter/Escape and the
+ * arrows all come from cellProps now instead of a local onKeyDown.
  * Blanking an EXISTING line commits "" — the line clears in place (the row
  * stays), mirroring the server's blank-text upsert. */
-function CellSubLineInput({ cellId, line, text, ghost, onWrite }: CellSubLineInputProps) {
+function CellSubLineInput({ cellId, rowId, weekId, line, text, ghost, tableNav, onWrite }: CellSubLineInputProps) {
   const [draft, setDraft] = useState(text);
   const dirtyRef = useRef(false);
 
@@ -217,10 +230,25 @@ function CellSubLineInput({ cellId, line, text, ghost, onWrite }: CellSubLineInp
     onWrite(line, draft);
   }
 
+  const navProps = tableNav.cellProps(
+    rowId,
+    weekId,
+    "text",
+    {
+      onCommit: commitIfDirty,
+      onRevert: (value) => {
+        dirtyRef.current = false;
+        setDraft(value);
+      },
+    },
+    line,
+  );
+
   return (
     <input
       className="meso-cell meso-line-input"
       data-testid={ghost ? `cell-line-new-${cellId}` : `cell-line-${cellId}-${line}`}
+      data-grid-cell={tableCellDomKey(rowId, weekId, "text", line)}
       aria-label={ghost ? "Add a line" : `Line ${line}`}
       placeholder={ghost ? "+ line" : "—"}
       value={draft}
@@ -229,16 +257,7 @@ function CellSubLineInput({ cellId, line, text, ghost, onWrite }: CellSubLineInp
         setDraft(e.target.value);
       }}
       onBlur={commitIfDirty}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          commitIfDirty();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          dirtyRef.current = false;
-          setDraft(text);
-        }
-      }}
+      {...navProps}
     />
   );
 }
@@ -258,7 +277,16 @@ interface GridCellEditorProps {
  * (week × line) via onWriteCellLine), then a trailing ghost input that mints
  * the NEXT sub-line (max existing line + 1, or 1) on its first non-blank
  * commit. Dirty-tracking commit-on-blur/Enter + Escape-revert carries
- * forward from the retired six-field editor unchanged in kind. */
+ * forward from the retired six-field editor unchanged in kind.
+ *
+ * Phase 2b adds stack copy/paste on the prescription input (the cell-level
+ * duplicate-forward primitive — copy a cell, arrow to another week, paste):
+ * Ctrl-C with NOTHING selected copies the whole stack (line 0 + non-blank
+ * sub-lines, newline-joined) — a real text selection keeps native copy —
+ * and pasting MULTI-LINE text replaces the whole stack (line 0 via
+ * onPatchCell, the rest via onWriteCellLine, any longer existing lines
+ * blanked so the result equals the source). Single-line paste stays native
+ * caret insertion into the draft. */
 function GridCellEditor({ cell, row, week, tableNav, onPatchCell, onWriteCellLine }: GridCellEditorProps) {
   const [draft, setDraft] = useState(cell.text);
   const dirtyRef = useRef(false);
@@ -292,6 +320,38 @@ function GridCellEditor({ cell, row, week, tableNav, onPatchCell, onWriteCellLin
   const lines = cell.lines ?? [];
   const nextLine = lines.reduce((max, l) => Math.max(max, l.line), 0) + 1;
 
+  function onCopy(e: ClipboardEvent<HTMLInputElement>) {
+    const el = e.currentTarget;
+    if (el.selectionStart !== el.selectionEnd) return; // real selection: native copy wins.
+    e.preventDefault();
+    const stack = [draft, ...lines.filter((l) => l.text.trim() !== "").map((l) => l.text)].join("\n");
+    e.clipboardData.setData("text/plain", stack);
+  }
+
+  function onPaste(e: ClipboardEvent<HTMLInputElement>) {
+    const pasted = e.clipboardData.getData("text/plain");
+    if (!pasted.includes("\n")) return; // single line: native caret insertion into the draft.
+    e.preventDefault();
+    const parts = pasted.replace(/\r\n/g, "\n").split("\n");
+    const head = parts[0] ?? "";
+    const rest = parts.slice(1);
+    while (rest.length && (rest[rest.length - 1] ?? "").trim() === "") rest.pop();
+    dirtyRef.current = false;
+    setDraft(head);
+    onPatchCell(cellId, { text: head });
+    // The pasted head is committed while focus stays here — it's the new
+    // Escape baseline (same rule as the Enter handler's), or Escape would
+    // roll the UI back past the commit.
+    tableNav.setRevertBaseline(row.exercise_slot_id, week.id, "text", head);
+    rest.forEach((text, i) => onWriteCellLine(row.exercise_slot_id, week.id, i + 1, text));
+    // Blank any existing line beyond the pasted stack so the result equals
+    // the source cell (a cleared line stays rendered in place — Phase 2a's
+    // blank-upsert semantics — rather than carrying stale text).
+    for (const l of lines) {
+      if (l.line > rest.length && l.text !== "") onWriteCellLine(row.exercise_slot_id, week.id, l.line, "");
+    }
+  }
+
   return (
     <div className="meso-table-cell-editor">
       <input
@@ -306,23 +366,31 @@ function GridCellEditor({ cell, row, week, tableNav, onPatchCell, onWriteCellLin
           setDraft(e.target.value);
         }}
         onBlur={commitIfDirty}
+        onCopy={onCopy}
+        onPaste={onPaste}
         {...navProps}
       />
       {lines.map((l) => (
         <CellSubLineInput
           key={l.line}
           cellId={cellId}
+          rowId={row.exercise_slot_id}
+          weekId={week.id}
           line={l.line}
           text={l.text}
+          tableNav={tableNav}
           onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
         />
       ))}
       <CellSubLineInput
         key={`ghost-${nextLine}`}
         cellId={cellId}
+        rowId={row.exercise_slot_id}
+        weekId={week.id}
         line={nextLine}
         text=""
         ghost
+        tableNav={tableNav}
         onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
       />
     </div>
@@ -333,14 +401,18 @@ interface RowColumnInputProps {
   row: GridRow;
   field: "tempo" | "rest" | "note";
   label: string;
+  tableNav: UseTableNavResult;
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
 }
 
 /** Phase 2a (D2): one per-exercise row column (Tempo / Notes / Rest) — a row
  * attribute off the block-shared ExerciseSlot, NOT a per-week cell value.
- * Same local dirty-tracking commit-on-blur/Enter + Escape-revert shape as
- * CellSubLineInput above (row columns are outside arrow-nav this phase). */
-function RowColumnInput({ row, field, label, onPatchRowColumns }: RowColumnInputProps) {
+ * Same dirty-tracking commit-on-blur/Enter + Escape-revert shape as
+ * CellSubLineInput above. Phase 2b put these columns INSIDE useTableNav's
+ * horizontal axis (name → tempo → weeks… → notes → rest, the source
+ * spreadsheet's order), so Enter/Escape and the arrows come from cellProps
+ * now instead of a local onKeyDown. */
+function RowColumnInput({ row, field, label, tableNav, onPatchRowColumns }: RowColumnInputProps) {
   const synced = row[field];
   const [draft, setDraft] = useState(synced);
   const dirtyRef = useRef(false);
@@ -356,10 +428,19 @@ function RowColumnInput({ row, field, label, onPatchRowColumns }: RowColumnInput
     onPatchRowColumns(row.exercise_slot_id, { [field]: draft });
   }
 
+  const navProps = tableNav.cellProps(row.exercise_slot_id, null, field, {
+    onCommit: commitIfDirty,
+    onRevert: (value) => {
+      dirtyRef.current = false;
+      setDraft(value);
+    },
+  });
+
   return (
     <input
       className="meso-cell meso-row-col-input"
       data-testid={`row-${field}-${row.exercise_slot_id}`}
+      data-grid-cell={tableCellDomKey(row.exercise_slot_id, null, field)}
       aria-label={`${row.name || "exercise"} — ${label}`}
       placeholder="—"
       value={draft}
@@ -368,16 +449,7 @@ function RowColumnInput({ row, field, label, onPatchRowColumns }: RowColumnInput
         setDraft(e.target.value);
       }}
       onBlur={commitIfDirty}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          commitIfDirty();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          dirtyRef.current = false;
-          setDraft(synced);
-        }
-      }}
+      {...navProps}
     />
   );
 }
@@ -762,7 +834,7 @@ function TableRow({
         )}
       </td>
       <td className="meso-table-row-col meso-table-row-col--tempo">
-        <RowColumnInput row={row} field="tempo" label="tempo" onPatchRowColumns={onPatchRowColumns} />
+        <RowColumnInput row={row} field="tempo" label="tempo" tableNav={tableNav} onPatchRowColumns={onPatchRowColumns} />
       </td>
       {weeks.map((week) => {
         const cell = row.cells[String(week.id)];
@@ -825,10 +897,10 @@ function TableRow({
         );
       })}
       <td className="meso-table-row-col meso-table-row-col--note">
-        <RowColumnInput row={row} field="note" label="notes" onPatchRowColumns={onPatchRowColumns} />
+        <RowColumnInput row={row} field="note" label="notes" tableNav={tableNav} onPatchRowColumns={onPatchRowColumns} />
       </td>
       <td className="meso-table-row-col meso-table-row-col--rest">
-        <RowColumnInput row={row} field="rest" label="rest" onPatchRowColumns={onPatchRowColumns} />
+        <RowColumnInput row={row} field="rest" label="rest" tableNav={tableNav} onPatchRowColumns={onPatchRowColumns} />
       </td>
     </tr>
   );
@@ -1074,8 +1146,20 @@ export function MesoTable(props: MesoTableProps) {
 
   // Rules of Hooks: called unconditionally, before the `!grid` early return
   // below — useTableNav tolerates a null grid the same way (anchor stays
-  // null, no throw).
-  const tableNav = useTableNav({ grid });
+  // null, no throw). Phase 2b: Enter at the last stop of a day appends a
+  // blank exercise row to THAT day (Enter-adds-row) — same verb as the day's
+  // "+ Add exercise" button, same busy gate. Returning false on a dropped
+  // dispatch keeps the hook from recording a focus intent for an append
+  // that never happened.
+  const tableNav = useTableNav({
+    grid,
+    onAppendRow: (dayId) => {
+      const day = grid?.days.find((d) => d.session_slot_id === dayId);
+      if (!day || busy) return false;
+      onAddExercise(day);
+      return true;
+    },
+  });
 
   // Issue #455 phase A2 (drag reordering): PointerSensor gets a small
   // activation distance so a plain click into a cell input doesn't start a
@@ -1169,8 +1253,8 @@ export function MesoTable(props: MesoTableProps) {
             <div className="meso-coachmark-title">The block table</div>
             <div className="meso-coachmark-text">
               Tap any cell and type the prescription — “4 x 6, RPE 9” — with extra lines below it for
-              cues or substitutions; arrow keys move cell to cell, and every change autosaves. Drag a ⠿
-              handle to reorder exercises or days.
+              cues or substitutions; arrows, Tab and Enter move cell to cell (Enter at the bottom of a
+              day adds a row), and every change autosaves. Drag a ⠿ handle to reorder exercises or days.
             </div>
           </div>
           <button

@@ -343,10 +343,112 @@ describe("cell sub-lines", () => {
     expect(onWriteCellLine).not.toHaveBeenCalled();
   });
 
-  it("sub-line and ghost inputs carry no data-grid-cell (outside A1 arrow-nav this phase)", () => {
+  it("sub-line and ghost inputs carry line-keyed data-grid-cell (INSIDE nav since 2b)", () => {
     render(<MesoTable {...baseProps({ grid: linesGrid() })} />);
-    expect(screen.getByTestId("cell-line-100-1")).not.toHaveAttribute("data-grid-cell");
-    expect(screen.getByTestId("cell-line-new-100")).not.toHaveAttribute("data-grid-cell");
+    expect(screen.getByTestId("cell-line-100-1")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "text", 1));
+    expect(screen.getByTestId("cell-line-100-2")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "text", 2));
+    expect(screen.getByTestId("cell-line-new-100")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, 1, "text", 3));
+  });
+
+  it("ArrowDown from the prescription steps INTO the stack: line 1, line 2, ghost, in order (D3)", async () => {
+    const user = userEvent.setup();
+    render(<MesoTable {...baseProps({ grid: linesGrid() })} />);
+    await user.click(screen.getByTestId("cell-text-100"));
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("cell-line-100-1")).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("cell-line-100-2")).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("cell-line-new-100")).toHaveFocus();
+  });
+});
+
+// --- Phase 2b: cell stack copy/paste (the duplicate-forward primitive) ------
+describe("cell stack copy/paste", () => {
+  const LINES = [
+    { id: 5, line: 1, text: "RPE 8" },
+    { id: 6, line: 2, text: "slow eccentric" },
+  ];
+
+  function linesGrid() {
+    return grid({ days: [day({ rows: [row({ cells: { "1": cell({ lines: LINES }) } })] })] });
+  }
+
+  function clipboard(text = "") {
+    return { getData: vi.fn(() => text), setData: vi.fn() };
+  }
+
+  it("copy with a collapsed selection copies the WHOLE stack, newline-joined", () => {
+    render(<MesoTable {...baseProps({ grid: linesGrid() })} />);
+    const input = screen.getByTestId("cell-text-100") as HTMLInputElement;
+    input.setSelectionRange(2, 2);
+    const clipboardData = clipboard();
+    fireEvent.copy(input, { clipboardData });
+    expect(clipboardData.setData).toHaveBeenCalledWith("text/plain", "3 x 5, RPE 8, 100\nRPE 8\nslow eccentric");
+  });
+
+  it("copy skips blank (cleared-in-place) sub-lines", () => {
+    const CLEARED = grid({
+      days: [day({ rows: [row({ cells: { "1": cell({ lines: [{ id: 5, line: 1, text: "" }, { id: 6, line: 2, text: "cue" }] }) } })] })],
+    });
+    render(<MesoTable {...baseProps({ grid: CLEARED })} />);
+    const input = screen.getByTestId("cell-text-100") as HTMLInputElement;
+    input.setSelectionRange(0, 0);
+    const clipboardData = clipboard();
+    fireEvent.copy(input, { clipboardData });
+    expect(clipboardData.setData).toHaveBeenCalledWith("text/plain", "3 x 5, RPE 8, 100\ncue");
+  });
+
+  it("copy with a REAL text selection stays native (no stack copy)", () => {
+    render(<MesoTable {...baseProps({ grid: linesGrid() })} />);
+    const input = screen.getByTestId("cell-text-100") as HTMLInputElement;
+    input.setSelectionRange(0, 3);
+    const clipboardData = clipboard();
+    fireEvent.copy(input, { clipboardData });
+    expect(clipboardData.setData).not.toHaveBeenCalled();
+  });
+
+  it("multi-line paste replaces the stack: line 0 via onPatchCell, sub-lines via onWriteCellLine, longer old lines blanked", () => {
+    const onPatchCell = vi.fn();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ grid: linesGrid(), onPatchCell, onWriteCellLine })} />);
+    const input = screen.getByTestId("cell-text-100") as HTMLInputElement;
+    fireEvent.paste(input, { clipboardData: clipboard("4 x 6\nRPE 9") });
+    expect(onPatchCell).toHaveBeenCalledWith(100, { text: "4 x 6" });
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9");
+    // Old line 2 ("slow eccentric") is beyond the pasted stack: blanked.
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 2, "");
+    expect(input).toHaveValue("4 x 6");
+  });
+
+  it("trailing blank pasted lines are dropped, not minted", () => {
+    const onPatchCell = vi.fn();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ onPatchCell, onWriteCellLine })} />); // default fixture: lines []
+    const input = screen.getByTestId("cell-text-100") as HTMLInputElement;
+    fireEvent.paste(input, { clipboardData: clipboard("4 x 6\n\n") });
+    expect(onPatchCell).toHaveBeenCalledWith(100, { text: "4 x 6" });
+    expect(onWriteCellLine).not.toHaveBeenCalled();
+  });
+
+  it("Escape after a multi-line paste reverts to the pasted head, never past the commit", () => {
+    render(<MesoTable {...baseProps({ grid: linesGrid() })} />);
+    const input = screen.getByTestId("cell-text-100") as HTMLInputElement;
+    input.focus(); // seeds the Escape baseline with the pre-paste text
+    fireEvent.paste(input, { clipboardData: clipboard("4 x 6\nRPE 9") });
+    expect(input).toHaveValue("4 x 6");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(input).toHaveValue("4 x 6"); // the committed paste IS the baseline now
+  });
+
+  it("single-line paste stays native caret insertion (no stack write)", () => {
+    const onPatchCell = vi.fn();
+    const onWriteCellLine = vi.fn();
+    render(<MesoTable {...baseProps({ onPatchCell, onWriteCellLine })} />);
+    const input = screen.getByTestId("cell-text-100") as HTMLInputElement;
+    fireEvent.paste(input, { clipboardData: clipboard("4 x 6") });
+    expect(onPatchCell).not.toHaveBeenCalled();
+    expect(onWriteCellLine).not.toHaveBeenCalled();
   });
 });
 
@@ -421,11 +523,11 @@ describe("row columns (tempo / notes / rest)", () => {
     expect(onPatchRowColumns).not.toHaveBeenCalled();
   });
 
-  it("row-column inputs carry no data-grid-cell (outside A1 arrow-nav this phase)", () => {
+  it("row-column inputs carry row-sentinel data-grid-cell keys (INSIDE nav since 2b)", () => {
     render(<MesoTable {...baseProps()} />);
-    expect(screen.getByTestId("row-tempo-9")).not.toHaveAttribute("data-grid-cell");
-    expect(screen.getByTestId("row-note-9")).not.toHaveAttribute("data-grid-cell");
-    expect(screen.getByTestId("row-rest-9")).not.toHaveAttribute("data-grid-cell");
+    expect(screen.getByTestId("row-tempo-9")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, null, "tempo"));
+    expect(screen.getByTestId("row-note-9")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, null, "note"));
+    expect(screen.getByTestId("row-rest-9")).toHaveAttribute("data-grid-cell", tableCellDomKey(9, null, "rest"));
   });
 });
 
@@ -802,8 +904,12 @@ describe("group per-athlete adjust badge", () => {
 // renders the real table and drives real keyboard events through RTL,
 // mirroring WeekGrid.test.tsx's "Phase 3" block (the one-week precedent).
 //
-// Phase 2a: the per-week editable surface is ONE freeform "text" input, so
-// the horizontal axis is name → week 1 text → week 2 text.
+// Phase 2a: the per-week editable surface is ONE freeform "text" input.
+// Phase 2b widened the axes to the full sheet: horizontally name → tempo →
+// week 1 text → week 2 text → notes → rest (Tab-walkable), vertically each
+// cell's sub-line stack (existing lines + the trailing ghost) before the
+// next row; Enter = commit + move down, appending a row at a day's last
+// stop via onAddExercise.
 //
 // Fixture: day 1 (session_slot_id 1) has row 9 "Box Squat" (cells 900/901)
 // and row 10 "RDL" (cells 1000/1001); day 2 (session_slot_id 2) has row 11
@@ -881,33 +987,37 @@ describe("keyboard grid navigation", () => {
       const user = userEvent.setup();
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       await user.click(screen.getByTestId("cell-text-1000")); // day 1's last row
-      await user.keyboard("{ArrowDown}");
+      await user.keyboard("{ArrowDown}{ArrowDown}"); // through the ghost, into day 2
       expect(screen.getByTestId("cell-text-1100")).toHaveFocus(); // day 2's row
       expect(screen.getByTestId("cell-text-1100")).toHaveAttribute("tabindex", "0");
     });
   });
 
-  describe("ArrowDown / ArrowUp navigate rows across day-table boundaries", () => {
-    it("ArrowDown moves focus to the same week's cell on the next row within a day", async () => {
+  describe("ArrowDown / ArrowUp navigate the stack, then rows, across day-table boundaries", () => {
+    it("ArrowDown from a prescription steps into its ghost, then the next row's cell", async () => {
       const user = userEvent.setup();
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       await user.click(screen.getByTestId("cell-text-900"));
       await user.keyboard("{ArrowDown}");
+      expect(screen.getByTestId("cell-line-new-900")).toHaveFocus(); // the ghost is a real stop (D3)
+      await user.keyboard("{ArrowDown}");
       expect(screen.getByTestId("cell-text-1000")).toHaveFocus();
     });
 
-    it("ArrowDown crosses a day-table boundary (last row of day 1 -> first row of day 2)", async () => {
+    it("ArrowDown crosses a day-table boundary (last stop of day 1 -> first row of day 2)", async () => {
       const user = userEvent.setup();
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       await user.click(screen.getByTestId("cell-text-1001"));
-      await user.keyboard("{ArrowDown}");
+      await user.keyboard("{ArrowDown}{ArrowDown}");
       expect(screen.getByTestId("cell-text-1101")).toHaveFocus();
     });
 
-    it("ArrowUp mirrors ArrowDown, crossing day boundaries upward", async () => {
+    it("ArrowUp mirrors ArrowDown, crossing day boundaries upward onto the previous row's last stop", async () => {
       const user = userEvent.setup();
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       await user.click(screen.getByTestId("cell-text-1100"));
+      await user.keyboard("{ArrowUp}");
+      expect(screen.getByTestId("cell-line-new-1000")).toHaveFocus(); // row 10's ghost
       await user.keyboard("{ArrowUp}");
       expect(screen.getByTestId("cell-text-1000")).toHaveFocus();
     });
@@ -932,40 +1042,134 @@ describe("keyboard grid navigation", () => {
       expect(screen.getByTestId("cell-text-900")).toHaveFocus();
     });
 
-    it("ArrowRight at the end of the name column moves into week 1's text cell", () => {
+    it("ArrowRight at the end of the name column moves into the TEMPO column (the sheet's order)", () => {
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       const nameInput = screen.getByTestId("row-name-9") as HTMLInputElement;
       nameInput.focus();
       nameInput.setSelectionRange(nameInput.value.length, nameInput.value.length);
       fireEvent.keyDown(nameInput, { key: "ArrowRight" });
+      expect(screen.getByTestId("row-tempo-9")).toHaveFocus();
+    });
+
+    it("ArrowRight at the end of the tempo column moves into week 1's text cell", () => {
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      const tempoInput = screen.getByTestId("row-tempo-9") as HTMLInputElement;
+      tempoInput.focus();
+      tempoInput.setSelectionRange(tempoInput.value.length, tempoInput.value.length);
+      fireEvent.keyDown(tempoInput, { key: "ArrowRight" });
       expect(screen.getByTestId("cell-text-900")).toHaveFocus();
     });
 
-    it("ArrowLeft at the start of week 1's text cell moves back to the name column", () => {
+    it("ArrowRight at the end of the LAST week's cell moves into the notes column", () => {
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      const textInput = screen.getByTestId("cell-text-901") as HTMLInputElement;
+      textInput.focus();
+      textInput.setSelectionRange(textInput.value.length, textInput.value.length);
+      fireEvent.keyDown(textInput, { key: "ArrowRight" });
+      expect(screen.getByTestId("row-note-9")).toHaveFocus();
+    });
+
+    it("ArrowLeft at the start of week 1's text cell moves back to the tempo column", () => {
       render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
       textInput.focus();
       textInput.setSelectionRange(0, 0);
       fireEvent.keyDown(textInput, { key: "ArrowLeft" });
-      expect(screen.getByTestId("row-name-9")).toHaveFocus();
+      expect(screen.getByTestId("row-tempo-9")).toHaveFocus();
+    });
+  });
+
+  describe("Tab walks the row unconditionally, wrapping between rows (Phase 2b)", () => {
+    it("Tab moves name -> tempo even with the caret mid-text", async () => {
+      const user = userEvent.setup();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      const nameInput = screen.getByTestId("row-name-9") as HTMLInputElement;
+      await user.click(nameInput);
+      nameInput.setSelectionRange(1, 1);
+      await user.tab();
+      expect(screen.getByTestId("row-tempo-9")).toHaveFocus();
+    });
+
+    it("Tab at the rest column wraps to the next row's name", async () => {
+      const user = userEvent.setup();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      await user.click(screen.getByTestId("row-rest-9"));
+      await user.tab();
+      expect(screen.getByTestId("row-name-10")).toHaveFocus();
+    });
+
+    it("Shift+Tab at the name column wraps back to the previous row's rest", async () => {
+      const user = userEvent.setup();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
+      await user.click(screen.getByTestId("row-name-10"));
+      await user.tab({ shift: true });
+      expect(screen.getByTestId("row-rest-9")).toHaveFocus();
+    });
+  });
+
+  describe("Enter-adds-row (integrated)", () => {
+    it("Enter at a day's last stop calls onAddExercise with that day (row has content)", async () => {
+      const user = userEvent.setup();
+      const onAddExercise = vi.fn();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID, onAddExercise })} />);
+      // Row 10's name is day 1's last vertical stop of the name column.
+      await user.click(screen.getByTestId("row-name-10"));
+      await user.keyboard("{Enter}");
+      expect(onAddExercise).toHaveBeenCalledTimes(1);
+      expect(onAddExercise.mock.calls[0]![0].session_slot_id).toBe(1);
+    });
+
+    it("Enter mid-day moves down instead of appending", async () => {
+      const user = userEvent.setup();
+      const onAddExercise = vi.fn();
+      render(<MesoTable {...baseProps({ grid: NAV_GRID, onAddExercise })} />);
+      await user.click(screen.getByTestId("row-name-9"));
+      await user.keyboard("{Enter}");
+      expect(onAddExercise).not.toHaveBeenCalled();
+      expect(screen.getByTestId("row-name-10")).toHaveFocus();
+    });
+
+    it("Enter at the last stop of a fully blank row does NOT append (the guard), and busy blocks the verb", async () => {
+      const user = userEvent.setup();
+      const onAddExercise = vi.fn();
+      const BLANK_GRID = grid({
+        weeks: NAV_GRID.weeks,
+        days: [
+          day({
+            session_slot_id: 1,
+            rows: [
+              row({
+                exercise_slot_id: 9,
+                name: "",
+                cells: { "1": cell({ prescription_id: 900, text: "" }), "2": cell({ prescription_id: 901, text: "" }) },
+              }),
+            ],
+          }),
+        ],
+      });
+      render(<MesoTable {...baseProps({ grid: BLANK_GRID, onAddExercise })} />);
+      await user.click(screen.getByTestId("row-name-9"));
+      await user.keyboard("{Enter}");
+      expect(onAddExercise).not.toHaveBeenCalled();
     });
   });
 
   describe("Enter commits / Escape reverts (integrated)", () => {
-    it("Enter commits only when the cell is dirty, and keeps focus in place", async () => {
+    it("Enter commits only when the cell is dirty, and moves down to the next stop (the ghost)", async () => {
       const user = userEvent.setup();
       const onPatchCell = vi.fn();
       render(<MesoTable {...baseProps({ grid: NAV_GRID, onPatchCell })} />);
       const textInput = screen.getByTestId("cell-text-900");
       await user.click(textInput);
-      await user.keyboard("{Enter}"); // clean cell: no-op (existing dirty gate)
+      await user.keyboard("{Enter}"); // clean cell: no commit (existing dirty gate) — still moves
       expect(onPatchCell).not.toHaveBeenCalled();
-      await user.clear(textInput);
+      expect(screen.getByTestId("cell-line-new-900")).toHaveFocus();
+      await user.clear(textInput); // refocuses the prescription input
       await user.type(textInput, "4 x 6");
       await user.keyboard("{Enter}");
       expect(onPatchCell).toHaveBeenCalledWith(900, { text: "4 x 6" });
       expect(onPatchCell).toHaveBeenCalledTimes(1);
-      expect(textInput).toHaveFocus();
+      expect(screen.getByTestId("cell-line-new-900")).toHaveFocus(); // spreadsheet Enter: down one stop
     });
 
     it("Escape reverts only the focused cell's draft, leaving a different dirty cell untouched", () => {
