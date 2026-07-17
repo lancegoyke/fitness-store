@@ -1,7 +1,7 @@
 /* MesoTable (P1 multi-week table) — one <table> per training day, week
    columns across the top. Reuses several classes/tokens from
-   designer-grid.css (.meso-cell, .meso-num-input, .meso-note,
-   .meso-remove-x, .meso-confirm-btn/.meso-cancel-btn, .meso-add-row/
+   designer-grid.css (.meso-cell, .meso-remove-x,
+   .meso-confirm-btn/.meso-cancel-btn, .meso-add-row/
    .meso-add-day-btn) so the table's controls read as the same design
    language elsewhere in the island. The `.meso-week-strip-btn` (+
    `--dashed`/`--accent`/`--confirm` variants) and `.meso-week-strip-confirm`
@@ -128,19 +128,11 @@
   gap: 4px;
 }
 
-/* Issue #455 phase A3: the row-name column's 2nd line — the per-ROW %1RM
- * badge/editor (RowOneRmEditor, MesoTable.tsx). No new layout rule here on
- * purpose: the element carries `.meso-ex-tags` (designer-grid.css, unscoped)
- * alongside `.meso-table-row-tags` for its box layout — true reuse rather
- * than a duplicate ruleset. An individual plan's non-pct/abs-load row
- * renders this line EMPTY (RowOneRmEditor returns null), collapsing to
- * `.meso-ex-tags`'s own small `min-height` allowance. */
-
-/* Issue #455 phase A2.5: the "Move to…" menu — same 2nd line, alongside
- * RowOneRmEditor's badge. Table-specific (the one-week view has no
- * equivalent control), so it lives here rather than the shared
- * designer-grid.css. Kept visually small/quiet like the %1RM badge it sits
- * next to — `.meso-onerm-badge`'s font-size (designer-grid.css), not a full
+/* Issue #455 phase A2.5: the "Move to…" menu — the row-name column's 2nd
+ * line. No new layout rule for the line itself: the element carries
+ * `.meso-ex-tags` (designer-grid.css, unscoped) alongside
+ * `.meso-table-row-tags` for its box layout — true reuse rather than a
+ * duplicate ruleset. The menu is kept visually small/quiet, not a full
  * form control. */
 .meso-move-day-select {
   appearance: none;
@@ -168,13 +160,6 @@
   gap: 3px;
 }
 
-.meso-table-cell-setsreps,
-.meso-table-cell-load {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
 .meso-table-skipped {
   display: inline-block;
   color: var(--dim);
@@ -182,32 +167,7 @@
   padding: 4px 2px;
 }
 
-.meso-table-swap-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 3px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--accent-deep);
-  background: var(--soft);
-  border: 1px solid var(--soft-line);
-  border-radius: 4px;
-  padding: 0 5px;
-}
-
-.meso-swap-badge-clear {
-  appearance: none;
-  cursor: pointer;
-  border: 0;
-  background: transparent;
-  font: inherit;
-  line-height: 1;
-  color: inherit;
-  padding: 0;
-}
-
-/* P2 exceptions: skip / swap / fill control cluster, shown alongside a
+/* P2 exceptions: skip / fill control cluster, shown alongside a
    non-skipped cell's editor (CONTRACT.md "MesoTable.tsx — new props"). */
 .meso-table-cell-actions {
   display: flex;
@@ -228,19 +188,6 @@
   color: var(--dim);
   padding: 1px 4px;
   border-radius: 4px;
-}
-
-.meso-cell-swap-editor {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.meso-swap-input {
-  width: 110px;
-  font-size: 11px;
-  padding: 2px 5px;
-  border: 1px solid var(--line);
 }
 
 /* P2: per-day "add this week only" toggle + week picker, alongside the
@@ -270,9 +217,8 @@
    actively dragged. No live CSS transform (a transformed <tr> inside
    border-collapse + a sticky first column, or a transformed day block
    inside .meso-table-scroll's overflow-x:auto, both have known cross-
-   browser glitches, unverifiable in jsdom) — opacity + shadow only,
-   mirroring designer-grid.css's .meso-day-card.is-dragging /
-   .meso-ex-row.is-dragging. The drag handle itself (`.meso-drag-handle`)
+   browser glitches, unverifiable in jsdom) — opacity + shadow only.
+   The drag handle itself (`.meso-drag-handle`)
    and `--day` variant are reused verbatim from designer-grid.css. The
    visible drag affordance is the DragOverlay ghost below instead of a
    live-transformed original element. */

@@ -50,45 +50,11 @@
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
-.meso-canvas-autosaved {
-  font-size: 11.5px;
-  color: var(--dim);
-  align-items: center;
-  gap: 6px;
-}
-.meso-canvas-autosaved-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ok);
-}
 .meso-canvas-body {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
 }
-.meso-week-view {
-  padding: 18px 20px 40px;
-  max-width: 1080px;
-}
-.meso-week-view-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-.meso-week-view-title {
-  margin: 0 0 3px;
-  font-size: 21px;
-  font-weight: 800;
-  letter-spacing: -0.025em;
-}
-.meso-week-view-sub {
-  margin: 0;
-  font-size: 12.5px;
-  color: var(--dim);
-}
-
 /* ---- first-run coachmark (reused for grid + phone regions) ---- */
 .meso-coachmark {
   align-items: flex-start;

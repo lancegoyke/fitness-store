@@ -1405,3 +1405,28 @@ _(Append dated entries here as decisions land.)_
   the "Make current" tooltip. Tour/demo delivery checks are untouched (they
   test "did the coach send the nudge"). No migration — `delivered_at` and
   `WeekDelivery` keep their data and meaning as history.
+- 2026-07-16 — **Built (spreadsheet parity 2e): UI cleanup — the dead chrome
+  from 2a–2d is stripped (parity plan §6, Phase 2 COMPLETE).** CSS-only by
+  construction: the earlier slices already deleted the components and
+  endpoints; a mechanical sweep (every class defined in the designer
+  stylesheets + `meso.css` checked against all TSX/HTML/JS/PY usage,
+  including template-literal `--${state}` construction) found ~75 orphaned
+  classes and zero orphaned markup. Deleted: **`designer-modal.css`
+  wholesale** (the 2c per-athlete override-editor modal — backdrop/field
+  grid/member picker/save-clear-cancel buttons — was its only tenant; the
+  `@import` dropped from `designer.css`); the rest of the **group chrome**
+  (topbar `meso-group-avatar*` stack, rail group avatar/glyph +
+  `--tight` list, `meso-participant-*` rows, the chat change-card's
+  `meso-change-member` chip, the grid's `meso-adjust-*` badges — the
+  "dead group CSS" debt logged under 2c); the **structured-cell chrome**
+  (2a: the `meso-onerm-*` editor family, `meso-load-toggle`,
+  `meso-num-input`, `meso-note` + its `meso.css` focus twin, the
+  `meso-table-cell-setsreps/load` flex pair, the swap badge/editor/input
+  family); the **retired one-week-designer chrome** (A5: `meso-week-view*`,
+  `meso-canvas-autosaved*`); and **prototype leftovers** (`meso-chip-soon`,
+  `meso-flag-badge/dot`, `meso-grid--2`, `meso-inline-block`,
+  `meso-seg-btn--v/--p`). Stale comments that named the dead classes
+  (the six-cell a11y note, the RowOneRmEditor/2nd-line notes, the
+  skip/swap cluster label, the day-card drag mirror) were rewritten in
+  place. Verification: the sweep re-run reports 0 dead classes; dist
+  rebuilt (designer.css 22.3 kB); 530 vitest + 2138 pytest green.

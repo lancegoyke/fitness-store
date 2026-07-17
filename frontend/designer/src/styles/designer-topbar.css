@@ -81,29 +81,6 @@
   font-size: 11px;
   color: var(--dim);
 }
-.meso-group-avatars {
-  display: flex;
-}
-.meso-group-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: #eef0f2;
-  border: 2px solid var(--surface);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--dim);
-  margin-left: -9px;
-}
-.meso-group-avatar--lead {
-  background: var(--soft);
-  color: var(--accent-deep);
-  margin-left: 0;
-}
-
 .meso-cycle-chip {
   align-items: center;
   gap: 6px;
@@ -120,13 +97,4 @@
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
-}
-.meso-chip-soon {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--dim);
-  background: var(--rail);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 7px 13px;
 }

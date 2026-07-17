@@ -1,6 +1,6 @@
 # Meso — spreadsheet parity by simplification
 
-**Status:** Phase 2d (deliver → live + notify) built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16
+**Status:** Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · next: Phase 3 (import + validate)
 **Owner:** Lance
 **North star:** make writing a program in Meso as fast and frictionless as writing it
 in a Google Sheet — keyboard-driven, freeform, one grid — then extend to tracking,
@@ -373,7 +373,26 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
      coach-side ("your edits are already live — delivering sends a heads-up")
      and athlete-side ("your program, live as your coach writes it"). No
      migration — `delivered_at`/`WeekDelivery` keep their data.
-   - 2e **UI cleanup** — strip the chrome the above obsoletes.
+   - 2e **UI cleanup** — strip the chrome the above obsoletes. **✅ Built
+     2026-07-16** (branch `meso/2e-ui-cleanup`; CSS-only — 2a–2d already
+     removed the components/endpoints, this sweeps their orphaned styles):
+     a mechanical sweep (every class defined in the designer stylesheets +
+     `meso.css`, checked against all TSX/HTML/JS/PY usage incl.
+     template-literal construction) found ~75 dead classes. Deleted:
+     `designer-modal.css` wholesale (the 2c override-editor modal — modal
+     chrome, field grid, member picker, save/clear/cancel buttons); the
+     group chrome (topbar `meso-group-avatar*`, rail
+     `meso-rail-avatar--group`/`meso-rail-group-glyph`/`--tight`,
+     `meso-participant-*`, chat's `meso-change-member` chip, grid's
+     `meso-adjust-*` badges); the structured-cell chrome (2a —
+     `meso-onerm-*` ×7, `meso-load-toggle`, `meso-num-input`, `meso-note`
+     + its `meso.css` focus twin, `meso-table-cell-setsreps/load`, the
+     swap badge/editor/input family); the retired one-week-designer chrome
+     (A5 — `meso-week-view*`, `meso-canvas-autosaved*`); and prototype
+     leftovers (`meso-chip-soon`, `meso-flag-badge/dot`,
+     `meso-grid--2`, `meso-inline-block`, `meso-seg-btn--v/--p`). Stale
+     comments referencing the dead classes updated in place; dist rebuilt
+     (designer.css 22.3 kB).
 3. **Phase 3 — Import + validate.** Importer over 3–5 templates → surface UX
    limitations → iterate.
 4. **Later — Extensions.** Tracking (already `LoggedSet`), data retention (snapshots),
