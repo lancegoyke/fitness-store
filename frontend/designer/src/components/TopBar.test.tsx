@@ -1,47 +1,61 @@
-// Specs for TopBar (CONTRACT.md "TopBar") — identity chip, cycle label,
-// preview/review/deliver actions. (The individual/group mode segmented
-// control and the group "Deliver to all · soon" chip went with the group
-// subsystem — the designer is single-mode now.)
+// Specs for TopBar (CONTRACT.md "TopBar") — brand, sidebar toggle, the view
+// segmented control, cycle label, and review/deliver actions. designer-simplify:
+// the athlete identity chip moved to AthleteMeta and "Preview as athlete" was
+// dropped (the segmented "Athlete view" is the one canonical switch).
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TopBar } from "./TopBar";
-import type { AthleteIdentity } from "../lib/api";
-
-const athlete: AthleteIdentity = { name: "Maya Okonkwo", initials: "MO", goal: "Strength", contraindications: [] };
+import type { ViewMode } from "../DesignerRoot";
 
 function baseProps(overrides: Partial<Parameters<typeof TopBar>[0]> = {}) {
   return {
-    athlete,
+    view: "table" as ViewMode,
+    onSelectView: vi.fn(),
     cycleLabel: "Hypertrophy · Wk 2 / 4",
-    onPreviewAsAthlete: vi.fn(),
     deliverHref: "/meso/deliver/7/?week=2",
+    sidebarOpen: true,
+    onToggleSidebar: vi.fn(),
     ...overrides,
   };
 }
 
 describe("TopBar", () => {
-  it("renders the athlete identity chip", () => {
-    render(<TopBar {...baseProps()} />);
-    expect(screen.getByText("Maya Okonkwo")).toBeInTheDocument();
-  });
-
-  it("renders no identity chip when athlete is null", () => {
-    render(<TopBar {...baseProps({ athlete: null })} />);
-    expect(screen.queryByText("Maya Okonkwo")).not.toBeInTheDocument();
-  });
-
   it("shows Review changes + Deliver", () => {
     render(<TopBar {...baseProps()} />);
     expect(screen.getByTestId("review-link")).toBeInTheDocument();
     expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=2");
   });
 
-  it("calls onPreviewAsAthlete when the preview button is clicked", async () => {
+  it("renders the view segmented control and marks the active tab", () => {
+    render(<TopBar {...baseProps({ view: "block" })} />);
+    expect(screen.getByTestId("view-tab-table")).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByTestId("view-tab-block")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("view-tab-athlete")).toBeInTheDocument();
+  });
+
+  it("calls onSelectView with the tab id when a tab is clicked", async () => {
     const user = userEvent.setup();
-    const onPreviewAsAthlete = vi.fn();
-    render(<TopBar {...baseProps({ onPreviewAsAthlete })} />);
-    await user.click(screen.getByTestId("preview-athlete-button"));
-    expect(onPreviewAsAthlete).toHaveBeenCalledTimes(1);
+    const onSelectView = vi.fn();
+    render(<TopBar {...baseProps({ onSelectView })} />);
+    await user.click(screen.getByTestId("view-tab-athlete"));
+    expect(onSelectView).toHaveBeenCalledWith("athlete");
+  });
+
+  it("toggles the sidebar and reflects open/closed state", async () => {
+    const user = userEvent.setup();
+    const onToggleSidebar = vi.fn();
+    const { rerender } = render(<TopBar {...baseProps({ sidebarOpen: true, onToggleSidebar })} />);
+    const toggle = screen.getByTestId("sidebar-toggle");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await user.click(toggle);
+    expect(onToggleSidebar).toHaveBeenCalledTimes(1);
+    rerender(<TopBar {...baseProps({ sidebarOpen: false, onToggleSidebar })} />);
+    expect(screen.getByTestId("sidebar-toggle")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("no longer renders the duplicate athlete identity chip / Preview button", () => {
+    render(<TopBar {...baseProps()} />);
+    expect(screen.queryByTestId("preview-athlete-button")).not.toBeInTheDocument();
   });
 
   it("renders the cycle label chip only when non-empty", () => {

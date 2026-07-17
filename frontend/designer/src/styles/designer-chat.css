@@ -1,9 +1,10 @@
-/* Agent chat panel (designer.html lines ~203-313). */
+/* Agent chat panel (designer.html lines ~203-313). designer-simplify: no
+   longer a standalone fixed-width column — it fills the left sidebar below the
+   AthleteMeta header, so it flexes to the remaining height and the sidebar
+   wrapper (not the panel) owns the right border. */
 .meso-chat-panel {
-  width: 356px;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   background: var(--surface);
-  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   min-height: 0;

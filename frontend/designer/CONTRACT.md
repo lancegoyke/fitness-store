@@ -242,10 +242,11 @@ in-page regardless of whether the storage write lands, exactly as today.
 DesignerRoot
 ├── TopBar
 ├── (body, flex row)
-│   ├── LeftRail
-│   ├── ChatPanel
-│   └── (canvas)
-│       ├── (canvas header: view segmented control + periodStyle control)
+│   ├── (sidebar, flex column)
+│   │   ├── AthleteMeta
+│   │   └── ChatPanel
+│   └── (canvas — just the scrollable body now; the view segmented control
+│       │         folded up into TopBar, periodStyle lives inside BlockView)
 │       ├── MesoTable (view === "table", default)
 │       ├── BlockView (view === "block")
 │       └── AthletePreview (view === "athlete")
@@ -278,7 +279,7 @@ Composes `useGrid` (the sole data owner), `useTableReorder`,
 `useUndoKeyboard`, `useAgentChat`, and `useCoachmarks`; owns
 `view`/`periodStyle`/`checks` as local
 `useState` (see "View-state rules"); derives `program` for `AthletePreview`
-via `gridToProgram(grid, weekId)` and `cycleLabel` for `TopBar`/`LeftRail`
+via `gridToProgram(grid, weekId)` and `cycleLabel` for `TopBar`
 via `cycleLabelFromGrid(phases, weeks)` (both pure helpers in `lib/grid.ts`
 added in A5 step 3 — the grid analogs of the retired `usePlanData`'s
 `athleteDay`/`aTotal`/`aDone` view-shaping and `cycleLabel` memo). No prop
@@ -288,20 +289,28 @@ readable.
 
 ### TopBar
 
-Props: `{ athlete, cycleLabel, onPreviewAsAthlete, deliverHref }`.
-Renders the Meso logo/back-link, the athlete identity chip, the cycle
-label chip, "Preview as athlete", "Review changes", and "Deliver". (The
-individual/group mode segmented control and the group "Deliver to all ·
-soon" chip went with the group subsystem.) Testids:
-`preview-athlete-button`, `deliver-link` (`href={deliverHref}`),
-`review-link`.
+Props: `{ view, onSelectView, cycleLabel, deliverHref, sidebarOpen, onToggleSidebar }`.
+Renders the Meso logo/back-link, the sidebar collapse toggle, the view
+segmented control (Table / Periodization / Athlete view), the cycle label
+chip, "Review changes", and "Deliver". designer-simplify: the athlete
+identity chip moved to `AthleteMeta` (it duplicated the rail's), the
+standalone "Preview as athlete" button was dropped (the segmented "Athlete
+view" is the one canonical switch), and the canvas's 49px view-control band
+folded up here. Testids: `sidebar-toggle` (`aria-pressed={sidebarOpen}`),
+`view-tab-{table|block|athlete}` (`aria-selected` marks the active view),
+`deliver-link` (`href={deliverHref}`), `review-link`.
 
-### LeftRail
+### AthleteMeta
 
-Props: `{ athlete, phases, onOpenBlockView }`.
-Renders the athlete identity block and the macrocycle phase list;
-"Open plan →" calls `onOpenBlockView` (sets `view = "block"` in
-`DesignerRoot`). Testid: `open-block-view-button`.
+Props: `{ athlete }`.
+The slim athlete-context header at the top of the left sidebar: identity
+(avatar + name + goal, once) and the contraindications list (`None noted.`
+when empty). Renders `null` when `athlete` is null. Testid: `athlete-meta`.
+designer-simplify: this replaces the old full-height `LeftRail` — its
+macrocycle phase list folded out (the top-bar cycle chip + the Periodization
+view own "where are we in the plan" now), and its duplicate goal tag +
+"Open plan →" shortcut (which shadowed the segmented control's
+"Periodization") were dropped. The sidebar wrapper stacks it above `ChatPanel`.
 
 ### ChatPanel
 
@@ -468,8 +477,8 @@ changes them):
   #455 phase A5 — was `"week"`; the one-week view is gone and
   `#meso-grid-data` is now a required hydration gate, so there's no more
   "grid absent, fall back to week" branch to default around either). Set by
-  `TopBar`'s "Preview as athlete" (→ `"athlete"`), `LeftRail`'s "Open plan →"
-  (→ `"block"`), the canvas segmented control (all three), and `BlockView`'s
+  `TopBar`'s "Preview as athlete" (→ `"athlete"`), the canvas segmented
+  control (all three), and `BlockView`'s
   `onSwitchWeek` (→ `"table"`, ignoring the clicked week's id — see
   "BlockView" above). No hook reads or writes it. `selectView` itself
   collapsed to a bare `setView(v)` in A5 — it used to also branch on

@@ -40,16 +40,6 @@
   min-width: 0;
   background: var(--bg);
 }
-.meso-canvas-header {
-  height: 49px;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
 .meso-canvas-body {
   flex: 1;
   overflow-y: auto;

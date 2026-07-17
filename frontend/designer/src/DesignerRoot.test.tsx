@@ -117,9 +117,9 @@ describe("hydration: full payload", () => {
     render(<DesignerRoot />);
 
     expect(screen.getByTestId("row-name-9")).toHaveValue("Squat");
-    // The athlete's name legitimately renders twice — the top-bar identity
-    // chip AND the left rail — exactly as the Alpine template it mirrors did.
-    expect(screen.getAllByText("Maya Okonkwo").length).toBeGreaterThan(0);
+    // designer-simplify: the athlete's name now renders exactly once (the
+    // sidebar's AthleteMeta) — the duplicate top-bar identity chip is gone.
+    expect(screen.getAllByText("Maya Okonkwo")).toHaveLength(1);
     expect(screen.getByTestId("week-col-1")).toBeInTheDocument();
   });
 
