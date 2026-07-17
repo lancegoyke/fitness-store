@@ -1,27 +1,101 @@
 /* MesoTable (P1 multi-week table) — one <table> per training day, week
-   columns across the top. Reuses several classes/tokens from
-   designer-grid.css (.meso-cell, .meso-remove-x,
+   columns across the top, above a mesocycle-level week-manager strip. Reuses
+   several classes/tokens from designer-grid.css (.meso-cell, .meso-remove-x,
    .meso-confirm-btn/.meso-cancel-btn, .meso-add-row/
    .meso-add-day-btn) so the table's controls read as the same design
    language elsewhere in the island. The `.meso-week-strip-btn` (+
-   `--dashed`/`--accent`/`--confirm` variants) and `.meso-week-strip-confirm`
+   `--dashed`/`--confirm` variants) and `.meso-week-strip-confirm`
    pill-button rules at the bottom of this file were originally
    designer-weekstrip.css's — issue #455 phase A5 retired the one-week
-   WeekStrip.tsx that owned them, but MesoTable's own week-column controls
-   ("+ Add week" / "Make current" / "Remove" / confirm-cancel) still use
-   them, so they moved here rather than being deleted. */
+   WeekStrip.tsx that owned them, but the WeekManagerStrip's "+ Add week" and
+   remove-confirm controls still use them, so they moved here rather than being
+   deleted. */
 
 .meso-table-view {
-  /* Consistent gutters so the toolbar and day cards don't sit flush against
+  /* Consistent gutters so the week strip and day cards don't sit flush against
      the canvas edges (designer-simplify). */
   padding: 18px 20px 24px;
 }
 
-.meso-table-toolbar {
+/* Mesocycle-level week manager (WeekManagerStrip) — one pill per week with
+   make-current / remove, plus "+ Add week". Sits above the day tables; week
+   lifecycle lives here, never inside a day. */
+.meso-week-strip {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   margin-bottom: 16px;
+}
+.meso-week-strip-heading {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-right: 2px;
+}
+.meso-week-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.meso-week-pill--current {
+  border-color: var(--accent);
+  background: var(--soft);
+}
+.meso-week-pill-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.meso-week-pill--current .meso-week-pill-label {
+  color: var(--accent-deep);
+}
+.meso-week-pill-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent-ink);
+  background: var(--accent);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.meso-week-pill-make-current {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-deep);
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.meso-week-pill-make-current:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.meso-week-pill-x {
+  appearance: none;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 6px;
+}
+.meso-week-pill-x:hover:not(:disabled) {
+  color: var(--warn);
 }
 
 .meso-table-day {
@@ -100,16 +174,6 @@
 
 .meso-table-deload-marker {
   color: var(--dim);
-}
-
-.meso-table-week-controls {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 5px;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: normal;
 }
 
 .meso-table tbody td {
@@ -294,11 +358,6 @@
 }
 .meso-week-strip-btn--dashed {
   border-style: dashed;
-}
-.meso-week-strip-btn--accent {
-  border-color: var(--accent);
-  background: var(--soft);
-  color: var(--accent-deep);
 }
 .meso-week-strip-confirm {
   display: inline-flex;

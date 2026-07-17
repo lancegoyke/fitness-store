@@ -260,11 +260,14 @@ child components the way the retired tree was: one file owns the whole
 table (day sub-tables, week columns, row cells, drag handles), documented
 in prose in its own header
 comment rather than a component-by-component breakdown here, since (unlike
-the retired tree) there's no multi-file boundary left to document. The week
-switcher (add/make-current/remove) is `MesoTable`'s own `WeekColumnHeader` +
-toolbar, not a standalone component — every week renders as its own table
-column, so there's no separate "switch to a week" verb left, only
-"add/remove/make-current."
+the retired tree) there's no multi-file boundary left to document. Week
+lifecycle (add/make-current/remove) lives in `MesoTable`'s own
+`WeekManagerStrip` — a mesocycle-level pill strip ABOVE the day tables
+(designer-simplify), NOT inside any day's `<table>`, since a week spans every
+day; `WeekColumnHeader` is now label-only (week label + deload marker +
+current-column highlight). Every week renders as its own table column, so
+there's no separate "switch to a week" verb left, only
+"add/remove/make-current" in the strip.
 
 ### DesignerRoot
 
@@ -347,14 +350,17 @@ table (`MesoTable`, one `<table>` per training day, week columns across the
 top) replaces the whole one-week-at-a-time tree they formed:
 
 - **`WeekStrip`** (week switcher chips + add/make-current/remove/undo/redo)
-  → `MesoTable`'s own `WeekColumnHeader` (per-column "Make current"/
-  "Remove"/confirm-cancel controls, rendered once on the first day block in
-  designer-simplify) + its toolbar's "+ Add week" button (the toolbar's only
-  control now). There's no more "switch to a week" verb (`onSwitchWeek`/week
-  chips) — every week already renders as its own column, so there's nothing to
-  switch between; undo/redo are the keyboard `useUndoKeyboard` +
-  `useGrid.undo`/`.redo`, and the visible ↺/↻ buttons moved to `TopBar`
-  (designer-simplify) — `MesoTable` no longer takes `history`/`onUndo`/`onRedo`.
+  → `MesoTable`'s own `WeekManagerStrip` — a mesocycle-level pill strip above
+  the day tables with per-week "Make current" + remove (arm→confirm) + the
+  "+ Add week" button (designer-simplify: this replaced both the retired
+  WeekStrip and the short-lived per-day-header controls; a week spans every
+  day, so its lifecycle belongs here once, not inside any day's `<table>`).
+  `WeekColumnHeader` is label-only now. There's no more "switch to a week" verb
+  (`onSwitchWeek`/week chips) — every week already renders as its own column,
+  so there's nothing to switch between; undo/redo are the keyboard
+  `useUndoKeyboard` + `useGrid.undo`/`.redo`, and the visible ↺/↻ buttons moved
+  to `TopBar` (designer-simplify) — `MesoTable` no longer takes
+  `history`/`onUndo`/`onRedo`.
 - **`WeekGrid`** (one week's days) → `MesoTable` itself. It once carried a
   "table" first-run coachmark (A4); designer-simplify removed that info alert
   (the block grid should be self-evident; tips will live in a dedicated help

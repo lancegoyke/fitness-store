@@ -566,11 +566,11 @@ describe("weeks: make-current / remove (arm -> confirm)", () => {
     expect(screen.queryByTestId("remove-week-1")).not.toBeInTheDocument();
   });
 
-  // designer-simplify: a week is the same across every day's table, so its
-  // lifecycle controls render ONCE (on the first day block), not repeated in
-  // every day-table's header. The week label column itself still appears per
-  // day so the grid stays column-aligned.
-  it("renders the week make-current/remove controls only on the first day-table", () => {
+  // designer-simplify: a week spans every day, so its lifecycle controls live
+  // ONCE in the mesocycle-level WeekManagerStrip above the day tables — never
+  // inside a day. The week LABEL column still appears per day (so the grid
+  // stays column-aligned), but it carries no controls.
+  it("renders the week make-current/remove controls once (in the week strip), not in any day-table", () => {
     render(
       <MesoTable
         {...baseProps({
@@ -581,13 +581,19 @@ describe("weeks: make-current / remove (arm -> confirm)", () => {
         })}
       />,
     );
-    // both day tables render (and each still shows the Wk 2 label column)…
+    // both day tables render, and each still shows the Wk 2 label column…
     expect(screen.getByTestId("meso-day-table-1")).toBeInTheDocument();
     expect(screen.getByTestId("meso-day-table-2")).toBeInTheDocument();
     expect(screen.getAllByTestId("week-col-2")).toHaveLength(2);
-    // …but the make-current / remove controls appear exactly once.
+    // …but the controls appear exactly once, in the strip's week pill, and the
+    // label column headers are not inside that pill.
     expect(screen.getAllByTestId("make-current-2")).toHaveLength(1);
     expect(screen.getAllByTestId("remove-week-2")).toHaveLength(1);
+    const pill = screen.getByTestId("week-pill-2");
+    expect(pill).toContainElement(screen.getByTestId("make-current-2"));
+    // the current week (1) shows a badge, not make-current.
+    expect(screen.queryByTestId("make-current-1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("week-pill-1")).toHaveTextContent(/current/i);
   });
 });
 
