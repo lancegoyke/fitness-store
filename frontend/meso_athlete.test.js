@@ -784,6 +784,29 @@ describe("addLine", () => {
     expect(lines.length).toBe(20); // capped at MAX_CELL_LINE
     expect(lines[lines.length - 1].line).toBe(20);
   });
+
+  it("numbers past the max existing line, not the length (sparse stack)", () => {
+    // The server dropped cleared line 1 but line 2 has text — a sparse stack.
+    // Numbering by length+1 would fabricate a duplicate line 2; number off the
+    // max existing line instead.
+    const c = cellLogger({
+      exercises: [{ id: 1, sub_lines: [{ line: 2, text: "x" }], set_rows: [] }],
+    });
+    c.addLine(c.exercises[0]);
+    const lines = c.exercises[0].sub_lines;
+    expect(lines.length).toBe(2);
+    expect(lines[1].line).toBe(3); // max(2) + 1, not length(1) + 1 = 2
+  });
+
+  it("caps against the max existing line, not the length", () => {
+    // A single line already at MAX_CELL_LINE — a length-based cap (1 < 20)
+    // would wrongly allow another; cap off the max line value instead.
+    const c = cellLogger({
+      exercises: [{ id: 1, sub_lines: [{ line: 20, text: "x" }], set_rows: [] }],
+    });
+    c.addLine(c.exercises[0]);
+    expect(c.exercises[0].sub_lines.length).toBe(1); // no-op at the cap
+  });
 });
 
 describe("sub-line hydration", () => {

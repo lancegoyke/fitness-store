@@ -3363,6 +3363,19 @@ def cell_line_write(request, plan_id, slot_id):
         return JsonResponse({"ok": False, "error": "text is too long."}, status=400)
 
     with transaction.atomic():
+        existing = Prescription.objects.filter(
+            exercise_slot=slot, week=week, line=line
+        ).first()
+        if existing is not None and existing.athlete_authored:
+            # Reclaim-then-snapshot (Phase 4a review): a coach edit reclaims an
+            # athlete-authored cell back into coach history. Persist the flag
+            # flip ALONE first, so ``record_plan_action`` snapshots this cell as
+            # a coach cell still holding the athlete's original text — a later
+            # coach undo then RESTORES that text (as a coach-owned cell) instead
+            # of hard-deleting the reclaimed row (which the snapshot, taken while
+            # the cell was still athlete-authored, would have omitted entirely).
+            existing.athlete_authored = False
+            existing.save(update_fields=["athlete_authored"])
         record_plan_action(plan, f"Edited {slot.name or 'exercise'}")
         cell, _created = Prescription.objects.get_or_create(
             exercise_slot=slot, week=week, line=line

@@ -488,8 +488,13 @@ function createLogger() {
     addLine(ex) {
       if (!ex) return;
       if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
-      if (ex.sub_lines.length >= MAX_CELL_LINE) return;
-      ex.sub_lines.push({ line: ex.sub_lines.length + 1, text: "" });
+      // Number off the MAX existing line, not the length: a sparse stack (the
+      // server dropped a cleared line but kept a later one) would otherwise
+      // fabricate a duplicate line number, breaking Alpine keys and `saveCell`
+      // targeting. The cap is against that max too.
+      const maxLine = ex.sub_lines.reduce((m, l) => Math.max(m, l.line || 0), 0);
+      if (maxLine >= MAX_CELL_LINE) return;
+      ex.sub_lines.push({ line: maxLine + 1, text: "" });
     },
 
     // POST one exercise's sub-line cell. Modeled on `_postOneRm`: best-effort,
