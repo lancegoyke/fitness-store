@@ -19,6 +19,7 @@ from django.core.exceptions import PermissionDenied
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
+from django.db.models import Count
 from django.db.models import Max
 from django.http import Http404
 from django.http import HttpResponse
@@ -444,6 +445,46 @@ class RelationshipHistoryView(LoginRequiredMixin, TemplateView):
         ctx["past"] = history["past"]
         ctx["reconnecting"] = history["reconnecting"]
         ctx["is_empty"] = not history["past"] and not history["reconnecting"]
+        return ctx
+
+
+class TemplateLibraryView(LoginRequiredMixin, TemplateView):
+    """The coach's template library (``/meso/templates/``) — parity plan §3.4.
+
+    A template = a ``Plan`` with ``is_template=True`` and an ``owner`` (no
+    athlete), imported via ``meso_import_template`` or authored in the designer.
+    This lists every template the requester owns, alphabetical, each opening in
+    the same designer grid. When the coach has active clients, each row offers
+    "Start for client" (``template_use`` — a live working copy) and "Batch
+    deliver" (``plan_batch_deliver`` — a delivered copy per picked client).
+    Login-gated (like ``DeliverView``): the library is scoped to the requester's
+    own templates, so an anonymous visitor is bounced to login.
+    """
+
+    template_name = "meso/template_library.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["active"] = "roster"
+        ctx["templates"] = (
+            Plan.objects.filter(is_template=True, owner=self.request.user)
+            .annotate(
+                block_count=Count("mesocycles", distinct=True),
+                week_count=Count("mesocycles__weeks", distinct=True),
+            )
+            .order_by("title")
+        )
+        # The coach's deliverable clients, offered as "Start for client" /
+        # "Batch deliver" targets. Soft-suspended (over-seat-limit, D6) links are
+        # omitted — the endpoints re-check, this just keeps the screen honest.
+        ctx["clients"] = [
+            {"id": rel.pk, "name": rel.athlete.display_name()}
+            for rel in CoachAthlete.objects.for_coach(self.request.user)
+            .active()
+            .exclude(pk__in=billing_access.suspended_athlete_ids(self.request.user))
+            .select_related("athlete")
+            .order_by("athlete__name", "athlete__email")
+        ]
         return ctx
 
 
@@ -3529,16 +3570,24 @@ def plan_batch_deliver(request, plan_id):
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
+
+    # A template has no deliver screen to return to (parity plan §3.4) — send the
+    # coach back to their library; a normal plan returns to its deliver screen.
+    def _back():
+        if plan.is_template:
+            return redirect("meso:template_library")
+        return redirect("meso:deliver_plan", plan_id=plan.pk)
+
     if current_week(plan) is None:
         messages.error(request, "This plan has no week to deliver.")
-        return redirect("meso:deliver_plan", plan_id=plan.pk)
+        return _back()
     try:
         picked_ids = [int(raw) for raw in request.POST.getlist("relationships")]
     except (TypeError, ValueError):
         return HttpResponseBadRequest("relationships must be ids.")
     if not picked_ids:
         messages.error(request, "Pick at least one client to deliver a copy to.")
-        return redirect("meso:deliver_plan", plan_id=plan.pk)
+        return _back()
     targets = list(
         CoachAthlete.objects.for_coach(request.user)
         .active()
@@ -3550,7 +3599,7 @@ def plan_batch_deliver(request, plan_id):
     )
     if not targets:
         messages.error(request, "No deliverable clients in that selection.")
-        return redirect("meso:deliver_plan", plan_id=plan.pk)
+        return _back()
     delivered_names = []
     with transaction.atomic():
         for relationship in targets:
@@ -3573,7 +3622,56 @@ def plan_batch_deliver(request, plan_id):
         request,
         f"Delivered an independent copy to {', '.join(delivered_names)}.",
     )
-    return redirect("meso:deliver_plan", plan_id=plan.pk)
+    return _back()
+
+
+@login_required
+@require_POST
+def template_use(request, plan_id):
+    """Start-for-client — deep-copy a template into a fresh client plan (§3.4).
+
+    The working-copy door of the template library: the owner picks one active
+    client and the template is deep-copied (``duplicate_for``) into a live,
+    ACTIVE, *undelivered* plan for that relationship, then opened in the
+    designer. Nothing is stamped or notified — the copy is live per the 2d
+    model (the athlete sees it), but no delivery snapshot is written and no
+    nudge is sent; batch-deliver is the separate "notify" door.
+
+    Only serves templates the requester owns (``editable_by`` + ``is_template``
+    → 404 for a foreign or non-template plan). A missing / non-numeric / foreign
+    ``relationship`` creates nothing and flashes back to the library. The copy
+    is written in one explicit ``transaction.atomic()`` (``ATOMIC_REQUESTS`` is
+    inert here).
+    """
+    plan = get_object_or_404(
+        Plan.objects.editable_by(request.user).filter(is_template=True),
+        pk=plan_id,
+    )
+    try:
+        rel_id = int(request.POST.get("relationship", ""))
+    except (TypeError, ValueError):
+        rel_id = None
+    relationship = None
+    if rel_id is not None:
+        relationship = (
+            CoachAthlete.objects.for_coach(request.user)
+            .active()
+            .filter(pk=rel_id)
+            .select_related("athlete")
+            .first()
+        )
+    if relationship is None:
+        messages.error(
+            request, "Pick one of your active clients to start this template."
+        )
+        return redirect("meso:template_library")
+    with transaction.atomic():
+        copy = plan.duplicate_for(relationship, status=Plan.Status.ACTIVE)
+    messages.success(
+        request,
+        f"Started {copy.title} for {relationship.athlete.display_name()}.",
+    )
+    return redirect("meso:designer_plan", plan_id=copy.pk)
 
 
 def _notify_athlete_block_delivered(request, plan, mesocycle, week_count):

@@ -104,6 +104,7 @@
             <div class="meso-spacer"></div>
             <span class="meso-row-meta">{{ athletes|length }} athlete{{ athletes|length|pluralize }}</span>
             <a href="{% url 'meso:relationship_history' %}" class="meso-row-meta" style="text-decoration:none;color:var(--accent);white-space:nowrap;">· Past athletes →</a>
+            <a href="{% url 'meso:template_library' %}" class="meso-row-meta" style="text-decoration:none;color:var(--accent);white-space:nowrap;">· Templates →</a>
           </div>
           <div data-tour="roster-athlete-rows">
             {% for a in athletes %}

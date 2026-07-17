@@ -13,6 +13,7 @@ from .views import OfflineView
 from .views import RelationshipHistoryView
 from .views import ResultsView
 from .views import RosterView
+from .views import TemplateLibraryView
 from .views import UsageDashboardView
 
 app_name = "meso"
@@ -39,6 +40,14 @@ urlpatterns = [
     ),
     path("deliver/", DeliverView.as_view(), name="deliver"),
     path("deliver/<int:plan_id>/", DeliverView.as_view(), name="deliver_plan"),
+    # Template library (parity plan §3.4): the coach's owned templates, each
+    # opening in the designer + offering "Start for client" / "Batch deliver".
+    path("templates/", TemplateLibraryView.as_view(), name="template_library"),
+    path(
+        "template/<int:plan_id>/use/",
+        views.template_use,
+        name="template_use",
+    ),
     path("results/", ResultsView.as_view(), name="results"),
     path(
         "results/<int:session_id>/",
