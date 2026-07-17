@@ -248,18 +248,19 @@ class TestDeliverChosenWeek:
         assert week1.is_current is True
         assert week2.is_current is False
 
-    def test_delivering_a_block_makes_its_weeks_visible(self, client):
-        from store_project.meso.serializers import latest_delivered_week
-
+    def test_delivering_a_block_stamps_every_live_week(self, client):
         plan, week1, _, _ = seed_plan()
         week2 = add_week(plan, index=2, is_current=False)
         client.force_login(plan.relationship.coach)
 
         post_week(client, plan, week2.pk)
 
-        # The whole block is delivered at once, so a delivered block week is now
-        # visible to the athlete (both share one delivery timestamp).
-        assert latest_delivered_week(plan).pk in {week1.pk, week2.pk}
+        # The whole block is nudged about at once: every live week shares one
+        # ``delivered_at`` notify marker (2d — a heads-up stamp, not a gate).
+        week1.refresh_from_db()
+        week2.refresh_from_db()
+        assert week1.delivered_at is not None
+        assert week1.delivered_at == week2.delivered_at
 
     def test_foreign_week_id_is_404_and_delivers_nothing(self, client):
         plan, _, _, _ = seed_plan()

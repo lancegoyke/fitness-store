@@ -595,45 +595,15 @@ def last_logged_labels(plan, prescriptions, unit):
     }
 
 
-def latest_delivered_week(plan):
-    """The most recently delivered week of ``plan``, or None.
-
-    Delivery gates *visibility*: a week the coach has delivered
-    (``Week.delivered_at`` stamped by ``plan_deliver``) becomes visible to the
-    athlete; an undelivered week is not. The athlete then sees that week's
-    **current** (live) contents — a coach correcting an already-delivered week
-    is reflected, by design; the frozen ``WeekDelivery`` snapshot is the
-    historical record for the (deferred) "changes since last delivery" diff, not
-    a separate athlete-facing view. Newest delivery wins so the athlete lands on
-    the week their coach just sent. Post-P3 the athlete home renders the whole
-    delivered *block* (this week's ``mesocycle``) as a read-only multi-week table
-    and uses this week as the block anchor + the focus-week fallback when no
-    delivered week is flagged current. See ``docs/archive/meso/athlete-plan.md``.
-    """
-    # P3 delivers a whole block at once, so every live week of that block shares
-    # one ``delivered_at`` — ordering on it alone would tie non-deterministically.
-    # Break the tie toward the week the athlete is on (``is_current``), then the
-    # earliest index, so the anchor/fallback is stable and meaningful. (Per-week
-    # delivery gives distinct timestamps, so the tiebreak never engages there.)
-    return (
-        models.Week.objects.filter(
-            mesocycle__plan=plan, delivered_at__isnull=False, deleted_at__isnull=True
-        )
-        .select_related("mesocycle")
-        .order_by("-delivered_at", "-is_current", "index")
-        .first()
-    )
-
-
 def current_week(plan, week=None):
-    """The week the designer opens to — and, post-P3, the week the athlete is on.
+    """The week the designer opens to — and the week the athlete is on.
 
     An explicit ``week`` wins (callers are expected to have already checked it
     is live — the delete endpoints pin the response to the just-touched row's
     own, still-live, week); otherwise the flagged current week among the
     plan's **live** weeks, or — failing both — the earliest live week in the
-    plan. The athlete home focuses this week (when it's a delivered week of the
-    block it renders) so "today's session" comes from where the athlete is.
+    plan. The athlete home anchors on this week (2d: delivery no longer gates
+    visibility) so "today's session" comes from where the athlete is.
     """
     if week is not None:
         return week

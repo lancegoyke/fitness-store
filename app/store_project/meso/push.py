@@ -1,9 +1,9 @@
 """Web push for the athlete PWA (Phase 4b — decisions S3/S7).
 
-The push peer of ``notifications.emails.send_week_delivered_email``: when a coach
-delivers a week, the athlete's subscribed devices get a "your week is ready" push
-that deep-links to ``/meso/me/``. Signing uses VAPID (``pywebpush``); the keys
-live in ``settings.MESO_VAPID_*``.
+The push peer of ``notifications.emails.send_block_delivered_email``: when a
+coach delivers a block, the athlete's subscribed devices get a "your block is
+ready" push that deep-links to ``/meso/me/``. Signing uses VAPID
+(``pywebpush``); the keys live in ``settings.MESO_VAPID_*``.
 
 Graceful degradation is the contract — with no VAPID keys configured, every send
 is a silent no-op (subscriptions are still *stored*, nothing is *sent*), so the
@@ -74,44 +74,16 @@ def _is_gone(exc):
     return response is not None and response.status_code in (404, 410)
 
 
-def notify_week_delivered(*, athlete, coach, plan, week, home_url):
-    """Push a delivery notification to all the athlete's devices (best-effort).
-
-    Returns the number of devices actually pushed to. A no-op (returns 0) when
-    push is disabled or the athlete has no subscriptions. Dead subscriptions are
-    deleted; other per-device failures are logged and skipped — one bad endpoint
-    never blocks the others, and nothing here ever raises to the caller.
-    """
-    # Imported here to avoid a models import at module load (push.py is imported
-    # from views before app loading settles in some paths).
-    from .models import PushSubscription
-
-    if not push_enabled():
-        return 0
-
-    subscriptions = list(PushSubscription.objects.filter(athlete=athlete))
-    if not subscriptions:
-        return 0
-
-    payload = {
-        "title": "Your next training week is ready",
-        "body": f"{coach.display_name()} delivered {_week_label(week)} of {plan.title}.",
-        "url": home_url,
-        "tag": f"meso-week-{week.pk}",
-    }
-    return _fan_out(subscriptions, payload)
-
-
 def notify_block_delivered(*, athlete, coach, plan, mesocycle, week_count, home_url):
     """Push a block-delivery notification to the athlete's devices (best-effort).
 
-    The block-level peer of ``notify_week_delivered`` (Meso P3): the individual
-    deliver path releases a whole mesocycle at once, so the athlete gets one
-    "your new block is ready" push, not one per week. Same contract — a no-op
-    (returns 0) when push is disabled or the athlete has no subscriptions, dead
-    subscriptions are pruned, other per-device failures are logged and skipped,
-    and nothing here ever raises to the caller. Returns the number of devices
-    actually pushed to.
+    The deliver nudge (Meso P3; the per-week variant was retired with the 2d
+    live+notify model): the deliver path nudges about a whole mesocycle at
+    once, so the athlete gets one "your new block is ready" push, not one per
+    week. A no-op (returns 0) when push is disabled or the athlete has no
+    subscriptions, dead subscriptions are pruned, other per-device failures are
+    logged and skipped, and nothing here ever raises to the caller. Returns the
+    number of devices actually pushed to.
     """
     # Imported here to avoid a models import at module load (push.py is imported
     # from views before app loading settles in some paths).
@@ -139,7 +111,7 @@ def notify_block_delivered(*, athlete, coach, plan, mesocycle, week_count, home_
 def _fan_out(subscriptions, payload):
     """Send one ``payload`` to each subscription; return the count actually sent.
 
-    The shared per-device loop behind the delivery notifiers: dead endpoints
+    The per-device loop behind the delivery notifier: dead endpoints
     (404/410 Gone) are pruned, any other per-device failure is logged and
     skipped, and nothing here ever raises — one bad endpoint never blocks the
     others or fails the deliver.
@@ -161,10 +133,6 @@ def _fan_out(subscriptions, payload):
                 "Unexpected error pushing to subscription %s", subscription.pk
             )
     return sent
-
-
-def _week_label(week):
-    return f"Week {week.index}"
 
 
 def _week_count_label(week_count):

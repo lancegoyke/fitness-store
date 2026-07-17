@@ -41,7 +41,6 @@ from django.views.generic import TemplateView
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
-from store_project.notifications.emails import send_week_delivered_email
 
 from . import adherence as meso_adherence
 from . import demo as meso_demo
@@ -295,7 +294,7 @@ class RosterView(TemplateView):
       login wall — Meso has to be legible before you have an account.
     - An **authenticated** visitor keeps the post-#311 role routing. The roster
       is a *coach* surface, so anyone not acting as a coach is sent to their
-      training home — where they see delivered programs, respond to a coach's
+      training home — where they see their programs, respond to a coach's
       invite, and request a coach (N4 Phase 2). A user counts as a coach if they
       have a ``CoachProfile`` *or* any coach-side link (athletes they coach,
       including a pending request awaiting them) *or* a sent email invite.
@@ -368,7 +367,7 @@ class RosterView(TemplateView):
                 demo=link.is_demo,
                 self_link=link.is_self,
                 has_working_plan=link.pk in have_plan,
-                # Adherence to the athlete's latest delivered week (read-side
+                # Adherence to the athlete's current week (read-side
                 # aggregation over their done logs); ``None`` hides the meter.
                 compliance=meso_adherence.link_compliance(link),
             )
@@ -473,7 +472,7 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         # exists the CTAs open it in the designer; when not, they create one.
         working_plan = link.working_plan()
         ctx["working_plan"] = working_plan
-        # Light up the program block off the athlete's delivered reality (current
+        # Light up the program block off the athlete's current week (current
         # block/week, the macrocycle rail, adherence, status, latest session). The
         # athlete identity record carries the program overlay merged in.
         athlete = presenters.profile_athlete(link.athlete)
@@ -1114,12 +1113,12 @@ def sandbox_signup(request):
 # -- athlete surface (athlete slice Phase 1) -------------------------------
 #
 # The athlete's own logged-in surface, distinct from the coach's view of an
-# athlete (``/meso/athlete/<uuid>/``). Read-only here; logging lands in Phase 2.
-# Everything is scoped to the athlete's *active* coaches (``for_athlete``), to
-# **delivered** weeks (delivery gates *visibility* — an undelivered week is
-# hidden; a delivered week's *current* contents are shown, see
-# ``latest_delivered_week``), and to non-archived plans. An out-of-scope session
-# is a flat 404 — never a silent empty render.
+# athlete (``/meso/athlete/<uuid>/``). Everything is scoped to the athlete's
+# *active* coaches (``for_athlete``) and to non-archived plans. Edits are live
+# (2d, parity plan §3.3): the athlete sees the plan exactly as it stands the
+# moment the coach types it — delivery is a one-time heads-up + snapshot, never
+# a visibility gate. An out-of-scope session is a flat 404 — never a silent
+# empty render.
 
 
 def _pwa_context():
@@ -1157,15 +1156,16 @@ def _athlete_has_completed_log(user):
 
 
 def _athlete_session_or_404(user, pk):
-    """A delivered session the athlete owns, or ``Http404``.
+    """A session the athlete owns, or ``Http404``.
 
-    404 unless the session's week is delivered *and* its plan is one the athlete
-    reaches through an active coach link — a foreign athlete, an undelivered
-    week, an archived plan, or an unknown id are indistinguishable (no leak).
+    404 unless the session's plan is one the athlete reaches through an active
+    coach link — a foreign athlete, an archived plan, or an unknown id are
+    indistinguishable (no leak). Delivery is NOT checked (2d): edits are live,
+    so an undelivered week's sessions are as loggable as any other.
 
     Soft delete (designer framework Phase 0): a session the coach removed —
-    or one under a removed week — is gone from the athlete's surface too, even
-    if it was already delivered. Cells are read live via ``session.cells()``
+    or one under a removed week — is gone from the athlete's surface too.
+    Cells are read live via ``session.cells()``
     (P0 fixed-lineup cutover), so every downstream call (the logger grid,
     ``_clean_logged_sets``'s allowed ids, ``athlete_set_one_rm``) sees only
     live rows. Already-logged history is untouched — those reads go through
@@ -1174,7 +1174,6 @@ def _athlete_session_or_404(user, pk):
     session = (
         Session.objects.filter(
             pk=pk,
-            week__delivered_at__isnull=False,
             week__mesocycle__plan__in=_athlete_plans(user),
             deleted_at__isnull=True,
             week__deleted_at__isnull=True,
@@ -1188,10 +1187,10 @@ def _athlete_session_or_404(user, pk):
 
 
 class AthleteHomeView(LoginRequiredMixin, TemplateView):
-    """The athlete's training home: their delivered programs, this week.
+    """The athlete's training home: their live programs, this week.
 
     ``?week=<id>`` is a display-only focus override (issue #456): it opens a
-    card onto a different delivered week of its block (e.g. tapping a week
+    card onto a different week of its block (e.g. tapping a week
     chip, or the "start next week" nudge after finishing the focus week)
     without moving anything — ``is_current`` only ever advances via the
     athlete's own logging (``athlete_log_session``) or the coach's "Make
@@ -1216,11 +1215,11 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
         ctx["pending"] = presenters.athlete_pending(self.request.user)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
-        # First-log coachmark (Phase 4): only when there's a delivered session to
-        # tap *and* the athlete has never logged — pointing "tap a session below"
+        # First-log coachmark (Phase 4): only when there's a session to tap
+        # *and* the athlete has never logged — pointing "tap a session below"
         # at an empty week would be noise.
-        has_delivered = any(card["sessions"] for card in ctx["plans"])
-        ctx["show_first_log_hint"] = has_delivered and not _athlete_has_completed_log(
+        has_sessions = any(card["sessions"] for card in ctx["plans"])
+        ctx["show_first_log_hint"] = has_sessions and not _athlete_has_completed_log(
             self.request.user
         )
         ctx.update(_pwa_context())
@@ -1228,7 +1227,7 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
 
 
 class AthleteSessionView(LoginRequiredMixin, TemplateView):
-    """One delivered session — the athlete's interactive logger (Phase 2).
+    """One session — the athlete's interactive logger (Phase 2).
 
     Renders the prescribed grid as set-input rows pre-filled from the athlete's
     own existing log, and injects ``log_data`` for the Alpine logger to hydrate
@@ -1264,12 +1263,12 @@ MAX_LOGGED_SET_NUMBER = 50
 @login_required
 @require_POST
 def athlete_log_session(request, pk):
-    """Upsert the athlete's log for a delivered session they own (Phase 2).
+    """Upsert the athlete's log for a session they own (Phase 2).
 
     Replaces the athlete's own ``SessionLog`` + ``LoggedSet`` rows for this
     session with the posted state, flips the session done (unless an explicit
     ``status`` says otherwise), and stamps the date (today when none is given).
-    Scoped by ``_athlete_session_or_404`` — a foreign, undelivered, archived, or
+    Scoped by ``_athlete_session_or_404`` — a foreign, archived, or
     unknown session is a flat 404, never a silent write. The body is fully
     validated *before* any write, so a bad request is a 400 that persists
     nothing; the write itself is idempotent (re-logging updates the one log,
@@ -1385,7 +1384,7 @@ def athlete_set_one_rm(request, pk):
     it syncs across devices and is visible to the coach. The body is
     ``{"prescription": <id>, "value": "140"}`` — a blank/absent ``value`` *clears*
     it back to the log-derived estimate. Scoped exactly like the log endpoint
-    (``_athlete_session_or_404``): the prescription must live in a delivered
+    (``_athlete_session_or_404``): the prescription must live in a
     session the athlete owns, else a flat 404/400 — never a write to a foreign
     lift. A manual value overrides the log-derived estimate and survives later
     logs.
@@ -2751,10 +2750,10 @@ def week_set_current(request, plan_id, week_id):
     """Make ``week`` the plan's current week — its designer-default + deliver target.
 
     The designer's "Make current": flips the live pointer to the viewed week so
-    delivery (which sends ``current_week``) targets it and the designer opens onto
-    it next time. Post-P3 this pointer also means "the week the athlete is on":
-    the athlete home (``presenters.athlete_home``) opens its block card onto the
-    current week (when it's delivered) and takes "today's session" from it — the
+    delivery (which targets ``current_week``'s block) nudges about it and the
+    designer opens onto it next time. This pointer also means "the week the
+    athlete is on": the athlete home (``presenters.athlete_home``) opens its
+    block card onto the current week and takes "today's session" from it — the
     coach marks which week the athlete is on by setting it current here. Since
     #456, the athlete's own logging auto-advances the pointer forward too
     (``Week.advance_current_week``, forward-only, off any successful log write)
@@ -3438,17 +3437,20 @@ def coach_set_one_rm(request, plan_id, pk):
 @login_required
 @require_POST
 def plan_deliver(request, plan_id):
-    """Deliver a **block** of the plan: stamp + snapshot its whole mesocycle (P3).
+    """Deliver a **block**: notify the athlete + snapshot its whole mesocycle.
 
-    The individual deliver path releases the whole block (one ``Mesocycle``, all
-    its live weeks) at once, not one week at a time. The target week is resolved
-    exactly as before — the ``week_id`` in the body (the multi-week designer's
-    "send the week I'm viewing"), else the plan's **current** (live) week — but it
-    only *selects which block* to send: every live week of ``target.mesocycle`` is
-    stamped ``delivered_at`` (one shared timestamp) and snapshotted. The chosen
-    week must belong to the plan (a foreign week is a 404). Re-delivering re-stamps
-    every week and writes fresh ``WeekDelivery`` rows. Delivering never changes
-    ``is_current`` — releasing a block doesn't move the live pointer.
+    2d (parity plan §3.3): the athlete already sees every edit live, so
+    delivering doesn't *release* anything — it sends the one-time "your block
+    is ready" nudge (email + push) and records history: every live week of the
+    target block is stamped ``delivered_at`` (one shared timestamp — the notify
+    marker) and gets a ``WeekDelivery`` snapshot (retention; feeds the deliver
+    screen's optional what-changed diff and, later, PRs). The target week is
+    resolved as before — the ``week_id`` in the body (the multi-week designer's
+    "send the week I'm viewing"), else the plan's **current** (live) week — and
+    only *selects which block* to nudge about. The chosen week must belong to
+    the plan (a foreign week is a 404). Re-delivering re-stamps every week and
+    writes fresh ``WeekDelivery`` rows. Delivering never changes ``is_current``
+    — a nudge doesn't move the live pointer.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -3567,74 +3569,13 @@ def plan_batch_deliver(request, plan_id):
     return redirect("meso:deliver_plan", plan_id=plan.pk)
 
 
-def _notify_athlete_delivered(request, plan, week):
-    """Best-effort: email **and** push the athlete that ``week`` was delivered.
-
-    S3 (email, Phase 4a) + S7 (web push, Phase 4b). Deferred to
-    ``transaction.on_commit`` so it fires only after the delivery actually
-    commits — under ``ATOMIC_REQUESTS`` the view runs in a transaction, and a
-    rolled-back deliver must not notify a false "your week is ready". Each
-    channel is independently best-effort: a failure in one is swallowed and
-    logged, never a 500 or a rolled-back deliver, and never blocks the other.
-
-    Sandbox gate (S4): a sandbox coach's deliveries never notify — there is no
-    real person behind a seeded demo athlete.
-    """
-    if meso_sandbox.is_sandbox(plan.coach):
-        return
-    home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
-    unsubscribe_url = request.build_absolute_uri(
-        reverse(
-            "meso:unsubscribe_delivery_email",
-            kwargs={"token": make_unsubscribe_token(plan.athlete)},
-        )
-    )
-
-    def _send():
-        try:
-            # The athlete can opt out of delivery emails (the email's
-            # List-Unsubscribe link). Push is a separate, browser-opt-in channel
-            # and is never gated by the email opt-out.
-            if not athlete_opted_out(plan.athlete):
-                send_week_delivered_email(
-                    athlete=plan.athlete,
-                    coach=plan.coach,
-                    plan=plan,
-                    week=week,
-                    home_url=home_url,
-                    unsubscribe_url=unsubscribe_url,
-                )
-        except Exception:  # mail is best-effort; never fail a delivery on it
-            logger.exception(
-                "Failed to send delivery email for plan %s week %s",
-                plan.pk,
-                week.pk,
-            )
-        try:
-            meso_push.notify_week_delivered(
-                athlete=plan.athlete,
-                coach=plan.coach,
-                plan=plan,
-                week=week,
-                home_url=home_url,
-            )
-        except Exception:  # push is best-effort too; never fail a delivery on it
-            logger.exception(
-                "Failed to send delivery push for plan %s week %s",
-                plan.pk,
-                week.pk,
-            )
-
-    transaction.on_commit(_send)
-
-
 def _notify_athlete_block_delivered(request, plan, mesocycle, week_count):
     """Best-effort: ONE email + ONE push that a whole **block** was delivered.
 
-    The block-level peer of ``_notify_athlete_delivered`` (P3): the individual
-    deliver path releases the whole mesocycle at once, so the athlete gets a
-    single "your new block is ready" nudge — not one notification per week. Same
-    contract as the per-week notifier: sandbox-gated at the coach check, deferred
+    The deliver nudge (P3; per-week notification retired with the 2d live+notify
+    model): the deliver path nudges about the whole mesocycle at once, so the
+    athlete gets a single "your new block is ready" heads-up — not one
+    notification per week. Sandbox-gated at the coach check, deferred
     to ``transaction.on_commit`` (under ``ATOMIC_REQUESTS`` a rolled-back deliver
     must not notify a false "your block is ready"), and each channel is
     independently best-effort — a failure in one is swallowed and logged, never a

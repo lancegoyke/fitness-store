@@ -38,7 +38,6 @@ from .serializers import _week_label
 from .serializers import current_week
 from .serializers import diff_week_snapshots
 from .serializers import initials
-from .serializers import latest_delivered_week
 from .serializers import serialize_mesocycle
 from .serializers import serialize_mesocycle_grid
 from .serializers import serialize_prescription
@@ -102,8 +101,8 @@ def roster_athlete(
     the coach-as-athlete is legible in the list ("You" badge).
     ``has_working_plan`` lets the roster hide the "Draft with AI" CTA for an
     athlete who already has a program (drafting only runs for a fresh plan).
-    ``compliance`` is the athlete's adherence to their latest delivered week
-    (``adherence.link_compliance``) — ``None`` when there's nothing delivered to
+    ``compliance`` is the athlete's adherence to their current week
+    (``adherence.link_compliance``) — ``None`` when there's nothing to
     measure, so the meter stays hidden rather than reading a misleading ``0%``.
     """
     name = user.display_name()
@@ -116,7 +115,7 @@ def roster_athlete(
         "meta": " · ".join(meta_parts) or "No training history on file",
         # Contraindications are intentionally absent here (issue #382): they belong
         # on the athlete profile, not as badges cluttering the scannable roster row.
-        # Adherence to the latest delivered week; ``None`` hides the meter.
+        # Adherence to the athlete's current week; ``None`` hides the meter.
         "compliance": compliance,
         "status": "suspended" if suspended else "",
         "status_label": "Suspended" if suspended else "",
@@ -211,22 +210,22 @@ def profile_program(link, working_plan):
 
     Lights up the long-dead ``has_program`` block (``macrocycle``/``compliance``/
     ``results_summary`` were ``[]``/``None`` placeholders). It keys off the
-    athlete's most recently delivered week (``adherence.link_latest_delivered_week``
-    — the same week the roster meter measures), so everything describes the
-    athlete's *delivered* reality:
+    athlete's current week (``adherence.link_current_week`` — the same week the
+    roster meter measures; 2d: delivery no longer gates visibility, so the
+    current pointer, not the latest delivery, is the athlete's reality):
 
-    - ``block``/``week`` — the delivered week's mesocycle name + ``Wk N`` label;
+    - ``block``/``week`` — the current week's mesocycle name + ``Wk N`` label;
     - ``macrocycle`` — the plan's blocks, the rail positioned at that week's block;
     - ``compliance`` — adherence to that week (``adherence.link_compliance``);
     - ``status`` — needs_review / drafting / delivered (``_profile_status``);
     - ``results_summary`` — the athlete's most recent logged session.
 
     ``has_program`` is False — the template falls back to the create / in-progress
-    empty state — until a *measurable* week has been delivered (compliance is
-    ``None`` with no delivered week, or an empty one). The goal still surfaces from
-    the plan the coach is shaping so the left rail isn't blank pre-delivery.
+    empty state — until there's a *measurable* week (compliance is ``None`` with
+    no live week, or an empty one). The goal still surfaces from the plan the
+    coach is shaping so the left rail isn't blank before any sessions exist.
     """
-    week = adherence.link_latest_delivered_week(link)
+    week = adherence.link_current_week(link)
     compliance = adherence.link_compliance(link)
     if week is None or compliance is None:
         goal = working_plan.goal if working_plan else ""
@@ -536,9 +535,15 @@ def athlete_pending(user):
 def deliver_screen(plan, week=None):
     """Context for the plan-bound deliver screen (P3; block delivery).
 
-    The individual deliver path releases the **whole block** — one ``Mesocycle``,
-    every one of its live weeks — at once (see ``plan_deliver``), so this screen
-    confirms the block, not a single week. The ``week`` argument (the plan's
+    2d (parity plan §3.3): the athlete already sees every edit live — delivering
+    is a one-time heads-up + a ``WeekDelivery`` history snapshot, not a release.
+    The "changes since last delivery" diff below is an optional what-changed
+    view for the coach, never a gate.
+
+    The individual deliver path nudges about the **whole block** — one
+    ``Mesocycle``, every one of its live weeks — at once (see ``plan_deliver``),
+    so this screen confirms the block, not a single week. The ``week`` argument
+    (the plan's
     current/live week by default, or an explicit ``?week=`` the coach picked in
     the designer's switcher) only *selects which block* to send; ``block`` is
     that week's mesocycle.
@@ -865,9 +870,9 @@ def session_results(session):
 # -- athlete surface (athlete slice Phase 1) -------------------------------
 #
 # The athlete's *own* read view (distinct from the coach's view of an athlete).
-# Scoped to delivered weeks across the athlete's active coaches; an undelivered
-# week never reaches these presenters (the view filters first). Log status comes
-# only from the athlete's *own* ``SessionLog`` rows.
+# Scoped to live weeks across the athlete's active coaches (2d: edits are live —
+# delivery never gates visibility). Log status comes only from the athlete's
+# *own* ``SessionLog`` rows.
 
 
 def _done_session_ids(session_ids, athlete):
@@ -911,20 +916,20 @@ def _cell_summary(cell):
     return _text_label("\n".join(p for p in parts if p and p.strip()))
 
 
-def _athlete_block_grid(block, delivered_week_ids, focus_week_id):
+def _athlete_block_grid(block, focus_week_id):
     """The athlete's read-only multi-week table, transformed from the coach grid.
 
     Reuses ``serialize_mesocycle_grid`` (one dense query set for the whole block —
-    no N+1 per cell) and strips it to what a read-only table needs: columns
-    filtered to the *delivered* weeks, each cell reduced to a display summary
-    (the freeform text stack; em-dash rendered by the template when
-    ``skipped``), and every coach-editing internal (history / ``*_id`` /
+    no N+1 per cell) and strips it to what a read-only table needs: every live
+    week of the block as a column (2d: delivery no longer gates visibility —
+    the athlete sees the block exactly as it stands), each cell reduced to a
+    display summary (the freeform text stack; em-dash rendered by the template
+    when ``skipped``), and every coach-editing internal (history / ``*_id`` /
     ``prescription_id`` / ``session_id``) dropped. The focus (current) week's
     column is flagged (``current``) so the template can highlight it.
     """
     grid = serialize_mesocycle_grid(block)
-    delivered = {str(wid) for wid in delivered_week_ids}
-    columns = [w for w in grid["weeks"] if str(w["id"]) in delivered]
+    columns = grid["weeks"]
     col_keys = [str(w["id"]) for w in columns]
     weeks = [
         {
@@ -941,10 +946,10 @@ def _athlete_block_grid(block, delivered_week_ids, focus_week_id):
         for row in day["rows"]:
             cells = []
             # Include the row only if the athlete actually trains it in some
-            # delivered week. An "add this week only" targeting an *undelivered*
-            # future week seeds skipped placeholder cells in the delivered weeks;
-            # counting any present cell would leak that build-ahead exercise's
-            # name across em-dash cells, so gate on a non-skipped delivered cell.
+            # week — a row skipped in every column (e.g. an "add this week
+            # only" exercise whose other weeks are placeholder cells) would
+            # render as a name beside a strip of em-dashes, so gate on a
+            # non-skipped cell somewhere.
             has_trainable = False
             for w, key in zip(columns, col_keys):
                 cell = row["cells"].get(key)
@@ -976,56 +981,38 @@ def _athlete_block_grid(block, delivered_week_ids, focus_week_id):
     return {"weeks": weeks, "days": days}
 
 
-def _single_current_week(plan):
-    """True when ``plan`` has exactly one live ``is_current`` week.
-
-    A plan (``week_set_current``) keeps a single current pointer, so
-    ``current_week`` is normally trustworthy as "the week the athlete is on."
-    Nothing in the schema enforces that, though — no DB constraint bars two
-    live ``True`` rows on the same plan — so this stays defensive hardening
-    rather than an assumption: ``athlete_home`` falls back to the latest
-    delivered week whenever this doesn't hold, instead of trusting an
-    ambiguous pointer.
-    """
-    return (
-        Week.objects.filter(
-            mesocycle__plan=plan, is_current=True, deleted_at__isnull=True
-        ).count()
-        == 1
-    )
-
-
 def athlete_home(user, focus_week_id=None):
-    """The athlete's active programs, each as its whole delivered block.
+    """The athlete's active programs, each as its whole current block.
 
     One card per non-archived plan across the athlete's *active* coaches (D-a).
-    A plan with no delivered week is shown as awaiting; otherwise the card opens
-    to the week the athlete is currently on (``is_current`` when it's delivered,
-    else the latest delivered week) — that focus week's sessions are the tappable
-    log rows — and carries a read-only multi-week table (``grid``) of the whole
-    delivered block so the athlete can see the weeks around them (P3).
+    Edits are live (2d, parity plan §3.3): the athlete sees every live week of
+    the plan the moment the coach types it — delivery is a heads-up + snapshot,
+    never a visibility gate. A plan with no weeks yet is shown as awaiting;
+    otherwise the card opens to the week the athlete is currently on (the
+    flagged ``is_current`` week, else the plan's earliest live week) — that
+    focus week's sessions are the tappable log rows — and carries a read-only
+    multi-week table (``grid``) of the whole block so the athlete can see the
+    weeks around them (P3).
 
     ``focus_week_id`` is a **display-only** override (issue #456): when it names
-    a live, delivered week belonging to one of the athlete's own cards, that
-    week — and therefore its block — becomes the anchor for THAT plan's card
-    only; every other card renders normally. It never touches ``is_current``;
-    the pointer only moves via the athlete's own logging (auto-advance) or the
-    coach's "Make current". An invalid/foreign/undelivered/deleted id is
-    silently ignored, rendering exactly as a bare request would.
+    a live week belonging to one of the athlete's own cards, that week — and
+    therefore its block — becomes the anchor for THAT plan's card only; every
+    other card renders normally. It never touches ``is_current``; the pointer
+    only moves via the athlete's own logging (auto-advance) or the coach's
+    "Make current". An invalid/foreign/deleted id is silently ignored,
+    rendering exactly as a bare request would.
 
-    The chip strip and "start next week" nudge span every delivered week of
-    the whole PLAN, not just the anchored block (Finding 1, issue #456): a
-    coach delivering a new block never moves the pointer, so a chip strip
-    scoped to only the anchored block would strand the athlete on the old one
-    forever. ``grid``/``sessions`` stay block-scoped — they follow the anchor
-    (the focus week's mesocycle) alone.
+    The chip strip and "start next week" nudge span every live week of the
+    whole PLAN, not just the anchored block (Finding 1, issue #456): a coach
+    adding a new block never moves the pointer, so a chip strip scoped to only
+    the anchored block would strand the athlete on the old one forever.
+    ``grid``/``sessions`` stay block-scoped — they follow the anchor (the
+    focus week's mesocycle) alone.
     """
     requested_week = None
     if focus_week_id is not None:
         requested_week = (
-            Week.objects.filter(
-                pk=focus_week_id, deleted_at__isnull=True, delivered_at__isnull=False
-            )
+            Week.objects.filter(pk=focus_week_id, deleted_at__isnull=True)
             .select_related("mesocycle")
             .first()
         )
@@ -1037,8 +1024,15 @@ def athlete_home(user, focus_week_id=None):
     )
     cards = []
     for plan in plans:
-        latest = latest_delivered_week(plan)
-        if latest is None:
+        # Every live week of the plan, in plan order — the same
+        # ``(mesocycle.order, index)`` tuple ``advance_current_week`` compares.
+        # One list serves the anchor pick, the chip strip, and the nudge.
+        plan_weeks = list(
+            Week.objects.filter(mesocycle__plan_id=plan.pk, deleted_at__isnull=True)
+            .select_related("mesocycle")
+            .order_by("mesocycle__order", "index")
+        )
+        if not plan_weeks:
             cards.append(
                 {
                     "id": plan.pk,
@@ -1047,7 +1041,6 @@ def athlete_home(user, focus_week_id=None):
                     "coach": plan.coach.display_name(),
                     "block": "",
                     "focus_index": None,
-                    "delivered_at": None,
                     "sessions": [],
                     "grid": None,
                     "awaiting": True,
@@ -1056,40 +1049,23 @@ def athlete_home(user, focus_week_id=None):
             continue
 
         # Anchor the card (both the block shown and the focus week) on the week
-        # the athlete is on: the plan's single ``is_current`` week, so a coach's
+        # the athlete is on: the flagged ``is_current`` week, so a coach's
         # "Make current" is honored even when it moves the athlete back to an
-        # earlier delivered block. ``_single_current_week`` is defensive
-        # hardening against the schema not actually enforcing "exactly one."
-        # When it doesn't hold (or the flagged week is undelivered — a current
-        # week the coach is still building), fall back to the latest delivered
-        # week, whose ordering already tracks the newest delivery.
+        # earlier block. Nothing in the schema enforces a single flag, so take
+        # the first in plan order — deterministic even against a stray double
+        # flag — and fall back to the plan's earliest live week when none is
+        # flagged.
         #
         # ``requested_week`` (the ``?week=`` override) wins over both when it
-        # names a live delivered week of THIS plan — matched by ``plan_id``
-        # rather than a second per-card query. A foreign/other-plan week never
-        # matches here, so it's a no-op for every other card.
+        # names a live week of THIS plan — matched by ``plan_id`` rather than
+        # a second per-card query. A foreign/other-plan week never matches
+        # here, so it's a no-op for every other card.
         if requested_week is not None and requested_week.mesocycle.plan_id == plan.pk:
             anchor = requested_week
         else:
-            current = current_week(plan)
-            if (
-                current is not None
-                and current.delivered_at is not None
-                and _single_current_week(plan)
-            ):
-                anchor = current
-            else:
-                anchor = latest
+            anchor = next((w for w in plan_weeks if w.is_current), plan_weeks[0])
         block = anchor.mesocycle
         focus = anchor
-        # The table columns: only DELIVERED live weeks of this block — a week the
-        # coach is building ahead (delivered_at is None) never reaches the athlete.
-        delivered_weeks = list(
-            block.weeks.filter(
-                deleted_at__isnull=True, delivered_at__isnull=False
-            ).order_by("index")
-        )
-        delivered_ids = {w.pk for w in delivered_weeks}
 
         # The focus week's sessions are the tappable log rows. Live rows only
         # (soft delete, designer framework Phase 0): a day the coach removed after
@@ -1101,29 +1077,16 @@ def athlete_home(user, focus_week_id=None):
         done = _done_session_ids([s.pk for s in session_objs], user)
         sessions = [_athlete_session_row(s, done=s.pk in done) for s in session_objs]
 
-        # Week chips + the "start next week" nudge (issue #456 Finding 1) span the
-        # WHOLE PLAN, not just the anchored block: delivery never moves
-        # ``is_current`` (by design — see ``Week.advance_current_week``), so a
-        # coach delivering a NEW block never touches the athlete's pointer.
-        # Restricting navigation to the anchored
-        # block's own delivered weeks would make that new block invisible and
-        # permanently unreachable — the athlete could never tap into it, and
-        # auto-advance could never carry them there either, since it only fires
-        # from a session the athlete has already reached. Ordered plan-wide by
-        # ``(mesocycle.order, index)`` — the same tuple order
-        # ``advance_current_week`` compares — since a block's own week
-        # ``index`` restarts at 1 each mesocycle.
-        plan_delivered_weeks = list(
-            Week.objects.filter(
-                mesocycle__plan_id=plan.pk,
-                deleted_at__isnull=True,
-                delivered_at__isnull=False,
-            )
-            .select_related("mesocycle")
-            .order_by("mesocycle__order", "index")
-        )
-        week_chip_groups = _week_chip_groups(plan_delivered_weeks, focus)
-        next_week = _next_delivered_week(plan_delivered_weeks, focus)
+        # Week chips + the "start next week" nudge (issue #456 Finding 1) span
+        # the WHOLE PLAN, not just the anchored block: a coach adding a NEW
+        # block never touches the athlete's pointer (``is_current`` only moves
+        # via auto-advance or "Make current"), so restricting navigation to the
+        # anchored block's own weeks would make that new block permanently
+        # unreachable — the athlete could never tap into it, and auto-advance
+        # could never carry them there either, since it only fires from a
+        # session the athlete has already reached.
+        week_chip_groups = _week_chip_groups(plan_weeks, focus)
+        next_week = _next_week(plan_weeks, focus)
         # Vacuously false with no sessions — "start next week" would be a
         # non-sequitur nudge on an empty focus week.
         focus_done = bool(session_objs) and all(s.pk in done for s in session_objs)
@@ -1136,11 +1099,10 @@ def athlete_home(user, focus_week_id=None):
                 "coach": plan.coach.display_name(),
                 "block": block.name,
                 "focus_index": focus.index,
-                "delivered_at": focus.delivered_at,
                 "sessions": sessions,
-                "grid": _athlete_block_grid(block, delivered_ids, focus.pk),
+                "grid": _athlete_block_grid(block, focus.pk),
                 "week_chip_groups": week_chip_groups,
-                "chip_count": len(plan_delivered_weeks),
+                "chip_count": len(plan_weeks),
                 "next_week": next_week,
                 "focus_done": focus_done,
                 "awaiting": False,
@@ -1149,14 +1111,14 @@ def athlete_home(user, focus_week_id=None):
     return cards
 
 
-def _week_chip_groups(plan_delivered_weeks, focus):
-    """Navigation chips for every delivered week of the PLAN, grouped by block.
+def _week_chip_groups(plan_weeks, focus):
+    """Navigation chips for every live week of the PLAN, grouped by block.
 
     Issue #456 Finding 1: the chip strip must span every live mesocycle, not
-    just the anchored one, or a newly delivered block is permanently
+    just the anchored one, or a newly added block is permanently
     unreachable. Grouping is by mesocycle (order preserved from
-    ``plan_delivered_weeks``, already plan-wide ordered); a plan with more
-    than one delivered block gets each group labeled with its block's name
+    ``plan_weeks``, already plan-wide ordered); a plan with more
+    than one block gets each group labeled with its block's name
     (``mesocycle.name`` — the same string the card header shows as
     ``plan.block``) so the jump is legible, while a single-block plan gets one
     unlabeled group — today's flat "Wk N" row, unchanged. ``current`` reads
@@ -1164,11 +1126,11 @@ def _week_chip_groups(plan_delivered_weeks, focus):
     which column this card is showing right now (the ``?week=`` override, or
     the anchor's default) — they usually coincide but must not be conflated.
     """
-    multi_block = len({w.mesocycle_id for w in plan_delivered_weeks}) > 1
+    multi_block = len({w.mesocycle_id for w in plan_weeks}) > 1
     groups = []
     current_meso_id = None
     group = None
-    for w in plan_delivered_weeks:
+    for w in plan_weeks:
         if w.mesocycle_id != current_meso_id:
             group = {"label": w.mesocycle.name if multi_block else "", "chips": []}
             groups.append(group)
@@ -1185,21 +1147,19 @@ def _week_chip_groups(plan_delivered_weeks, focus):
     return groups
 
 
-def _next_delivered_week(plan_delivered_weeks, focus):
-    """The next delivered week after ``focus``, plan-wide — or ``None``.
+def _next_week(plan_weeks, focus):
+    """The next live week after ``focus``, plan-wide — or ``None``.
 
     Issue #456 Finding 1: crosses block boundaries, so the "start next week"
-    nudge can point into a newly delivered block, not just the anchored one.
+    nudge can point into a newly added block, not just the anchored one.
     ``cross_block`` flags when the next week belongs to a different mesocycle
     than the focus week, so the template can phrase the nudge with the
     destination block's name instead of a same-block "start Week N".
     """
-    focus_pos = next(
-        (i for i, w in enumerate(plan_delivered_weeks) if w.pk == focus.pk), None
-    )
-    if focus_pos is None or focus_pos + 1 >= len(plan_delivered_weeks):
+    focus_pos = next((i for i, w in enumerate(plan_weeks) if w.pk == focus.pk), None)
+    if focus_pos is None or focus_pos + 1 >= len(plan_weeks):
         return None
-    nxt = plan_delivered_weeks[focus_pos + 1]
+    nxt = plan_weeks[focus_pos + 1]
     cross_block = nxt.mesocycle_id != focus.mesocycle_id
     return {
         "id": nxt.pk,
@@ -1263,9 +1223,9 @@ def _target_label(prescription, lines=()):
 
 
 def athlete_session(session, athlete):
-    """One delivered session as the athlete's interactive logger (Phase 2).
+    """One session as the athlete's interactive logger (Phase 2).
 
-    ``session`` is already athlete-scoped + delivered by the view; this formats
+    ``session`` is already athlete-scoped by the view; this formats
     the prescribed grid into set-input rows, pre-filled from the athlete's own
     most-recent ``SessionLog``, and reports its done status. Cells are read via
     ``session.cells()`` (P0 fixed-lineup cutover), already live-filtered.

@@ -494,7 +494,7 @@ class TestNotifyGuard:
 
         with (
             mock.patch(
-                "store_project.meso.views.meso_push.notify_week_delivered"
+                "store_project.meso.views.meso_push.notify_block_delivered"
             ) as push_mock,
             django_capture_on_commit_callbacks(execute=True),
         ):

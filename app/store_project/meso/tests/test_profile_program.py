@@ -3,14 +3,15 @@
 The profile's "Current block / adherence / macrocycle / latest session" card and
 its left-rail goals shipped as a fully-built template fed dead placeholders
 (``profile_athlete`` returned ``has_program=False``; the view hard-coded
-``macrocycle=[]`` / ``results_summary=None``). Delivery + logging have existed
-since the athlete slice, so the data is finally there. These pin the read-side
+``macrocycle=[]`` / ``results_summary=None``). These pin the read-side
 that lights the block up:
 
-- it keys off the athlete's most recently *delivered* week (the same week the
-  roster meter measures);
-- ``has_program`` is gated on a *measurable* delivered week, so an athlete with
-  nothing delivered honestly falls back to the create / in-progress empty state;
+- it keys off the athlete's *current* week (the same week the roster meter
+  measures; 2d — delivery no longer gates visibility, so the ``is_current``
+  pointer, not the latest delivery, is the anchor);
+- ``has_program`` is gated on a *measurable* week (one with sessions), so an
+  athlete with nothing to train honestly falls back to the create /
+  in-progress empty state;
 - ``status`` prefers the most actionable signal (needs_review > drafting >
   delivered); ``results_summary`` reuses the coach results scoring.
 """
@@ -43,27 +44,29 @@ def make_plan(
     rel,
     *,
     blocks=("Accumulation", "Intensification", "Realization"),
-    delivered_block=1,
+    current_block=1,
     sessions=2,
     done=1,
     goal="Squat 405",
     status=Plan.Status.ACTIVE,
 ):
-    """A plan under ``rel`` whose ``delivered_block``-th block holds the live week.
+    """A plan under ``rel`` whose ``current_block``-th block holds the athlete's week.
 
     Each block is a ``Mesocycle`` (``order``/``index`` ascending). Only the week
-    in ``delivered_block`` is delivered (so it's unambiguously the latest), with
-    ``sessions`` days, the first ``done`` of them logged *done* for the athlete.
-    Returns ``(plan, delivered_week)``.
+    in ``current_block`` is flagged ``is_current`` (and stamped delivered — the
+    notify marker, irrelevant to the read since 2d), with ``sessions`` days, the
+    first ``done`` of them logged *done* for the athlete.
+    Returns ``(plan, current_week)``.
     """
     plan = PlanFactory(relationship=rel, status=status, goal=goal)
-    delivered = None
+    current = None
     for i, name in enumerate(blocks):
         meso = MesocycleFactory(plan=plan, name=name, order=i, week_count=4)
         week = WeekFactory(mesocycle=meso, index=i + 1, delivered_at=None)
-        if i == delivered_block:
+        if i == current_block:
+            week.is_current = True
             week.delivered_at = timezone.now()
-            week.save(update_fields=["delivered_at"])
+            week.save(update_fields=["is_current", "delivered_at"])
             for n in range(sessions):
                 session = day(week, day_number=n + 1, name=f"Day {n + 1}")
                 if n < done:
@@ -72,8 +75,8 @@ def make_plan(
                         athlete=rel.athlete,
                         status=SessionLog.Status.DONE,
                     )
-            delivered = week
-    return plan, delivered
+            current = week
+    return plan, current
 
 
 # -- empty state (nothing delivered) ---------------------------------------
@@ -114,15 +117,15 @@ class TestEmptyState:
 
 
 class TestProgramBlock:
-    def test_block_and_week_label_off_the_delivered_week(self):
+    def test_block_and_week_label_off_the_current_week(self):
         rel = CoachAthleteFactory()
-        make_plan(rel, delivered_block=1)  # block index 1 → "Intensification", Wk 2
+        make_plan(rel, current_block=1)  # block index 1 → "Intensification", Wk 2
         athlete = presenters.profile_program(rel, None)["athlete"]
         assert athlete["has_program"] is True
         assert athlete["block"] == "Intensification"
         assert athlete["week"] == "Wk 2"
 
-    def test_compliance_matches_the_delivered_week(self):
+    def test_compliance_matches_the_current_week(self):
         rel = CoachAthleteFactory()
         make_plan(rel, sessions=2, done=1)  # 1 of 2 done → 50%
         athlete = presenters.profile_program(rel, None)["athlete"]
@@ -148,12 +151,12 @@ class TestProgramBlock:
 
 
 class TestMacrocycle:
-    def test_states_positioned_at_the_delivered_block(self):
+    def test_states_positioned_at_the_current_block(self):
         rel = CoachAthleteFactory()
         make_plan(
             rel,
             blocks=("B0", "B1", "B2", "B3"),
-            delivered_block=1,
+            current_block=1,
         )
         macro = presenters.profile_program(rel, None)["macrocycle"]
         assert [m["name"] for m in macro] == ["B0", "B1", "B2", "B3"]
@@ -302,7 +305,7 @@ class TestProfileRender:
 
     def test_delivered_program_renders_block_and_meter(self, client):
         coach, rel = self._coach_with_athlete()
-        _, week = make_plan(rel, delivered_block=1, sessions=2, done=1)
+        _, week = make_plan(rel, current_block=1, sessions=2, done=1)
         client.force_login(coach)
         resp = client.get(reverse("meso:athlete", kwargs={"pk": rel.athlete_id}))
         assert resp.status_code == 200

@@ -4,13 +4,15 @@ These pin the read-side aggregation that finally fills the roster's two
 long-standing placeholders (``presenters`` carried ``compliance=None`` and the
 view set ``activity=[]`` as "Phase 2/3 concepts awaiting logged data"):
 
-- ``adherence.link_compliance`` — what fraction of the latest *delivered* week's
-  sessions the athlete has marked *done*;
+- ``adherence.link_compliance`` — what fraction of the athlete's *current*
+  week's sessions they have marked *done* (2d: delivery no longer gates
+  anything, so the anchor is the ``is_current`` pointer on the newest plan,
+  not the latest delivery);
 - ``adherence.recent_logs`` / ``presenters.roster_activity`` — the coach's
   athletes' most recent completed sessions, scoped to active links.
 
-The contract mirrors the athlete surface: delivery is the gate, ``done`` is the
-signal, and an athlete only ever counts their own logs.
+The contract mirrors the athlete surface: ``done`` is the signal, and an
+athlete only ever counts their own logs.
 """
 
 from datetime import timedelta
@@ -76,11 +78,38 @@ class TestLinkCompliance:
         rel = CoachAthleteFactory()
         assert adherence.link_compliance(rel) is None
 
-    def test_none_when_nothing_delivered(self):
+    def test_none_for_an_empty_undelivered_week(self):
         rel = CoachAthleteFactory()
         meso = MesocycleFactory(plan=PlanFactory(relationship=rel))
-        WeekFactory(mesocycle=meso, delivered_at=None)  # built, never delivered
+        WeekFactory(mesocycle=meso, delivered_at=None)  # no sessions to measure
         assert adherence.link_compliance(rel) is None
+
+    def test_undelivered_current_week_still_measures(self):
+        # 2d: delivery is a notify marker, not a gate — a week the coach never
+        # delivered still drives the meter once it has sessions.
+        rel = CoachAthleteFactory()
+        meso = MesocycleFactory(plan=PlanFactory(relationship=rel))
+        week = WeekFactory(mesocycle=meso, index=1, is_current=True, delivered_at=None)
+        session = day(week, day_number=1, name="Day 1")
+        SessionLogFactory(
+            session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
+        )
+        assert adherence.link_compliance(rel) == 100
+
+    def test_current_pointer_wins_within_the_plan(self):
+        # The flagged week is the anchor even when a later week exists.
+        rel = CoachAthleteFactory()
+        meso = MesocycleFactory(plan=PlanFactory(relationship=rel))
+        current = WeekFactory(
+            mesocycle=meso, index=1, is_current=True, delivered_at=None
+        )
+        later = WeekFactory(mesocycle=meso, index=2, delivered_at=timezone.now())
+        done_session = day(current, day_number=1, name="Day 1")
+        day(later, day_number=1, name="Day 1")  # unlogged — must not count
+        SessionLogFactory(
+            session=done_session, athlete=rel.athlete, status=SessionLog.Status.DONE
+        )
+        assert adherence.link_compliance(rel) == 100
 
     def test_none_for_a_delivered_week_with_no_sessions(self):
         rel = CoachAthleteFactory()
@@ -107,10 +136,12 @@ class TestLinkCompliance:
         delivered_week(rel, sessions=3, done=2)  # 66.6… → 67
         assert adherence.link_compliance(rel) == 67
 
-    def test_only_counts_the_latest_delivered_week(self):
+    def test_only_counts_the_newest_plans_week(self):
         rel = CoachAthleteFactory()
         now = timezone.now()
-        # An older, fully-logged week must not inflate the newest week's number.
+        # An older plan's fully-logged week must not inflate the newest one's
+        # number (each ``delivered_week`` builds its own plan; the newest
+        # ``modified`` plan anchors the meter).
         delivered_week(
             rel, sessions=2, done=2, delivered_at=now - timedelta(days=7), index=1
         )

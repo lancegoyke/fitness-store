@@ -674,8 +674,8 @@ class Command(BaseCommand):
     def _ensure_log(self, athlete, plan, today):
         """Deliver + log Maya's current-week "Lower" session (the first real log).
 
-        Idempotent: the week is delivered once (the visibility gate the real
-        logging flow requires), and the ``SessionLog`` + ``LoggedSet`` rows are
+        Idempotent: the week is delivered once (the coach workflow's step
+        order, not a gate — 2d), and the ``SessionLog`` + ``LoggedSet`` rows are
         created only if absent, so a reseed never duplicates or clobbers a hand-
         edited log. Returns None if the plan's hierarchy isn't present.
         """

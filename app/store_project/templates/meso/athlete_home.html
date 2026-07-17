@@ -21,7 +21,7 @@
       <div>
         <p class="meso-eyebrow">Your training</p>
         <h1 class="meso-h1">This week</h1>
-        <p class="meso-sub">What your coach delivered — tap a session to see the plan.</p>
+        <p class="meso-sub">Your program, live as your coach writes it — tap a session to see the plan.</p>
       </div>
     </div>
 
@@ -132,21 +132,21 @@
         <p class="meso-row-meta" style="margin-bottom:12px;">Coach {{ plan.coach }}{% if plan.goal %} · {{ plan.goal }}{% endif %}</p>
 
         {% if plan.awaiting %}
-          <p class="meso-row-meta">Nothing delivered yet — your coach is still building this week.</p>
+          <p class="meso-row-meta">Nothing here yet — your coach is still building this program.</p>
         {% else %}
           {% if plan.chip_count > 1 %}
             {% comment %}
-              Week chips (issue #456) — the tappable path onto any delivered
+              Week chips (issue #456) — the tappable path onto any live
               week of this PLAN, not just the anchored block's (Finding 1: a
-              coach delivering a new block never moves is_current, so scoping
+              coach adding a new block never moves is_current, so scoping
               this to the anchored block would strand the athlete on the old
               one forever). Pure server-rendered links; the CURRENT
               (is_current) chip is filled, the FOCUSED (viewed) chip gets an
               accent outline, and the two can differ (viewing an earlier week
               for review doesn't move is_current). Grouped by block: a group
               only gets a visible label once the plan has more than one
-              delivered block, otherwise it's today's flat "Wk N" row. Only
-              shown at all once the plan has more than one delivered week.
+              block, otherwise it's today's flat "Wk N" row. Only
+              shown at all once the plan has more than one week.
               Rendered independent of plan.sessions (nit #456 P2): a focused
               week whose sessions were all soft-deleted must not hide the only
               plan-wide navigation off it.
@@ -184,24 +184,23 @@
               {% endfor %}
             </div>
           {% else %}
-            {# This card's plan HAS delivered weeks — this focused week just has
-               no live sessions right now (e.g. the coach removed them all after
-               delivering it). Distinct from
-               the truly-nothing-delivered "awaiting" state above (nit #456
+            {# This card's plan HAS weeks — this focused week just has
+               no live sessions right now (e.g. the coach removed them all).
+               Distinct from the truly-empty "awaiting" state above (nit #456
                P2): the plan-wide chips/grid above still stand, so this is
                deliberately a light inline note, not the "still building" copy. #}
             <p class="meso-row-meta">No sessions this week.</p>
           {% endif %}
 
           {% if plan.focus_done and plan.next_week %}
-            {# "Start next week" nudge (#456) — discoverability sugar; the chips above are the universal path. Crosses blocks (Finding 1): when the next delivered week lives in a different mesocycle, the copy names the destination block so the jump makes sense. #}
+            {# "Start next week" nudge (#456) — discoverability sugar; the chips above are the universal path. Crosses blocks (Finding 1): when the next week lives in a different mesocycle, the copy names the destination block so the jump makes sense. #}
             <a class="meso-btn meso-btn--primary" href="{% url 'meso:athlete_home' %}?week={{ plan.next_week.id }}" style="width:100%;justify-content:center;margin-top:10px;padding:11px 14px;font-size:13.5px;">{% if plan.next_week.cross_block %}Week {{ plan.focus_index }} done — start {{ plan.next_week.block_label }} · Week {{ plan.next_week.index }} &rarr;{% else %}Week {{ plan.focus_index }} done — start Week {{ plan.next_week.index }} &rarr;{% endif %}</a>
           {% endif %}
 
           {% if plan.grid.days %}
             {% comment %}
               Read-only multi-week block table (P3). One compact table per
-              training day; rows = exercises, columns = delivered weeks. Each
+              training day; rows = exercises, columns = the block's weeks. Each
               table scrolls horizontally inside its own container so a narrow
               phone screen never scrolls the whole page sideways. Pure
               server-rendered — no JS. (A multi-line {# #} comment is NOT
@@ -247,7 +246,7 @@
       </div>
     {% empty %}
       <div class="meso-card meso-card--pad">
-        <p class="meso-row-meta">No active programs yet. Once a coach delivers a week, it shows up here.</p>
+        <p class="meso-row-meta">No active programs yet. Once a coach starts you on a program, it shows up here.</p>
       </div>
     {% endfor %}
 

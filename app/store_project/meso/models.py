@@ -1393,10 +1393,11 @@ class Mesocycle(models.Model):
         row's freeform *text* (the whole line stack — prescription line plus any
         sub-lines, Phase 2a) carried forward from the latest live week as a
         starting point the coach then tweaks. Each new cell starts clean —
-        ``skipped`` (a one-week exception) is never carried forward. The new week is a **non-current, undelivered
-        draft**: adding a future week never changes what's live or what delivery
-        targets — making a week the deliver target is the separate
-        ``week_set_current`` action. ``week_count`` grows to stay >= the highest
+        ``skipped`` (a one-week exception) is never carried forward. The new
+        week is **non-current** (and visible to the athlete at once — 2d, edits
+        are live): adding a future week never moves the athlete's pointer or
+        what delivery targets — making a week the deliver target is the
+        separate ``week_set_current`` action. ``week_count`` grows to stay >= the highest
         materialized index so the periodization rail stays honest. Returns the
         new ``Week``.
 
@@ -1606,6 +1607,9 @@ class Week(models.Model):
     intensity = models.PositiveIntegerField(_("Intensity"), default=0)
     is_deload = models.BooleanField(_("Deload"), default=False)
     is_current = models.BooleanField(_("Current"), default=False)
+    # When the coach last sent the deliver nudge (2d: a notify marker +
+    # snapshot timestamp, never a visibility gate — the athlete sees live weeks
+    # regardless).
     delivered_at = models.DateTimeField(_("Delivered at"), null=True, blank=True)
     # Soft delete (designer framework Phase 0): a week is *live* iff this is
     # None. The delete endpoint stamps only this row — children are hidden by
@@ -1979,13 +1983,14 @@ class SessionLog(models.Model):
 
 
 # ---------------------------------------------------------------------------
-# Delivery / lightweight versioning (Phase 4)
+# Delivery / lightweight versioning (Phase 4; reframed by 2d)
 #
 # Delivering a week stamps ``Week.delivered_at`` and records a ``WeekDelivery``
-# snapshot of the week at that moment. "Changes since last delivery" then =
-# diff(current serialization, latest ``payload``); the full diff *UI* is
-# deferred (persistence-plan open assumption #3) — this just captures the data
-# cheaply.
+# snapshot of the week at that moment. Since 2d (parity plan §3.3) delivery is
+# a one-time notify + history record — never a visibility gate (the athlete
+# sees every edit live). The snapshots are retention/history: they feed the
+# deliver screen's optional "changes since last delivery" diff and, later, the
+# PR engine's prescribed-vs-performed record.
 # ---------------------------------------------------------------------------
 
 

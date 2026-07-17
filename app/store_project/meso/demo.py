@@ -135,9 +135,9 @@ def load_delivery(coach):
 def load_log(coach):
     """Segment: log Maya's Lower session + refresh her 1RM.
 
-    Depends on ``delivery`` (in the real workflow an athlete can't log a
-    session that was never delivered to them), which in turn pulls in
-    ``program``/``athletes``.
+    Depends on ``delivery`` (the demo tells the coach workflow's story in
+    order — deliver, then log — even though delivery no longer gates logging,
+    2d), which in turn pulls in ``program``/``athletes``.
     """
     _lock(coach)
     load_delivery(coach)

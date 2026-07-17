@@ -1,6 +1,6 @@
 # Meso — spreadsheet parity by simplification
 
-**Status:** Phase 2c (groups removed → batch-deliver) built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16
+**Status:** Phase 2d (deliver → live + notify) built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16
 **Owner:** Lance
 **North star:** make writing a program in Meso as fast and frictionless as writing it
 in a Google Sheet — keyboard-driven, freeform, one grid — then extend to tracking,
@@ -354,7 +354,25 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
      per pick, stamped + snapshotted + notified exactly like an individual
      deliver. The saved client list (one-click class deliver) is deferred
      until real use demands it.
-   - 2d **Deliver → live + notify** — repurpose snapshots.
+   - 2d **Deliver → live + notify** — repurpose snapshots. **✅ Built
+     2026-07-16** (branch `meso/2d-live-plus-notify`): the delivery
+     visibility gate is gone — the athlete sees **every live week** of every
+     non-archived plan the moment the coach types it (home, chips, block
+     grid, session logger, focus override, and logging all drop their
+     `delivered_at` filters); the athlete home anchors on the `is_current`
+     pointer (falling back to the earliest live week; `awaiting` = a plan
+     with no weeks at all), and adherence re-bases from "latest delivered
+     week" to the current week (`link_current_week` — newest plan by
+     `modified`, then the flagged week). **Deliver stays as the one-time
+     nudge:** it still stamps `delivered_at` (now purely a notify marker),
+     snapshots every live week (`WeekDelivery` = history/retention, feeding
+     the deliver screen's now-optional what-changed diff), and sends the one
+     block-level email + push; the dead per-week notify chain
+     (`_notify_athlete_delivered`, `send_week_delivered_email`,
+     `notify_week_delivered` + templates) was removed. Copy reframed
+     coach-side ("your edits are already live — delivering sends a heads-up")
+     and athlete-side ("your program, live as your coach writes it"). No
+     migration — `delivered_at`/`WeekDelivery` keep their data.
    - 2e **UI cleanup** — strip the chrome the above obsoletes.
 3. **Phase 3 — Import + validate.** Importer over 3–5 templates → surface UX
    limitations → iterate.
