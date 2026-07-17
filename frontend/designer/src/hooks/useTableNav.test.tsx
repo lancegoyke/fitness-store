@@ -841,6 +841,27 @@ describe("Enter-adds-row (onAppendRow)", () => {
     expect(result.current.anchor).toEqual({ rowId: 12, weekId: 1, field: "text", line: 0 });
   });
 
+  it("onAppendRow returning false (dropped dispatch, e.g. busy) records NO focus intent", () => {
+    let cells = mountCells(GRID);
+    const onAppendRow = vi.fn(() => false as const); // MesoTable drops the verb while busy.
+    const { result, rerender } = renderHook(({ grid: g }) => useTableNav({ grid: g, onAppendRow }), {
+      initialProps: { grid: GRID },
+    });
+    focus(result.current, cells, 10, null, "name");
+    act(() => {
+      result.current.cellProps(10, null, "name", NOOP_CALLBACKS).onKeyDown(keyEvent("Enter", cells[tableCellDomKey(10, null, "name")]!));
+    });
+    expect(onAppendRow).toHaveBeenCalledWith(1);
+
+    // Day 1's last row later changes for an unrelated reason (someone
+    // clicked "+ Add exercise") — the dropped dispatch must not move focus.
+    const LATER = grid({ days: [day(1, [row(9, [1, 2]), row(10, [1, 2]), row(12, [1, 2], { name: "" })]), day(2, [row(11, [1, 2])])] });
+    cells = resyncCells(LATER);
+    act(() => rerender({ grid: LATER }));
+    expect(result.current.anchor).toEqual({ rowId: 10, weekId: null, field: "name", line: 0 });
+    expect(document.activeElement).toBe(cells[tableCellDomKey(10, null, "name")]);
+  });
+
   it("a stale append intent expires instead of stealing focus on a later unrelated change", () => {
     let cells = mountCells(GRID);
     const onAppendRow = vi.fn(); // the POST fails silently: no row ever appears.

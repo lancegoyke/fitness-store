@@ -1144,12 +1144,16 @@ export function MesoTable(props: MesoTableProps) {
   // below — useTableNav tolerates a null grid the same way (anchor stays
   // null, no throw). Phase 2b: Enter at the last stop of a day appends a
   // blank exercise row to THAT day (Enter-adds-row) — same verb as the day's
-  // "+ Add exercise" button, same busy gate.
+  // "+ Add exercise" button, same busy gate. Returning false on a dropped
+  // dispatch keeps the hook from recording a focus intent for an append
+  // that never happened.
   const tableNav = useTableNav({
     grid,
     onAppendRow: (dayId) => {
       const day = grid?.days.find((d) => d.session_slot_id === dayId);
-      if (day && !busy) onAddExercise(day);
+      if (!day || busy) return false;
+      onAddExercise(day);
+      return true;
     },
   });
 

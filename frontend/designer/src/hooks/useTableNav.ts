@@ -130,9 +130,12 @@ export interface UseTableNavOptions {
    * stop of a day whose row has content — the caller appends a blank
    * exercise row to that day (useGrid.addExercise). Once the day's LAST ROW
    * actually changes on a grid refetch, the hook focuses the new row at the
-   * column Enter came from. Optional so hook-only tests without an append
-   * path keep their old "Enter at the bottom stays put" behavior. */
-  onAppendRow?(dayId: number): void;
+   * column Enter came from. Return `false` when the append was NOT
+   * dispatched (e.g. the grid is busy) so no focus intent is recorded — a
+   * dropped dispatch must never move focus when that day's last row later
+   * changes for an unrelated reason. Optional so hook-only tests without an
+   * append path keep their old "Enter at the bottom stays put" behavior. */
+  onAppendRow?(dayId: number): boolean | void;
 }
 
 /** DOM identity for a cell's `data-grid-cell` attribute / querySelector key.
@@ -260,6 +263,14 @@ function nearestLineStop(stops: number[], line: number): number {
     else break;
   }
   return best;
+}
+
+/** The line a horizontal move (arrow or Tab) into `col` should land on:
+ * week-text columns clamp to the target cell's nearest stop at-or-below
+ * `line` (see nearestLineStop); row-scoped columns are single-line. */
+function clampLine(row: GridRow | undefined, col: TableColumnPos, line: number): number {
+  if (col.field !== "text" || col.weekId === null) return 0;
+  return nearestLineStop(lineStops(row, col.weekId, col.field), line);
 }
 
 /** Every (rowId, line) of one column, day-major/row-minor/line-inner — the
@@ -541,10 +552,7 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
           // coordinate nothing renders. A sub-line move clamps to each
           // candidate's nearest stop (see nearestLineStop).
           while (candidateCol !== undefined) {
-            const candLine =
-              candidateCol.field === "text" && candidateCol.weekId !== null
-                ? nearestLineStop(lineStops(flat.rowsById.get(rowId), candidateCol.weekId, candidateCol.field), line)
-                : 0;
+            const candLine = clampLine(flat.rowsById.get(rowId), candidateCol, line);
             if (cellExists(rowId, candidateCol.weekId, candidateCol.field, candLine)) {
               commitAnchor({ rowId, weekId: candidateCol.weekId, field: candidateCol.field, line: candLine }, flat, true);
               return;
@@ -580,10 +588,7 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
             const rowAt = flat.rowOrder[r];
             const col = columns[c];
             if (rowAt === undefined || col === undefined) return; // ran off the table: native Tab leaves the grid.
-            const candLine =
-              col.field === "text" && col.weekId !== null
-                ? nearestLineStop(lineStops(flat.rowsById.get(rowAt), col.weekId, col.field), ln)
-                : 0;
+            const candLine = clampLine(flat.rowsById.get(rowAt), col, ln);
             if (cellExists(rowAt, col.weekId, col.field, candLine)) {
               event.preventDefault();
               commitAnchor({ rowId: rowAt, weekId: col.weekId, field: col.field, line: candLine }, flat, true);
@@ -614,14 +619,15 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
           }
           if (dayId === undefined || !onAppendRow) return;
           if (rowDomBlank(rowId)) return;
-          appendPendingRef.current = {
+          const pending: AppendPending = {
             dayId,
             weekId,
             field,
             prevLastRow: flat.lastRowByDay.get(dayId),
             ttl: 4,
           };
-          onAppendRow(dayId);
+          if (onAppendRow(dayId) === false) return; // dropped (busy): record no intent.
+          appendPendingRef.current = pending;
           return;
         }
         case "Escape": {
