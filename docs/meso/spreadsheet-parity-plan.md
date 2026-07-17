@@ -390,7 +390,7 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
      swap badge/editor/input family); the retired one-week-designer chrome
      (A5 — `meso-week-view*`, `meso-canvas-autosaved*`); and prototype
      leftovers (`meso-chip-soon`, `meso-flag-badge/dot`,
-     `meso-grid--2`, `meso-inline-block`, `meso-seg-btn--v/--p`). Stale
+     `meso-grid--2`, `meso-inline-block`). Stale
      comments referencing the dead classes updated in place; dist rebuilt
      (designer.css 22.3 kB).
 3. **Phase 3 — Import + validate.** Importer over 3–5 templates → surface UX

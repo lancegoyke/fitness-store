@@ -1424,8 +1424,11 @@ _(Append dated entries here as decisions land.)_
   `meso-table-cell-setsreps/load` flex pair, the swap badge/editor/input
   family); the **retired one-week-designer chrome** (A5: `meso-week-view*`,
   `meso-canvas-autosaved*`); and **prototype leftovers** (`meso-chip-soon`,
-  `meso-flag-badge/dot`, `meso-grid--2`, `meso-inline-block`,
-  `meso-seg-btn--v/--p`). Stale comments that named the dead classes
+  `meso-flag-badge/dot`, `meso-grid--2`, `meso-inline-block` —
+  `meso-seg-btn--v/--p` looked dead to the first sweep but are live in
+  `DesignerRoot.tsx`/`BlockView.tsx` template literals and were restored;
+  the sweep's meso.css corpus was missing `.tsx`, caught by the Codex
+  review loop). Stale comments that named the dead classes
   (the six-cell a11y note, the RowOneRmEditor/2nd-line notes, the
   skip/swap cluster label, the day-card drag mirror) were rewritten in
   place. Verification: the sweep re-run reports 0 dead classes; dist
