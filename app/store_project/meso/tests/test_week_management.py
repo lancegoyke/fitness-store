@@ -24,11 +24,8 @@ from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import GroupMembershipFactory
-from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
-from store_project.meso.models import PrescriptionOverride
 from store_project.meso.models import Session
 from store_project.meso.models import Week
 from store_project.meso.serializers import serialize_week
@@ -395,58 +392,6 @@ class TestWeekSetCurrentEndpoint:
         link, plan, week1, week2 = self._two_week_plan()
         client.force_login(link.coach)
         assert client.get(self._url(plan, week2)).status_code == 405
-
-
-# ---------------------------------------------------------------------------
-# Groups — the shared program is multi-week too
-# ---------------------------------------------------------------------------
-
-
-class TestGroupWeekManagement:
-    def test_week_add_on_a_group_plan_copies_the_shared_structure(self, client):
-        group = MesoGroupFactory()
-        plan = group.create_shared_plan()
-        before = Week.objects.filter(mesocycle__plan=plan).count()
-        client.force_login(group.coach)
-        resp = client.post(reverse("meso:api_week_add", kwargs={"plan_id": plan.pk}))
-        assert resp.status_code == 201
-        assert Week.objects.filter(mesocycle__plan=plan).count() == before + 1
-        new_week = _latest_week(plan)
-        # The shared structure is copied so the new week is immediately editable.
-        assert new_week.sessions.count() >= 1
-
-    def test_append_week_does_not_carry_per_athlete_overrides_forward(self):
-        # P0 semantics change: the old per-member override carry-forward is
-        # dropped — overrides are per-cell now, and re-diffing them across a
-        # whole new week's worth of cells is out of scope for P0 (groups
-        # Phase 5 revisits). The new week's cell (same row identity, fresh
-        # per-week cell) starts with no override; the source cell's override
-        # is untouched.
-        group = MesoGroupFactory()
-        membership = GroupMembershipFactory(group=group)
-        plan = group.create_shared_plan()
-        meso = plan.mesocycles.get()
-        week1 = meso.weeks.get()
-        first_session = week1.sessions.order_by("session_slot__order").first()
-        cell = list(first_session.cells())[0]
-        cell.exercise_slot.name = "Back Squat"  # make the row unambiguous
-        cell.exercise_slot.save()
-        PrescriptionOverride.objects.create(
-            membership=membership, prescription=cell, load_pct=90, note="knee"
-        )
-
-        new_week = meso.append_week()
-
-        new_session = new_week.sessions.order_by("session_slot__order").first()
-        new_cell = list(new_session.cells())[0]
-        # SAME row identity as the source (block-shared ExerciseSlot) …
-        assert new_cell.exercise_slot_id == cell.exercise_slot_id
-        assert new_cell.name == "Back Squat"
-        # … but a fresh per-week cell with no carried-forward override.
-        assert new_cell.pk != cell.pk
-        assert not new_cell.overrides.exists()
-        # The source cell's override is untouched.
-        assert cell.overrides.count() == 1
 
 
 # ---------------------------------------------------------------------------

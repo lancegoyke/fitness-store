@@ -43,7 +43,6 @@ from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import ContraindicationFactory
-from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.serializers import serialize_plan
 from store_project.users.factories import UserFactory
@@ -189,10 +188,3 @@ class TestSerializerAthleteIdentity:
         assert data["athlete"]["goal"] == "Get strong"
         texts = [c["text"] for c in data["athlete"]["contraindications"]]
         assert texts == ["R shoulder impingement"]  # active only
-
-    def test_group_plan_has_no_athlete_identity(self):
-        group = MesoGroupFactory()
-        plan = group.create_shared_plan()
-        data = serialize_plan(plan)
-        assert data["athlete"] is None
-        assert data["group"] is not None

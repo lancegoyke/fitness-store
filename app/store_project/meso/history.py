@@ -66,12 +66,9 @@ def serialize_plan_snapshot(plan):
     """A self-contained, plan-wide snapshot of every editable row.
 
     Captures ALL ``Week``/``SessionSlot``/``ExerciseSlot``/``Session``/
-    ``Prescription`` rows belonging to ``plan`` — including soft-deleted ones
-    — plus every ``PrescriptionOverride`` on the plan's prescription cells
-    (only ever non-empty for a group plan, since an override's
-    ``clean``/``set_override`` only ever target a same-group cell). Field
-    lists mirror what the designer actually edits; delivery stamps, logs, and
-    athlete data are never captured (see module docstring).
+    ``Prescription`` rows belonging to ``plan`` — including soft-deleted ones.
+    Field lists mirror what the designer actually edits; delivery stamps,
+    logs, and athlete data are never captured (see module docstring).
 
     The P0 fixed-lineup cutover split the old per-week ``ExercisePrescription``
     into a fixed ``SessionSlot``(day)/``ExerciseSlot``(row) identity plus a
@@ -85,9 +82,6 @@ def serialize_plan_snapshot(plan):
     )
     sessions = models.Session.objects.filter(week__mesocycle__plan=plan)
     cells = models.Prescription.objects.filter(week__mesocycle__plan=plan)
-    overrides = models.PrescriptionOverride.objects.filter(
-        prescription__exercise_slot__session_slot__mesocycle__plan=plan
-    )
     return {
         "weeks": [
             {
@@ -149,23 +143,6 @@ def serialize_plan_snapshot(plan):
             }
             for c in cells
         ],
-        # Natural-keyed (membership_id, prescription_id) — an override has no pk
-        # identity worth preserving (``restore_plan_snapshot`` reconciles by this
-        # key: create missing, update differing, delete extras). Field names
-        # mirror ``GroupMembership.set_override``'s kwargs. ``prescription_id``
-        # now names a ``Prescription`` cell (P0 fixed-lineup cutover).
-        "overrides": [
-            {
-                "membership_id": o.membership_id,
-                "prescription_id": o.prescription_id,
-                "swap": o.swap_name,
-                "load_pct": o.load_pct,
-                "sets": o.sets,
-                "reps": o.reps,
-                "note": o.note,
-            }
-            for o in overrides
-        ],
     }
 
 
@@ -197,11 +174,6 @@ def restore_plan_snapshot(plan, snapshot):
     sub-line created after the snapshot — undo removes it; also any bug-made
     stray), which is safe precisely because the pk-upsert makes a later redo
     able to recreate it.
-
-    ``PrescriptionOverride`` rows are reconciled to the snapshot by natural key
-    (create missing, update differing, delete extras) — hard delete is fine
-    there too: no history hangs off an override and the natural key makes
-    recreation stable.
     """
     week_rows = {row["pk"]: row for row in snapshot.get("weeks", [])}
     slot_rows = {row["pk"]: row for row in snapshot.get("session_slots", [])}
@@ -338,53 +310,6 @@ def restore_plan_snapshot(plan, snapshot):
         exercise_slot_id__in=live_exercise_slot_pks_in_snapshot,
         week_id__in=live_week_pks_in_snapshot,
     ).exclude(pk__in=cell_pks).delete()
-
-    # Reconcile overrides to the snapshot by natural key (membership, cell).
-    # A membership hard-deletes when its athlete leaves the group (taking its
-    # override rows with it, CASCADE) — a snapshot recorded before that may
-    # still name it. Skip those rows rather than recreate them: the insert
-    # would die on the dead FK, and failing the whole restore (409) over a
-    # roster change would brick every older undo step. The departed member's
-    # adjustments simply stay gone — membership isn't plan-editable state.
-    snapshot_overrides = snapshot.get("overrides", [])
-    live_membership_ids = set(
-        models.GroupMembership.objects.filter(
-            pk__in={row["membership_id"] for row in snapshot_overrides}
-        ).values_list("pk", flat=True)
-    )
-    snapshot_by_key = {
-        (row["membership_id"], row["prescription_id"]): row
-        for row in snapshot_overrides
-        if row["membership_id"] in live_membership_ids
-    }
-    existing_by_key = {
-        (o.membership_id, o.prescription_id): o
-        for o in models.PrescriptionOverride.objects.filter(
-            prescription__exercise_slot__session_slot__mesocycle__plan=plan
-        )
-    }
-    for key, override in existing_by_key.items():
-        if key not in snapshot_by_key:
-            override.delete()
-    for key, row in snapshot_by_key.items():
-        existing = existing_by_key.get(key)
-        if existing is not None:
-            existing.swap_name = row["swap"]
-            existing.load_pct = row["load_pct"]
-            existing.sets = row["sets"]
-            existing.reps = row["reps"]
-            existing.note = row["note"]
-            existing.save()
-        else:
-            models.PrescriptionOverride.objects.create(
-                membership_id=key[0],
-                prescription_id=key[1],
-                swap_name=row["swap"],
-                load_pct=row["load_pct"],
-                sets=row["sets"],
-                reps=row["reps"],
-                note=row["note"],
-            )
 
 
 def record_plan_action(plan, label):

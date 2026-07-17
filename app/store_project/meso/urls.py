@@ -8,7 +8,6 @@ from .views import BecomeCoachView
 from .views import ChangeReviewView
 from .views import CoachBillingView
 from .views import DeliverView
-from .views import GroupDetailView
 from .views import MesoDesignerView
 from .views import OfflineView
 from .views import RelationshipHistoryView
@@ -111,10 +110,6 @@ urlpatterns = [
     # the mounted driver re-reads it after a self-variant deliver/results fetch
     # action to mirror the server-side auto-advance without a page reload.
     path("tour/config/", views.tour_config, name="tour_config"),
-    path("group/new/", views.group_create, name="group_create"),
-    path("group/<int:pk>/", GroupDetailView.as_view(), name="group"),
-    path("group/<int:pk>/design/", views.group_design, name="group_design"),
-    path("group/<int:pk>/deliver/", views.group_deliver, name="group_deliver"),
     # Email invites / onboarding (N4): coach sends/revokes, athlete claims.
     path("invite/", views.coach_invite, name="coach_invite"),
     path(
@@ -230,12 +225,6 @@ urlpatterns = [
         views.api_plan_redo,
         name="api_plan_redo",
     ),
-    # Per-athlete override on a group's shared program (groups Phase 3).
-    path(
-        "api/plan/<int:plan_id>/prescription/<int:pk>/override/",
-        views.prescription_override,
-        name="api_prescription_override",
-    ),
     # Coach sets/clears an athlete's 1RM from the designer (1RM follow-up Phase 3).
     path(
         "api/plan/<int:plan_id>/prescription/<int:pk>/one-rm/",
@@ -278,6 +267,13 @@ urlpatterns = [
         "api/plan/<int:plan_id>/deliver/",
         views.plan_deliver,
         name="api_plan_deliver",
+    ),
+    # Batch-deliver (2c): form POST fanning an independent COPY of the plan
+    # out to the selected clients — the group subsystem's replacement (D1).
+    path(
+        "plan/<int:plan_id>/batch-deliver/",
+        views.plan_batch_deliver,
+        name="plan_batch_deliver",
     ),
     # Agent proposal engine (agent slice Phase 1; async + status poll Phase 4).
     path(

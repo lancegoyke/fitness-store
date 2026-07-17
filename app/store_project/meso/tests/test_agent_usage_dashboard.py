@@ -21,7 +21,6 @@ from django.utils import timezone
 from store_project.meso.billing import agent_usage_report as report_mod
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachSubscriptionFactory
-from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachSubscription
@@ -214,16 +213,3 @@ class TestRendering:
         body = client.get(URL, {"month": "2026-06"}).content.decode()
         assert "month=2026-05" in body
         assert "month=2026-07" in body
-
-    def test_group_run_attributes_to_the_group(self, client):
-        start, end = report_mod.current_month_bounds()
-        group_plan = GroupPlanFactory()
-        _at(
-            start + timedelta(days=1),
-            plan=group_plan,
-            coach=group_plan.group.coach,
-            estimated_cost_usd=Decimal("0.10"),
-        )
-        client.force_login(SuperAdminFactory())
-        body = client.get(URL).content.decode()
-        assert f"Group: {group_plan.group.name}" in body

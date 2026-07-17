@@ -25,7 +25,6 @@ from store_project.meso.billing import access
 from store_project.meso.models import AthleteProfile
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachProfile
-from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
 from store_project.meso.models import PushSubscription
 from store_project.meso.models import SessionLog
@@ -59,11 +58,9 @@ class TestLoadDemo:
         """Maya gets the sample plan, delivered + logged, so results light up."""
         coach = _coach()
         demo.load_demo(coach)
-        plan = (
-            Plan.objects.filter(relationship__coach=coach, relationship__is_demo=True)
-            .exclude(source_group__isnull=False)
-            .first()
-        )
+        plan = Plan.objects.filter(
+            relationship__coach=coach, relationship__is_demo=True
+        ).first()
         assert plan is not None
         assert plan.status == Plan.Status.ACTIVE
         assert plan.mesocycles.exists()  # a real tree, not a bare scaffold
@@ -71,15 +68,6 @@ class TestLoadDemo:
         assert SessionLog.objects.filter(
             athlete__in=demo._demo_athletes(coach)
         ).exists()
-
-    def test_creates_a_demo_group_with_members_and_shared_plan(self):
-        coach = _coach()
-        demo.load_demo(coach)
-        groups = MesoGroup.objects.filter(coach=coach, is_demo=True)
-        assert groups.count() == 1
-        group = groups.get()
-        assert len(group.active_member_users()) == 3
-        assert group.shared_plan() is not None
 
     def test_demo_athletes_are_namespaced_non_routable_and_opted_out(self):
         coach = _coach()
@@ -103,11 +91,9 @@ class TestLoadDemo:
         demo.load_demo(coach)
         first_users = User.objects.count()
         first_plans = Plan.objects.count()
-        first_groups = MesoGroup.objects.count()
         demo.load_demo(coach)
         assert User.objects.count() == first_users
         assert Plan.objects.count() == first_plans
-        assert MesoGroup.objects.count() == first_groups
         assert CoachAthlete.objects.for_coach(coach).filter(is_demo=True).count() == 5
 
 
@@ -122,7 +108,6 @@ class TestClearDemo:
         demo.load_demo(coach)
         demo.clear_demo(coach)
         assert CoachAthlete.objects.for_coach(coach).filter(is_demo=True).count() == 0
-        assert MesoGroup.objects.filter(coach=coach, is_demo=True).count() == 0
         assert list(demo._demo_athletes(coach)) == []
         assert demo.has_demo(coach) is False
 
@@ -148,27 +133,6 @@ class TestClearDemo:
         coach = _coach()
         demo.clear_demo(coach)  # no-op, no error
         assert demo.has_demo(coach) is False
-
-    def test_real_group_with_same_name_is_not_hijacked(self):
-        """A coach's real group sharing the demo group's name is never touched.
-
-        The demo group is keyed by ``is_demo``, not the user-editable name — so a
-        real group of the same name is not flipped to demo, mutated, or deleted by
-        ``clear_demo`` (the P1 the Codex review caught).
-        """
-        coach = _coach()
-        real_group = MesoGroup.objects.create(
-            coach=coach, name=demo.GROUP["name"], focus="Real focus"
-        )
-        demo.load_demo(coach)
-        demo.clear_demo(coach)
-        real_group.refresh_from_db()
-        assert real_group.is_demo is False
-        assert real_group.focus == "Real focus"
-        # And the demo created its *own* separate group while present.
-        assert (
-            MesoGroup.objects.filter(coach=coach, name=demo.GROUP["name"]).count() == 1
-        )
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MesoTable } from "./MesoTable";
 import { tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
-import type { GridCell, GridDay, GridRow, GridWeek, GroupIdentity, MesoGrid } from "../lib/api";
+import type { GridCell, GridDay, GridRow, GridWeek, MesoGrid } from "../lib/api";
 
 function week(overrides: Partial<GridWeek> = {}): GridWeek {
   return {
@@ -73,20 +73,6 @@ function grid(overrides: Partial<MesoGrid> = {}): MesoGrid {
   };
 }
 
-function group(overrides: Partial<GroupIdentity> = {}): GroupIdentity {
-  return {
-    id: 3,
-    name: "Squad",
-    member_count: 2,
-    members: [
-      { id: "a1", name: "Maya Okonkwo", initials: "MO" },
-      { id: "a2", name: "Aaron Adams", initials: "AA" },
-    ],
-    flags: [],
-    ...overrides,
-  };
-}
-
 const HISTORY_NONE = { can_undo: false, can_redo: false, undo_label: "", redo_label: "" };
 
 function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
@@ -94,8 +80,6 @@ function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
     grid: grid(),
     history: HISTORY_NONE,
     busy: false,
-    group: null,
-    onOpenOverride: vi.fn(),
     onPatchCell: vi.fn(),
     onWriteCellLine: vi.fn(),
     onPatchRowColumns: vi.fn(),
@@ -834,66 +818,6 @@ describe("add exercise this week", () => {
     await user.click(screen.getByTestId("add-this-week-1"));
     await user.click(screen.getByTestId("add-this-week-1-2"));
     expect(onAddExerciseThisWeek).toHaveBeenCalledWith(expect.objectContaining({ session_slot_id: 1 }), 2);
-  });
-});
-
-// --- P5 group: per-cell per-athlete adjust badge ---------------------------
-// Mirrors ExerciseRow's group "+ adjust"/`ex.adj` badge (.meso-adjust-badge /
-// .meso-adjust-empty, testid override-badge-<id>), but scoped PER CELL on the
-// multi-week table — testid `cell-override-badge-<prescription_id>`. Only
-// shown when a `group` with members is passed (individual plans carry no
-// group) and never on a skipped cell. Clicking it hands (row, cell) up to
-// DesignerRoot, which synthesizes an Exercise and opens the override editor.
-describe("group per-athlete adjust badge", () => {
-  const adjustsFor = (id: string) => [
-    { id, name: "Maya Okonkwo", initials: "MO", label: "-10%", swap: "", load_pct: 90, sets: "", reps: "", note: "" },
-  ];
-
-  it("renders the adj summary as the badge text for a group cell that has one", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          group: group(),
-          grid: grid({
-            days: [day({ rows: [row({ cells: { "1": cell({ adj: "MO -10%", adjusts: adjustsFor("a1") }) } })] })],
-          }),
-        })}
-      />,
-    );
-    expect(screen.getByTestId("cell-override-badge-100")).toHaveTextContent("MO -10%");
-  });
-
-  it('renders a "+ adjust" affordance for a group cell with no adj', () => {
-    render(<MesoTable {...baseProps({ group: group() })} />);
-    expect(screen.getByTestId("cell-override-badge-100")).toHaveTextContent("+ adjust");
-  });
-
-  it("renders NO adjust control for an individual plan (group is null)", () => {
-    render(<MesoTable {...baseProps({ group: null })} />);
-    expect(screen.queryByTestId("cell-override-badge-100")).not.toBeInTheDocument();
-  });
-
-  it("renders no adjust control for a skipped cell", () => {
-    render(
-      <MesoTable
-        {...baseProps({
-          group: group(),
-          grid: grid({ days: [day({ rows: [row({ cells: { "1": cell({ skipped: true }) } })] })] }),
-        })}
-      />,
-    );
-    expect(screen.queryByTestId("cell-override-badge-100")).not.toBeInTheDocument();
-  });
-
-  it("clicking the badge calls onOpenOverride with the owning row and cell", async () => {
-    const user = userEvent.setup();
-    const onOpenOverride = vi.fn();
-    render(<MesoTable {...baseProps({ group: group(), onOpenOverride })} />);
-    await user.click(screen.getByTestId("cell-override-badge-100"));
-    expect(onOpenOverride).toHaveBeenCalledWith(
-      expect.objectContaining({ exercise_slot_id: 9 }),
-      expect.objectContaining({ prescription_id: 100 }),
-    );
   });
 });
 

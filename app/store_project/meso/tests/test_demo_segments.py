@@ -1,8 +1,8 @@
 """Guided demo onboarding tour — Phase 1: segmenting the demo loaders.
 
 ``load_demo`` (``meso/demo.py``) used to be one monolithic load. This phase
-splits it into five idempotent, per-coach **segment** loaders — ``athletes`` /
-``program`` / ``delivery`` / ``log`` / ``group`` — that each ensure their own
+splits it into idempotent, per-coach **segment** loaders — ``athletes`` /
+``program`` / ``delivery`` / ``log`` — that each ensure their own
 prerequisites, so a later guided tour (Phase 2) can offer them one at a time,
 in any order, from their own step. This is a **behavior-preserving refactor**
 (``docs/meso/demo-onboarding-tour-plan.md``, Phase 1): ``load_demo`` stays the
@@ -16,7 +16,7 @@ Covers:
   make this checkable);
 - each loader is idempotent;
 - loaders compose safely out of dependency order;
-- all five segments together reproduce ``load_demo``'s workspace exactly;
+- all segments together reproduce ``load_demo``'s workspace exactly;
 - the ``has_*`` predicates flip precisely when their segment loads;
 - ``clear_demo`` still removes everything after a piecemeal load;
 - the ``demo_load`` endpoint's new optional ``segment`` POST field;
@@ -32,7 +32,6 @@ from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachProfile
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
-from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Week
@@ -49,11 +48,10 @@ def _coach():
 
 
 def _maya_plan(coach):
-    """Maya's individual plan (excludes any group-materialized plan)."""
+    """Maya's individual plan."""
     return Plan.objects.get(
         relationship__coach=coach,
         relationship__is_demo=True,
-        source_group__isnull=True,
     )
 
 
@@ -62,7 +60,6 @@ def _maya_week(coach):
     return Week.objects.get(
         mesocycle__plan__relationship__coach=coach,
         mesocycle__plan__relationship__is_demo=True,
-        mesocycle__plan__source_group__isnull=True,
         mesocycle__name=demo.SAMPLE_LOG["mesocycle"],
         index=demo.SAMPLE_LOG["week_index"],
     )
@@ -76,7 +73,6 @@ def _row_counts():
         Plan.objects.count(),
         Mesocycle.objects.count(),
         Week.objects.count(),
-        MesoGroup.objects.count(),
         SessionLog.objects.count(),
         LoggedSet.objects.count(),
     )
@@ -95,7 +91,6 @@ class TestSegmentSlices:
         assert demo.has_program(coach) is False
         assert demo.has_delivery(coach) is False
         assert demo.has_log(coach) is False
-        assert demo.has_group(coach) is False
         assert CoachAthlete.objects.for_coach(coach).filter(is_demo=True).count() == 5
 
     def test_load_program_creates_athletes_and_plan_tree_only(self):
@@ -105,7 +100,6 @@ class TestSegmentSlices:
         assert demo.has_program(coach) is True
         assert demo.has_delivery(coach) is False
         assert demo.has_log(coach) is False
-        assert demo.has_group(coach) is False
         plan = _maya_plan(coach)
         assert plan.title == demo.SAMPLE_PLAN["title"]
         assert plan.mesocycles.exists()
@@ -116,7 +110,6 @@ class TestSegmentSlices:
         assert demo.has_program(coach) is True
         assert demo.has_delivery(coach) is True
         assert demo.has_log(coach) is False
-        assert demo.has_group(coach) is False
         week = _maya_week(coach)
         assert week.delivered_at is not None
         assert not SessionLog.objects.filter(
@@ -128,22 +121,8 @@ class TestSegmentSlices:
         demo.load_log(coach)
         assert demo.has_delivery(coach) is True
         assert demo.has_log(coach) is True
-        assert demo.has_group(coach) is False
         log = SessionLog.objects.get(athlete__in=demo._demo_athletes(coach))
         assert log.sets.exists()
-
-    def test_load_group_creates_athletes_and_group_only(self):
-        coach = _coach()
-        demo.load_group(coach)
-        assert demo.has_athletes(coach) is True
-        assert demo.has_group(coach) is True
-        # The group's own shared plan must not read as Maya's ``program`` segment.
-        assert demo.has_program(coach) is False
-        assert demo.has_delivery(coach) is False
-        assert demo.has_log(coach) is False
-        group = MesoGroup.objects.get(coach=coach, is_demo=True)
-        assert len(group.active_member_users()) == 3
-        assert group.shared_plan() is not None
 
 
 # ---------------------------------------------------------------------------
@@ -168,28 +147,6 @@ class TestSegmentIdempotency:
 
 
 class TestOutOfOrderComposition:
-    def test_group_then_program_then_delivery_is_safe(self):
-        coach = _coach()
-        demo.load_group(coach)
-        demo.load_program(coach)
-        demo.load_delivery(coach)
-        assert demo.has_athletes(coach) is True
-        assert demo.has_program(coach) is True
-        assert demo.has_delivery(coach) is True
-        assert demo.has_group(coach) is True
-        assert demo.has_log(coach) is False
-        # No duplicate rows from the repeated prerequisite chains.
-        assert CoachAthlete.objects.for_coach(coach).filter(is_demo=True).count() == 5
-        assert (
-            Plan.objects.filter(
-                relationship__coach=coach,
-                relationship__is_demo=True,
-                source_group__isnull=True,
-            ).count()
-            == 1
-        )
-        assert MesoGroup.objects.filter(coach=coach, is_demo=True).count() == 1
-
     def test_all_segments_in_reverse_dependency_order(self):
         """Loading every segment back-to-front still lands on the full workspace."""
         coach = _coach()
@@ -199,7 +156,15 @@ class TestOutOfOrderComposition:
         assert demo.has_program(coach) is True
         assert demo.has_delivery(coach) is True
         assert demo.has_log(coach) is True
-        assert demo.has_group(coach) is True
+        # No duplicate rows from the repeated prerequisite chains.
+        assert CoachAthlete.objects.for_coach(coach).filter(is_demo=True).count() == 5
+        assert (
+            Plan.objects.filter(
+                relationship__coach=coach,
+                relationship__is_demo=True,
+            ).count()
+            == 1
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -244,11 +209,6 @@ class TestSegmentsEquivalentToLoadDemo:
         )
         assert logged_sets(coach_a) == logged_sets(coach_b) > 0
 
-        group_a = MesoGroup.objects.get(coach=coach_a, is_demo=True)
-        group_b = MesoGroup.objects.get(coach=coach_b, is_demo=True)
-        assert group_a.name == group_b.name == demo.GROUP["name"]
-        assert len(group_a.active_member_users()) == len(group_b.active_member_users())
-
 
 # ---------------------------------------------------------------------------
 # has_* predicates — derived from data, flip exactly when their segment loads
@@ -262,7 +222,6 @@ class TestHasPredicates:
         assert demo.has_program(coach) is False
         assert demo.has_delivery(coach) is False
         assert demo.has_log(coach) is False
-        assert demo.has_group(coach) is False
 
         demo.load_athletes(coach)
         assert demo.has_athletes(coach) is True
@@ -278,10 +237,6 @@ class TestHasPredicates:
 
         demo.load_log(coach)
         assert demo.has_log(coach) is True
-        assert demo.has_group(coach) is False
-
-        demo.load_group(coach)
-        assert demo.has_group(coach) is True
 
     def test_has_demo_mirrors_has_athletes(self):
         coach = _coach()
@@ -298,16 +253,13 @@ class TestHasPredicates:
 class TestClearAfterPiecemealLoad:
     def test_clear_demo_removes_all_segments(self):
         coach = _coach()
-        demo.load_group(coach)
         demo.load_log(coach)
         demo.clear_demo(coach)
         assert demo.has_athletes(coach) is False
         assert demo.has_program(coach) is False
         assert demo.has_delivery(coach) is False
         assert demo.has_log(coach) is False
-        assert demo.has_group(coach) is False
         assert CoachAthlete.objects.for_coach(coach).filter(is_demo=True).count() == 0
-        assert MesoGroup.objects.filter(coach=coach, is_demo=True).count() == 0
         assert list(demo._demo_athletes(coach)) == []
 
 
@@ -338,7 +290,6 @@ class TestDemoLoadEndpointSegments:
         assert resp.url == reverse("meso:roster")
         assert demo.has_demo(coach) is True
         assert demo.has_program(coach) is True
-        assert demo.has_group(coach) is True
 
     def test_valid_segment_loads_only_that_segment(self, client):
         coach = _coach()
@@ -348,7 +299,6 @@ class TestDemoLoadEndpointSegments:
         assert resp.url == reverse("meso:roster")
         assert demo.has_athletes(coach) is True
         assert demo.has_program(coach) is False
-        assert demo.has_group(coach) is False
 
     def test_invalid_segment_400s_and_creates_nothing(self, client):
         coach = _coach()
@@ -373,7 +323,7 @@ class TestDemoLoadEndpointSegments:
     def test_segment_load_sends_no_email(self, client, mailoutbox):
         coach = _coach()
         client.force_login(coach)
-        client.post(reverse("meso:demo_load"), {"segment": "group"})
+        client.post(reverse("meso:demo_load"), {"segment": "log"})
         assert mailoutbox == []
 
 

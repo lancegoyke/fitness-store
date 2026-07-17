@@ -2,7 +2,6 @@ import datetime
 import ipaddress
 import json
 import logging
-import uuid
 from urllib.parse import urlencode
 from urllib.parse import urlparse
 
@@ -69,15 +68,12 @@ from .models import CoachInvite
 from .models import CoachProfile
 from .models import CoachSubscription
 from .models import ExerciseSlot
-from .models import GroupMembership
 from .models import InvalidTransition
 from .models import LoggedSet
 from .models import Mesocycle
-from .models import MesoGroup
 from .models import Plan
 from .models import PlanAction
 from .models import Prescription
-from .models import PrescriptionOverride
 from .models import ProposedChange
 from .models import PushSubscription
 from .models import SandboxSession
@@ -87,7 +83,6 @@ from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
 from .serializers import current_week
-from .serializers import group_adjustments
 from .serializers import serialize_chat_thread
 from .serializers import serialize_mesocycle_grid
 from .serializers import serialize_plan
@@ -169,10 +164,8 @@ def _coach_working_plan(user, *, plans=None):
 
     The target a bare ``/meso/designer/`` or ``/meso/deliver/`` URL resolves to:
     the plan the coach last worked, or back on the roster if they have none.
-    ``plans`` scopes the candidate set — the *designer* passes
-    ``Plan.objects.editable_by(user)`` so a group shared program can be the
-    working plan too (the designer handles both kinds), while deliver keeps the
-    individual-only default (``for_coach``) since deliver-to-all is Phase 4.
+    ``plans`` overrides the candidate set; the default is the coach's editable
+    plans (``for_coach``).
     """
     qs = plans if plans is not None else Plan.objects.for_coach(user)
     return qs.exclude(status=Plan.Status.ARCHIVED).order_by("-modified").first()
@@ -232,9 +225,6 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
 
     def get(self, request, *args, **kwargs):
         if kwargs.get("plan_id") is None:
-            # The designer opens individual *or* group plans, so its bare-URL
-            # target spans both (``editable_by``) — a coach who just edited a
-            # group's shared program lands back on it, not an older individual one.
             plan = _coach_working_plan(
                 request.user, plans=Plan.objects.editable_by(request.user)
             )
@@ -246,8 +236,6 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        # ``editable_by`` (not ``for_coach``) so a *group* shared program — rooted
-        # at a group the coach owns — opens here too, not just individual plans.
         plan = (
             Plan.objects.editable_by(self.request.user)
             .filter(pk=kwargs["plan_id"])
@@ -363,13 +351,12 @@ class RosterView(TemplateView):
         # (S6 Phase 5); flag those rows so the roster shows a "Suspended" badge.
         suspended = billing_access.suspended_athlete_ids(self.request.user)
         # Relationships that already have an editable working plan (mirrors
-        # ``working_plan``: non-archived, not a materialized group snapshot). The
-        # roster hides the "Draft with AI" CTA for these — ``plan_create`` reopens
-        # an existing plan rather than drafting, so the action would be a no-op.
+        # ``working_plan``: non-archived). The roster hides the "Draft with AI"
+        # CTA for these — ``plan_create`` reopens an existing plan rather than
+        # drafting, so the action would be a no-op.
         have_plan = set(
             Plan.objects.filter(
                 relationship_id__in=[link.pk for link in links],
-                source_group__isnull=True,
             )
             .exclude(status=Plan.Status.ARCHIVED)
             .values_list("relationship_id", flat=True)
@@ -387,16 +374,8 @@ class RosterView(TemplateView):
             )
             for link in links
         ]
-        groups = (
-            MesoGroup.objects.for_coach(self.request.user)
-            .active()
-            .prefetch_related("memberships__relationship__athlete")
-        )
         ctx["active"] = "roster"
         ctx["athletes"] = athletes
-        # Groups (S1 Phase 1) read real rows; the shared program + per-athlete
-        # auto-adjusts land in groups Phase 2/3.
-        ctx["groups"] = [presenters.roster_group(g) for g in groups]
         # Outstanding email invites the coach has sent — pending *or* expired (N4);
         # an expired one still shows so the coach can Resend it (Phase 3).
         outstanding_invites = CoachInvite.objects.for_coach(
@@ -426,7 +405,7 @@ class RosterView(TemplateView):
         # onboarding card that teaches the model and offers the one-click demo;
         # once demo data is loaded a banner offers to remove it (Q3).
         ctx["has_demo"] = meso_demo.has_demo(self.request.user)
-        ctx["is_empty"] = not athletes and not ctx["groups"]
+        ctx["is_empty"] = not athletes
         # Self-coaching (guided-tour Phase 0): the roster offers "Add yourself as
         # an athlete" until the coach's one self-link is active.
         ctx["has_self_link"] = any(link.is_self for link in links)
@@ -507,29 +486,6 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         # Whether to offer "Draft with AI" on the create CTA — the same agent
         # allowance gate the endpoint enforces (the draft *is* an agent run).
         ctx["can_use_agent"] = billing_access.can_use_agent(self.request.user)
-        return ctx
-
-
-class GroupDetailView(LoginRequiredMixin, TemplateView):
-    """A coach's training group — members + their cross-group flags (S1 Phase 1).
-
-    Coach-scoped: a foreign or unknown group is a flat 404. The shared program +
-    per-athlete auto-adjusts land in groups Phase 2/3; this is the read surface.
-    """
-
-    template_name = "meso/group_detail.html"
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        group = (
-            MesoGroup.objects.for_coach(self.request.user)
-            .filter(pk=kwargs["pk"])
-            .first()
-        )
-        if group is None:
-            raise Http404("Unknown group")
-        ctx["active"] = "roster"
-        ctx["group"] = presenters.group_detail(group)
         return ctx
 
 
@@ -644,7 +600,7 @@ class CoachBillingView(LoginRequiredMixin, TemplateView):
     """Coach-facing billing & plan page (agent-usage — coach surface).
 
     A coach's own plan/tier, the bill they owe (base + per active seat), the
-    upgrade CTAs, and their AI-agent runs this month broken down per athlete/group
+    upgrade CTAs, and their AI-agent runs this month broken down per athlete
     — the coach-scoped complement to the staff-only owner usage dashboard (which
     shows org-wide *cost*). A coach never sees the internal cost estimate here, only
     what they pay and how much they've used (``presenters.coach_billing``).
@@ -666,90 +622,6 @@ class CoachBillingView(LoginRequiredMixin, TemplateView):
         ctx["active"] = "billing"
         ctx.update(presenters.coach_billing(self.request.user))
         return ctx
-
-
-def _coach_active_athletes(coach, athlete_ids):
-    """Resolve posted athlete ids to this coach's *active*-link athletes.
-
-    Sanitizes each id to a UUID (a malformed value is skipped, never reaching the
-    ORM as a query error) and scopes to the coach's own active links, so only
-    their current athletes resolve — a foreign or stale pick simply drops out.
-    The order follows the posted ids' resolution, deduped by the link set.
-    """
-    valid_ids = []
-    for raw in athlete_ids:
-        try:
-            valid_ids.append(uuid.UUID(str(raw)))
-        except (ValueError, TypeError, AttributeError):
-            continue
-    if not valid_ids:
-        return []
-    links = (
-        CoachAthlete.objects.for_coach(coach)
-        .active()
-        .filter(athlete_id__in=valid_ids)
-        .select_related("athlete")
-    )
-    return [link.athlete for link in links]
-
-
-@login_required
-@require_POST
-def group_create(request):
-    """Create a new group from the roster: name + focus + picked members (Phase 2b).
-
-    A normal form POST (not JSON), the roster's "New group" disclosure. ``name``
-    is required; ``focus`` is optional; ``athletes`` is the multi-valued list of
-    picked athlete ids, each resolved against the coach's *active* links so only
-    their own current athletes can be added (a foreign/stale/malformed pick is
-    silently ignored — ``MesoGroup.create_for_coach`` carries the same tenancy
-    guard). Lands on the new group's detail page, where the coach designs its
-    shared program. A blank name creates nothing and returns to the roster (the
-    field is also ``required`` client-side).
-    """
-    name = (request.POST.get("name") or "").strip()
-    if not name:
-        messages.error(request, "A group needs a name.")
-        return redirect("meso:roster")
-    focus = (request.POST.get("focus") or "").strip()
-    athletes = _coach_active_athletes(request.user, request.POST.getlist("athletes"))
-    group = MesoGroup.create_for_coach(
-        request.user, name=name, focus=focus, athletes=athletes
-    )
-    # #441 P3-5: the groups step auto-advances once the group exists. Self
-    # variant only (the sandbox groups step completes via demo_load(group)). A
-    # no-op unless the coach is parked on groups.
-    if meso_tour.variant_for(request.user) == "self":
-        meso_tour.advance_if_on_step(request.user, "groups")
-    return redirect("meso:group", pk=group.pk)
-
-
-@login_required
-@require_POST
-def group_design(request, pk):
-    """Open (or create) a group's shared program and land in the designer (Phase 2).
-
-    Coach-scoped: a foreign or unknown group is a flat 404. Idempotent — reuses
-    the group's existing non-archived shared plan, only creating (with a starter
-    scaffold) when there is none. The lookup + create run under a row lock on the
-    group so two concurrent submits can't both see "no plan" and each create one
-    (the second waits, then reuses the first's plan).
-    """
-    with transaction.atomic():
-        group = (
-            MesoGroup.objects.select_for_update()
-            .for_coach(request.user)
-            .filter(pk=pk)
-            .first()
-        )
-        if group is None:
-            raise Http404("Unknown group")
-        # Edit gate (D6): an over-limit coach is frozen out of designing programs.
-        if not billing_access.can_edit(request.user):
-            messages.error(request, OVER_LIMIT_MESSAGE)
-            return redirect("meso:group", pk=group.pk)
-        plan = group.shared_plan() or group.create_shared_plan()
-    return redirect("meso:designer_plan", plan_id=plan.pk)
 
 
 def _reserve_plan_draft(request, plan):
@@ -795,7 +667,7 @@ def _reserve_plan_draft(request, plan):
 def plan_create(request, pk):
     """Create (or open) an individual program for one of the coach's athletes.
 
-    The individual analogue of ``group_design`` — the action behind the
+    The action behind the
     "+ New program" / "Build a program" CTAs (first-time-UX Phase 1). Coach-scoped
     to an *active* link (a foreign, pending, or unknown athlete is a flat 404).
     Idempotent: reuses the relationship's existing non-archived plan, only
@@ -959,7 +831,6 @@ _SEGMENT_MESSAGES = {
     "program": "Sample program built — a full mesocycle, ready to explore.",
     "delivery": "This week delivered to Maya's phone.",
     "log": "Session logged — Maya's results are in.",
-    "group": "Sample group added — shared programming + per-athlete overrides.",
 }
 
 
@@ -968,13 +839,13 @@ _SEGMENT_MESSAGES = {
 def demo_load(request):
     """Load a coach-scoped demo workspace so a new coach can explore (Q3, Phase 2).
 
-    A populated, **clearly-labeled, fully-removable** workspace — five athletes, a
-    built/delivered/logged program, and a group — scoped to this coach, idempotent,
+    A populated, **clearly-labeled, fully-removable** workspace — five athletes and
+    a built/delivered/logged program — scoped to this coach, idempotent,
     billing-neutral, and silent (no demo-athlete email/push). Lands on the roster
     where the data now shows, with a "Remove demo data" affordance.
 
     An optional ``segment`` POST field narrows the load to one slice of the demo
-    (``meso_demo.SEGMENTS`` — ``athletes``/``program``/``delivery``/``log``/``group``)
+    (``meso_demo.SEGMENTS`` — ``athletes``/``program``/``delivery``/``log``)
     instead of the full aggregate; an unrecognized name loads nothing and 400s.
     No URL changes: this stays the one ``meso:demo_load`` endpoint for both the
     full load and (guided-tour Phase 2) each step's per-segment "add sample data"
@@ -1240,43 +1111,6 @@ def sandbox_signup(request):
     return redirect(f"{reverse('account_signup')}?{query}")
 
 
-@login_required
-@require_POST
-def group_deliver(request, pk):
-    """Deliver a group's whole shared current block to every active member (P5).
-
-    The coach-facing entry — a plain form POST from the group-detail page's
-    "Deliver this block to all members" button. Coach-scoped (a foreign or unknown
-    group is a flat 404). Requires a shared program (else a flashed prompt to
-    design one) and at least one member (else a flashed error from the fan-out);
-    on success it flashes the block's week count + how many members were delivered
-    to. Always lands back on the group-detail page.
-    """
-    group = MesoGroup.objects.for_coach(request.user).filter(pk=pk).first()
-    if group is None:
-        raise Http404("Unknown group")
-    # Deliver gate (D6): an over-limit coach can't deliver until back within the cap.
-    if not billing_access.can_edit(request.user):
-        messages.error(request, OVER_LIMIT_MESSAGE)
-        return redirect("meso:group", pk=group.pk)
-    plan = group.shared_plan()
-    if plan is None:
-        messages.error(request, "Design a shared program before delivering.")
-        return redirect("meso:group", pk=group.pk)
-    summary, error = _fan_out_group_delivery(request, plan)
-    if error is not None:
-        messages.error(request, error)
-    else:
-        n = summary["members"]
-        w = summary["week_count"]
-        messages.success(
-            request,
-            f"Delivered the block ({w} week{'' if w == 1 else 's'}) to "
-            f"{n} member{'' if n == 1 else 's'}.",
-        )
-    return redirect("meso:group", pk=group.pk)
-
-
 # -- athlete surface (athlete slice Phase 1) -------------------------------
 #
 # The athlete's own logged-in surface, distinct from the coach's view of an
@@ -1529,8 +1363,7 @@ def athlete_log_session(request, pk):
         )
         # #456: any successful log write — pending or done alike, forward-only —
         # advances the plan's ``is_current`` pointer onto this week (the athlete
-        # started it). Covers both individual and group-materialized member
-        # plans, since both flow through this one view.
+        # started it).
         if session.week.advance_current_week():
             _touch_plan(session.week.mesocycle.plan)
     # #441 P3-5: the results step auto-advances once the coach *completes* one of
@@ -2320,8 +2153,8 @@ def _coach_plan_or_forbidden(request, plan_id):
     """The plan the requester coaches, or an ``HttpResponseForbidden``.
 
     404 when the plan does not exist; 403 when it exists but the requester may
-    not edit it — for an individual plan, its coach over an active relationship;
-    for a group plan, the coach who owns the group (``Plan.is_editable_by``).
+    not edit it — its coach over an active relationship
+    (``Plan.is_editable_by``).
     """
     plan = get_object_or_404(Plan, pk=plan_id)
     if not plan.is_editable_by(request.user):
@@ -3173,161 +3006,10 @@ def api_plan_redo(request, plan_id):
     return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
 
 
-# Free-form per-athlete override cells, mapped to their model ``max_length``.
-OVERRIDE_TEXT_FIELDS = {"swap": 255, "sets": 32, "reps": 32, "note": 255}
-
-
-def _group_member_or_none(group, athlete_id):
-    """The group's *active* membership for ``athlete_id`` (a User UUID), or None.
-
-    Scoped to the group's own coach + active links so an override can only ever
-    target a current member; a malformed id, a stranger, or an ended member all
-    resolve to None (the endpoint answers 400).
-    """
-    if not isinstance(athlete_id, str) or not athlete_id:
-        return None
-    try:
-        return (
-            GroupMembership.objects.filter(
-                group=group,
-                relationship__athlete_id=athlete_id,
-                relationship__coach=group.coach,
-                relationship__status=CoachAthlete.Status.ACTIVE,
-            )
-            .select_related("relationship__athlete")
-            .first()
-        )
-    except (ValueError, ValidationError):
-        return None  # athlete_id wasn't a valid UUID
-
-
-def _clean_override_diff(payload, existing):
-    """Validate the posted override fields onto ``existing``, or return a 400.
-
-    Returns ``(diff, None)`` on success or ``(None, HttpResponseBadRequest)``.
-    **Merge** semantics, matching the autosave ``prescription_patch`` convention:
-    a field *absent* from the payload keeps its current value (from ``existing``,
-    or empty/None when creating), so a partial update never silently drops the
-    other parts of a multi-field adjust. A field *present* overwrites — send it
-    empty (``"swap": ""`` / ``"load_pct": null``) to clear just that part.
-    ``swap``/``sets``/``reps``/``note`` are free text within their model lengths;
-    ``load_pct`` is an integer in the model's sane band (or null).
-    """
-    diff = {
-        "swap_name": existing.swap_name if existing else "",
-        "sets": existing.sets if existing else "",
-        "reps": existing.reps if existing else "",
-        "note": existing.note if existing else "",
-        "load_pct": existing.load_pct if existing else None,
-    }
-    for field, max_length in OVERRIDE_TEXT_FIELDS.items():
-        if field not in payload:
-            continue
-        value = payload[field]
-        if not isinstance(value, str):
-            return None, HttpResponseBadRequest(f"{field} must be a string.")
-        if len(value) > max_length:
-            return None, HttpResponseBadRequest(f"{field} is too long.")
-        diff["swap_name" if field == "swap" else field] = value
-    if "load_pct" in payload:
-        load_pct = payload["load_pct"]
-        if load_pct is not None and (
-            not isinstance(load_pct, int)
-            or isinstance(load_pct, bool)
-            or not (
-                PrescriptionOverride.MIN_LOAD_PCT
-                <= load_pct
-                <= PrescriptionOverride.MAX_LOAD_PCT
-            )
-        ):
-            return None, HttpResponseBadRequest(
-                f"load_pct must be an integer between "
-                f"{PrescriptionOverride.MIN_LOAD_PCT} and "
-                f"{PrescriptionOverride.MAX_LOAD_PCT}."
-            )
-        diff["load_pct"] = load_pct
-    return diff, None
-
-
-def _override_response(plan, prescription):
-    """The override endpoint's reply: the row + its (recomputed) adj badge.
-
-    ``adj`` reflects *all* the row's remaining active-member adjusts, so the
-    front-end can repaint the badge after a set or a clear (it may still be lit by
-    another member, or now dark).
-    """
-    entry = group_adjustments(plan, [prescription]).get(prescription.pk)
-    return JsonResponse(
-        {
-            "ok": True,
-            "prescription": serialize_prescription(prescription),
-            "adj": entry["adj"] if entry else None,
-            "adjusts": entry["adjusts"] if entry else [],
-            # Row-level reply + refreshed history (see prescription_patch).
-            "history": serialize_plan_history(plan),
-        }
-    )
-
-
-@login_required
-@require_POST
-def prescription_override(request, plan_id, pk):
-    """Set or clear one member's per-athlete adjust on a shared-program row (Phase 3).
-
-    Group plans only — the adjust overlay layers on a *shared* program, so an
-    individual plan is a 400. Coach-scoped via ``_coach_plan_or_forbidden`` (403
-    if not the group's coach); the prescription must belong to the plan (404
-    otherwise) and ``athlete`` must be an active member of the group (400). Body:
-    ``{"athlete": <uuid>, "swap"/"load_pct"/"sets"/"reps"/"note"}`` to set, or
-    ``{"athlete": <uuid>, "clear": true}`` to drop the whole adjust. Field updates
-    **merge** (an omitted field keeps its current value, like the autosave
-    ``prescription_patch``); send a field empty to clear just that part, and an
-    adjust left with no parts is removed. Fully validated before any write.
-    """
-    plan, forbidden = _editable_plan_or_response(request, plan_id)
-    if forbidden is not None:
-        return forbidden
-    if not plan.is_group:
-        return HttpResponseBadRequest("Overrides apply to a group's shared program.")
-    prescription = _cell_or_404(plan, pk)
-    try:
-        payload = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
-        return HttpResponseBadRequest("Malformed JSON.")
-    if not isinstance(payload, dict):
-        return HttpResponseBadRequest("Expected a JSON object.")
-
-    membership = _group_member_or_none(plan.group, payload.get("athlete"))
-    if membership is None:
-        return HttpResponseBadRequest("athlete must be an active member of the group.")
-
-    if payload.get("clear"):
-        with transaction.atomic():
-            record_plan_action(plan, "Edited override")
-            membership.clear_override(prescription)
-            _touch_plan(plan)
-        return _override_response(plan, prescription)
-
-    existing = membership.overrides.filter(prescription=prescription).first()
-    diff, error = _clean_override_diff(payload, existing)
-    if error is not None:
-        return error
-    try:
-        with transaction.atomic():
-            record_plan_action(plan, "Edited override")
-            membership.set_override(prescription, **diff)
-            _touch_plan(plan)
-    except InvalidTransition:
-        # The prescription is scoped to this plan above, so its group always
-        # matches the membership; this stays defensive against future drift.
-        return HttpResponseBadRequest("The prescription is not in this program.")
-    return _override_response(plan, prescription)
-
-
 def _live_session_in_plan_or_none(plan, session_id):
     """A live ``Session`` of ``plan`` by pk, or ``None`` (a bad body reference).
 
-    Mirrors ``_group_member_or_none``'s convention: a body-referenced id that
+    A body-referenced id that
     doesn't resolve to a live row of this plan answers 400, not the URL-segment
     404 used for the endpoint's own ``pk``.
     """
@@ -3364,9 +3046,8 @@ def prescription_move(request, plan_id, pk):
     Body ``{"session_id": <int>, "index": <int>}``; malformed JSON, a non-object
     body, or a missing/non-int field is a bare 400 (mirrors ``prescription_patch``).
     A ``session_id`` that doesn't resolve to a live session of THIS plan is also
-    a 400 (``_live_session_in_plan_or_none``, mirroring ``prescription_override``'s
-    ``_group_member_or_none`` bad-reference convention) rather than a 404 — only
-    the URL-segment ``pk`` gets the 404 treatment.
+    a 400 (``_live_session_in_plan_or_none``'s bad-reference convention) rather
+    than a 404 — only the URL-segment ``pk`` gets the 404 treatment.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -3721,7 +3402,7 @@ def coach_set_one_rm(request, plan_id, pk):
     The coach-side companion to ``athlete_set_one_rm``: a coach prescribing a
     %1RM target needs the athlete's max for it to mean anything, so they can set
     it here directly — useful before the athlete has ever logged the lift.
-    Individual plans only (a group plan has no single athlete → 400). Coach-scoped
+    Coach-scoped
     via ``_coach_plan_or_forbidden`` (403); the prescription must belong to the
     plan (404). Body ``{"value": "140"}`` — a blank/absent ``value`` *clears* it
     back to the log-derived estimate. The 1RM is the athlete's own
@@ -3732,8 +3413,6 @@ def coach_set_one_rm(request, plan_id, pk):
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    if plan.is_group:
-        return HttpResponseBadRequest("A 1RM belongs to a single athlete, not a group.")
     prescription = _cell_or_404(plan, pk)
     try:
         payload = json.loads(request.body or "{}")
@@ -3756,41 +3435,6 @@ def coach_set_one_rm(request, plan_id, pk):
     )
 
 
-def _fan_out_group_delivery(request, plan):
-    """Deliver a group plan's whole current block to every active member (P5).
-
-    Runs the model fan-out (``MesoGroup.deliver_block``) — each member's
-    *resolved* block materialized + every live week stamped + snapshotted — then
-    notifies each athlete ONCE at block level (email + push, best-effort on
-    commit), reusing the P3 individual block deliver hook (one nudge per member,
-    not one per week). Returns ``(summary, error)``: ``error`` is a human message
-    when there is nothing to deliver (no live week / no members), which the
-    callers map to a 400 / flashed error. ``summary["week_count"]`` is the shared
-    block's live-week count. The whole fan-out runs inside the request's
-    transaction (``ATOMIC_REQUESTS``), so a partial fan-out can't half-commit.
-    """
-    try:
-        # Deliver the *requested* plan, not whichever the group reselects, so a
-        # group holding more than one program can't drift to a different one.
-        now, delivered = plan.group.deliver_block(plan)
-    except InvalidTransition as exc:
-        return None, str(exc)
-    for member_plan, member_weeks in delivered:
-        # One block notification per member (the whole block delivered at once),
-        # not one per week — reuse the P3 block notifier.
-        _notify_athlete_block_delivered(
-            request, member_plan, member_weeks[0].mesocycle, len(member_weeks)
-        )
-    # Every member mirrors the same shared block, so its live-week count is the
-    # member's week count; the fan-out guarantees at least one member.
-    week_count = len(delivered[0][1])
-    return {
-        "members": len(delivered),
-        "delivered_at": now.isoformat(),
-        "week_count": week_count,
-    }, None
-
-
 @login_required
 @require_POST
 def plan_deliver(request, plan_id):
@@ -3804,21 +3448,11 @@ def plan_deliver(request, plan_id):
     stamped ``delivered_at`` (one shared timestamp) and snapshotted. The chosen
     week must belong to the plan (a foreign week is a 404). Re-delivering re-stamps
     every week and writes fresh ``WeekDelivery`` rows. Delivering never changes
-    ``is_current`` — releasing a block doesn't move the live pointer. A group plan
-    fans out its whole current block per-member (P5 brought group delivery to the
-    same whole-block parity), so its branch also releases every live week at once.
+    ``is_current`` — releasing a block doesn't move the live pointer.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    if plan.is_group:
-        # A group plan fans its whole current block out to every active member
-        # (each member's *resolved* program), P5. ``week_id`` is ignored — the
-        # group always sends its whole block.
-        summary, error = _fan_out_group_delivery(request, plan)
-        if error is not None:
-            return HttpResponseBadRequest(error)
-        return JsonResponse({"ok": True, **summary}, status=201)
     # An empty body (the bare deliver button) means "no week_id" — target the
     # live week's block, as before; a present-but-malformed body is a 400, not a
     # silent delivery of the wrong block.
@@ -3858,6 +3492,79 @@ def plan_deliver(request, plan_id):
         },
         status=201,
     )
+
+
+@login_required
+@require_POST
+def plan_batch_deliver(request, plan_id):
+    """Deliver an independent COPY of this plan to several clients at once (2c).
+
+    The replacement for the removed group fan-out (parity plan §3.1, D1):
+    instead of one shared program + per-member overrides + live-linked
+    materialized snapshots, the coach picks clients on the deliver screen and
+    each gets their own ``Plan.duplicate_for`` copy — fully independent and
+    live-editable per client from that moment on. Each copy's current block is
+    stamped + snapshotted exactly like an individual deliver (P3), and each
+    athlete gets the one block-level nudge.
+
+    Form POST from the deliver screen (``relationships`` = checkbox ids);
+    redirects back with a flash. Targets must be *active* athletes of this
+    coach; the plan's own athlete and soft-suspended (over-seat-limit, D6)
+    links are silently dropped from the selection — the screen never offers
+    them, so their presence in the POST is a stale/forged form, not a flow to
+    error-message. The whole fan-out runs in one explicit
+    ``transaction.atomic()`` (``ATOMIC_REQUESTS`` is inert in this deployment,
+    and a half-delivered batch would be worse than a clean retry);
+    notifications ride ``transaction.on_commit`` so a rollback never nudges.
+    """
+    plan, forbidden = _editable_plan_or_response(request, plan_id)
+    if forbidden is not None:
+        return forbidden
+    if current_week(plan) is None:
+        messages.error(request, "This plan has no week to deliver.")
+        return redirect("meso:deliver_plan", plan_id=plan.pk)
+    try:
+        picked_ids = [int(raw) for raw in request.POST.getlist("relationships")]
+    except (TypeError, ValueError):
+        return HttpResponseBadRequest("relationships must be ids.")
+    if not picked_ids:
+        messages.error(request, "Pick at least one client to deliver a copy to.")
+        return redirect("meso:deliver_plan", plan_id=plan.pk)
+    targets = list(
+        CoachAthlete.objects.for_coach(request.user)
+        .active()
+        .filter(pk__in=picked_ids)
+        .exclude(pk=plan.relationship_id)
+        .exclude(pk__in=billing_access.suspended_athlete_ids(request.user))
+        .select_related("athlete")
+        .order_by("athlete__name", "athlete__email")
+    )
+    if not targets:
+        messages.error(request, "No deliverable clients in that selection.")
+        return redirect("meso:deliver_plan", plan_id=plan.pk)
+    delivered_names = []
+    with transaction.atomic():
+        for relationship in targets:
+            copy = plan.duplicate_for(relationship, status=Plan.Status.ACTIVE)
+            target_week = current_week(copy)
+            block = target_week.mesocycle
+            now = timezone.now()
+            live_weeks = list(block.weeks.filter(deleted_at__isnull=True))
+            for week in live_weeks:
+                week.delivered_at = now
+                week.save(update_fields=["delivered_at"])
+                WeekDelivery.objects.create(
+                    week=week,
+                    delivered_at=now,
+                    payload=serialize_week_snapshot(week),
+                )
+            _notify_athlete_block_delivered(request, copy, block, len(live_weeks))
+            delivered_names.append(relationship.athlete.display_name())
+    messages.success(
+        request,
+        f"Delivered an independent copy to {', '.join(delivered_names)}.",
+    )
+    return redirect("meso:deliver_plan", plan_id=plan.pk)
 
 
 def _notify_athlete_delivered(request, plan, week):
@@ -4103,16 +3810,11 @@ def agent_propose(request, plan_id):
                 status=503,
             )
 
-        # A group run grounds on the group (members + folded contraindications)
-        # and edits the shared program (groups Phase 1); tag it ``group`` for the
-        # usage ledger (attributed to the group, athlete null).
-        trigger = (
-            AgentProposalBatch.Trigger.GROUP
-            if plan.is_group
-            else AgentProposalBatch.Trigger.MANUAL
-        )
         batch = agent_service.create_drafting_batch(
-            plan, instruction, coach=request.user, trigger=trigger
+            plan,
+            instruction,
+            coach=request.user,
+            trigger=AgentProposalBatch.Trigger.MANUAL,
         )
     # The batch is committed; enqueue the worker run and bump the plan outside the
     # lock so neither holds the coach row.
@@ -4145,10 +3847,7 @@ def batch_status(request, batch_id):
     if batch.status == AgentProposalBatch.Status.FAILED:
         data["error"] = batch.error
     elif batch.status != AgentProposalBatch.Status.DRAFTING:
-        changes = [
-            serialize_proposed_change(c)
-            for c in batch.changes.select_related("membership__relationship__athlete")
-        ]
+        changes = [serialize_proposed_change(c) for c in batch.changes.all()]
         data["changes"] = changes
         if changes:
             data["review_url"] = reverse(
@@ -4170,16 +3869,14 @@ def batch_status(request, batch_id):
 def _coach_batch_or_404(request, batch_id):
     """The batch the requester coaches, or raise ``Http404``.
 
-    Scoped to a plan the coach may *edit* (``editable_by``), so it covers an
-    individual plan over an active relationship **and** a group plan the coach owns
-    (the group agent runs behind this same review gate) — a foreign/unknown batch
-    is a 404.
+    Scoped to a plan the coach may *edit* (``editable_by``) — an individual plan
+    over an active relationship; a foreign/unknown batch is a 404.
     """
     batch = (
         AgentProposalBatch.objects.filter(
             pk=batch_id, plan__in=Plan.objects.editable_by(request.user)
         )
-        .select_related("plan", "plan__relationship", "plan__group")
+        .select_related("plan", "plan__relationship")
         .first()
     )
     if batch is None:
@@ -4239,15 +3936,8 @@ def batch_apply(request, batch_id):
     with transaction.atomic():
         record_plan_action(batch.plan, "Applied agent changes")
         result = agent_apply.apply_batch(batch)
-    # Where the review screen sends the coach next. An individual plan has a
-    # deliver screen; a group plan's delivery is deliver-to-all (no individual
-    # deliver screen — ``DeliverView`` is ``for_coach`` individual-only and would
-    # 404 a group plan), so a group batch lands back in the designer where the
-    # shared program + its group delivery live.
-    if batch.plan.is_group:
-        next_url = reverse("meso:designer_plan", kwargs={"plan_id": batch.plan_id})
-    else:
-        next_url = reverse("meso:deliver_plan", kwargs={"plan_id": batch.plan_id})
+    # Where the review screen sends the coach next: the plan's deliver screen.
+    next_url = reverse("meso:deliver_plan", kwargs={"plan_id": batch.plan_id})
     return JsonResponse(
         {
             "ok": True,
@@ -4528,7 +4218,7 @@ class ChangeReviewView(LoginRequiredMixin, TemplateView):
                 pk=kwargs["batch_id"],
                 plan__in=Plan.objects.editable_by(self.request.user),
             )
-            .select_related("plan", "plan__relationship__athlete", "plan__group")
+            .select_related("plan", "plan__relationship__athlete")
             .first()
         )
         if batch is None:
@@ -4572,6 +4262,19 @@ class DeliverView(LoginRequiredMixin, TemplateView):
             raise Http404("Unknown plan")
         ctx["plan_id"] = plan.pk
         ctx.update(presenters.deliver_screen(plan, week=self._target_week(plan)))
+        # Batch-deliver (2c, parity plan §3.1): the coach's OTHER deliverable
+        # clients, offered as "send each an independent copy" checkboxes.
+        # Soft-suspended (over-seat-limit, D6) links are omitted — the POST
+        # re-checks, this just keeps the screen honest.
+        ctx["batch_candidates"] = [
+            {"id": rel.pk, "name": rel.athlete.display_name()}
+            for rel in CoachAthlete.objects.for_coach(self.request.user)
+            .active()
+            .exclude(pk=plan.relationship_id)
+            .exclude(pk__in=billing_access.suspended_athlete_ids(self.request.user))
+            .select_related("athlete")
+            .order_by("athlete__name", "athlete__email")
+        ]
         return ctx
 
     def _target_week(self, plan):

@@ -55,7 +55,7 @@ describe("thread rendering", () => {
         id: 3,
         role: "agent",
         text: "Lowered Day 2 volume.",
-        changes: [{ id: "c1", title: "Squat -10%", member: "Maya" }],
+        changes: [{ id: "c1", title: "Squat -10%" }],
         reviewUrl: "/meso/review/9/",
       },
     ];

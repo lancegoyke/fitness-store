@@ -69,7 +69,6 @@ def _serialize(report):
                 "clients": [
                     {
                         "label": cl.label,
-                        "is_group": cl.is_group,
                         "totals": _serialize_totals(cl.totals),
                     }
                     for cl in c.clients

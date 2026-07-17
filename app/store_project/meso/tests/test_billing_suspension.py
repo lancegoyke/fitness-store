@@ -14,8 +14,7 @@ Covered:
   coach; the active links beyond the oldest ``FREE_SEAT_LIMIT`` once a free/lapsed
   coach is over the cap.
 - ``access.can_edit_plan`` — an individual plan is frozen only when *its*
-  relationship is suspended; a group plan (no single relationship) falls back to
-  the coarse coach-wide freeze.
+  relationship is suspended.
 - the endpoints: an over-limit coach can still patch / deliver / apply a batch for
   a kept (oldest) athlete, but is 402'd on a suspended one.
 - the roster surfaces a per-athlete "Suspended" badge and a count.
@@ -32,10 +31,7 @@ from store_project.meso.billing import access
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachSubscriptionFactory
-from store_project.meso.factories import GroupMembershipFactory
-from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import MesocycleFactory
-from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AgentProposalBatch
@@ -154,24 +150,6 @@ class TestCanEditPlan:
         coach = UserFactory()
         _, plan, _ = _aged_plan(coach, days_ago=5)  # only athlete → at cap
         assert access.is_over_limit(coach) is False
-        assert access.can_edit_plan(plan) is True
-
-    def test_group_plan_frozen_by_coarse_freeze_when_over(self):
-        coach = UserFactory()
-        group = MesoGroupFactory(coach=coach)
-        GroupMembershipFactory(group=group)
-        GroupMembershipFactory(group=group)  # two active links → over the cap
-        plan = GroupPlanFactory(group=group)
-        assert access.is_over_limit(coach) is True
-        # A group plan has no single relationship to keep live, so it falls back to
-        # the coarse coach-wide freeze.
-        assert access.can_edit_plan(plan) is False
-
-    def test_group_plan_editable_within_cap(self):
-        coach = UserFactory()
-        group = MesoGroupFactory(coach=coach)
-        GroupMembershipFactory(group=group)  # one active link → at cap
-        plan = GroupPlanFactory(group=group)
         assert access.can_edit_plan(plan) is True
 
     def test_active_coach_any_plan_editable(self):

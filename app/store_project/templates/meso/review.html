@@ -38,7 +38,6 @@
           <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;">
             <span class="meso-badge meso-badge--accent">{{ c.kind }}</span>
             <span class="meso-row-meta">{{ c.day }}</span>
-            {% if c.member %}<span class="meso-badge meso-badge--muted" title="Per-athlete auto-adjust"><i></i>{{ c.member }}</span>{% endif %}
             <div class="meso-spacer"></div>
             <span class="meso-badge meso-badge--ok" x-show="statuses[{{ c.id }}] === 'approved'"><i></i>Approved</span>
             <span class="meso-badge meso-badge--muted" x-show="statuses[{{ c.id }}] === 'rejected'"><i></i>Rejected</span>

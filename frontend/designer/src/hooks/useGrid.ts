@@ -2,7 +2,7 @@
 // (MesoTable). Owns `grid`/`history` and every verb that mutates it. Issue
 // #455 phase A5 retired the sibling one-week `usePlanData` owner (and
 // everything that only existed to feed it) — this hook is now DesignerRoot's
-// SOLE data owner island-wide, not just the table's: `grid.plan`/`.group`/
+// SOLE data owner island-wide, not just the table's: `grid.plan`/
 // `.athlete`/`.phases` (added in A5 step 1) feed TopBar/LeftRail/BlockView/
 // AthletePreview too, via the pure `lib/grid.ts` helpers `gridToProgram`/
 // `cycleLabelFromGrid`.
@@ -35,17 +35,10 @@ export type GridCellPatch = Partial<Pick<GridCell, "text">>;
 /** The per-exercise row columns (Phase 2a, D2) writable via patchRowColumns. */
 export type GridRowPatch = Partial<Pick<GridRow, "tempo" | "rest" | "note">>;
 
-/** P5 group: the adj/adjusts a group override save/clear returns for one cell
- * — patched into that cell (matched by prescription_id) so its adjust badge
- * repaints without a full grid refetch. The grid analog of usePlanData's
- * `patchExercise({adj, adjusts})` on the single-week path. */
-export type GridCellAdjPatch = Pick<GridCell, "adj" | "adjusts">;
-
-/** Any payload carrying a fresh plan history — accepts BOTH the grid
- * endpoints' `GridHistory` (string labels) AND the override editor's
- * `serialize_plan_history` reply routed through `useOverrideEditor`
- * (`undo_label`/`redo_label` typed `string | null`). Coerced to `GridHistory`
- * on adoption below, so either convention lands cleanly. */
+/** Any payload carrying a fresh plan history — tolerant of `undo_label`/
+ * `redo_label` arriving as `string | null` (the `serialize_plan_history`
+ * convention) as well as `GridHistory`'s always-string labels. Coerced to
+ * `GridHistory` on adoption below, so either convention lands cleanly. */
 interface GridHistoryCarrier {
   history?: {
     can_undo: boolean;
@@ -104,9 +97,7 @@ function currentWeekId(grid: MesoGrid | null): Id | undefined {
 
 /** Immutably patch every cell (across every day/row/week) whose
  * prescription_id matches — in practice exactly one, since prescription_id
- * is unique per (row, week). Takes a `Partial<GridCell>` so both a typed-in
- * field patch (GridCellPatch) and a group adjust repaint (GridCellAdjPatch)
- * route through the same immutable walk. */
+ * is unique per (row, week). */
 function updateCellInGrid(grid: MesoGrid, cellId: Id, patch: Partial<GridCell>): MesoGrid {
   return {
     ...grid,
@@ -214,16 +205,15 @@ export function useGrid(options: UseGridOptions) {
       const res = await fetch(`/meso/api/plan/${planId}/grid/`);
       if (!res.ok) throw new Error("Request failed: " + res.status);
       const data = (await res.json()) as MesoGrid & { ok?: boolean };
-      // Issue #455 phase A5: plan/group/athlete/phases must ride every
+      // Issue #455 phase A5: plan/athlete/phases must ride every
       // refetch too, not just the initial hydration — this is now the
       // front-end's ONLY source for the top bar / left rail / block view (the
       // one-week plan_data owner that used to carry them is gone). Dropping
       // any of these here would silently blank that chrome after the very
       // next structural edit (regression test: useGrid.test.ts "refetchGrid
-      // carries the new plan/group/athlete/phases fields through").
+      // carries the new plan/athlete/phases fields through").
       setGrid({
         plan: data.plan,
-        group: data.group,
         athlete: data.athlete,
         phases: data.phases,
         mesocycle: data.mesocycle,
@@ -260,19 +250,6 @@ export function useGrid(options: UseGridOptions) {
     },
     [planId, csrf, adoptGridHistory],
   );
-
-  // P5 group: repaint one cell's per-athlete adjust badge from a group
-  // override save/clear reply. Purely local (no POST) — useOverrideEditor
-  // already POSTed to prescription/<id>/override/ and hands back {adj,
-  // adjusts, history}; DesignerRoot routes its `patchExercise` here and its
-  // `adoptHistory` to adoptGridHistory above. Matches on prescription_id, so
-  // it no-ops harmlessly if the id doesn't resolve to a live cell on this
-  // grid (issue #455 phase A5: there is no other data owner left for it to
-  // belong to instead — this used to also guard against the one-week
-  // planData path, now retired).
-  const patchCellAdj = useCallback((cellId: Id, patch: GridCellAdjPatch) => {
-    setGrid((prev) => (prev ? updateCellInGrid(prev, cellId, patch) : prev));
-  }, []);
 
   const renameExercise = useCallback(
     (exerciseSlotId: Id, name: string) => {
@@ -602,8 +579,6 @@ export function useGrid(options: UseGridOptions) {
     history,
     busy,
     patchCell,
-    patchCellAdj,
-    adoptGridHistory,
     renameExercise,
     writeCellLine,
     patchRowColumns,

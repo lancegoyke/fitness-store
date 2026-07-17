@@ -27,7 +27,6 @@ from django.utils import timezone
 from store_project.meso.agent import service
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import MesocycleFactory
-from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
@@ -778,38 +777,6 @@ class TestLogAdvancesCurrentWeek:
         s.week_b.refresh_from_db()
         assert s.week_b.is_current is True
         assert s.week_a.is_current is False
-
-    def test_advances_a_group_materialized_member_plan_not_the_shared_pointer(
-        self, client
-    ):
-        coach = UserFactory()
-        group = MesoGroupFactory(coach=coach)
-        athlete = UserFactory()
-        CoachAthleteFactory(
-            coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
-        )
-        group.add_athlete(athlete)
-        shared_plan = group.create_shared_plan()
-        shared_meso = shared_plan.mesocycles.get()
-        shared_meso.append_week()  # a second live week; week 1 stays current
-
-        _, delivered = group.deliver_block(shared_plan)
-        member_plan, member_weeks = delivered[0]
-        member_week1, member_week2 = member_weeks  # index order
-
-        client.force_login(athlete)
-        session2 = member_week2.sessions.first()
-        resp = post(client, session2, {"sets": []})
-        assert resp.status_code == 200
-
-        member_week1.refresh_from_db()
-        member_week2.refresh_from_db()
-        assert member_week2.is_current is True
-        assert member_week1.is_current is False
-
-        # The group's own shared pointer is untouched by a member's log.
-        shared_week1 = shared_meso.weeks.get(index=1)
-        assert shared_week1.is_current is True
 
     def test_advance_does_not_append_to_the_undo_stack(self, client):
         s = self._two_week_plan()

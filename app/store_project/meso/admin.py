@@ -9,13 +9,10 @@ from .models import CoachProfile
 from .models import CoachSubscription
 from .models import Contraindication
 from .models import ExerciseSlot
-from .models import GroupMembership
 from .models import LoggedSet
 from .models import Mesocycle
-from .models import MesoGroup
 from .models import Plan
 from .models import Prescription
-from .models import PrescriptionOverride
 from .models import ProposedChange
 from .models import PushSubscription
 from .models import Session
@@ -325,48 +322,7 @@ class ProposedChangeAdmin(admin.ModelAdmin):
     list_display = ("title", "batch", "kind", "status", "honors", "order")
     list_filter = ("kind", "status")
     search_fields = ("title", "rationale")
-    raw_id_fields = ("batch", "session", "prescription", "membership")
-
-
-# -- groups (S1) -----------------------------------------------------------
-
-
-class GroupMembershipInline(admin.TabularInline):
-    model = GroupMembership
-    extra = 0
-    raw_id_fields = ("relationship",)
-    readonly_fields = ("created_at",)
-
-
-@admin.register(MesoGroup)
-class MesoGroupAdmin(admin.ModelAdmin):
-    list_display = ("name", "coach", "focus", "status", "is_demo", "modified")
-    list_filter = ("status", "is_demo")
-    search_fields = ("name", "focus", "coach__email", "coach__name")
-    raw_id_fields = ("coach",)
-    inlines = (GroupMembershipInline,)
-
-
-@admin.register(PrescriptionOverride)
-class PrescriptionOverrideAdmin(admin.ModelAdmin):
-    list_display = (
-        "__str__",
-        "membership",
-        "swap_name",
-        "load_pct",
-        "sets",
-        "reps",
-        "modified",
-    )
-    search_fields = (
-        "membership__group__name",
-        # ``prescription.name`` is a resolving property, not a DB column —
-        # search the real field it falls through to instead.
-        "prescription__exercise_slot__name",
-        "swap_name",
-    )
-    raw_id_fields = ("membership", "prescription")
-    readonly_fields = ("created_at", "modified")
+    raw_id_fields = ("batch", "session", "prescription")
 
 
 # -- athlete PWA -----------------------------------------------------------

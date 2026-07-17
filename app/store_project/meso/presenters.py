@@ -152,9 +152,7 @@ def _profile_status(link, working_plan, delivered_plan):
     ``needs_review`` (a pending agent proposal the coach can apply now) outranks
     ``drafting`` (a run still in flight off the request thread), which outranks the
     steady ``delivered``. Scoped to the coach's *own* plans for this athlete — the
-    individual working plan and the delivered plan. A group-delivery snapshot's
-    proposals live on the shared group plan (reviewed from the group designer, not
-    this individual profile), so a group-only athlete simply reads ``delivered``.
+    individual working plan and the delivered plan.
 
     Returns ``(status, label, review_batch_id)`` — the id of the *this athlete's*
     pending batch (newest first) so the profile's "Review agent changes" CTA links
@@ -184,17 +182,12 @@ def _profile_results(link):
     Reuses ``session_results`` (the coach results screen) so the profile's "Latest
     session" card shows the same completion %, RPE-vs-target, and overshoot flag.
     Scoped to the athlete's own *done* logs — a pending "Save progress" draft isn't
-    a result — on this link's **individual** plans only. A *materialized*
-    group-delivery snapshot (``source_group`` set) is excluded: the card links to
-    ``results_session``, whose ``ResultsView`` authorizes through
-    ``Plan.objects.for_coach`` (individual-only), so a snapshot session would 404.
-    Archived plans are excluded too. ``None`` — the card is hidden — when the
-    athlete has no openable logged session yet.
+    a result — on this link's plans. Archived plans are excluded. ``None`` — the
+    card is hidden — when the athlete has no openable logged session yet.
     """
     log = (
         SessionLog.objects.filter(
             session__week__mesocycle__plan__relationship=link,
-            session__week__mesocycle__plan__source_group__isnull=True,
             athlete=link.athlete,
             status=SessionLog.Status.DONE,
         )
@@ -220,8 +213,7 @@ def profile_program(link, working_plan):
     ``results_summary`` were ``[]``/``None`` placeholders). It keys off the
     athlete's most recently delivered week (``adherence.link_latest_delivered_week``
     — the same week the roster meter measures), so everything describes the
-    athlete's *delivered* reality, spanning the coach's individual plan and any
-    group-delivery snapshot:
+    athlete's *delivered* reality:
 
     - ``block``/``week`` — the delivered week's mesocycle name + ``Wk N`` label;
     - ``macrocycle`` — the plan's blocks, the rail positioned at that week's block;
@@ -258,8 +250,8 @@ def profile_program(link, working_plan):
     states = _phase_states(mesocycles, week.mesocycle)
     macrocycle = [serialize_mesocycle(m, s) for m, s in zip(mesocycles, states)]
     status, status_label, review_batch_id = _profile_status(link, working_plan, plan)
-    # The goal of the plan the coach is actively shaping if there is one, else the
-    # delivered plan's — a group-only athlete has no individual working plan.
+    # The goal of the plan the coach is actively shaping if there is one, else
+    # the delivered plan's.
     goal = (working_plan.goal if working_plan else "") or plan.goal
     return {
         "athlete": {
@@ -274,36 +266,6 @@ def profile_program(link, working_plan):
         },
         "macrocycle": macrocycle,
         "results_summary": _profile_results(link),
-    }
-
-
-def roster_group(group):
-    """A row in the coach's roster *Groups* card (groups slice Phase 1).
-
-    Members are scoped to active links (``active_member_users``). There is no
-    shared program until groups Phase 2, so the meta line says so rather than
-    inventing a current-week label.
-    """
-    members = group.active_member_users()
-    member_objs = [
-        {"initials": initials(u.display_name()), "tone": "neutral"} for u in members
-    ]
-    count = len(member_objs)
-    focus = group.focus or "General"
-    meta = " · ".join(
-        [
-            f"{count} participant{'' if count == 1 else 's'}",
-            focus,
-            "No shared program yet",
-        ]
-    )
-    return {
-        "id": group.pk,
-        "name": group.name,
-        "focus": focus,
-        "member_objs": member_objs,
-        "meta": meta,
-        "status_label": group.get_status_display(),
     }
 
 
@@ -520,7 +482,7 @@ def coach_billing(coach):
     The complement to the staff-only owner dashboard (``usage_dashboard``): that
     shows org-wide **cost** (COGS); this shows *one coach* their **bill** (the flat
     monthly Pro price they owe, D14) and **how much agent they've used** this month,
-    broken down per athlete/group. The hard line: a coach sees what they pay and how
+    broken down per athlete. The hard line: a coach sees what they pay and how
     much they've used, **never** the internal per-run cost estimate, so this context
     carries run counts and the flat price only — no ``cost``/``margin`` keys.
 
@@ -569,43 +531,6 @@ def athlete_pending(user):
         else:
             requests.append(row)
     return {"invites": invites, "requests": requests}
-
-
-def group_detail(group):
-    """The group detail page: members + their cross-group contraindication flags.
-
-    The "flags across group" set folds every active member's contraindication
-    labels into one unique, sorted list (the designer prototype's panel).
-    """
-    members = group.active_member_users()
-    member_data = []
-    flags = set()
-    for user in members:
-        labels = [c.label for c in _active_contraindications(user)]
-        flags.update(labels)
-        name = user.display_name()
-        member_data.append(
-            {
-                "id": user.pk,
-                "name": name,
-                "initials": initials(name),
-                "tone": "neutral",
-                "flags": labels,
-            }
-        )
-    # The shared program (Phase 2): its id when the group already has one (the
-    # detail page links straight to the designer), else None (offer to design it).
-    shared = group.shared_plan()
-    return {
-        "id": group.pk,
-        "name": group.name,
-        "focus": group.focus or "General",
-        "status_label": group.get_status_display(),
-        "members": member_data,
-        "member_count": len(member_data),
-        "flags": sorted(flags),
-        "shared_plan_id": shared.pk if shared else None,
-    }
 
 
 def deliver_screen(plan, week=None):
@@ -698,18 +623,12 @@ def review_changes(batch):
     """Context for the review screen from a real ``AgentProposalBatch`` (B6).
 
     Feeds the same template the prototype fixtures did, so a real batch renders
-    unchanged; per-change approve/reject persistence + apply land in Phase 2. A
-    **group** batch (the group agent edits the shared program) has no single
-    athlete, so the review heading names the *group* instead.
+    unchanged; per-change approve/reject persistence + apply land in Phase 2.
     """
     plan = batch.plan
-    subject = plan.group.name if plan.is_group else plan.athlete.display_name()
     return {
-        "athlete": {"name": subject},
-        "changes": [
-            serialize_proposed_change(c)
-            for c in batch.changes.select_related("membership__relationship__athlete")
-        ],
+        "athlete": {"name": plan.athlete.display_name()},
+        "changes": [serialize_proposed_change(c) for c in batch.changes.all()],
     }
 
 
@@ -1060,15 +979,13 @@ def _athlete_block_grid(block, delivered_week_ids, focus_week_id):
 def _single_current_week(plan):
     """True when ``plan`` has exactly one live ``is_current`` week.
 
-    Both an individual plan (``week_set_current``) and a group-materialized
-    member plan (``sync_delivered_plan``, which now only ever mirrors the
-    source's pointer on the member's *first* materialization — issue #456)
-    keep a single current pointer, so ``current_week`` is normally trustworthy
-    as "the week the athlete is on." Nothing in the schema enforces that,
-    though — no DB constraint bars two live ``True`` rows on the same plan —
-    so this stays defensive hardening rather than an assumption: ``athlete_home``
-    falls back to the latest delivered week whenever this doesn't hold, instead
-    of trusting an ambiguous pointer.
+    A plan (``week_set_current``) keeps a single current pointer, so
+    ``current_week`` is normally trustworthy as "the week the athlete is on."
+    Nothing in the schema enforces that, though — no DB constraint bars two
+    live ``True`` rows on the same plan — so this stays defensive hardening
+    rather than an assumption: ``athlete_home`` falls back to the latest
+    delivered week whenever this doesn't hold, instead of trusting an
+    ambiguous pointer.
     """
     return (
         Week.objects.filter(
@@ -1139,14 +1056,10 @@ def athlete_home(user, focus_week_id=None):
             continue
 
         # Anchor the card (both the block shown and the focus week) on the week
-        # the athlete is on. For an individual plan that's its single ``is_current``
-        # week, so a coach's "Make current" is honored even when it moves the
-        # athlete back to an earlier delivered block. A group-materialized member
-        # plan carries that same single pointer post-#456 (mirrored once, at the
-        # member's first materialization; from there the athlete's own logging or
-        # a coach override is what moves it) — ``_single_current_week`` is
-        # defensive hardening against the schema not actually enforcing "exactly
-        # one," not an expectation that a group plan is shaped any differently.
+        # the athlete is on: the plan's single ``is_current`` week, so a coach's
+        # "Make current" is honored even when it moves the athlete back to an
+        # earlier delivered block. ``_single_current_week`` is defensive
+        # hardening against the schema not actually enforcing "exactly one."
         # When it doesn't hold (or the flagged week is undelivered — a current
         # week the coach is still building), fall back to the latest delivered
         # week, whose ordering already tracks the newest delivery.
@@ -1190,10 +1103,9 @@ def athlete_home(user, focus_week_id=None):
 
         # Week chips + the "start next week" nudge (issue #456 Finding 1) span the
         # WHOLE PLAN, not just the anchored block: delivery never moves
-        # ``is_current`` (by design — see ``Week.advance_current_week`` /
-        # ``GroupMembership.sync_delivered_plan``), so a coach delivering a NEW
-        # block never touches the athlete's (or a group member's, post-first-
-        # materialization) pointer. Restricting navigation to the anchored
+        # ``is_current`` (by design — see ``Week.advance_current_week``), so a
+        # coach delivering a NEW block never touches the athlete's pointer.
+        # Restricting navigation to the anchored
         # block's own delivered weeks would make that new block invisible and
         # permanently unreachable — the athlete could never tap into it, and
         # auto-advance could never carry them there either, since it only fires

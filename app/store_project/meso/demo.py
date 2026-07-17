@@ -1,16 +1,15 @@
 """Coach-scoped one-click demo data (first-time-UX Phase 2, decision Q3).
 
-A brand-new coach can load a *populated* workspace — five athletes, one
-built/delivered/logged individual program, and a training group with a shared
-program plus per-athlete auto-adjusts — to explore Meso before committing real
-clients, then remove it in one click.
+A brand-new coach can load a *populated* workspace — five athletes and one
+built/delivered/logged individual program — to explore Meso before committing
+real clients, then remove it in one click.
 
 This is a thin, coach-scoped wrapper over the demo the ``seed_meso_demo``
 management command stands up: it reuses that command's data (``ATHLETES`` /
-``SAMPLE_PLAN`` / ``SAMPLE_LOG`` / ``GROUP``) but creates everything **scoped to
+``SAMPLE_PLAN`` / ``SAMPLE_LOG``) but creates everything **scoped to
 the requesting coach** so two coaches never collide. Guardrails (Q3):
 
-- **clearly labeled + fully removable** — demo relationships/groups carry an
+- **clearly labeled + fully removable** — demo relationships carry an
   ``is_demo`` flag; ``clear_demo`` removes exactly those (and the demo athlete
   users they hang off), never the coach's real data;
 - **billing-neutral** — an ``is_demo`` link is not a billable seat
@@ -18,9 +17,8 @@ the requesting coach** so two coaches never collide. Guardrails (Q3):
   trips the paywall;
 - **no outbound email/push** — demo athletes are fake people: their address is
   non-routable and namespaced per coach, they carry the delivery-email opt-out,
-  and the load delivers weeks at the **model layer** (``deliver_block`` /
-  a direct ``delivered_at`` stamp), which — unlike the deliver *views* — notifies
-  nobody.
+  and the load delivers weeks at the **model layer** (a direct ``delivered_at``
+  stamp), which — unlike the deliver *views* — notifies nobody.
 """
 
 from datetime import date
@@ -32,7 +30,6 @@ from django.utils import timezone
 from store_project.users.models import User
 
 from .management.commands.seed_meso_demo import ATHLETES
-from .management.commands.seed_meso_demo import GROUP
 from .management.commands.seed_meso_demo import SAMPLE_LOG
 from .management.commands.seed_meso_demo import SAMPLE_PLAN
 from .management.commands.seed_meso_demo import _months_before
@@ -43,9 +40,7 @@ from .models import CoachAthlete
 from .models import Contraindication
 from .models import LoggedSet
 from .models import Mesocycle
-from .models import MesoGroup
 from .models import Plan
-from .models import Prescription
 from .models import Session
 from .models import SessionLog
 from .models import Unit
@@ -103,7 +98,7 @@ def _demo_athlete_and_link(coach, slug):
 # Per-feature slices of ``load_demo`` (guided-tour Phase 1, decision O3): each
 # is idempotent and ensures its own prerequisites, so the tour (Phase 2) can
 # fire any one of them, in any order, from its own step/endpoint. ``load_demo``
-# below is the thin aggregate that runs all five — the O6 "skip · load
+# below is the thin aggregate that runs all four — the O6 "skip · load
 # everything" path and the pre-tour ``demo_load`` view behavior.
 
 
@@ -151,28 +146,12 @@ def load_log(coach):
     _ensure_demo_log(maya, plan, date.today())
 
 
-@transaction.atomic
-def load_group(coach):
-    """Segment: Strength Squad + shared plan + per-athlete overrides.
-
-    Depends on ``athletes`` only — the group has its own shared plan, separate
-    from Maya's individual one, so it never needs ``program``/``delivery``/``log``.
-    """
-    _lock(coach)
-    load_athletes(coach)
-    athletes = {
-        slug: _demo_athlete_and_link(coach, slug) for slug in GROUP["member_slugs"]
-    }
-    _ensure_demo_group(coach, athletes)
-
-
 #: Segment name → loader, for views to dispatch a per-segment load by POST field.
 SEGMENTS = {
     "athletes": load_athletes,
     "program": load_program,
     "delivery": load_delivery,
     "log": load_log,
-    "group": load_group,
 }
 
 
@@ -197,7 +176,6 @@ def load_demo(coach):
     load_program(coach)
     load_delivery(coach)
     load_log(coach)
-    load_group(coach)
 
 
 # -- per-segment "is it loaded?" predicates ------------------------------------
@@ -213,32 +191,18 @@ def has_athletes(coach):
 
 
 def has_program(coach):
-    """Whether Maya's demo plan tree has been built.
-
-    Scoped to the *individual* tree (``source_group`` excluded, mirroring
-    ``CoachAthlete.working_plan``): the ``group`` segment's delivery
-    materializes its own per-member ``Mesocycle``/``Week`` rows onto group
-    members' individual relationships (``sync_delivered_plan``) — those must
-    not be mistaken for the ``program`` segment.
-    """
+    """Whether Maya's demo plan tree has been built."""
     return Mesocycle.objects.filter(
         plan__relationship__coach=coach,
         plan__relationship__is_demo=True,
-        plan__source_group__isnull=True,
     ).exists()
 
 
 def has_delivery(coach):
-    """Whether Maya's demo current week has been delivered.
-
-    Same ``source_group`` exclusion as ``has_program`` — a materialized
-    group-member week being delivered (part of the ``group`` segment) must not
-    read as the ``delivery`` segment.
-    """
+    """Whether Maya's demo current week has been delivered."""
     return Week.objects.filter(
         mesocycle__plan__relationship__coach=coach,
         mesocycle__plan__relationship__is_demo=True,
-        mesocycle__plan__source_group__isnull=True,
         delivered_at__isnull=False,
     ).exists()
 
@@ -248,22 +212,13 @@ def has_log(coach):
     return SessionLog.objects.filter(athlete__in=_demo_athletes(coach)).exists()
 
 
-def has_group(coach):
-    """Whether the demo group has been created."""
-    return MesoGroup.objects.filter(coach=coach, is_demo=True).exists()
-
-
 @transaction.atomic
 def clear_demo(coach):
     """Remove exactly this coach's demo data — never their real data.
 
-    The demo group is owned by the (real) coach, so it won't cascade from deleting
-    the demo athletes; drop it explicitly first (cascading its shared +
-    materialized plans, memberships, and overrides). Then delete the demo athlete
-    users, which cascades their links, individual plans, logged sessions, and
-    profiles. A coach with no demo is a clean no-op.
+    Deletes the demo athlete users, which cascades their links, individual
+    plans, logged sessions, and profiles. A coach with no demo is a clean no-op.
     """
-    MesoGroup.objects.filter(coach=coach, is_demo=True).delete()
     demo_user_ids = list(_demo_athletes(coach).values_list("pk", flat=True))
     User.objects.filter(pk__in=demo_user_ids).delete()
 
@@ -440,78 +395,3 @@ def _ensure_demo_log(athlete, plan, today):
 
     refresh_one_rms(athlete, list(prescriptions.values()), plan.unit)
     return log
-
-
-# -- the demo group ----------------------------------------------------------
-
-
-def _ensure_demo_group(coach, athletes):
-    """A demo group (three members) with a shared program, overrides, delivery.
-
-    Keyed by **demo identity** (``is_demo``), never the user-editable name: a coach
-    may already own a real group named the same, and matching it by name would
-    flip it to demo and let ``clear_demo`` delete it. There is exactly one demo
-    group per coach, so reuse it on reseed or create a fresh one.
-    """
-    group = MesoGroup.objects.filter(coach=coach, is_demo=True).first()
-    if group is None:
-        group = MesoGroup.objects.create(
-            coach=coach,
-            name=GROUP["name"],
-            focus=GROUP["focus"],
-            status=MesoGroup.Status.ACTIVE,
-            is_demo=True,
-        )
-    memberships = {}
-    for slug in GROUP["member_slugs"]:
-        athlete, _link = athletes[slug]
-        memberships[slug] = group.add_athlete(athlete)
-    if group.shared_plan() is None:
-        group.create_shared_plan()
-    _ensure_demo_overrides(group, memberships)
-    _ensure_demo_group_delivery(group)
-    return group
-
-
-def _ensure_demo_overrides(group, memberships):
-    """A couple of per-athlete auto-adjusts so the designer's ``adj`` badge shows.
-
-    Overrides target a ``Prescription`` **cell** (P0), so "first"/"second
-    shared lift" is the first two rows of the shared program's *current* week,
-    ordered by day then row.
-    """
-    from .serializers import current_week
-
-    plan = group.shared_plan()
-    if plan is None:
-        return
-    week = current_week(plan)
-    if week is None:
-        return
-    prescriptions = list(
-        Prescription.objects.filter(week=week, line=0)
-        .select_related("exercise_slot__session_slot")
-        .order_by("exercise_slot__session_slot__order", "exercise_slot__order")
-    )
-    if len(prescriptions) < 2:
-        return
-    first, second = prescriptions[0], prescriptions[1]
-    if "devon" in memberships:
-        memberships["devon"].set_override(first, load_pct=90)
-    if "priya" in memberships:
-        memberships["priya"].set_override(first, swap_name="Box Squat")
-    if "marcus" in memberships:
-        memberships["marcus"].set_override(second, sets="2", reps="8")
-
-
-def _ensure_demo_group_delivery(group):
-    """Deliver the shared current block to members once (model layer — no notify)."""
-    from .serializers import current_week
-
-    plan = group.shared_plan()
-    if plan is None:
-        return
-    week = current_week(plan)
-    if week is None or week.delivered_at is not None:
-        return
-    group.deliver_block()

@@ -11,9 +11,7 @@ Session → Prescription`` hierarchy (a ``Prescription`` is a cell = the fixed
 ``ExerciseSlot`` row × this ``Week``) so Phase 3 can hydrate the designer
 from the database instead of fixtures. The designer's ``last`` column (what the
 athlete actually did last time, per lift) is derived from real logged sets here
-(athlete slice Phase 3); ``adj`` (a group plan's per-row per-athlete auto-adjust
-badge) is emitted from real ``PrescriptionOverride`` diffs (groups slice S1,
-Phase 3 — ``group_adjustments``).
+(athlete slice Phase 3).
 """
 
 from collections import Counter
@@ -70,8 +68,6 @@ def serialize_proposed_change(change):
     Matches the prototype's ``PROPOSED_CHANGES`` dicts (``id``/``kind``/``day``/
     ``title``/``before``/``after``/``rationale``/``honors``) so the same template
     renders real batches; ``status`` is added for the (Phase 2) approve gate.
-    ``member`` names the group member a per-athlete ``adjust`` targets (blank for
-    every other kind, which edits the shared row) so the coach sees who diverges.
     """
     return {
         "id": change.pk,
@@ -82,11 +78,6 @@ def serialize_proposed_change(change):
         "after": change.after,
         "rationale": change.rationale,
         "honors": change.honors,
-        "member": (
-            change.membership.relationship.athlete.display_name()
-            if change.membership_id
-            else ""
-        ),
         "status": change.status,
     }
 
@@ -125,10 +116,7 @@ def _agent_reply_for_batch(batch):
         )
         return message
 
-    changes = [
-        serialize_proposed_change(c)
-        for c in batch.changes.select_related("membership__relationship__athlete")
-    ]
+    changes = [serialize_proposed_change(c) for c in batch.changes.all()]
     message["text"] = batch.summary or (_NO_CHANGES_NOTE if not changes else "")
     message["changes"] = changes
     message["reviewUrl"] = (
@@ -660,178 +648,14 @@ def current_week(plan, week=None):
     return weeks[0] if weeks else None
 
 
-# -- per-athlete overrides: the ``adj`` overlay (groups slice S1, Phase 3) --
-#
-# A group plan is a *shared* program; each member can carry per-row auto-adjusts
-# (a ``PrescriptionOverride`` — a swap, a load %, a volume tweak). A member's
-# *effective* program = the shared template + their override diffs. The designer
-# renders these as a per-row ``adj`` badge driven by the real diffs.
-
-
-def resolve_prescription(cell, override):
-    """A member's effective row = the shared line-0 cell + their override diff.
-
-    Text-first interim (Phase 2a, until §3.1 removes the group subsystem in
-    2c): the shared prescription is one freeform ``text`` cell, so an override
-    resolves as text too. A volume override (``sets``/``reps``) recomposes
-    line 0 — the parse layer fills in whichever half the override leaves blank
-    from the shared text. A swap or note override becomes an ``extra_lines``
-    entry (per §2.6 a substitution/note is a freeform sub-line, not a field);
-    a ``load_pct`` adjust is rendered as a plain-language extra line rather
-    than scaling a token inside freeform text.
-
-    ``cell`` may be ``None`` (a defensive caller with no line-0 cell) —
-    resolves to a blank base.
-    """
-    base = {
-        "name": cell.name if cell is not None else "",
-        "text": cell.text if cell is not None else "",
-        "extra_lines": [],
-    }
-    if override is None or cell is None:
-        return base
-    from .parsing import parse_prescription
-
-    text = cell.text
-    if override.sets or override.reps:
-        parsed = parse_prescription(cell.text) or {}
-        sets = override.sets or parsed.get("sets") or "?"
-        reps = override.reps or parsed.get("reps") or "?"
-        text = f"{sets} x {reps}"
-    extra_lines = []
-    if override.swap_name:
-        extra_lines.append(override.swap_name)
-    if override.load_pct is not None and override.load_pct != 100:
-        extra_lines.append(f"{override.load_pct}% of prescribed load")
-    if override.note:
-        extra_lines.append(override.note)
-    return {
-        "name": override.swap_name or base["name"],
-        "text": text,
-        "extra_lines": extra_lines,
-    }
-
-
-def override_adj_label(override):
-    """A short badge for one member's adjust, e.g. "→ Box Squat · -10%".
-
-    Folds the present diff parts into a compact label: a swap (``→ name``), a load
-    delta (``-10%`` / ``+5%``, a no-op 100% omitted), and a volume tweak
-    (``2×8``). A note-only adjust (no swap/load/volume) marks as ``note`` so it
-    still surfaces. A truly empty override yields an empty string.
-    """
-    parts = []
-    if override.swap_name:
-        parts.append(f"→ {override.swap_name}")
-    if override.load_pct is not None and override.load_pct != 100:
-        delta = override.load_pct - 100
-        parts.append(f"{'+' if delta > 0 else '-'}{abs(delta)}%")
-    if override.sets or override.reps:
-        parts.append(f"{override.sets or '—'}×{override.reps or '—'}")
-    # A note-only adjust is still a real diff (``resolve_prescription`` applies it
-    # and the model stores it), so it must not vanish from the badge — mark it
-    # rather than emit an empty label that ``group_adjustments`` would skip.
-    if not parts and override.note:
-        parts.append("note")
-    return " · ".join(parts)
-
-
-def group_adjustments(plan, prescriptions):
-    """Map each prescription's pk to its members' adjust badges (group plans).
-
-    One query over the plan's overrides for the rendered prescriptions, scoped to
-    the group's *active* members (an ended member's adjust drops off, matching
-    ``active_member_users``). Returns ``{presc_id: {"adj", "adjusts"}}`` where
-    ``adj`` is a per-row summary — one member's ``"{initials} {label}"``, or
-    ``"N adjusts"`` for several — and ``adjusts`` the per-member breakdown. A row
-    with no (effective) adjust is simply absent from the map.
-    """
-    if not prescriptions:
-        return {}
-    overrides = (
-        models.PrescriptionOverride.objects.filter(
-            prescription_id__in=[p.pk for p in prescriptions],
-            membership__group=plan.group,
-            membership__relationship__coach=plan.group.coach,
-            membership__relationship__status=models.CoachAthlete.Status.ACTIVE,
-        )
-        .select_related("membership__relationship__athlete")
-        .order_by("membership__relationship__athlete__name")
-    )
-    by_presc = defaultdict(list)
-    for override in overrides:
-        label = override_adj_label(override)
-        if not label:
-            continue
-        name = override.membership.relationship.athlete.display_name()
-        by_presc[override.prescription_id].append(
-            {
-                "id": str(override.membership.relationship.athlete_id),
-                "name": name,
-                "initials": initials(name),
-                "label": label,
-                # The raw stored diff, so the in-grid editor can pre-fill the
-                # member's existing adjust (the label is display-only).
-                "swap": override.swap_name,
-                "load_pct": override.load_pct,
-                "sets": override.sets,
-                "reps": override.reps,
-                "note": override.note,
-            }
-        )
-    result = {}
-    for presc_id, adjusts in by_presc.items():
-        if len(adjusts) == 1:
-            summary = f"{adjusts[0]['initials']} {adjusts[0]['label']}"
-        else:
-            summary = f"{len(adjusts)} adjusts"
-        result[presc_id] = {"adj": summary, "adjusts": adjusts}
-    return result
-
-
-def serialize_group_identity(group):
-    """The group's identity for the designer's Group mode (S1 Phase 2).
-
-    What the designer hydrates Group mode from — the group name/focus, its active
-    members (avatars + each one's contraindication flags), and the unique flags
-    folded across the group. Mirrors ``presenters.group_detail`` but in the JSON
-    shape the Alpine front-end reads, so Group mode renders off real rows instead
-    of the prototype's hardcoded squad. Members are scoped to active links by
-    ``active_member_users``.
-    """
-    members = group.active_member_users()
-    member_data = []
-    flags = set()
-    for user in members:
-        labels = [c.label for c in user.contraindications.all() if c.active]
-        flags.update(labels)
-        name = user.display_name()
-        member_data.append(
-            {
-                "id": str(user.pk),
-                "name": name,
-                "initials": initials(name),
-                "flags": labels,
-            }
-        )
-    return {
-        "id": group.pk,
-        "name": group.name,
-        "focus": group.focus or "General",
-        "members": member_data,
-        "member_count": len(member_data),
-        "flags": sorted(flags),
-    }
-
-
 def serialize_athlete_identity(plan):
     """The individual plan's athlete identity for the designer left rail (Phase 5).
 
     Replaces the prototype's hardcoded athlete chrome ("Maya Okonkwo" + invented
     contraindications) with the *real* athlete — their name/initials, the plan's
     goal, and their active contraindications (the same global injuries the agent
-    grounds on, so the coach sees the constraints while programming). A group plan
-    has no single athlete (it carries ``group`` instead), so this returns None.
+    grounds on, so the coach sees the constraints while programming). A plan with
+    no relationship (no athlete) returns None.
     """
     athlete = plan.athlete
     if athlete is None:
@@ -881,9 +705,7 @@ def serialize_plan(plan, week=None):
     """Serialize ``plan`` to the designer's ``program``/``weeks``/``phases`` shape.
 
     ``week`` optionally pins which week populates ``program``/``weeks``;
-    otherwise the flagged current week (or the plan's first) is used. A group plan
-    (rooted at a ``MesoGroup``) carries a ``group`` identity payload and skips the
-    athlete-scoped "last time" column; an individual plan carries ``group: None``.
+    otherwise the flagged current week (or the plan's first) is used.
     """
     open_week = current_week(plan, week)
     current_mesocycle = open_week.mesocycle if open_week else None
@@ -892,44 +714,32 @@ def serialize_plan(plan, week=None):
         # Soft delete (designer framework Phase 0): only live sessions surface
         # in the grid, and — matching ``serialize_session`` — only their live
         # cells (``session.cells()``, P0 fixed-lineup cutover) feed the "last
-        # time" / 1RM / adjust overlays below.
+        # time" / 1RM overlays below.
         sessions = list(open_week.sessions.filter(deleted_at__isnull=True))
         program = [serialize_session(s) for s in sessions]
         prescriptions = [c for s in sessions for c in s.cells()]
-        if not plan.is_group:
-            # Light up the "last time" column from real logs (athlete Phase 3):
-            # one query over the plan's logged sets, mapped onto the rendered
-            # prescriptions. A group plan has no single athlete, so no "last".
-            last_map = last_logged_labels(plan, prescriptions, plan.unit)
-            # The athlete's persisted, log-derived 1RM per lift, so the coach sees
-            # what a %1RM target translates to when prescribing one. Local import:
-            # ``one_rm`` imports this module. A group plan has no single athlete.
-            from .one_rm import one_rm_values
+        # Light up the "last time" column from real logs (athlete Phase 3):
+        # one query over the plan's logged sets, mapped onto the rendered
+        # prescriptions.
+        last_map = last_logged_labels(plan, prescriptions, plan.unit)
+        # The athlete's persisted, log-derived 1RM per lift, so the coach sees
+        # what a %1RM target translates to when prescribing one. Local import:
+        # ``one_rm`` imports this module.
+        from .one_rm import one_rm_values
 
-            one_rm_map = one_rm_values(plan.athlete, prescriptions, plan.unit)
-            for session_data in program:
-                for exercise in session_data["exercises"]:
-                    label = last_map.get(exercise["id"])
-                    if label:
-                        exercise["last"] = label
-                    one_rm = one_rm_map.get(exercise["id"])
-                    if one_rm is not None:
-                        exercise["one_rm"] = _fmt_num(one_rm.value)
-                        # The coach designer distinguishes a log-derived estimate
-                        # from a value the coach/athlete set, and repaints it after
-                        # an edit (1RM Phase 3 — the editable %1RM badge).
-                        exercise["one_rm_source"] = one_rm.source
-        else:
-            # A group plan instead carries the per-athlete adjust overlay (groups
-            # Phase 3): a per-row ``adj`` badge driven by the members' real
-            # override diffs (one query over the plan's overrides).
-            adj_map = group_adjustments(plan, prescriptions)
-            for session_data in program:
-                for exercise in session_data["exercises"]:
-                    entry = adj_map.get(exercise["id"])
-                    if entry:
-                        exercise["adj"] = entry["adj"]
-                        exercise["adjusts"] = entry["adjusts"]
+        one_rm_map = one_rm_values(plan.athlete, prescriptions, plan.unit)
+        for session_data in program:
+            for exercise in session_data["exercises"]:
+                label = last_map.get(exercise["id"])
+                if label:
+                    exercise["last"] = label
+                one_rm = one_rm_map.get(exercise["id"])
+                if one_rm is not None:
+                    exercise["one_rm"] = _fmt_num(one_rm.value)
+                    # The coach designer distinguishes a log-derived estimate
+                    # from a value the coach/athlete set, and repaints it after
+                    # an edit (1RM Phase 3 — the editable %1RM badge).
+                    exercise["one_rm_source"] = one_rm.source
         week_strip = [
             serialize_week(w)
             for w in current_mesocycle.weeks.filter(deleted_at__isnull=True)
@@ -950,9 +760,7 @@ def serialize_plan(plan, week=None):
             "status": plan.status,
             "unit": plan.unit,
         },
-        "group": serialize_group_identity(plan.group) if plan.is_group else None,
-        # The real athlete identity for an individual plan's left rail (Phase 5);
-        # ``None`` for a group plan, which renders off ``group`` instead.
+        # The real athlete identity for the designer's left rail (Phase 5).
         "athlete": serialize_athlete_identity(plan),
         "program": program,
         "weeks": week_strip,
@@ -1000,7 +808,7 @@ def serialize_mesocycle_grid(mesocycle):
     own); every live (slot × week) pair should have exactly one, built from a
     single query grouped in Python to avoid N+1 over the block.
 
-    Issue #455 phase A5: ``plan``/``group``/``athlete``/``phases`` join the
+    Issue #455 phase A5: ``plan``/``athlete``/``phases`` join the
     payload (and ``weeks[].vol``/``.inten`` too) so the front-end can retire
     the separate one-week ``serialize_plan``/``plan_data`` owner and hydrate
     the top bar / left rail / block view straight off this grid — the same
@@ -1044,8 +852,8 @@ def serialize_mesocycle_grid(mesocycle):
     # (slot, week) into ``{line-0 cell, sub-line list}`` so each row's dense
     # ``cells`` map is built without a per-row lookup.
     # ``select_related("exercise_slot")`` keeps the resolving
-    # ``.exercise_id``/``.name`` property reads (adj keying below) from being
-    # an N+1 (one query per cell).
+    # ``.exercise_id``/``.name`` property reads from being an N+1 (one query
+    # per cell).
     cells_by_key = {}
     lines_by_key = defaultdict(list)
     for cell in (
@@ -1059,13 +867,6 @@ def serialize_mesocycle_grid(mesocycle):
             cells_by_key[(cell.exercise_slot_id, cell.week_id)] = cell
         else:
             lines_by_key[(cell.exercise_slot_id, cell.week_id)].append(cell)
-
-    # A GROUP plan carries the per-athlete adjust overlay on each cell (P5): the
-    # same per-row ``adj`` badge ``serialize_plan``'s single-week ``program``
-    # shows, driven by the members' real override diffs — one query over the
-    # block's line-0 cells, keyed by prescription pk. An individual plan has no
-    # members, so its cells get no ``adj`` keys.
-    adj_map = group_adjustments(plan, cells_by_key.values()) if plan.is_group else {}
 
     days = []
     for slot in session_slots:
@@ -1090,14 +891,6 @@ def serialize_mesocycle_grid(mesocycle):
                         for lc in lines_by_key.get((exercise_slot.pk, week.pk), [])
                     ],
                 }
-                # The per-athlete adjust overlay (group plans only) — set exactly
-                # as ``serialize_plan``'s adj-merge does: only when the cell has an
-                # effective adjust. An individual plan's ``adj_map`` is empty, so
-                # its cells never carry ``adj``/``adjusts``.
-                entry = adj_map.get(cell.pk)
-                if entry:
-                    cell_data["adj"] = entry["adj"]
-                    cell_data["adjusts"] = entry["adjusts"]
                 cells[str(week.pk)] = cell_data
             rows.append(
                 {
@@ -1157,9 +950,6 @@ def serialize_mesocycle_grid(mesocycle):
             "status": plan.status,
             "unit": plan.unit,
         },
-        "group": serialize_group_identity(plan.group) if plan.is_group else None,
-        # None for a group plan, which renders off "group" instead — mirrors
-        # serialize_plan's athlete/group split.
         "athlete": serialize_athlete_identity(plan),
         "phases": phases,
         "mesocycle": {

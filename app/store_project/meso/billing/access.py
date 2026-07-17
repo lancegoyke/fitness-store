@@ -222,13 +222,13 @@ def suspended_athlete_ids(coach):
 def can_edit_plan(plan):
     """Per-plan edit/deliver gate (D6) — may this plan be mutated or delivered?
 
-    The per-athlete refinement of ``can_edit`` (S6 Phase 5): an **individual** plan
-    is frozen only when *its own* relationship is soft-suspended, so an over-limit
-    coach keeps full control of their oldest ``FREE_SEAT_LIMIT`` athletes' plans and
-    is blocked only on the suspended ones. A **group** plan serves many athletes
-    through no single relationship, so it falls back to the coarse coach-wide freeze
-    (``can_edit``). Defended at the mutating endpoints, not just the UI.
+    The per-athlete refinement of ``can_edit`` (S6 Phase 5): a plan is frozen
+    only when *its own* relationship is soft-suspended, so an over-limit coach
+    keeps full control of their oldest ``FREE_SEAT_LIMIT`` athletes' plans and
+    is blocked only on the suspended ones. Defended at the mutating endpoints,
+    not just the UI. A relationship-less plan (none exist today; templates may
+    reintroduce them) falls back to the coarse coach-wide freeze.
     """
-    if plan.relationship_id is None:  # a group plan — no single link to keep live
+    if plan.relationship_id is None:
         return can_edit(plan.coach)
     return plan.relationship_id not in suspended_athlete_ids(plan.coach)

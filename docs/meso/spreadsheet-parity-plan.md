@@ -1,6 +1,6 @@
 # Meso — spreadsheet parity by simplification
 
-**Status:** Phase 2b (keyboard flow) built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16
+**Status:** Phase 2c (groups removed → batch-deliver) built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16
 **Owner:** Lance
 **North star:** make writing a program in Meso as fast and frictionless as writing it
 in a Google Sheet — keyboard-driven, freeform, one grid — then extend to tracking,
@@ -336,7 +336,24 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
      stack (line 0 + sub-lines, longer old lines blanked); single-line paste
      stays native. No backend changes — appends reuse `session_add_exercise`,
      paste reuses `prescription_patch`/`cell_line_write`.
-   - 2c **Remove `MesoGroup`** → batch-deliver + client list.
+   - 2c **Remove `MesoGroup`** → batch-deliver + client list. **✅ Built
+     2026-07-16** (branch `meso/2c-remove-mesogroup`): the whole group
+     subsystem is gone — `MesoGroup`/`GroupMembership`/`PrescriptionOverride`,
+     `Plan.group`/`source_group` + the XOR/singleton constraints,
+     `deliver_block`/`sync_delivered_plan`, the override endpoint + designer
+     override editor, the group designer mode (the island is single-mode now),
+     the group agent (`Kind.ADJUST`, `Trigger.GROUP`, `_group_context`,
+     member framing), the roster Groups card, the demo group segment, and the
+     "groups" tour step (migration `0040`; shared group plans deleted by a
+     data step, a member's materialized copy simply survives as an ordinary
+     individual plan). **Replaced by batch-deliver:** `Plan.duplicate_for`
+     deep-copies the live tree (whole line stacks, tempo/rest/note, tags,
+     `is_current` mirrored, `delivered_at` reset) and the deliver screen
+     offers the coach's other clients as checkboxes —
+     `plan_batch_deliver` fans out one independent, live-editable ACTIVE copy
+     per pick, stamped + snapshotted + notified exactly like an individual
+     deliver. The saved client list (one-click class deliver) is deferred
+     until real use demands it.
    - 2d **Deliver → live + notify** — repurpose snapshots.
    - 2e **UI cleanup** — strip the chrome the above obsoletes.
 3. **Phase 3 — Import + validate.** Importer over 3–5 templates → surface UX
@@ -352,7 +369,8 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
 **Status 2026-07-16:** D1, D2, D4, D5, D6 **confirmed** (leans accepted). D3 **resolved**
 as a separate sub-row (below).
 
-- **D1 — Remove `MesoGroup`? → CONFIRMED yes.** Batch-deliver + optional client list.
+- **D1 — Remove `MesoGroup`? → CONFIRMED yes; built 2026-07-16 (2c).**
+  Batch-deliver shipped; the optional saved client list is deferred.
 - **D2 — Tempo & Rest → CONFIRMED columns** (per-exercise, not per-week).
 - **D3 — RPE → RESOLVED: separate sub-row.** Lance types RPE in the cell **directly
   beneath** the sets/reps cell (a per-week sub-row reached by arrow-down), not inline.

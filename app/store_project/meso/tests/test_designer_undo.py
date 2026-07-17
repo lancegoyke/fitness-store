@@ -25,7 +25,7 @@ Covers, per the Phase 1 spec:
 - snapshot spot-checks (pre-mutation prescription values; the soft-deleted
   week's pk);
 - undo/redo round trips for a cell edit, a day delete (logs survive), an added
-  exercise (same pk on redo), a per-athlete override, and ``week_set_current``;
+  exercise (same pk on redo), and ``week_set_current``;
 - batch_apply records ONE action for the whole batch and undo reverts it all;
 - redo invalidation on a fresh mutation; the exact empty-stack error strings;
 - the 50-row history cap (oldest trimmed);
@@ -41,11 +41,8 @@ from django.urls import reverse
 
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
-from store_project.meso.factories import GroupMembershipFactory
-from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
-from store_project.meso.factories import MesoGroupFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import ProposedChangeFactory
 from store_project.meso.factories import SessionLogFactory
@@ -55,7 +52,6 @@ from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
 from store_project.meso.models import PlanAction
 from store_project.meso.models import Prescription
-from store_project.meso.models import PrescriptionOverride
 from store_project.meso.models import ProposedChange
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Week
@@ -88,17 +84,6 @@ def seed_plan(coach=None, athlete=None):
     session = day(week, day_number=1, name="Lower")
     cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return plan, week, session, cell
-
-
-def seed_group_plan():
-    """A minimal owned group plan with one current week → session → prescription cell."""
-    group = MesoGroupFactory()
-    plan = GroupPlanFactory(group=group, title="Squad Block", status=Plan.Status.ACTIVE)
-    meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
-    session = day(week, day_number=1, name="Lower")
-    cell = presc(session, name="Box Squat")
-    return group, plan, week, session, cell
 
 
 def _two_week_plan():
@@ -584,47 +569,6 @@ class TestBatchApplyUndo:
 
 
 # ---------------------------------------------------------------------------
-# prescription_override — reconciled by natural key
-# ---------------------------------------------------------------------------
-
-
-class TestOverrideUndoRedo:
-    def test_undo_drops_the_override_and_redo_restores_the_same_values(self, client):
-        group, plan, week, session, cell = seed_group_plan()
-        membership = GroupMembershipFactory(group=group)
-        athlete_id = str(membership.relationship.athlete_id)
-        client.force_login(group.coach)
-
-        resp = post_json(
-            client,
-            reverse(
-                "meso:api_prescription_override",
-                kwargs={"plan_id": plan.pk, "pk": cell.pk},
-            ),
-            {"athlete": athlete_id, "swap": "Box Squat Variant", "load_pct": 90},
-        )
-        assert resp.status_code == 200
-        assert PrescriptionOverride.objects.filter(
-            membership=membership, prescription=cell
-        ).exists()
-        assert undo_actions(plan).count() == 1
-
-        resp = client.post(undo_url(plan))
-        assert resp.status_code == 200
-        assert not PrescriptionOverride.objects.filter(
-            membership=membership, prescription=cell
-        ).exists()
-
-        resp = client.post(redo_url(plan))
-        assert resp.status_code == 200
-        override = PrescriptionOverride.objects.get(
-            membership=membership, prescription=cell
-        )
-        assert override.swap_name == "Box Squat Variant"
-        assert override.load_pct == 90
-
-
-# ---------------------------------------------------------------------------
 # week_set_current — undo restores the previous pointer
 # ---------------------------------------------------------------------------
 
@@ -809,11 +753,11 @@ class TestSerializePlanHistory:
 class TestPartialResponseHistory:
     """Row-level mutation replies must carry refreshed ``history``.
 
-    ``prescription_patch`` / ``session_add_exercise`` / ``session_add`` /
-    ``prescription_override`` reply with row payloads, not the full plan
-    envelope — but they still record an undo action, so without a ``history``
-    key the client's undo affordance stays stale (a cell edit on a fresh page
-    would never enable the Undo button until the next full re-serialize).
+    ``prescription_patch`` / ``session_add_exercise`` / ``session_add``
+    reply with row payloads, not the full plan envelope — but they still
+    record an undo action, so without a ``history`` key the client's undo
+    affordance stays stale (a cell edit on a fresh page would never enable
+    the Undo button until the next full re-serialize).
     """
 
     def test_prescription_patch_reply_includes_history(self, client):
@@ -842,21 +786,6 @@ class TestPartialResponseHistory:
         assert resp.status_code == 201
         assert resp.json()["history"]["can_undo"] is True
 
-    def test_override_reply_includes_history(self, client):
-        group, plan, week, session, cell = seed_group_plan()
-        membership = GroupMembershipFactory(group=group)
-        client.force_login(group.coach)
-        resp = post_json(
-            client,
-            reverse(
-                "meso:api_prescription_override",
-                kwargs={"plan_id": plan.pk, "pk": cell.pk},
-            ),
-            {"athlete": str(membership.relationship.athlete_id), "load_pct": 90},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["history"]["can_undo"] is True
-
 
 class TestActionLabelClamp:
     def test_long_exercise_names_produce_a_bounded_label(self, client):
@@ -875,38 +804,3 @@ class TestActionLabelClamp:
         assert resp.status_code == 200
         label = undo_actions(plan).order_by("-seq").first().label
         assert len(label) <= 80
-
-
-class TestRestoreAfterMembershipRemoved:
-    def test_undo_skips_overrides_whose_membership_is_gone(self, client):
-        # A membership hard-deletes when an athlete leaves the group (its
-        # overrides cascade away with it). A snapshot recorded before that must
-        # still restore — the departed member's override is skipped, not
-        # recreated (an IntegrityError-500 here would brick the plan's undo).
-        group, plan, week, session, cell = seed_group_plan()
-        membership = GroupMembershipFactory(group=group)
-        client.force_login(group.coach)
-        resp = post_json(
-            client,
-            reverse(
-                "meso:api_prescription_override",
-                kwargs={"plan_id": plan.pk, "pk": cell.pk},
-            ),
-            {"athlete": str(membership.relationship.athlete_id), "load_pct": 90},
-        )
-        assert resp.status_code == 200
-
-        # A later edit snapshots state WITH the override in it…
-        original_text = cell.text
-        resp = patch(client, plan, cell, text="3 x 10, RPE 7, 80")
-        assert resp.status_code == 200
-        # …then the member leaves (membership + its overrides hard-delete).
-        membership.delete()
-
-        # Undo of that edit restores the text — and quietly skips the
-        # departed member's override instead of 500ing on the dead FK.
-        resp = client.post(undo_url(plan))
-        assert resp.status_code == 200
-        cell.refresh_from_db()
-        assert cell.text == original_text
-        assert not PrescriptionOverride.objects.filter(prescription=cell).exists()

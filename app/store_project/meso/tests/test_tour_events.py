@@ -136,7 +136,6 @@ class TestRecordHelpers:
         assert tour.step_key_for_segment("program") == "designer"
         assert tour.step_key_for_segment("delivery") == "deliver"
         assert tour.step_key_for_segment("log") == "results"
-        assert tour.step_key_for_segment("group") == "groups"
         assert tour.step_key_for_segment("bogus") == ""
 
 
@@ -577,7 +576,7 @@ class TestPlanCreateOptIn:
         from store_project.meso.agent import client as client_module
 
         link = CoachAthleteFactory()
-        tour.set_step(CoachProfile.objects.create(user=link.coach), 6)  # agent
+        tour.set_step(CoachProfile.objects.create(user=link.coach), 5)  # agent
         monkeypatch.setattr(
             client_module, "get_default_client", lambda: _FakeDraftClient()
         )
@@ -598,7 +597,7 @@ class TestPlanCreateOptIn:
     # never taken, so the action shape doesn't match the step (Codex review nit).
     def test_organic_plain_post_while_touring_on_agent_records_nothing(self, client):
         link = CoachAthleteFactory()
-        tour.set_step(CoachProfile.objects.create(user=link.coach), 6)  # agent
+        tour.set_step(CoachProfile.objects.create(user=link.coach), 5)  # agent
         client.force_login(link.coach)
 
         # No draft, no tour=1 — a manual "New program" while parked on agent.

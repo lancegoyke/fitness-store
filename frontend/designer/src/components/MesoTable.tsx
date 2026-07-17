@@ -51,7 +51,8 @@
 // %1RM badge/editor (RowOneRmEditor — a % load is just text now, no typed
 // load to resolve) and the one-week swap badge/menu (a substitution is
 // sub-line text, written like any other line). skip/unskip, fill-across-
-// weeks, add-this-week, move-to-day and the group adjust badge all stay.
+// weeks, add-this-week and move-to-day all stay. (The per-cell group
+// adjust badge went with the group subsystem itself.)
 // The table's own coachmark landed in issue #455 phase A4 (re-authored
 // copy, not a mechanical port of WeekGrid.tsx's "grid" mark — see this
 // file's coachmarkVisible/dismissCoachmark prop header).
@@ -69,7 +70,7 @@ import {
 } from "@dnd-kit/core";
 import type { CollisionDetection, DragEndEvent, DragStartEvent, KeyboardCoordinateGetter } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, GroupIdentity, MesoGrid } from "../lib/api";
+import type { GridCell, GridDay, GridHistory, GridRow, GridWeek, MesoGrid } from "../lib/api";
 import type { GridCellPatch, GridRowPatch, Id } from "../hooks/useGrid";
 import { useTableNav, tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
 import type { UseTableNavResult } from "../hooks/useTableNav";
@@ -80,13 +81,6 @@ export interface MesoTableProps {
   grid: MesoGrid | null;
   history: GridHistory;
   busy: boolean;
-  // P5 group: the plan's group identity (null for an individual plan). When
-  // it has members, every non-skipped cell gains a per-athlete adjust badge
-  // (mirroring ExerciseRow's group "+ adjust"/`ex.adj` badge on the one-week
-  // path); clicking it hands (row, cell) up so DesignerRoot can open the
-  // shared override editor scoped to that cell.
-  group: GroupIdentity | null;
-  onOpenOverride(row: GridRow, cell: GridCell): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   // Phase 2a: upsert one freeform (week × line) sub-line of a row's stack —
   // addressed by slot/week/line, not pk, since the line may not exist yet
@@ -705,13 +699,11 @@ interface TableRowProps {
   days: GridDay[];
   weeks: GridWeek[];
   busy: boolean;
-  showAdjust: boolean;
   tableNav: UseTableNavResult;
   rowArmed: boolean;
   onArmRow(): void;
   onConfirmRemoveRow(): void;
   onCancelRemoveRow(): void;
-  onOpenOverride(row: GridRow, cell: GridCell): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
@@ -733,13 +725,11 @@ function TableRow({
   days,
   weeks,
   busy,
-  showAdjust,
   tableNav,
   rowArmed,
   onArmRow,
   onConfirmRemoveRow,
   onCancelRemoveRow,
-  onOpenOverride,
   onPatchCell,
   onWriteCellLine,
   onPatchRowColumns,
@@ -869,22 +859,6 @@ function TableRow({
                   onPatchCell={onPatchCell}
                   onWriteCellLine={onWriteCellLine}
                 />
-                {showAdjust && (
-                  <button
-                    type="button"
-                    data-testid={`cell-override-badge-${cell.prescription_id}`}
-                    data-hover="brighten"
-                    className="meso-adjust-badge"
-                    onClick={() => onOpenOverride(row, cell)}
-                    title={
-                      cell.adj
-                        ? (cell.adjusts || []).map((a) => (a.name || "") + ": " + (a.label || "")).join("\n")
-                        : "Set a per-athlete adjust"
-                    }
-                  >
-                    {cell.adj ? cell.adj : <span className="meso-adjust-empty">+ adjust</span>}
-                  </button>
-                )}
                 <CellActions
                   cell={cell}
                   busy={busy}
@@ -911,12 +885,10 @@ interface TableDayBlockProps {
   days: GridDay[];
   weeks: GridWeek[];
   busy: boolean;
-  showAdjust: boolean;
   tableNav: UseTableNavResult;
   isArmed(type: ArmedKind, id: Id): boolean;
   arm(type: ArmedKind, id: Id): void;
   disarm(): void;
-  onOpenOverride(row: GridRow, cell: GridCell): void;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
   onPatchRowColumns(exerciseSlotId: Id, patch: GridRowPatch): void;
@@ -941,12 +913,10 @@ function TableDayBlock({
   days,
   weeks,
   busy,
-  showAdjust,
   tableNav,
   isArmed,
   arm,
   disarm,
-  onOpenOverride,
   onPatchCell,
   onWriteCellLine,
   onPatchRowColumns,
@@ -1065,7 +1035,6 @@ function TableDayBlock({
                   days={days}
                   weeks={weeks}
                   busy={busy}
-                  showAdjust={showAdjust}
                   tableNav={tableNav}
                   rowArmed={isArmed("exercise", row.exercise_slot_id)}
                   onArmRow={() => arm("exercise", row.exercise_slot_id)}
@@ -1074,7 +1043,6 @@ function TableDayBlock({
                     disarm();
                   }}
                   onCancelRemoveRow={disarm}
-                  onOpenOverride={onOpenOverride}
                   onPatchCell={onPatchCell}
                   onWriteCellLine={onWriteCellLine}
                   onPatchRowColumns={onPatchRowColumns}
@@ -1111,8 +1079,6 @@ export function MesoTable(props: MesoTableProps) {
     grid,
     history,
     busy,
-    group,
-    onOpenOverride,
     onPatchCell,
     onWriteCellLine,
     onPatchRowColumns,
@@ -1139,10 +1105,6 @@ export function MesoTable(props: MesoTableProps) {
   const isArmed = (type: ArmedKind, id: Id) => !!armed && armed.type === type && armed.id === id;
   const arm = (type: ArmedKind, id: Id) => setArmed({ type, id });
   const disarm = () => setArmed(null);
-
-  // P5 group: the per-cell adjust badge only exists on a GROUP plan with
-  // members — an individual plan carries no `group`, so no cell ever shows it.
-  const showAdjust = !!(group && group.members.length);
 
   // Rules of Hooks: called unconditionally, before the `!grid` early return
   // below — useTableNav tolerates a null grid the same way (anchor stays
@@ -1283,12 +1245,10 @@ export function MesoTable(props: MesoTableProps) {
               days={grid.days}
               weeks={grid.weeks}
               busy={busy}
-              showAdjust={showAdjust}
               tableNav={tableNav}
               isArmed={isArmed}
               arm={arm}
               disarm={disarm}
-              onOpenOverride={onOpenOverride}
               onPatchCell={onPatchCell}
               onWriteCellLine={onWriteCellLine}
               onPatchRowColumns={onPatchRowColumns}

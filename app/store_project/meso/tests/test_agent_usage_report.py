@@ -5,7 +5,7 @@ this is the read side. ``billing/agent_usage_report.build_report`` rolls a calen
 month's non-eval runs up into per-coach cost-vs-revenue margins, a per-client
 breakdown, and roll-ups by model / trigger / billing tier; the
 ``meso_agent_usage_report`` command renders it. Covers the month window, the
-margin math, the COGS-vs-CAC tier split, group-vs-athlete attribution, the
+margin math, the COGS-vs-CAC tier split, per-athlete attribution, the
 eval-exclusion, and the unknown-model (unpriced) path. See
 ``docs/meso/agent-usage-plan.md``.
 """
@@ -24,7 +24,6 @@ from store_project.meso.billing import agent_usage_report as report_mod
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachSubscriptionFactory
-from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachSubscription
@@ -131,24 +130,7 @@ class TestAttribution:
         report = report_mod.build_report(start=start, end=end)
         (coach,) = report.coaches
         (client,) = coach.clients
-        assert client.is_group is False
         assert client.label == plan.relationship.athlete.display_name()
-
-    def test_group_run_attributes_to_the_group(self):
-        start, end = report_mod.month_bounds(2026, 6)
-        plan = GroupPlanFactory()
-        _at(
-            start + timedelta(days=1),
-            plan=plan,
-            coach=plan.group.coach,
-            trigger=AgentProposalBatch.Trigger.GROUP,
-        )
-
-        report = report_mod.build_report(start=start, end=end)
-        (coach,) = report.coaches
-        (client,) = coach.clients
-        assert client.is_group is True
-        assert client.label == f"Group: {plan.group.name}"
 
     def test_two_runs_for_one_athlete_collapse_to_one_client(self):
         start, end = report_mod.month_bounds(2026, 6)

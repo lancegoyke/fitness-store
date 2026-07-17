@@ -1,23 +1,17 @@
-// Specs for TopBar (CONTRACT.md "TopBar") — mode segmented control, identity
-// chip, cycle label, preview/review/deliver actions; individual-only
-// review+deliver vs. the group "Deliver to all · soon" chip (ported 1:1 from
-// designer.html's x-show conditionals, lines ~92-97).
+// Specs for TopBar (CONTRACT.md "TopBar") — identity chip, cycle label,
+// preview/review/deliver actions. (The individual/group mode segmented
+// control and the group "Deliver to all · soon" chip went with the group
+// subsystem — the designer is single-mode now.)
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TopBar } from "./TopBar";
-import type { AthleteIdentity, GroupIdentity } from "../lib/api";
+import type { AthleteIdentity } from "../lib/api";
 
 const athlete: AthleteIdentity = { name: "Maya Okonkwo", initials: "MO", goal: "Strength", contraindications: [] };
-const group: GroupIdentity = { id: 3, name: "Squad", member_count: 2, members: [], flags: [] };
 
 function baseProps(overrides: Partial<Parameters<typeof TopBar>[0]> = {}) {
   return {
-    mode: "individual" as const,
-    onSetMode: vi.fn(),
-    isIndividual: true,
-    isGroup: false,
     athlete,
-    group: null,
     cycleLabel: "Hypertrophy · Wk 2 / 4",
     onPreviewAsAthlete: vi.fn(),
     deliverHref: "/meso/deliver/7/?week=2",
@@ -26,38 +20,20 @@ function baseProps(overrides: Partial<Parameters<typeof TopBar>[0]> = {}) {
 }
 
 describe("TopBar", () => {
-  it("renders the individual identity and mode buttons", () => {
+  it("renders the athlete identity chip", () => {
     render(<TopBar {...baseProps()} />);
     expect(screen.getByText("Maya Okonkwo")).toBeInTheDocument();
-    expect(screen.getByTestId("mode-individual-button")).toBeInTheDocument();
-    expect(screen.getByTestId("mode-group-button")).toBeInTheDocument();
   });
 
-  it("calls onSetMode with the clicked segment", async () => {
-    const user = userEvent.setup();
-    const onSetMode = vi.fn();
-    render(<TopBar {...baseProps({ onSetMode })} />);
-    await user.click(screen.getByTestId("mode-group-button"));
-    expect(onSetMode).toHaveBeenCalledWith("group");
+  it("renders no identity chip when athlete is null", () => {
+    render(<TopBar {...baseProps({ athlete: null })} />);
+    expect(screen.queryByText("Maya Okonkwo")).not.toBeInTheDocument();
   });
 
-  it("shows Review changes + Deliver for an individual plan, not the group chip", () => {
+  it("shows Review changes + Deliver", () => {
     render(<TopBar {...baseProps()} />);
     expect(screen.getByTestId("review-link")).toBeInTheDocument();
     expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=2");
-    expect(screen.queryByText(/Deliver to all/)).not.toBeInTheDocument();
-  });
-
-  it("shows the 'Deliver to all · soon' chip for a group plan, hiding review+deliver", () => {
-    render(
-      <TopBar
-        {...baseProps({ mode: "group", isIndividual: false, isGroup: true, athlete: null, group })}
-      />,
-    );
-    expect(screen.getByText(/Deliver to all/)).toBeInTheDocument();
-    expect(screen.queryByTestId("review-link")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("deliver-link")).not.toBeInTheDocument();
-    expect(screen.getByText("Squad")).toBeInTheDocument();
   });
 
   it("calls onPreviewAsAthlete when the preview button is clicked", async () => {

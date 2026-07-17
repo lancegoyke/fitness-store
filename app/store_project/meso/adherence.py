@@ -20,14 +20,11 @@ from .models import Week
 def link_latest_delivered_week(link):
     """The most recently delivered week across *all* of this link's plans.
 
-    Spans both the coach's individual plan and any group-delivery snapshot
-    (``source_group`` set) rooted at this relationship — both are work this coach
-    delivered to the athlete, so adherence should reflect whichever week was
-    delivered most recently. **Archived** plans are excluded (matching
-    ``working_plan`` / ``athlete_home``): removing an athlete from a group
-    archives their materialized snapshot while the link stays active, and the
-    athlete can no longer see or log it, so it must not drive the meter. Returns
-    ``None`` when the coach hasn't delivered anything live to this athlete yet.
+    Adherence reflects whichever week was delivered most recently. **Archived**
+    plans are excluded (matching ``working_plan`` / ``athlete_home``): an
+    archived plan's weeks are ones the athlete can no longer see or log, so
+    they must not drive the meter. Returns ``None`` when the coach hasn't
+    delivered anything live to this athlete yet.
     """
     return (
         Week.objects.filter(
@@ -90,10 +87,9 @@ def recent_logs(coach, *, limit=8):
 
     Scoped to the coach's *active* links (an ended relationship's history drops
     off the feed, matching the roster's athlete list), to non-**archived** plans
-    (a removed group member's archived snapshot must not resurface), and to
-    *done* logs only — the feed answers "who finished a session," not "who opened
-    one." Spans individual and group-delivered sessions alike, since both root at
-    the athlete's relationship with the coach. Ordered by when the log was
+    (an archived plan's sessions must not resurface), and to *done* logs only —
+    the feed answers "who finished a session," not "who opened
+    one." Ordered by when the log was
     written (``created_at``), so re-saving an old workout surfaces as fresh
     activity and the order never depends on the nullable workout ``date``. The
     log's ``athlete`` is tied to the plan's own athlete: the write path always

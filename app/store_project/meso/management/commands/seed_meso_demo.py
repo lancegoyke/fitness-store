@@ -12,11 +12,7 @@ database renders the roster, athlete profile, and designer from actual data:
 - one sample **Plan** for Maya — the full fixed-lineup hierarchy
   (``Mesocycle → SessionSlot → ExerciseSlot`` identity + ``Week → Prescription``
   per-week cells) reproducing the designer's fixture grid, so ``serialize_plan``
-  round-trips it straight into the designer;
-- one demo **MesoGroup** (groups slice S1) with three of the athletes as
-  members + a **shared program** rooted at the group (Phase 2a) carrying a couple
-  of per-athlete **auto-adjusts** (Phase 3), so the roster's *Groups* card and the
-  group designer (including its ``adj`` badge) all render off real rows.
+  round-trips it straight into the designer.
 
 The command is **idempotent**: re-running ``get_or_create``s every row, so it
 never duplicates. ``--delete`` tears the demo back down (the demo athletes and,
@@ -44,7 +40,6 @@ from store_project.meso.models import Contraindication
 from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
-from store_project.meso.models import MesoGroup
 from store_project.meso.models import Plan
 from store_project.meso.models import Prescription
 from store_project.meso.models import Session
@@ -296,15 +291,6 @@ SAMPLE_LOG = {
 }
 
 
-# A demo group (groups slice S1): three of the athletes who train together, so a
-# fresh DB renders the roster's *Groups* card off real rows. Phase 2a also gives
-# it a shared program (rooted at the group); per-athlete auto-adjusts are Phase 3.
-GROUP = {
-    "name": "Tue/Thu Strength Squad",
-    "focus": "Strength",
-    "member_slugs": ["devon", "priya", "marcus"],
-}
-
 # A pending email invite (N4) so the roster's onboarding surface is visible — a
 # person the coach invited who hasn't claimed an account yet.
 PENDING_INVITE_EMAIL = "prospect@example.com"
@@ -475,7 +461,6 @@ class Command(BaseCommand):
             if spec["slug"] == "maya":
                 plan = self._ensure_plan(coach, athlete)
                 self._ensure_log(athlete, plan, today)
-        self._ensure_group(coach)
         self._ensure_pending_invite(coach)
         self._ensure_pending_request(coach)
         self._ensure_past_athlete(coach, today)
@@ -483,18 +468,14 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"✓ Meso demo seeded for {coach.email}: "
-                f"{len(ATHLETES)} athletes, 1 group (+ shared program), "
-                "1 sample plan, 1 logged session, 1 pending invite, "
-                "1 pending request, 1 past athlete."
+                f"{len(ATHLETES)} athletes, 1 sample plan, 1 logged session, "
+                "1 pending invite, 1 pending request, 1 past athlete."
             )
         )
 
     # -- teardown ---------------------------------------------------------
 
     def _delete_demo(self, coach_email):
-        # The demo group is owned by the (kept) coach, so deleting the demo
-        # athletes only cascade-removes its memberships; drop the group too.
-        MesoGroup.objects.filter(coach__email=coach_email, name=GROUP["name"]).delete()
         CoachInvite.objects.filter(
             coach__email=coach_email, email=PENDING_INVITE_EMAIL
         ).delete()
@@ -653,96 +634,6 @@ class Command(BaseCommand):
             },
         )
         return link
-
-    # -- the demo group ---------------------------------------------------
-
-    def _ensure_group(self, coach):
-        """A demo group with three of the athletes (idempotent).
-
-        ``update_or_create`` restores the group to active on reseed; ``add_athlete``
-        is idempotent and requires the active link the loop above already ensured.
-        """
-        group, _ = MesoGroup.objects.update_or_create(
-            coach=coach,
-            name=GROUP["name"],
-            defaults={
-                "focus": GROUP["focus"],
-                "status": MesoGroup.Status.ACTIVE,
-            },
-        )
-        email_to_slug = {s["email"]: s["slug"] for s in ATHLETES}
-        emails = [s["email"] for s in ATHLETES if s["slug"] in GROUP["member_slugs"]]
-        members = User.objects.filter(email__in=emails)
-        memberships = {}
-        for athlete in members:
-            memberships[email_to_slug[athlete.email]] = group.add_athlete(athlete)
-        # Groups Phase 2a: a shared program rooted at the group (created once, so
-        # a reseed never spawns a second) — the group designer renders off it.
-        if group.shared_plan() is None:
-            group.create_shared_plan()
-            self.stdout.write(f"  - built shared program for group '{group.name}'")
-        self._ensure_group_overrides(group, memberships)
-        self._ensure_group_delivery(group)
-        self.stdout.write(
-            f"  - ensured group '{group.name}' ({members.count()} members)"
-        )
-        return group
-
-    def _ensure_group_overrides(self, group, memberships):
-        """A couple of per-athlete auto-adjusts on the shared program (Phase 3).
-
-        So a fresh DB renders the designer's ``adj`` badge off real diffs: two
-        members adjust the first shared lift (a load % + a contraindication swap →
-        a "2 adjusts" badge) and a third tweaks the second lift's volume. Idempotent
-        — ``set_override`` upserts, so a reseed never piles up extra overrides.
-
-        Overrides target a ``Prescription`` **cell** (P0), so "first"/"second
-        shared lift" is the first two rows of the shared program's *current*
-        week, ordered by day then row (``exercise_slot__session_slot__order``,
-        ``exercise_slot__order``) — the same two rows the old per-week
-        ``ExercisePrescription`` ordering picked.
-        """
-        from store_project.meso.serializers import current_week
-
-        plan = group.shared_plan()
-        if plan is None:
-            return
-        week = current_week(plan)
-        if week is None:
-            return
-        prescriptions = list(
-            Prescription.objects.filter(week=week, line=0)
-            .select_related("exercise_slot__session_slot")
-            .order_by("exercise_slot__session_slot__order", "exercise_slot__order")
-        )
-        if len(prescriptions) < 2:
-            return
-        first, second = prescriptions[0], prescriptions[1]
-        if "devon" in memberships:
-            memberships["devon"].set_override(first, load_pct=90)
-        if "priya" in memberships:
-            memberships["priya"].set_override(first, swap_name="Box Squat")
-        if "marcus" in memberships:
-            memberships["marcus"].set_override(second, sets="2", reps="8")
-
-    def _ensure_group_delivery(self, group):
-        """Deliver the group's whole shared current block to its members once (P5).
-
-        Idempotent: skipped once the shared block's current week is stamped
-        delivered, so a reseed never re-fans-out or piles up snapshots. Gives the
-        three demo members a real, *resolved* delivered block on their own athlete
-        surface (Devon's load %, Priya's swap, Marcus's volume tweak all applied).
-        """
-        from store_project.meso.serializers import current_week
-
-        plan = group.shared_plan()
-        if plan is None:
-            return
-        week = current_week(plan)
-        if week is None or week.delivered_at is not None:
-            return
-        group.deliver_block()
-        self.stdout.write(f"  - delivered shared block to group '{group.name}' members")
 
     # -- the sample plan --------------------------------------------------
 

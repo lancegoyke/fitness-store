@@ -11,7 +11,6 @@ export interface ChatChange {
   id?: string | number;
   kind?: string;
   title?: string;
-  member?: string;
   before?: string;
   after?: string;
 }

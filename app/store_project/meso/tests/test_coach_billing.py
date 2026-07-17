@@ -4,7 +4,7 @@ The owner dashboard (``UsageDashboardView``, Phase 4) is **staff-gated** and sho
 org-wide *cost* (COGS) so a coach can't probe what the agent costs the business.
 This is the complementary **coach-scoped** read: a coach sees *their* plan, the
 seats they pay for, their projected bill (the revenue they owe — base + per-seat),
-and how many AI-agent runs they've spent this month broken down by athlete/group.
+and how many AI-agent runs they've spent this month broken down by athlete.
 
 The hard line this slice draws: a coach sees **what they pay** (revenue) and
 **how much they've used** (run counts), never the internal per-run **cost**
@@ -24,7 +24,6 @@ from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.factories import CoachSubscriptionFactory
-from store_project.meso.factories import GroupPlanFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachSubscription
@@ -71,18 +70,6 @@ class TestCoachRunBreakdown:
         labels = {r.label: r.runs for r in rows}
         assert labels[heavy.relationship.athlete.display_name()] == 3
         assert labels[light.relationship.athlete.display_name()] == 1
-
-    def test_attributes_a_group_plan_to_the_group(self):
-        coach = _coach()
-        group_plan = GroupPlanFactory(group__coach=coach, group__name="Squad A")
-        _run_for(coach, plan=group_plan, trigger=AgentProposalBatch.Trigger.GROUP)
-
-        start, end = report_mod.current_month_bounds()
-        (row,) = report_mod.coach_run_breakdown(coach, start=start, end=end)
-
-        assert row.is_group is True
-        assert row.label == "Group: Squad A"
-        assert row.runs == 1
 
     def test_scopes_to_the_coach(self):
         coach = _coach()
