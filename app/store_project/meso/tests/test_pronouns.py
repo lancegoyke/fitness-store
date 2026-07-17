@@ -51,22 +51,23 @@ class TestDeliverPronouns:
         return client.get(url, params)
 
     def test_head_and_success_copy_are_gender_neutral(self, client):
-        # NB: the whole-block deliver copy (#447) is what's rendered here — the
-        # head ("sees the whole block in their app") and the post-deliver success
-        # ("Block delivered … will see all N weeks … on their phone"). This test
-        # pins that all of it stays gender-neutral (name + they/their).
+        # NB: the live+notify deliver copy (2d) is what's rendered here — the
+        # head ("your edits are already live in NAME's app") and the
+        # post-deliver success ("Block delivered … got the heads-up … on their
+        # phone"). This test pins that all of it stays gender-neutral (name +
+        # they/their).
         plan, _, _ = _plan()
         client.force_login(plan.relationship.coach)
 
         body = self._get(client, plan).content.decode()
 
         # Neutral phrasing (name + they/their) is present…
-        assert "sees the whole block in their app" in body
+        assert f"already live in {ATHLETE_NAME}'s app" in body
         assert f"Block delivered to {ATHLETE_NAME}" in body
         assert "on their phone" in body
         assert "Track sessions" in body
         # …and the hard-coded she/her copy is gone.
-        assert "sees the whole block in her app" not in body
+        assert "in her app" not in body
         assert "She'll see all" not in body
         assert "on her phone" not in body
         assert "Track her sessions" not in body

@@ -256,81 +256,13 @@ class TestSendWebPush:
         webpush.assert_not_called()
 
 
-class TestNotifyWeekDelivered:
-    def _call(self, athlete, plan, week):
-        return meso_push.notify_week_delivered(
-            athlete=athlete,
-            coach=plan.coach,
-            plan=plan,
-            week=week,
-            home_url="http://testserver/meso/me/",
-        )
-
-    def test_pushes_to_each_device_with_payload(self):
-        plan, week = seed_plan()
-        athlete = plan.athlete
-        make_sub(athlete, endpoint="https://push/1")
-        make_sub(athlete, endpoint="https://push/2")
-        with mock.patch(PUSH_PATH) as webpush:
-            sent = self._call(athlete, plan, week)
-        assert sent == 2
-        assert webpush.call_count == 2
-        payload = json.loads(webpush.call_args.kwargs["data"])
-        assert plan.coach.display_name() in payload["body"]
-        assert plan.title in payload["body"]
-        assert "Week 1" in payload["body"]
-        assert payload["url"] == "http://testserver/meso/me/"
-
-    def test_prunes_dead_subscription(self):
-        plan, week = seed_plan()
-        athlete = plan.athlete
-        make_sub(athlete, endpoint="https://push/dead")
-        with mock.patch(PUSH_PATH, side_effect=gone_exception(410)):
-            sent = self._call(athlete, plan, week)
-        assert sent == 0
-        assert PushSubscription.objects.filter(athlete=athlete).count() == 0
-
-    def test_other_failure_is_swallowed_and_keeps_subscription(self):
-        plan, week = seed_plan()
-        athlete = plan.athlete
-        make_sub(athlete, endpoint="https://push/flaky")
-        with mock.patch(PUSH_PATH, side_effect=gone_exception(500)):
-            sent = self._call(athlete, plan, week)
-        # A transient 500 isn't "gone" — swallow it, keep the subscription.
-        assert sent == 0
-        assert PushSubscription.objects.filter(athlete=athlete).count() == 1
-
-    def test_no_subscriptions_is_noop(self):
-        plan, week = seed_plan()
-        with mock.patch(PUSH_PATH) as webpush:
-            sent = self._call(plan.athlete, plan, week)
-        assert sent == 0
-        webpush.assert_not_called()
-
-    @override_settings(**DISABLED)
-    def test_disabled_is_noop(self):
-        plan, week = seed_plan()
-        make_sub(plan.athlete, endpoint="https://push/1")
-        with mock.patch(PUSH_PATH) as webpush:
-            sent = self._call(plan.athlete, plan, week)
-        assert sent == 0
-        webpush.assert_not_called()
-
-    def test_only_the_athletes_subscriptions(self):
-        plan, week = seed_plan()
-        make_sub(plan.athlete, endpoint="https://push/athlete")
-        make_sub(plan.coach, endpoint="https://push/coach")  # must be ignored
-        with mock.patch(PUSH_PATH) as webpush:
-            sent = self._call(plan.athlete, plan, week)
-        assert sent == 1
-        endpoints = {
-            c.kwargs["subscription_info"]["endpoint"] for c in webpush.call_args_list
-        }
-        assert endpoints == {"https://push/athlete"}
-
-
 class TestNotifyBlockDelivered:
-    """P3 block push: one nudge for the whole delivered mesocycle."""
+    """P3 block push: one nudge for the whole delivered mesocycle.
+
+    The only delivery push since 2d (the per-week notifier was retired with the
+    live+notify model), so this class also pins the shared ``_fan_out``
+    mechanics — prune-dead, swallow-transient, athlete-only scoping.
+    """
 
     def _call(self, athlete, plan, mesocycle, week_count):
         return meso_push.notify_block_delivered(
@@ -392,6 +324,37 @@ class TestNotifyBlockDelivered:
             sent = self._call(plan.athlete, plan, week.mesocycle, 2)
         assert sent == 0
         webpush.assert_not_called()
+
+    def test_prunes_dead_subscription(self):
+        plan, week = seed_plan()
+        athlete = plan.athlete
+        make_sub(athlete, endpoint="https://push/dead")
+        with mock.patch(PUSH_PATH, side_effect=gone_exception(410)):
+            sent = self._call(athlete, plan, week.mesocycle, 2)
+        assert sent == 0
+        assert PushSubscription.objects.filter(athlete=athlete).count() == 0
+
+    def test_other_failure_is_swallowed_and_keeps_subscription(self):
+        plan, week = seed_plan()
+        athlete = plan.athlete
+        make_sub(athlete, endpoint="https://push/flaky")
+        with mock.patch(PUSH_PATH, side_effect=gone_exception(500)):
+            sent = self._call(athlete, plan, week.mesocycle, 2)
+        # A transient 500 isn't "gone" — swallow it, keep the subscription.
+        assert sent == 0
+        assert PushSubscription.objects.filter(athlete=athlete).count() == 1
+
+    def test_only_the_athletes_subscriptions(self):
+        plan, week = seed_plan()
+        make_sub(plan.athlete, endpoint="https://push/athlete")
+        make_sub(plan.coach, endpoint="https://push/coach")  # must be ignored
+        with mock.patch(PUSH_PATH) as webpush:
+            sent = self._call(plan.athlete, plan, week.mesocycle, 2)
+        assert sent == 1
+        endpoints = {
+            c.kwargs["subscription_info"]["endpoint"] for c in webpush.call_args_list
+        }
+        assert endpoints == {"https://push/athlete"}
 
 
 # -- the deliver hook ------------------------------------------------------

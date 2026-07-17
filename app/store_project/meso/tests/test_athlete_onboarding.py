@@ -39,8 +39,8 @@ pytestmark = pytest.mark.django_db
 def seed(*, athlete=None, coach=None, delivered=True):
     """A plan → week → session → prescription for one athlete.
 
-    ``delivered`` stamps the week (the athlete's home only surfaces delivered
-    sessions); leaving it false models a coach who's still building.
+    ``delivered`` stamps the week (the notify marker — since 2d the athlete's
+    home surfaces live sessions either way).
     """
     coach = coach or UserFactory()
     athlete = athlete or UserFactory()
@@ -106,10 +106,21 @@ class TestFirstLogHintHome:
         body = client.get(HOME).content.decode()
         assert HOME_HINT in body
 
-    def test_hidden_when_nothing_is_delivered_yet(self, client):
-        # No delivered session to tap → the "tap a session below" nudge would
-        # point at nothing, so it must not show.
-        athlete, *_ = seed(delivered=False)
+    def test_hidden_when_there_are_no_sessions_yet(self, client):
+        # No session to tap (the coach's plan has an empty week) → the "tap a
+        # session below" nudge would point at nothing, so it must not show.
+        # (2d: delivery no longer gates visibility, so only true emptiness
+        # hides the hint.)
+        coach = UserFactory()
+        athlete = UserFactory()
+        rel = CoachAthleteFactory(
+            coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        )
+        plan = PlanFactory(
+            relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
+        )
+        meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
+        WeekFactory(mesocycle=meso, index=1, is_current=True, delivered_at=None)
         client.force_login(athlete)
         body = client.get(HOME).content.decode()
         assert HOME_HINT not in body

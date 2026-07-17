@@ -18,9 +18,9 @@
 
     <div class="meso-pagehead">
       <div>
-        <p class="meso-eyebrow">Publish</p>
+        <p class="meso-eyebrow">Notify</p>
         <h1 class="meso-h1">Deliver {{ deliver.block_name|default:"block" }}</h1>
-        <p class="meso-sub">{{ deliver.week_count }} week{{ deliver.week_count|pluralize }} · to {{ athlete.name }} · once delivered, {{ athlete.name }} sees the whole block in their app.</p>
+        <p class="meso-sub">{{ deliver.week_count }} week{{ deliver.week_count|pluralize }} · to {{ athlete.name }} · your edits are already live in {{ athlete.name }}'s app — delivering sends a heads-up and records a snapshot.</p>
       </div>
     </div>
 
@@ -42,24 +42,24 @@
         <p class="meso-eyebrow">Changes since last delivery</p>
         {% if not deliver.is_redelivery %}
         <!-- First delivery of the block: nothing to diff against. -->
-          <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">First delivery — the whole block ({{ deliver.week_count }} week{{ deliver.week_count|pluralize }}) is sent to {{ athlete.name }}.</span>
+          <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">First delivery — {{ athlete.name }} gets a heads-up that the whole block ({{ deliver.week_count }} week{{ deliver.week_count|pluralize }}) is ready.</span>
         {% else %}
-        <!-- Block delivery sends every live week; each week carries its own diff
-             against the snapshot it last went out as. A never-delivered week is
-             new this delivery; a delivered week with no edits since is unchanged;
-             otherwise its live grid is diffed per session (edited rows'
-             before &#8594; after, rows added (+) or removed (&#8722;), whole days,
-             week-meta). -->
+        <!-- An optional what-changed view (2d): delivery snapshots every live
+             week; each week carries its own diff against the snapshot it last
+             went out as. A never-delivered week is new this delivery; a
+             delivered week with no edits since is unchanged; otherwise its
+             live grid is diffed per session (edited rows' before &#8594; after,
+             rows added (+) or removed (&#8722;), whole days, week-meta). -->
           <div style="display:flex;flex-direction:column;gap:18px;">
             {% for wk in deliver.weeks %}
               <div>
                 <div style="font-size:11px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:var(--ink);margin-bottom:6px;">{{ wk.label }}</div>
                 {% if not wk.changes %}
                 <!-- Never delivered before — first time this week is sent. -->
-                  <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">New this delivery — first time {{ wk.label }} is sent to {{ athlete.name }}.</span>
+                  <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">New this delivery — first time {{ wk.label }} is included for {{ athlete.name }}.</span>
                 {% elif not wk.changes.has_changes %}
                 <!-- Re-delivering this week with no edits since it last went out. -->
-                  <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">No changes since you last delivered {{ wk.label }} — re-delivering it as-is.</span>
+                  <span style="font-size:12.5px;line-height:1.35;color:var(--dim);">No changes since you last delivered {{ wk.label }}.</span>
                 {% else %}
                   <div style="display:flex;flex-direction:column;gap:12px;">
                     {% for s in wk.changes.sessions %}
@@ -108,11 +108,6 @@
         {% endif %}
       </div>
 
-      <div class="meso-card meso-card--pad">
-        <p class="meso-eyebrow">Schedule &amp; notifications</p>
-        <p class="meso-sub" style="margin:0;">Scheduling and push/email notifications arrive with the athlete app.</p>
-      </div>
-
       {% if batch_candidates %}
         <!-- Batch-deliver (2c): each picked client gets their own independent,
              editable deep copy of this program — the group fan-out's replacement. -->
@@ -146,7 +141,7 @@
     <div x-show="delivered" x-cloak class="meso-card meso-card--pad" style="text-align:center;padding:36px 24px;">
       <div style="width:46px;height:46px;border-radius:50%;background:var(--ok);display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;margin:0 auto 14px;">✓</div>
       <h2 style="margin:0 0 4px;font-size:19px;font-weight:800;letter-spacing:-0.02em;">Block delivered to {{ athlete.name }}</h2>
-      <p class="meso-sub" style="margin-bottom:20px;">{{ athlete.name }} will see all {{ deliver.week_count }} week{{ deliver.week_count|pluralize }} — Day 1 on their phone.</p>
+      <p class="meso-sub" style="margin-bottom:20px;">{{ athlete.name }} got the heads-up — all {{ deliver.week_count }} week{{ deliver.week_count|pluralize }} live on their phone.</p>
       <div style="display:flex;gap:10px;justify-content:center;">
         <a class="meso-btn" href="{% url 'meso:roster' %}">Back to roster</a>
         <a class="meso-btn meso-btn--primary" href="{% url 'meso:results' %}">Track sessions →</a>

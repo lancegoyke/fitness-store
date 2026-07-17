@@ -1378,3 +1378,30 @@ _(Append dated entries here as decisions land.)_
   `transaction.atomic()` (ATOMIC_REQUESTS is inert). The optional saved
   client list ("one-click class deliver") is deferred until real use demands
   it. Follow-up debt for 2e: dead group CSS in the designer stylesheets.
+- 2026-07-16 — **Built (spreadsheet parity 2d): deliver → live + notify — the
+  delivery visibility gate is gone (D6, parity plan §3.3).** This supersedes
+  the 2026-06-28 "delivery contract" (delivery gates a week's *visibility*):
+  the athlete now sees **every live week** of every non-archived plan through
+  an active coach link the moment the coach types it — a shared spreadsheet.
+  Gate removals: `serializers.latest_delivered_week` deleted; the athlete
+  home/chips/block-grid/focus-override and `_athlete_session_or_404` (session
+  view + logger + manual-1RM) dropped their `delivered_at` filters; the home
+  anchors on the `is_current` pointer (first flagged in plan order, else the
+  earliest live week; `awaiting` = a plan with no live weeks at all).
+  Adherence re-based: `link_latest_delivered_week` →
+  `adherence.link_current_week` (newest non-archived plan by `modified`, then
+  its flagged current week) — the roster meter and profile-program block now
+  measure the athlete's *current* week. **Deliver stays as the one-time
+  nudge:** stamps `delivered_at` (a notify marker only), writes `WeekDelivery`
+  snapshots (history/retention; they feed the deliver screen's what-changed
+  diff, now explicitly optional, and later the PR engine), and sends the one
+  block-level email + push. The dead per-week notify chain was removed
+  (`_notify_athlete_delivered`, `emails.send_week_delivered_email`,
+  `push.notify_week_delivered`, the `week_delivered.*` templates — the block
+  variants are the only notifiers since P3). Copy reframed on the deliver
+  screen ("your edits are already live … delivering sends a heads-up and
+  records a snapshot"; stale "Schedule & notifications" placeholder card
+  dropped), the athlete home, the designer's AthletePreview coachmark, and
+  the "Make current" tooltip. Tour/demo delivery checks are untouched (they
+  test "did the coach send the nudge"). No migration — `delivered_at` and
+  `WeekDelivery` keep their data and meaning as history.

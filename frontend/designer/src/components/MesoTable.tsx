@@ -1317,7 +1317,7 @@ function WeekColumnHeader({ week, armed, busy, onArm, onDisarm, onSetCurrentWeek
             data-grid-restore=""
             className="meso-week-strip-btn meso-week-strip-btn--accent"
             disabled={busy}
-            title="Make this the live week — delivery will send it"
+            title="Make this the athlete's week — their home and today's session anchor on it"
             onClick={() => onSetCurrentWeek(week.id)}
           >
             Make current

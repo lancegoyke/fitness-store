@@ -79,7 +79,7 @@ export function AthletePreview({
           <div className="meso-coachmark-body">
             <div className="meso-coachmark-title">Preview as your athlete</div>
             <div className="meso-coachmark-text">
-              This is exactly what your athlete sees on their phone. Preview it, then Deliver to send the week.
+              This is exactly what your athlete sees on their phone — your edits are live the moment you type them. Deliver sends them a heads-up.
             </div>
           </div>
           <button

@@ -129,11 +129,12 @@ class TestLogAccessControl:
         assert resp.status_code == 404
         assert SessionLog.objects.count() == 0
 
-    def test_404_when_undelivered(self, client):
+    def test_undelivered_session_is_loggable(self, client):
+        """Edits are live (2d): delivery never gates logging."""
         s = seed(delivered=False)
         client.force_login(s.athlete)
-        assert post(client, s.session, {"sets": []}).status_code == 404
-        assert SessionLog.objects.count() == 0
+        assert post(client, s.session, {"sets": []}).status_code == 200
+        assert SessionLog.objects.count() == 1
 
     def test_404_inactive_link(self, client):
         s = seed(link_status=CoachAthlete.Status.ENDED)

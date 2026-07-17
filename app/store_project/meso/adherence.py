@@ -1,10 +1,13 @@
-"""Coach-facing adherence — how much of the delivered work an athlete logged.
+"""Coach-facing adherence — how much of the prescribed work an athlete logged.
 
-Read-only aggregation over delivered weeks and the athletes' own *done*
+Read-only aggregation over the athlete's current week and their own *done*
 ``SessionLog`` rows. It lights up the roster's long-standing ``compliance`` meter
 and ``activity`` feed placeholders (``presenters`` flagged both as "Phase 2/3
-concepts" awaiting logged data) — delivery + logging have existed since the
-athlete slice, so the data is finally there to measure.
+concepts" awaiting logged data).
+
+Since 2d (parity plan §3.3) delivery no longer gates what the athlete sees, so
+adherence anchors on the athlete's **current** week — the ``is_current`` pointer
+their own logging advances — not on the latest delivered week.
 
 Nothing here mutates state; it's a pure read layer the presenter formats.
 """
@@ -17,27 +20,29 @@ from .models import SessionLog
 from .models import Week
 
 
-def link_latest_delivered_week(link):
-    """The most recently delivered week across *all* of this link's plans.
+def link_current_week(link):
+    """The week the athlete is on, across *all* of this link's plans.
 
-    Adherence reflects whichever week was delivered most recently. **Archived**
-    plans are excluded (matching ``working_plan`` / ``athlete_home``): an
-    archived plan's weeks are ones the athlete can no longer see or log, so
-    they must not drive the meter. Returns ``None`` when the coach hasn't
-    delivered anything live to this athlete yet.
+    The meter's anchor: the newest (``-modified``) plan wins — the same
+    ordering the athlete home lists cards in — then its flagged ``is_current``
+    week, then its earliest live week. **Archived** plans are excluded
+    (matching ``working_plan`` / ``athlete_home``): an archived plan's weeks
+    are ones the athlete can no longer see or log, so they must not drive the
+    meter. Returns ``None`` when the link has no live weeks at all.
     """
     return (
         Week.objects.filter(
             mesocycle__plan__relationship=link,
-            delivered_at__isnull=False,
+            deleted_at__isnull=True,
         )
         .exclude(mesocycle__plan__status=Plan.Status.ARCHIVED)
         .select_related("mesocycle")
-        # A P3 block delivery stamps every week with one ``delivered_at``; break
-        # that tie toward the athlete's current week (then earliest index) so the
-        # meter is deterministic instead of DB-order dependent. (Per-week delivery
-        # has distinct timestamps, so this never changes its result.)
-        .order_by("-delivered_at", "-is_current", "index")
+        .order_by(
+            "-mesocycle__plan__modified",
+            "-is_current",
+            "mesocycle__order",
+            "index",
+        )
         .first()
     )
 
@@ -57,22 +62,22 @@ def _done_session_count(session_ids, athlete):
 
 
 def link_compliance(link):
-    """Percent (0–100) of the latest delivered week's sessions the athlete logged.
+    """Percent (0–100) of the current week's sessions the athlete logged.
 
-    Measured against the most recently delivered week
-    (``link_latest_delivered_week``): the fraction of its sessions the athlete
-    has marked *done*, rounded to a whole percent. Returns ``None`` — so the
-    roster honestly hides the meter rather than showing a misleading ``0%`` —
-    when there's nothing to measure: no plan, no delivered week, or a delivered
-    week with no sessions. ``0`` (the coach delivered, the athlete hasn't logged
-    yet) is a real, distinct signal and is *not* collapsed to ``None``.
+    Measured against the athlete's current week (``link_current_week``): the
+    fraction of its sessions the athlete has marked *done*, rounded to a whole
+    percent. Returns ``None`` — so the roster honestly hides the meter rather
+    than showing a misleading ``0%`` — when there's nothing to measure: no
+    plan, no live week, or a week with no sessions. ``0`` (the program is
+    there, the athlete hasn't logged yet) is a real, distinct signal and is
+    *not* collapsed to ``None``.
 
-    One ``link_latest_delivered_week`` query plus two small aggregates; bounded
+    One ``link_current_week`` query plus two small aggregates; bounded
     and proportionate to the handful of athletes a roster renders.
     """
     if link is None:
         return None
-    week = link_latest_delivered_week(link)
+    week = link_current_week(link)
     if week is None:
         return None
     session_ids = list(week.sessions.values_list("pk", flat=True))

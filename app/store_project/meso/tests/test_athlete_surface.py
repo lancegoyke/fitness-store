@@ -3,16 +3,15 @@
 The first logged-in surface for an *athlete* (distinct from the coach's view of
 an athlete at ``/meso/athlete/<uuid>/``):
 
-- ``/meso/me/`` lists the athlete's active-coach plans, each with its latest
-  delivered week and that week's sessions (marked done/pending from the
-  athlete's own ``SessionLog``);
-- ``/meso/me/session/<id>/`` shows one delivered session's prescribed exercises,
-  read-only.
+- ``/meso/me/`` lists the athlete's active-coach plans, each anchored on the
+  athlete's current week with that week's sessions (marked done/pending from
+  the athlete's own ``SessionLog``);
+- ``/meso/me/session/<id>/`` shows one session's prescribed exercises.
 
-These tests pin the **scoping contract** (see ``docs/archive/meso/athlete-plan.md``):
-an athlete sees only plans across their *active* coaches, only **delivered**
-weeks, and never another athlete's data. Delivery — not plan status — is the
-publish gate; an undelivered week is invisible even to its own athlete.
+These tests pin the **scoping contract**: an athlete sees only plans across
+their *active* coaches, and never another athlete's data. Edits are live (2d,
+parity plan §3.3): every live week is visible the moment the coach types it —
+delivery is a one-time notify + snapshot, never a visibility gate.
 """
 
 import json
@@ -94,9 +93,9 @@ def seed_block(
     (the row), with a per-week ``Prescription`` cell carrying a distinct load so
     each week's column is identifiable. Weeks 1 & 2 are delivered (the whole
     block delivers at once); week 2 is the athlete's ``is_current`` week; week 3
-    is left undelivered unless ``third_delivered`` (a week the coach is still
-    building — invisible to the athlete). ``sub_second`` adds a freeform
-    sub-line (e.g. a substitution) beneath week 2's cell.
+    is left undelivered unless ``third_delivered`` — since 2d that only means
+    "not yet nudged about"; the athlete sees it live either way. ``sub_second``
+    adds a freeform sub-line (e.g. a substitution) beneath week 2's cell.
     """
     coach = coach or UserFactory()
     athlete = athlete or UserFactory()
@@ -247,13 +246,13 @@ class TestAthleteHome:
         body = client.get(HOME).content.decode()
         assert "Coach Lance" in body
 
-    def test_hides_undelivered_week(self, client):
-        s = seed(delivered=False, session_name="SecretLower")
+    def test_undelivered_week_is_visible(self, client):
+        """Edits are live (2d): a week the coach hasn't delivered still shows."""
+        s = seed(delivered=False, session_name="FreshLower")
         client.force_login(s.athlete)
         body = client.get(HOME).content.decode()
-        # The plan card may show (awaiting delivery) but its sessions must not.
-        assert "SecretLower" not in body
-        assert session_url(s.session) not in body
+        assert "FreshLower" in body
+        assert session_url(s.session) in body
 
     def test_excludes_other_athletes_plan(self, client):
         mine = seed(session_name="MyLower")
@@ -322,13 +321,13 @@ class TestAthleteHome:
         assert "4 x 8, RPE 7, 71" in body  # week-1 cell summary (verbatim text)
         assert "4 x 8, RPE 8, 101" in body  # week-2 cell summary
 
-    def test_undelivered_week_is_not_a_column(self, client):
-        """A week the coach hasn't delivered yet never becomes an athlete column."""
+    def test_undelivered_week_is_a_column_too(self, client):
+        """Edits are live (2d): an undelivered week is a column like any other."""
         b = seed_block()  # week 3 undelivered
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
-        assert "Wk 3" not in body
-        assert "RPE 8, 131" not in body  # its cell is never rendered
+        assert "Wk 3" in body
+        assert "4 x 8, RPE 8, 131" in body  # its cell renders live
 
     def test_home_focuses_the_current_delivered_week(self, client):
         """The home opens to ``is_current``: only its sessions are tappable rows.
@@ -359,32 +358,28 @@ class TestAthleteHome:
         assert "Front Squat" in body  # the substitution sub-line
         assert "Box Squat" in body  # the slot row still labels the row
 
-    def test_multiple_current_weeks_focus_the_latest_delivered(self, client):
-        """The home opens to the newest delivered week when several are current.
+    def test_multiple_current_weeks_focus_the_first_in_plan_order(self, client):
+        """A stray double ``is_current`` flag anchors deterministically.
 
-        A group-materialized plan flags EVERY delivered week ``is_current``, so
-        the home must not focus the earliest of them (regression: focusing
-        ``current_week`` stranded the athlete on week 1 after week 2 was
-        delivered).
+        Nothing in the schema bars two flagged weeks (the writers all keep a
+        single pointer, but a stray row from admin/import must not make the
+        home non-deterministic): the first flagged week in plan order wins.
         """
-        b = seed_block()  # w1 & w2 delivered at the same ``now``; w2 is_current
-        # Reproduce the group-sync anomaly: an earlier week is *also* current and
-        # was delivered before w2.
+        b = seed_block()  # w2 is_current
+        # A stray second flag on the earlier week.
         b.w1.is_current = True
-        b.w1.delivered_at = timezone.now() - timedelta(days=1)
-        b.w1.save(update_fields=["is_current", "delivered_at"])
+        b.w1.save(update_fields=["is_current"])
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
-        assert session_url(b.s2) in body  # newest delivered week is the focus
-        assert session_url(b.s1) not in body  # the earlier current week is not
+        assert session_url(b.s1) in body  # first flagged week in plan order
+        assert session_url(b.s2) not in body
 
     def test_current_pointer_in_an_earlier_block_anchors_that_block(self, client):
-        """A "Make current" back to an earlier delivered block wins over latest.
+        """A "Make current" back to an earlier block wins over the newest one.
 
-        ``latest_delivered_week`` points at the newest block, but when the coach
-        moves the (single) ``is_current`` pointer to a week in an earlier
-        delivered block, the individual athlete's home must open to THAT block and
-        week — not the most recent delivery. The newer block is still reachable
+        When the coach moves the (single) ``is_current`` pointer to a week in
+        an earlier block, the individual athlete's home must open to THAT block
+        and week — not the most recently added or delivered one. The newer block is still reachable
         (issue #456 Finding 1: the chip strip spans the whole plan), just not the
         anchor — its session is not a tappable log row until the athlete taps
         into it.
@@ -434,28 +429,33 @@ class TestAthleteHome:
         assert "Peak" in body  # the newer block is reachable via the chip strip
         assert session_url(s_b) not in body  # but not a tappable row (not the anchor)
 
-    def test_future_only_add_this_week_row_is_not_leaked(self, client):
-        """An exercise added only to an undelivered future week must not surface.
+    def test_row_skipped_in_every_week_is_hidden(self, client):
+        """A row with no trainable cell anywhere never renders.
 
-        "Add this week only" seeds skipped placeholder cells in every other live
-        week; when the target is an undelivered future week, the athlete's block
-        table (delivered columns only) would otherwise render that build-ahead
-        exercise's name across em-dash cells. A row with no trainable delivered
-        cell is dropped.
+        A row skipped in every week (nothing but placeholder cells) would show
+        a name beside a strip of em-dashes, so it's dropped. A row trainable in
+        ANY live week — e.g. an "add this week only" exercise targeting a
+        future week — renders (2d: every live week is a visible column, so
+        there's no build-ahead leak to guard against).
         """
-        b = seed_block()  # weeks 1 & 2 delivered, week 3 undelivered
-        future = ExerciseSlot.objects.create(
-            session_slot=b.slot, name="Front Squat (future only)", order=1
+        b = seed_block()
+        ghost = ExerciseSlot.objects.create(
+            session_slot=b.slot, name="Ghost Row (all skipped)", order=1
         )
-        # Skipped placeholders in the delivered weeks; trainable only in the
-        # undelivered week 3 (the add-this-week-only-a-future-week shape).
+        make_presc(exercise_slot=ghost, week=b.w1, skipped=True)
+        make_presc(exercise_slot=ghost, week=b.w2, skipped=True)
+        make_presc(exercise_slot=ghost, week=b.w3, skipped=True)
+        future = ExerciseSlot.objects.create(
+            session_slot=b.slot, name="Front Squat (week 3 only)", order=2
+        )
         make_presc(exercise_slot=future, week=b.w1, skipped=True)
         make_presc(exercise_slot=future, week=b.w2, skipped=True)
         make_presc(exercise_slot=future, week=b.w3, sets="3", reps="8", load="90")
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
-        assert "Front Squat (future only)" not in body  # build-ahead not leaked
-        assert "Box Squat" in body  # the real delivered row still shows
+        assert "Ghost Row (all skipped)" not in body  # nothing trainable — dropped
+        assert "Front Squat (week 3 only)" in body  # live in week 3's column
+        assert "Box Squat" in body
 
     def test_block_table_comment_does_not_leak_onto_the_page(self, client):
         """The block table's template-author note stays out of the rendered HTML.
@@ -496,12 +496,21 @@ class TestAthleteHome:
         # The block grid survives too.
         assert "Your block" in body
 
-    def test_nothing_delivered_still_shows_awaiting_copy(self, client):
-        """The truly-nothing-delivered state keeps its own distinct copy."""
-        s = seed(delivered=False)
-        client.force_login(s.athlete)
+    def test_plan_with_no_weeks_shows_awaiting_copy(self, client):
+        """A plan with no live weeks at all keeps its own distinct copy."""
+        coach = UserFactory()
+        athlete = UserFactory()
+        rel = CoachAthleteFactory(
+            coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+        )
+        plan = PlanFactory(
+            relationship=rel, title="Bare Plan", status=Plan.Status.ACTIVE
+        )
+        MesocycleFactory(plan=plan, name="Empty Block", order=0)
+        client.force_login(athlete)
         body = client.get(HOME).content.decode()
-        assert "Nothing delivered yet — your coach is still building this week." in body
+        assert "Bare Plan" in body
+        assert "Nothing here yet — your coach is still building this program." in body
 
 
 # -- issue #456: ?week= display-only focus override + the chip/nudge UI ---
@@ -576,12 +585,15 @@ class TestWeekFocusOverride:
         assert session_url(theirs.s1) not in body
         assert session_url(theirs.s2) not in body
 
-    def test_undelivered_week_is_ignored(self, client):
+    def test_undelivered_week_is_focusable(self, client):
+        """Edits are live (2d): any live week of the plan can take the focus."""
         b = seed_block()  # week 3 left undelivered by default
         client.force_login(b.athlete)
         resp = client.get(HOME, {"week": b.w3.pk})
         assert resp.status_code == 200
-        assert session_url(b.s2) in resp.content.decode()
+        body = resp.content.decode()
+        assert session_url(b.s3) in body
+        assert session_url(b.s2) not in body
 
     def test_soft_deleted_week_is_ignored(self, client):
         b = seed_block(third_delivered=True)
@@ -632,12 +644,13 @@ class TestWeekChips:
         body = client.get(HOME).content.decode()
         assert "?week=" not in body
 
-    def test_undelivered_week_never_appears_as_a_chip(self, client):
+    def test_undelivered_week_appears_as_a_chip_too(self, client):
+        """Edits are live (2d): every live week is a chip, delivered or not."""
         b = seed_block()  # week 3 left undelivered
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
-        assert "Wk 3" not in body
-        assert f"?week={b.w3.pk}" not in body
+        assert "Wk 3" in body
+        assert f"?week={b.w3.pk}" in body
 
     def test_soft_deleted_delivered_week_never_appears_as_a_chip(self, client):
         b = seed_block(third_delivered=True)
@@ -665,8 +678,10 @@ class TestStartNextWeekNudge:
         body = client.get(HOME).content.decode()
         assert "start Week" not in body
 
-    def test_absent_when_focus_is_the_last_delivered_week(self, client):
-        b = seed_block()  # w2 is focus + the LAST delivered week (w3 undelivered)
+    def test_absent_when_focus_is_the_last_week(self, client):
+        b = seed_block()  # w2 is focus; drop w3 so w2 is the plan's last week
+        b.w3.deleted_at = timezone.now()
+        b.w3.save(update_fields=["deleted_at"])
         SessionLogFactory(
             session=b.s2, athlete=b.athlete, status=SessionLog.Status.DONE
         )
@@ -821,10 +836,13 @@ class TestAthleteSession:
         client.force_login(intruder)
         assert client.get(session_url(s.session)).status_code == 404
 
-    def test_404_when_undelivered(self, client):
+    def test_undelivered_session_is_reachable(self, client):
+        """Edits are live (2d): delivery never gates the session view."""
         s = seed(delivered=False)
         client.force_login(s.athlete)
-        assert client.get(session_url(s.session)).status_code == 404
+        resp = client.get(session_url(s.session))
+        assert resp.status_code == 200
+        assert "Box Squat" in resp.content.decode()
 
     def test_404_inactive_link(self, client):
         s = seed(link_status=CoachAthlete.Status.ENDED)

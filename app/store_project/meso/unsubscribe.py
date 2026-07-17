@@ -9,7 +9,7 @@ The link carries a signed token (``django.core.signing``) naming the athlete —
 no login required (the recipient may not be signed in, and a social login may use
 a different address than the one we mailed) and no token column (the signature is
 the authorization). Following it records a single opt-out flag on the athlete's
-``AthleteProfile``; the deliver hook (``views._notify_athlete_delivered``) honors
+``AthleteProfile``; the deliver hook (``views._notify_athlete_block_delivered``) honors
 it. Intentionally *not* a notification-preferences system — one flag for the one
 email that needed an off switch.
 """
