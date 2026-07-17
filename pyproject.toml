@@ -32,6 +32,7 @@ dependencies = [
   "anthropic>=0.112.0",
   "pywebpush>=2.3.0",
   "django-q2>=1.10.0",
+  "openpyxl>=3.1",
 ]
 
 [dependency-groups]

@@ -18,11 +18,12 @@ only via another connector fetch.
 
 | Have raw `.xlsx`/`.pdf` | Have `.md` grid only (needs re-fetch for raw) |
 |---|---|
-| `102.xlsx`, `baseline-H000.xlsx`, `annotated-program-sample.xlsx`, `101.pdf`, `lance-program.xlsx` (gitignored) | `101/103/201/301/321/402/402G/405G/501/601/701/801G/3G000/5G000` |
+| `101.xlsx`, `102.xlsx`, `103.xlsx`, `402.xlsx`, `601.xlsx`, `baseline-H000.xlsx`, `annotated-program-sample.xlsx`, `101.pdf`, `lance-program.xlsx` (gitignored) | `201/301/321/402G/405G/501/701/801G/3G000/5G000` |
 
-**Still needed for a clean Phase-3 import set:** raw `.xlsx` for the import targets
-`101, 103, 402, 601` (currently `.md`/`.pdf` only). Re-export via the connector when
-building the importer.
+The Phase-3 import set is complete: raw `.xlsx` for `101, 102, 103, 402, 601`
+(re-exported via the connector 2026-07-16/17) — the fixtures behind
+`meso/sheet_import.py`, the `meso_import_template` command, and their tests
+(`meso/tests/test_sheet_import.py`).
 
 ## The anonymized annotated sample
 `templates/annotated-program-sample.xlsx` (+ `.md`) is derived from a real client's

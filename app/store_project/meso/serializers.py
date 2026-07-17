@@ -624,11 +624,20 @@ def serialize_athlete_identity(plan):
     Replaces the prototype's hardcoded athlete chrome ("Maya Okonkwo" + invented
     contraindications) with the *real* athlete — their name/initials, the plan's
     goal, and their active contraindications (the same global injuries the agent
-    grounds on, so the coach sees the constraints while programming). A plan with
-    no relationship (no athlete) returns None.
+    grounds on, so the coach sees the constraints while programming). A
+    **template** plan has no athlete — the identity chip shows the template's
+    own title instead (parity plan §3.4: same editor, so the coach still sees
+    *what* they're editing). Any other relationship-less plan returns None.
     """
     athlete = plan.athlete
     if athlete is None:
+        if plan.is_template:
+            return {
+                "name": plan.title,
+                "initials": initials(plan.title),
+                "goal": "Template",
+                "contraindications": [],
+            }
         return None
     name = athlete.display_name()
     return {
