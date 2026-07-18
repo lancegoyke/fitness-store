@@ -64,7 +64,7 @@ def seed_plan(coach=None, athlete=None):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return plan, week
@@ -445,9 +445,7 @@ class TestPushConfigInPage:
         rel = CoachAthleteFactory()
         plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE)
         meso = MesocycleFactory(plan=plan, order=0)
-        week = WeekFactory(
-            mesocycle=meso, index=1, is_current=True, delivered_at=timezone.now()
-        )
+        week = WeekFactory(mesocycle=meso, index=1, delivered_at=timezone.now())
         day(week, day_number=1, name="Lower")
         return rel.athlete
 

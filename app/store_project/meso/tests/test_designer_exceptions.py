@@ -54,7 +54,7 @@ def seed_plan(coach=None, athlete=None):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return plan, meso, week, session, cell
@@ -68,7 +68,7 @@ def seed_two_week_plan(coach=None, athlete=None):
     duplicates the ``ExerciseSlot``.
     """
     plan, meso, week1, session, cell1 = seed_plan(coach=coach, athlete=athlete)
-    week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
+    week2 = WeekFactory(mesocycle=meso, index=2)
     cell2 = presc(
         exercise_slot=cell1.exercise_slot,
         week=week2,
@@ -332,7 +332,7 @@ class TestPrescriptionFill:
 
     def test_fill_with_explicit_week_ids_targets_only_those_weeks(self, client):
         plan, meso, week1, week2, session, cell1, cell2 = seed_two_week_plan()
-        week3 = WeekFactory(mesocycle=meso, index=3, is_current=False)
+        week3 = WeekFactory(mesocycle=meso, index=3)
         cell3 = presc(
             exercise_slot=cell1.exercise_slot,
             week=week3,

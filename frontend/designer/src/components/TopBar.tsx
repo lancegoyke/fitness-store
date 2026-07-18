@@ -11,7 +11,11 @@ export interface TopBarProps {
   view: ViewMode;
   onSelectView(view: ViewMode): void;
   cycleLabel: string;
-  deliverHref: string;
+  // null when the viewed block has no live week to deliver (the default
+  // grid can open on an empty first block while a later block has weeks —
+  // docs/meso/remove-current-week-plan.md §4b) — renders the control inert
+  // rather than a link that would silently target a different block.
+  deliverHref: string | null;
   sidebarOpen: boolean;
   onToggleSidebar(): void;
   // Undo/redo live here (global, Ctrl+Z-backed editor actions) rather than in
@@ -120,9 +124,25 @@ export function TopBar({
       <a data-testid="review-link" href="/meso/review/" data-hover="rail" className="meso-btn-rail">
         Review changes
       </a>
-      <a data-testid="deliver-link" href={deliverHref} data-hover="brighten" className="meso-btn-deliver">
-        Deliver
-      </a>
+      {deliverHref ? (
+        <a data-testid="deliver-link" href={deliverHref} data-hover="brighten" className="meso-btn-deliver">
+          Deliver
+        </a>
+      ) : (
+        // No live week in the viewed block — nothing to deliver. Inert: no
+        // href (so no navigation, with or without JS) + aria-disabled,
+        // matching the visual treatment .meso-topbar-iconbtn:disabled uses
+        // for the undo/redo buttons above (opacity + default cursor), the
+        // only other disabled-control convention in this island.
+        <a
+          data-testid="deliver-link"
+          aria-disabled="true"
+          className="meso-btn-deliver meso-btn-deliver--disabled"
+          title="No live week in this block to deliver"
+        >
+          Deliver
+        </a>
+      )}
     </div>
   );
 }

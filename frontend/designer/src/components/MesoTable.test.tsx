@@ -18,7 +18,6 @@ function week(overrides: Partial<GridWeek> = {}): GridWeek {
     label: "Wk 1",
     phase: "Accum",
     deload: false,
-    current: true,
     delivered_at: null,
     ...overrides,
   };
@@ -87,7 +86,6 @@ function baseProps(overrides: Partial<Parameters<typeof MesoTable>[0]> = {}) {
     onRemoveDay: vi.fn(),
     onAddWeek: vi.fn(),
     onRemoveWeek: vi.fn(),
-    onSetCurrentWeek: vi.fn(),
     onSkipCell: vi.fn(),
     onFillAcrossWeeks: vi.fn(),
     onAddExerciseThisWeek: vi.fn(),
@@ -115,22 +113,19 @@ describe("layout", () => {
 });
 
 describe("week columns", () => {
-  it("renders label, a deload marker, and marks the current week", () => {
+  it("renders each week's label and deload marker (no current-week highlight — programs are date-less)", () => {
     render(
       <MesoTable
         {...baseProps({
           grid: grid({
-            weeks: [
-              week({ id: 1, label: "Wk 1", current: true }),
-              week({ id: 2, label: "Wk 2", deload: true, current: false }),
-            ],
+            weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", deload: true })],
           }),
         })}
       />,
     );
     const col1 = screen.getByTestId("week-col-1");
     expect(col1).toHaveTextContent("Wk 1");
-    expect(col1).toHaveAttribute("aria-current", "true");
+    expect(col1).not.toHaveAttribute("aria-current");
 
     const col2 = screen.getByTestId("week-col-2");
     expect(col2).toHaveTextContent("Wk 2");
@@ -528,29 +523,14 @@ describe("remove day (arm -> confirm)", () => {
   });
 });
 
-describe("weeks: make-current / remove (arm -> confirm)", () => {
-  it("make-current calls onSetCurrentWeek", async () => {
-    const user = userEvent.setup();
-    const onSetCurrentWeek = vi.fn();
-    render(
-      <MesoTable
-        {...baseProps({
-          grid: grid({ weeks: [week({ id: 1, current: true }), week({ id: 2, label: "Wk 2", current: false })] }),
-          onSetCurrentWeek,
-        })}
-      />,
-    );
-    await user.click(screen.getByTestId("make-current-2"));
-    expect(onSetCurrentWeek).toHaveBeenCalledWith(2);
-  });
-
+describe("weeks: remove (arm -> confirm)", () => {
   it("remove-week arms then confirms, calling onRemoveWeek", async () => {
     const user = userEvent.setup();
     const onRemoveWeek = vi.fn();
     render(
       <MesoTable
         {...baseProps({
-          grid: grid({ weeks: [week({ id: 1, current: true }), week({ id: 2, label: "Wk 2", current: false })] }),
+          grid: grid({ weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2" })] }),
           onRemoveWeek,
         })}
       />,
@@ -560,22 +540,25 @@ describe("weeks: make-current / remove (arm -> confirm)", () => {
     expect(onRemoveWeek).toHaveBeenCalledWith(2);
   });
 
-  it("does not offer make-current/remove-week for the current week", () => {
-    render(<MesoTable {...baseProps({ grid: grid({ weeks: [week({ id: 1, current: true })] }) })} />);
-    expect(screen.queryByTestId("make-current-1")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("remove-week-1")).not.toBeInTheDocument();
+  // Programs are date-less and carry no "current week" pointer
+  // (docs/meso/remove-current-week-plan.md) — there is no exempt week
+  // anymore; every live week's pill offers remove (the backend's own
+  // last-live-week guard, not this component, is what stops the final one).
+  it("offers remove-week for every week, including the first", () => {
+    render(<MesoTable {...baseProps({ grid: grid({ weeks: [week({ id: 1 })] }) })} />);
+    expect(screen.getByTestId("remove-week-1")).toBeInTheDocument();
   });
 
   // designer-simplify: a week spans every day, so its lifecycle controls live
   // ONCE in the mesocycle-level WeekManagerStrip above the day tables — never
   // inside a day. The week LABEL column still appears per day (so the grid
   // stays column-aligned), but it carries no controls.
-  it("renders the week make-current/remove controls once (in the week strip), not in any day-table", () => {
+  it("renders the week remove control once (in the week strip), not in any day-table", () => {
     render(
       <MesoTable
         {...baseProps({
           grid: grid({
-            weeks: [week({ id: 1, current: true }), week({ id: 2, label: "Wk 2", current: false })],
+            weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2" })],
             days: [day({ session_slot_id: 1, name: "Lower" }), day({ session_slot_id: 2, name: "Upper" })],
           }),
         })}
@@ -585,15 +568,10 @@ describe("weeks: make-current / remove (arm -> confirm)", () => {
     expect(screen.getByTestId("meso-day-table-1")).toBeInTheDocument();
     expect(screen.getByTestId("meso-day-table-2")).toBeInTheDocument();
     expect(screen.getAllByTestId("week-col-2")).toHaveLength(2);
-    // …but the controls appear exactly once, in the strip's week pill, and the
-    // label column headers are not inside that pill.
-    expect(screen.getAllByTestId("make-current-2")).toHaveLength(1);
+    // …but the control appears exactly once, in the strip's week pill.
     expect(screen.getAllByTestId("remove-week-2")).toHaveLength(1);
     const pill = screen.getByTestId("week-pill-2");
-    expect(pill).toContainElement(screen.getByTestId("make-current-2"));
-    // the current week (1) shows a badge, not make-current.
-    expect(screen.queryByTestId("make-current-1")).not.toBeInTheDocument();
-    expect(screen.getByTestId("week-pill-1")).toHaveTextContent(/current/i);
+    expect(pill).toContainElement(screen.getByTestId("remove-week-2"));
   });
 });
 
@@ -663,7 +641,7 @@ describe("add exercise this week", () => {
       <MesoTable
         {...baseProps({
           grid: grid({
-            weeks: [week({ id: 1, current: true }), week({ id: 2, label: "Wk 2", current: false })],
+            weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2" })],
             days: [targetDay],
           }),
           onAddExerciseThisWeek,
@@ -696,7 +674,7 @@ describe("add exercise this week", () => {
 // "Bench" (cells 1100/1101). Two weeks (id 1 "Wk 1", id 2 "Wk 2") so
 // ArrowRight/Left week-crossing is exercisable directly.
 const NAV_GRID: MesoGrid = grid({
-  weeks: [week({ id: 1, label: "Wk 1", current: true }), week({ id: 2, label: "Wk 2", current: false })],
+  weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2" })],
   days: [
     day({
       session_slot_id: 1,
@@ -1035,9 +1013,9 @@ describe("keyboard grid navigation: skidding over a skipped cell (issue #455 rev
   it("ArrowRight from the prior week's cell skips an entire skipped-week cell and lands on the following week's text input", () => {
     const SKIP_GRID = grid({
       weeks: [
-        week({ id: 1, label: "Wk 1", current: true }),
-        week({ id: 2, label: "Wk 2", current: false }),
-        week({ id: 3, label: "Wk 3", current: false }),
+        week({ id: 1, label: "Wk 1" }),
+        week({ id: 2, label: "Wk 2" }),
+        week({ id: 3, label: "Wk 3" }),
       ],
       days: [
         day({

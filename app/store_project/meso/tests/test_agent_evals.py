@@ -32,6 +32,7 @@ class TestCheckResult:
             plan,
             "go",
             coach=plan.coach,
+            mesocycle=plan.mesocycles.first(),
             client=FakeClient({"summary": "", "changes": []}),
         )
         case = evals.GoldenCase(name="x", instruction="go", min_changes=1)
@@ -53,7 +54,11 @@ class TestCheckResult:
             ],
         }
         batch, rejected = evals.service.propose_changes(
-            plan, "progress", coach=plan.coach, client=FakeClient(result)
+            plan,
+            "progress",
+            coach=plan.coach,
+            mesocycle=plan.mesocycles.first(),
+            client=FakeClient(result),
         )
         case = evals.GoldenCase(
             name="progress",
@@ -84,7 +89,11 @@ class TestGuardrailHoldsEndToEnd:
             ],
         }
         batch, rejected = evals.service.propose_changes(
-            plan, "swap", coach=plan.coach, client=FakeClient(unsafe)
+            plan,
+            "swap",
+            coach=plan.coach,
+            mesocycle=plan.mesocycles.first(),
+            client=FakeClient(unsafe),
         )
         case = evals.GoldenCase(
             name="knee_safe_swap", instruction="swap", expect_kinds=frozenset({"swap"})
@@ -110,7 +119,9 @@ class TestScriptedCorpus:
         client = evals.ScriptedEvalClient()
 
         for case in evals.GOLDEN_CASES:
-            result = evals.evaluate(plan, case, client=client)
+            result = evals.evaluate(
+                plan, case, client=client, mesocycle=plan.mesocycles.first()
+            )
             assert result.passed, f"{case.name} failed: {result.failures}"
             assert result.n_changes >= case.min_changes
 

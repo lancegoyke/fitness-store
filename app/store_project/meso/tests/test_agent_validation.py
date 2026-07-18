@@ -32,7 +32,7 @@ def make_plan(athlete=None):
     CoachSubscription.comp(rel.coach)
     plan = PlanFactory(relationship=rel)
     meso = MesocycleFactory(plan=plan, order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     cell = presc(session, name="Back Squat")
     return plan, session, cell
@@ -82,7 +82,9 @@ class TestCleanChange:
     def test_valid_swap_targeting_a_plan_prescription(self):
         plan, session, presc = make_plan()
         cleaned, errors = validation.clean_change(
-            base_change(prescription_id=presc.pk), plan
+            base_change(prescription_id=presc.pk),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["kind"] == "swap"
@@ -94,13 +96,17 @@ class TestCleanChange:
 
     def test_unknown_kind_rejected(self):
         plan, _, _ = make_plan()
-        cleaned, errors = validation.clean_change(base_change(kind="frobnicate"), plan)
+        cleaned, errors = validation.clean_change(
+            base_change(kind="frobnicate"), plan, mesocycle=plan.mesocycles.first()
+        )
         assert cleaned is None
         assert any("kind" in e for e in errors)
 
     def test_missing_title_rejected(self):
         plan, _, _ = make_plan()
-        cleaned, errors = validation.clean_change(base_change(title="  "), plan)
+        cleaned, errors = validation.clean_change(
+            base_change(title="  "), plan, mesocycle=plan.mesocycles.first()
+        )
         assert cleaned is None
         assert any("title" in e for e in errors)
 
@@ -108,7 +114,9 @@ class TestCleanChange:
         plan, _, _ = make_plan()
         other_presc = PrescriptionFactory()  # belongs to a different plan
         cleaned, errors = validation.clean_change(
-            base_change(prescription_id=other_presc.pk), plan
+            base_change(prescription_id=other_presc.pk),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("not in this plan" in e for e in errors)
@@ -119,11 +127,13 @@ class TestCleanChange:
         # resolve within the current block, any live week (a swap renames the
         # block-shared slot).
         plan, session, _ = make_plan()  # week index 1 is current
-        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
+        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2)
         off_session = day(week2, day_number=1, name="Lower")
         off_presc = presc(off_session, name="Squat")
         cleaned, errors = validation.clean_change(
-            base_change(prescription_id=off_presc.pk), plan
+            base_change(prescription_id=off_presc.pk),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["prescription"] == off_presc
@@ -135,12 +145,14 @@ class TestCleanChange:
         # Guards both the prescription (swap) and the session (add) lookups.
         plan, _, _ = make_plan()  # current block = mesocycle order 0
         other_block = MesocycleFactory(plan=plan, order=1)
-        other_week = WeekFactory(mesocycle=other_block, index=1, is_current=False)
+        other_week = WeekFactory(mesocycle=other_block, index=1)
         other_session = day(other_week, day_number=1, name="Lower")
         other_presc = presc(other_session, name="Squat")
 
         swap_cleaned, swap_errors = validation.clean_change(
-            base_change(prescription_id=other_presc.pk), plan
+            base_change(prescription_id=other_presc.pk),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert swap_cleaned is None
         assert any("not in this plan" in e for e in swap_errors)
@@ -154,6 +166,7 @@ class TestCleanChange:
                 "new_name": "Plank",
             },
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert add_cleaned is None
         assert any("not in this plan" in e for e in add_errors)
@@ -162,7 +175,7 @@ class TestCleanChange:
         # P4: a progress can set a specific (future/other) week's load — the
         # agent programs progression across the whole block.
         plan, session, _ = make_plan()  # week index 1 is current
-        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
+        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2)
         off_session = day(week2, day_number=1, name="Lower")
         off_presc = presc(off_session, name="Squat")
         cleaned, errors = validation.clean_change(
@@ -170,6 +183,7 @@ class TestCleanChange:
                 kind="progress", prescription_id=off_presc.pk, new_load="100 kg"
             ),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["prescription"] == off_presc
@@ -178,14 +192,16 @@ class TestCleanChange:
     def test_non_integer_prescription_id_rejected(self):
         plan, _, _ = make_plan()
         cleaned, errors = validation.clean_change(
-            base_change(prescription_id="abc"), plan
+            base_change(prescription_id="abc"), plan, mesocycle=plan.mesocycles.first()
         )
         assert cleaned is None
         assert any("integer" in e for e in errors)
 
     def test_deload_without_target_is_allowed(self):
         plan, _, _ = make_plan()
-        cleaned, errors = validation.clean_change(base_change(kind="deload"), plan)
+        cleaned, errors = validation.clean_change(
+            base_change(kind="deload"), plan, mesocycle=plan.mesocycles.first()
+        )
         assert errors == []
         assert cleaned["session"] is None
         assert cleaned["prescription"] is None
@@ -195,14 +211,18 @@ class TestCleanChange:
         # The tool schema doesn't require a target id; an untargeted swap can't
         # be applied, so the guardrail drops it.
         raw = base_change()  # no prescription_id / session_id
-        cleaned, errors = validation.clean_change(raw, plan)
+        cleaned, errors = validation.clean_change(
+            raw, plan, mesocycle=plan.mesocycles.first()
+        )
         assert cleaned is None
         assert any("must target a prescription" in e for e in errors)
 
     def test_consistent_prescription_and_session_accepted(self):
         plan, session, presc = make_plan()
         cleaned, errors = validation.clean_change(
-            base_change(prescription_id=presc.pk, session_id=session.pk), plan
+            base_change(prescription_id=presc.pk, session_id=session.pk),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["prescription"] == presc
@@ -212,7 +232,9 @@ class TestCleanChange:
         plan, session, cell = make_plan()
         other_session = day(session.week, day_number=2, name="Upper")
         cleaned, errors = validation.clean_change(
-            base_change(prescription_id=cell.pk, session_id=other_session.pk), plan
+            base_change(prescription_id=cell.pk, session_id=other_session.pk),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("not in the given session" in e for e in errors)
@@ -227,6 +249,7 @@ class TestCleanChange:
                 new_sets="4",
             ),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["session"] == session
@@ -243,6 +266,7 @@ class TestCleanChange:
                 introduces_exercise="Deep Knee Flexion Drill",
             ),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("contraindication" in e for e in errors)
@@ -257,7 +281,9 @@ class TestCleanChange:
         plan, _, presc = make_plan(athlete=athlete)
         raw = base_change(prescription_id=presc.pk, after="Deep Knee Flexion Drill")
         raw.pop("introduces_exercise")
-        cleaned, errors = validation.clean_change(raw, plan)
+        cleaned, errors = validation.clean_change(
+            raw, plan, mesocycle=plan.mesocycles.first()
+        )
         assert cleaned is None
         assert any("contraindication" in e for e in errors)
 
@@ -275,6 +301,7 @@ class TestCleanChange:
                 after="Goblet Squat 3x10",
             ),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("contraindication" in e for e in errors)
@@ -296,6 +323,7 @@ class TestCleanChange:
                 introduces_exercise="Box Step-Down",
             ),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("contraindication" in e for e in errors)
@@ -311,6 +339,7 @@ class TestCleanChange:
                 prescription_id=presc.pk, introduces_exercise="Box Step-Down (low)"
             ),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["introduces_exercise"] == "Box Step-Down (low)"
@@ -332,6 +361,7 @@ class TestCleanChange:
                 new_sets="3",
             ),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["kind"] == "volume"
@@ -341,6 +371,7 @@ class TestCleanChange:
         cleaned, errors = validation.clean_change(
             base_change(prescription_id=presc.pk, honors="x" * 500, before=None),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert len(cleaned["honors"]) == 255
@@ -348,7 +379,9 @@ class TestCleanChange:
 
     def test_non_dict_rejected(self):
         plan, _, _ = make_plan()
-        cleaned, errors = validation.clean_change("not a dict", plan)
+        cleaned, errors = validation.clean_change(
+            "not a dict", plan, mesocycle=plan.mesocycles.first()
+        )
         assert cleaned is None
         assert errors
 
@@ -359,7 +392,9 @@ class TestApplyPayload:
     def test_swap_payload_from_new_name(self):
         plan, _, presc = make_plan()
         cleaned, errors = validation.clean_change(
-            base_change(prescription_id=presc.pk, new_name="Box Squat"), plan
+            base_change(prescription_id=presc.pk, new_name="Box Squat"),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["payload"] == {"name": "Box Squat"}
@@ -369,6 +404,7 @@ class TestApplyPayload:
         cleaned, errors = validation.clean_change(
             base_change(prescription_id=presc.pk, introduces_exercise="Goblet Squat"),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["payload"] == {"name": "Goblet Squat"}
@@ -378,6 +414,7 @@ class TestApplyPayload:
         cleaned, errors = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="92.5 kg"),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["payload"] == {"load": "92.5 kg"}
@@ -385,14 +422,18 @@ class TestApplyPayload:
     def test_volume_payload_carries_sets(self):
         plan, session, presc = make_plan()
         cleaned, errors = validation.clean_change(
-            base_change(kind="volume", session_id=session.pk, new_sets="4"), plan
+            base_change(kind="volume", session_id=session.pk, new_sets="4"),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["payload"] == {"sets": "4"}
 
     def test_deload_has_empty_payload(self):
         plan, _, _ = make_plan()
-        cleaned, errors = validation.clean_change(base_change(kind="deload"), plan)
+        cleaned, errors = validation.clean_change(
+            base_change(kind="deload"), plan, mesocycle=plan.mesocycles.first()
+        )
         assert errors == []
         assert cleaned["payload"] == {}
 
@@ -401,6 +442,7 @@ class TestApplyPayload:
         cleaned, _ = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="x" * 99),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert len(cleaned["payload"]["load"]) == 32
 
@@ -409,7 +451,9 @@ class TestApplyPayload:
         # show an "approved" edit the apply step silently skips.
         plan, _, presc = make_plan()
         cleaned, errors = validation.clean_change(
-            base_change(kind="progress", prescription_id=presc.pk), plan
+            base_change(kind="progress", prescription_id=presc.pk),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("value to apply" in e for e in errors)
@@ -417,7 +461,9 @@ class TestApplyPayload:
     def test_volume_without_a_value_is_rejected(self):
         plan, session, _ = make_plan()
         cleaned, errors = validation.clean_change(
-            base_change(kind="volume", session_id=session.pk), plan
+            base_change(kind="volume", session_id=session.pk),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("value to apply" in e for e in errors)
@@ -448,6 +494,7 @@ class TestPercentProgressBound:
         cleaned, errors = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="82"),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["payload"] == {"load": "82%"}
@@ -459,6 +506,7 @@ class TestPercentProgressBound:
         cleaned, errors = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="82.5 %"),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["payload"] == {"load": "82.5%"}
@@ -471,6 +519,7 @@ class TestPercentProgressBound:
         cleaned, errors = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="100 lb"),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("percent" in e for e in errors)
@@ -482,6 +531,7 @@ class TestPercentProgressBound:
         cleaned, errors = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="180"),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("out of range" in e for e in errors)
@@ -491,6 +541,7 @@ class TestPercentProgressBound:
         cleaned, errors = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="heavy"),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("percent" in e for e in errors)
@@ -502,6 +553,7 @@ class TestPercentProgressBound:
         cleaned, errors = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="105"),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["payload"] == {"load": "105%"}
@@ -513,6 +565,7 @@ class TestPercentProgressBound:
         cleaned, errors = validation.clean_change(
             base_change(kind="progress", prescription_id=presc.pk, new_load="180 kg"),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["payload"] == {"load": "180 kg"}
@@ -565,7 +618,9 @@ class TestAddKind:
     def test_valid_add_targets_a_session_and_builds_the_row(self):
         plan, session, _ = make_plan()
         cleaned, errors = validation.clean_change(
-            self.add_change(session_id=session.pk), plan
+            self.add_change(session_id=session.pk),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["kind"] == "add"
@@ -590,6 +645,7 @@ class TestAddKind:
                 "new_name": "Plank",
             },
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["payload"] == {"name": "Plank"}
@@ -605,13 +661,16 @@ class TestAddKind:
                 "introduces_exercise": "Goblet Squat",
             },
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["payload"]["name"] == "Goblet Squat"
 
     def test_add_without_a_session_is_rejected(self):
         plan, _, _ = make_plan()
-        cleaned, errors = validation.clean_change(self.add_change(), plan)
+        cleaned, errors = validation.clean_change(
+            self.add_change(), plan, mesocycle=plan.mesocycles.first()
+        )
         assert cleaned is None
         assert any("session" in e for e in errors)
 
@@ -625,6 +684,7 @@ class TestAddKind:
                 "session_id": session.pk,
             },
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("name" in e for e in errors)
@@ -637,6 +697,7 @@ class TestAddKind:
         cleaned, errors = validation.clean_change(
             self.add_change(session_id=session.pk, new_name="Deep Knee Flexion Drill"),
             plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert cleaned is None
         assert any("contraindication" in e for e in errors)
@@ -645,12 +706,12 @@ class TestAddKind:
         # P4: whole-block grounding — an add can target any live week's day, not
         # just the current week's.
         plan, _, _ = make_plan()
-        other_week = WeekFactory(
-            mesocycle=plan.mesocycles.first(), index=2, is_current=False
-        )
+        other_week = WeekFactory(mesocycle=plan.mesocycles.first(), index=2)
         other_session = day(other_week, day_number=1, name="Upper")
         cleaned, errors = validation.clean_change(
-            self.add_change(session_id=other_session.pk), plan
+            self.add_change(session_id=other_session.pk),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert errors == []
         assert cleaned["session"] == other_session
@@ -658,7 +719,9 @@ class TestAddKind:
     def test_add_field_values_are_length_capped(self):
         plan, session, _ = make_plan()
         cleaned, _ = validation.clean_change(
-            self.add_change(session_id=session.pk, new_sets="9" * 99), plan
+            self.add_change(session_id=session.pk, new_sets="9" * 99),
+            plan,
+            mesocycle=plan.mesocycles.first(),
         )
         assert len(cleaned["payload"]["sets"]) == 32
 

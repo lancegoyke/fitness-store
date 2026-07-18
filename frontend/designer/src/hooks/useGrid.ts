@@ -16,7 +16,7 @@
 // source cell's already-committed DB values, so an in-flight edit must land
 // first or the fill can copy stale data (Codex P2).
 //
-// Structural verbs (add/remove day|week|exercise, set-current, undo/redo)
+// Structural verbs (add/remove day|week|exercise, undo/redo)
 // await their POST, then call refetchGrid() (a plain GET, mirroring
 // usePlanData's switchWeek) to re-sync the whole grid — mirroring
 // usePlanData/useReorder's ref-guard idiom, one shared in-flight guard across
@@ -90,9 +90,14 @@ export function rowIdentityCellId(weeks: GridWeek[], row: GridRow | undefined): 
   return first ? row.cells[String(first.id)]?.prescription_id : undefined;
 }
 
+// The viewed week for structural verbs that need ONE week id to anchor a
+// POST (add-day's `week_id`, undo/redo's `week_id`) — programs are date-less
+// and carry no "current" pointer (docs/meso/remove-current-week-plan.md), so
+// this is simply the grid's first live week, mirroring the server's own
+// `current_week(plan)` degrade (explicit week -> else earliest live week).
 function currentWeekId(grid: MesoGrid | null): Id | undefined {
   if (!grid) return undefined;
-  return (grid.weeks.find((w) => w.current) ?? grid.weeks[0])?.id;
+  return grid.weeks[0]?.id;
 }
 
 /** Immutably patch every cell (across every day/row/week) whose
@@ -341,6 +346,12 @@ export function useGrid(options: UseGridOptions) {
     () =>
       runStructural(async () => {
         const weekId = currentWeekId(grid);
+        // No live week in the block we're viewing means there is nothing to hang
+        // a day on. Posting anyway would send `{week_id: undefined}` — JSON drops
+        // the key, and the server's own fallback would create the day in whatever
+        // block DOES have a live week, i.e. not the one on screen. Add a week
+        // first (that path is block-scoped).
+        if (weekId == null) return;
         try {
           await apiPost(`/meso/api/plan/${planId}/session/`, { week_id: weekId }, csrf);
         } catch (err) {
@@ -369,15 +380,25 @@ export function useGrid(options: UseGridOptions) {
   const addWeek = useCallback(
     () =>
       runStructural(async () => {
+        // Post the block we're VIEWING. Without it the server falls back to the
+        // plan's first block, which is the same block the grid opens on today —
+        // but only by coincidence, and it silently diverged before (an empty
+        // first block sent the new week to a later one, where this grid would
+        // never show it).
+        const mesocycleId = grid?.mesocycle?.id;
         try {
-          await apiPost(`/meso/api/plan/${planId}/week/`, null, csrf);
+          await apiPost(
+            `/meso/api/plan/${planId}/week/`,
+            mesocycleId != null ? { mesocycle_id: mesocycleId } : null,
+            csrf,
+          );
         } catch (err) {
           console.error("Add week failed", err);
           return;
         }
         await refetchGrid();
       }),
-    [planId, csrf, runStructural, refetchGrid],
+    [grid, planId, csrf, runStructural, refetchGrid],
   );
 
   const removeWeek = useCallback(
@@ -387,20 +408,6 @@ export function useGrid(options: UseGridOptions) {
           await apiPost(`/meso/api/plan/${planId}/week/${weekId}/delete/`, null, csrf);
         } catch (err) {
           console.error("Remove week failed", err);
-          return;
-        }
-        await refetchGrid();
-      }),
-    [planId, csrf, runStructural, refetchGrid],
-  );
-
-  const setCurrentWeek = useCallback(
-    (weekId: Id) =>
-      runStructural(async () => {
-        try {
-          await apiPost(`/meso/api/plan/${planId}/week/${weekId}/current/`, null, csrf);
-        } catch (err) {
-          console.error("Set current week failed", err);
           return;
         }
         await refetchGrid();
@@ -549,7 +556,6 @@ export function useGrid(options: UseGridOptions) {
     removeDay,
     addWeek,
     removeWeek,
-    setCurrentWeek,
     reorderExercises,
     reorderDays,
     skipCell,

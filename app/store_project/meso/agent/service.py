@@ -63,19 +63,66 @@ def _coach_style(coach):
     return {"tags": profile.programming_style or [], "avoid": profile.avoid_rules}
 
 
-def build_context(plan):
+def build_context(plan, mesocycle):
     """Everything the model is grounded on, as a JSON-serializable dict.
 
     Grounds on the plan's one athlete (profile, contraindications, recent logs)
-    plus the whole current **block** (``serialize_agent_block``): every live week
-    of the plan's current mesocycle with its full session/cell grid and per-week
-    volume/intensity/phase/current flags, so the agent programs progression
+    plus the whole ``mesocycle`` **block** (``serialize_agent_block``): every
+    live week of it with its full session/cell grid and per-week
+    volume/intensity/phase/deload flags, so the agent programs progression
     across the block, not one week in isolation (P4).
+
+    ``mesocycle`` is the coach's *viewed* block — resolved once, at request
+    time, by whoever created the batch (``AgentProposalBatch.mesocycle``, §4b)
+    — and threaded straight through, never re-derived here. May be ``None``
+    (no block to program, or one hard-deleted mid-run); ``serialize_agent_block``
+    degrades to an empty block rather than silently falling back to a different
+    one.
     """
+    # Both halves of the context must describe the SAME block. ``serialize_plan``
+    # resolves its own opening week via ``current_week(plan)`` — the plan's
+    # earliest live week — so left alone it would expose block 1's prescription
+    # ids beside block 2's ``block`` payload. The model can only see ids, not
+    # which block they belong to, so it would happily target the block-1 ones and
+    # validation would then drop them as outside ``batch.mesocycle``. Pin it to
+    # this block's first live week.
+    #
+    # A resolved block can still have no live week of its own (``mesocycle`` is
+    # ``None``, or every week in it was soft-deleted — reachable since
+    # ``week_delete`` only guards the *plan's* last live week, not the block's,
+    # docs/meso/remove-current-week-plan.md §4b). ``week=None`` is
+    # ``serialize_plan``'s "no override" sentinel, so passing it through
+    # unconditionally would make it fall back to ``current_week(plan)`` — the
+    # plan's earliest live week, quite possibly sitting in a DIFFERENT block —
+    # and hand the model that other block's prescription ids again, right back
+    # in the failure mode this function exists to close. So: when this block has
+    # no live week, force the block-scoped rows ``serialize_plan`` would itself
+    # produce for "no open week" (``program``/``weeks`` empty, ``viewing`` null)
+    # rather than let its fallback reach past this (empty) block into another.
+    resolved_week = serializers.first_live_week(mesocycle)
+    plan_context = serializers.serialize_plan(plan, week=resolved_week)
+    if resolved_week is None:
+        plan_context["program"] = []
+        plan_context["weeks"] = []
+        plan_context["viewing"] = None
+        # ``serialize_plan`` has ALREADY fallen back to a different block by
+        # this point — ``open_week = current_week(plan, None)`` inside it
+        # lands on the plan's earliest live week, quite possibly in block 1
+        # while ``mesocycle`` (this block) is empty — and derives
+        # ``current_mesocycle`` from THAT week, so ``phases`` marks block 1
+        # "current" even though ``context["block"]`` is this empty block. That
+        # is the same mixed-block leak the ``program``/``weeks``/``viewing``
+        # blanks above exist to close, just surfacing on the macrocycle rail
+        # instead of the grid. There's no meaningful "viewing" position for a
+        # block with no live weeks, so clear it rather than reimplement
+        # ``_phase_states`` here — an empty list renders no rail at all, which
+        # is correct for "nothing to view."
+        plan_context["phases"] = []
+
     context = {
-        "plan": serializers.serialize_plan(plan),
+        "plan": plan_context,
         "coach_style": _coach_style(plan.coach),
-        "block": serializers.serialize_agent_block(plan),
+        "block": serializers.serialize_agent_block(plan, mesocycle),
     }
     context["athlete"] = {
         "name": plan.athlete.display_name(),
@@ -91,9 +138,23 @@ def build_context(plan):
 
 
 def create_drafting_batch(
-    plan, instruction, *, coach, trigger=models.AgentProposalBatch.Trigger.MANUAL
+    plan,
+    instruction,
+    *,
+    coach,
+    mesocycle,
+    trigger=models.AgentProposalBatch.Trigger.MANUAL,
 ):
     """Persist a ``drafting`` batch the endpoint returns before the job runs.
+
+    ``mesocycle`` is the block the coach had open, captured by the caller at
+    request time (``agent_propose`` / ``_reserve_plan_draft``) and frozen onto
+    the batch (§4b) — grounding (a background job) and apply (a later request)
+    read it back from here rather than re-deriving "which block" on their own,
+    which is what let the answer silently drift to a different block than the
+    one the coach was looking at. Required, not defaulted: a caller that
+    doesn't know the block should resolve one explicitly (or pass ``None`` on
+    purpose) rather than have this function guess.
 
     Snapshots the slicing dimensions for the usage ledger at creation: ``trigger``
     (what kicked the run off) and the coach's ``billing_status`` *now* (lossy to
@@ -102,6 +163,7 @@ def create_drafting_batch(
     """
     return models.AgentProposalBatch.objects.create(
         plan=plan,
+        mesocycle=mesocycle,
         coach=coach,
         instruction=instruction,
         status=models.AgentProposalBatch.Status.DRAFTING,
@@ -165,7 +227,7 @@ def _persist_result(batch, result, *, model, duration_ms=None):
         order = 0
         for raw in raw_changes:
             cleaned, errors = validation.clean_change(
-                raw, batch.plan, forbidden=forbidden
+                raw, batch.plan, mesocycle=batch.mesocycle, forbidden=forbidden
             )
             if cleaned is None:
                 rejected.append({"raw": raw, "errors": errors})
@@ -213,7 +275,7 @@ def run_proposal_job(batch_id, *, client=None):
     ``(batch, rejected)``.
     """
     batch = models.AgentProposalBatch.objects.select_related(
-        "plan", "plan__relationship", "plan__relationship__athlete"
+        "plan", "plan__relationship", "plan__relationship__athlete", "mesocycle"
     ).get(pk=batch_id)
     try:
         client = client or client_module.get_default_client()
@@ -226,7 +288,8 @@ def run_proposal_job(batch_id, *, client=None):
         started = time.monotonic()
         try:
             result = client.propose(
-                context=build_context(batch.plan), instruction=batch.instruction
+                context=build_context(batch.plan, batch.mesocycle),
+                instruction=batch.instruction,
             )
         except Exception as exc:  # external boundary
             duration_ms = int((time.monotonic() - started) * 1000)
@@ -250,6 +313,7 @@ def propose_changes(
     instruction,
     *,
     coach,
+    mesocycle,
     client=None,
     trigger=models.AgentProposalBatch.Trigger.MANUAL,
 ):
@@ -260,12 +324,15 @@ def propose_changes(
     provider failure — and persists no batch in either case. Returns
     ``(batch, rejected)`` on success. ``trigger`` tags the run for the usage ledger
     (the eval harness passes ``eval`` so its runs are excluded from cost reports).
+    ``mesocycle`` is the block to ground/validate against (§4b) — required, like
+    ``create_drafting_batch``, so a caller states its scope rather than this
+    function guessing one.
     """
     client = client or client_module.get_default_client()
     if client is None:
         raise AgentNotConfigured("The Meso agent is not configured (no API key).")
 
-    context = build_context(plan)
+    context = build_context(plan, mesocycle)
     model = getattr(client, "model", "")
     # Network call happens outside the DB transaction. Wrap provider failures
     # (timeouts, API errors, a bad configured model) as AgentError so the
@@ -282,6 +349,7 @@ def propose_changes(
     with transaction.atomic():
         batch = models.AgentProposalBatch.objects.create(
             plan=plan,
+            mesocycle=mesocycle,
             coach=coach,
             instruction=instruction,
             status=models.AgentProposalBatch.Status.PENDING,

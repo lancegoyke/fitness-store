@@ -1,17 +1,20 @@
 """The athlete-profile program block — ``presenters.profile_program`` + render.
 
-The profile's "Current block / adherence / macrocycle / latest session" card and
-its left-rail goals shipped as a fully-built template fed dead placeholders
-(``profile_athlete`` returned ``has_program=False``; the view hard-coded
-``macrocycle=[]`` / ``results_summary=None``). These pin the read-side
-that lights the block up:
+The profile's "Cadence / macrocycle / latest session" card and its left-rail
+goals shipped as a fully-built template fed dead placeholders (``profile_athlete``
+returned ``has_program=False``; the view hard-coded ``macrocycle=[]`` /
+``results_summary=None``). These pin the read-side that lights the block up:
 
-- it keys off the athlete's *current* week (the same week the roster meter
-  measures; 2d — delivery no longer gates visibility, so the ``is_current``
-  pointer, not the latest delivery, is the anchor);
-- ``has_program`` is gated on a *measurable* week (one with sessions), so an
-  athlete with nothing to train honestly falls back to the create /
-  in-progress empty state;
+- programs are date-less (docs/meso/remove-current-week-plan.md §4a, decided
+  2026-07-18) — there is no "current week" to report a position or a percent
+  against, so the block surfaces **cadence** (recency + a rolling 14-day
+  session count, ``adherence.link_last_trained`` / ``link_session_count``)
+  instead of the old per-week compliance meter;
+- ``has_program`` is gated on "the plan has any live week" (computable
+  without ``is_current``) — an athlete with a program but nothing logged yet
+  still sees the block, with cadence reading "No sessions yet";
+- the macrocycle rail highlights the block of the athlete's most-recent DONE
+  log (factual history), not a "current" pointer;
 - ``status`` prefers the most actionable signal (needs_review > drafting >
   delivered); ``results_summary`` reuses the coach results scoring.
 """
@@ -44,29 +47,29 @@ def make_plan(
     rel,
     *,
     blocks=("Accumulation", "Intensification", "Realization"),
-    current_block=1,
+    logged_block=1,
     sessions=2,
     done=1,
     goal="Squat 405",
     status=Plan.Status.ACTIVE,
 ):
-    """A plan under ``rel`` whose ``current_block``-th block holds the athlete's week.
+    """A plan whose ``logged_block``-th block holds the athlete's cadence data.
 
-    Each block is a ``Mesocycle`` (``order``/``index`` ascending). Only the week
-    in ``current_block`` is flagged ``is_current`` (and stamped delivered — the
-    notify marker, irrelevant to the read since 2d), with ``sessions`` days, the
-    first ``done`` of them logged *done* for the athlete.
-    Returns ``(plan, current_week)``.
+    Each block is a ``Mesocycle`` (``order``/``index`` ascending) with one live
+    week (index 1, delivered — the notify marker, irrelevant to the read since
+    2d). Only ``logged_block``'s week gets ``sessions`` days materialized, the
+    first ``done`` of them logged *done* for the athlete — this is the block
+    the macrocycle rail highlights (the most-recent DONE log's block) and the
+    source of the profile's cadence chip. Returns ``(plan, logged_week)``.
     """
     plan = PlanFactory(relationship=rel, status=status, goal=goal)
-    current = None
+    logged_week = None
     for i, name in enumerate(blocks):
         meso = MesocycleFactory(plan=plan, name=name, order=i, week_count=4)
         week = WeekFactory(mesocycle=meso, index=i + 1, delivered_at=None)
-        if i == current_block:
-            week.is_current = True
+        if i == logged_block:
             week.delivered_at = timezone.now()
-            week.save(update_fields=["is_current", "delivered_at"])
+            week.save(update_fields=["delivered_at"])
             for n in range(sessions):
                 session = day(week, day_number=n + 1, name=f"Day {n + 1}")
                 if n < done:
@@ -75,8 +78,8 @@ def make_plan(
                         athlete=rel.athlete,
                         status=SessionLog.Status.DONE,
                     )
-            current = week
-    return plan, current
+            logged_week = week
+    return plan, logged_week
 
 
 # -- empty state (nothing delivered) ---------------------------------------
@@ -87,14 +90,15 @@ class TestEmptyState:
         rel = CoachAthleteFactory()
         program = presenters.profile_program(rel, None)
         assert program["athlete"]["has_program"] is False
-        assert program["athlete"]["compliance"] is None
+        assert program["athlete"]["recency"] == "No sessions yet"
+        assert program["athlete"]["session_count_14d"] == 0
         assert program["athlete"]["status"] == ""
         assert program["athlete"]["goals"] == []
         assert program["macrocycle"] == []
         assert program["results_summary"] is None
 
     def test_working_plan_built_but_undelivered(self):
-        # A plan exists (goal set) but no week is delivered → still the empty
+        # A plan exists (goal set) but has no live WEEK yet → still the empty
         # state, but the goal surfaces so the left rail isn't blank pre-delivery.
         rel = CoachAthleteFactory()
         plan = PlanFactory(relationship=rel, goal="Bench 315")
@@ -103,33 +107,40 @@ class TestEmptyState:
         assert program["athlete"]["has_program"] is False
         assert program["athlete"]["goals"] == ["Bench 315"]
 
-    def test_delivered_week_with_no_sessions_is_not_a_program(self):
-        # A delivered week with nothing to measure (compliance None) must not
-        # light up the block with a misleading meter.
+    def test_delivered_week_with_no_sessions_still_counts_as_a_program(self):
+        # Re-based gate (§4a): "has_program" now means "the plan has any live
+        # week," not "there's a measurable percent" — a delivered-but-empty
+        # week still lights up the block, with cadence honestly degrading to
+        # "No sessions yet" rather than the block being hidden.
         rel = CoachAthleteFactory()
         meso = MesocycleFactory(plan=PlanFactory(relationship=rel))
         WeekFactory(mesocycle=meso, delivered_at=timezone.now())  # no sessions
         program = presenters.profile_program(rel, None)
-        assert program["athlete"]["has_program"] is False
+        assert program["athlete"]["has_program"] is True
+        assert program["athlete"]["recency"] == "No sessions yet"
+        assert program["athlete"]["session_count_14d"] == 0
 
 
-# -- the lit-up block ------------------------------------------------------
+# -- the lit-up block --------------------------------------------------------
 
 
 class TestProgramBlock:
-    def test_block_and_week_label_off_the_current_week(self):
+    def test_cadence_reflects_the_logged_block(self):
         rel = CoachAthleteFactory()
-        make_plan(rel, current_block=1)  # block index 1 → "Intensification", Wk 2
+        make_plan(rel, sessions=2, done=1, logged_block=1)
         athlete = presenters.profile_program(rel, None)["athlete"]
         assert athlete["has_program"] is True
-        assert athlete["block"] == "Intensification"
-        assert athlete["week"] == "Wk 2"
+        assert athlete["recency"] == "just now"  # the DONE log was just written
+        assert athlete["session_count_14d"] == 1
 
-    def test_compliance_matches_the_current_week(self):
+    def test_no_block_or_week_label(self):
+        # The app never asserts a "current block/week" position (docs/meso/
+        # remove-current-week-plan.md) — those keys don't exist any more.
         rel = CoachAthleteFactory()
-        make_plan(rel, sessions=2, done=1)  # 1 of 2 done → 50%
+        make_plan(rel)
         athlete = presenters.profile_program(rel, None)["athlete"]
-        assert athlete["compliance"] == 50
+        assert "block" not in athlete
+        assert "week" not in athlete
 
     def test_goal_from_the_delivered_plan(self):
         rel = CoachAthleteFactory()
@@ -151,19 +162,27 @@ class TestProgramBlock:
 
 
 class TestMacrocycle:
-    def test_states_positioned_at_the_current_block(self):
+    def test_states_positioned_at_the_most_recently_logged_block(self):
         rel = CoachAthleteFactory()
         make_plan(
             rel,
             blocks=("B0", "B1", "B2", "B3"),
-            current_block=1,
+            logged_block=1,
         )
         macro = presenters.profile_program(rel, None)["macrocycle"]
         assert [m["name"] for m in macro] == ["B0", "B1", "B2", "B3"]
-        # Done before the live block, current on it, next immediately after,
-        # future beyond.
+        # Done before the highlighted block, current on it, next immediately
+        # after, future beyond.
         assert [m["state"] for m in macro] == ["done", "current", "next", "future"]
         assert macro[0]["weeks"] == "4 wk"
+
+    def test_no_highlight_when_nothing_logged_yet(self):
+        # No DONE log anywhere on the plan → no block reads as "current";
+        # every block is "future" (nothing started, factually).
+        rel = CoachAthleteFactory()
+        make_plan(rel, blocks=("B0", "B1"), sessions=2, done=0)
+        macro = presenters.profile_program(rel, None)["macrocycle"]
+        assert [m["state"] for m in macro] == ["future", "future"]
 
 
 # -- the status badge ------------------------------------------------------
@@ -303,18 +322,22 @@ class TestProfileRender:
         rel.athlete.save(update_fields=["name"])
         return coach, rel
 
-    def test_delivered_program_renders_block_and_meter(self, client):
+    def test_delivered_program_renders_block_and_cadence(self, client):
         coach, rel = self._coach_with_athlete()
-        _, week = make_plan(rel, current_block=1, sessions=2, done=1)
+        make_plan(rel, logged_block=1, sessions=2, done=1)
         client.force_login(coach)
         resp = client.get(reverse("meso:athlete", kwargs={"pk": rel.athlete_id}))
         assert resp.status_code == 200
         body = resp.content.decode()
-        assert "Intensification" in body  # current block
-        assert "Wk 2" in body
-        assert "50%" in body  # adherence meter
+        assert "Intensification" in body  # the logged block, via the rail
+        assert "just now" in body  # cadence recency chip
+        assert "1 session in 14d" in body  # cadence rolling-count chip
         assert "Realization" in body  # macrocycle rail
         assert "Delivered" in body  # status badge
+        # No stale "Current block" position claim (the results card's own
+        # "Wk 2 · Day 1" session label is unrelated — that names WHICH
+        # session was logged, not a "you are here" claim).
+        assert "Current block" not in body
         # The latest-session card links to that athlete's logged session.
         logged = SessionLog.objects.filter(
             athlete=rel.athlete, status=SessionLog.Status.DONE
@@ -338,14 +361,15 @@ class TestProfileRender:
         assert reverse("meso:review_batch", kwargs={"batch_id": batch.pk}) in body
 
     def test_delivered_but_unlogged_hides_the_latest_session_card(self, client):
-        # has_program is true (a measurable delivered week), but nothing's logged
-        # yet — the Latest-session card must not render blank with a dangling %.
+        # has_program is true (a plan with a live week), but nothing's logged
+        # yet — the cadence chip honestly reads "No sessions yet" and the
+        # Latest-session card must not render at all.
         coach, rel = self._coach_with_athlete()
         make_plan(rel, sessions=2, done=0)
         client.force_login(coach)
         resp = client.get(reverse("meso:athlete", kwargs={"pk": rel.athlete_id}))
         body = resp.content.decode()
-        assert "0%" in body  # the adherence meter still shows
+        assert "No sessions yet" in body
         assert "Latest session" not in body
 
     def test_undelivered_with_working_plan_shows_in_progress(self, client):

@@ -46,7 +46,10 @@ class TestDraftingBatch:
     def test_create_drafting_batch_is_drafting_with_no_changes(self):
         plan, _, _ = make_plan()
         batch = service.create_drafting_batch(
-            plan, "Make it knee-safe.", coach=plan.coach
+            plan,
+            "Make it knee-safe.",
+            coach=plan.coach,
+            mesocycle=plan.mesocycles.first(),
         )
         assert batch.status == AgentProposalBatch.Status.DRAFTING
         assert batch.instruction == "Make it knee-safe."
@@ -57,7 +60,9 @@ class TestDraftingBatch:
 class TestRunProposalJob:
     def test_happy_path_flips_drafting_to_pending(self):
         plan, _, presc = make_plan()
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
         fake = FakeClient(one_swap(presc))
 
         result_batch, rejected = service.run_proposal_job(batch.pk, client=fake)
@@ -73,7 +78,9 @@ class TestRunProposalJob:
 
     def test_provider_failure_marks_batch_failed(self):
         plan, _, _ = make_plan()
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
 
         class BoomClient:
             model = "claude-opus-4-8-test"
@@ -92,7 +99,9 @@ class TestRunProposalJob:
         from store_project.meso.agent import client as client_module
 
         plan, _, _ = make_plan()
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
         monkeypatch.setattr(client_module, "get_default_client", lambda: None)
 
         service.run_proposal_job(batch.pk)
@@ -109,7 +118,9 @@ class TestRunProposalJob:
             athlete=plan.athlete,
             text="L knee — avoid deep knee flexion under load",
         )
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
         fake = FakeClient(
             {
                 "summary": "",
@@ -139,7 +150,9 @@ class TestDispatch:
         # inline so the batch is resolved by the time dispatch returns.
         settings.MESO_AGENT_RUN_SYNC = True
         plan, _, presc = make_plan()
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
         fake = FakeClient(one_swap(presc))
 
         jobs.dispatch_proposal(batch.pk, client=fake)
@@ -160,7 +173,9 @@ class TestDispatch:
             jobs, "async_task", lambda func, *args: enqueued.append((func, args))
         )
         plan, _, _ = make_plan()
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
 
         with django_capture_on_commit_callbacks(execute=True):
             jobs.dispatch_proposal(batch.pk)
@@ -182,7 +197,9 @@ class TestDispatch:
         plan, _, presc = make_plan()
         fake = FakeClient(one_swap(presc))
         monkeypatch.setattr(client_module, "get_default_client", lambda: fake)
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
 
         with django_capture_on_commit_callbacks(execute=True):
             jobs.dispatch_proposal(batch.pk)
@@ -203,7 +220,9 @@ class TestDispatch:
 
         monkeypatch.setattr(jobs, "async_task", boom)
         plan, _, _ = make_plan()
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
 
         with django_capture_on_commit_callbacks(execute=True):
             jobs.dispatch_proposal(batch.pk)

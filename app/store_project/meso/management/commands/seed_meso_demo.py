@@ -19,14 +19,16 @@ database renders the roster, athlete profile, and designer from actual data:
 The command is **idempotent**: re-running ``get_or_create``s/``update_or_create``s
 every row, so it never duplicates. ``--delete`` tears the demo back down (the
 demo athletes and, by cascade, their links and plans) for a clean re-seed.
-Each client has exactly one ``is_current`` (live) week; every week strictly
-before it is delivered **and logged** — a real multi-week training history —
-while every week after it is built but left undelivered/unlogged, so the
-"future" of the program looks unfinished on purpose. Maya's current-week
-"Lower" session additionally carries her original hand-authored log
-(``SAMPLE_LOG``) so the coach's results screen and the designer's "last time"
-column light up off real data (athlete slice Phase 3); the review screen
-renders real agent batches once a proposal is run.
+Every live week of every client's plan is delivered (2d: delivery no longer
+gates visibility, so there's no "future, undelivered" distinction left to
+model — see docs/meso/remove-current-week-plan.md §6); each plan also names a
+"logged-through" week purely at the seed-data level (``logged_through_index``,
+never a materialized field) — every week strictly before it gets a real,
+multi-week logged training history, while the ones at/after it are built but
+left unlogged. Maya's logged-through-week "Lower" session additionally carries
+her original hand-authored log (``SAMPLE_LOG``) so the coach's results screen
+and the designer's "last time" column light up off real data (athlete slice
+Phase 3); the review screen renders real agent batches once a proposal is run.
 """
 
 from datetime import date
@@ -132,8 +134,8 @@ ATHLETES = [
 # sets/reps/RPE/load + a weekly load step) into real per-week cell text for
 # every week of a block, so authoring three full programs stays a data
 # problem, not a hand-typed-text problem. Only Maya's Hypertrophy block (the
-# original fixture grid, preserved byte-for-byte on its current week) skips
-# this and stays hand-authored below.
+# original fixture grid, preserved byte-for-byte on its logged-through week)
+# skips this and stays hand-authored below.
 # ---------------------------------------------------------------------------
 
 # A phase's default sets/reps/RPE and where its working load sits relative to
@@ -291,7 +293,6 @@ def _progressive_weeks(
     count,
     phase,
     deload_index=None,
-    current_index=None,
     start_index=1,
     volume_start=60,
     volume_step=8,
@@ -309,7 +310,6 @@ def _progressive_weeks(
     for offset in range(count):
         index = start_index + offset
         is_deload = deload_index is not None and index == deload_index
-        is_current = current_index is not None and index == current_index
         if is_deload:
             volume = max(35, volume_start - 15)
             intensity = min(95, intensity_start + intensity_step)
@@ -325,7 +325,6 @@ def _progressive_weeks(
                 "volume": volume,
                 "intensity": intensity,
                 "is_deload": is_deload,
-                "is_current": is_current,
                 "cells": _cells_for_week(days, index, deload_index=deload_index),
             }
         )
@@ -378,10 +377,16 @@ def _block(
     count,
     phase,
     deload_index=None,
-    current_index=None,
+    logged_through_index=None,
     phase_overrides=None,
 ):
-    """One ``SAMPLE_PLAN``-mesocycle-shaped block spec, fully built."""
+    """One ``SAMPLE_PLAN``-mesocycle-shaped block spec, fully built.
+
+    ``logged_through_index`` is a plain seed-data bookkeeping value — how deep
+    into THIS block ``_log_plan_history`` should generate a logged training
+    history — never a materialized ``Week`` field (see that method's
+    docstring). At most one block across a plan sets it.
+    """
     tuning = _BLOCK_TUNING[kind]
     return {
         "name": name,
@@ -393,10 +398,10 @@ def _block(
             count=count,
             phase=phase,
             deload_index=deload_index,
-            current_index=current_index,
             phase_overrides=phase_overrides,
             **tuning,
         ),
+        "logged_through_index": logged_through_index,
     }
 
 
@@ -409,7 +414,7 @@ def _client_block(
     count,
     phase,
     deload_index=None,
-    current_index=None,
+    logged_through_index=None,
     phase_overrides=None,
 ):
     """``_block`` from a client's day templates for one phase ``kind``."""
@@ -421,7 +426,7 @@ def _client_block(
         count=count,
         phase=phase,
         deload_index=deload_index,
-        current_index=current_index,
+        logged_through_index=logged_through_index,
         phase_overrides=phase_overrides,
     )
 
@@ -439,8 +444,9 @@ def _client_block(
 # ``"exercises"`` order, each ``{"text": "<freeform>", "skipped": bool,
 # "lines": ["<sub-line>", ...]}`` (all optional).
 #
-# Her Hypertrophy block's **current week (index 2) is preserved verbatim** —
-# many tests assert its exact cell text — while weeks 1/3/4 (previously blank)
+# Her Hypertrophy block's **logged-through week (index 2) is preserved
+# verbatim** — many tests assert its exact cell text — while weeks 1/3/4
+# (previously blank)
 # now carry real progressive text generated from the same per-exercise
 # ``scheme``s (added as an extra, build_block-ignored key on each exercise
 # entry below). Her other three blocks (Base/GPP, Strength, Peak/Test) are
@@ -607,11 +613,12 @@ _HYPERTROPHY_DAYS = [
 
 # Maya's Base/GPP lineup — deliberately DIFFERENT movement names than her
 # Hypertrophy block (general-prep substitutes, not the same lifts at a lighter
-# load): Base/GPP is fully logged history (it's entirely before her current
-# week), so reusing a Hypertrophy lift name here would feed those lighter
-# prep-phase loads into the *same* derived-1RM identity as her real Hypertrophy
-# logs and drag it down — separate names keep the two blocks' histories from
-# colliding. Still fully knee-safe / no-impact throughout.
+# load): Base/GPP is fully logged history (it's entirely before her
+# logged-through week), so reusing a Hypertrophy lift name here would feed
+# those lighter prep-phase loads into the *same* derived-1RM identity as her
+# real Hypertrophy logs and drag it down — separate names keep the two
+# blocks' histories from colliding. Still fully knee-safe / no-impact
+# throughout.
 _MAYA_PREP_DAY_TEMPLATES = [
     (
         1,
@@ -657,8 +664,8 @@ _MAYA_PREP_DAY_TEMPLATES = [
 
 # Maya's Strength / Peak-Test lineup — her Hypertrophy block's own lifts,
 # reused at a heavier/lower-rep zone. Safe to share names with the Hypertrophy
-# block (unlike Base/GPP above): both these blocks fall AFTER her current week,
-# so neither is ever logged — no history to collide with.
+# block (unlike Base/GPP above): both these blocks fall AFTER her
+# logged-through week, so neither is ever logged — no history to collide with.
 _MAYA_MAIN_DAY_TEMPLATES = [
     (
         1,
@@ -702,9 +709,10 @@ _MAYA_MAIN_DAY_TEMPLATES = [
     ),
 ]
 
-# Maya's Hypertrophy "weeks" — index/phase/volume/intensity/is_deload/
-# is_current are UNCHANGED from the original fixture; week 2 (current) keeps
-# its exact original ``cells`` dict verbatim (the Box Squat ``72%`` row, the
+# Maya's Hypertrophy "weeks" — index/phase/volume/intensity/is_deload are
+# UNCHANGED from the original fixture; week 2 (the plan's logged-through
+# week — see SAMPLE_PLAN's ``logged_through_index`` below) keeps its exact
+# original ``cells`` dict verbatim (the Box Squat ``72%`` row, the
 # ``{"skipped": True}`` cell, the ``Cable Crunch`` sub-line) — many tests
 # assert this precisely. Weeks 1/3/4 gain generated ``cells`` (previously
 # blank).
@@ -715,7 +723,6 @@ _HYPERTROPHY_WEEKS = [
         "volume": 70,
         "intensity": 62,
         "is_deload": False,
-        "is_current": False,
         "cells": _cells_for_week(_HYPERTROPHY_DAYS, 1, deload_index=4),
     },
     {
@@ -724,7 +731,6 @@ _HYPERTROPHY_WEEKS = [
         "volume": 85,
         "intensity": 68,
         "is_deload": False,
-        "is_current": True,
         "cells": {
             1: [
                 {"text": "4 x 6, RPE 7, 72%"},
@@ -761,7 +767,6 @@ _HYPERTROPHY_WEEKS = [
         "volume": 100,
         "intensity": 73,
         "is_deload": False,
-        "is_current": False,
         "cells": _cells_for_week(_HYPERTROPHY_DAYS, 3, deload_index=4),
     },
     {
@@ -770,7 +775,6 @@ _HYPERTROPHY_WEEKS = [
         "volume": 55,
         "intensity": 70,
         "is_deload": True,
-        "is_current": False,
         "cells": _cells_for_week(_HYPERTROPHY_DAYS, 4, deload_index=4),
     },
 ]
@@ -794,6 +798,9 @@ SAMPLE_PLAN = {
             "week_count": 4,
             "days": _HYPERTROPHY_DAYS,
             "weeks": _HYPERTROPHY_WEEKS,
+            # Seed-data-only bookkeeping (never a materialized field) — see
+            # ``_block``'s docstring and ``_log_plan_history``.
+            "logged_through_index": 2,
         },
         _client_block(
             "Strength",
@@ -816,7 +823,7 @@ SAMPLE_PLAN = {
     ],
 }
 
-# Maya's logged "Lower" session (the current week, Day 1) — the first real logged
+# Maya's logged "Lower" session (the logged-through week, Day 1) — the first real logged
 # rows on the demo. Worked mostly to target, with the Box Squat top set running
 # hot and the last leg-curl set falling short, so the results screen shows a real
 # completion %, an RPE-over flag, and a shortfall note. ``(reps, load, rpe)`` per
@@ -844,9 +851,10 @@ SAMPLE_LOG = {
 # ---------------------------------------------------------------------------
 # Devon's plan — R shoulder, neutral-grip pressing only (6 months trained:
 # still building his base). Every lift is either neutral-grip or has no
-# shoulder-pressing component at all. Current week: Strength block, week 2 of
-# 4 — Base/GPP + Hypertrophy fully behind him (logged history), Strength wk1
-# behind him too, Strength wk3/4 + Peak/Test still ahead (built, undelivered).
+# shoulder-pressing component at all. Logged-through week: Strength block,
+# week 2 of 4 — Base/GPP + Hypertrophy fully behind him (logged history),
+# Strength wk1 behind him too, Strength wk3/4 + Peak/Test still ahead (built,
+# but unlogged).
 # ---------------------------------------------------------------------------
 
 _DEVON_DAY_TEMPLATES = [
@@ -928,7 +936,7 @@ DEVON_PLAN = {
             count=4,
             phase="Int",
             deload_index=4,
-            current_index=2,
+            logged_through_index=2,
         ),
         _client_block(
             "Peak / Test",
@@ -945,10 +953,10 @@ DEVON_PLAN = {
 
 # ---------------------------------------------------------------------------
 # Priya's plan — no contraindications, 72 months trained: an advanced,
-# heavier barbell-first program. Current week: Hypertrophy block, week 3 of 4
-# — Base/GPP fully behind her plus Hypertrophy wk1/2 (logged history);
-# Hypertrophy wk4 (deload) + Strength + Peak/Test still ahead (built,
-# undelivered) — two whole future blocks past her current one.
+# heavier barbell-first program. Logged-through week: Hypertrophy block, week
+# 3 of 4 — Base/GPP fully behind her plus Hypertrophy wk1/2 (logged history);
+# Hypertrophy wk4 (deload) + Strength + Peak/Test still ahead (built, but
+# unlogged) — two whole future blocks past her logged-through one.
 # ---------------------------------------------------------------------------
 
 _PRIYA_DAY_TEMPLATES = [
@@ -1011,7 +1019,7 @@ PRIYA_PLAN = {
             count=4,
             phase="Accum",
             deload_index=4,
-            current_index=3,
+            logged_through_index=3,
         ),
         _client_block(
             "Strength",
@@ -1086,7 +1094,7 @@ def build_block(mesocycle, block_spec):
       (``name``/``exercise``/``tags`` plus the per-exercise ``tempo``/``rest``/
       ``note`` columns, Phase 2a / D2);
     - ``"weeks"``: the block's ``Week`` columns (``index``/``phase``/``volume``/
-      ``intensity``/``is_deload``/``is_current``). EVERY listed week materializes
+      ``intensity``/``is_deload``). EVERY listed week materializes
       the full fixed lineup — a ``Session`` per day and a line-0 ``Prescription``
       cell per row (invariant: every slot × live-week has a cell) — so the block
       is dense. A week may carry a ``"cells"`` dict (``{day_number: [<cell>,
@@ -1147,7 +1155,6 @@ def build_block(mesocycle, block_spec):
                 "volume": week_spec.get("volume", 0),
                 "intensity": week_spec.get("intensity", 0),
                 "is_deload": week_spec.get("is_deload", False),
-                "is_current": week_spec.get("is_current", False),
             },
         )
         weeks_by_index[week_spec["index"]] = week
@@ -1249,7 +1256,7 @@ class Command(BaseCommand):
             plan_spec = PLANS.get(spec["slug"])
             if plan_spec is not None:
                 plan = self._ensure_plan(coach, athlete, plan_spec)
-                self._log_plan_history(athlete, plan, today)
+                self._log_plan_history(athlete, plan, plan_spec, today)
                 if spec["slug"] == "maya":
                     self._ensure_log(athlete, plan, today)
         self._ensure_pending_invite(coach)
@@ -1260,8 +1267,8 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"✓ Meso demo seeded for {coach.email}: "
                 f"{len(ATHLETES)} athletes, {len(PLANS)} clients with full "
-                "programs (every block built, one logged multi-week history "
-                "each through their current week), 1 pending invite, "
+                "programs (every block built + delivered, one logged "
+                "multi-week history each), 1 pending invite, "
                 "1 pending request, 1 past athlete."
             )
         )
@@ -1484,21 +1491,29 @@ class Command(BaseCommand):
         self.stdout.write(f"  - built sample plan '{plan.title}' for {athlete.name}")
         return plan
 
-    # -- logged history: every week strictly before the current one -------
+    # -- delivery + logged history ------------------------------------------
 
-    def _log_plan_history(self, athlete, plan, today):
-        """Deliver + log every week of ``plan`` strictly before its current week.
+    def _log_plan_history(self, athlete, plan, plan_spec, today):
+        """Deliver every live week of ``plan``; log the ones before its cutoff.
 
-        Walks the plan's live weeks in program order (mesocycle order, then
-        week index). Every week before the flagged ``is_current`` week gets
-        every one of its (non-skipped) prescriptions logged as a completed
-        session — a real multi-week training history — dated further into the
-        past the earlier it falls in the program. The current week itself is
-        stamped delivered here too (never logged here: Maya's hand-authored
-        current-week Day-1 log is layered on separately by ``_ensure_log``;
-        Devon/Priya's current week is simply delivered, per the demo's design).
-        Weeks after current are left alone on purpose — built, but neither
-        delivered nor logged.
+        2d: delivery no longer gates what the athlete sees, so there's no
+        "future, undelivered" distinction left to model — every live week
+        simply gets ``delivered_at`` stamped, unconditionally (docs/meso/
+        remove-current-week-plan.md §6).
+
+        A realistic multi-week logged training history is still worth
+        demoing, so ``plan_spec``'s ONE mesocycle dict carrying a
+        ``logged_through_index`` (a plain seed-data marker set by ``_block``/
+        ``_client_block`` — never a materialized ``Week`` field, since that
+        field no longer exists) marks how deep to log: every week strictly
+        before that ``(mesocycle order, index)`` point gets every one of its
+        (non-skipped) prescriptions logged as a completed session, dated
+        further into the past the earlier it falls in the program. A plan
+        with no such marker (no mesocycle sets it) is delivered only, never
+        logged. The cutoff week itself is never logged here: Maya's
+        hand-authored cutoff-week Day-1 log is layered on separately by
+        ``_ensure_log``; Devon/Priya's cutoff week is left unlogged, matching
+        the demo's original design.
 
         Idempotent: a week's ``SessionLog``s are (re)created only when absent
         (mirrors ``_ensure_log``'s create-if-absent contract), so a reseed
@@ -1509,20 +1524,30 @@ class Command(BaseCommand):
             .select_related("mesocycle")
             .order_by("mesocycle__order", "index")
         )
-        current = next((w for w in live_weeks if w.is_current), None)
-        if current is None:
+        now = timezone.now()
+        for week in live_weeks:
+            if week.delivered_at is None:
+                week.delivered_at = now
+                week.save(update_fields=["delivered_at"])
+
+        cutoff = None
+        cutoff_meso_spec = None
+        for meso_spec in plan_spec["mesocycles"]:
+            idx = meso_spec.get("logged_through_index")
+            if idx is not None:
+                cutoff = (meso_spec["order"], idx)
+                cutoff_meso_spec = meso_spec
+                break
+        if cutoff is None:
             return
-        current_key = (current.mesocycle.order, current.index)
+
         total = len(live_weeks)
         logged_prescriptions = []
         logged_weeks = 0
         for position, week in enumerate(live_weeks):
-            if (week.mesocycle.order, week.index) >= current_key:
+            if (week.mesocycle.order, week.index) >= cutoff:
                 continue
             weeks_ago = total - position
-            if week.delivered_at is None:
-                week.delivered_at = timezone.now()
-                week.save(update_fields=["delivered_at"])
             logged_weeks += 1
             for session in week.sessions.filter(deleted_at__isnull=True).select_related(
                 "session_slot"
@@ -1546,21 +1571,18 @@ class Command(BaseCommand):
                     _logged_sets_from_cells(log, prescriptions)
                 )
 
-        if current.delivered_at is None:
-            current.delivered_at = timezone.now()
-            current.save(update_fields=["delivered_at"])
         if logged_prescriptions:
             refresh_one_rms(athlete, logged_prescriptions, plan.unit)
         if logged_weeks:
             self.stdout.write(
                 f"  - logged {logged_weeks} weeks of history for {athlete.name} "
-                f"(through {current.mesocycle.name} wk{current.index})"
+                f"(through {cutoff_meso_spec['name']} wk{cutoff[1]})"
             )
 
     # -- the sample logged session ----------------------------------------
 
     def _ensure_log(self, athlete, plan, today):
-        """Deliver + log Maya's current-week "Lower" session (the first real log).
+        """Deliver + log Maya's logged-through-week "Lower" session (the first real log).
 
         Idempotent: the week is delivered once (the coach workflow's step
         order, not a gate — 2d), and the ``SessionLog`` + ``LoggedSet`` rows are

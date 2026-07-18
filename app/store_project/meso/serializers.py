@@ -179,8 +179,7 @@ def _week_label(week):
 def serialize_week(week):
     """One column in the designer's week strip.
 
-    ``id``/``index`` let the client target a week for the switcher (view, add,
-    set-current); ``current`` flags the live (deliver-target) week.
+    ``id``/``index`` let the client target a week for the switcher (view, add).
     """
     return {
         "id": week.pk,
@@ -190,7 +189,6 @@ def serialize_week(week):
         "vol": week.volume,
         "inten": week.intensity,
         "deload": week.is_deload,
-        "current": week.is_current,
     }
 
 
@@ -619,14 +617,16 @@ def last_logged_labels(plan, prescriptions, unit):
 
 
 def current_week(plan, week=None):
-    """The week the designer opens to — and the week the athlete is on.
+    """The default week for callers that need *some* week and don't care which.
 
     An explicit ``week`` wins (callers are expected to have already checked it
     is live — the delete endpoints pin the response to the just-touched row's
-    own, still-live, week); otherwise the flagged current week among the
-    plan's **live** weeks, or — failing both — the earliest live week in the
-    plan. The athlete home anchors on this week (2d: delivery no longer gates
-    visibility) so "today's session" comes from where the athlete is.
+    own, still-live, week); otherwise the earliest live week in the plan
+    ``(mesocycle.order, index)``, or ``None`` for a plan with no live weeks.
+    There is no notion of "the week the athlete is on" — programs are
+    date-less and the app never asserts a position for the athlete (see
+    ``docs/meso/remove-current-week-plan.md``); this is a plain opening
+    default for designer/deliver/grid entry points.
     """
     if week is not None:
         return week
@@ -635,10 +635,25 @@ def current_week(plan, week=None):
         .select_related("mesocycle")
         .order_by("mesocycle__order", "index")
     )
-    for candidate in weeks:
-        if candidate.is_current:
-            return candidate
     return weeks[0] if weeks else None
+
+
+def first_live_week(mesocycle):
+    """The earliest live week of one **block**, or ``None`` if it has none.
+
+    The block-scoped counterpart to ``current_week``: where that one answers
+    "some week of this plan," this one stays inside a single mesocycle. Every
+    caller that has already resolved *which block* it means — the agent's
+    persisted ``batch.mesocycle`` (§4b), the grid/add-week default — wants this
+    one, because falling through to the plan's earliest live week would land
+    them in a different block than the one they resolved.
+
+    A block with no materialized weeks yet returns ``None``; callers degrade to
+    a no-op rather than silently retargeting.
+    """
+    if mesocycle is None:
+        return None
+    return mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index").first()
 
 
 def serialize_athlete_identity(plan):
@@ -778,21 +793,21 @@ def serialize_plan(plan, week=None):
     }
 
 
-def _pick_session_id(slot_id, sessions_by_slot, current_week_id, weeks):
+def _pick_session_id(slot_id, sessions_by_slot, anchor_week_id, weeks):
     """The live ``Session`` pk the P1 grid uses for one day column.
 
-    Prefers the current (deliver-target) week's session for this slot, since
-    that's the row the write endpoints (add-exercise, remove-day) already key
-    off of; falls back to the earliest live week that has one (``weeks`` is
-    already ordered by ``index``) when the current week is missing a session
-    for this slot (e.g. it was independently soft-deleted). ``None`` only when
-    no live week has a session for this slot at all.
+    Prefers the anchor week's (the grid's opening default) session for this
+    slot, since that's the row the write endpoints (add-exercise, remove-day)
+    already key off of; falls back to the earliest live week that has one
+    (``weeks`` is already ordered by ``index``) when the anchor week is
+    missing a session for this slot (e.g. it was independently soft-deleted).
+    ``None`` only when no live week has a session for this slot at all.
     """
     by_week = sessions_by_slot.get(slot_id)
     if not by_week:
         return None
-    if current_week_id is not None and current_week_id in by_week:
-        return by_week[current_week_id]
+    if anchor_week_id is not None and anchor_week_id in by_week:
+        return by_week[anchor_week_id]
     for week in weeks:
         if week.pk in by_week:
             return by_week[week.pk]
@@ -822,7 +837,7 @@ def serialize_mesocycle_grid(mesocycle):
     plan = mesocycle.plan
     weeks = list(mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index"))
     week_ids = [w.pk for w in weeks]
-    current_week_id = next((w.pk for w in weeks if w.is_current), None)
+    current_week_id = weeks[0].pk if weeks else None
 
     session_slots = list(
         mesocycle.session_slots.filter(deleted_at__isnull=True).order_by(
@@ -967,7 +982,6 @@ def serialize_mesocycle_grid(mesocycle):
                 "label": _week_label(w),
                 "phase": w.phase,
                 "deload": w.is_deload,
-                "current": w.is_current,
                 "delivered_at": w.delivered_at.isoformat() if w.delivered_at else None,
                 # BlockView's periodization timeline bar heights.
                 "vol": w.volume,
@@ -980,24 +994,28 @@ def serialize_mesocycle_grid(mesocycle):
     }
 
 
-def serialize_agent_block(plan):
-    """The whole current block for the agent's grounding (P4).
+def serialize_agent_block(plan, mesocycle):
+    """The whole block ``mesocycle`` for the agent's grounding (P4, §4b).
 
-    Every live week of the plan's current mesocycle with its full session/cell
-    grid (numbers incl. ``rest``) plus the week's phase/volume/intensity/deload/
-    current flags — so the agent programs progression across the block, not one
-    week in isolation. Reuses ``serialize_week_snapshot`` and adds ``is_current``.
-    A cell's pk is stable, so ids here match ``serialize_plan``'s single-week
-    ``program`` — any id the agent returns resolves the same either way.
+    Every live week of ``mesocycle`` with its full session/cell grid (numbers
+    incl. ``rest``) plus the week's phase/volume/intensity/deload flags — so the
+    agent programs progression across the block, not one week in isolation.
+    Reuses ``serialize_week_snapshot`` verbatim. A cell's pk is stable, so ids
+    here match ``serialize_plan``'s single-week ``program`` — any id the agent
+    returns resolves the same either way.
+
+    ``mesocycle`` is passed in directly — the caller (``build_context``, from
+    ``AgentProposalBatch.mesocycle``) already resolved *which* block this run
+    is scoped to at request time; this function does no re-derivation of its
+    own (docs/meso/remove-current-week-plan.md §4b — re-deriving here, on every
+    call, is exactly what let the agent silently drift onto a different block
+    than the one the coach had open). ``None`` is a real, expected input — a
+    plan with no block, or a batch whose block was hard-deleted after the run
+    started (``SET_NULL``) — and degrades to the same empty shape a plan with
+    no live weeks would produce, never a fallback re-derivation.
     """
-    week = current_week(plan)
-    mesocycle = week.mesocycle if week else None
     if mesocycle is None:
         return {"name": "", "weeks": []}
     weeks = mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index")
-    serialized = []
-    for w in weeks:
-        snap = serialize_week_snapshot(w)
-        snap["week"]["is_current"] = w.is_current
-        serialized.append(snap)
+    serialized = [serialize_week_snapshot(w) for w in weeks]
     return {"name": mesocycle.name, "weeks": serialized}

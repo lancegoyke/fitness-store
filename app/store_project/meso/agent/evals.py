@@ -129,12 +129,20 @@ def check_result(case, plan, batch, rejected):
     return failures, warnings
 
 
-def evaluate(plan, case, *, client):
-    """Run one golden case against ``plan`` with ``client`` and check invariants."""
+def evaluate(plan, case, *, client, mesocycle):
+    """Run one golden case against ``mesocycle`` (a block of ``plan``) with ``client``.
+
+    ``mesocycle`` scopes grounding/validation like any other proposal run
+    (§4b, docs/meso/remove-current-week-plan.md) — the harness has no
+    "coach's viewed block" of its own to inherit, so a caller (the
+    ``meso_agent_eval`` command, tests) picks one explicitly rather than this
+    function guessing.
+    """
     batch, rejected = service.propose_changes(
         plan,
         case.instruction,
         coach=plan.coach,
+        mesocycle=mesocycle,
         client=client,
         trigger=AgentProposalBatch.Trigger.EVAL,
     )

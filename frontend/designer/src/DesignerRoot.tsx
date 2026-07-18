@@ -141,6 +141,11 @@ export function DesignerRoot() {
   const planId: Id = hydrated?.planId ?? "";
   const csrf = hydrated?.csrf ?? "";
   const unit = hydrated?.unit ?? "kg";
+  // §4b (docs/meso/remove-current-week-plan.md): the block the coach has
+  // open — sent on every agent POST so grounding/validation/apply (which
+  // run across time-separated requests) scope to it instead of silently
+  // falling back to the plan's first block.
+  const mesocycleId: Id = hydrated?.gridData.mesocycle.id ?? "";
 
   // useGrid is the SOLE data owner (issue #455 phase A5 — the one-week
   // usePlanData sibling is gone). Owns grid/history and every verb that
@@ -166,6 +171,7 @@ export function DesignerRoot() {
   const agentChat = useAgentChat({
     planId,
     csrf,
+    mesocycleId,
     initialMessages: hydrated?.initialMessages ?? [DEFAULT_GREETING],
     initialResumeUrl: hydrated?.initialResumeUrl ?? null,
   });
@@ -178,8 +184,21 @@ export function DesignerRoot() {
   const flags = hydrated.flags;
 
   const grid = gridState.grid;
-  const gridCurrentWeekId = grid ? grid.weeks.find((w) => w.current)?.id ?? grid.weeks[0]?.id ?? null : null;
-  const deliverHref = buildDeliverHref(planId, gridCurrentWeekId);
+  // Programs are date-less and carry no "current" week pointer
+  // (docs/meso/remove-current-week-plan.md) — the deliver link simply
+  // targets the grid's first live week, same default `current_week(plan)`
+  // degrades to server-side.
+  const gridCurrentWeekId = grid ? grid.weeks[0]?.id ?? null : null;
+  // The default grid opens on the plan's FIRST block by order (§4b) — which
+  // can legitimately have zero live weeks while a later block has some
+  // (`week_delete` only guards the plan's LAST live week, not the block's).
+  // `buildDeliverHref(planId, null)` degrades to the bare `/meso/deliver/
+  // <plan>/` URL, and `DeliverView` without `?week=` falls back to
+  // `current_week(plan)` — a LATER block than the empty one on screen.
+  // There's genuinely nothing to deliver from a block with no weeks, so pass
+  // `null` through (TopBar renders the control inert) instead of building a
+  // link that would silently open a different block.
+  const deliverHref = gridCurrentWeekId != null ? buildDeliverHref(planId, gridCurrentWeekId) : null;
   const cycleLabel = cycleLabelFromGrid(grid?.phases ?? [], grid?.weeks ?? []);
   const athleteProgram = grid ? gridToProgram(grid) : [];
 
@@ -234,7 +253,6 @@ export function DesignerRoot() {
                 onRemoveDay={gridState.removeDay}
                 onAddWeek={gridState.addWeek}
                 onRemoveWeek={gridState.removeWeek}
-                onSetCurrentWeek={gridState.setCurrentWeek}
                 onSkipCell={gridState.skipCell}
                 onFillAcrossWeeks={gridState.fillAcrossWeeks}
                 onAddExerciseThisWeek={gridState.addExerciseThisWeek}

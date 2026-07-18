@@ -282,8 +282,6 @@ def _parse_sheet(sheet):
         weeks.append(
             {
                 "index": index,
-                # The importer lands the coach on week 1, like a fresh block.
-                "is_current": index == 1,
                 "cells": cells,
             }
         )

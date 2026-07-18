@@ -33,7 +33,7 @@ def seed_session(unit=Unit.KILOGRAMS):
     rel = CoachAthleteFactory(coach=UserFactory(), athlete=UserFactory())
     plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE, unit=unit)
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     absolute = presc(session, name="Back Squat", sets="4", reps="6", load="70", order=0)
     percent = presc(session, name="Front Squat", text="3 x 5, 75%", order=1)

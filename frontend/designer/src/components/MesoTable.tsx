@@ -101,7 +101,6 @@ export interface MesoTableProps {
   onRemoveDay(day: GridDay): void;
   onAddWeek(): void;
   onRemoveWeek(weekId: Id): void;
-  onSetCurrentWeek(weekId: Id): void;
   // P2 exceptions: one-week skip + text-stack fill-across-weeks + a
   // this-week-only add — CONTRACT.md "MesoTable.tsx — new props".
   onSkipCell(cellId: number, skipped: boolean): void;
@@ -994,7 +993,6 @@ export function MesoTable(props: MesoTableProps) {
     onRemoveDay,
     onAddWeek,
     onRemoveWeek,
-    onSetCurrentWeek,
     onSkipCell,
     onFillAcrossWeeks,
     onAddExerciseThisWeek,
@@ -1074,7 +1072,6 @@ export function MesoTable(props: MesoTableProps) {
         isArmed={isArmed}
         arm={arm}
         disarm={disarm}
-        onSetCurrentWeek={onSetCurrentWeek}
         onRemoveWeek={onRemoveWeek}
         onAddWeek={onAddWeek}
       />
@@ -1132,17 +1129,15 @@ interface WeekColumnHeaderProps {
   week: GridWeek;
 }
 
-/** A week column's header — just the label + deload marker + current-week
- * highlight. The lifecycle controls (make-current / remove) live in the
- * WeekManagerStrip above the day tables (designer-simplify), never inside a
- * day, since a week spans every day. */
+/** A week column's header — just the label + deload marker. The lifecycle
+ * controls (remove) live in the WeekManagerStrip above the day tables
+ * (designer-simplify), never inside a day, since a week spans every day.
+ * Programs are date-less and carry no "current week" pointer
+ * (docs/meso/remove-current-week-plan.md), so there is no per-week
+ * highlight here anymore either. */
 function WeekColumnHeader({ week }: WeekColumnHeaderProps) {
   return (
-    <th
-      data-testid={`week-col-${week.id}`}
-      aria-current={week.current ? "true" : undefined}
-      className={`meso-table-week-col${week.current ? " meso-table-week-col--current" : ""}`}
-    >
+    <th data-testid={`week-col-${week.id}`} className="meso-table-week-col">
       <div className="meso-table-week-label">
         <span>{week.label}</span>
         {week.deload && (
@@ -1161,29 +1156,25 @@ interface WeekManagerStripProps {
   isArmed(type: ArmedKind, id: Id): boolean;
   arm(type: ArmedKind, id: Id): void;
   disarm(): void;
-  onSetCurrentWeek(weekId: Id): void;
   onRemoveWeek(weekId: Id): void;
   onAddWeek(): void;
 }
 
 /** The mesocycle-level week manager, above the day tables (designer-simplify):
- * one pill per week with make-current + remove (arm→confirm), plus "+ Add
- * week". A week spans every training day, so its lifecycle belongs here once —
- * not repeated in, or tied to, any single day's table header. The current
- * week's pill is highlighted; its column in each day table is highlighted to
- * match. Buttons keep `data-grid-restore` so a click returns focus to the
- * grid's anchor cell (see useTableNav). */
-function WeekManagerStrip({ weeks, busy, isArmed, arm, disarm, onSetCurrentWeek, onRemoveWeek, onAddWeek }: WeekManagerStripProps) {
+ * one pill per week with remove (arm→confirm), plus "+ Add week". A week
+ * spans every training day, so its lifecycle belongs here once — not
+ * repeated in, or tied to, any single day's table header. Programs are
+ * date-less and carry no "current week" pointer
+ * (docs/meso/remove-current-week-plan.md) — every week's pill looks and
+ * behaves the same; there is no "Make current" control anymore. Buttons
+ * keep `data-grid-restore` so a click returns focus to the grid's anchor
+ * cell (see useTableNav). */
+function WeekManagerStrip({ weeks, busy, isArmed, arm, disarm, onRemoveWeek, onAddWeek }: WeekManagerStripProps) {
   return (
     <div className="meso-week-strip" role="group" aria-label="Weeks">
       <span className="meso-week-strip-heading">Weeks</span>
       {weeks.map((week) => (
-        <div
-          key={week.id}
-          data-testid={`week-pill-${week.id}`}
-          aria-current={week.current ? "true" : undefined}
-          className={`meso-week-pill${week.current ? " meso-week-pill--current" : ""}`}
-        >
+        <div key={week.id} data-testid={`week-pill-${week.id}`} className="meso-week-pill">
           <span className="meso-week-pill-label">
             {week.label}
             {week.deload && (
@@ -1193,9 +1184,7 @@ function WeekManagerStrip({ weeks, busy, isArmed, arm, disarm, onSetCurrentWeek,
               </span>
             )}
           </span>
-          {week.current ? (
-            <span className="meso-week-pill-badge">current</span>
-          ) : isArmed("week", week.id) ? (
+          {isArmed("week", week.id) ? (
             <span className="meso-week-strip-confirm">
               <button
                 type="button"
@@ -1224,31 +1213,18 @@ function WeekManagerStrip({ weeks, busy, isArmed, arm, disarm, onSetCurrentWeek,
               </button>
             </span>
           ) : (
-            <>
-              <button
-                type="button"
-                data-testid={`make-current-${week.id}`}
-                data-grid-restore=""
-                className="meso-week-pill-make-current"
-                disabled={busy}
-                title="Make this the athlete's week — their home and today's session anchor on it"
-                onClick={() => onSetCurrentWeek(week.id)}
-              >
-                Make current
-              </button>
-              <button
-                type="button"
-                data-testid={`remove-week-${week.id}`}
-                data-grid-restore=""
-                className="meso-week-pill-x"
-                disabled={busy}
-                aria-label="Remove this week"
-                title="Remove this week"
-                onClick={() => arm("week", week.id)}
-              >
-                ×
-              </button>
-            </>
+            <button
+              type="button"
+              data-testid={`remove-week-${week.id}`}
+              data-grid-restore=""
+              className="meso-week-pill-x"
+              disabled={busy}
+              aria-label="Remove this week"
+              title="Remove this week"
+              onClick={() => arm("week", week.id)}
+            >
+              ×
+            </button>
           )}
         </div>
       ))}

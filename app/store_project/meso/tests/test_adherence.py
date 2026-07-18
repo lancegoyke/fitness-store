@@ -1,15 +1,19 @@
-"""Coach-facing adherence — the roster ``compliance`` meter + ``activity`` feed.
+"""Coach-facing adherence — cadence (recency + rolling volume) + the activity feed.
 
-These pin the read-side aggregation that finally fills the roster's two
-long-standing placeholders (``presenters`` carried ``compliance=None`` and the
-view set ``activity=[]`` as "Phase 2/3 concepts awaiting logged data"):
+These pin the read-side aggregation behind the roster's "last trained" pill and
+the profile's cadence chip — replacing the old current-week compliance meter,
+which lost its denominator once ``Week.is_current`` was removed (programs are
+date-less; docs/meso/remove-current-week-plan.md §4a, decided 2026-07-18):
 
-- ``adherence.link_compliance`` — what fraction of the athlete's *current*
-  week's sessions they have marked *done* (2d: delivery no longer gates
-  anything, so the anchor is the ``is_current`` pointer on the newest plan,
-  not the latest delivery);
+- ``adherence.link_last_trained`` — the athlete's most recent *done*
+  ``SessionLog``, across every live (non-archived) plan on the link;
+- ``adherence.link_recency_days`` — whole days since that log, the roster
+  pill's tone-band input;
+- ``adherence.link_session_count`` — distinct DONE sessions in a rolling
+  window (default 14d), the profile's secondary chip;
 - ``adherence.recent_logs`` / ``presenters.roster_activity`` — the coach's
-  athletes' most recent completed sessions, scoped to active links.
+  athletes' most recent completed sessions, scoped to active links
+  (untouched by this rework — already fully date-less).
 
 The contract mirrors the athlete surface: ``done`` is the signal, and an
 athlete only ever counts their own logs.
@@ -70,147 +74,154 @@ def delivered_week(
     return week
 
 
-# -- link_compliance -------------------------------------------------------
+def _backdate(log, days_ago):
+    """Force a ``SessionLog.created_at`` back in time.
+
+    Bypasses ``auto_now_add``, which otherwise ignores any value passed at
+    creation.
+    """
+    SessionLog.objects.filter(pk=log.pk).update(
+        created_at=timezone.now() - timedelta(days=days_ago)
+    )
+    log.refresh_from_db()
+    return log
 
 
-class TestLinkCompliance:
-    def test_none_without_a_plan(self):
+def _done_log(rel, *, days_ago=0, week=None):
+    """A single DONE ``SessionLog`` for ``rel``'s athlete, optionally back-dated."""
+    week = week or delivered_week(rel, sessions=1, done=0)
+    session = week.sessions.first()
+    log = SessionLogFactory(
+        session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
+    )
+    if days_ago:
+        _backdate(log, days_ago)
+    return log
+
+
+# -- link_last_trained / link_recency_days -----------------------------------
+
+
+class TestLinkLastTrainedAndRecency:
+    def test_none_without_any_logs(self):
         rel = CoachAthleteFactory()
-        assert adherence.link_compliance(rel) is None
-
-    def test_none_for_an_empty_undelivered_week(self):
-        rel = CoachAthleteFactory()
-        meso = MesocycleFactory(plan=PlanFactory(relationship=rel))
-        WeekFactory(mesocycle=meso, delivered_at=None)  # no sessions to measure
-        assert adherence.link_compliance(rel) is None
-
-    def test_undelivered_current_week_still_measures(self):
-        # 2d: delivery is a notify marker, not a gate — a week the coach never
-        # delivered still drives the meter once it has sessions.
-        rel = CoachAthleteFactory()
-        meso = MesocycleFactory(plan=PlanFactory(relationship=rel))
-        week = WeekFactory(mesocycle=meso, index=1, is_current=True, delivered_at=None)
-        session = day(week, day_number=1, name="Day 1")
-        SessionLogFactory(
-            session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
-        )
-        assert adherence.link_compliance(rel) == 100
-
-    def test_current_pointer_wins_within_the_plan(self):
-        # The flagged week is the anchor even when a later week exists.
-        rel = CoachAthleteFactory()
-        meso = MesocycleFactory(plan=PlanFactory(relationship=rel))
-        current = WeekFactory(
-            mesocycle=meso, index=1, is_current=True, delivered_at=None
-        )
-        later = WeekFactory(mesocycle=meso, index=2, delivered_at=timezone.now())
-        done_session = day(current, day_number=1, name="Day 1")
-        day(later, day_number=1, name="Day 1")  # unlogged — must not count
-        SessionLogFactory(
-            session=done_session, athlete=rel.athlete, status=SessionLog.Status.DONE
-        )
-        assert adherence.link_compliance(rel) == 100
-
-    def test_none_for_a_delivered_week_with_no_sessions(self):
-        rel = CoachAthleteFactory()
-        meso = MesocycleFactory(plan=PlanFactory(relationship=rel))
-        WeekFactory(mesocycle=meso, delivered_at=timezone.now())
-        assert adherence.link_compliance(rel) is None
+        assert adherence.link_last_trained(rel) is None
+        assert adherence.link_recency_days(rel) is None
 
     def test_none_link_is_none(self):
-        assert adherence.link_compliance(None) is None
+        assert adherence.link_last_trained(None) is None
+        assert adherence.link_recency_days(None) is None
 
-    def test_zero_when_delivered_but_unlogged(self):
+    def test_recency_zero_for_a_log_today(self):
         rel = CoachAthleteFactory()
-        delivered_week(rel, sessions=3, done=0)
-        # A real, distinct signal — the coach delivered, the athlete hasn't logged.
-        assert adherence.link_compliance(rel) == 0
+        _done_log(rel)
+        assert adherence.link_recency_days(rel) == 0
 
-    def test_full_when_all_done(self):
+    def test_recency_counts_whole_days(self):
         rel = CoachAthleteFactory()
-        delivered_week(rel, sessions=4, done=4)
-        assert adherence.link_compliance(rel) == 100
+        _done_log(rel, days_ago=5)
+        assert adherence.link_recency_days(rel) == 5
 
-    def test_rounds_partial(self):
+    def test_picks_the_newest_log_across_plans(self):
         rel = CoachAthleteFactory()
-        delivered_week(rel, sessions=3, done=2)  # 66.6… → 67
-        assert adherence.link_compliance(rel) == 67
-
-    def test_only_counts_the_newest_plans_week(self):
-        rel = CoachAthleteFactory()
-        now = timezone.now()
-        # An older plan's fully-logged week must not inflate the newest one's
-        # number (each ``delivered_week`` builds its own plan; the newest
-        # ``modified`` plan anchors the meter).
-        delivered_week(
-            rel, sessions=2, done=2, delivered_at=now - timedelta(days=7), index=1
-        )
-        delivered_week(rel, sessions=2, done=0, delivered_at=now, index=2)
-        assert adherence.link_compliance(rel) == 0
+        _done_log(rel, days_ago=10)
+        newest = _done_log(rel, days_ago=1)
+        assert adherence.link_last_trained(rel).pk == newest.pk
+        assert adherence.link_recency_days(rel) == 1
 
     def test_ignores_pending_logs(self):
         rel = CoachAthleteFactory()
-        week = delivered_week(rel, sessions=2, done=1)
-        # A *pending* log on the second session must not count as done.
-        other = week.sessions.order_by("session_slot__day_number").last()
+        week = delivered_week(rel, sessions=1, done=0)
+        session = week.sessions.first()
         SessionLogFactory(
-            session=other, athlete=rel.athlete, status=SessionLog.Status.PENDING
+            session=session, athlete=rel.athlete, status=SessionLog.Status.PENDING
         )
-        assert adherence.link_compliance(rel) == 50
+        assert adherence.link_last_trained(rel) is None
 
     def test_ignores_another_athletes_logs(self):
         rel = CoachAthleteFactory()
-        week = delivered_week(rel, sessions=2, done=0)
+        week = delivered_week(rel, sessions=1, done=0)
+        session = week.sessions.first()
         stranger = UserFactory()
-        for session in week.sessions.all():
-            SessionLogFactory(
-                session=session, athlete=stranger, status=SessionLog.Status.DONE
-            )
-        # The stranger's done logs are not this athlete's adherence.
-        assert adherence.link_compliance(rel) == 0
+        SessionLogFactory(
+            session=session, athlete=stranger, status=SessionLog.Status.DONE
+        )
+        assert adherence.link_last_trained(rel) is None
 
     def test_ignores_archived_plans(self):
         rel = CoachAthleteFactory()
-        # The only delivered week lives on an archived plan (e.g. a removed
-        # group member's snapshot) — the athlete can't see/log it, so it must
-        # not drive the meter.
-        delivered_week(rel, sessions=2, done=2, archived=True)
-        assert adherence.link_compliance(rel) is None
+        week = delivered_week(rel, sessions=1, done=0, archived=True)
+        session = week.sessions.first()
+        SessionLogFactory(
+            session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
+        )
+        assert adherence.link_last_trained(rel) is None
 
-    def test_prefers_active_plan_over_newer_archived(self):
+    def test_spans_every_live_plan_not_just_the_newest(self):
+        # An older still-live plan's log can be the freshest one — cadence
+        # isn't scoped to "the newest plan" the way the old meter was.
         rel = CoachAthleteFactory()
-        now = timezone.now()
-        # A live (older) delivered plan plus a newer *archived* one: the meter
-        # measures the live program, not the hidden archived snapshot.
-        delivered_week(
-            rel, sessions=2, done=1, delivered_at=now - timedelta(days=2), index=1
+        older_week = delivered_week(rel, sessions=1, done=0, index=1)
+        newer_week = delivered_week(rel, sessions=1, done=0, index=1)
+        newest_log = _done_log(rel, week=older_week, days_ago=1)
+        _done_log(rel, week=newer_week, days_ago=20)
+        assert adherence.link_last_trained(rel).pk == newest_log.pk
+
+
+# -- link_session_count -------------------------------------------------------
+
+
+class TestLinkSessionCount:
+    def test_zero_without_logs(self):
+        rel = CoachAthleteFactory()
+        assert adherence.link_session_count(rel) == 0
+
+    def test_zero_link_is_none(self):
+        assert adherence.link_session_count(None) == 0
+
+    def test_counts_done_logs_within_the_window(self):
+        rel = CoachAthleteFactory()
+        _done_log(rel, days_ago=1)
+        _done_log(rel, days_ago=13)
+        assert adherence.link_session_count(rel, days=14) == 2
+
+    def test_excludes_logs_outside_the_window(self):
+        rel = CoachAthleteFactory()
+        _done_log(rel, days_ago=15)
+        assert adherence.link_session_count(rel, days=14) == 0
+
+    def test_ignores_pending_logs(self):
+        rel = CoachAthleteFactory()
+        week = delivered_week(rel, sessions=1, done=0)
+        session = week.sessions.first()
+        SessionLogFactory(
+            session=session, athlete=rel.athlete, status=SessionLog.Status.PENDING
         )
-        delivered_week(
-            rel,
-            sessions=2,
-            done=2,
-            delivered_at=now,
-            index=2,
-            archived=True,
+        assert adherence.link_session_count(rel) == 0
+
+    def test_ignores_archived_plans(self):
+        rel = CoachAthleteFactory()
+        week = delivered_week(rel, sessions=1, done=0, archived=True)
+        session = week.sessions.first()
+        SessionLogFactory(
+            session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
         )
-        assert adherence.link_compliance(rel) == 50
+        assert adherence.link_session_count(rel) == 0
 
     def test_duplicate_done_logs_count_the_session_once(self):
         rel = CoachAthleteFactory()
-        week = delivered_week(rel, sessions=2, done=0)
-        session = week.sessions.order_by("session_slot__day_number").first()
-        # Two done logs for the *same* session (the model allows dated history)
-        # must count that session once, never push compliance past 100.
+        week = delivered_week(rel, sessions=1, done=0)
+        session = week.sessions.first()
         SessionLogFactory(
             session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
         )
         SessionLogFactory(
             session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
         )
-        assert adherence.link_compliance(rel) == 50
+        assert adherence.link_session_count(rel) == 1
 
 
-# -- recent_logs -----------------------------------------------------------
+# -- recent_logs (unchanged — already fully date-less) ------------------------
 
 
 class TestRecentLogs:
@@ -282,19 +293,44 @@ class TestRecentLogs:
         assert {log.athlete_id for log in logs} == {a.athlete_id, b.athlete_id}
 
 
-# -- presenters ------------------------------------------------------------
+# -- presenters ----------------------------------------------------------------
 
 
 class TestRosterPresenters:
-    def test_roster_athlete_threads_compliance(self):
+    def test_roster_athlete_threads_recency(self):
         user = UserFactory()
-        row = presenters.roster_athlete(user, compliance=42)
-        assert row["compliance"] == 42
+        row = presenters.roster_athlete(user, recency_days=2)
+        assert row["recency_label"] == "Last trained 2 days ago"
+        assert row["recency_tone"] == "ok"
 
-    def test_roster_athlete_compliance_defaults_none(self):
+    def test_roster_athlete_recency_defaults_to_no_sessions(self):
         user = UserFactory()
         row = presenters.roster_athlete(user)
-        assert row["compliance"] is None
+        assert row["recency_label"] == "No sessions yet"
+        assert row["recency_tone"] == "muted"
+
+    def test_roster_athlete_recency_tone_bands(self):
+        # <=3d green (ok), 4-9d amber (warn), >=10d red (danger) — decided
+        # 2026-07-18 (docs/meso/remove-current-week-plan.md §4a).
+        user = UserFactory()
+        assert presenters.roster_athlete(user, recency_days=0)["recency_tone"] == "ok"
+        assert presenters.roster_athlete(user, recency_days=3)["recency_tone"] == "ok"
+        assert presenters.roster_athlete(user, recency_days=4)["recency_tone"] == "warn"
+        assert presenters.roster_athlete(user, recency_days=9)["recency_tone"] == "warn"
+        assert (
+            presenters.roster_athlete(user, recency_days=10)["recency_tone"] == "danger"
+        )
+
+    def test_roster_athlete_recency_label_today_and_singular_day(self):
+        user = UserFactory()
+        assert (
+            presenters.roster_athlete(user, recency_days=0)["recency_label"]
+            == "Last trained today"
+        )
+        assert (
+            presenters.roster_athlete(user, recency_days=1)["recency_label"]
+            == "Last trained 1 day ago"
+        )
 
     def test_roster_athlete_omits_contraindications(self):
         # Issue #382: contraindications belong on the athlete profile, not the
@@ -343,18 +379,16 @@ class TestRosterPresenters:
 
 
 class TestRosterViewAdherence:
-    def test_compliance_meter_and_activity_render(self, client):
+    def test_recency_pill_and_activity_render(self, client):
         coach = UserFactory()
         CoachProfileFactory(user=coach)
         rel = CoachAthleteFactory(coach=coach)
         rel.athlete.name = "Maya Okonkwo"
         rel.athlete.save(update_fields=["name"])
-        week = delivered_week(rel, sessions=2, done=1)
+        week = delivered_week(rel, sessions=2, done=0)
         session = week.sessions.order_by("session_slot__day_number").first()
         session.session_slot.name = "Lower"
         session.session_slot.save(update_fields=["name"])
-        # Re-log so the activity text picks up the renamed session.
-        SessionLog.objects.filter(session=session, athlete=rel.athlete).delete()
         SessionLogFactory(
             session=session, athlete=rel.athlete, status=SessionLog.Status.DONE
         )
@@ -363,7 +397,16 @@ class TestRosterViewAdherence:
         resp = client.get(reverse("meso:roster"))
         assert resp.status_code == 200
         body = resp.content.decode()
-        # Compliance meter for the one delivered+half-logged week.
-        assert "50%" in body
+        # The tone-coded "last trained" pill for the just-logged session.
+        assert "Last trained today" in body
         # Recent-activity feed names the athlete + the session they logged.
         assert "Lower" in body
+
+    def test_no_sessions_yet_renders_for_an_unlogged_athlete(self, client):
+        coach = UserFactory()
+        CoachProfileFactory(user=coach)
+        CoachAthleteFactory(coach=coach)
+        client.force_login(coach)
+        resp = client.get(reverse("meso:roster"))
+        assert resp.status_code == 200
+        assert "No sessions yet" in resp.content.decode()

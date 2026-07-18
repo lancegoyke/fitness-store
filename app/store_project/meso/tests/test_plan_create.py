@@ -72,12 +72,11 @@ class TestScaffoldAndCreatePlan:
 
         assert plan.relationship_id == link.pk
         assert plan.status == Plan.Status.DRAFT
-        # One block, one current week, two training days, one starter row each.
+        # One block, one week, two training days, one starter row each.
         mesos = list(plan.mesocycles.all())
         assert len(mesos) == 1
         weeks = list(mesos[0].weeks.all())
         assert len(weeks) == 1
-        assert weeks[0].is_current is True
         sessions = list(weeks[0].sessions.all())
         assert len(sessions) == 2
         for session in sessions:

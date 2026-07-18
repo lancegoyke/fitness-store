@@ -113,6 +113,14 @@
              editable deep copy of this program — the group fan-out's replacement. -->
         <form method="post" action="{% url 'meso:plan_batch_deliver' plan_id %}" class="meso-card meso-card--pad">
           {% csrf_token %}
+          <!-- remove-current-week-plan.md §2.6 FIX 1: carry the block this
+               screen is confirming (deliver.week_id — the ?week= the coach
+               picked, or the plan's default block) through to
+               plan_batch_deliver, which maps it onto each recipient's fresh
+               copy by mesocycle.order. Without this, batch-deliver has no way
+               to know which block the coach was looking at and silently
+               targets each copy's first block instead. -->
+          <input type="hidden" name="week_id" value="{{ deliver.week_id|default:'' }}">
           <p class="meso-eyebrow">Also deliver a copy to&#8230;</p>
           <p class="meso-sub" style="margin:0 0 10px;">Each client gets their own independent copy of this program — edits to one never touch another.</p>
           <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">

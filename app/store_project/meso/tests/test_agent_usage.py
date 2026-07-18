@@ -164,7 +164,9 @@ def test_normalize_result_coerces_bare_dict_and_passthrough():
 class TestPersistUsageOnSuccess:
     def test_run_writes_usage_cost_and_duration(self):
         plan, _, _ = make_plan()
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
         usage = client_module.RunUsage(
             input_tokens=1000,
             output_tokens=500,
@@ -195,7 +197,11 @@ class TestPersistUsageOnSuccess:
         plan, _, _ = make_plan()
         usage = client_module.RunUsage(input_tokens=100, output_tokens=50)
         batch, _ = service.propose_changes(
-            plan, "go", coach=plan.coach, client=UsageClient(usage)
+            plan,
+            "go",
+            coach=plan.coach,
+            mesocycle=plan.mesocycles.first(),
+            client=UsageClient(usage),
         )
         batch.refresh_from_db()
         assert batch.input_tokens == 100
@@ -206,7 +212,11 @@ class TestPersistUsageOnSuccess:
         # A legacy/scripted client returning a plain dict made no real API call.
         plan, _, _ = make_plan()
         batch, _ = service.propose_changes(
-            plan, "go", coach=plan.coach, client=DictClient()
+            plan,
+            "go",
+            coach=plan.coach,
+            mesocycle=plan.mesocycles.first(),
+            client=DictClient(),
         )
         batch.refresh_from_db()
         assert batch.input_tokens == 0
@@ -222,7 +232,9 @@ class TestPersistUsageOnSuccess:
 
 def test_failed_run_records_model_and_duration_with_zero_usage():
     plan, _, _ = make_plan()
-    batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+    batch = service.create_drafting_batch(
+        plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+    )
 
     service.run_proposal_job(batch.pk, client=BoomClient())
 
@@ -243,13 +255,19 @@ def test_failed_run_records_model_and_duration_with_zero_usage():
 class TestRunDimensions:
     def test_manual_run_defaults_to_manual_trigger(self):
         plan, _, _ = make_plan()
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
         assert batch.trigger == AgentProposalBatch.Trigger.MANUAL
 
     def test_draft_trigger_is_snapshotted(self):
         plan, _, _ = make_plan()
         batch = service.create_drafting_batch(
-            plan, "go", coach=plan.coach, trigger=AgentProposalBatch.Trigger.DRAFT
+            plan,
+            "go",
+            coach=plan.coach,
+            mesocycle=plan.mesocycles.first(),
+            trigger=AgentProposalBatch.Trigger.DRAFT,
         )
         assert batch.trigger == AgentProposalBatch.Trigger.DRAFT
 
@@ -258,20 +276,29 @@ class TestRunDimensions:
         # can exclude them from real cost (they're a quality check, not coach use).
         plan, _, presc = make_plan()
         case = evals.GOLDEN_CASES[0]
-        evals.evaluate(plan, case, client=evals.ScriptedEvalClient())
+        evals.evaluate(
+            plan,
+            case,
+            client=evals.ScriptedEvalClient(),
+            mesocycle=plan.mesocycles.first(),
+        )
         batch = plan.proposal_batches.get()
         assert batch.trigger == AgentProposalBatch.Trigger.EVAL
 
     def test_comped_coach_billing_status_snapshot(self):
         # make_plan comps the coach, so the run records the comped tier.
         plan, _, _ = make_plan()
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
         assert batch.billing_status == CoachSubscription.Status.COMPED
 
     def test_free_coach_with_no_subscription_snapshots_free(self):
         # A plan whose coach has no subscription row reads as the free tier.
         plan = PlanFactory()
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
         assert batch.billing_status == CoachSubscription.Status.FREE
 
     def test_active_coach_billing_status_snapshot(self):
@@ -279,5 +306,7 @@ class TestRunDimensions:
         CoachSubscriptionFactory(
             coach=plan.coach, status=CoachSubscription.Status.ACTIVE
         )
-        batch = service.create_drafting_batch(plan, "go", coach=plan.coach)
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
         assert batch.billing_status == CoachSubscription.Status.ACTIVE

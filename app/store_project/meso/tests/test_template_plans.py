@@ -46,7 +46,7 @@ def template_plan(owner=None, *, title="402", with_grid=True):
     if not with_grid:
         return plan, None
     meso = MesocycleFactory(plan=plan, name=title, order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Day 1")
     cell = presc(session, name="A) Squat jump", sets="3", reps="3")
     return plan, cell

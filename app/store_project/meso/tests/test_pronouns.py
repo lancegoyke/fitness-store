@@ -40,7 +40,7 @@ def _plan(athlete_name=ATHLETE_NAME):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week1 = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week1 = WeekFactory(mesocycle=meso, index=1)
     day(week1, day_number=1, name="Lower")
     return plan, meso, week1
 

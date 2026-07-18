@@ -36,7 +36,7 @@ pytestmark = pytest.mark.django_db
 
 
 def seed_plan(coach=None, athlete=None):
-    """A minimal owned plan with one current week → session → prescription."""
+    """A minimal owned plan with one (earliest-live) week → session → prescription."""
     rel = CoachAthleteFactory(
         coach=coach or UserFactory(), athlete=athlete or UserFactory()
     )
@@ -44,16 +44,16 @@ def seed_plan(coach=None, athlete=None):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     presc = presc_(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return plan, week, session, presc
 
 
-def add_week(plan, *, index, is_current=False):
+def add_week(plan, *, index):
     """Append another week (with one new day) to the plan's first block."""
     meso = plan.mesocycles.order_by("order").first()
-    week = WeekFactory(mesocycle=meso, index=index, is_current=is_current)
+    week = WeekFactory(mesocycle=meso, index=index)
     day(week, day_number=index, name=f"Day {index}")
     return week
 
@@ -104,11 +104,9 @@ class TestDeliver:
 
     def test_deliver_stamps_the_whole_block_not_just_current(self, client):
         # P3 block delivery: sending a plan releases the whole mesocycle, so a
-        # second week in the same block is stamped too — not only the flagged one.
+        # second week in the same block is stamped too — not only the target week.
         plan, week1, _, _ = seed_plan()
-        week1.is_current = False
-        week1.save(update_fields=["is_current"])
-        week2 = WeekFactory(mesocycle=week1.mesocycle, index=2, is_current=True)
+        week2 = WeekFactory(mesocycle=week1.mesocycle, index=2)
         day(week2, day_number=2, name="Upper")
         client.force_login(plan.relationship.coach)
 
@@ -208,17 +206,17 @@ class TestDeliver:
 
 
 class TestDeliverChosenWeek:
-    """Deliver a chosen (non-current) week via an explicit ``week_id``.
+    """Deliver a chosen week via an explicit ``week_id``.
 
     The multi-week designer lets a coach build weeks ahead; this lets them
-    *send* a built-ahead week directly — without first flipping it to the live
-    (current) week. The athlete sees the newest-delivered week, the coach's live
-    pointer is left untouched, and a foreign week is rejected.
+    *send* a built-ahead week directly, without it being the plan's default
+    (earliest-live) week. The athlete sees the newest-delivered week, and a
+    foreign week is rejected.
     """
 
     def test_choosing_a_week_delivers_its_whole_block(self, client):
         plan, week1, _, _ = seed_plan()
-        week2 = add_week(plan, index=2, is_current=False)
+        week2 = add_week(plan, index=2)
         client.force_login(plan.relationship.coach)
 
         resp = post_week(client, plan, week2.pk)
@@ -235,22 +233,9 @@ class TestDeliverChosenWeek:
         assert WeekDelivery.objects.filter(week=week2).count() == 1
         assert WeekDelivery.objects.filter(week=week1).count() == 1
 
-    def test_delivering_a_week_does_not_change_the_current_pointer(self, client):
-        plan, week1, _, _ = seed_plan()
-        week2 = add_week(plan, index=2, is_current=False)
-        client.force_login(plan.relationship.coach)
-
-        post_week(client, plan, week2.pk)
-
-        week1.refresh_from_db()
-        week2.refresh_from_db()
-        # Delivering never flips ``is_current`` — week1 stays the live target.
-        assert week1.is_current is True
-        assert week2.is_current is False
-
     def test_delivering_a_block_stamps_every_live_week(self, client):
         plan, week1, _, _ = seed_plan()
-        week2 = add_week(plan, index=2, is_current=False)
+        week2 = add_week(plan, index=2)
         client.force_login(plan.relationship.coach)
 
         post_week(client, plan, week2.pk)
@@ -289,7 +274,7 @@ class TestDeliverChosenWeek:
         # onto a valid pk and act on the wrong week — both must answer 400.
         plan, week, _, _ = seed_plan()
         # A week whose pk could be the coercion target (1) of 1.9 / True.
-        add_week(plan, index=2, is_current=False)
+        add_week(plan, index=2)
         client.force_login(plan.relationship.coach)
 
         resp = client.post(
@@ -329,7 +314,7 @@ class TestDeliverChosenWeek:
         coach = UserFactory()
         CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)  # kept
         plan, _, _, _ = seed_plan(coach=coach)  # newer link → suspended → over
-        week2 = add_week(plan, index=2, is_current=False)
+        week2 = add_week(plan, index=2)
         client.force_login(coach)
 
         resp = post_week(client, plan, week2.pk)
@@ -406,11 +391,11 @@ class TestBlockDeliver:
         assert WeekDelivery.objects.filter(week=dead).count() == 0
 
     def test_a_week_of_a_different_block_is_not_delivered(self, client):
-        # A block == ONE mesocycle. Delivering the current week's block leaves a
+        # A block == ONE mesocycle. Delivering the target week's block leaves a
         # sibling mesocycle of the same plan untouched.
         plan, week1, _, _ = seed_plan()
         other_meso = MesocycleFactory(plan=plan, name="Strength", order=1)
-        other_week = WeekFactory(mesocycle=other_meso, index=1, is_current=False)
+        other_week = WeekFactory(mesocycle=other_meso, index=1)
         day(other_week, day_number=1, name="Push")
         client.force_login(plan.relationship.coach)
 
@@ -459,23 +444,22 @@ class TestDeliverScreen:
 
     def test_screen_defaults_to_current_week(self, client):
         plan, week1, _, _ = seed_plan()
-        add_week(plan, index=2, is_current=False)
+        add_week(plan, index=2)
         client.force_login(plan.relationship.coach)
 
         ctx = self._screen(client, plan).context["deliver"]
 
-        # The target week (which *selects the block*) defaults to the live week;
-        # ``is_current`` is now a per-week fact, not a block-level warning.
+        # The target week (which *selects the block*) defaults to the earliest
+        # live week — there is no flagged "current" week any more, just plain
+        # ``(mesocycle.order, index)`` ordering.
         assert ctx["week_id"] == week1.pk
-        live_chip = next(w for w in ctx["weeks"] if w["id"] == week1.pk)
-        assert live_chip["is_current"] is True
 
     def test_screen_targets_the_week_query_param_selects_the_block(self, client):
         # ?week= picks which BLOCK to deliver (via one of its weeks); the whole
         # block's live weeks are then listed.
         plan, week1, _, _ = seed_plan()
         meso2 = MesocycleFactory(plan=plan, name="Strength", order=1)
-        week2 = WeekFactory(mesocycle=meso2, index=1, is_current=False)
+        week2 = WeekFactory(mesocycle=meso2, index=1)
         day(week2, day_number=1, name="Push")
         client.force_login(plan.relationship.coach)
 
@@ -490,7 +474,7 @@ class TestDeliverScreen:
 
     def test_screen_lists_every_live_week_in_the_block(self, client):
         plan, week1, _, _ = seed_plan()
-        week2 = add_week(plan, index=2, is_current=False)
+        week2 = add_week(plan, index=2)
         client.force_login(plan.relationship.coach)
 
         resp = self._screen(client, plan)
@@ -518,21 +502,3 @@ class TestDeliverScreen:
         ctx = self._screen(client, plan, week="nope").context["deliver"]
 
         assert ctx["week_id"] == week1.pk
-
-    def test_screen_no_flagged_week_treats_the_fallback_as_live(self, client):
-        # When no week is flagged ``is_current``, ``current_week`` falls back to the
-        # earliest week as the live target. The screen must agree: the default
-        # target == that fallback, and it's the week marked live in the per-week list.
-        plan, week1, _, _ = seed_plan()
-        week1.is_current = False
-        week1.save(update_fields=["is_current"])
-        add_week(plan, index=2, is_current=False)
-        client.force_login(plan.relationship.coach)
-
-        resp = self._screen(client, plan)
-
-        ctx = resp.context["deliver"]
-        assert ctx["week_id"] == week1.pk
-        # The fallback week is the one marked live in the per-week list.
-        live_chip = next(w for w in ctx["weeks"] if w["id"] == week1.pk)
-        assert live_chip["is_current"] is True

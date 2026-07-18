@@ -24,9 +24,9 @@ export interface BlockViewProps {
   phases: Phase[];
   // Issue #455 phase A5: sourced straight off the grid (gridState.grid.weeks)
   // now that the one-week planData owner is retired — GridWeek already
-  // structurally satisfies cellOn/cellStyle's Pick<Week, "current"|"deload">
-  // and carries its own vol/inten (serialize_mesocycle_grid additions), so
-  // no render-logic change was needed here, only this prop type.
+  // structurally satisfies cellOn/cellStyle's Pick<Week, "deload"> and
+  // carries its own vol/inten (serialize_mesocycle_grid additions), so no
+  // render-logic change was needed here, only this prop type.
   weeks: GridWeek[];
   periodStyle: PeriodStyle;
   onSetPeriodStyle(style: PeriodStyle): void;
@@ -119,12 +119,12 @@ export function BlockView({ phases, weeks, periodStyle, onSetPeriodStyle, onSwit
               >
                 <div className="meso-timeline-bars">
                   <div
-                    className={`meso-bar meso-bar--vol${w.current ? " is-current" : w.deload ? " is-deload" : ""}`}
+                    className={`meso-bar meso-bar--vol${w.deload ? " is-deload" : ""}`}
                     style={{ height: barH(w.vol ?? 0, 156) }}
                   />
                   <div className="meso-bar meso-bar--inten" style={{ height: barH(w.inten ?? 0, 156) }} />
                 </div>
-                <div className={`meso-timeline-label${w.current ? " is-current" : ""}`}>{w.label}</div>
+                <div className="meso-timeline-label">{w.label}</div>
                 {/* NOTE (deviation): the source repeats `w.phase` here as a
                     colored pill under every bar. The fixture (and real data,
                     since a week's phase name is almost always one of the
@@ -165,10 +165,10 @@ export function BlockView({ phases, weeks, periodStyle, onSetPeriodStyle, onSwit
             </div>
             {weeks.map((w, ri) => (
               <div key={ri} className="meso-cal-row">
-                <div className={`meso-cal-week-label${w.current ? " is-current" : ""}`}>{w.label}</div>
+                <div className="meso-cal-week-label">{w.label}</div>
                 {CAL_DAYS.map((_, ci) => (
                   <div key={ci} style={parseStyleString(cellStyle(w, ci))}>
-                    {cellOn(w, ci) && <div className={`meso-cal-dot${w.current ? " is-current" : ""}`} />}
+                    {cellOn(w, ci) && <div className="meso-cal-dot" />}
                   </div>
                 ))}
               </div>

@@ -9,9 +9,11 @@ scoped to the plan's athlete and this plan's sessions, newest first, and capped.
 import datetime
 
 import pytest
+from django.utils import timezone
 
 from store_project.meso.agent import service
 from store_project.meso.factories import LoggedSetFactory
+from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import SessionLog
@@ -22,28 +24,127 @@ from store_project.meso.tests.test_agent_validation import make_plan
 pytestmark = pytest.mark.django_db
 
 
+def test_context_plan_and_block_halves_agree_on_a_non_first_block():
+    # §4b FIX 1 regression: ``context["block"]`` is the requested mesocycle,
+    # but ``context["plan"]`` used to come from a bare ``serializers.
+    # serialize_plan(plan)``, which resolves its OWN opening week via
+    # ``current_week(plan)`` — the plan's earliest LIVE week, i.e. block 1.
+    # For a block-2 run the model would see block 1's prescription ids sitting
+    # right next to block 2's ``block`` payload; it could target one of those
+    # block-1 ids, and validation would then silently drop the change as
+    # outside ``batch.mesocycle`` — an edit the coach asked for that just
+    # vanishes. Both halves must describe the SAME block.
+    plan, session, cell1 = make_plan()  # block 1 (order=0), week 1, "Back Squat"
+    meso2 = MesocycleFactory(plan=plan, order=1)
+    week2 = WeekFactory(mesocycle=meso2, index=1)
+    session2 = day(week2, day_number=1, name="Upper")
+    cell2 = presc(session2, name="Bench Press")
+
+    context = service.build_context(plan, meso2)
+
+    block_ids = {
+        ex["id"]
+        for w in context["block"]["weeks"]
+        for s in w["sessions"]
+        for ex in s["exercises"]
+    }
+    plan_ids = {ex["id"] for s in context["plan"]["program"] for ex in s["exercises"]}
+    assert cell2.pk in block_ids
+    # This is the failure mode: if ``build_context`` reverts to a bare
+    # ``serialize_plan(plan)``, ``plan_ids`` comes back as block 1's cells
+    # instead and both of the assertions below flip.
+    assert cell2.pk in plan_ids
+    assert cell1.pk not in plan_ids
+
+
+def test_context_blanks_plan_program_when_target_block_has_no_live_weeks():
+    # FIX 1 (docs/meso/remove-current-week-plan.md §4b edge case): a block can
+    # have zero live weeks while another block of the same plan still has some
+    # — reachable because ``week_delete`` only guards the plan's LAST live
+    # week, not the block's. ``first_live_week(empty_block)`` is then ``None``,
+    # which is also ``serialize_plan``'s "no override" sentinel — so left
+    # unguarded, ``build_context`` would let ``serialize_plan`` fall back to
+    # the plan's earliest live week, i.e. block 1's, and hand the model block
+    # 1's prescription ids beside an empty ``block`` payload scoped to
+    # ``empty_block``. Validation would then drop any edit against those ids
+    # as outside ``batch.mesocycle`` — a burned allowance for nothing.
+    plan, session, cell1 = make_plan()  # block 1 (order=0), live week, cell1
+    empty_block = MesocycleFactory(plan=plan, order=1)  # no weeks at all
+
+    context = service.build_context(plan, empty_block)
+
+    assert context["plan"]["program"] == []
+    assert context["plan"]["weeks"] == []
+    assert context["plan"]["viewing"] is None
+    assert context["block"] == {"name": empty_block.name, "weeks": []}
+    plan_ids = {ex["id"] for s in context["plan"]["program"] for ex in s["exercises"]}
+    assert cell1.pk not in plan_ids
+    # FIX 2 regression: ``serialize_plan(plan, week=None)`` has ALREADY fallen
+    # back to block 1 (the plan's earliest live week) by the time we get here,
+    # so its ``phases`` list marks block 1 "current" — mixed-block context
+    # even though ``context["block"]`` is the empty block. No block is being
+    # "viewed" when the target block has no live weeks, so ``phases`` must be
+    # cleared, not just the grid fields above.
+    assert context["plan"]["phases"] == []
+
+
+def test_context_blanks_plan_program_when_target_blocks_week_was_soft_deleted():
+    # Same edge case, reached the way the app actually reaches it: the block
+    # had a live week, then its last week was soft-deleted via the block-level
+    # ``week_delete`` path (which only guards the plan's last live week).
+    plan, session, cell1 = make_plan()  # block 1 (order=0), live week, cell1
+    emptied_block = MesocycleFactory(plan=plan, order=1)
+    doomed_week = WeekFactory(mesocycle=emptied_block, index=1)
+    doomed_week.deleted_at = timezone.now()
+    doomed_week.save(update_fields=["deleted_at"])
+
+    context = service.build_context(plan, emptied_block)
+
+    assert context["plan"]["program"] == []
+    assert context["plan"]["weeks"] == []
+    assert context["plan"]["viewing"] is None
+    plan_ids = {ex["id"] for s in context["plan"]["program"] for ex in s["exercises"]}
+    assert cell1.pk not in plan_ids
+
+
+def test_context_blanks_plan_program_when_mesocycle_is_none():
+    # The other input ``first_live_week`` returns ``None`` for: no block to
+    # program at all (e.g. a hard-deleted batch.mesocycle, SET_NULL).
+    plan, session, cell1 = make_plan()
+
+    context = service.build_context(plan, None)
+
+    assert context["plan"]["program"] == []
+    assert context["plan"]["weeks"] == []
+    assert context["plan"]["viewing"] is None
+    assert context["block"] == {"name": "", "weeks": []}
+
+
 def test_context_includes_whole_block():
-    # P4 whole-block grounding: the agent sees EVERY live week of the current
-    # mesocycle — its full session/cell grid (numbers incl. ``rest``) plus each
-    # week's volume/intensity/is_current — so it can program across the block.
-    plan, session, _ = make_plan()  # week 1 (current) with a day + "Back Squat"
-    week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
+    # P4 whole-block grounding: the agent sees EVERY live week of the
+    # grounded mesocycle — its full session/cell grid (numbers incl.
+    # ``rest``) plus each week's volume/intensity — so it can program across
+    # the block. (Which block gets grounded on is now the caller's explicit
+    # ``mesocycle`` — the coach's viewed block, persisted on the batch —
+    # docs/meso/remove-current-week-plan.md §4b; this test just pins the
+    # whole-block shape, not the scoping itself.)
+    plan, session, _ = make_plan()  # week 1 with a day + "Back Squat"
+    week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2)
     w2_session = day(week2, day_number=1, name="Lower")
     presc(w2_session, name="Front Squat")
 
-    block = service.build_context(plan)["block"]
+    block = service.build_context(plan, plan.mesocycles.first())["block"]
 
     assert len(block["weeks"]) == 2
     for w in block["weeks"]:
         # Week meta exposes the progression levers.
         assert "volume" in w["week"]
         assert "intensity" in w["week"]
-        assert "is_current" in w["week"]
         # Each cell exposes its full numbers, including ``rest``.
         for s in w["sessions"]:
             for ex in s["exercises"]:
                 assert "rest" in ex
-    # Week 2's cell is visible — the agent sees beyond the current week.
+    # Week 2's cell is visible — the agent sees beyond the first week.
     names = {
         ex["name"]
         for w in block["weeks"]
@@ -55,7 +156,7 @@ def test_context_includes_whole_block():
 
 def test_context_has_empty_recent_logs_without_any():
     plan, _, _ = make_plan()
-    context = service.build_context(plan)
+    context = service.build_context(plan, plan.mesocycles.first())
     assert context["recent_logs"] == []
 
 
@@ -69,7 +170,7 @@ def test_context_includes_recent_logged_sets():
     )
     LoggedSetFactory(session_log=log, prescription=presc, reps="5", load="100", rpe="8")
 
-    context = service.build_context(plan)
+    context = service.build_context(plan, plan.mesocycles.first())
 
     logs = context["recent_logs"]
     assert len(logs) == 1
@@ -85,7 +186,7 @@ def test_recent_logs_are_scoped_to_the_plans_athlete():
     # A log on a different athlete/plan must not leak into this plan's grounding.
     SessionLogFactory(session=other_session, athlete=other_plan.athlete)
 
-    context = service.build_context(plan)
+    context = service.build_context(plan, plan.mesocycles.first())
 
     assert context["recent_logs"] == []
 
@@ -99,7 +200,7 @@ def test_recent_logs_are_capped_and_newest_first():
             date=datetime.date(2026, 6, day_num),
         )
 
-    logs = service.build_context(plan)["recent_logs"]
+    logs = service.build_context(plan, plan.mesocycles.first())["recent_logs"]
 
     assert len(logs) == service.RECENT_LOG_LIMIT
     # Newest first.

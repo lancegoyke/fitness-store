@@ -116,3 +116,10 @@
 .meso-btn-deliver--inline {
   padding: 8px 14px;
 }
+/* Inert state (no live week in the viewed block to deliver — see TopBar) —
+   same visual treatment .meso-topbar-iconbtn:disabled uses for undo/redo. */
+.meso-btn-deliver--disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}

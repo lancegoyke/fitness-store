@@ -17,7 +17,6 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import models
-from django.db import transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -1292,7 +1291,6 @@ class Plan(models.Model):
             phase="Accum",
             volume=70,
             intensity=65,
-            is_current=True,
         )
         for day in range(1, days + 1):
             slot = SessionSlot.objects.create(
@@ -1313,10 +1311,8 @@ class Plan(models.Model):
         shared rows, so editing one client's program never touches another's.
         Copies only the *live* tree (soft-deleted weeks/days/rows stay behind);
         every cell's whole line stack — text, ``skipped``, sub-lines — comes
-        across verbatim. Per-week ``is_current`` mirrors the source so the
-        athlete's home opens on the same week the coach is pointing at;
-        ``delivered_at`` resets — the copy is undelivered until a deliver
-        stamps it. Returns the new ``Plan``.
+        across verbatim. ``delivered_at`` resets — the copy is undelivered
+        until a deliver stamps it. Returns the new ``Plan``.
         """
         copy = Plan.objects.create(
             relationship=relationship,
@@ -1375,7 +1371,6 @@ class Plan(models.Model):
                     volume=week.volume,
                     intensity=week.intensity,
                     is_deload=week.is_deload,
-                    is_current=week.is_current,
                 )
             Session.objects.bulk_create(
                 [
@@ -1446,15 +1441,25 @@ class Mesocycle(models.Model):
         sub-lines, Phase 2a) carried forward from the latest live week as a
         starting point the coach then tweaks. Each new cell starts clean —
         ``skipped`` (a one-week exception) is never carried forward. The new
-        week is **non-current** (and visible to the athlete at once — 2d, edits
-        are live): adding a future week never moves the athlete's pointer or
-        what delivery targets — making a week the deliver target is the
-        separate ``week_set_current`` action. ``week_count`` grows to stay >= the highest
-        materialized index so the periodization rail stays honest. Returns the
-        new ``Week``.
+        week is live and visible to the athlete at once (2d, edits are live):
+        adding a future week is a pure grid append with no pointer to move.
+        ``week_count`` grows to stay >= the highest materialized index so the
+        periodization rail stays honest. Returns the new ``Week``.
 
-        A degenerate block with no weeks yet seeds one starter day (mirroring
-        ``Plan.scaffold``) so the result is immediately editable.
+        A genuinely degenerate block — no weeks AND no slots yet — seeds one
+        starter day (mirroring ``Plan.scaffold``) so the result is immediately
+        editable. That is *not* the same thing as "no source week": since
+        ``SessionSlot``/``ExerciseSlot`` are block-level identity that
+        survives a week's soft delete (P0 fixed-lineup cutover), a block can
+        have live slots with every one of its weeks soft-deleted — reachable
+        because ``week_delete`` only guards the *plan's* last live week, not
+        the block's (docs/meso/remove-current-week-plan.md §4b). Seeding a
+        fresh starter day on top of those surviving slots would leave the old
+        live slots with no session/cell in any live week — an orphaned block
+        next to a redundant "Day 1." So the starter-day seed is gated on the
+        slots, not the source week: a block with live slots always reuses
+        them, whether or not it currently has a source week to carry text
+        from.
 
         The source is the latest **live** week (a soft-deleted week is not a
         template to build from), but the new week's ``index`` is one past the
@@ -1473,9 +1478,13 @@ class Mesocycle(models.Model):
             volume=source.volume if source else 0,
             intensity=source.intensity if source else 0,
             is_deload=source.is_deload if source else False,
-            is_current=False,
         )
-        if source is None:
+        live_slots = list(
+            self.session_slots.filter(deleted_at__isnull=True).order_by(
+                "order", "day_number"
+            )
+        )
+        if source is None and not live_slots:
             slot = SessionSlot.objects.create(
                 mesocycle=self, day_number=1, name="Day 1", order=0
             )
@@ -1485,23 +1494,22 @@ class Mesocycle(models.Model):
             )
             Prescription.objects.create(exercise_slot=exercise_slot, week=week)
         else:
-            live_slots = list(
-                self.session_slots.filter(deleted_at__isnull=True).order_by(
-                    "order", "day_number"
-                )
-            )
             Session.objects.bulk_create(
                 [Session(week=week, session_slot=slot) for slot in live_slots]
             )
             # The whole line stack carries forward (Phase 2a): line 0's
             # prescription text plus any sub-lines (the RPE row, cues) — the
             # coach then tweaks the new column. ``skipped`` (a one-week
-            # exception) never carries.
+            # exception) never carries. No source week (the emptied-but-slots-
+            # survive edge case above) means there's nothing to carry forward
+            # at all — ``source_cells`` just stays empty and every cell below
+            # falls through to its blank default.
             source_cells = defaultdict(dict)
-            for cell in Prescription.objects.filter(
-                week=source, exercise_slot__deleted_at__isnull=True
-            ):
-                source_cells[cell.exercise_slot_id][cell.line] = cell.text
+            if source is not None:
+                for cell in Prescription.objects.filter(
+                    week=source, exercise_slot__deleted_at__isnull=True
+                ):
+                    source_cells[cell.exercise_slot_id][cell.line] = cell.text
             live_exercise_slots = ExerciseSlot.objects.filter(
                 session_slot__in=live_slots, deleted_at__isnull=True
             )
@@ -1658,7 +1666,6 @@ class Week(models.Model):
     volume = models.PositiveIntegerField(_("Volume"), default=0)
     intensity = models.PositiveIntegerField(_("Intensity"), default=0)
     is_deload = models.BooleanField(_("Deload"), default=False)
-    is_current = models.BooleanField(_("Current"), default=False)
     # When the coach last sent the deliver nudge (2d: a notify marker +
     # snapshot timestamp, never a visibility gate — the athlete sees live weeks
     # regardless).
@@ -1699,94 +1706,6 @@ class Week(models.Model):
         self.save(update_fields=["deleted_at"])
         self.sessions.filter(deleted_at__isnull=True).update(deleted_at=now)
         return self
-
-    def advance_current_week(self):
-        """Move the plan's ``is_current`` pointer forward onto this week (#456).
-
-        Locked product rule: when an athlete logs a session belonging to a week
-        LATER than the plan's current week, the pointer follows them — "they
-        started the next week." Forward-only: logging an earlier-or-equal week
-        is a no-op. Advances on ANY successful log write, ``pending`` ("Save
-        progress") just as much as ``done`` ("Log session") — the rule is about
-        which week the athlete is *on*, not whether they finished it, so this
-        deliberately does NOT gate on completion.
-
-        "Later" is PLAN-wide, not per-block: compared as the tuple
-        ``(mesocycle.order, week.index)`` — the same ordering ``current_week()``
-        (serializers.py) walks — since ``is_current`` is unique per plan and
-        spans mesocycles, while a block's own week ``index`` resets to 1 each
-        time.
-
-        Locks the plan first (mirrors ``week_set_current``/``session_add`` et
-        al. in views.py) so two concurrent log writes can't both read a stale
-        current week and race past each other.
-
-        Never calls ``record_plan_action``: the athlete moving their own
-        position is not a coach designer edit and must not enter the coach's
-        undo stack — ``week_set_current`` stays the coach's manual, undoable
-        override, in any direction.
-
-        Only ever compares against / clears *live* weeks (``deleted_at``
-        ``isnull``) — the logged week is live by construction
-        (``_athlete_session_or_404`` only ever serves a live session), and a
-        soft-deleted week must never be treated as, or clobbered into, current.
-
-        Re-resolves THIS week from the post-lock ``live_weeks`` read (by pk)
-        rather than trusting the caller's pre-lock ``self`` (Finding 2): a
-        concurrent writer (another log write, or the coach's
-        ``week_set_current``) can commit between the caller loading ``self``
-        and this method acquiring the lock, and both the forward/no-op
-        comparison and the eventual save use that freshly-read row so they're
-        never split across two different snapshots of the same week. A week
-        concurrently soft-deleted out from under ``self`` between load and
-        lock is never resurrected — this returns ``False`` instead.
-
-        Returns ``True`` when the pointer moved — including a plan with zero
-        current weeks self-healing onto this one — ``False`` for a no-op. A
-        caller that cares about ``Plan.modified`` staleness should bump it
-        itself when this returns ``True`` (mirrors views.py's ``_touch_plan``;
-        kept out of this model-layer helper to avoid a models→views dependency).
-        """
-        plan_id = self.mesocycle.plan_id
-        with transaction.atomic():
-            Plan.objects.select_for_update().filter(pk=plan_id).first()
-            live_weeks = list(
-                Week.objects.filter(mesocycle__plan_id=plan_id, deleted_at__isnull=True)
-                .select_related("mesocycle")
-                .order_by("mesocycle__order", "index")
-            )
-            # Re-resolve THIS week from the just-locked, fresh read instead of
-            # trusting the pre-lock ``self`` (issue #456 Finding 2): a concurrent
-            # writer (another log write, or the coach's ``week_set_current``) can
-            # commit between the caller loading ``self`` and this method
-            # acquiring the lock, leaving ``self.is_current`` stale. Comparing
-            # and saving against ``fresh`` instead means the flag this method
-            # tests and the row it saves are always the same, current-as-of-the
-            # -lock instance — the stale ``self`` was letting a concurrent
-            # "coach moves the pointer earlier, then we advance past it" race
-            # skip the save (stale ``True``) and leave the plan with ZERO
-            # current weeks.
-            fresh = next((w for w in live_weeks if w.pk == self.pk), None)
-            if fresh is None:
-                # Concurrently soft-deleted between ``self`` loading and this
-                # lock — never resurrect a dead week as current.
-                return False
-            current = next((w for w in live_weeks if w.is_current), None)
-            if current is not None:
-                current_key = (current.mesocycle.order, current.index)
-                logged_key = (fresh.mesocycle.order, fresh.index)
-                if logged_key <= current_key:
-                    return False
-            Week.objects.filter(
-                mesocycle__plan_id=plan_id, deleted_at__isnull=True
-            ).exclude(pk=fresh.pk).update(is_current=False)
-            if not fresh.is_current:
-                fresh.is_current = True
-                fresh.save(update_fields=["is_current"])
-            # Keep the caller's (possibly stale) instance coherent with what we
-            # just persisted, in case they read ``self.is_current`` afterward.
-            self.is_current = True
-            return True
 
 
 class Session(models.Model):
@@ -2119,6 +2038,27 @@ class AgentProposalBatch(models.Model):
         on_delete=models.CASCADE,
         related_name="proposal_batches",
         verbose_name=_("Plan"),
+    )
+    # The block the coach was viewing when they kicked off this run (§4b,
+    # docs/meso/remove-current-week-plan.md) — captured once at request time
+    # and frozen here, because grounding + validation run in a BACKGROUND JOB
+    # and apply happens on a LATER coach request; nothing downstream can re-read
+    # a live "current" pointer across that time gap without risking a different
+    # answer each time (or, post-``is_current``, silently defaulting to block 1
+    # while the coach works block 2 — the exact regression this field fixes).
+    # ``SET_NULL`` IS LOAD-BEARING: this batch is also the usage/cost ledger
+    # (agent-usage tracking v1), so deleting a block must never cascade into
+    # deleting billing history. ``null=True`` additionally covers legacy rows
+    # (created before this field existed) and any caller that doesn't pin a
+    # block (the eval harness, direct/test callers) — those degrade to the
+    # empty-block grounding guard, never to a silent earliest-live re-derivation.
+    mesocycle = models.ForeignKey(
+        "Mesocycle",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="proposal_batches",
+        verbose_name=_("Block"),
     )
     coach = models.ForeignKey(
         settings.AUTH_USER_MODEL,

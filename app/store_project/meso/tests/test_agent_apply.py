@@ -13,6 +13,7 @@ import pytest
 from store_project.exercises.factories import ExerciseFactory
 from store_project.meso.agent import apply as agent_apply
 from store_project.meso.factories import AgentProposalBatchFactory
+from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import ProposedChangeFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AgentProposalBatch
@@ -26,7 +27,9 @@ pytestmark = pytest.mark.django_db
 
 
 def _batch(plan):
-    return AgentProposalBatchFactory(plan=plan, coach=plan.coach)
+    return AgentProposalBatchFactory(
+        plan=plan, coach=plan.coach, mesocycle=plan.mesocycles.first()
+    )
 
 
 class TestApplyChange:
@@ -151,6 +154,45 @@ class TestApplyChange:
         agent_apply.apply_change(change)
         session.week.refresh_from_db()
         assert session.week.is_deload is True
+
+    def test_deload_no_session_fallback_uses_the_batchs_block_not_the_plans_first(
+        self,
+    ):
+        # §4b: an untargeted deload ("make this a deload week") flags the
+        # batch's PERSISTED block's earliest live week — never the plan's
+        # earliest-live week regardless of block (the old ``current_week``
+        # re-derivation, which would always land on block 1).
+        plan, session1, _ = make_plan()  # block 1 (order 0)
+        block2 = MesocycleFactory(plan=plan, order=1)
+        week2 = WeekFactory(mesocycle=block2, index=1)
+        batch = AgentProposalBatchFactory(plan=plan, coach=plan.coach, mesocycle=block2)
+        change = ProposedChangeFactory(
+            batch=batch,
+            kind=ProposedChange.Kind.DELOAD,
+            prescription=None,
+            session=None,
+        )
+
+        agent_apply.apply_change(change)
+
+        week2.refresh_from_db()
+        session1.week.refresh_from_db()
+        assert week2.is_deload is True
+        assert session1.week.is_deload is False  # block 1 untouched
+
+    def test_deload_no_session_fallback_is_a_noop_without_a_batch_block(self):
+        # A batch with no persisted block (never resolved, or hard-deleted
+        # after the run started — ``SET_NULL``) degrades to a safe no-op,
+        # never a wrong-block write.
+        plan, _, _ = make_plan()
+        batch = AgentProposalBatchFactory(plan=plan, coach=plan.coach, mesocycle=None)
+        change = ProposedChangeFactory(
+            batch=batch,
+            kind=ProposedChange.Kind.DELOAD,
+            prescription=None,
+            session=None,
+        )
+        assert agent_apply.apply_change(change) is None
 
     def test_swap_without_name_or_prescription_is_a_noop(self):
         plan, _, _ = make_plan()

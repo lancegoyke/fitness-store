@@ -58,7 +58,11 @@ class TestFakeDemoClientPropose:
         fake = FakeDemoClient()
 
         batch, rejected = service.propose_changes(
-            plan, "Draft something for this week.", coach=plan.coach, client=fake
+            plan,
+            "Draft something for this week.",
+            coach=plan.coach,
+            mesocycle=plan.mesocycles.first(),
+            client=fake,
         )
 
         assert rejected == []
@@ -90,7 +94,11 @@ class TestFakeDemoClientPropose:
         fake = FakeDemoClient()
 
         batch, rejected = service.propose_changes(
-            plan, "Draft something for this week.", coach=plan.coach, client=fake
+            plan,
+            "Draft something for this week.",
+            coach=plan.coach,
+            mesocycle=plan.mesocycles.first(),
+            client=fake,
         )
 
         assert batch.changes.count() >= 1
@@ -103,7 +111,8 @@ class TestFakeDemoClientPropose:
     def test_summary_reads_like_a_coach_not_a_test_fixture(self):
         plan, _, _ = make_plan()
         result = FakeDemoClient().propose(
-            context=service.build_context(plan), instruction="go"
+            context=service.build_context(plan, plan.mesocycles.first()),
+            instruction="go",
         )
         summary = result["summary"].lower()
         assert "scripted" not in summary

@@ -18,8 +18,14 @@ from django.urls import reverse
 
 from store_project.meso.agent import client as client_module
 from store_project.meso.factories import AgentProposalBatchFactory
+from store_project.meso.factories import MesocycleFactory
+from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import ProposedChangeFactory
+from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AgentProposalBatch
+from store_project.meso.models import CoachSubscription
+from store_project.meso.tests._helpers import day
+from store_project.meso.tests._helpers import presc
 from store_project.meso.tests.test_agent_service import FakeClient
 from store_project.meso.tests.test_agent_validation import make_plan
 from store_project.users.factories import UserFactory
@@ -64,6 +70,15 @@ def propose(client, plan, instruction="Make it knee-safe."):
     return client.post(
         agent_url(plan),
         data=json.dumps({"instruction": instruction}),
+        content_type="application/json",
+    )
+
+
+def propose_block(client, plan, mesocycle_id, instruction="Make it knee-safe."):
+    """Like ``propose``, but pins the block the coach had open (§4b)."""
+    return client.post(
+        agent_url(plan),
+        data=json.dumps({"instruction": instruction, "mesocycle_id": mesocycle_id}),
         content_type="application/json",
     )
 
@@ -220,6 +235,135 @@ class TestAgentEndpoint:
         plan, _, _ = make_plan()
         client.force_login(plan.coach)
         assert client.get(agent_url(plan)).status_code == 405
+
+
+class TestAgentScopeMesocycle:
+    """§4b: the batch freezes the coach's viewed block.
+
+    docs/meso/remove-current-week-plan.md — the coach's *viewed* block is
+    captured once, at request time, and frozen onto the batch: grounding (a
+    background job) and apply (a later request) read it back rather than
+    re-deriving "which block" on their own, which is what let the answer
+    silently drift to the plan's earliest-LIVE block (block 1) instead of the
+    block the coach actually had open (e.g. block 2).
+    """
+
+    def test_posted_mesocycle_id_is_persisted_on_the_batch(self, client, monkeypatch):
+        plan, _, _ = make_plan()
+        block2 = MesocycleFactory(plan=plan, order=1)
+        install_fake(monkeypatch, {"summary": "", "changes": []})
+        client.force_login(plan.coach)
+
+        resp = propose_block(client, plan, block2.pk, "go")
+
+        assert resp.status_code == 202
+        batch = AgentProposalBatch.objects.get(pk=resp.json()["batch_id"])
+        assert batch.mesocycle_id == block2.pk
+
+    def test_no_mesocycle_id_falls_back_to_the_plans_first_block(
+        self, client, monkeypatch
+    ):
+        # Today's UI doesn't send ``mesocycle_id`` yet (a follow-up commit) —
+        # the fallback must still resolve to a real block, same default the
+        # designer grid uses, not ``None``.
+        plan, _, _ = make_plan()  # a single block, order 0
+        install_fake(monkeypatch, {"summary": "", "changes": []})
+        client.force_login(plan.coach)
+
+        resp = propose(client, plan, "go")
+
+        batch = AgentProposalBatch.objects.get(pk=resp.json()["batch_id"])
+        assert batch.mesocycle_id == plan.mesocycles.first().pk
+
+    def test_a_foreign_plans_mesocycle_id_404s(self, client, monkeypatch):
+        # The ``plan=plan`` filter in the lookup IS the security check: a block
+        # from a different coach's plan must 404, never leak whether it exists.
+        plan, _, _ = make_plan()
+        other_plan, _, _ = make_plan()
+        foreign_block = other_plan.mesocycles.first()
+        install_fake(monkeypatch, {"summary": "", "changes": []})
+        client.force_login(plan.coach)
+
+        resp = propose_block(client, plan, foreign_block.pk, "go")
+
+        assert resp.status_code == 404
+        assert not AgentProposalBatch.objects.exists()
+
+    def test_a_plan_with_no_block_400s(self, client, monkeypatch):
+        plan = PlanFactory()  # no ``scaffold()`` — zero blocks
+        CoachSubscription.comp(plan.coach)
+        install_fake(monkeypatch, {"summary": "", "changes": []})
+        client.force_login(plan.coach)
+
+        resp = propose(client, plan, "go")
+
+        assert resp.status_code == 400
+        assert not AgentProposalBatch.objects.exists()
+
+    def test_scopes_grounding_and_validation_to_the_posted_block_not_earliest_live(
+        self, client, monkeypatch
+    ):
+        """THE REGRESSION GUARD.
+
+        The coach is viewing block 2's grid — not block 1's — when they kick
+        off a run. Post block 2's id; grounding and validation must scope to
+        block 2, never silently fall back to the plan's earliest LIVE week
+        (block 1, the old ``current_week`` resolver).
+
+        Without §4b's persisted-``mesocycle`` fix this fails both ways: the
+        client would be grounded on block 1's "Back Squat" only (never seeing
+        block 2's "Front Squat"), and the roles would flip below — the block-2
+        target dropped as "out of contract" while the block-1 target is wrongly
+        kept.
+        """
+        plan, session1, presc1 = make_plan()  # block 1 (order 0): "Back Squat"
+        block2 = MesocycleFactory(plan=plan, order=1)
+        week2 = WeekFactory(mesocycle=block2, index=1)
+        session2 = day(week2, day_number=1, name="Lower")
+        presc2 = presc(session2, name="Front Squat")
+
+        fake = FakeClient(
+            {
+                "summary": "",
+                "changes": [
+                    {
+                        "kind": "progress",
+                        "prescription_id": presc2.pk,
+                        "title": "Front Squat → 100 kg",
+                        "rationale": "in block 2, the posted block",
+                        "new_load": "100 kg",
+                    },
+                    {
+                        "kind": "progress",
+                        "prescription_id": presc1.pk,
+                        "title": "Back Squat → 100 kg",
+                        "rationale": "in block 1 — out of contract",
+                        "new_load": "100 kg",
+                    },
+                ],
+            }
+        )
+        monkeypatch.setattr(client_module, "get_default_client", lambda: fake)
+        client.force_login(plan.coach)
+
+        resp = propose_block(client, plan, block2.pk, "go")
+
+        assert resp.status_code == 202
+        batch = AgentProposalBatch.objects.get(pk=resp.json()["batch_id"])
+        assert batch.mesocycle_id == block2.pk
+
+        # Grounding: the model only ever saw block 2's exercise.
+        names = {
+            ex["name"]
+            for w in fake.context["block"]["weeks"]
+            for s in w["sessions"]
+            for ex in s["exercises"]
+        }
+        assert names == {"Front Squat"}
+
+        # Validation: block 2's target is kept; block 1's is dropped.
+        kept = {c.prescription_id for c in batch.changes.all()}
+        assert kept == {presc2.pk}
 
 
 class TestBatchStatus:

@@ -88,8 +88,8 @@
           <div class="meso-card meso-card--pad">
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
               <div>
-                <p class="meso-eyebrow" style="margin:0 0 3px;">Current block</p>
-                <div style="font-size:17px;font-weight:800;letter-spacing:-0.02em;">{{ athlete.block }} · {{ athlete.week }}</div>
+                <p class="meso-eyebrow" style="margin:0 0 3px;">Cadence</p>
+                <div style="font-size:17px;font-weight:800;letter-spacing:-0.02em;">{{ athlete.recency }} · {{ athlete.session_count_14d }} session{{ athlete.session_count_14d|pluralize }} in 14d</div>
               </div>
               <div class="meso-spacer"></div>
               {% if athlete.status == 'needs_review' %}
@@ -99,11 +99,6 @@
               {% else %}
                 <span class="meso-badge meso-badge--muted"><i></i>{{ athlete.status_label }}</span>
               {% endif %}
-            </div>
-            <div style="display:flex;align-items:center;gap:10px;">
-              <span class="meso-row-meta" style="width:78px;">Adherence</span>
-              <div class="meso-meter"><span style="width:{{ athlete.compliance }}%;"></span></div>
-              <span class="meso-row-meta meso-mono">{{ athlete.compliance }}%</span>
             </div>
             <hr class="meso-hr" />
             <p class="meso-eyebrow">Macrocycle</p>

@@ -35,7 +35,6 @@ function week(overrides: Partial<GridWeek> = {}): GridWeek {
     label: "Wk 1",
     phase: "Accum",
     deload: false,
-    current: true,
     delivered_at: null,
     ...overrides,
   };
@@ -87,7 +86,7 @@ function day(id: number, rows: GridRow[], overrides: Partial<GridDay> = {}): Gri
 function grid(overrides: Partial<MesoGrid> = {}): MesoGrid {
   return {
     mesocycle: { id: 1, plan_id: 1, name: "Block", week_count: 2 },
-    weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false })],
+    weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2" })],
     days: [day(1, [row(9, [1, 2]), row(10, [1, 2])]), day(2, [row(11, [1, 2])])],
     history: { can_undo: false, can_redo: false, undo_label: "", redo_label: "" },
     ...overrides,
@@ -1208,7 +1207,7 @@ describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom 
   it("(1) ArrowRight over a hole in the middle of a row skips the entire missing week and lands on the next rendered cell", () => {
     // Row 9 has cells for weeks 1 and 3 only — week 2 is a total hole.
     const HOLE_GRID = grid({
-      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false }), week({ id: 3, label: "Wk 3", current: false })],
+      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2" }), week({ id: 3, label: "Wk 3" })],
       days: [day(1, [row(9, [1, 3])])],
     });
     const cells = mountCells(HOLE_GRID);
@@ -1231,7 +1230,7 @@ describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom 
     // Row 9 has a cell for week 1 only — week 2 is a total hole, but the
     // notes/rest columns after it always render, so the skid lands there.
     const HOLE_GRID = grid({
-      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false })],
+      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2" })],
       days: [day(1, [row(9, [1])])],
     });
     const cells = mountCells(HOLE_GRID);
@@ -1251,7 +1250,7 @@ describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom 
 
   it("(3) ArrowLeft mirrors (1): skips the entire missing week backwards, landing on the previous rendered cell", () => {
     const HOLE_GRID = grid({
-      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false }), week({ id: 3, label: "Wk 3", current: false })],
+      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2" }), week({ id: 3, label: "Wk 3" })],
       days: [day(1, [row(9, [1, 3])])],
     });
     const cells = mountCells(HOLE_GRID);
@@ -1275,7 +1274,7 @@ describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom 
     // GHOST (its last stop), down lands on row 11's line 0 — skipping every
     // stop row 10 doesn't render at this column.
     const HOLE_GRID = grid({
-      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false })],
+      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2" })],
       days: [day(1, [row(9, [1, 2]), row(10, [2]), row(11, [1, 2])])],
     });
     const cells = mountCells(HOLE_GRID);
@@ -1295,7 +1294,7 @@ describe("hole-skidding: arrows land on the next RENDERED cell, never a phantom 
 
   it("(5) invariant holds across a repeated skid in both horizontal directions: the anchor always addresses an existing, tabIndex-0 node", () => {
     const HOLE_GRID = grid({
-      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2", current: false }), week({ id: 3, label: "Wk 3", current: false })],
+      weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2" }), week({ id: 3, label: "Wk 3" })],
       days: [day(1, [row(9, [1, 3])])],
     });
     const cells = mountCells(HOLE_GRID);

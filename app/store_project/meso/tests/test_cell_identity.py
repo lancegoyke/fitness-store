@@ -23,7 +23,7 @@ pytestmark = pytest.mark.django_db
 def _cell_on_catalog_slot():
     """A cell whose slot is catalog-backed (``exercise`` set), named 'Back Squat'."""
     plan = PlanFactory()
-    week = WeekFactory(mesocycle__plan=plan, index=1, is_current=True)
+    week = WeekFactory(mesocycle__plan=plan, index=1)
     session = day(week, day_number=1, name="Lower")
     catalog = ExerciseFactory()
     return presc(session, name="Back Squat", exercise=catalog), catalog
@@ -70,7 +70,7 @@ class TestSkippedCellsAreNotTrainable:
 
     def _day_with_a_skip(self):
         plan = PlanFactory()
-        week = WeekFactory(mesocycle__plan=plan, index=1, is_current=True)
+        week = WeekFactory(mesocycle__plan=plan, index=1)
         session = day(week, day_number=1, name="Lower")
         presc(session, name="Squat")
         presc(session, name="Skipped Curl", skipped=True)

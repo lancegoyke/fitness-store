@@ -32,6 +32,18 @@ describe("TopBar", () => {
     expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=2");
   });
 
+  // §4b (docs/meso/remove-current-week-plan.md): the default grid can open
+  // on a block with zero live weeks while a later block has some. A live
+  // deliverHref there would silently target that later block
+  // (DeliverView without ?week= falls back to current_week(plan)) — so
+  // `null` renders the control inert instead of a misleading link.
+  it("renders Deliver as inert (no href, aria-disabled) when deliverHref is null", () => {
+    render(<TopBar {...baseProps({ deliverHref: null })} />);
+    const deliver = screen.getByTestId("deliver-link");
+    expect(deliver).not.toHaveAttribute("href");
+    expect(deliver).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("renders the view segmented control and marks the active tab", () => {
     render(<TopBar {...baseProps({ view: "block" })} />);
     expect(screen.getByTestId("view-tab-table")).toHaveAttribute("aria-selected", "false");

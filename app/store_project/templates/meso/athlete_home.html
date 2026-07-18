@@ -20,7 +20,7 @@
     <div class="meso-pagehead">
       <div>
         <p class="meso-eyebrow">Your training</p>
-        <h1 class="meso-h1">This week</h1>
+        <h1 class="meso-h1">Your programs</h1>
         <p class="meso-sub">Your program, live as your coach writes it — tap a session to see the plan.</p>
       </div>
     </div>
@@ -127,7 +127,7 @@
       <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
         <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px;flex-wrap:wrap;">
           <span style="font-size:17px;font-weight:800;letter-spacing:-0.02em;">{{ plan.title }}</span>
-          {% if plan.block %}<span class="meso-row-meta">{{ plan.block }} · Week {{ plan.focus_index }}</span>{% endif %}
+          {% if plan.block %}<span class="meso-row-meta">{{ plan.block }}</span>{% endif %}
         </div>
         <p class="meso-row-meta" style="margin-bottom:12px;">Coach {{ plan.coach }}{% if plan.goal %} · {{ plan.goal }}{% endif %}</p>
 
@@ -138,18 +138,17 @@
             {% comment %}
               Week chips (issue #456) — the tappable path onto any live
               week of this PLAN, not just the anchored block's (Finding 1: a
-              coach adding a new block never moves is_current, so scoping
-              this to the anchored block would strand the athlete on the old
-              one forever). Pure server-rendered links; the CURRENT
-              (is_current) chip is filled, the FOCUSED (viewed) chip gets an
-              accent outline, and the two can differ (viewing an earlier week
-              for review doesn't move is_current). Grouped by block: a group
-              only gets a visible label once the plan has more than one
-              block, otherwise it's today's flat "Wk N" row. Only
-              shown at all once the plan has more than one week.
-              Rendered independent of plan.sessions (nit #456 P2): a focused
-              week whose sessions were all soft-deleted must not hide the only
-              plan-wide navigation off it.
+              coach adding a new block must stay reachable, so scoping this
+              to the anchored block would strand the athlete on the old one
+              forever). Pure server-rendered ?week= links; the FOCUSED
+              (viewed) chip gets an accent outline — the app has no
+              "current" week to also flag (docs/meso/remove-current-week-
+              plan.md). Grouped by block: a group only gets a visible label
+              once the plan has more than one block, otherwise it's today's
+              flat "Wk N" row. Only shown at all once the plan has more than
+              one week. Rendered independent of plan.sessions (nit #456 P2):
+              a focused week whose sessions were all soft-deleted must not
+              hide the only plan-wide navigation off it.
             {% endcomment %}
             <div style="margin-bottom:12px;">
               {% for group in plan.week_chip_groups %}
@@ -157,7 +156,7 @@
                   {% if group.label %}<p class="meso-eyebrow" style="margin-bottom:5px;">{{ group.label }}</p>{% endif %}
                   <div style="display:flex;flex-wrap:wrap;gap:7px;">
                     {% for w in group.chips %}
-                      <a href="{% if w.current %}{% url 'meso:athlete_home' %}{% else %}{% url 'meso:athlete_home' %}?week={{ w.id }}{% endif %}" class="meso-mono" style="display:inline-flex;align-items:center;padding:7px 13px;border-radius:999px;font-size:12px;font-weight:700;text-decoration:none;{% if w.current %}background:var(--accent-deep);color:var(--accent-ink);border:1px solid var(--accent-deep);{% else %}background:var(--surface);color:var(--ink);border:1px solid var(--line);{% endif %}{% if w.focused and not w.current %}box-shadow:inset 0 0 0 1.5px var(--accent-deep);color:var(--accent-deep);{% endif %}">{{ w.label }}</a>
+                      <a href="{% url 'meso:athlete_home' %}?week={{ w.id }}" class="meso-mono" style="display:inline-flex;align-items:center;padding:7px 13px;border-radius:999px;font-size:12px;font-weight:700;text-decoration:none;background:var(--surface);color:var(--ink);border:1px solid var(--line);{% if w.focused %}box-shadow:inset 0 0 0 1.5px var(--accent-deep);color:var(--accent-deep);{% endif %}">{{ w.label }}</a>
                     {% endfor %}
                   </div>
                 </div>
@@ -166,7 +165,7 @@
           {% endif %}
 
           {% if plan.sessions %}
-            {# The focus week's sessions — the "log today" affordance. #}
+            {# The anchored week's sessions — the "log today" affordance. #}
             <div class="meso-flex" style="flex-direction:column;gap:8px;">
               {% for s in plan.sessions %}
                 <a class="meso-row" href="{{ s.url }}" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;text-decoration:none;color:inherit;">
@@ -184,17 +183,20 @@
               {% endfor %}
             </div>
           {% else %}
-            {# This card's plan HAS weeks — this focused week just has
-               no live sessions right now (e.g. the coach removed them all).
-               Distinct from the truly-empty "awaiting" state above (nit #456
-               P2): the plan-wide chips/grid above still stand, so this is
-               deliberately a light inline note, not the "still building" copy. #}
-            <p class="meso-row-meta">No sessions this week.</p>
-          {% endif %}
+            {% comment %}
+              This card's plan HAS weeks — the anchored week just has no live
+              sessions right now (e.g. the coach removed them all). Distinct
+              from the truly-empty "awaiting" state above (nit #456 P2): the
+              plan-wide chips/grid above still stand, so this is deliberately a
+              light inline note, not the "still building" copy.
 
-          {% if plan.focus_done and plan.next_week %}
-            {# "Start next week" nudge (#456) — discoverability sugar; the chips above are the universal path. Crosses blocks (Finding 1): when the next week lives in a different mesocycle, the copy names the destination block so the jump makes sense. #}
-            <a class="meso-btn meso-btn--primary" href="{% url 'meso:athlete_home' %}?week={{ plan.next_week.id }}" style="width:100%;justify-content:center;margin-top:10px;padding:11px 14px;font-size:13.5px;">{% if plan.next_week.cross_block %}Week {{ plan.focus_index }} done — start {{ plan.next_week.block_label }} · Week {{ plan.next_week.index }} &rarr;{% else %}Week {{ plan.focus_index }} done — start Week {{ plan.next_week.index }} &rarr;{% endif %}</a>
+              Uses the comment TAG, like the block below and for the same
+              reason: Django's hash-comment tokenizer is single-line, so a
+              multi-line hash comment is not stripped and renders verbatim onto
+              the athlete's screen. This block was one, and leaked in exactly
+              this state.
+            {% endcomment %}
+            <p class="meso-row-meta">No sessions here yet.</p>
           {% endif %}
 
           {% if plan.grid.days %}
@@ -220,7 +222,7 @@
                         <tr>
                           <th style="position:sticky;left:0;z-index:1;text-align:left;padding:7px 10px;font-weight:700;color:var(--dim);background:var(--surface);border-bottom:1px solid var(--line);">Exercise</th>
                           {% for w in plan.grid.weeks %}
-                            <th style="text-align:left;padding:7px 10px;font-weight:700;border-bottom:1px solid var(--line);{% if w.current %}color:var(--accent-deep);background:var(--soft);{% else %}color:var(--dim);{% endif %}">{{ w.label }}{% if w.deload %} · DL{% endif %}</th>
+                            <th style="text-align:left;padding:7px 10px;font-weight:700;border-bottom:1px solid var(--line);{% if w.focused %}color:var(--accent-deep);background:var(--soft);{% else %}color:var(--dim);{% endif %}">{{ w.label }}{% if w.deload %} · DL{% endif %}</th>
                           {% endfor %}
                         </tr>
                       </thead>
@@ -229,7 +231,7 @@
                           <tr>
                             <td style="position:sticky;left:0;z-index:1;padding:7px 10px;font-weight:700;color:var(--ink);background:var(--surface);border-top:1px solid var(--line);">{{ row.name }}</td>
                             {% for c in row.cells %}
-                              <td style="padding:7px 10px;color:var(--ink);border-top:1px solid var(--line);{% if c.current %}background:var(--soft);{% endif %}">
+                              <td style="padding:7px 10px;color:var(--ink);border-top:1px solid var(--line);{% if c.focused %}background:var(--soft);{% endif %}">
                                 {% if not c.present %}<span style="color:var(--dim);">·</span>{% elif c.skipped %}<span style="color:var(--dim);">—</span>{% else %}{{ c.summary }}{% endif %}
                               </td>
                             {% endfor %}
