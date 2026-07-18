@@ -183,11 +183,19 @@
               {% endfor %}
             </div>
           {% else %}
-            {# This card's plan HAS weeks — the anchored week just has
-               no live sessions right now (e.g. the coach removed them all).
-               Distinct from the truly-empty "awaiting" state above (nit #456
-               P2): the plan-wide chips/grid above still stand, so this is
-               deliberately a light inline note, not the "still building" copy. #}
+            {% comment %}
+              This card's plan HAS weeks — the anchored week just has no live
+              sessions right now (e.g. the coach removed them all). Distinct
+              from the truly-empty "awaiting" state above (nit #456 P2): the
+              plan-wide chips/grid above still stand, so this is deliberately a
+              light inline note, not the "still building" copy.
+
+              Uses the comment TAG, like the block below and for the same
+              reason: Django's hash-comment tokenizer is single-line, so a
+              multi-line hash comment is not stripped and renders verbatim onto
+              the athlete's screen. This block was one, and leaked in exactly
+              this state.
+            {% endcomment %}
             <p class="meso-row-meta">No sessions here yet.</p>
           {% endif %}
 

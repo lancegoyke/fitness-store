@@ -296,6 +296,40 @@ class TestWeekAddEndpoint:
 
         assert resp.status_code == 400
 
+    def test_malformed_json_body_is_400(self, client):
+        # The body now SELECTS THE TARGET BLOCK — silently downgrading
+        # malformed JSON to `{}` (the old behavior) would add the week to the
+        # DEFAULT block instead of refusing outright, which a coach mid-edit
+        # would never notice landed on the wrong block.
+        link = CoachAthleteFactory()
+        plan = link.create_plan()
+        client.force_login(link.coach)
+
+        resp = client.post(
+            self._url(plan),
+            data="{not json",
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 400
+        assert Week.objects.filter(mesocycle__plan=plan).count() == 1  # no write
+
+    def test_non_object_json_body_is_400(self, client):
+        # Valid JSON that isn't an object (e.g. a bare list) used to reach
+        # `payload.get("mesocycle_id")` and raise AttributeError -> 500.
+        link = CoachAthleteFactory()
+        plan = link.create_plan()
+        client.force_login(link.coach)
+
+        resp = client.post(
+            self._url(plan),
+            data=json.dumps([]),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 400
+        assert Week.objects.filter(mesocycle__plan=plan).count() == 1  # no write
+
     def test_bodyless_add_targets_the_plans_first_block_even_when_it_has_no_live_weeks(
         self, client
     ):

@@ -2875,9 +2875,27 @@ def week_add(request, plan_id):
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    try:
-        payload = json.loads(request.body or "{}")
-    except json.JSONDecodeError:
+    # This body now SELECTS THE TARGET BLOCK (mesocycle_id), unlike the old
+    # single-block plan — silently downgrading malformed JSON to `{}` (the
+    # prior behavior) would add the week to the DEFAULT block instead of the
+    # one the coach's client actually meant, and valid-but-non-object JSON
+    # (e.g. `[]`) would reach `.get()` below and 500. A bodyless / form /
+    # multipart post (no DECLARED JSON body) still means "use the default
+    # block" — same `_body_week_id` convention just above (content_type !=
+    # application/json, or an empty body, is absence, not an error; `apiPost`
+    # always sets the JSON content-type even for `body: null`, which lands
+    # empty here). A body that DOES declare itself JSON, though, is validated
+    # strictly, same as `agent_propose`: malformed JSON or anything that
+    # isn't an object fails loudly (400) before any write, rather than
+    # silently landing on the default block or 500ing on `.get()`.
+    if request.content_type == "application/json" and request.body:
+        try:
+            payload = json.loads(request.body)
+        except json.JSONDecodeError:
+            return HttpResponseBadRequest("Malformed JSON.")
+        if not isinstance(payload, dict):
+            return HttpResponseBadRequest("Expected a JSON object.")
+    else:
         payload = {}
     mesocycle_id = payload.get("mesocycle_id")
     if mesocycle_id is not None:

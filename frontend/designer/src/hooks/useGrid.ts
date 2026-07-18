@@ -346,6 +346,12 @@ export function useGrid(options: UseGridOptions) {
     () =>
       runStructural(async () => {
         const weekId = currentWeekId(grid);
+        // No live week in the block we're viewing means there is nothing to hang
+        // a day on. Posting anyway would send `{week_id: undefined}` — JSON drops
+        // the key, and the server's own fallback would create the day in whatever
+        // block DOES have a live week, i.e. not the one on screen. Add a week
+        // first (that path is block-scoped).
+        if (weekId == null) return;
         try {
           await apiPost(`/meso/api/plan/${planId}/session/`, { week_id: weekId }, csrf);
         } catch (err) {

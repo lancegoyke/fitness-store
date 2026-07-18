@@ -189,7 +189,16 @@ export function DesignerRoot() {
   // targets the grid's first live week, same default `current_week(plan)`
   // degrades to server-side.
   const gridCurrentWeekId = grid ? grid.weeks[0]?.id ?? null : null;
-  const deliverHref = buildDeliverHref(planId, gridCurrentWeekId);
+  // The default grid opens on the plan's FIRST block by order (§4b) — which
+  // can legitimately have zero live weeks while a later block has some
+  // (`week_delete` only guards the plan's LAST live week, not the block's).
+  // `buildDeliverHref(planId, null)` degrades to the bare `/meso/deliver/
+  // <plan>/` URL, and `DeliverView` without `?week=` falls back to
+  // `current_week(plan)` — a LATER block than the empty one on screen.
+  // There's genuinely nothing to deliver from a block with no weeks, so pass
+  // `null` through (TopBar renders the control inert) instead of building a
+  // link that would silently open a different block.
+  const deliverHref = gridCurrentWeekId != null ? buildDeliverHref(planId, gridCurrentWeekId) : null;
   const cycleLabel = cycleLabelFromGrid(grid?.phases ?? [], grid?.weeks ?? []);
   const athleteProgram = grid ? gridToProgram(grid) : [];
 

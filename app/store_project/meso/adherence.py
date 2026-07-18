@@ -12,10 +12,17 @@ they're putting in" than progress through a fixed denominator. The signal is
 **recency** — how long since the athlete's last logged (done) session — plus a
 secondary rolling volume count, both keyed off ``SessionLog.created_at`` (the
 server-stamped log-write clock, always present and monotonic, unlike the
-nullable athlete-entered ``date``). Two caveats apply to both: ``created_at``
-is *write* time, so re-saving an old workout reads as fresh; and any
+nullable athlete-entered ``date``). Three caveats apply: ``created_at``
+is *write* time, so re-saving an old workout reads as fresh; any
 recency-based signal penalizes an athlete who trains but doesn't log — a
-coaching-culture tradeoff, not a code one.
+coaching-culture tradeoff, not a code one; and ``athlete_log_session``
+updates an existing (pending) ``SessionLog`` *in place* when it goes done —
+``created_at`` is ``auto_now_add`` and keeps the row's ORIGINAL timestamp, so
+a session logged pending days ago and only marked done today still orders
+(and windows, for ``link_session_count``) by that original time, reading as
+stale — or falling outside the 14-day window entirely — instead of today.
+Closing this would need a separate written-at/completed-at timestamp, which
+is out of scope for the ``created_at``-only design decided in §4a.
 
 Nothing here mutates state; it's a pure read layer the presenter formats.
 """

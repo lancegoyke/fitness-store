@@ -215,6 +215,24 @@ describe("table view (issue #455 phase A5: the only view left besides periodizat
     expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=1");
   });
 
+  // §4b: the default grid opens on the plan's FIRST block by order, which
+  // can have zero live weeks while a later block has some (week_delete only
+  // guards the plan's LAST live week, not the block's). Nothing to deliver
+  // from an empty block, so the control must be inert rather than a link
+  // that falls back to DeliverView's current_week(plan) — a later block.
+  it("renders Deliver inert when the viewed block has zero live weeks", () => {
+    jsonScript("meso-grid-data", gridPayload({ weeks: [], days: [] }));
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+
+    render(<DesignerRoot />);
+
+    const deliver = screen.getByTestId("deliver-link");
+    expect(deliver).not.toHaveAttribute("href");
+    expect(deliver).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("routes a Ctrl/Cmd+Z keyboard shortcut to the grid's own undo (the only undo/redo owner left)", async () => {
     jsonScript(
       "meso-grid-data",

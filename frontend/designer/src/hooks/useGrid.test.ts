@@ -421,6 +421,20 @@ describe("addDay", () => {
     expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
     expect(result.current.grid?.days).toHaveLength(2);
   });
+
+  it("makes no fetch call when the grid has zero live weeks (no viewed week to anchor on)", async () => {
+    // Posting anyway would send {week_id: undefined} — JSON drops the key,
+    // and the server's own fallback would create the day in whatever block
+    // DOES have a live week, i.e. not the block on screen.
+    const { result } = setup(grid({ weeks: [] }));
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
+
+    await act(async () => {
+      await result.current.addDay();
+    });
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
 });
 
 describe("removeDay", () => {
