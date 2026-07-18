@@ -105,6 +105,19 @@ def build_context(plan, mesocycle):
         plan_context["program"] = []
         plan_context["weeks"] = []
         plan_context["viewing"] = None
+        # ``serialize_plan`` has ALREADY fallen back to a different block by
+        # this point — ``open_week = current_week(plan, None)`` inside it
+        # lands on the plan's earliest live week, quite possibly in block 1
+        # while ``mesocycle`` (this block) is empty — and derives
+        # ``current_mesocycle`` from THAT week, so ``phases`` marks block 1
+        # "current" even though ``context["block"]`` is this empty block. That
+        # is the same mixed-block leak the ``program``/``weeks``/``viewing``
+        # blanks above exist to close, just surfacing on the macrocycle rail
+        # instead of the grid. There's no meaningful "viewing" position for a
+        # block with no live weeks, so clear it rather than reimplement
+        # ``_phase_states`` here — an empty list renders no rail at all, which
+        # is correct for "nothing to view."
+        plan_context["phases"] = []
 
     context = {
         "plan": plan_context,

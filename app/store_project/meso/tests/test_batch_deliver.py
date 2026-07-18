@@ -24,6 +24,7 @@ Covered here:
 import pytest
 from django.urls import reverse
 
+from store_project.meso import views
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
@@ -232,3 +233,195 @@ class TestBatchDeliverEndpoint:
         content = resp.content.decode()
         assert "Blake Doe" in content
         assert f'value="{rel_b.pk}"' in content
+
+
+class TestBatchDeliverTargetsTheViewedBlock:
+    """remove-current-week-plan.md §2.6 FIX 1 regression.
+
+    Before this branch, ``Plan.duplicate_for`` mirrored ``is_current`` onto the
+    copy, so ``current_week(copy)`` (the old batch-deliver targeting call)
+    inherited whichever block the coach was viewing on the source plan. That
+    mirror is gone; left alone, ``current_week(copy)`` resolves to the copy's
+    FIRST live block regardless of what the coach had open — a coach batch-
+    delivering from block 2's deliver screen would silently stamp + notify
+    every recipient about block 1, the wrong program, with no visible signal.
+
+    The fix carries the coach's viewed week through the form (a hidden
+    ``week_id`` input mirroring ``deliver.week_id``) and maps it onto each copy
+    by ``mesocycle.order`` — ``duplicate_for`` preserves both ``order`` and
+    week ``index`` verbatim, so "the copy's block at the same order position"
+    IS the coach's viewed block, just on a fresh program tree.
+    """
+
+    def url(self, plan):
+        return reverse("meso:plan_batch_deliver", kwargs={"plan_id": plan.pk})
+
+    def _two_block_plan(self):
+        plan, cell1 = seed_source(coach=comp(UserFactory()))
+        meso2 = MesocycleFactory(plan=plan, name="Block 2", order=1)
+        week2 = WeekFactory(mesocycle=meso2, index=1)
+        cell2 = presc_(
+            day(week2, day_number=1, name="Upper"), name="Bench Press", text="3 x 8"
+        )
+        return plan, cell1, week2, cell2
+
+    def test_batch_deliver_stamps_the_viewed_block_of_every_copy(
+        self, client, mailoutbox, django_capture_on_commit_callbacks
+    ):
+        # The coach is on block 2's deliver screen (``?week=`` pointed the
+        # presenter at ``week2``) and batch-delivers to two clients. Both
+        # copies must get BLOCK 2 stamped/notified, not block 1 — block 1 is
+        # the copy's earliest live block, i.e. today's silent-wrong-block bug.
+        plan, cell1, week2, cell2 = self._two_block_plan()
+        rel_b = CoachAthleteFactory(coach=plan.coach, athlete=UserFactory())
+        rel_c = CoachAthleteFactory(coach=plan.coach, athlete=UserFactory())
+        client.force_login(plan.coach)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = client.post(
+                self.url(plan),
+                {
+                    "relationships": [rel_b.pk, rel_c.pk],
+                    "week_id": week2.pk,
+                },
+            )
+
+        assert resp.status_code == 302
+        for rel in (rel_b, rel_c):
+            copy = rel.plans.get()
+            block1 = copy.mesocycles.get(order=0)
+            block2 = copy.mesocycles.get(order=1)
+            block1_weeks = block1.weeks.filter(deleted_at__isnull=True)
+            block2_weeks = block2.weeks.filter(deleted_at__isnull=True)
+            assert block2_weeks.exists()
+            assert all(w.delivered_at is not None for w in block2_weeks)
+            assert WeekDelivery.objects.filter(week__in=block2_weeks).count() == 1
+            # Block 1 — the copy's FIRST live block — must be untouched.
+            assert all(w.delivered_at is None for w in block1_weeks)
+            assert WeekDelivery.objects.filter(week__in=block1_weeks).count() == 0
+        assert len(mailoutbox) == 2
+
+    def test_no_explicit_week_id_still_targets_the_first_block(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        # No hidden field posted (a stale form or the bare pre-branch behavior)
+        # — degrade to today's default, the copy's earliest live block.
+        plan, cell1, week2, cell2 = self._two_block_plan()
+        rel_b = CoachAthleteFactory(coach=plan.coach, athlete=UserFactory())
+        client.force_login(plan.coach)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = client.post(self.url(plan), {"relationships": [rel_b.pk]})
+
+        assert resp.status_code == 302
+        copy = rel_b.plans.get()
+        block1_weeks = copy.mesocycles.get(order=0).weeks.filter(
+            deleted_at__isnull=True
+        )
+        block2_weeks = copy.mesocycles.get(order=1).weeks.filter(
+            deleted_at__isnull=True
+        )
+        assert all(w.delivered_at is not None for w in block1_weeks)
+        assert all(w.delivered_at is None for w in block2_weeks)
+
+    def test_foreign_week_id_does_not_leak_or_mistarget(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        # A week id belonging to a DIFFERENT plan entirely (tampered/stale
+        # form) must not be honoured — it isn't scoped to the source plan, so
+        # it degrades exactly like "no week_id" rather than 500ing or leaking
+        # another coach's block position onto this delivery.
+        plan, cell1, week2, cell2 = self._two_block_plan()
+        other_plan, _ = seed_source(coach=comp(UserFactory()))
+        foreign_week = other_plan.mesocycles.get().weeks.get(index=1)
+        rel_b = CoachAthleteFactory(coach=plan.coach, athlete=UserFactory())
+        client.force_login(plan.coach)
+
+        with django_capture_on_commit_callbacks(execute=True):
+            resp = client.post(
+                self.url(plan),
+                {"relationships": [rel_b.pk], "week_id": foreign_week.pk},
+            )
+
+        assert resp.status_code == 302
+        copy = rel_b.plans.get()
+        block1_weeks = copy.mesocycles.get(order=0).weeks.filter(
+            deleted_at__isnull=True
+        )
+        block2_weeks = copy.mesocycles.get(order=1).weeks.filter(
+            deleted_at__isnull=True
+        )
+        # Degrades to the copy's first block — the foreign id is ignored, not
+        # honoured and not a 404/500.
+        assert all(w.delivered_at is not None for w in block1_weeks)
+        assert all(w.delivered_at is None for w in block2_weeks)
+
+    def test_malformed_week_id_is_a_400(self, client):
+        # Mirrors the existing ``relationships must be ids.`` guard just below
+        # it in the view — a non-integer value is a tampered/broken request,
+        # not a silent fallback.
+        plan, cell1, week2, cell2 = self._two_block_plan()
+        rel_b = CoachAthleteFactory(coach=plan.coach, athlete=UserFactory())
+        client.force_login(plan.coach)
+
+        resp = client.post(
+            self.url(plan),
+            {"relationships": [rel_b.pk], "week_id": "not-an-id"},
+        )
+
+        assert resp.status_code == 400
+        assert rel_b.plans.count() == 0
+
+
+class TestTargetWeekForBatchCopy:
+    """Unit coverage of the ``mesocycle.order`` mapping helper in isolation.
+
+    ``duplicate_for`` copies every block unconditionally (``Mesocycle`` has no
+    soft delete), so the "copy has nothing at the matching ``order``" branch
+    can't actually be reached by posting through the view — every real copy of
+    a plan mirrors its whole block layout. It's still a real defensive branch
+    (a concurrent edit to the source plan mid-batch, or any future caller that
+    doesn't guarantee a mirrored copy), so it's covered directly here instead
+    of contorted through the endpoint.
+    """
+
+    def test_no_source_block_returns_none(self):
+        plan, _cell = seed_source(coach=comp(UserFactory()))
+        assert views._target_week_for_batch_copy(plan, None) is None
+
+    def test_matching_order_returns_that_blocks_first_live_week(self):
+        plan, _cell = seed_source(coach=comp(UserFactory()))
+        meso2 = MesocycleFactory(plan=plan, name="Block 2", order=1)
+        week2 = WeekFactory(mesocycle=meso2, index=1)
+
+        block1 = plan.mesocycles.get(order=0)
+        result = views._target_week_for_batch_copy(plan, block1)
+        assert result == block1.weeks.order_by("index").first()
+
+        result2 = views._target_week_for_batch_copy(plan, meso2)
+        assert result2 == week2
+
+    def test_copy_with_no_block_at_that_order_degrades_to_none(self):
+        # ``other`` never got a second block, so ``source_block``'s order=1
+        # has no counterpart here — the defensive branch.
+        source, _cell = seed_source(coach=comp(UserFactory()))
+        MesocycleFactory(plan=source, name="Block 2", order=1)
+        other, _other_cell = seed_source(coach=comp(UserFactory()))  # order=0 only
+
+        assert (
+            views._target_week_for_batch_copy(other, source.mesocycles.get(order=1))
+            is None
+        )
+
+    def test_matching_block_with_no_live_week_degrades_to_none(self):
+        # The copy DOES have a block at that order, but it's empty (no
+        # materialized weeks) — same degrade, different cause.
+        source, _cell = seed_source(coach=comp(UserFactory()))
+        MesocycleFactory(plan=source, name="Block 2", order=1)
+        other, _other_cell = seed_source(coach=comp(UserFactory()))
+        MesocycleFactory(plan=other, name="Block 2", order=1)  # no weeks
+
+        assert (
+            views._target_week_for_batch_copy(other, source.mesocycles.get(order=1))
+            is None
+        )

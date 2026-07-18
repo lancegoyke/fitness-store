@@ -79,6 +79,13 @@ def test_context_blanks_plan_program_when_target_block_has_no_live_weeks():
     assert context["block"] == {"name": empty_block.name, "weeks": []}
     plan_ids = {ex["id"] for s in context["plan"]["program"] for ex in s["exercises"]}
     assert cell1.pk not in plan_ids
+    # FIX 2 regression: ``serialize_plan(plan, week=None)`` has ALREADY fallen
+    # back to block 1 (the plan's earliest live week) by the time we get here,
+    # so its ``phases`` list marks block 1 "current" — mixed-block context
+    # even though ``context["block"]`` is the empty block. No block is being
+    # "viewed" when the target block has no live weeks, so ``phases`` must be
+    # cleared, not just the grid fields above.
+    assert context["plan"]["phases"] == []
 
 
 def test_context_blanks_plan_program_when_target_blocks_week_was_soft_deleted():

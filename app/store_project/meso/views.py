@@ -3641,6 +3641,38 @@ def plan_deliver(request, plan_id):
     )
 
 
+def _target_week_for_batch_copy(copy, source_block):
+    """Map the coach's *viewed* block onto one just-duplicated batch copy.
+
+    remove-current-week-plan.md §2.6 FIX 1: before this branch,
+    ``Plan.duplicate_for`` mirrored ``is_current`` onto the copy, so
+    ``current_week(copy)`` inherited whichever block the coach had open on the
+    source plan. That mirror is gone, so left to its own default
+    ``current_week(copy)`` always resolves to the copy's FIRST live block —
+    a coach batch-delivering from block 2's deliver screen would silently
+    stamp + notify every recipient about block 1 instead, with no visible
+    signal.
+
+    ``duplicate_for`` preserves both ``mesocycle.order`` and week ``index``
+    verbatim (it deep-copies the whole live tree in ``order``/``index``
+    sequence onto fresh rows), so "the copy's block at the same ``order`` as
+    the block the coach was viewing" IS that block — just re-homed onto new
+    pks. Map by position, never by pk.
+
+    Returns the copy's matching block's first live week, or ``None`` when
+    there is no ``source_block`` (no explicit/valid ``week_id`` was posted) or
+    the copy has nothing at that ``order`` / that block has no live week of
+    its own. The latter shouldn't normally happen — ``duplicate_for`` mirrors
+    every block unconditionally — but a concurrent edit to the source plan
+    mid-batch is a real, if rare, race; callers degrade to
+    ``current_week(copy)`` rather than error.
+    """
+    if source_block is None:
+        return None
+    copy_block = copy.mesocycles.filter(order=source_block.order).first()
+    return first_live_week(copy_block)
+
+
 @login_required
 @require_POST
 def plan_batch_deliver(request, plan_id):
@@ -3650,19 +3682,25 @@ def plan_batch_deliver(request, plan_id):
     instead of one shared program + per-member overrides + live-linked
     materialized snapshots, the coach picks clients on the deliver screen and
     each gets their own ``Plan.duplicate_for`` copy — fully independent and
-    live-editable per client from that moment on. Each copy's current block is
-    stamped + snapshotted exactly like an individual deliver (P3), and each
-    athlete gets the one block-level nudge.
+    live-editable per client from that moment on. Each copy's TARGET block —
+    the one the coach was viewing on the source plan's deliver screen, see
+    ``_target_week_for_batch_copy`` — is stamped + snapshotted exactly like an
+    individual deliver (P3), and each athlete gets the one block-level nudge.
 
-    Form POST from the deliver screen (``relationships`` = checkbox ids);
-    redirects back with a flash. Targets must be *active* athletes of this
-    coach; the plan's own athlete and soft-suspended (over-seat-limit, D6)
-    links are silently dropped from the selection — the screen never offers
-    them, so their presence in the POST is a stale/forged form, not a flow to
-    error-message. The whole fan-out runs in one explicit
-    ``transaction.atomic()`` (``ATOMIC_REQUESTS`` is inert in this deployment,
-    and a half-delivered batch would be worse than a clean retry);
-    notifications ride ``transaction.on_commit`` so a rollback never nudges.
+    Form POST from the deliver screen (``relationships`` = checkbox ids, plus
+    a hidden ``week_id`` mirroring ``deliver.week_id`` — the block the
+    ``?week=``-aware deliver screen is confirming); redirects back with a
+    flash. Targets must be *active* athletes of this coach; the plan's own
+    athlete and soft-suspended (over-seat-limit, D6) links are silently
+    dropped from the selection — the screen never offers them, so their
+    presence in the POST is a stale/forged form, not a flow to
+    error-message. ``week_id`` gets the same treatment: it must resolve to a
+    live week of *this* plan or it's ignored (a foreign/other-plan id is a
+    stale/forged form too, never honoured) — see the resolution below. The
+    whole fan-out runs in one explicit ``transaction.atomic()``
+    (``ATOMIC_REQUESTS`` is inert in this deployment, and a half-delivered
+    batch would be worse than a clean retry); notifications ride
+    ``transaction.on_commit`` so a rollback never nudges.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -3685,6 +3723,23 @@ def plan_batch_deliver(request, plan_id):
     if not picked_ids:
         messages.error(request, "Pick at least one client to deliver a copy to.")
         return _back()
+    # The block the coach was viewing on the SOURCE plan (FIX 1) — resolved
+    # once, here, and mapped onto each copy inside the loop below. A blank
+    # field (no hidden input rendered, or an older cached form) means "no
+    # opinion" and degrades silently, same as a picked relationship id that
+    # doesn't resolve; only a malformed (non-integer) value is a 400, mirroring
+    # the ``relationships`` parsing just above.
+    raw_week_id = request.POST.get("week_id", "").strip()
+    source_block = None
+    if raw_week_id:
+        try:
+            source_week_id = int(raw_week_id)
+        except ValueError:
+            return HttpResponseBadRequest("week_id must be an id.")
+        source_week = Week.objects.filter(
+            pk=source_week_id, mesocycle__plan=plan, deleted_at__isnull=True
+        ).first()
+        source_block = source_week.mesocycle if source_week else None
     targets = list(
         CoachAthlete.objects.for_coach(request.user)
         .active()
@@ -3701,7 +3756,9 @@ def plan_batch_deliver(request, plan_id):
     with transaction.atomic():
         for relationship in targets:
             copy = plan.duplicate_for(relationship, status=Plan.Status.ACTIVE)
-            target_week = current_week(copy)
+            target_week = _target_week_for_batch_copy(
+                copy, source_block
+            ) or current_week(copy)
             block = target_week.mesocycle
             now = timezone.now()
             live_weeks = list(block.weeks.filter(deleted_at__isnull=True))
