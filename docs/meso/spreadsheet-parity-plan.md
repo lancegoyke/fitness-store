@@ -1,6 +1,6 @@
 # Meso — spreadsheet parity by simplification
 
-**Status:** 4b built 2026-07-17 (personal records — derivation) · 4a built 2026-07-17 (athlete tracking — sub-lines) · 3b built 2026-07-17 (template library UI) · Phase 3 built 2026-07-17 (import + validate) · Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · next: PR surface (athlete/coach) + parse-at-commit pipeline → agent
+**Status:** 4d built 2026-07-17 (personal-records panel — athlete home + coach profile) · 4c built 2026-07-17 (PR event surface — athlete toast + coach marker) · designer simplification built 2026-07-17 (grid-first UX cleanup, #477) · 4b built 2026-07-17 (personal records — derivation) · 4a built 2026-07-17 (athlete tracking — sub-lines) · 3b built 2026-07-17 (template library UI) · Phase 3 built 2026-07-17 (import + validate) · Phase 2 COMPLETE (2e UI cleanup built 2026-07-16) · 2d built 2026-07-16 · 2c built 2026-07-16 · 2b built 2026-07-16 · 2a built 2026-07-16 · started 2026-07-16 · **next: parse-at-commit pipeline → agent** (the PR surface is done)
 **Owner:** Lance
 **North star:** make writing a program in Meso as fast and frictionless as writing it
 in a Google Sheet — keyboard-driven, freeform, one grid — then extend to tracking,
@@ -481,6 +481,41 @@ tempo-heavy, DUP, conjugate, EMOM/AMRAP). The risks and mitigations:
    write time — the agreed model, D4-live below) can drive the same computation
    with no rework. 14 pinned tests; no migration (stays `0042`); no UI (the PR
    surface is the next slice). Full meso suite green (1991).
+   **4c — PR event surface (athlete toast + coach marker) ✅ Built 2026-07-17**
+   (branch `meso/4c-pr-event`, #478): PR #1 of the PR-surface slice — the 4b
+   engine (`personal_records.py`, derive-on-read best-e1RM + `new_records_in`)
+   shipped with no UI; 4c wires the detector into the two moments a new best
+   matters. **Athlete:** `athlete_log_session` returns `new_records` alongside
+   `log` (pure detection off the just-committed rows, DONE-only so a "Save
+   progress" draft returns `[]`); `meso_athlete.js` populates it in `save()` and
+   the offline `flushQueue()` path (a PR beaten offline still lands on sync);
+   `athlete_session.html` shows a dismissible 🎉 celebration card. **Coach:**
+   `session_results` adds `summary["new_records"]` + a per-row `pr` flag matched
+   by the same B4 lift identity (`key_str`) the engine keys on; `results.html`
+   renders a "New PR(s) this session" callout + an inline `PR` badge on the lift
+   row. **Shared:** `serialize_new_record` formats the raw Epley floats
+   **server-side** (2-dp, trailing-zero trimmed) so the client renders verbatim
+   and can never re-round to a different value than the pinned server one.
+   Derive-on-read, no `PersonalRecord` table, no new endpoints/URLs, no migration
+   (stays `0042`). 10 tests (`test_pr_surface.py`); full meso suite green (1998).
+   **4d — Personal-records panel (athlete home + coach profile) ✅ Built
+   2026-07-17** (branch `meso/4d-records-book`, #479): PR #2 of the PR-surface
+   slice — the persistent "records book" that completes it (event + standing
+   bests). A **Personal records panel** on the athlete's training home and the
+   coach's athlete-profile, both fed by 4b's derive-on-read `personal_records()`
+   (best Epley e1RM per lift + winning-set provenance). `presenters.py`:
+   `_personal_record_rows(athlete, unit)` (shared, alphabetical, e1RM formatted
+   server-side via `_fmt_num`), `athlete_personal_records(user)` +
+   `coach_personal_records(link)`, each scoping unit to the most-recently-active
+   plan (`_records_unit_plan`). `views.py`: `AthleteHomeView` + `AthleteProfileView`
+   set `ctx["personal_records"]`. `_pr_list.html`: one shared partial
+   (lift · est. 1RM · provenance), self-hiding when empty; included below the live
+   programs (athlete) and in the left rail (coach). **Unit is a per-PLAN property**
+   (there is no athlete-level unit preference) so each host shows one denomination
+   (its most-recently-active plan's unit) rather than pooling kg and lb.
+   Derive-on-read, nothing persisted, no new endpoints/URLs, no migration (stays
+   `0042`). 11 tests (`test_pr_records_panel.py`); full meso suite green (2009).
+   **The PR-surface slice is complete — the runway is now parse-at-commit → agent.**
 
 ---
 
@@ -531,8 +566,10 @@ committed). `lance-program.xlsx` + `sheet-dump.json` persist locally but are git
 Key source workbooks (re-fetchable via the connector): the filled history "Lance Goyke
 program" (`1FLOdWQJn403nP42lWE-xWPQpO8d8LGRhfE5UjnOtaSg`) and the annotation-study client
 (`1hd_MIzXGuKxbOSVOUb0FHGk0wKwtTurVy6bUkQPlLgI`, tab `415 - 0626`, gid `402688260`).
-**Still missing for a full Phase-3 import set:** raw `.xlsx` for `101/103/402/601`
-(currently `.md`/`.pdf` only) — re-export via the connector when building the importer.
+**Phase-3 import set — complete:** raw `.xlsx` for all five validation templates
+(`101/102/103/402/601`) are committed under `docs/meso/fixtures/templates/`
+(re-exported via the connector during Phase 3). A full bulk import of all 57
+remains a later data-loading pass.
 
 ### Column layout of a real program grid (reference for the importer)
 `A = Day label · B = Exercise (merged down the block) · C = Tempo · D–G = Week 1–4
