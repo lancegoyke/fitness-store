@@ -1552,3 +1552,73 @@ _(Append dated entries here as decisions land.)_
   suite green (1991). Athlete session viewer judged good as-is; the **program
   designer needs a separate UX-cleanup pass** (overloaded layout + an unnecessary
   current-week selector) — handed to its own session.
+- 2026-07-17 — **Built (spreadsheet parity, designer simplification): grid-first
+  UX cleanup (PR #477).** The separate designer UX-cleanup pass flagged at the end
+  of the 4b entry, resolved as an approved Full Tiers 1–4 + Passes E/F. The designer
+  had grown three permanent columns (left rail + agent + grid), always-on per-cell
+  chrome, and day tables that didn't align across days; the grid is the product, so
+  give it the screen and let it read like a sheet at rest. **Layout:** left rail +
+  agent merged into ONE ~344px sidebar (slim athlete-metadata header above the
+  always-visible agent — the agent ships soon, so it stays visible by default); grid
+  canvas 818px → 1096px at 1440px, collapsible to full width; the
+  Table/Periodization/Athlete switcher folded into the top bar (reclaims the 49px
+  canvas-header band); duplicate identity chip + 3× goal renders removed; Undo/Redo
+  moved to the top bar as ↺/↻ icons (kept `data-grid-restore` so focus returns to
+  the grid). **Grid feel:** resting cells read like a spreadsheet — Skip / Fill→ /
+  "+ line" reveal only on cell `:focus-within` (no hover reflow), per-row × on row
+  hover; the always-on "The block table" info alert dropped. **Week management:**
+  week Make-current / Remove moved OUT of the day-table headers into a
+  mesocycle-level `WeekManagerStrip` above the tables (rendered ONCE, not repeated
+  ~12× per day header); `WeekColumnHeader` is label-only. **Table structure:**
+  `table-layout: fixed` + a shared `<colgroup>` from one width source so every day's
+  table aligns column-for-column; fixed a real separator-misalignment bug — a
+  `display:flex` `<td>` detaches from table row-height sync, leaving a tall sub-line
+  row's sticky border misaligned. **Removed** the cross-day "Move to…" select +
+  `moveExerciseToDay` verb (drag is within-day only; delete + re-add is the
+  workaround). **GUARDRAIL preserved** — `is_current` semantics, deliver→live,
+  billing, the athlete session viewer, and the agent's propose→review→apply contract
+  all untouched (every change is UI-layer); the clutter was the per-day×per-week
+  repetition, so de-duped, not deleted. 519 frontend tests green; `tsc` clean; Codex
+  CLEAN — it caught one real regression (hiding the ghost `+line` with `display:none`
+  broke keyboard ArrowUp into it; jsdom can't see CSS so tests passed falsely) fixed
+  with a zero-height *focusable* collapse. **Reusable lesson: never `display:none` a
+  keyboard-nav grid stop — use a focusable collapse.** No migration.
+- 2026-07-17 — **Built (spreadsheet parity 4c): PR event surface — athlete toast +
+  coach results marker (parity plan §6, phase 4).** PR #1 of the PR-surface slice.
+  The 4b engine (`personal_records.py`) shipped derive-on-read best-e1RM +
+  `new_records_in` detection with no UI; 4c surfaces the detector at the two moments
+  a new best matters. **Athlete:** `athlete_log_session` returns `new_records`
+  alongside `log` (pure detection off the just-committed rows, DONE-only so a "Save
+  progress" draft returns `[]`); `meso_athlete.js` populates it in `save()` and the
+  offline `flushQueue()` path (a PR beaten offline still lands on sync);
+  `athlete_session.html` shows a dismissible 🎉 celebration card. **Coach:**
+  `session_results` adds `summary["new_records"]` + a per-row `pr` flag matched by
+  the same B4 lift identity (`key_str`) the engine keys on; `results.html` renders a
+  "New PR(s) this session" callout + an inline `PR` badge. **Shared:**
+  `serialize_new_record` formats the raw Epley floats **server-side** (2-dp,
+  trailing-zero trimmed, matching the `AthleteOneRm` display) so the client renders
+  verbatim and can never re-round to a different value than the pinned server one.
+  Source of truth = the structured `LoggedSet` (D4), not parsed free text; reuses
+  the pinned `epley_one_rm` + hybrid B4 identity verbatim. Derive-on-read, no
+  `PersonalRecord` table (a deliberate later slice), no new endpoints/URLs, no
+  migration (stays `0042`). 10 tests (`test_pr_surface.py`); full meso suite 1998;
+  Codex CLEAN.
+- 2026-07-17 — **Built (spreadsheet parity 4d): personal-records panel — athlete
+  home + coach profile (parity plan §6, phase 4).** PR #2 of the PR-surface slice —
+  the persistent "records book" that completes it (event + standing bests). A
+  **Personal records panel** on the athlete's training home and the coach's
+  athlete-profile, both fed by 4b's derive-on-read `personal_records()` (best Epley
+  e1RM per lift + the winning set's provenance). `presenters.py`:
+  `_personal_record_rows(athlete, unit)` (shared, alphabetical, e1RM formatted
+  server-side via `_fmt_num`), `athlete_personal_records(user)` +
+  `coach_personal_records(link)`, each scoping unit via `_records_unit_plan`.
+  `views.py`: `AthleteHomeView` + `AthleteProfileView` set
+  `ctx["personal_records"]`. `_pr_list.html`: one shared partial (lift · est. 1RM ·
+  provenance), self-hiding when empty, included below the live programs (athlete)
+  and in the left rail (coach). **Decision — unit is a per-PLAN property** (there is
+  no athlete-level unit preference), so each host shows one denomination (its
+  most-recently-active plan's unit) rather than pooling kg and lb; the coach reaches
+  the panel only through an active link. Derive-on-read, nothing persisted, no new
+  endpoints/URLs, no migration (stays `0042`). 11 tests (`test_pr_records_panel.py`);
+  full meso suite 2009; Codex CLEAN. **The PR-surface slice is complete — the plan's
+  runway is now parse-at-commit → agent.**
