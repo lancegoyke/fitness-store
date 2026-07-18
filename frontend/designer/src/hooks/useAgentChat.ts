@@ -20,6 +20,14 @@ export interface ChatMessage {
 export interface UseAgentChatOptions {
   planId: Id;
   csrf: string;
+  // §4b (docs/meso/remove-current-week-plan.md): the block the coach has
+  // open (DesignerRoot's `gridData.mesocycle.id`) — captured here, once, and
+  // sent on every proposal POST so grounding/validation/apply (which run
+  // across time-separated requests: a background job, then a later apply
+  // request) scope to the block the coach was actually looking at instead of
+  // re-deriving it from a now-removed "current week" pointer and silently
+  // falling back to the plan's first block.
+  mesocycleId: Id;
   initialMessages: ChatMessage[];
   initialResumeUrl: string | null;
 }
@@ -33,7 +41,7 @@ const CHIPS: { label: string }[] = [
 ];
 
 export function useAgentChat(options: UseAgentChatOptions) {
-  const { planId, csrf, initialMessages, initialResumeUrl } = options;
+  const { planId, csrf, mesocycleId, initialMessages, initialResumeUrl } = options;
 
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [inputText, setInputText] = useState("");
@@ -75,7 +83,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
             "Content-Type": "application/json",
             "X-CSRFToken": csrf,
           },
-          body: JSON.stringify({ instruction }),
+          body: JSON.stringify({ instruction, mesocycle_id: mesocycleId }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -93,7 +101,7 @@ export function useAgentChat(options: UseAgentChatOptions) {
         setAgentTyping(false);
       }
     },
-    [planId, csrf, pushAgent],
+    [planId, csrf, mesocycleId, pushAgent],
   );
 
   const send = useCallback(

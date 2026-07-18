@@ -18,8 +18,10 @@
 }
 
 /* Mesocycle-level week manager (WeekManagerStrip) — one pill per week with
-   make-current / remove, plus "+ Add week". Sits above the day tables; week
-   lifecycle lives here, never inside a day. */
+   remove, plus "+ Add week". Sits above the day tables; week lifecycle lives
+   here, never inside a day. Programs are date-less and carry no "current
+   week" pointer (docs/meso/remove-current-week-plan.md), so there is no
+   "Make current" control and every pill looks the same. */
 .meso-week-strip {
   display: flex;
   flex-wrap: wrap;
@@ -44,44 +46,11 @@
   border: 1px solid var(--line);
   background: var(--surface);
 }
-.meso-week-pill--current {
-  border-color: var(--accent);
-  background: var(--soft);
-}
 .meso-week-pill-label {
   font-size: 12px;
   font-weight: 700;
   color: var(--ink);
   white-space: nowrap;
-}
-.meso-week-pill--current .meso-week-pill-label {
-  color: var(--accent-deep);
-}
-.meso-week-pill-badge {
-  font-size: 9.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--accent-ink);
-  background: var(--accent);
-  padding: 2px 8px;
-  border-radius: 999px;
-}
-.meso-week-pill-make-current {
-  appearance: none;
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent-deep);
-  background: transparent;
-  border: 0;
-  padding: 2px 6px;
-  border-radius: 6px;
-  white-space: nowrap;
-}
-.meso-week-pill-make-current:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .meso-week-pill-x {
   appearance: none;
@@ -153,10 +122,6 @@
   vertical-align: top;
 }
 
-.meso-table-week-col--current {
-  color: var(--accent-deep);
-}
-
 .meso-table-week-label {
   display: flex;
   align-items: center;
@@ -166,10 +131,6 @@
   letter-spacing: -0.01em;
   font-weight: 700;
   color: var(--ink);
-}
-
-.meso-table-week-col--current .meso-table-week-label {
-  color: var(--accent-deep);
 }
 
 .meso-table-deload-marker {
@@ -353,8 +314,7 @@
 
 /* Folded in from the retired designer-weekstrip.css (issue #455 phase A5)
    — the pill-button family MesoTable's own week-column controls use
-   ("+ Add week" toolbar button, "Make current" / "Remove" / confirm-cancel
-   per column). */
+   ("+ Add week" toolbar button, "Remove" / confirm-cancel per column). */
 .meso-week-strip-btn {
   appearance: none;
   cursor: pointer;

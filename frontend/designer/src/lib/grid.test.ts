@@ -55,20 +55,17 @@ describe("cellOn", () => {
 });
 
 describe("cellStyle", () => {
-  it("paints an on cell in the current week with the accent color", () => {
-    const style = cellStyle({ current: true, deload: false }, 0);
-    expect(style).toContain("background:var(--accent)");
-    expect(style).toContain("border:1px solid var(--soft-line)");
-  });
-
-  it("paints an on cell in a non-current week with the soft color", () => {
-    const style = cellStyle({ current: false, deload: false }, 0);
+  // Programs are date-less and carry no "current week" pointer
+  // (docs/meso/remove-current-week-plan.md) — every live week paints the
+  // same border/on-color now.
+  it("paints an on cell with the soft color", () => {
+    const style = cellStyle({ deload: false }, 0);
     expect(style).toContain("background:var(--soft)");
     expect(style).toContain("border:1px solid var(--line)");
   });
 
   it("paints an off cell with the rail color", () => {
-    const style = cellStyle({ current: false, deload: false }, 1);
+    const style = cellStyle({ deload: false }, 1);
     expect(style).toContain("background:var(--rail)");
   });
 });
@@ -86,7 +83,6 @@ function week(overrides: Partial<GridWeek> = {}): GridWeek {
     label: "Wk 1",
     phase: "Accum",
     deload: false,
-    current: true,
     delivered_at: null,
     vol: 70,
     inten: 65,
@@ -144,7 +140,7 @@ function grid(overrides: Partial<MesoGrid> = {}): MesoGrid {
 }
 
 describe("gridToProgram", () => {
-  it("defaults to the current week and resolves each row's cell for it", () => {
+  it("defaults to the FIRST week and resolves each row's cell for it", () => {
     const g = grid();
     const program = gridToProgram(g);
     expect(program).toEqual([
@@ -168,16 +164,6 @@ describe("gridToProgram", () => {
         ],
       },
     ]);
-  });
-
-  it("falls back to the FIRST week when no grid week is current (Codex A5 review)", () => {
-    // The server's current_week(plan) falls back to the earliest live week;
-    // an unset pointer must not blank the athlete preview when the grid
-    // itself renders fine.
-    const g = grid({ weeks: [week({ id: 1, current: false }), week({ id: 2, current: false })] });
-    const program = gridToProgram(g);
-    expect(program).toHaveLength(1);
-    expect(program[0]!.exercises[0]!.id).toBe(100); // week 1's cell
   });
 
   it("omits a day whose resolved week has no live session (session_ids omits the week — Codex A5 review)", () => {
@@ -209,9 +195,9 @@ describe("gridToProgram", () => {
     expect(gridToProgram(g)[0]!.id).toBe(11);
   });
 
-  it("resolves the requested weekId instead of the current week when given", () => {
+  it("resolves the requested weekId instead of the default (first) week when given", () => {
     const g = grid({
-      weeks: [week({ id: 1, current: true }), week({ id: 2, current: false })],
+      weeks: [week({ id: 1 }), week({ id: 2 })],
       days: [
         day({
           session_ids: { "1": 11, "2": 12 }, // a live session per live week (real serializer shape)
@@ -317,19 +303,14 @@ describe("cycleLabelFromGrid", () => {
     { name: "Hypertrophy", weeks: "4 wk", state: "current" },
   ];
 
-  it("joins the current phase's name and the current week's label/count", () => {
-    const weeks = [week({ id: 1, label: "Wk 1", current: false }), week({ id: 2, label: "Wk 2", current: true })];
-    expect(cycleLabelFromGrid(phases, weeks)).toBe("Hypertrophy · Wk 2 / 2");
-  });
-
-  it("falls back to the first week when none is flagged current", () => {
-    const weeks = [week({ id: 1, label: "Wk 1", current: false })];
-    expect(cycleLabelFromGrid(phases, weeks)).toBe("Hypertrophy · Wk 1 / 1");
+  it("joins the current phase's name and the FIRST week's label/count", () => {
+    const weeks = [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2" })];
+    expect(cycleLabelFromGrid(phases, weeks)).toBe("Hypertrophy · Wk 1 / 2");
   });
 
   it("falls back to the first phase when none is flagged current", () => {
     const noCurrentPhases: Phase[] = [{ name: "Base", weeks: "4 wk", state: "done" }];
-    const weeks = [week({ id: 1, label: "Wk 1", current: true })];
+    const weeks = [week({ id: 1, label: "Wk 1" })];
     expect(cycleLabelFromGrid(noCurrentPhases, weeks)).toBe("Base · Wk 1 / 1");
   });
 

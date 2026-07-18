@@ -60,7 +60,7 @@ function gridPayload(overrides: Record<string, unknown> = {}) {
     phases: [{ name: "Hypertrophy", weeks: "4 wk", state: "current" }],
     mesocycle: { id: 1, plan_id: 7, name: "Block 1", week_count: 1 },
     weeks: [
-      { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, current: true, delivered_at: null, vol: 70, inten: 65 },
+      { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, delivered_at: null, vol: 70, inten: 65 },
     ],
     days: [
       {
@@ -199,11 +199,11 @@ describe("table view (issue #455 phase A5: the only view left besides periodizat
     expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
   });
 
-  it("targets the deliver link at the grid's CURRENT week", () => {
+  it("targets the deliver link at the grid's FIRST week (programs are date-less — no current-week pointer)", () => {
     jsonScript("meso-grid-data", gridPayload({
       weeks: [
-        { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, current: false, delivered_at: null },
-        { id: 2, index: 1, label: "Wk 2", phase: "Accum", deload: false, current: true, delivered_at: null },
+        { id: 1, index: 0, label: "Wk 1", phase: "Accum", deload: false, delivered_at: null },
+        { id: 2, index: 1, label: "Wk 2", phase: "Accum", deload: false, delivered_at: null },
       ],
     }));
     jsonScript("meso-chat-thread", []);
@@ -212,7 +212,7 @@ describe("table view (issue #455 phase A5: the only view left besides periodizat
 
     render(<DesignerRoot />);
 
-    expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=2");
+    expect(screen.getByTestId("deliver-link")).toHaveAttribute("href", "/meso/deliver/7/?week=1");
   });
 
   it("routes a Ctrl/Cmd+Z keyboard shortcut to the grid's own undo (the only undo/redo owner left)", async () => {
@@ -285,6 +285,30 @@ describe("Phase 2a: sub-line + row-column wiring", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/row/9/", expect.anything()));
     const call = fetchMock.mock.calls.find((c) => c[0] === "/meso/api/plan/7/row/9/")!;
     expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({ tempo: "31X1" });
+  });
+});
+
+// §4b (docs/meso/remove-current-week-plan.md): the coach's viewed block
+// (`gridData.mesocycle.id`) rides every agent proposal POST — grounding/
+// validation run in a background job and apply on a later request, so
+// neither can re-read a "current week" pointer that no longer exists.
+describe("§4b: agent proposal carries the viewed block's mesocycle_id", () => {
+  it("sends {instruction, mesocycle_id} sourced from the hydrated grid's mesocycle", async () => {
+    const user = userEvent.setup();
+    jsonScript("meso-grid-data", gridPayload({ mesocycle: { id: 42, plan_id: 7, name: "Block 1", week_count: 1 } }));
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 202, json: async () => ({ status_url: null }) });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<DesignerRoot />);
+    await user.click(screen.getByTestId("agent-chip-0"));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/meso/api/plan/7/agent/", expect.anything()));
+    const call = fetchMock.mock.calls.find((c) => c[0] === "/meso/api/plan/7/agent/")!;
+    const body = JSON.parse((call[1] as RequestInit).body as string);
+    expect(body.mesocycle_id).toBe(42);
   });
 });
 

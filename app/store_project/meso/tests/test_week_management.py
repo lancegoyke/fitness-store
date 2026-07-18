@@ -399,17 +399,20 @@ class TestSwitcherWiring:
         assert 'id="meso-grid-data"' in body
         assert 'id="meso-designer-root"' in body
 
-    def test_meso_table_wires_all_three_verbs(self):
-        # Every week column renders its own "make current"/"remove" controls
-        # (WeekColumnHeader), and the toolbar renders "+ Add week" once
-        # (mirrors WeekStrip.tsx's pre-A5 three verbs: switch is now simply
-        # rendering every week as a column, so there's no onSwitchWeek left).
+    def test_meso_table_wires_add_and_remove_week(self):
+        # The mesocycle-level WeekManagerStrip renders each week's "remove"
+        # control and the toolbar's "+ Add week" once (mirrors WeekStrip.tsx's
+        # pre-A5 verbs: switch is now simply rendering every week as a
+        # column, so there's no onSwitchWeek left). "Make current"/
+        # onSetCurrentWeek was removed along with Week.is_current — see
+        # docs/meso/remove-current-week-plan.md.
         table = _read_island_source("components", "MesoTable.tsx")
         assert "onAddWeek" in table
-        assert "onSetCurrentWeek" in table
         assert "onRemoveWeek" in table
+        assert "onSetCurrentWeek" not in table
 
     def test_use_grid_exposes_the_week_methods(self):
         js = _read_island_source("hooks", "useGrid.ts")
-        for verb in ("addWeek", "setCurrentWeek", "removeWeek", "refetchGrid"):
+        for verb in ("addWeek", "removeWeek", "refetchGrid"):
             assert verb in js
+        assert "setCurrentWeek" not in js

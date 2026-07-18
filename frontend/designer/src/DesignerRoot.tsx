@@ -141,6 +141,11 @@ export function DesignerRoot() {
   const planId: Id = hydrated?.planId ?? "";
   const csrf = hydrated?.csrf ?? "";
   const unit = hydrated?.unit ?? "kg";
+  // §4b (docs/meso/remove-current-week-plan.md): the block the coach has
+  // open — sent on every agent POST so grounding/validation/apply (which
+  // run across time-separated requests) scope to it instead of silently
+  // falling back to the plan's first block.
+  const mesocycleId: Id = hydrated?.gridData.mesocycle.id ?? "";
 
   // useGrid is the SOLE data owner (issue #455 phase A5 — the one-week
   // usePlanData sibling is gone). Owns grid/history and every verb that
@@ -166,6 +171,7 @@ export function DesignerRoot() {
   const agentChat = useAgentChat({
     planId,
     csrf,
+    mesocycleId,
     initialMessages: hydrated?.initialMessages ?? [DEFAULT_GREETING],
     initialResumeUrl: hydrated?.initialResumeUrl ?? null,
   });
@@ -178,7 +184,11 @@ export function DesignerRoot() {
   const flags = hydrated.flags;
 
   const grid = gridState.grid;
-  const gridCurrentWeekId = grid ? grid.weeks.find((w) => w.current)?.id ?? grid.weeks[0]?.id ?? null : null;
+  // Programs are date-less and carry no "current" week pointer
+  // (docs/meso/remove-current-week-plan.md) — the deliver link simply
+  // targets the grid's first live week, same default `current_week(plan)`
+  // degrades to server-side.
+  const gridCurrentWeekId = grid ? grid.weeks[0]?.id ?? null : null;
   const deliverHref = buildDeliverHref(planId, gridCurrentWeekId);
   const cycleLabel = cycleLabelFromGrid(grid?.phases ?? [], grid?.weeks ?? []);
   const athleteProgram = grid ? gridToProgram(grid) : [];
@@ -234,7 +244,6 @@ export function DesignerRoot() {
                 onRemoveDay={gridState.removeDay}
                 onAddWeek={gridState.addWeek}
                 onRemoveWeek={gridState.removeWeek}
-                onSetCurrentWeek={gridState.setCurrentWeek}
                 onSkipCell={gridState.skipCell}
                 onFillAcrossWeeks={gridState.fillAcrossWeeks}
                 onAddExerciseThisWeek={gridState.addExerciseThisWeek}

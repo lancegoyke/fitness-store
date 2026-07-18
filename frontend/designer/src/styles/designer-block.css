@@ -110,9 +110,6 @@
 .meso-bar--vol {
   background: var(--soft-line);
 }
-.meso-bar--vol.is-current {
-  background: var(--accent);
-}
 .meso-bar--vol.is-deload {
   background: color-mix(in srgb, var(--accent) 28%, #fff);
 }
@@ -124,9 +121,6 @@
   font-size: 12.5px;
   font-weight: 700;
   color: var(--dim);
-}
-.meso-timeline-label.is-current {
-  color: var(--ink);
 }
 .meso-timeline-phase {
   font-size: 10.5px;
@@ -210,15 +204,9 @@
   color: var(--dim);
   font-weight: 700;
 }
-.meso-cal-week-label.is-current {
-  color: var(--ink);
-}
 .meso-cal-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
-}
-.meso-cal-dot.is-current {
-  background: var(--accent-ink);
 }

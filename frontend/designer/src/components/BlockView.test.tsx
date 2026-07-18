@@ -11,13 +11,14 @@ const phases: Phase[] = [
   { name: "Hypertrophy", weeks: "4 wk", state: "current" },
 ];
 // Issue #455 phase A5: BlockView now takes GridWeek[] (sourced off the
-// grid), not the retired one-week Week[].
+// grid), not the retired one-week Week[]. Programs are date-less and carry
+// no "current week" pointer (docs/meso/remove-current-week-plan.md), so
+// there is no `current` field to fixture here anymore.
 const weeks: GridWeek[] = [
   {
     id: 1,
     index: 1,
     label: "Wk 1",
-    current: true,
     phase: "Hypertrophy",
     deload: false,
     delivered_at: null,
@@ -28,7 +29,6 @@ const weeks: GridWeek[] = [
     id: 2,
     index: 2,
     label: "Wk 2",
-    current: false,
     phase: "Hypertrophy",
     deload: true,
     delivered_at: null,
@@ -85,5 +85,18 @@ describe("BlockView", () => {
     render(<BlockView {...baseProps({ periodStyle: "calendar" })} />);
     expect(screen.getAllByText("Wk 1").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Wk 2").length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Programs are date-less and carry no "current week" pointer
+  // (docs/meso/remove-current-week-plan.md) — the timeline/calendar views no
+  // longer highlight any one week as "current" (only a deload week still
+  // gets its own marker). Phase state's "current" (a macrocycle concept,
+  // still real) is unaffected — covered by the macro-strip test above.
+  it("never applies an is-current class to a timeline bar/label or a calendar week label/dot", () => {
+    const { container: timelineContainer } = render(<BlockView {...baseProps({ periodStyle: "timeline" })} />);
+    expect(timelineContainer.querySelectorAll(".is-current")).toHaveLength(0);
+
+    const { container: calendarContainer } = render(<BlockView {...baseProps({ periodStyle: "calendar" })} />);
+    expect(calendarContainer.querySelectorAll(".is-current")).toHaveLength(0);
   });
 });

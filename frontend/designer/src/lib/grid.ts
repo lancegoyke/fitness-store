@@ -39,15 +39,19 @@ export function cellOn(
   return sessionDays.indexOf(ci) >= 0 && !(w.deload && ci === 4);
 }
 
-/** The calendar cell's inline style string (faithful port of cellStyle). */
+/** The calendar cell's inline style string (faithful port of cellStyle).
+ * Programs are date-less and carry no "current week" pointer
+ * (docs/meso/remove-current-week-plan.md), so every live week paints the
+ * same border/on-color now — the `current`-flagged accent branch this used
+ * to have is gone. */
 export function cellStyle(
-  w: Pick<Week, "current" | "deload">,
+  w: Pick<Week, "deload">,
   ci: number,
   sessionDays: readonly number[] = DEFAULT_SESSION_DAYS,
 ): string {
   const on = cellOn(w, ci, sessionDays);
-  const border = w.current ? "var(--soft-line)" : "var(--line)";
-  const bg = on ? (w.current ? "var(--accent)" : "var(--soft)") : "var(--rail)";
+  const border = "var(--line)";
+  const bg = on ? "var(--soft)" : "var(--rail)";
   return (
     "height:34px;border-radius:7px;border:1px solid " +
     border +
@@ -64,23 +68,20 @@ export function cellStyle(
  * AthletePreview's `program` prop, derived from the grid instead of a
  * separately-hydrated one-week payload. Walks `grid.days`, and for each row
  * picks that row's cell at the resolved week (`weekId` if given, else the
- * grid's own current week, else the FIRST week — the same fallback the
- * server's `current_week(plan)` and `cycleLabelFromGrid` apply, so a block
- * whose pointer isn't set still previews instead of blanking) — a row with
- * no cell for that week is simply omitted, mirroring `Session.cells()` only
- * ever surfacing live cells server-side. A DAY whose resolved week has no
- * live session (`session_ids` omits the week — a per-week session delete)
- * is omitted entirely: the athlete won't see that session, so neither
- * should the preview (the retired `serialize_plan` filtered on the open
- * week's live sessions the same way). The exercise name is just `row.name`
- * now — Phase 2a retired the one-week swap fields, so there's no per-cell
- * display name left to override the block identity.
+ * grid's FIRST week — the same default the server's `current_week(plan)`
+ * (its `is_current` pointer removed, docs/meso/remove-current-week-plan.md)
+ * and `cycleLabelFromGrid` apply) — a row with no cell for that week is
+ * simply omitted, mirroring `Session.cells()` only ever surfacing live cells
+ * server-side. A DAY whose resolved week has no live session (`session_ids`
+ * omits the week — a per-week session delete) is omitted entirely: the
+ * athlete won't see that session, so neither should the preview (the
+ * retired `serialize_plan` filtered on the open week's live sessions the
+ * same way). The exercise name is just `row.name` now — Phase 2a retired
+ * the one-week swap fields, so there's no per-cell display name left to
+ * override the block identity.
  */
 export function gridToProgram(grid: MesoGrid, weekId?: number | string): Day[] {
-  const week =
-    weekId != null
-      ? grid.weeks.find((w) => w.id === weekId)
-      : (grid.weeks.find((w) => w.current) ?? grid.weeks[0]);
+  const week = weekId != null ? grid.weeks.find((w) => w.id === weekId) : grid.weeks[0];
   if (!week) return [];
   const weekKey = String(week.id);
 
@@ -120,11 +121,12 @@ export function gridToProgram(grid: MesoGrid, weekId?: number | string): Day[] {
  * usePlanData's "viewed week" (which no longer exists — the table shows
  * every week as columns at once, so there's no single week being "viewed").
  * Same formula as the retired `usePlanData.cycleLabel`, just keyed off the
- * grid's CURRENT week instead.
+ * grid's FIRST week instead (programs are date-less and carry no "current"
+ * week pointer — docs/meso/remove-current-week-plan.md).
  */
-export function cycleLabelFromGrid(phases: Phase[], weeks: Pick<Week, "id" | "label" | "current">[]): string {
+export function cycleLabelFromGrid(phases: Phase[], weeks: Pick<Week, "id" | "label">[]): string {
   const currentPhase = phases.find((p) => p.state === "current") ?? phases[0] ?? null;
-  const week = weeks.find((w) => w.current) ?? weeks[0] ?? null;
+  const week = weeks[0] ?? null;
   const phase = currentPhase ? currentPhase.name : "";
   const wk = week ? week.label + (weeks.length ? " / " + weeks.length : "") : "";
   return [phase, wk].filter(Boolean).join(" · ");

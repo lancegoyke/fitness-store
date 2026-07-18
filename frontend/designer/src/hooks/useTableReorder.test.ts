@@ -14,18 +14,20 @@
 //   identity), never prescription_id — a cell's *content* identity is
 //   always resolved fresh from `grid` at drop time (never carried on the
 //   event), mirroring useReorder's dayId/prescriptionId split.
-// - Row order payload = the CURRENT week's (`grid.weeks.find(w =>
-//   w.current)`) live row cells' prescription_ids, in the new order — a row
-//   with no cell for that week (an add-this-week-only hole) is excluded,
-//   mirroring the server's own `session.cells()` query for that week
-//   (views.py `session_reorder`).
-// - Day order payload = the CURRENT week's live Session pks, read from EACH
+// - Programs are date-less and carry no "current week" pointer
+//   (docs/meso/remove-current-week-plan.md) — both payloads anchor on the
+//   VIEWED week, `grid.weeks[0]`:
+// - Row order payload = the viewed week's live row cells' prescription_ids,
+//   in the new order — a row with no cell for that week (an
+//   add-this-week-only hole) is excluded, mirroring the server's own
+//   `session.cells()` query for that week (views.py `session_reorder`).
+// - Day order payload = the viewed week's live Session pks, read from EACH
 //   day's OWN `GridDay.session_ids[String(currentWeekId)]` (views.py
 //   `week_reorder_sessions`) — never the display-only `GridDay.session_id`,
 //   which can silently fall back to a DIFFERENT week's session
 //   (`_pick_session_id`, serializers.py) and would 400 server-side if
 //   posted. Defensive no-op if ANY live day lacks a `session_ids` entry for
-//   the current week.
+//   the viewed week.
 // - Cross-day row moves are OUT of scope for A2 (own follow-up) — enforced
 //   here as a second, independent guard even though MesoTable's own
 //   collision filter (filterTableDragCandidates) should already keep a row
@@ -55,7 +57,6 @@ function week(overrides: Partial<GridWeek> = {}): GridWeek {
     label: "Wk 1",
     phase: "Accum",
     deload: false,
-    current: true,
     delivered_at: null,
     ...overrides,
   };
@@ -196,7 +197,7 @@ describe("regression: encoded dnd ids (as the real MesoTable emits) resolve corr
 
   it("a day event with encoded string ids still calls reorderDay with the right payload", () => {
     const g = grid({
-      weeks: [week({ id: 1, current: true })],
+      weeks: [week({ id: 1 })],
       days: [
         day({ session_slot_id: 1, session_id: 11, session_ids: { "1": 11 } }),
         day({ session_slot_id: 2, session_id: 22, session_ids: { "1": 22 } }),
@@ -213,7 +214,7 @@ describe("regression: encoded dnd ids (as the real MesoTable emits) resolve corr
 });
 
 describe("within-day row reorder", () => {
-  it("calls reorderRow with the day's session_id and the current week's cell ids in the new order", () => {
+  it("calls reorderRow with the day's session_id and the viewed week's cell ids in the new order", () => {
     const g = grid({
       days: [
         day({
@@ -231,17 +232,17 @@ describe("within-day row reorder", () => {
     expect(reorderRow).toHaveBeenCalledWith(11, [1000, 900]);
   });
 
-  it("no-ops a row drop when the day's session_ids lacks a current-week entry (fallback session_id must not substitute)", () => {
-    // The current week's session was independently soft-deleted:
+  it("no-ops a row drop when the day's session_ids lacks a viewed-week entry (fallback session_id must not substitute)", () => {
+    // The viewed week's session was independently soft-deleted:
     // `session_id` silently falls back to ANOTHER week's session
-    // (`_pick_session_id`), so posting current-week cell ids to it would
+    // (`_pick_session_id`), so posting viewed-week cell ids to it would
     // 400 server-side — same guard the day path already has.
     const g = grid({
       days: [
         day({
           session_slot_id: 1,
           session_id: 99, // fallback: another week's session
-          session_ids: { "2": 99 }, // no entry for current week "1"
+          session_ids: { "2": 99 }, // no entry for the viewed week "1"
           rows: [
             row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 900 }) } }),
             row({ exercise_slot_id: 10, cells: { "1": cell({ prescription_id: 1000 }) } }),
@@ -260,7 +261,7 @@ describe("within-day row reorder", () => {
         day({
           session_slot_id: 1,
           session_id: 99, // display fallback pointing elsewhere
-          session_ids: { "1": 11 }, // the current week's real session
+          session_ids: { "1": 11 }, // the viewed week's real session
           rows: [
             row({ exercise_slot_id: 9, cells: { "1": cell({ prescription_id: 900 }) } }),
             row({ exercise_slot_id: 10, cells: { "1": cell({ prescription_id: 1000 }) } }),
@@ -292,7 +293,7 @@ describe("within-day row reorder", () => {
     expect(reorderRow).toHaveBeenCalledWith(11, [1000, 900, 1200]);
   });
 
-  it("excludes a hole row (no cell for the current week) from the posted order array", () => {
+  it("excludes a hole row (no cell for the viewed week) from the posted order array", () => {
     const g = grid({
       days: [
         day({
@@ -313,9 +314,9 @@ describe("within-day row reorder", () => {
 });
 
 describe("day reorder", () => {
-  it("calls reorderDay with the current week's id and the block's session ids in the new order", () => {
+  it("calls reorderDay with the viewed week's id and the block's session ids in the new order", () => {
     const g = grid({
-      weeks: [week({ id: 1, current: true })],
+      weeks: [week({ id: 1 })],
       days: [
         day({ session_slot_id: 1, session_id: 11, session_ids: { "1": 11 } }),
         day({ session_slot_id: 2, session_id: 22, session_ids: { "1": 22 } }),
@@ -326,7 +327,7 @@ describe("day reorder", () => {
     expect(reorderDay).toHaveBeenCalledWith(1, [22, 11]);
   });
 
-  it("no-ops when any live day lacks a session_ids entry for the current week", () => {
+  it("no-ops when any live day lacks a session_ids entry for the viewed week", () => {
     const g = grid({
       days: [
         day({ session_slot_id: 1, session_id: 11, session_ids: { "1": 11 } }),
@@ -339,20 +340,20 @@ describe("day reorder", () => {
   });
 
   // Regression (Codex #455 A2 review finding 2): `session_id` is a
-  // DISPLAY-ONLY field that can fall back to a different, non-current
-  // week's session pk (`_pick_session_id`, serializers.py) when the current
+  // DISPLAY-ONLY field that can fall back to a different, non-viewed
+  // week's session pk (`_pick_session_id`, serializers.py) when the viewed
   // week's own session was independently deleted (see the per-week
   // exceptions system's `session_delete` endpoint). Day reorder must read
   // `session_ids[currentWeekKey]` — never let the fallback `session_id`
   // substitute — or the client posts another week's session pk to
-  // `week_reorder_sessions`, which 400s (it requires EXACTLY the current
+  // `week_reorder_sessions`, which 400s (it requires EXACTLY the viewed
   // week's live session ids).
-  it("does not substitute the fallback session_id when the current week's own session_ids entry is missing", () => {
+  it("does not substitute the fallback session_id when the viewed week's own session_ids entry is missing", () => {
     const g = grid({
-      weeks: [week({ id: 1, current: true })],
+      weeks: [week({ id: 1 })],
       days: [
         day({ session_slot_id: 1, session_id: 11, session_ids: { "1": 11 } }),
-        // day 2's current week (week 1) session was independently deleted —
+        // day 2's viewed week (week 1) session was independently deleted —
         // session_id falls back to some OTHER week's session (pk 999), but
         // session_ids carries no "1" entry.
         day({ session_slot_id: 2, session_id: 999, session_ids: {} }),
@@ -365,7 +366,7 @@ describe("day reorder", () => {
 
   it("builds the order from each day's CURRENT-WEEK session_ids entry, not the (possibly-fallback) session_id field", () => {
     const g = grid({
-      weeks: [week({ id: 5, current: true })],
+      weeks: [week({ id: 5 })],
       days: [
         // session_id (999) intentionally mismatches session_ids["5"] (11) —
         // if the hook ever read session_id again, this assertion would catch it.
@@ -411,9 +412,9 @@ describe("no-op drops", () => {
     expect(reorderRow).not.toHaveBeenCalled();
   });
 
-  it("does nothing when there is no current week", () => {
+  it("does nothing when the grid has no weeks at all (no viewed week to anchor on)", () => {
     const g = grid({
-      weeks: [week({ id: 1, current: false })],
+      weeks: [],
       days: [
         day({
           session_slot_id: 1,

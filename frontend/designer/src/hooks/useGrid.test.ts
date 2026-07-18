@@ -16,7 +16,6 @@ function week(overrides: Partial<GridWeek> = {}): GridWeek {
     label: "Wk 1",
     phase: "Accum",
     deload: false,
-    current: true,
     delivered_at: null,
     ...overrides,
   };
@@ -177,7 +176,7 @@ describe("renameExercise", () => {
     // (prescription_patch's `name` branch renames the slot).
     const { result } = setup(
       grid({
-        weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })],
+        weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2" })],
         days: [
           day({
             rows: [
@@ -404,8 +403,8 @@ describe("removeExercise", () => {
 });
 
 describe("addDay", () => {
-  it("POSTs session/ with {week_id: current week id}, then refetches", async () => {
-    const initial = grid({ weeks: [week({ id: 1, current: true }), week({ id: 2, current: false })] });
+  it("POSTs session/ with {week_id: the viewed (first) week's id}, then refetches", async () => {
+    const initial = grid({ weeks: [week({ id: 1 }), week({ id: 2 })] });
     const { result } = setup(initial);
     globalThis.fetch = vi
       .fn()
@@ -451,7 +450,7 @@ describe("addWeek", () => {
       .fn()
       .mockResolvedValueOnce(res({ ok: true }))
       .mockResolvedValueOnce(
-        res({ ok: true, ...grid({ weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2", current: false })] }) }),
+        res({ ok: true, ...grid({ weeks: [week({ id: 1 }), week({ id: 2, label: "Wk 2" })] }) }),
       ) as unknown as typeof fetch;
 
     await act(async () => {
@@ -484,31 +483,8 @@ describe("removeWeek", () => {
   });
 });
 
-describe("setCurrentWeek", () => {
-  it("POSTs week/{weekId}/current/ with a null body, then refetches", async () => {
-    const initial = grid({ weeks: [week({ id: 1, current: true }), week({ id: 2, current: false })] });
-    const { result } = setup(initial);
-    globalThis.fetch = vi
-      .fn()
-      .mockResolvedValueOnce(res({ ok: true }))
-      .mockResolvedValueOnce(
-        res({ ok: true, ...grid({ weeks: [week({ id: 1, current: false }), week({ id: 2, current: true })] }) }),
-      ) as unknown as typeof fetch;
-
-    await act(async () => {
-      await result.current.setCurrentWeek(2);
-    });
-
-    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[0]![0]).toBe("/meso/api/plan/7/week/2/current/");
-    expect(calls[0]![1].body).toBe(null);
-    expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
-    expect(result.current.grid?.weeks[1]?.current).toBe(true);
-  });
-});
-
 describe("undo/redo", () => {
-  it("undo POSTs {week_id: current week id} to undo/, then refetches the grid (ignoring its own envelope)", async () => {
+  it("undo POSTs {week_id: the viewed (first) week's id} to undo/, then refetches the grid (ignoring its own envelope)", async () => {
     const initial = grid({
       history: { can_undo: true, can_redo: false, undo_label: "Edited Squat", redo_label: "" },
     });

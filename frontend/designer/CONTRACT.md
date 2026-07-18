@@ -90,8 +90,8 @@ MesoGrid | null` and `history: GridHistory`, hydrated once from
 - **RETIRED in Phase 2a: `setOneRm`** — the %1RM editor is gone (a % load
   is just prescription text now; see "RETIRED: useOneRmEditor /
   RowOneRmEditor" below), and with it `GridCellOneRmPatch`.
-- **Structural verbs** (`addDay`/`removeDay`, `addWeek`/`removeWeek`/
-  `setCurrentWeek`, `addExercise`/`removeExercise`, `reorderDays`/
+- **Structural verbs** (`addDay`/`removeDay`, `addWeek`/`removeWeek`,
+  `addExercise`/`removeExercise`, `reorderDays`/
   `reorderExercises`, `undo`/`redo`, `skipCell`/
   `fillAcrossWeeks`/`addExerciseThisWeek` — `swapCell` retired in Phase 2a
   (a substitution is sub-line text now, written through `writeCellLine`);
@@ -117,7 +117,8 @@ Issue #455 phase A5 deleted these four hooks (and their specs) outright —
   `applyPlanData` as its central re-serialize sink and `switchWeek`/
   `addWeek`/`setCurrentWeek` as its week-management verbs. `useGrid.grid`
   (now carrying `plan`/`athlete`/`phases` too, added in A5 step 1)
-  and its `addWeek`/`removeWeek`/`setCurrentWeek` replace it 1:1; the
+  and its `addWeek`/`removeWeek` replace it (`setCurrentWeek` is gone
+  entirely with the `is_current` removal, not re-homed); the
   concept of a single "viewed week" is gone — `MesoTable` renders every
   week as a column simultaneously, so there's nothing to switch between.
 - **`useAutosave`** persisted one exercise row's fields (fire-and-forget,
@@ -261,13 +262,15 @@ table (day sub-tables, week columns, row cells, drag handles), documented
 in prose in its own header
 comment rather than a component-by-component breakdown here, since (unlike
 the retired tree) there's no multi-file boundary left to document. Week
-lifecycle (add/make-current/remove) lives in `MesoTable`'s own
+lifecycle (add/remove) lives in `MesoTable`'s own
 `WeekManagerStrip` — a mesocycle-level pill strip ABOVE the day tables
 (designer-simplify), NOT inside any day's `<table>`, since a week spans every
-day; `WeekColumnHeader` is now label-only (week label + deload marker +
-current-column highlight). Every week renders as its own table column, so
-there's no separate "switch to a week" verb left, only
-"add/remove/make-current" in the strip.
+day; `WeekColumnHeader` is now label-only (week label + deload marker). Every
+week renders as its own table column, so there's no separate "switch to a
+week" verb left, only "add/remove" in the strip. The "make current" verb and
+the current-column highlight are gone with the `is_current` pointer
+(docs/meso/remove-current-week-plan.md) — programs are date-less, so the app
+no longer names a current week.
 
 ### DesignerRoot
 
@@ -349,9 +352,9 @@ Issue #455 phase A5 deleted all four components outright — the multi-week
 table (`MesoTable`, one `<table>` per training day, week columns across the
 top) replaces the whole one-week-at-a-time tree they formed:
 
-- **`WeekStrip`** (week switcher chips + add/make-current/remove/undo/redo)
+- **`WeekStrip`** (week switcher chips + add/remove/undo/redo)
   → `MesoTable`'s own `WeekManagerStrip` — a mesocycle-level pill strip above
-  the day tables with per-week "Make current" + remove (arm→confirm) + the
+  the day tables with per-week remove (arm→confirm) + the
   "+ Add week" button (designer-simplify: this replaced both the retired
   WeekStrip and the short-lived per-day-header controls; a week spans every
   day, so its lifecycle belongs here once, not inside any day's `<table>`).
@@ -412,7 +415,8 @@ module's documented decision). Testids: `period-style-timeline-button`,
 `weeks: GridWeek[]` (issue #455 phase A5 — was `Week[]`, sourced from the
 retired `usePlanData`; now straight off `gridState.grid.weeks`).
 `GridWeek` already structurally satisfies `cellOn`/`cellStyle`'s
-`Pick<Week, "current" | "deload">`, and gained its own `vol`/`inten`
+`Pick<Week, "deload">` (`"current"` dropped with the `is_current`
+removal), and gained its own `vol`/`inten`
 fields (`serialize_mesocycle_grid` additions, A5 step 1) so the timeline's
 `barH(w.vol ?? 0, 156)` bars don't silently render at the floor height — no
 render-logic change in `BlockView.tsx` itself, only the prop type. **Real
@@ -434,8 +438,8 @@ key). Component itself needed **zero** changes for A5 — only its caller
 changed what it passes as `program`: `DesignerRoot` now derives it via
 `gridToProgram(grid, weekId)` (`lib/grid.ts`, added in A5 step 3) — a pure
 transform that walks `grid.days`, picks each row's cell at the resolved
-week (default: `grid.weeks.find(w => w.current)`), and omits a row with no
-cell for that week. Replaces the retired `usePlanData`'s hydrated `program`
+week (default: `grid.weeks[0]` — the block's first week, since the
+`is_current` pointer is gone), and omits a row with no cell for that week. Replaces the retired `usePlanData`'s hydrated `program`
 array; no server round trip. Phase 2a: the derived `Exercise` is the new
 text-first shape (`name` is just `row.name` — the one-week swap fields are
 gone — plus `text`/`lines` off the cell and `tempo`/`rest`/`note` off the

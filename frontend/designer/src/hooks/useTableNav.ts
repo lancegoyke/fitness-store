@@ -396,8 +396,8 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
     // Restoration may move focus ONLY when it won't steal it: the active
     // element is a grid cell, focus was orphaned by the swap (fell to
     // body), or the coach is on a control explicitly marked
-    // data-grid-restore (undo/redo, add-week, make-current, remove-week —
-    // swap initiators whose result should return them to the table).
+    // data-grid-restore (undo/redo, add-week, remove-week — swap initiators
+    // whose result should return them to the table).
     // Anything else — the chat composer re-rendering under focus on a cell
     // patch — keeps focus.
     const active = document.activeElement as HTMLElement | null;

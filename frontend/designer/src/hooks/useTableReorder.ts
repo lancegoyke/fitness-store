@@ -15,20 +15,24 @@
 // from colliding with another day's rows in the first place.
 //
 // Payload construction mirrors the two endpoints' exact contracts
-// (app/store_project/meso/views.py `session_reorder`/`week_reorder_sessions`):
-//  - Row order = the CURRENT week's (`grid.weeks.find(w => w.current)`)
-//    live row cells' `prescription_id`s, in the new order — a row with no
-//    cell for that week (an add-this-week-only hole) is excluded, mirroring
-//    the server's own `session.cells()` query for that week.
-//  - Day order = the CURRENT week's live Session pks, in the new order —
+// (app/store_project/meso/views.py `session_reorder`/`week_reorder_sessions`).
+// Programs are date-less and carry no "current week" pointer
+// (docs/meso/remove-current-week-plan.md) — both payloads anchor on the
+// VIEWED week, `grid.weeks[0]` (the grid's own opening default, same as the
+// server's `current_week(plan)` degrade), not a flagged week:
+//  - Row order = the viewed week's (`grid.weeks[0]`) live row cells'
+//    `prescription_id`s, in the new order — a row with no cell for that week
+//    (an add-this-week-only hole) is excluded, mirroring the server's own
+//    `session.cells()` query for that week.
+//  - Day order = the viewed week's live Session pks, in the new order —
 //    read from EACH day's own `GridDay.session_ids[String(currentWeekId)]`,
 //    never `GridDay.session_id` (display-only, and `_pick_session_id`
-//    (serializers.py:954) can fall back to an earlier live week's session
-//    for a slot when the current week's was independently soft-deleted; the
+//    (serializers.py:954) can fall back to a LATER live week's session for a
+//    slot when the viewed week's was independently soft-deleted; the
 //    fallback pk belongs to the WRONG week and would 400 server-side if
-//    posted as part of the current week's order — Codex #455 A2 review
+//    posted as part of the viewed week's order — Codex #455 A2 review
 //    finding 2). Defensive no-op if ANY live day lacks a `session_ids` entry
-//    for the current week.
+//    for the viewed week.
 //
 // IMPORTANT (Codex #455 A2 review finding 1): identity for both verbs comes
 // EXCLUSIVELY from the `TableDragData` carried on `active.data.current`/
@@ -61,8 +65,11 @@ export interface UseTableReorderOptions {
   reorderDay(weekId: Id, order: number[]): void;
 }
 
+// The viewed week both reorder payloads anchor on — programs are date-less
+// and carry no "current" pointer, so this is simply the grid's first live
+// week (its own opening default), same as useGrid.ts's own `currentWeekId`.
 function currentWeekId(grid: MesoGrid): Id | undefined {
-  return grid.weeks.find((w) => w.current)?.id;
+  return grid.weeks[0]?.id;
 }
 
 export function useTableReorder(options: UseTableReorderOptions) {
@@ -73,18 +80,18 @@ export function useTableReorder(options: UseTableReorderOptions) {
     const weekId = currentWeekId(grid);
     if (weekId == null) return;
     const weekKey = String(weekId);
-    // The endpoint is the CURRENT week's session — resolved via
+    // The endpoint is the VIEWED week's session — resolved via
     // `session_ids[weekKey]`, never `session_id`, which can silently be a
-    // FALLBACK to a different week when the current week's session was
-    // independently soft-deleted; posting current-week cell ids to a
+    // FALLBACK to a different week when the viewed week's session was
+    // independently soft-deleted; posting viewed-week cell ids to a
     // fallback session 400s server-side (same guard as dayReorder below).
     const sessionId = day.session_ids[weekKey];
     if (sessionId == null) return;
-    // Only rows with a live cell for the CURRENT week can appear in the
+    // Only rows with a live cell for the VIEWED week can appear in the
     // order array — session_reorder's contract is EXACTLY session.cells()
-    // for the viewed (current) week. A row that exists only on some OTHER
-    // week (an add-this-week-only hole) is invisible here, same as the
-    // server's own query.
+    // for the viewed week. A row that exists only on some OTHER week (an
+    // add-this-week-only hole) is invisible here, same as the server's own
+    // query.
     const liveRows = day.rows.filter((r) => r.cells[weekKey]);
     const oldIndex = liveRows.findIndex((r) => r.exercise_slot_id === activeExerciseSlotId);
     const newIndex = liveRows.findIndex((r) => r.exercise_slot_id === overExerciseSlotId);
@@ -99,7 +106,7 @@ export function useTableReorder(options: UseTableReorderOptions) {
     const weekId = currentWeekId(grid);
     if (weekId == null) return;
     const weekKey = String(weekId);
-    // Defensive no-op: every live day must resolve its OWN current-week
+    // Defensive no-op: every live day must resolve its OWN viewed-week
     // session id via `session_ids[weekKey]` (see this file's header) —
     // `session_id` can silently be a FALLBACK to a different week and must
     // never substitute here, or the posted order 400s server-side.

@@ -13,7 +13,7 @@ function res(body: unknown, ok = true, status = 200) {
 
 function setup(initialMessages: ChatMessage[] = [], initialResumeUrl: string | null = null) {
   return renderHook(() =>
-    useAgentChat({ planId: 7, csrf: "tok", initialMessages, initialResumeUrl }),
+    useAgentChat({ planId: 7, csrf: "tok", mesocycleId: 3, initialMessages, initialResumeUrl }),
   );
 }
 
@@ -64,7 +64,24 @@ describe("onSend", () => {
     const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/agent/");
     expect(opts.method).toBe("POST");
-    expect(JSON.parse(opts.body)).toEqual({ instruction: "lighten Friday" });
+    // §4b (docs/meso/remove-current-week-plan.md): the coach's viewed block
+    // rides every proposal POST, not just the instruction text.
+    expect(JSON.parse(opts.body)).toEqual({ instruction: "lighten Friday", mesocycle_id: 3 });
+    await flush();
+  });
+
+  it("sends the hook's own mesocycleId (the coach's viewed block), not a hardcoded one", async () => {
+    // §4b (docs/meso/remove-current-week-plan.md): grounding/validation/apply
+    // run across time-separated requests (a background job, then a later
+    // apply request) and can no longer re-derive the block from a removed
+    // "current week" pointer — the UI must capture and send it up front.
+    const { result } = renderHook(() =>
+      useAgentChat({ planId: 7, csrf: "tok", mesocycleId: 42, initialMessages: [], initialResumeUrl: null }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ status_url: null }, true, 202)) as unknown as typeof fetch;
+    act(() => result.current.onChip("go"));
+    const [, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(JSON.parse(opts.body)).toEqual({ instruction: "go", mesocycle_id: 42 });
     await flush();
   });
 
@@ -114,7 +131,7 @@ describe("onChip", () => {
     act(() => result.current.onChip("Add a deload week"));
     expect(result.current.messages.some((m) => m.role === "coach" && m.text === "Add a deload week")).toBe(true);
     const [, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(JSON.parse(opts.body)).toEqual({ instruction: "Add a deload week" });
+    expect(JSON.parse(opts.body)).toEqual({ instruction: "Add a deload week", mesocycle_id: 3 });
     await flush();
   });
 

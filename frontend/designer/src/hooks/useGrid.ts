@@ -16,7 +16,7 @@
 // source cell's already-committed DB values, so an in-flight edit must land
 // first or the fill can copy stale data (Codex P2).
 //
-// Structural verbs (add/remove day|week|exercise, set-current, undo/redo)
+// Structural verbs (add/remove day|week|exercise, undo/redo)
 // await their POST, then call refetchGrid() (a plain GET, mirroring
 // usePlanData's switchWeek) to re-sync the whole grid — mirroring
 // usePlanData/useReorder's ref-guard idiom, one shared in-flight guard across
@@ -90,9 +90,14 @@ export function rowIdentityCellId(weeks: GridWeek[], row: GridRow | undefined): 
   return first ? row.cells[String(first.id)]?.prescription_id : undefined;
 }
 
+// The viewed week for structural verbs that need ONE week id to anchor a
+// POST (add-day's `week_id`, undo/redo's `week_id`) — programs are date-less
+// and carry no "current" pointer (docs/meso/remove-current-week-plan.md), so
+// this is simply the grid's first live week, mirroring the server's own
+// `current_week(plan)` degrade (explicit week -> else earliest live week).
 function currentWeekId(grid: MesoGrid | null): Id | undefined {
   if (!grid) return undefined;
-  return (grid.weeks.find((w) => w.current) ?? grid.weeks[0])?.id;
+  return grid.weeks[0]?.id;
 }
 
 /** Immutably patch every cell (across every day/row/week) whose
@@ -394,20 +399,6 @@ export function useGrid(options: UseGridOptions) {
     [planId, csrf, runStructural, refetchGrid],
   );
 
-  const setCurrentWeek = useCallback(
-    (weekId: Id) =>
-      runStructural(async () => {
-        try {
-          await apiPost(`/meso/api/plan/${planId}/week/${weekId}/current/`, null, csrf);
-        } catch (err) {
-          console.error("Set current week failed", err);
-          return;
-        }
-        await refetchGrid();
-      }),
-    [planId, csrf, runStructural, refetchGrid],
-  );
-
   // Issue #455 phase A2 (drag reordering): same STRUCTURAL shape as every
   // verb above — the server owns the authoritative order (block-wide P0
   // ExerciseSlot/SessionSlot.order), so these await their POST then
@@ -549,7 +540,6 @@ export function useGrid(options: UseGridOptions) {
     removeDay,
     addWeek,
     removeWeek,
-    setCurrentWeek,
     reorderExercises,
     reorderDays,
     skipCell,
