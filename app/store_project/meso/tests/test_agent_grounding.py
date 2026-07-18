@@ -9,6 +9,7 @@ scoped to the plan's athlete and this plan's sessions, newest first, and capped.
 import datetime
 
 import pytest
+from django.utils import timezone
 
 from store_project.meso.agent import service
 from store_project.meso.factories import LoggedSetFactory
@@ -54,6 +55,62 @@ def test_context_plan_and_block_halves_agree_on_a_non_first_block():
     # instead and both of the assertions below flip.
     assert cell2.pk in plan_ids
     assert cell1.pk not in plan_ids
+
+
+def test_context_blanks_plan_program_when_target_block_has_no_live_weeks():
+    # FIX 1 (docs/meso/remove-current-week-plan.md §4b edge case): a block can
+    # have zero live weeks while another block of the same plan still has some
+    # — reachable because ``week_delete`` only guards the plan's LAST live
+    # week, not the block's. ``first_live_week(empty_block)`` is then ``None``,
+    # which is also ``serialize_plan``'s "no override" sentinel — so left
+    # unguarded, ``build_context`` would let ``serialize_plan`` fall back to
+    # the plan's earliest live week, i.e. block 1's, and hand the model block
+    # 1's prescription ids beside an empty ``block`` payload scoped to
+    # ``empty_block``. Validation would then drop any edit against those ids
+    # as outside ``batch.mesocycle`` — a burned allowance for nothing.
+    plan, session, cell1 = make_plan()  # block 1 (order=0), live week, cell1
+    empty_block = MesocycleFactory(plan=plan, order=1)  # no weeks at all
+
+    context = service.build_context(plan, empty_block)
+
+    assert context["plan"]["program"] == []
+    assert context["plan"]["weeks"] == []
+    assert context["plan"]["viewing"] is None
+    assert context["block"] == {"name": empty_block.name, "weeks": []}
+    plan_ids = {ex["id"] for s in context["plan"]["program"] for ex in s["exercises"]}
+    assert cell1.pk not in plan_ids
+
+
+def test_context_blanks_plan_program_when_target_blocks_week_was_soft_deleted():
+    # Same edge case, reached the way the app actually reaches it: the block
+    # had a live week, then its last week was soft-deleted via the block-level
+    # ``week_delete`` path (which only guards the plan's last live week).
+    plan, session, cell1 = make_plan()  # block 1 (order=0), live week, cell1
+    emptied_block = MesocycleFactory(plan=plan, order=1)
+    doomed_week = WeekFactory(mesocycle=emptied_block, index=1)
+    doomed_week.deleted_at = timezone.now()
+    doomed_week.save(update_fields=["deleted_at"])
+
+    context = service.build_context(plan, emptied_block)
+
+    assert context["plan"]["program"] == []
+    assert context["plan"]["weeks"] == []
+    assert context["plan"]["viewing"] is None
+    plan_ids = {ex["id"] for s in context["plan"]["program"] for ex in s["exercises"]}
+    assert cell1.pk not in plan_ids
+
+
+def test_context_blanks_plan_program_when_mesocycle_is_none():
+    # The other input ``first_live_week`` returns ``None`` for: no block to
+    # program at all (e.g. a hard-deleted batch.mesocycle, SET_NULL).
+    plan, session, cell1 = make_plan()
+
+    context = service.build_context(plan, None)
+
+    assert context["plan"]["program"] == []
+    assert context["plan"]["weeks"] == []
+    assert context["plan"]["viewing"] is None
+    assert context["block"] == {"name": "", "weeks": []}
 
 
 def test_context_includes_whole_block():

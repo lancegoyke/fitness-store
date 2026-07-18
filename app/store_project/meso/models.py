@@ -1446,8 +1446,20 @@ class Mesocycle(models.Model):
         ``week_count`` grows to stay >= the highest materialized index so the
         periodization rail stays honest. Returns the new ``Week``.
 
-        A degenerate block with no weeks yet seeds one starter day (mirroring
-        ``Plan.scaffold``) so the result is immediately editable.
+        A genuinely degenerate block — no weeks AND no slots yet — seeds one
+        starter day (mirroring ``Plan.scaffold``) so the result is immediately
+        editable. That is *not* the same thing as "no source week": since
+        ``SessionSlot``/``ExerciseSlot`` are block-level identity that
+        survives a week's soft delete (P0 fixed-lineup cutover), a block can
+        have live slots with every one of its weeks soft-deleted — reachable
+        because ``week_delete`` only guards the *plan's* last live week, not
+        the block's (docs/meso/remove-current-week-plan.md §4b). Seeding a
+        fresh starter day on top of those surviving slots would leave the old
+        live slots with no session/cell in any live week — an orphaned block
+        next to a redundant "Day 1." So the starter-day seed is gated on the
+        slots, not the source week: a block with live slots always reuses
+        them, whether or not it currently has a source week to carry text
+        from.
 
         The source is the latest **live** week (a soft-deleted week is not a
         template to build from), but the new week's ``index`` is one past the
@@ -1467,7 +1479,12 @@ class Mesocycle(models.Model):
             intensity=source.intensity if source else 0,
             is_deload=source.is_deload if source else False,
         )
-        if source is None:
+        live_slots = list(
+            self.session_slots.filter(deleted_at__isnull=True).order_by(
+                "order", "day_number"
+            )
+        )
+        if source is None and not live_slots:
             slot = SessionSlot.objects.create(
                 mesocycle=self, day_number=1, name="Day 1", order=0
             )
@@ -1477,23 +1494,22 @@ class Mesocycle(models.Model):
             )
             Prescription.objects.create(exercise_slot=exercise_slot, week=week)
         else:
-            live_slots = list(
-                self.session_slots.filter(deleted_at__isnull=True).order_by(
-                    "order", "day_number"
-                )
-            )
             Session.objects.bulk_create(
                 [Session(week=week, session_slot=slot) for slot in live_slots]
             )
             # The whole line stack carries forward (Phase 2a): line 0's
             # prescription text plus any sub-lines (the RPE row, cues) — the
             # coach then tweaks the new column. ``skipped`` (a one-week
-            # exception) never carries.
+            # exception) never carries. No source week (the emptied-but-slots-
+            # survive edge case above) means there's nothing to carry forward
+            # at all — ``source_cells`` just stays empty and every cell below
+            # falls through to its blank default.
             source_cells = defaultdict(dict)
-            for cell in Prescription.objects.filter(
-                week=source, exercise_slot__deleted_at__isnull=True
-            ):
-                source_cells[cell.exercise_slot_id][cell.line] = cell.text
+            if source is not None:
+                for cell in Prescription.objects.filter(
+                    week=source, exercise_slot__deleted_at__isnull=True
+                ):
+                    source_cells[cell.exercise_slot_id][cell.line] = cell.text
             live_exercise_slots = ExerciseSlot.objects.filter(
                 session_slot__in=live_slots, deleted_at__isnull=True
             )

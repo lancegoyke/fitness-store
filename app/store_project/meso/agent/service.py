@@ -85,12 +85,29 @@ def build_context(plan, mesocycle):
     # ids beside block 2's ``block`` payload. The model can only see ids, not
     # which block they belong to, so it would happily target the block-1 ones and
     # validation would then drop them as outside ``batch.mesocycle``. Pin it to
-    # this block's first live week (``None`` → ``serialize_plan``'s own default,
-    # which is all a block with no materialized weeks could offer anyway).
+    # this block's first live week.
+    #
+    # A resolved block can still have no live week of its own (``mesocycle`` is
+    # ``None``, or every week in it was soft-deleted — reachable since
+    # ``week_delete`` only guards the *plan's* last live week, not the block's,
+    # docs/meso/remove-current-week-plan.md §4b). ``week=None`` is
+    # ``serialize_plan``'s "no override" sentinel, so passing it through
+    # unconditionally would make it fall back to ``current_week(plan)`` — the
+    # plan's earliest live week, quite possibly sitting in a DIFFERENT block —
+    # and hand the model that other block's prescription ids again, right back
+    # in the failure mode this function exists to close. So: when this block has
+    # no live week, force the block-scoped rows ``serialize_plan`` would itself
+    # produce for "no open week" (``program``/``weeks`` empty, ``viewing`` null)
+    # rather than let its fallback reach past this (empty) block into another.
+    resolved_week = serializers.first_live_week(mesocycle)
+    plan_context = serializers.serialize_plan(plan, week=resolved_week)
+    if resolved_week is None:
+        plan_context["program"] = []
+        plan_context["weeks"] = []
+        plan_context["viewing"] = None
+
     context = {
-        "plan": serializers.serialize_plan(
-            plan, week=serializers.first_live_week(mesocycle)
-        ),
+        "plan": plan_context,
         "coach_style": _coach_style(plan.coach),
         "block": serializers.serialize_agent_block(plan, mesocycle),
     }

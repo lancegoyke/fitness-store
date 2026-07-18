@@ -30,6 +30,8 @@ from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import ExerciseSlot
+from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import Week
 from store_project.meso.serializers import serialize_week
@@ -136,16 +138,97 @@ class TestAppendWeek:
         assert meso.weeks.count() == 5
         assert meso.week_count == 5  # grew past the planned length
 
-    def test_seeds_a_starter_when_block_has_no_weeks(self):
-        # A degenerate block (no weeks) still yields an editable week.
+    def test_seeds_a_starter_when_block_has_no_weeks_and_no_slots(self):
+        # A GENUINELY degenerate block — no weeks AND no SessionSlot/
+        # ExerciseSlot identity either — still yields one editable starter
+        # day. Hard-deleting only the Week rows (leaving the block's slots
+        # behind) is a *different* case — see
+        # ``TestAppendWeekReusesSurvivingSlots`` below — so this test clears
+        # the slots too to actually exercise the "nothing here yet" path.
         link = CoachAthleteFactory()
         plan = link.create_plan()
         meso = plan.mesocycles.get()
         meso.weeks.all().delete()
+        meso.session_slots.all().delete()
         new_week = meso.append_week()
         assert new_week.index == 1
         assert new_week.sessions.count() == 1
         assert new_week.sessions.get().cells().count() == 1
+
+    def test_reuses_surviving_live_slots_instead_of_seeding_a_starter(self):
+        # FIX 2 (docs/meso/remove-current-week-plan.md §4b edge case):
+        # ``SessionSlot``/``ExerciseSlot`` are block-level identity that
+        # outlives a week's soft delete, so a block with every week
+        # soft-deleted (reachable — ``week_delete`` only guards the plan's
+        # last live week, not the block's) still has its old live slots. The
+        # ``source is None`` branch used to seed a brand-new "Day 1"/"New
+        # exercise" starter regardless, leaving the surviving slots live with
+        # no session/cell in ANY live week — an orphaned block sitting next
+        # to a redundant starter day. It must instead reuse what's there.
+        link = CoachAthleteFactory()
+        plan = link.create_plan()  # scaffold: 1 block, 1 week, 2 days, 1 row each
+        meso = plan.mesocycles.get()
+        only_week = meso.weeks.get()
+        live_slot_ids = set(
+            meso.session_slots.filter(deleted_at__isnull=True).values_list(
+                "pk", flat=True
+            )
+        )
+        live_exercise_slot_ids = set(
+            ExerciseSlot.objects.filter(
+                session_slot__mesocycle=meso, deleted_at__isnull=True
+            ).values_list("pk", flat=True)
+        )
+        assert len(live_slot_ids) == 2  # sanity: the scaffold's 2 days survive
+
+        only_week.soft_delete()  # empties the block: no live weeks, slots intact
+
+        new_week = meso.append_week()
+
+        # No redundant starter day: still exactly the scaffold's 2 slots.
+        assert (
+            set(
+                meso.session_slots.filter(deleted_at__isnull=True).values_list(
+                    "pk", flat=True
+                )
+            )
+            == live_slot_ids
+        )
+        # Every surviving live slot got a session in the new week...
+        new_week_slot_ids = set(
+            new_week.sessions.values_list("session_slot_id", flat=True)
+        )
+        assert new_week_slot_ids == live_slot_ids
+        # ...and every surviving live exercise slot got a blank cell.
+        new_week_exercise_slot_ids = set(
+            Prescription.objects.filter(week=new_week).values_list(
+                "exercise_slot_id", flat=True
+            )
+        )
+        assert new_week_exercise_slot_ids == live_exercise_slot_ids
+        for cell in Prescription.objects.filter(week=new_week):
+            assert cell.text == ""
+
+    def test_source_is_not_none_path_is_unchanged(self):
+        # The normal path (a block WITH a live source week) must reuse the
+        # same live slots/text-carry-forward behavior as before FIX 2 — this
+        # pins that the reshape only touched the ``source is None`` branch.
+        link = CoachAthleteFactory()
+        plan = link.create_plan()
+        meso = plan.mesocycles.get()
+        source = meso.weeks.get()
+        first_day = source.sessions.order_by("session_slot__order").first()
+        first_cell = list(first_day.cells())[0]
+        first_cell.text = "3 x 5, 100%"
+        first_cell.save()
+
+        new_week = meso.append_week()
+
+        assert new_week.sessions.count() == 2
+        new_first_day = new_week.sessions.order_by("session_slot__order").first()
+        copied = list(new_first_day.cells())[0]
+        assert copied.exercise_slot_id == first_cell.exercise_slot_id
+        assert copied.text == "3 x 5, 100%"
 
 
 # ---------------------------------------------------------------------------
