@@ -10,8 +10,7 @@ Covered here:
 
 - ``Plan.duplicate_for`` copies the whole *live* tree (blocks, days, rows —
   tempo/rest/note/tags included — weeks, sessions, and every cell's line
-  stack), mirrors ``is_current``, resets ``delivered_at``, and skips
-  soft-deleted rows;
+  stack), resets ``delivered_at``, and skips soft-deleted rows;
 - the copy is independent: edits on either side never touch the other;
 - ``POST plan/<id>/batch-deliver/`` creates + delivers one ACTIVE copy per
   picked client (weeks stamped, ``WeekDelivery`` snapshots written, one
@@ -53,14 +52,14 @@ def comp(coach):
 def seed_source(coach=None):
     """A two-week plan with a sub-line, a skip, row columns, and dead rows.
 
-    Week 1 is current. Deliberately includes everything ``duplicate_for`` must
-    carry (sub-line, skipped cell, tempo/rest/note, tags) and everything it
-    must NOT (a soft-deleted week, a soft-deleted exercise row).
+    Deliberately includes everything ``duplicate_for`` must carry (sub-line,
+    skipped cell, tempo/rest/note, tags) and everything it must NOT (a
+    soft-deleted week, a soft-deleted exercise row).
     """
     rel = CoachAthleteFactory(coach=coach or UserFactory(), athlete=UserFactory())
     plan = PlanFactory(relationship=rel, title="Base 1", status=Plan.Status.ACTIVE)
     meso = MesocycleFactory(plan=plan, name="Block 1", order=0)
-    week1 = WeekFactory(mesocycle=meso, index=1, is_current=True, phase="Accum")
+    week1 = WeekFactory(mesocycle=meso, index=1, phase="Accum")
     session = day(week1, day_number=1, name="Lower")
     cell = presc_(
         session,
@@ -73,7 +72,7 @@ def seed_source(coach=None):
     cell.exercise_slot.tags = ["squat"]
     cell.exercise_slot.save(update_fields=["tags"])
     sub_line(cell, "RPE 8")
-    week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
+    week2 = WeekFactory(mesocycle=meso, index=2)
     day(week2, session_slot=session.session_slot)
     Prescription.objects.create(
         exercise_slot=cell.exercise_slot, week=week2, text="", skipped=True
@@ -102,7 +101,6 @@ class TestDuplicateFor:
         assert (block.name, block.order) == ("Block 1", 0)
         weeks = list(block.weeks.order_by("index"))
         assert [w.index for w in weeks] == [1, 2]  # dead week 3 not copied
-        assert weeks[0].is_current and not weeks[1].is_current
         assert weeks[0].phase == "Accum"
         assert all(w.delivered_at is None for w in weeks)
         row = block.session_slots.get().exercise_slots.get()  # dead row skipped

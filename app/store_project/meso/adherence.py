@@ -1,90 +1,100 @@
-"""Coach-facing adherence — how much of the prescribed work an athlete logged.
+"""Coach-facing adherence — cadence, not a per-week prescription percent.
 
-Read-only aggregation over the athlete's current week and their own *done*
-``SessionLog`` rows. It lights up the roster's long-standing ``compliance`` meter
-and ``activity`` feed placeholders (``presenters`` flagged both as "Phase 2/3
-concepts" awaiting logged data).
+Read-only aggregation over an athlete's own *done* ``SessionLog`` rows. It
+lights up the roster's long-standing recency signal and ``activity`` feed
+placeholders (``presenters`` flagged both as "Phase 2/3 concepts" awaiting
+logged data).
 
-Since 2d (parity plan §3.3) delivery no longer gates what the athlete sees, so
-adherence anchors on the athlete's **current** week — the ``is_current`` pointer
-their own logging advances — not on the latest delivered week.
+Programs are date-less, so there is no "current week" to measure a percent
+against (docs/meso/remove-current-week-plan.md §4a, decided 2026-07-18):
+"cadence is more important to know because it can alert how much effort
+they're putting in" than progress through a fixed denominator. The signal is
+**recency** — how long since the athlete's last logged (done) session — plus a
+secondary rolling volume count, both keyed off ``SessionLog.created_at`` (the
+server-stamped log-write clock, always present and monotonic, unlike the
+nullable athlete-entered ``date``). Two caveats apply to both: ``created_at``
+is *write* time, so re-saving an old workout reads as fresh; and any
+recency-based signal penalizes an athlete who trains but doesn't log — a
+coaching-culture tradeoff, not a code one.
 
 Nothing here mutates state; it's a pure read layer the presenter formats.
 """
 
+from datetime import timedelta
+
 from django.db.models import F
+from django.utils import timezone
 
 from .models import CoachAthlete
 from .models import Plan
 from .models import SessionLog
-from .models import Week
 
 
-def link_current_week(link):
-    """The week the athlete is on, across *all* of this link's plans.
+def link_last_trained(link):
+    """This link's athlete's most recent *done* ``SessionLog``, any live plan.
 
-    The meter's anchor: the newest (``-modified``) plan wins — the same
-    ordering the athlete home lists cards in — then its flagged ``is_current``
-    week, then its earliest live week. **Archived** plans are excluded
-    (matching ``working_plan`` / ``athlete_home``): an archived plan's weeks
-    are ones the athlete can no longer see or log, so they must not drive the
-    meter. Returns ``None`` when the link has no live weeks at all.
+    The cadence signal's raw material: newest ``created_at`` wins, scanning
+    every one of the link's **non-archived** plans (not just the newest one —
+    a stale log on an older still-live plan is just as real a "last trained"
+    as one on the newest). Archived plans are excluded, matching
+    ``recent_logs`` / the old current-week anchor: their history is no longer
+    something the athlete can see or add to, so it must not read as current
+    cadence. Returns ``None`` when the link has no done logs at all (``link``
+    itself may also be ``None`` — a convenience for callers that fetch it
+    once and pass it straight through).
     """
+    if link is None:
+        return None
     return (
-        Week.objects.filter(
-            mesocycle__plan__relationship=link,
-            deleted_at__isnull=True,
+        SessionLog.objects.filter(
+            session__week__mesocycle__plan__relationship=link,
+            athlete=link.athlete,
+            status=SessionLog.Status.DONE,
         )
-        .exclude(mesocycle__plan__status=Plan.Status.ARCHIVED)
-        .select_related("mesocycle")
-        .order_by(
-            "-mesocycle__plan__modified",
-            "-is_current",
-            "mesocycle__order",
-            "index",
-        )
+        .exclude(session__week__mesocycle__plan__status=Plan.Status.ARCHIVED)
+        .select_related("session__week__mesocycle__plan")
+        .order_by("-created_at")
         .first()
     )
 
 
-def _done_session_count(session_ids, athlete):
-    """How many of ``session_ids`` the athlete has a *done* log for (one query)."""
+def link_recency_days(link):
+    """Whole days since ``link_last_trained`` — the roster pill's tone input.
+
+    ``0`` for a log written today; ``None`` when there's no done log yet
+    (mirrors the old meter's hidden state — the roster shows "No sessions
+    yet" rather than a misleading number).
+    """
+    log = link_last_trained(link)
+    if log is None:
+        return None
+    return (timezone.now() - log.created_at).days
+
+
+def link_session_count(link, *, days=14):
+    """Distinct DONE sessions this link's athlete logged in the last ``days``.
+
+    The cadence signal's volume half (decision Option B): a plain count, not a
+    percent — a date-less program exposes no prescribed weekly frequency to
+    divide by, so there is no honest denominator to build a meter from. Same
+    archived-plan exclusion as ``link_last_trained``. A session logged done
+    more than once (the model allows dated history) counts once.
+    """
+    if link is None:
+        return 0
+    since = timezone.now() - timedelta(days=days)
     return (
         SessionLog.objects.filter(
-            session_id__in=session_ids,
-            athlete=athlete,
+            session__week__mesocycle__plan__relationship=link,
+            athlete=link.athlete,
             status=SessionLog.Status.DONE,
+            created_at__gte=since,
         )
+        .exclude(session__week__mesocycle__plan__status=Plan.Status.ARCHIVED)
         .values("session_id")
         .distinct()
         .count()
     )
-
-
-def link_compliance(link):
-    """Percent (0–100) of the current week's sessions the athlete logged.
-
-    Measured against the athlete's current week (``link_current_week``): the
-    fraction of its sessions the athlete has marked *done*, rounded to a whole
-    percent. Returns ``None`` — so the roster honestly hides the meter rather
-    than showing a misleading ``0%`` — when there's nothing to measure: no
-    plan, no live week, or a week with no sessions. ``0`` (the program is
-    there, the athlete hasn't logged yet) is a real, distinct signal and is
-    *not* collapsed to ``None``.
-
-    One ``link_current_week`` query plus two small aggregates; bounded
-    and proportionate to the handful of athletes a roster renders.
-    """
-    if link is None:
-        return None
-    week = link_current_week(link)
-    if week is None:
-        return None
-    session_ids = list(week.sessions.values_list("pk", flat=True))
-    if not session_ids:
-        return None
-    done = _done_session_count(session_ids, link.athlete)
-    return round(done / len(session_ids) * 100)
 
 
 def recent_logs(coach, *, limit=8):

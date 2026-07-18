@@ -1433,13 +1433,15 @@ class TestDurableRestartAffordance:
 # ---------------------------------------------------------------------------
 
 
-def _self_plan(coach, *, delivered=False, current=True):
+def _self_plan(coach, *, delivered=False):
     """A self-link + individual plan with one week (session + prescription).
 
     Mirrors ``test_deliver``/``test_athlete_logging``'s seed graph, but on the
     coach's own ``is_self`` link (coach == athlete) so the self-variant
     deliver/log flow runs end to end. ``delivered`` stamps the week (a loggable,
-    delivered session); ``current`` flags it live (a deliverable week).
+    delivered session); every week is live and deliverable the moment it's
+    created (there's no separate "current" flag to set — docs/meso/remove-
+    current-week-plan.md).
     """
     link = CoachAthlete.add_self(coach)
     plan = PlanFactory(relationship=link, status=Plan.Status.ACTIVE)
@@ -1447,7 +1449,6 @@ def _self_plan(coach, *, delivered=False, current=True):
     week = WeekFactory(
         mesocycle=meso,
         index=1,
-        is_current=current,
         delivered_at=timezone.now() if delivered else None,
     )
     session = day(week, day_number=1, name="Lower")
@@ -1472,7 +1473,7 @@ class TestSelfLoadedPredicates:
 
     def test_has_delivery_false_for_an_undelivered_self_week(self):
         coach = _coach()
-        _self_plan(coach)  # a current week, not yet delivered
+        _self_plan(coach)  # a live week, not yet delivered
         assert tour._self_has_delivery(coach) is False
 
     def test_has_log_false_before_true_after(self):
@@ -1591,7 +1592,7 @@ class TestActionSiteAutoAdvance:
 
     def test_self_deliver_advances_on_plan_deliver(self, client):
         coach = _coach()
-        s = _self_plan(coach)  # a deliverable current week
+        s = _self_plan(coach)  # a deliverable live week
         tour.set_step(coach.coach_profile, 3)  # deliver
         client.force_login(coach)
 

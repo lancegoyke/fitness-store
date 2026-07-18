@@ -3,9 +3,12 @@
 The first logged-in surface for an *athlete* (distinct from the coach's view of
 an athlete at ``/meso/athlete/<uuid>/``):
 
-- ``/meso/me/`` lists the athlete's active-coach plans, each anchored on the
-  athlete's current week with that week's sessions (marked done/pending from
-  the athlete's own ``SessionLog``);
+- ``/meso/me/`` lists the athlete's active-coach plans, each card opened onto a
+  derived scroll hint (the last live week containing any of the athlete's OWN
+  logged sessions, else the earliest live week — see ``presenters._scroll_hint``,
+  docs/meso/remove-current-week-plan.md §5), with that week's sessions marked
+  done/pending from the athlete's own ``SessionLog``. The app never asserts a
+  "you are here" position — no "current"/"Week N"/"This week" label anywhere;
 - ``/meso/me/session/<id>/`` shows one session's prescribed exercises.
 
 These tests pin the **scoping contract**: an athlete sees only plans across
@@ -33,7 +36,6 @@ from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import Plan
 from store_project.meso.models import SessionLog
 from store_project.meso.models import SessionSlot
-from store_project.meso.models import Week
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc as make_presc
 from store_project.meso.tests._helpers import sub_line
@@ -60,7 +62,6 @@ def seed(
     week = WeekFactory(
         mesocycle=meso,
         index=2,
-        is_current=True,
         delivered_at=timezone.now() if delivered else None,
     )
     session = day(week, day_number=1, name=session_name, bias="Quad")
@@ -86,16 +87,24 @@ def seed_block(
     skip_first=False,
     sub_second="",
     third_delivered=False,
+    logged=True,
 ):
     """A three-week block of ONE day × ONE exercise row (P3 athlete multi-week).
 
     All three weeks share one ``SessionSlot`` (the day) and one ``ExerciseSlot``
     (the row), with a per-week ``Prescription`` cell carrying a distinct load so
     each week's column is identifiable. Weeks 1 & 2 are delivered (the whole
-    block delivers at once); week 2 is the athlete's ``is_current`` week; week 3
-    is left undelivered unless ``third_delivered`` — since 2d that only means
-    "not yet nudged about"; the athlete sees it live either way. ``sub_second``
-    adds a freeform sub-line (e.g. a substitution) beneath week 2's cell.
+    block delivers at once); week 3 is left undelivered unless
+    ``third_delivered`` — since 2d that only means "not yet nudged about"; the
+    athlete sees it live either way.
+
+    ``logged`` (default ``True``) stamps a DONE ``SessionLog`` on week 2's
+    session, making it the derived scroll hint (§5) for the bulk of these
+    tests — the real-data equivalent of the old ``is_current`` flag, but
+    re-derived from the athlete's own logging rather than a stored pointer.
+    Pass ``logged=False`` to test the true zero-history default (the
+    earliest live week). ``sub_second`` adds a freeform sub-line (e.g. a
+    substitution) beneath week 2's cell.
     """
     coach = coach or UserFactory()
     athlete = athlete or UserFactory()
@@ -111,12 +120,11 @@ def seed_block(
         mesocycle=meso, day_number=1, name="Lower", bias="Quad", order=0
     )
     ex = ExerciseSlot.objects.create(session_slot=slot, name="Box Squat", order=0)
-    w1 = WeekFactory(mesocycle=meso, index=1, is_current=False, delivered_at=now)
-    w2 = WeekFactory(mesocycle=meso, index=2, is_current=True, delivered_at=now)
+    w1 = WeekFactory(mesocycle=meso, index=1, delivered_at=now)
+    w2 = WeekFactory(mesocycle=meso, index=2, delivered_at=now)
     w3 = WeekFactory(
         mesocycle=meso,
         index=3,
-        is_current=False,
         delivered_at=now if third_delivered else None,
     )
     s1 = day(w1, session_slot=slot)
@@ -135,6 +143,8 @@ def seed_block(
     if sub_second:
         sub_line(c2, sub_second)
     c3 = make_presc(exercise_slot=ex, week=w3, sets="4", reps="8", load="131", rpe="8")
+    if logged:
+        SessionLogFactory(session=s2, athlete=athlete, status=SessionLog.Status.DONE)
     return SimpleNamespace(
         coach=coach,
         athlete=athlete,
@@ -157,12 +167,13 @@ def seed_block(
 def seed_two_block(*, coach=None, athlete=None):
     """A two-mesocycle plan (issue #456 Finding 1): both blocks delivered.
 
-    Block A ("Base", order 0) carries two delivered weeks, week 2 of which is
-    the athlete's ``is_current`` week — the athlete is mid-block-A. Block B
-    ("Peak", order 1) carries one delivered week, index 1, ``is_current``
-    False — a coach delivering a brand-new mesocycle never moves the pointer
-    (by design), so block B starts out reachable only via plan-wide
-    navigation, never the anchored block A alone.
+    Block A ("Base", order 0) carries two delivered weeks. Block B ("Peak",
+    order 1) carries one delivered week, index 1, delivered LATER than block
+    A. Neither block has any logged session — the plan's derived scroll hint
+    (§5) is therefore its earliest live week (block A, week 1) unless a test
+    logs into one explicitly or overrides with ``?week=``. A newly delivered
+    block is always reachable via plan-wide chip navigation regardless of the
+    anchor (issue #456 Finding 1).
     """
     coach = coach or UserFactory()
     athlete = athlete or UserFactory()
@@ -179,8 +190,8 @@ def seed_two_block(*, coach=None, athlete=None):
         mesocycle=meso_a, day_number=1, name="Squat Day", bias="Quad", order=0
     )
     ex_a = ExerciseSlot.objects.create(session_slot=slot_a, name="Back Squat", order=0)
-    a1 = WeekFactory(mesocycle=meso_a, index=1, is_current=False, delivered_at=now)
-    a2 = WeekFactory(mesocycle=meso_a, index=2, is_current=True, delivered_at=now)
+    a1 = WeekFactory(mesocycle=meso_a, index=1, delivered_at=now)
+    a2 = WeekFactory(mesocycle=meso_a, index=2, delivered_at=now)
     sa1 = day(a1, session_slot=slot_a)
     sa2 = day(a2, session_slot=slot_a)
     make_presc(exercise_slot=ex_a, week=a1, sets="5", reps="5", load="90", rpe="8")
@@ -191,7 +202,7 @@ def seed_two_block(*, coach=None, athlete=None):
         mesocycle=meso_b, day_number=1, name="Bench Day", bias="Push", order=0
     )
     ex_b = ExerciseSlot.objects.create(session_slot=slot_b, name="Bench Press", order=0)
-    b1 = WeekFactory(mesocycle=meso_b, index=1, is_current=False, delivered_at=now)
+    b1 = WeekFactory(mesocycle=meso_b, index=1, delivered_at=now)
     sb1 = day(b1, session_slot=slot_b)
     make_presc(exercise_slot=ex_b, week=b1, sets="3", reps="5", load="80", rpe="8")
 
@@ -304,10 +315,21 @@ class TestAthleteHome:
         body = client.get(HOME).content.decode()
         assert "To do" in body
 
+    # -- no position claim anywhere (docs/meso/remove-current-week-plan.md) --
+
+    def test_no_position_label_rendered(self, client):
+        """The app never tells the athlete which week/position they're on."""
+        s = seed()
+        client.force_login(s.athlete)
+        body = client.get(HOME).content.decode()
+        assert "This week" not in body
+        assert "Week 2" not in body  # s.week is index 2 — no "Week N" claim
+        assert "Your programs" in body  # the neutral heading instead
+
     # -- multi-week block (P3) --------------------------------------------
 
     def test_shows_every_delivered_week_of_the_block(self, client):
-        """The card renders the WHOLE delivered block, not just the latest week.
+        """The card renders the WHOLE delivered block, not just the anchor week.
 
         The read-only multi-week table has a column per delivered week, each
         carrying that week's own prescription summary.
@@ -329,17 +351,42 @@ class TestAthleteHome:
         assert "Wk 3" in body
         assert "4 x 8, RPE 8, 131" in body  # its cell renders live
 
-    def test_home_focuses_the_current_delivered_week(self, client):
-        """The home opens to ``is_current``: only its sessions are tappable rows.
+    def test_home_focuses_the_last_logged_week(self, client):
+        """The home opens on the derived scroll hint.
 
-        Earlier delivered weeks live in the read-only table — their sessions are
-        cells, not links to the logger.
+        Only its sessions are tappable rows — earlier weeks live in the
+        read-only table, their sessions are cells, not links to the logger.
         """
-        b = seed_block()  # week 2 is_current + delivered
+        b = seed_block()  # week 2 has the default logged session (see seed_block)
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
-        assert session_url(b.s2) in body  # current week's session logs
+        assert session_url(b.s2) in body  # the logged week's session logs
         assert session_url(b.s1) not in body  # earlier week is read-only
+
+    def test_home_focuses_the_earliest_week_when_nothing_logged(self, client):
+        """With nothing logged, the scroll hint is the plan's earliest week.
+
+        Never a "current" claim — just where the grid opens.
+        """
+        b = seed_block(logged=False)
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert session_url(b.s1) in body
+        assert session_url(b.s2) not in body
+
+    def test_anchors_on_the_latest_logged_week_when_multiple_are_logged(self, client):
+        """The LATEST (plan order) logged week wins the scroll hint.
+
+        Not the earliest, when the athlete has logged into more than one week.
+        """
+        b = seed_block()  # week 2 is logged by default
+        SessionLogFactory(
+            session=b.s1, athlete=b.athlete, status=SessionLog.Status.DONE
+        )
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert session_url(b.s2) in body  # the later logged week wins
+        assert session_url(b.s1) not in body
 
     def test_skipped_cell_renders_em_dash(self, client):
         """A one-week skip shows an em-dash in its cell, not a prescription."""
@@ -358,31 +405,15 @@ class TestAthleteHome:
         assert "Front Squat" in body  # the substitution sub-line
         assert "Box Squat" in body  # the slot row still labels the row
 
-    def test_multiple_current_weeks_focus_the_first_in_plan_order(self, client):
-        """A stray double ``is_current`` flag anchors deterministically.
+    def test_scroll_hint_follows_the_log_not_delivery_recency(self, client):
+        """A log in an earlier block anchors there even a newer block delivered later.
 
-        Nothing in the schema bars two flagged weeks (the writers all keep a
-        single pointer, but a stray row from admin/import must not make the
-        home non-deterministic): the first flagged week in plan order wins.
-        """
-        b = seed_block()  # w2 is_current
-        # A stray second flag on the earlier week.
-        b.w1.is_current = True
-        b.w1.save(update_fields=["is_current"])
-        client.force_login(b.athlete)
-        body = client.get(HOME).content.decode()
-        assert session_url(b.s1) in body  # first flagged week in plan order
-        assert session_url(b.s2) not in body
-
-    def test_current_pointer_in_an_earlier_block_anchors_that_block(self, client):
-        """A "Make current" back to an earlier block wins over the newest one.
-
-        When the coach moves the (single) ``is_current`` pointer to a week in
-        an earlier block, the individual athlete's home must open to THAT block
-        and week — not the most recently added or delivered one. The newer block is still reachable
-        (issue #456 Finding 1: the chip strip spans the whole plan), just not the
-        anchor — its session is not a tappable log row until the athlete taps
-        into it.
+        The scroll hint (§5) is derived purely from the athlete's own logged
+        sessions — never from which block the coach delivered most recently —
+        so a block the athlete actually trained in wins the anchor even when a
+        brand-new block was delivered afterward. The newer block is still
+        reachable via the chip strip; its session just isn't the tappable log
+        row until the athlete taps into it.
         """
         coach = UserFactory()
         athlete = UserFactory()
@@ -394,7 +425,7 @@ class TestAthleteHome:
         )
         earlier = timezone.now() - timedelta(days=7)
         now = timezone.now()
-        # Block A — delivered earlier, carries the athlete's current week.
+        # Block A — delivered earlier; the athlete actually logged here.
         meso_a = MesocycleFactory(plan=plan, name="Base", order=0)
         slot_a = SessionSlot.objects.create(
             mesocycle=meso_a, day_number=1, name="Squat Day", bias="Quad", order=0
@@ -402,14 +433,13 @@ class TestAthleteHome:
         ex_a = ExerciseSlot.objects.create(
             session_slot=slot_a, name="Back Squat", order=0
         )
-        w_a = WeekFactory(
-            mesocycle=meso_a, index=1, is_current=True, delivered_at=earlier
-        )
+        w_a = WeekFactory(mesocycle=meso_a, index=1, delivered_at=earlier)
         s_a = day(w_a, session_slot=slot_a)
         make_presc(
             exercise_slot=ex_a, week=w_a, sets="5", reps="5", load="100", rpe="8"
         )
-        # Block B — delivered later, no current week.
+        SessionLogFactory(session=s_a, athlete=athlete, status=SessionLog.Status.DONE)
+        # Block B — delivered later; nothing logged here yet.
         meso_b = MesocycleFactory(plan=plan, name="Peak", order=1)
         slot_b = SessionSlot.objects.create(
             mesocycle=meso_b, day_number=1, name="Bench Day", bias="Push", order=0
@@ -417,13 +447,13 @@ class TestAthleteHome:
         ex_b = ExerciseSlot.objects.create(
             session_slot=slot_b, name="Bench Press", order=0
         )
-        w_b = WeekFactory(mesocycle=meso_b, index=1, is_current=False, delivered_at=now)
+        w_b = WeekFactory(mesocycle=meso_b, index=1, delivered_at=now)
         s_b = day(w_b, session_slot=slot_b)
         make_presc(exercise_slot=ex_b, week=w_b, sets="3", reps="5", load="80", rpe="8")
 
         client.force_login(athlete)
         body = client.get(HOME).content.decode()
-        assert "Base" in body  # anchored on block A (the current pointer)
+        assert "Base" in body  # anchored on block A — where the athlete logged
         assert "Back Squat" in body
         assert session_url(s_a) in body  # its week is the tappable log row
         assert "Peak" in body  # the newer block is reachable via the chip strip
@@ -478,18 +508,18 @@ class TestAthleteHome:
     ):
         """A focused week with zero live sessions keeps plan-wide navigation.
 
-        When the focused/current week's sessions are all soft-deleted but the
-        plan still has another delivered week, the card must keep the chip
-        strip and the block grid — hiding them (the old all-or-nothing
+        When the anchored week's sessions are all soft-deleted but the plan
+        still has another delivered week, the card must keep the chip strip
+        and the block grid — hiding them (the old all-or-nothing
         ``{% if plan.sessions %}`` gate) would strand the athlete on the empty
         week with no way to reach the rest of the block.
         """
-        b = seed_block()  # w1 & w2 delivered, w2 is_current
+        b = seed_block()  # w1 & w2 delivered; w2 is the (logged) anchor
         b.s2.deleted_at = timezone.now()
         b.s2.save(update_fields=["deleted_at"])
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
-        assert "No sessions this week." in body
+        assert "No sessions here yet." in body
         assert "Nothing delivered yet" not in body
         # The chip strip (2 delivered weeks) survives — week 1 is reachable.
         assert f"?week={b.w1.pk}" in body
@@ -513,7 +543,7 @@ class TestAthleteHome:
         assert "Nothing here yet — your coach is still building this program." in body
 
 
-# -- issue #456: ?week= display-only focus override + the chip/nudge UI ---
+# -- ?week= display-only override + the chip UI ----------------------------
 
 
 def log_url(session):
@@ -531,41 +561,36 @@ def post_log(client, session, payload):
 class TestWeekFocusOverride:
     """``?week=<id>`` opens a card onto a different delivered week — display only.
 
-    Never moves ``is_current``: that pointer only ever advances via the
-    athlete's own logging (auto-advance, #456) or the coach's "Make current".
+    It never writes anything — there's no pointer left to move (docs/meso/
+    remove-current-week-plan.md): the scroll hint is re-derived on every read
+    from the athlete's own logged sessions, and the override simply wins over
+    it for that one request.
     """
 
-    def test_valid_later_week_switches_focus_without_moving_is_current(self, client):
-        b = seed_block(third_delivered=True)  # w2 is_current; w1 & w3 delivered too
+    def test_valid_later_week_switches_focus(self, client):
+        b = seed_block(third_delivered=True)  # w2 is the default anchor
         client.force_login(b.athlete)
         resp = client.get(HOME, {"week": b.w3.pk})
         assert resp.status_code == 200
         body = resp.content.decode()
         assert session_url(b.s3) in body  # focus switched to week 3
         assert session_url(b.s2) not in body
-        b.w2.refresh_from_db()
-        b.w3.refresh_from_db()
-        assert b.w2.is_current is True  # the GET never moved the pointer
-        assert b.w3.is_current is False
-        assert Week.objects.filter(mesocycle__plan=b.plan, is_current=True).count() == 1
 
     def test_valid_earlier_week_switches_focus_too(self, client):
-        b = seed_block(third_delivered=True)  # w2 is_current; w1 is earlier
+        b = seed_block(third_delivered=True)  # w2 is the default anchor
         client.force_login(b.athlete)
         resp = client.get(HOME, {"week": b.w1.pk})
         assert resp.status_code == 200
         body = resp.content.decode()
         assert session_url(b.s1) in body
         assert session_url(b.s2) not in body
-        b.w2.refresh_from_db()
-        assert b.w2.is_current is True  # review direction is still a no-op on write
 
     def test_nonexistent_week_id_is_ignored(self, client):
         b = seed_block()
         client.force_login(b.athlete)
         resp = client.get(HOME, {"week": 999999})
         assert resp.status_code == 200
-        assert session_url(b.s2) in resp.content.decode()  # bare default focus
+        assert session_url(b.s2) in resp.content.decode()  # bare default anchor
 
     def test_non_numeric_week_param_is_ignored(self, client):
         b = seed_block()
@@ -613,30 +638,24 @@ class TestWeekFocusOverride:
         body = client.get(HOME, {"week": a.w3.pk}).content.decode()
         assert session_url(a.s3) in body  # plan A switched to week 3
         assert session_url(a.s2) not in body
-        assert session_url(b.s2) in body  # plan B is untouched — still its own current
+        assert session_url(b.s2) in body  # plan B is untouched — still its own anchor
         assert session_url(b.s3) not in body
 
 
 class TestWeekChips:
     """The tappable chip row above the session list — the universal navigation path."""
 
-    def test_rendered_with_current_and_focused_marked(self, client):
-        b = seed_block()  # w1, w2 delivered; w2 is_current + focus
+    def test_every_chip_links_with_the_week_param(self, client):
+        b = seed_block()  # w1, w2 delivered; w2 is the (logged) anchor
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
         assert "Wk 1" in body
         assert "Wk 2" in body
-        assert f"?week={b.w1.pk}" in body  # the non-current chip carries the param
-        assert f"?week={b.w2.pk}" not in body  # the current chip links to the bare URL
-
-    def test_focused_week_distinguished_from_current(self, client):
-        b = seed_block(third_delivered=True)  # w2 current; view w1 instead
-        client.force_login(b.athlete)
-        body = client.get(HOME, {"week": b.w1.pk}).content.decode()
-        # The current week's chip still points at the bare URL...
-        assert f"?week={b.w2.pk}" not in body
-        # ...while the now-focused week's chip links back to itself.
+        # Every chip — including the anchored one — is a plain ?week= link; the
+        # app has no "current" week to give a special bare-URL chip to
+        # (docs/meso/remove-current-week-plan.md).
         assert f"?week={b.w1.pk}" in body
+        assert f"?week={b.w2.pk}" in body
 
     def test_not_rendered_for_a_single_delivered_week(self, client):
         s = seed()  # only one delivered week
@@ -665,77 +684,19 @@ class TestWeekChips:
         b = seed_block()
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
-        assert "tappable path onto any delivered" not in body
+        assert "tappable path onto any live" not in body
         assert "#}" not in body
 
 
-class TestStartNextWeekNudge:
-    """The "start next week" link appears only once the focus week is fully logged."""
-
-    def test_absent_when_not_all_focus_sessions_done(self, client):
-        b = seed_block(third_delivered=True)  # w2 focus, nothing logged
-        client.force_login(b.athlete)
-        body = client.get(HOME).content.decode()
-        assert "start Week" not in body
-
-    def test_absent_when_focus_is_the_last_week(self, client):
-        b = seed_block()  # w2 is focus; drop w3 so w2 is the plan's last week
-        b.w3.deleted_at = timezone.now()
-        b.w3.save(update_fields=["deleted_at"])
-        SessionLogFactory(
-            session=b.s2, athlete=b.athlete, status=SessionLog.Status.DONE
-        )
-        client.force_login(b.athlete)
-        body = client.get(HOME).content.decode()
-        assert "start Week" not in body
-
-    def test_appears_when_focus_done_and_a_later_week_exists(self, client):
-        b = seed_block(third_delivered=True)  # w2 focus; w3 delivered + later
-        SessionLogFactory(
-            session=b.s2, athlete=b.athlete, status=SessionLog.Status.DONE
-        )
-        client.force_login(b.athlete)
-        body = client.get(HOME).content.decode()
-        assert "start Week 3" in body
-        assert f"?week={b.w3.pk}" in body
-
-
-class TestWeekFocusIntegrationLoop:
-    """Tap a later week's chip, log a session there, and auto-advance closes the loop."""
-
-    def test_visiting_via_week_param_then_logging_advances_is_current(self, client):
-        b = seed_block(third_delivered=True)  # w2 is_current; w3 later, delivered
-        client.force_login(b.athlete)
-
-        # The athlete taps the Wk 3 chip...
-        body = client.get(HOME, {"week": b.w3.pk}).content.decode()
-        assert session_url(b.s3) in body
-
-        # ...and logs its session (already-shipped auto-advance, #456).
-        resp = post_log(client, b.s3, {"sets": []})
-        assert resp.status_code == 200
-
-        b.w2.refresh_from_db()
-        b.w3.refresh_from_db()
-        assert b.w3.is_current is True
-        assert b.w2.is_current is False
-        assert Week.objects.filter(mesocycle__plan=b.plan, is_current=True).count() == 1
-
-        # Their next bare visit naturally focuses week 3.
-        body = client.get(HOME).content.decode()
-        assert session_url(b.s3) in body
-        assert session_url(b.s2) not in body
-
-
 # -- issue #456 Finding 1: navigation spans the whole PLAN, not just the ----
-# -- anchored block (a newly delivered block never moves is_current) -------
+# -- anchored block ----------------------------------------------------------
 
 
 class TestPlanWideChips:
     """The chip strip spans every delivered week of the plan, grouped by block."""
 
     def test_chips_span_both_blocks_with_block_labels(self, client):
-        b = seed_two_block()  # a2 (block A) is_current; block B has one more
+        b = seed_two_block()
         client.force_login(b.athlete)
         body = client.get(HOME).content.decode()
         assert "Base" in body
@@ -757,56 +718,6 @@ class TestPlanWideChips:
         assert session_url(b.sa2) not in body
         assert "Bench Press" in body  # block B's grid
         assert "Back Squat" not in body  # block A's grid is not also shown
-        # The GET never moved the pointer.
-        b.a2.refresh_from_db()
-        b.b1.refresh_from_db()
-        assert b.a2.is_current is True
-        assert b.b1.is_current is False
-        assert Week.objects.filter(mesocycle__plan=b.plan, is_current=True).count() == 1
-
-
-class TestPlanWideNudge:
-    """The "start next week" nudge crosses block boundaries too."""
-
-    def test_nudge_crosses_into_the_next_delivered_block(self, client):
-        b = seed_two_block()  # a2 = last delivered week of block A, is_current
-        SessionLogFactory(
-            session=b.sa2, athlete=b.athlete, status=SessionLog.Status.DONE
-        )
-        client.force_login(b.athlete)
-        body = client.get(HOME).content.decode()
-        assert "start Peak · Week 1" in body  # block-aware copy
-        assert f"?week={b.b1.pk}" in body
-
-
-class TestPlanWideIntegrationLoop:
-    """Tapping into a later BLOCK, logging there, and auto-advance crossing it."""
-
-    def test_full_http_loop_logs_into_block_two_and_advances_across_blocks(
-        self, client
-    ):
-        b = seed_two_block()
-        client.force_login(b.athlete)
-
-        # The athlete taps into block B via the override...
-        body = client.get(HOME, {"week": b.b1.pk}).content.decode()
-        assert session_url(b.sb1) in body
-
-        # ...and logs its session — auto-advance follows them across the block.
-        resp = post_log(client, b.sb1, {"sets": []})
-        assert resp.status_code == 200
-
-        b.a2.refresh_from_db()
-        b.b1.refresh_from_db()
-        assert b.b1.is_current is True
-        assert b.a2.is_current is False
-        assert Week.objects.filter(mesocycle__plan=b.plan, is_current=True).count() == 1
-
-        # Their next bare visit naturally focuses block B.
-        body = client.get(HOME).content.decode()
-        assert session_url(b.sb1) in body
-        assert session_url(b.sa2) not in body
-        assert "Peak" in body
 
 
 # -- athlete session detail ------------------------------------------------
@@ -930,7 +841,7 @@ class TestSoftDeletedRowsHidden:
         client.force_login(s.athlete)
         body = client.get(HOME).content.decode()
         assert session_url(s.session) not in body
-        assert "No sessions this week." in body
+        assert "No sessions here yet." in body
 
     def test_session_page_404s_when_session_soft_deleted(self, client):
         s = seed()

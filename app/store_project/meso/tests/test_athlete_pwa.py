@@ -54,9 +54,7 @@ def seed(*, athlete=None, coach=None):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(
-        mesocycle=meso, index=2, is_current=True, delivered_at=timezone.now()
-    )
+    week = WeekFactory(mesocycle=meso, index=2, delivered_at=timezone.now())
     session = day(week, day_number=1, name="Lower", bias="Quad")
     cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return athlete, coach, session, cell

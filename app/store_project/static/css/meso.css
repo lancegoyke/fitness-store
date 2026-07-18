@@ -51,6 +51,12 @@ body.meso {
   --warn: #b4541f;
   --warn-soft: #fbefe8;
   --ok: #2f8f56;
+  /* Cadence signal's "stale" band (issue #482 — the recency pill replacing
+     the current-week compliance meter): a third, more urgent tone than
+     --warn so a lapsed athlete (>=10d) reads as a clear escalation, not the
+     same amber as "a few days behind." */
+  --danger: #b23434;
+  --danger-soft: #fbeaea;
   /* shared dark site nav (PR 3) — same values as base.css :root */
   --nav-bg: #0a0a0a;
   --nav-fg: #ededed;
@@ -570,6 +576,11 @@ button.meso-card:hover {
   color: var(--dim);
   background: var(--rail);
   border: 1px solid var(--line);
+}
+.meso-badge--danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, #fff);
 }
 .meso-tag {
   display: inline-flex;

@@ -79,7 +79,7 @@ def seed_session(n=3, coach=None, athlete=None):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower", order=0)
     cells = [presc(session, name=f"Exercise {i}", order=i) for i in range(n)]
     return plan, week, session, cells
@@ -94,7 +94,7 @@ def seed_week_with_sessions(n=3, coach=None, athlete=None):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     sessions = [
         day(week, day_number=i + 1, name=f"Day {i + 1}", order=i) for i in range(n)
     ]

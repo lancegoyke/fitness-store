@@ -1,18 +1,21 @@
-"""Multi-week designer — add weeks, view any week, set the deliver target.
+"""Multi-week designer — add weeks, view any week.
 
 Until now a plan was effectively single-week: ``Plan.scaffold`` materialized one
-``Week`` (``is_current``) and the only growth verb was ``session_add`` (a day in
-*that* week). A coach could not build a multi-week mesocycle, review an earlier
-week, or aim delivery at a week other than the scaffold's first. This slice closes
-that long-deferred gap:
+``Week`` and the only growth verb was ``session_add`` (a day in *that* week). A
+coach could not build a multi-week mesocycle or review an earlier week. This
+slice closes that long-deferred gap:
 
 - ``Mesocycle.append_week`` — materialize the next week, copying the latest week's
   session/prescription structure (a real progression starting point, not a blank).
 - ``GET  /meso/api/plan/<id>/week/<week_id>/``          — view/edit any week (read).
 - ``POST /meso/api/plan/<id>/week/``                    — add the next week (write).
-- ``POST /meso/api/plan/<id>/week/<week_id>/current/``  — set the deliver target.
 - ``serialize_week`` gains ``id``/``index``; ``serialize_plan`` gains ``viewing``
   (the open week's id) so the client tracks which week's grid it is showing.
+
+(The former ``POST .../week/<id>/current/`` "set the deliver target" endpoint —
+the coach's manual "Make current" — was removed along with ``Week.is_current``
+itself; see docs/meso/remove-current-week-plan.md. Programs are date-less and
+every live week is simply deliverable.)
 """
 
 import json
@@ -87,7 +90,6 @@ class TestAppendWeek:
         new_week = meso.append_week()
 
         assert new_week.index == 2
-        assert new_week.is_current is False
         assert new_week.delivered_at is None
         # Meta carried forward as a starting point.
         assert new_week.phase == "Accum"
@@ -109,14 +111,14 @@ class TestAppendWeek:
         assert copied.text == "3 x 5, 100%"
         assert copied.tags == ["main"]
 
-    def test_new_week_is_not_current_or_delivered(self):
+    def test_new_week_is_not_delivered(self):
         link = CoachAthleteFactory()
         plan = link.create_plan()
         meso = plan.mesocycles.get()
         meso.append_week()
-        # The scaffold's first week stays the live one; the new week is a draft.
-        assert meso.weeks.filter(is_current=True).count() == 1
-        assert meso.weeks.get(index=1).is_current is True
+        # The new week is live immediately (no pointer to move) but starts
+        # undelivered — delivery is a separate, explicit nudge.
+        assert meso.weeks.count() == 2
         assert meso.weeks.filter(delivered_at__isnull=False).count() == 0
 
     def test_grows_week_count_to_track_materialized_weeks(self):
@@ -280,15 +282,6 @@ class TestWeekViewEndpoint:
         assert len(body["program"]) == 2
         assert len(body["weeks"]) == 2
 
-    def test_view_does_not_change_the_current_week(self, client):
-        link, plan, week1, week2 = self._two_week_plan()
-        client.force_login(link.coach)
-        client.get(self._url(plan, week2))
-        week1.refresh_from_db()
-        week2.refresh_from_db()
-        assert week1.is_current is True
-        assert week2.is_current is False
-
     def test_over_limit_coach_can_still_view(self, client):
         # Read access is not billing-gated: a suspended coach keeps read access.
         coach = UserFactory()
@@ -322,81 +315,8 @@ class TestWeekViewEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# POST /meso/api/plan/<id>/week/<week_id>/current/  — set the deliver target
-# ---------------------------------------------------------------------------
-
-
-class TestWeekSetCurrentEndpoint:
-    def _url(self, plan, week):
-        return reverse(
-            "meso:api_week_set_current",
-            kwargs={"plan_id": plan.pk, "week_id": week.pk},
-        )
-
-    def _two_week_plan(self):
-        link = CoachAthleteFactory()
-        plan = link.create_plan()
-        meso = plan.mesocycles.get()
-        return link, plan, meso.weeks.get(index=1), meso.append_week()
-
-    def test_sets_target_current_and_clears_siblings(self, client):
-        link, plan, week1, week2 = self._two_week_plan()
-        assert week1.is_current is True
-        client.force_login(link.coach)
-        resp = client.post(self._url(plan, week2))
-        assert resp.status_code == 200
-        week1.refresh_from_db()
-        week2.refresh_from_db()
-        assert week2.is_current is True
-        assert week1.is_current is False
-        body = resp.json()
-        assert body["viewing"] == week2.pk
-        # The strip flags exactly the new current week.
-        current = [w for w in body["weeks"] if w["current"]]
-        assert [w["id"] for w in current] == [week2.pk]
-
-    def test_bumps_plan_modified(self, client):
-        link, plan, week1, week2 = self._two_week_plan()
-        before = plan.modified
-        client.force_login(link.coach)
-        client.post(self._url(plan, week2))
-        plan.refresh_from_db()
-        assert plan.modified > before
-
-    def test_over_limit_suspended_plan_is_402(self, client):
-        coach = UserFactory()
-        _aged_link(coach, days_ago=30)
-        suspended = _aged_link(coach, days_ago=1)
-        plan = suspended.create_plan()
-        meso = plan.mesocycles.get()
-        week2 = meso.append_week()
-        client.force_login(coach)
-        resp = client.post(self._url(plan, week2))
-        assert resp.status_code == 402
-        week2.refresh_from_db()
-        assert week2.is_current is False
-
-    def test_foreign_coach_forbidden(self, client):
-        link, plan, week1, week2 = self._two_week_plan()
-        client.force_login(UserFactory())
-        assert client.post(self._url(plan, week2)).status_code in (403, 404)
-
-    def test_404_for_a_week_in_another_plan(self, client):
-        link = CoachAthleteFactory()
-        plan = link.create_plan()
-        other_week = WeekFactory()
-        client.force_login(link.coach)
-        assert client.post(self._url(plan, other_week)).status_code == 404
-
-    def test_rejects_get(self, client):
-        link, plan, week1, week2 = self._two_week_plan()
-        client.force_login(link.coach)
-        assert client.get(self._url(plan, week2)).status_code == 405
-
-
-# ---------------------------------------------------------------------------
 # session_add is week-scoped — "+ Add day" lands on the *viewed* week, not the
-# live one (regression: the switcher can open a non-current week)
+# default one (regression: the switcher can open a non-default week)
 # ---------------------------------------------------------------------------
 
 
@@ -411,7 +331,7 @@ class TestSessionAddWeekScoping:
         return link, plan, meso.weeks.get(index=1), meso.append_week()
 
     def test_adds_the_day_to_the_posted_week(self, client):
-        link, plan, week1, week2 = self._two_week_plan()  # week1 is current
+        link, plan, week1, week2 = self._two_week_plan()  # week1 is earliest
         client.force_login(link.coach)
         resp = client.post(
             self._url(plan),
@@ -420,13 +340,13 @@ class TestSessionAddWeekScoping:
         )
         assert resp.status_code == 201
         new_session = Session.objects.get(pk=resp.json()["session"]["id"])
-        # The day lands on the viewed (non-current) week, not the live one.
+        # The day lands on the viewed week, not the default one.
         assert new_session.week_id == week2.pk
 
-    def test_defaults_to_the_current_week_without_a_week_id(self, client):
+    def test_defaults_to_the_earliest_week_without_a_week_id(self, client):
         link, plan, week1, week2 = self._two_week_plan()
         client.force_login(link.coach)
-        resp = client.post(self._url(plan))  # no body → live week
+        resp = client.post(self._url(plan))  # no body → earliest live week
         assert resp.status_code == 201
         new_session = Session.objects.get(pk=resp.json()["session"]["id"])
         assert new_session.week_id == week1.pk

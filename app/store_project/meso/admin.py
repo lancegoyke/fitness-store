@@ -212,10 +212,9 @@ class WeekAdmin(admin.ModelAdmin):
         "volume",
         "intensity",
         "is_deload",
-        "is_current",
         "delivered_at",
     )
-    list_filter = ("is_deload", "is_current")
+    list_filter = ("is_deload",)
     raw_id_fields = ("mesocycle",)
     inlines = (SessionInline, PrescriptionInline, WeekDeliveryInline)
 

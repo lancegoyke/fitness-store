@@ -3,10 +3,10 @@
 ``serialize_mesocycle_grid`` (``test_serializers.py``) builds the dense
 day × row × week shape; this endpoint exposes it read-only, scoped by
 ownership only (mirrors ``week_view`` — not billing-gated, since viewing never
-mutates anything). It defaults to the plan's current mesocycle (the block its
-current week belongs to) and accepts ``?mesocycle=<id>`` to view another block
-in the same plan. The designer view also hydrates the same payload into the
-page (``grid_data``) for the initial page load.
+mutates anything). It defaults to the plan's earliest-live-week mesocycle (the
+block that week belongs to) and accepts ``?mesocycle=<id>`` to view another
+block in the same plan. The designer view also hydrates the same payload into
+the page (``grid_data``) for the initial page load.
 """
 
 import pytest
@@ -112,7 +112,7 @@ class TestMesocycleGridEndpoint:
         plan = link.create_plan()
         first_meso = plan.mesocycles.get()
         second_meso = MesocycleFactory(plan=plan, name="Block 2", order=1)
-        week = WeekFactory(mesocycle=second_meso, index=1, is_current=False)
+        week = WeekFactory(mesocycle=second_meso, index=1)
         session = day(week, day_number=1, name="Only day")
         presc(session, name="Only row")
         client.force_login(link.coach)
@@ -141,19 +141,23 @@ class TestMesocycleGridEndpoint:
         resp = client.get(self._url(plan) + "?mesocycle=not-an-int")
         assert resp.status_code == 400
 
-    def test_defaults_to_the_current_weeks_mesocycle(self, client):
+    def test_defaults_to_the_earliest_live_weeks_mesocycle(self, client):
+        """No ``?mesocycle=`` defaults to the plan's earliest live week's block.
+
+        There used to be a per-plan "current" flag a coach could set on any
+        week to override plain ordering; that pointer is gone (see
+        ``docs/meso/remove-current-week-plan.md``) — the default is now purely
+        the earliest ``(mesocycle.order, index)`` live week's block, so a
+        later block never wins by default.
+        """
         link = CoachAthleteFactory()
         plan = link.create_plan()
         first_meso = plan.mesocycles.get()
         second_meso = MesocycleFactory(plan=plan, name="Block 2", order=1)
-        week2 = WeekFactory(mesocycle=second_meso, index=1, is_current=True)
-        # Only one week can be current plan-wide.
-        first_meso.weeks.update(is_current=False)
-        week2.is_current = True
-        week2.save(update_fields=["is_current"])
+        WeekFactory(mesocycle=second_meso, index=1)
         client.force_login(link.coach)
         resp = client.get(self._url(plan))
-        assert resp.json()["mesocycle"]["id"] == second_meso.pk
+        assert resp.json()["mesocycle"]["id"] == first_meso.pk
 
     def test_no_mesocycle_at_all_is_404(self, client):
         rel = CoachAthleteFactory()

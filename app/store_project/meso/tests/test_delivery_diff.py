@@ -289,7 +289,7 @@ def seed_plan(coach=None, athlete=None, load="111"):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     presc = presc_(session, name="Box Squat", sets="4", reps="6", load=load, rpe="7")
     return plan, week, session, presc
@@ -317,7 +317,7 @@ class TestDeliverScreenChanges:
 
     def test_screen_reports_block_shape(self):
         plan, week1, _, _ = seed_plan()
-        WeekFactory(mesocycle=plan.mesocycles.first(), index=2, is_current=False)
+        WeekFactory(mesocycle=plan.mesocycles.first(), index=2)
         deliver = presenters.deliver_screen(plan)["deliver"]
         assert deliver["week_count"] == 2
         assert deliver["block_name"] == "Hypertrophy"
@@ -379,7 +379,7 @@ class TestDeliverScreenChanges:
         # snapshot — an edit on the built-ahead week surfaces on that week only.
         plan, week1, _, _ = seed_plan()
         meso = plan.mesocycles.first()
-        week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
+        week2 = WeekFactory(mesocycle=meso, index=2)
         session2 = day(week2, day_number=2, name="Upper")
         presc2 = presc_(session2, name="Bench", sets="3", reps="5", load="80")
         record_delivery(week2)
@@ -407,7 +407,7 @@ class TestDeliverScreenChanges:
         # non-target week the athlete has no new work in.
         plan, week1, session1, _ = seed_plan()
         meso = plan.mesocycles.first()
-        week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
+        week2 = WeekFactory(mesocycle=meso, index=2)
         day(week2, session_slot=session1.session_slot)
         record_delivery(week1)
         record_delivery(week2)
@@ -456,7 +456,7 @@ class TestDeliverScreenRendersDiff:
         # Two delivered weeks, each edited → each gets its own "Wk N" section.
         plan, week1, _, presc1 = seed_plan(load="111")
         meso = plan.mesocycles.first()
-        week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
+        week2 = WeekFactory(mesocycle=meso, index=2)
         session2 = day(week2, day_number=2, name="Upper")
         presc2 = presc_(session2, name="Bench", sets="3", reps="5", load="80")
         record_delivery(week1)
@@ -506,7 +506,7 @@ class TestDeliverScreenRendersDiff:
         # "No changes".
         plan, week1, session1, _ = seed_plan()
         meso = plan.mesocycles.first()
-        week2 = WeekFactory(mesocycle=meso, index=2, is_current=False)
+        week2 = WeekFactory(mesocycle=meso, index=2)
         day(week2, session_slot=session1.session_slot)
         record_delivery(week1)
         record_delivery(week2)

@@ -42,7 +42,7 @@ def seed_plan(coach=None, athlete=None):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return plan, session, cell
@@ -291,7 +291,7 @@ class TestNamePatch:
         # The rename lands on the slot, so a sibling week's cell (same row)
         # resolves to the new name too — no per-week identity remains.
         plan, _, cell = seed_plan()
-        week2 = WeekFactory(mesocycle=cell.week.mesocycle, index=2, is_current=False)
+        week2 = WeekFactory(mesocycle=cell.week.mesocycle, index=2)
         sibling = presc(exercise_slot=cell.exercise_slot, week=week2, text="4 x 6")
         client.force_login(plan.relationship.coach)
 

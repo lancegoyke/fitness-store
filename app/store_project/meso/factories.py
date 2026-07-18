@@ -103,7 +103,6 @@ try:
         volume = 70
         intensity = 65
         is_deload = False
-        is_current = False
 
     class SessionSlotFactory(DjangoModelFactory):
         """The fixed DAY definition (P0 fixed-lineup cutover)."""

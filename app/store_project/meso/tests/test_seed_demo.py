@@ -8,11 +8,13 @@ client-side fixtures). These tests cover the command's contract:
   contraindications), an active link each, and full programs for three of
   them (Maya / Devon / Priya — Marcus and Lena stay plan-less);
 - Maya's sample plan round-trips through ``serialize_plan`` to the designer's
-  expected shape (3 sessions in the current week, a 4-week strip, a 4-block
-  macrocycle with done/current/next/future states) — her Hypertrophy block's
-  current week (index 2) is preserved verbatim (the original fixture grid);
-- Devon's and Priya's plans are each fully built (every block, every week)
-  with exactly one current week and a logged multi-week history before it;
+  expected shape (3 sessions in a week, a 4-week strip, a 4-block macrocycle
+  with done/current/next/future states) — her Hypertrophy block's
+  logged-through week (index 2) is preserved verbatim (the original fixture
+  grid);
+- Devon's and Priya's plans are each fully built (every block, every week),
+  every live week delivered (2d: delivery no longer gates visibility), with a
+  logged multi-week history before a seed-data-only "logged-through" cutoff;
 - it is idempotent (re-running never duplicates); and
 - ``--delete`` tears the demo back down without touching the coach.
 """
@@ -59,6 +61,21 @@ def seed(**options):
 def _plan_for(coach, athlete_email):
     """The one plan ``seed_meso_demo`` built for this athlete (of the coach's 3)."""
     return Plan.objects.for_coach(coach).get(relationship__athlete__email=athlete_email)
+
+
+def _maya_logged_through_week(plan):
+    """Maya's Hypertrophy-block logged-through week (index 2).
+
+    The hand-authored fixture the round-trip tests pin exact cell text
+    against. ``current_week(plan)`` (called by ``serialize_plan(plan)`` with
+    no explicit ``week``) now defaults to the plan's EARLIEST live week
+    overall — Base/GPP week 1, a different block entirely (docs/meso/remove-
+    current-week-plan.md) — so callers that care about the Hypertrophy
+    fixture specifically must pass this week in explicitly rather than
+    relying on the bare default.
+    """
+    hypertrophy = plan.mesocycles.get(name="Hypertrophy")
+    return hypertrophy.weeks.get(index=2)
 
 
 class TestSeedCreatesDemo:
@@ -182,23 +199,24 @@ class TestSeedCreatesDemo:
         assert plan.mesocycles.count() == 4
         hypertrophy = plan.mesocycles.get(name="Hypertrophy")
         assert hypertrophy.weeks.count() == 4
-        current = hypertrophy.weeks.get(is_current=True)
-        assert current.index == 2
+        # The demo's logged-through week (a seed-data-only marker, not a
+        # materialized field — see seed_meso_demo.py's ``logged_through_index``).
+        logged_through = hypertrophy.weeks.get(index=2)
         assert hypertrophy.weeks.get(is_deload=True).index == 4
         # The fixed lineup is DENSE across the whole block (P0 invariant: every
         # slot × live-week has a line-0 cell) — every week materializes the same
         # 3 days, so no live week is a half-built shell.
-        assert current.sessions.count() == 3
-        expected_cells = current.cells.filter(line=0).count()
+        assert logged_through.sessions.count() == 3
+        expected_cells = logged_through.cells.filter(line=0).count()
         assert expected_cells == 15  # 3 days × 5 rows
         assert Session.objects.filter(week__mesocycle=hypertrophy).count() == 12
         for week in hypertrophy.weeks.all():
             assert week.sessions.count() == 3
             assert week.cells.filter(line=0).count() == expected_cells
-        # The current week's one freeform sub-line: the Hanging Knee Raise
-        # substitution typed as text (§2.6), not a swap field.
+        # The logged-through week's one freeform sub-line: the Hanging Knee
+        # Raise substitution typed as text (§2.6), not a swap field.
         assert list(
-            current.cells.filter(line__gte=1).values_list("text", flat=True)
+            logged_through.cells.filter(line__gte=1).values_list("text", flat=True)
         ) == ["Cable Crunch"]
 
 
@@ -206,10 +224,11 @@ class TestSamplePlanRoundTrips:
     def test_serializes_to_designer_shape(self):
         seed()
         plan = _plan_for(User.objects.get(email=COACH_EMAIL), MAYA_EMAIL)
-        data = serialize_plan(plan)
+        week = _maya_logged_through_week(plan)
+        data = serialize_plan(plan, week=week)
 
         assert data["plan"]["title"] == "Hypertrophy Block"
-        assert len(data["program"]) == 3  # 3 sessions in the current week
+        assert len(data["program"]) == 3  # 3 sessions in this week
         assert [s["name"] for s in data["program"]] == ["Lower", "Upper", "Posterior"]
         assert len(data["weeks"]) == 4  # the mesocycle's week strip
         assert [p["state"] for p in data["phases"]] == [
@@ -222,7 +241,8 @@ class TestSamplePlanRoundTrips:
     def test_knee_safe_tag_round_trips(self):
         seed()
         plan = _plan_for(User.objects.get(email=COACH_EMAIL), MAYA_EMAIL)
-        data = serialize_plan(plan)
+        week = _maya_logged_through_week(plan)
+        data = serialize_plan(plan, week=week)
         lower = next(s for s in data["program"] if s["name"] == "Lower")
         box_squat = lower["exercises"][0]
         assert box_squat["name"] == "Box Squat (to parallel)"
@@ -234,7 +254,8 @@ class TestSamplePlanRoundTrips:
         seed()
         seed()  # reseed must not spawn a second %1RM row
         plan = _plan_for(User.objects.get(email=COACH_EMAIL), MAYA_EMAIL)
-        data = serialize_plan(plan)
+        week = _maya_logged_through_week(plan)
+        data = serialize_plan(plan, week=week)
         lower = next(s for s in data["program"] if s["name"] == "Lower")
         box_squat = lower["exercises"][0]
         assert parse_prescription(box_squat["text"])["load"] == "72%"
@@ -289,7 +310,12 @@ class TestSeedLogsASession:
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
         plan = _plan_for(coach, MAYA_EMAIL)
-        lower = next(s for s in serialize_plan(plan)["program"] if s["name"] == "Lower")
+        week = _maya_logged_through_week(plan)
+        lower = next(
+            s
+            for s in serialize_plan(plan, week=week)["program"]
+            if s["name"] == "Lower"
+        )
         box_squat = lower["exercises"][0]
         assert box_squat["last"] == "4×6 · 70kg · RPE8.5"
 
@@ -301,7 +327,12 @@ class TestSeedLogsASession:
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
         plan = _plan_for(coach, MAYA_EMAIL)
-        lower = next(s for s in serialize_plan(plan)["program"] if s["name"] == "Lower")
+        week = _maya_logged_through_week(plan)
+        lower = next(
+            s
+            for s in serialize_plan(plan, week=week)["program"]
+            if s["name"] == "Lower"
+        )
         assert lower["exercises"][0]["one_rm"] == "84"
 
     def test_reseed_does_not_duplicate_the_log(self):
@@ -317,9 +348,13 @@ class TestDevonAndPriyaPrograms:
     """Devon and Priya each get a full program too (parity with Maya's).
 
     Every block (Base/GPP → Hypertrophy → Strength → Peak/Test) is built with
-    a fixed lineup and real per-week prescription text in every week; exactly
-    one week is ``is_current``; every week strictly before it is delivered and
-    logged (a real multi-week history), and nothing after it is.
+    a fixed lineup and real per-week prescription text in every week. 2d:
+    delivery no longer gates visibility, so every live week is simply
+    delivered — there's no "future, undelivered" state left to model. A
+    logged-through cutoff still exists purely as seed-data bookkeeping (see
+    seed_meso_demo.py's ``logged_through_index``, never a materialized
+    field): every week strictly before it gets a real multi-week logged
+    history; nothing at or after it is logged.
     """
 
     @pytest.mark.parametrize(
@@ -346,17 +381,22 @@ class TestDevonAndPriyaPrograms:
     @pytest.mark.parametrize(
         "email", [DEVON_EMAIL, PRIYA_EMAIL], ids=["devon", "priya"]
     )
-    def test_plan_has_exactly_one_current_week(self, email):
+    def test_every_live_week_is_delivered(self, email):
+        # 2d + the seed decision (docs/meso/remove-current-week-plan.md §6):
+        # delivery no longer gates visibility, so there's no "future,
+        # undelivered" distinction left to model — the seed simply delivers
+        # every live week.
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
         plan = _plan_for(coach, email)
-        current_weeks = Week.objects.filter(mesocycle__plan=plan, is_current=True)
-        assert current_weeks.count() == 1
+        weeks = Week.objects.filter(mesocycle__plan=plan)
+        assert weeks.exists()
+        assert all(w.delivered_at is not None for w in weeks)
 
     @pytest.mark.parametrize(
         "email", [DEVON_EMAIL, PRIYA_EMAIL], ids=["devon", "priya"]
     )
-    def test_weeks_before_current_are_delivered_and_logged(self, email):
+    def test_weeks_before_the_logged_through_cutoff_have_a_real_history(self, email):
         seed()
         coach = User.objects.get(email=COACH_EMAIL)
         athlete = User.objects.get(email=email)
@@ -366,24 +406,27 @@ class TestDevonAndPriyaPrograms:
             .select_related("mesocycle")
             .order_by("mesocycle__order", "index")
         )
-        current = next(w for w in weeks if w.is_current)
-        current_key = (current.mesocycle.order, current.index)
-        before = [w for w in weeks if (w.mesocycle.order, w.index) < current_key]
-        after = [w for w in weeks if (w.mesocycle.order, w.index) > current_key]
-        assert before  # meaningful history exists
-        assert after  # a future, unbuilt-looking tail exists too
-        for week in before:
-            assert week.delivered_at is not None
-        earliest = before[0]
-        logs = SessionLog.objects.filter(
-            session__week=earliest, athlete=athlete, status=SessionLog.Status.DONE
-        )
-        assert logs.exists()
-        assert LoggedSet.objects.filter(session_log__in=logs).count() > 0
-        # The current week is delivered too, but nothing after it is.
-        assert current.delivered_at is not None
-        for week in after:
-            assert week.delivered_at is None
+        logged_flags = [
+            SessionLog.objects.filter(
+                session__week=w, athlete=athlete, status=SessionLog.Status.DONE
+            ).exists()
+            for w in weeks
+        ]
+        assert any(logged_flags)  # meaningful history exists
+        assert not all(logged_flags)  # a future, unlogged tail exists too
+        # Logging is contiguous from the start of the plan (the seed's
+        # ``logged_through_index`` cutoff, a plain seed-data marker — see
+        # seed_meso_demo.py's ``_log_plan_history`` — never a materialized
+        # field): every logged week precedes every unlogged one.
+        last_logged = max(i for i, logged in enumerate(logged_flags) if logged)
+        assert all(logged_flags[: last_logged + 1])
+        assert not any(logged_flags[last_logged + 1 :])
+        for week in weeks[: last_logged + 1]:
+            logs = SessionLog.objects.filter(
+                session__week=week, athlete=athlete, status=SessionLog.Status.DONE
+            )
+            assert LoggedSet.objects.filter(session_log__in=logs).count() > 0
+        for week in weeks[last_logged + 1 :]:
             assert not SessionLog.objects.filter(
                 session__week=week, athlete=athlete
             ).exists()

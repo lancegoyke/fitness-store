@@ -18,12 +18,14 @@ Covers, per ``docs/archive/meso/designer-framework-plan.md`` Phase 0:
   ``api_week_delete``): happy path (200, envelope shape, DB row survives with
   ``deleted_at`` set, drops out of ``serialize_plan``, bumps ``plan.modified``)
   and the shared negative matrix (login/method/ownership/404/double-delete);
-- the week-delete extra rules (can't delete the current week or the last live
-  week; deleting the viewed week reopens onto the current one);
+- the week-delete extra rule (can't delete the plan's last live week; deleting
+  the viewed week reopens onto ``serialize_plan``'s own default — the
+  earliest live week, docs/meso/remove-current-week-plan.md — since programs
+  are date-less and any live week is otherwise deletable);
 - every existing lookup that must become soft-delete-aware once a row can be
   hidden without being gone (``prescription_patch``, ``session_add_exercise``,
-  ``week_view``, ``week_set_current``, ``plan_deliver``, ``week_add`` after a
-  delete, ``Mesocycle.append_week``, ``serialize_week_snapshot``).
+  ``week_view``, ``plan_deliver``, ``week_add`` after a delete,
+  ``Mesocycle.append_week``, ``serialize_week_snapshot``).
 """
 
 import json
@@ -56,7 +58,7 @@ pytestmark = pytest.mark.django_db
 
 
 def seed_plan(coach=None, athlete=None):
-    """A minimal owned plan with one current week → session → prescription cell."""
+    """A minimal owned plan with one live week → session → prescription cell."""
     rel = CoachAthleteFactory(
         coach=coach or UserFactory(), athlete=athlete or UserFactory()
     )
@@ -64,14 +66,14 @@ def seed_plan(coach=None, athlete=None):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return plan, week, session, cell
 
 
 def _two_week_plan():
-    """A plan with ``week1`` (current) and ``week2`` (non-current)."""
+    """A plan with ``week1`` (index 1, earliest) and ``week2`` (index 2)."""
     link = CoachAthleteFactory()
     plan = link.create_plan()
     meso = plan.mesocycles.get()
@@ -318,7 +320,7 @@ class TestWeekDeleteEndpoint:
             kwargs={"plan_id": plan.pk, "week_id": week.pk},
         )
 
-    def test_soft_deletes_non_current_week_and_returns_current_weeks_payload(
+    def test_soft_deletes_a_non_last_week_and_returns_earliest_weeks_payload(
         self, client
     ):
         link, plan, week1, week2 = _two_week_plan()
@@ -329,8 +331,9 @@ class TestWeekDeleteEndpoint:
         body = resp.json()
         assert body["ok"] is True
         assert _envelope_keys(body)
-        # serialize_plan(plan) with no pinned week falls back to the current
-        # week — the frontend's fallback per the spec.
+        # serialize_plan(plan) with no pinned week falls back to its own
+        # default — the earliest live week (docs/meso/remove-current-week-
+        # plan.md) — since programs are date-less and week2 is now gone.
         assert body["viewing"] == week1.pk
         assert [w["id"] for w in body["weeks"]] == [week1.pk]
         assert Week.objects.filter(pk=week2.pk).exists()
@@ -339,25 +342,25 @@ class TestWeekDeleteEndpoint:
         plan.refresh_from_db()
         assert plan.modified > before
 
-    def test_current_week_cannot_be_deleted(self, client):
+    def test_any_non_last_live_week_is_deletable(self, client):
+        # A behavior change from the removed "can't delete the current week"
+        # rule (docs/meso/remove-current-week-plan.md §2.8): programs are
+        # date-less, so any live week is deletable, subject only to the
+        # last-remaining-live-week guard below.
         link, plan, week1, week2 = _two_week_plan()
         client.force_login(link.coach)
         resp = client.post(self._url(plan, week1))
-        assert resp.status_code == 400
+        assert resp.status_code == 200
         body = resp.json()
-        assert body["ok"] is False
+        assert body["ok"] is True
         week1.refresh_from_db()
-        assert week1.deleted_at is None
+        assert week1.deleted_at is not None
 
     def test_last_remaining_live_week_cannot_be_deleted(self, client):
         link = CoachAthleteFactory()
         plan = link.create_plan()
         meso = plan.mesocycles.get()
         week = meso.weeks.get()
-        # Force it non-current so this exercises the *last-live-week* rule, not
-        # the separate "can't delete the current week" rule above.
-        week.is_current = False
-        week.save(update_fields=["is_current"])
         client.force_login(link.coach)
         resp = client.post(self._url(plan, week))
         assert resp.status_code == 400
@@ -413,7 +416,7 @@ class TestWeekDeleteEndpoint:
         assert second.status_code == 404
 
     def test_week_add_succeeds_after_deleting_a_week(self, client):
-        # week1 (index 1, current) stays live; week2 (index 2) is deleted. A
+        # week1 (index 1) stays live; week2 (index 2) is deleted. A
         # naive `source.index + 1` would collide with week2's still-unique
         # (mesocycle, index) row via `unique_week_index`, since a soft-deleted
         # week keeps its index — the new week must be indexed past it.
@@ -483,22 +486,6 @@ class TestAncestorSoftDeleteAware:
         resp = client.get(
             reverse(
                 "meso:api_week_view", kwargs={"plan_id": plan.pk, "week_id": week2.pk}
-            )
-        )
-        assert resp.status_code == 404
-
-    def test_week_set_current_404s_for_a_deleted_week(self, client):
-        link, plan, week1, week2 = _two_week_plan()
-        client.force_login(link.coach)
-        del_week_url = reverse(
-            "meso:api_week_delete", kwargs={"plan_id": plan.pk, "week_id": week2.pk}
-        )
-        assert client.post(del_week_url).status_code == 200
-
-        resp = client.post(
-            reverse(
-                "meso:api_week_set_current",
-                kwargs={"plan_id": plan.pk, "week_id": week2.pk},
             )
         )
         assert resp.status_code == 404

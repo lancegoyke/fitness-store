@@ -32,7 +32,7 @@ def make_plan(athlete=None):
     CoachSubscription.comp(rel.coach)
     plan = PlanFactory(relationship=rel)
     meso = MesocycleFactory(plan=plan, order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     cell = presc(session, name="Back Squat")
     return plan, session, cell
@@ -119,7 +119,7 @@ class TestCleanChange:
         # resolve within the current block, any live week (a swap renames the
         # block-shared slot).
         plan, session, _ = make_plan()  # week index 1 is current
-        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
+        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2)
         off_session = day(week2, day_number=1, name="Lower")
         off_presc = presc(off_session, name="Squat")
         cleaned, errors = validation.clean_change(
@@ -135,7 +135,7 @@ class TestCleanChange:
         # Guards both the prescription (swap) and the session (add) lookups.
         plan, _, _ = make_plan()  # current block = mesocycle order 0
         other_block = MesocycleFactory(plan=plan, order=1)
-        other_week = WeekFactory(mesocycle=other_block, index=1, is_current=False)
+        other_week = WeekFactory(mesocycle=other_block, index=1)
         other_session = day(other_week, day_number=1, name="Lower")
         other_presc = presc(other_session, name="Squat")
 
@@ -162,7 +162,7 @@ class TestCleanChange:
         # P4: a progress can set a specific (future/other) week's load — the
         # agent programs progression across the whole block.
         plan, session, _ = make_plan()  # week index 1 is current
-        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
+        week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2)
         off_session = day(week2, day_number=1, name="Lower")
         off_presc = presc(off_session, name="Squat")
         cleaned, errors = validation.clean_change(
@@ -645,9 +645,7 @@ class TestAddKind:
         # P4: whole-block grounding — an add can target any live week's day, not
         # just the current week's.
         plan, _, _ = make_plan()
-        other_week = WeekFactory(
-            mesocycle=plan.mesocycles.first(), index=2, is_current=False
-        )
+        other_week = WeekFactory(mesocycle=plan.mesocycles.first(), index=2)
         other_session = day(other_week, day_number=1, name="Upper")
         cleaned, errors = validation.clean_change(
             self.add_change(session_id=other_session.pk), plan

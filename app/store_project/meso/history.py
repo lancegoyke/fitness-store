@@ -96,7 +96,6 @@ def serialize_plan_snapshot(plan):
                 "volume": w.volume,
                 "intensity": w.intensity,
                 "is_deload": w.is_deload,
-                "is_current": w.is_current,
                 "deleted_at": _iso(w.deleted_at),
             }
             for w in weeks
@@ -160,8 +159,8 @@ def restore_plan_snapshot(plan, snapshot):
     something bypassed it, in which case ``HistoryUnavailable`` is raised so
     the caller's transaction rolls back cleanly (nothing is ever
     half-restored). Rows named in the snapshot have every captured field
-    (including ``deleted_at``/``is_current``) written back; a row of one of
-    those four kinds **absent** from the snapshot (created after it was taken)
+    (including ``deleted_at``) written back; a row of one of those four kinds
+    **absent** from the snapshot (created after it was taken)
     is soft-deleted — restore never hard-deletes or recreates one of these
     rows, so a later redo revives the exact same pk.
 
@@ -226,7 +225,6 @@ def restore_plan_snapshot(plan, snapshot):
         week.volume = row["volume"]
         week.intensity = row["intensity"]
         week.is_deload = row["is_deload"]
-        week.is_current = row["is_current"]
         week.deleted_at = _parse_dt(row["deleted_at"])
         week.save()
 

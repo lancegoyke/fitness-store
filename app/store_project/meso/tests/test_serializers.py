@@ -54,12 +54,12 @@ MESOCYCLE_SPEC = [
 ]
 
 # The current mesocycle's week strip (meso.js `weeks`).
-# index, phase, volume, intensity, is_deload, is_current
+# index, phase, volume, intensity, is_deload
 WEEK_SPEC = [
-    (1, "Accum", 70, 62, False, False),
-    (2, "Accum", 85, 68, False, True),
-    (3, "Accum", 100, 73, False, False),
-    (4, "Deload", 55, 70, True, False),
+    (1, "Accum", 70, 62, False),
+    (2, "Accum", 85, 68, False),
+    (3, "Accum", 100, 73, False),
+    (4, "Deload", 55, 70, True),
 ]
 
 # The current week's sessions (meso.js `program`). Each exercise carries the
@@ -133,14 +133,13 @@ def build_maya_plan():
             volume=vol,
             intensity=inten,
             is_deload=deload,
-            is_current=current,
         )
-        for (index, phase, vol, inten, deload, current) in WEEK_SPEC
+        for (index, phase, vol, inten, deload) in WEEK_SPEC
     ]
-    current_week = weeks[1]  # Wk 2
+    open_week = weeks[0]  # Wk 1 — the plan's default opening week (earliest live)
     for day_number, (name, bias, exercises) in enumerate(SESSION_SPEC, start=1):
         session = day(
-            current_week,
+            open_week,
             day_number=day_number,
             name=name,
             bias=bias,
@@ -203,7 +202,6 @@ class TestSerializePlan:
                 "vol": 70,
                 "inten": 62,
                 "deload": False,
-                "current": False,
             },
             {
                 "id": ids[1],
@@ -213,7 +211,6 @@ class TestSerializePlan:
                 "vol": 85,
                 "inten": 68,
                 "deload": False,
-                "current": True,
             },
             {
                 "id": ids[2],
@@ -223,7 +220,6 @@ class TestSerializePlan:
                 "vol": 100,
                 "inten": 73,
                 "deload": False,
-                "current": False,
             },
             {
                 "id": ids[3],
@@ -233,17 +229,21 @@ class TestSerializePlan:
                 "vol": 55,
                 "inten": 70,
                 "deload": True,
-                "current": False,
             },
         ]
 
     def test_serialize_plan_reports_the_viewed_week(self):
+        """No explicit ``week`` — ``viewing`` defaults to the earliest live week."""
         plan = build_maya_plan()
         result = serialize_plan(plan)
-        current = Week.objects.get(mesocycle__plan=plan, is_current=True)
-        assert result["viewing"] == current.pk
+        earliest = (
+            Week.objects.filter(mesocycle__plan=plan)
+            .order_by("mesocycle__order", "index")
+            .first()
+        )
+        assert result["viewing"] == earliest.pk
 
-    def test_program_is_current_weeks_sessions(self):
+    def test_program_is_the_opening_weeks_sessions(self):
         plan = build_maya_plan()
         result = serialize_plan(plan)
         program = result["program"]
@@ -311,7 +311,7 @@ class TestSerializePlan:
             MesocycleFactory(plan=plan, name=name, order=order, week_count=4)
             for name, order in sparse
         ]
-        WeekFactory(mesocycle=mesos[1], index=1, is_current=True)
+        WeekFactory(mesocycle=mesos[1], index=1)
         result = serialize_plan(plan)
         assert [p["state"] for p in result["phases"]] == [
             "done",
@@ -320,13 +320,13 @@ class TestSerializePlan:
             "future",
         ]
 
-    def test_program_picks_current_week_only(self):
-        """`program` is the *current* week's sessions, not every week's."""
+    def test_program_picks_the_opening_weeks_sessions_only(self):
+        """`program` is the *opening* (earliest live) week's sessions, not every week's."""
         plan = build_maya_plan()
-        # A session on a non-current week must not appear in `program`.
+        # A session on a later, non-opening week must not appear in `program`.
         hypertrophy = plan.mesocycles.get(name="Hypertrophy")
-        wk1 = hypertrophy.weeks.get(index=1)
-        day(wk1, day_number=1, name="Should Not Appear", order=1)
+        wk3 = hypertrophy.weeks.get(index=3)
+        day(wk3, day_number=1, name="Should Not Appear", order=1)
         result = serialize_plan(plan)
         assert "Should Not Appear" not in [s["name"] for s in result["program"]]
 
@@ -346,7 +346,7 @@ class TestLastLoggedColumn:
         rel = CoachAthleteFactory()
         plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE, unit=unit)
         meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-        week = WeekFactory(mesocycle=meso, index=2, is_current=True)
+        week = WeekFactory(mesocycle=meso, index=2)
         session = day(week, day_number=1, name="Lower")
         cell = presc(
             session,
@@ -447,12 +447,19 @@ class TestLastLoggedColumn:
         assert self._box_squat(s.plan)["last"] == "1×6 · 72.5kg · RPE7"
 
     def test_last_matches_same_lift_across_weeks(self):
-        """A prior week's log surfaces against the current week's same lift."""
-        s = self._plan()
-        wk1 = WeekFactory(mesocycle=s.meso, index=1, is_current=False)
-        wk1_session = day(wk1, day_number=1, name="Lower")
-        wk1_cell = presc(
-            wk1_session,
+        """A log on a different week surfaces against the opening week's same lift.
+
+        ``s.week`` (index 2) is the plan's only week from ``_plan()``, so it's
+        the earliest live week and stays the *opening* week (the one
+        ``program`` renders) even after a later week is added below — matching
+        is by exercise identity across the whole plan
+        (``last_logged_labels``), not by week order.
+        """
+        s = self._plan()  # index 2 — the plan's earliest (opening) week
+        wk3 = WeekFactory(mesocycle=s.meso, index=3)
+        wk3_session = day(wk3, day_number=1, name="Lower")
+        wk3_cell = presc(
+            wk3_session,
             name="Box Squat",
             order=0,
             sets="3",
@@ -461,13 +468,13 @@ class TestLastLoggedColumn:
             rpe="7",
         )
         self._log(
-            wk1_session,
+            wk3_session,
             s.athlete,
-            wk1_cell,
+            wk3_cell,
             when=date(2026, 6, 17),
             sets=[("6", "65", "7")],
         )
-        # The current (Wk 2) Box Squat shows last week's logged Box Squat.
+        # The opening week's Box Squat shows the other week's logged Box Squat.
         assert self._box_squat(s.plan)["last"] == "1×6 · 65kg · RPE7"
 
     def test_last_is_scoped_to_this_athlete(self):
@@ -499,12 +506,11 @@ def _build_grid_meso():
     rel = CoachAthleteFactory()
     plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE)
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0, week_count=4)
-    week1 = WeekFactory(mesocycle=meso, index=1, phase="Accum", is_current=True)
+    week1 = WeekFactory(mesocycle=meso, index=1, phase="Accum")
     week2 = WeekFactory(
         mesocycle=meso,
         index=2,
         phase="Accum",
-        is_current=False,
         delivered_at=timezone.now(),
     )
 
@@ -607,7 +613,6 @@ class TestSerializeMesocycleGrid:
             "label": "Wk 1",
             "phase": "Accum",
             "deload": False,
-            "current": True,
             "delivered_at": None,
             # Issue #455 phase A5: BlockView's periodization timeline bars
             # (barH(w.vol, ...)/barH(w.inten, ...)) need these on the grid
@@ -620,7 +625,6 @@ class TestSerializeMesocycleGrid:
         assert wk2["id"] == f.week2.pk
         assert wk2["index"] == 2
         assert wk2["label"] == "Wk 2"
-        assert wk2["current"] is False
         assert wk2["delivered_at"] == f.week2.delivered_at.isoformat()
         assert wk2["vol"] == f.week2.volume
         assert wk2["inten"] == f.week2.intensity
@@ -637,7 +641,7 @@ class TestSerializeMesocycleGrid:
         assert day1_data["name"] == "Lower"
         assert day1_data["bias"] == "Quad bias"
         assert day1_data["order"] == 0
-        # Current week (week1) wins the session_id.
+        # The opening (earliest live) week (week1) wins the session_id.
         assert day1_data["session_id"] == f.day1.pk
 
     def test_rows_ordered_by_order_with_block_identity(self):
@@ -738,10 +742,10 @@ class TestSerializeMesocycleGrid:
         result = serialize_mesocycle_grid(f.meso)
         assert result["history"] == serialize_plan_history(f.plan)
 
-    def test_session_id_falls_back_to_first_live_week_when_current_lacks_one(self):
+    def test_session_id_falls_back_to_first_live_week_when_the_anchor_lacks_one(self):
         f = _build_grid_meso()
-        # Simulate the current week's session for day1 having been individually
-        # removed while the day (SessionSlot) itself stays live.
+        # Simulate the anchor (opening) week's session for day1 having been
+        # individually removed while the day (SessionSlot) itself stays live.
         Session.objects.filter(pk=f.day1.pk).update(deleted_at=timezone.now())
         result = serialize_mesocycle_grid(f.meso)
         day1_data = result["days"][0]
@@ -769,7 +773,7 @@ class TestSerializeMesocycleGrid:
     ):
         f = _build_grid_meso()
         # Same soft-delete as the session_id fallback test above: day1's
-        # CURRENT week (week1) session is gone, so session_id falls back to
+        # OPENING week (week1) session is gone, so session_id falls back to
         # week2's — but session_ids must show NO entry for week1 at all
         # (never substitute the fallback), only the live week2 entry.
         Session.objects.filter(pk=f.day1.pk).update(deleted_at=timezone.now())

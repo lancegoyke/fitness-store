@@ -121,12 +121,7 @@
                 {% if a.is_self %}
                   <span class="meso-badge meso-badge--muted"><i></i>You</span>
                 {% endif %}
-                {% if a.compliance is not None %}
-                  <div style="width:108px;display:flex;align-items:center;gap:8px;">
-                    <div class="meso-meter"><span style="width:{{ a.compliance }}%;"></span></div>
-                    <span class="meso-row-meta meso-mono">{{ a.compliance }}%</span>
-                  </div>
-                {% endif %}
+                <span class="meso-badge meso-badge--{{ a.recency_tone }}"><i></i>{{ a.recency_label }}</span>
                 {% if a.status == 'suspended' %}
                   <span class="meso-badge meso-badge--warn"><i></i>{{ a.status_label }}</span>
                 {% elif a.status == 'needs_review' %}

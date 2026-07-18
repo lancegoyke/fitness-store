@@ -54,7 +54,6 @@ def seed(*, athlete=None, coach=None, delivered=True):
     week = WeekFactory(
         mesocycle=meso,
         index=2,
-        is_current=True,
         delivered_at=timezone.now() if delivered else None,
     )
     session = day(week, day_number=1, name="Lower", bias="Quad")
@@ -120,7 +119,7 @@ class TestFirstLogHintHome:
             relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
         )
         meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-        WeekFactory(mesocycle=meso, index=1, is_current=True, delivered_at=None)
+        WeekFactory(mesocycle=meso, index=1, delivered_at=None)
         client.force_login(athlete)
         body = client.get(HOME).content.decode()
         assert HOME_HINT not in body

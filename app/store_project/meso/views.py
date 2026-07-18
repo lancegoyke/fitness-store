@@ -251,7 +251,7 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
         # the designer needs (``serialize_plan`` itself survives unchanged —
         # it's still load-bearing for the agent's ``build_context``, see
         # serializers.py). Uses the same block resolution ``serialize_plan``
-        # used to (the current week's mesocycle); left unset for a plan with
+        # used to (``current_week``'s default mesocycle); left unset for a plan with
         # no block at all (shouldn't happen post-scaffold, but a corrupt/
         # legacy row shouldn't 500 the whole designer — it renders a blank
         # island instead, per CONTRACT.md).
@@ -370,9 +370,10 @@ class RosterView(TemplateView):
                 demo=link.is_demo,
                 self_link=link.is_self,
                 has_working_plan=link.pk in have_plan,
-                # Adherence to the athlete's current week (read-side
-                # aggregation over their done logs); ``None`` hides the meter.
-                compliance=meso_adherence.link_compliance(link),
+                # Cadence signal (§4a, decided 2026-07-18): days since the
+                # athlete's last done log, read-side over their own logs;
+                # ``None`` renders as "No sessions yet".
+                recency_days=meso_adherence.link_recency_days(link),
             )
             for link in links
         ]
@@ -515,9 +516,9 @@ class AthleteProfileView(LoginRequiredMixin, TemplateView):
         # exists the CTAs open it in the designer; when not, they create one.
         working_plan = link.working_plan()
         ctx["working_plan"] = working_plan
-        # Light up the program block off the athlete's current week (current
-        # block/week, the macrocycle rail, adherence, status, latest session). The
-        # athlete identity record carries the program overlay merged in.
+        # Light up the program block (cadence, the macrocycle rail, status,
+        # latest session). The athlete identity record carries the program
+        # overlay merged in.
         athlete = presenters.profile_athlete(link.athlete)
         program = presenters.profile_program(link, working_plan)
         athlete.update(program["athlete"])
@@ -1232,15 +1233,15 @@ def _athlete_session_or_404(user, pk):
 
 
 class AthleteHomeView(LoginRequiredMixin, TemplateView):
-    """The athlete's training home: their live programs, this week.
+    """The athlete's training home: their live programs, free navigation.
 
-    ``?week=<id>`` is a display-only focus override (issue #456): it opens a
-    card onto a different week of its block (e.g. tapping a week
-    chip, or the "start next week" nudge after finishing the focus week)
-    without moving anything — ``is_current`` only ever advances via the
-    athlete's own logging (``athlete_log_session``) or the coach's "Make
-    current". A missing/invalid id is just ``None``, which renders exactly
-    like a bare request.
+    The app never asserts a "you are here" position (docs/meso/remove-
+    current-week-plan.md): a card opens onto a derived scroll hint (the last
+    week with any of the athlete's own logged sets, else the earliest live
+    week — see ``presenters.athlete_home``), and ``?week=<id>`` is the ONLY
+    week selector — a display-only override (e.g. tapping a week chip) that
+    picks which week of its block a card shows, nothing more. A missing/
+    invalid id is just ``None``, which renders exactly like a bare request.
     """
 
     template_name = "meso/athlete_home.html"
@@ -1407,11 +1408,6 @@ def athlete_log_session(request, pk):
             list(session.trainable_cells()),
             session.week.mesocycle.plan.unit,
         )
-        # #456: any successful log write — pending or done alike, forward-only —
-        # advances the plan's ``is_current`` pointer onto this week (the athlete
-        # started it).
-        if session.week.advance_current_week():
-            _touch_plan(session.week.mesocycle.plan)
     # #441 P3-5: the results step auto-advances once the coach *completes* one of
     # their own self-link sessions. Gated on the step's own predicate so a
     # ``pending`` "save progress" — or a done log the coach makes as an athlete
@@ -1500,9 +1496,9 @@ def athlete_cell_write(request, pk):
     billing gate (the coach's over-limit freeze doesn't touch the athlete's own
     tracking), the body fully validated before any write (a bad request is a
     400 that persists nothing), and the write is an idempotent upsert. It
-    records NO ``PlanAction`` and advances ``is_current`` forward-only, exactly
-    like logging. ``line`` 0 is rejected (that's the coach's prescription line),
-    as is ``line`` > ``MAX_CELL_LINE``; blank text clears the sub-line in place.
+    records NO ``PlanAction``. ``line`` 0 is rejected (that's the coach's
+    prescription line), as is ``line`` > ``MAX_CELL_LINE``; blank text clears
+    the sub-line in place.
     """
     session = _athlete_session_or_404(request.user, pk)
     plan = session.week.mesocycle.plan
@@ -1547,9 +1543,6 @@ def athlete_cell_write(request, pk):
         cell.text = text
         cell.athlete_authored = True
         cell.save(update_fields=["text", "athlete_authored"])
-        # The athlete moving their own position advances the live-week pointer
-        # forward-only — no ``PlanAction`` (parity with ``athlete_log_session``).
-        session.week.advance_current_week()
         _touch_plan(plan)
     return JsonResponse(
         {
@@ -2626,8 +2619,8 @@ def session_add(request, plan_id):
     # autocommit (ATOMIC_REQUESTS is inert here), so the lock must own its own
     # transaction to be held.
     with transaction.atomic():
-        # Lock ordering: plan BEFORE any child row (undo/redo, the deletes, and
-        # week_set_current all lock the plan first, then touch weeks) — taking
+        # Lock ordering: plan BEFORE any child row (undo/redo and the deletes,
+        # e.g. week_delete, all lock the plan first, then touch weeks) — taking
         # the mesocycle lock first here could deadlock against them.
         Plan.objects.select_for_update().filter(pk=plan.pk).first()
         Mesocycle.objects.select_for_update().filter(pk=meso.pk).first()
@@ -2804,10 +2797,11 @@ def week_view(request, plan_id, week_id):
 def _default_grid_mesocycle(plan):
     """The block the P1 grid opens onto when no ``?mesocycle=`` is given.
 
-    Mirrors ``serialize_plan``'s block resolution: the current (live) week's
-    block, falling back to the plan's first block for the rare case where the
-    plan has a block but no materialized weeks yet (a fresh, not-yet-designed
-    block). ``None`` only when the plan has no block at all.
+    Mirrors ``serialize_plan``'s block resolution: ``current_week``'s
+    earliest-live-week default's block, falling back to the plan's first
+    block for the rare case where the plan has a block but no materialized
+    weeks yet (a fresh, not-yet-designed block). ``None`` only when the plan
+    has no block at all.
     """
     open_week = current_week(plan)
     if open_week is not None:
@@ -2822,10 +2816,11 @@ def api_mesocycle_grid(request, plan_id):
 
     A pure read (mirrors ``week_view``) — scoped by ownership only (404/403),
     **not** billing-gated: an over-limit coach keeps read access. Defaults to
-    the plan's current mesocycle; ``?mesocycle=<id>`` views another block of
-    the same plan (404 for one that doesn't belong to it, 400 for a
-    non-integer). A plan with no block at all is a 404; a block with no
-    materialized weeks yet returns a valid, empty-ish grid.
+    ``_default_grid_mesocycle`` (the plan's earliest-live-week block);
+    ``?mesocycle=<id>`` views another block of the same plan (404 for one
+    that doesn't belong to it, 400 for a non-integer). A plan with no block at
+    all is a 404; a block with no materialized weeks yet returns a valid,
+    empty-ish grid.
     """
     plan, forbidden = _coach_plan_or_forbidden(request, plan_id)
     if forbidden is not None:
@@ -2849,14 +2844,16 @@ def api_mesocycle_grid(request, plan_id):
 def week_add(request, plan_id):
     """Materialize the next week in the plan's active block and open onto it.
 
-    The designer's "+ Add week": grows the mesocycle of the live (current) week —
-    or, lacking one, the plan's last block — by copying its latest week's grid
-    (``Mesocycle.append_week``). The new week is a non-current draft, so adding it
-    never changes what's live or deliverable. Scoped + edit-gated like the other
-    designer writes (403 foreign, 402 over-limit). Row-locks the mesocycle so two
-    concurrent submits can't both read the same max index and collide on
-    ``unique_week_index`` (explicit transaction — prod views run in autocommit).
-    Returns the plan pinned to the new week so the client switches to it.
+    The designer's "+ Add week": grows the mesocycle of ``current_week``'s
+    default block — or, lacking one, the plan's last block — by copying its
+    latest week's grid (``Mesocycle.append_week``). The new week is live and
+    editable immediately (programs are date-less; there's no "current" week
+    it could preempt). Scoped + edit-gated like the other designer writes (403
+    foreign, 402 over-limit). Row-locks the mesocycle so two concurrent
+    submits can't both read the same max index and collide on
+    ``unique_week_index`` (explicit transaction — prod views run in
+    autocommit). Returns the plan pinned to the new week so the client
+    switches to it.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -2885,56 +2882,6 @@ def week_add(request, plan_id):
 
 @login_required
 @require_POST
-def week_set_current(request, plan_id, week_id):
-    """Make ``week`` the plan's current week — its designer-default + deliver target.
-
-    The designer's "Make current": flips the live pointer to the viewed week so
-    delivery (which targets ``current_week``'s block) nudges about it and the
-    designer opens onto it next time. This pointer also means "the week the
-    athlete is on": the athlete home (``presenters.athlete_home``) opens its
-    block card onto the current week and takes "today's session" from it — the
-    coach marks which week the athlete is on by setting it current here. Since
-    #456, the athlete's own logging auto-advances the pointer forward too
-    (``Week.advance_current_week``, forward-only, off any successful log write)
-    — this endpoint is the coach's *manual* override: unlike the athlete's
-    logging, it can move the pointer in either direction (back to an earlier
-    week included). Exactly one week is current — the others in the plan are
-    cleared.
-    Scoped + edit-gated (403 foreign, 402 over-limit); a foreign week is a 404.
-    Row-locks the plan so concurrent set-currents serialize, and re-reads the
-    week's liveness under that lock — a concurrent ``week_delete`` (which
-    takes the same lock) could soft-delete this week while we wait, and a
-    deleted week must never become current. Returns the plan pinned to the
-    new current week.
-    """
-    plan, forbidden = _editable_plan_or_response(request, plan_id)
-    if forbidden is not None:
-        return forbidden
-    week = get_object_or_404(
-        Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
-    )
-    with transaction.atomic():
-        Plan.objects.select_for_update().filter(pk=plan.pk).first()
-        week.refresh_from_db()
-        if week.deleted_at is not None:
-            raise Http404("Week not found.")
-        already_current = week.is_current
-        if not already_current:
-            # Snapshot BEFORE the bulk clear below touches every other week's
-            # ``is_current`` flag, so undo restores exactly who was current.
-            record_plan_action(plan, f"Made Week {week.index} current")
-        Week.objects.filter(mesocycle__plan=plan).exclude(pk=week.pk).update(
-            is_current=False
-        )
-        if not already_current:
-            week.is_current = True
-            week.save(update_fields=["is_current"])
-        _touch_plan(plan)
-    return JsonResponse({"ok": True, **serialize_plan(plan, week=week)})
-
-
-@login_required
-@require_POST
 def week_delete(request, plan_id, week_id):
     """Soft-delete one week (designer framework Phase 0, issue #401).
 
@@ -2945,16 +2892,17 @@ def week_delete(request, plan_id, week_id):
     Cells carry no ``deleted_at`` of their own; they're hidden via the join to
     this dead week regardless.
 
-    Two rules gate the action itself (400, not the row's own 404 — it exists
-    and is live): the **current** (deliver-target) week can't be deleted — the
-    coach must make another week current first — and the plan's **last
-    remaining live week** can't be deleted (a plan always needs at least one).
-    Row-locks the plan (mirrors ``week_set_current``) and re-reads the row's
-    flags under that lock, so a concurrent ``week_set_current`` or a second
-    delete can't race the current-flag check or the last-live-week count.
-    Response is *not* pinned to a week —
-    ``serialize_plan`` falls back to the (untouched) current week, which the
-    client uses to reopen even if the deleted week was the one being viewed.
+    One rule gates the action itself (400, not the row's own 404 — it exists
+    and is live): the plan's **last remaining live week** can't be deleted (a
+    plan always needs at least one). Any other live week is deletable —
+    programs are date-less and the app no longer tracks a "current" week, so
+    there's nothing left to make current first (docs/meso/remove-current-
+    week-plan.md §2.8). Row-locks the plan and re-reads the row's liveness
+    under that lock, so a concurrent second delete can't race the
+    last-live-week count. Response is *not* pinned to a week —
+    ``serialize_plan`` falls back to its own default (the plan's earliest live
+    week), which the client uses to reopen even if the deleted week was the
+    one being viewed.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
@@ -2967,14 +2915,6 @@ def week_delete(request, plan_id, week_id):
         week.refresh_from_db()
         if week.deleted_at is not None:
             raise Http404("Week not found.")
-        if week.is_current:
-            return JsonResponse(
-                {
-                    "ok": False,
-                    "error": "Make another week current before removing this one.",
-                },
-                status=400,
-            )
         live_week_count = Week.objects.filter(
             mesocycle__plan=plan, deleted_at__isnull=True
         ).count()
@@ -3604,11 +3544,12 @@ def plan_deliver(request, plan_id):
     marker) and gets a ``WeekDelivery`` snapshot (retention; feeds the deliver
     screen's optional what-changed diff and, later, PRs). The target week is
     resolved as before — the ``week_id`` in the body (the multi-week designer's
-    "send the week I'm viewing"), else the plan's **current** (live) week — and
-    only *selects which block* to nudge about. The chosen week must belong to
-    the plan (a foreign week is a 404). Re-delivering re-stamps every week and
-    writes fresh ``WeekDelivery`` rows. Delivering never changes ``is_current``
-    — a nudge doesn't move the live pointer.
+    "send the week I'm viewing"), else the plan's earliest live week
+    (``current_week``'s default — the bare "Deliver" button rarely fires this,
+    the designer normally posts an explicit ``week_id``) — and only *selects
+    which block* to nudge about. The chosen week must belong to the plan (a
+    foreign week is a 404). Re-delivering re-stamps every week and writes
+    fresh ``WeekDelivery`` rows.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:

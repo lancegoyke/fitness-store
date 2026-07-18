@@ -24,8 +24,8 @@ Covers, per the Phase 1 spec:
   nothing — athlete data and delivery stamps are not editable state);
 - snapshot spot-checks (pre-mutation prescription values; the soft-deleted
   week's pk);
-- undo/redo round trips for a cell edit, a day delete (logs survive), an added
-  exercise (same pk on redo), and ``week_set_current``;
+- undo/redo round trips for a cell edit, a day delete (logs survive), and an
+  added exercise (same pk on redo);
 - batch_apply records ONE action for the whole batch and undo reverts it all;
 - redo invalidation on a fresh mutation; the exact empty-stack error strings;
 - the 50-row history cap (oldest trimmed);
@@ -72,7 +72,7 @@ EMPTY_HISTORY = {
 
 
 def seed_plan(coach=None, athlete=None):
-    """A minimal owned plan with one current week → session → prescription cell."""
+    """A minimal owned plan with one live week → session → prescription cell."""
     rel = CoachAthleteFactory(
         coach=coach or UserFactory(), athlete=athlete or UserFactory()
     )
@@ -80,14 +80,14 @@ def seed_plan(coach=None, athlete=None):
         relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
     )
     meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     cell = presc(session, name="Box Squat", sets="4", reps="6", load="70", rpe="7")
     return plan, week, session, cell
 
 
 def _two_week_plan():
-    """A plan with ``week1`` (current) and ``week2`` (non-current)."""
+    """A plan with ``week1`` (index 1, earliest) and ``week2`` (index 2)."""
     link = CoachAthleteFactory()
     plan = link.create_plan()
     meso = plan.mesocycles.get()
@@ -173,20 +173,9 @@ class TestRecording:
         # 4. week_add
         resp = client.post(reverse("meso:api_week_add", kwargs={"plan_id": plan.pk}))
         assert resp.status_code == 201
-        added_week_id = resp.json()["viewing"]
         assert undo_actions(plan).count() == 4
 
-        # 5. week_set_current (flip the pointer onto the new week)
-        resp = client.post(
-            reverse(
-                "meso:api_week_set_current",
-                kwargs={"plan_id": plan.pk, "week_id": added_week_id},
-            )
-        )
-        assert resp.status_code == 200
-        assert undo_actions(plan).count() == 5
-
-        # 6–8. the three Phase 0 deletes
+        # 5–7. the three Phase 0 deletes
         resp = client.post(
             reverse(
                 "meso:api_prescription_delete",
@@ -210,11 +199,11 @@ class TestRecording:
         assert resp.status_code == 200
 
         actions = list(undo_actions(plan).order_by("seq"))
-        assert len(actions) == 8
+        assert len(actions) == 7
         seqs = [a.seq for a in actions]
         # No undos in between, so the allocator (max seq + 1) yields consecutive
         # seqs; every recorded row lands on the undo stack, redo stays empty.
-        assert seqs == list(range(seqs[0], seqs[0] + 8))
+        assert seqs == list(range(seqs[0], seqs[0] + 7))
         assert redo_actions(plan).count() == 0
         for action in actions:
             assert isinstance(action.snapshot, dict)
@@ -222,7 +211,7 @@ class TestRecording:
             assert action.label  # every action carries a human label
         # The three deletes are the last three actions; their labels read as
         # deletions (loose pin — exact wording is the implementer's).
-        for action in actions[5:]:
+        for action in actions[4:]:
             assert "Deleted" in action.label
 
     def test_patch_snapshot_captures_pre_mutation_prescription_values(self, client):
@@ -566,33 +555,6 @@ class TestBatchApplyUndo:
         cell.refresh_from_db()
         assert cell.name == "Box Squat"
         assert cell.text == "4 x 6, RPE 7, 70"
-
-
-# ---------------------------------------------------------------------------
-# week_set_current — undo restores the previous pointer
-# ---------------------------------------------------------------------------
-
-
-class TestWeekSetCurrentUndo:
-    def test_undo_makes_the_previous_week_current_again(self, client):
-        link, plan, week1, week2 = _two_week_plan()
-        client.force_login(link.coach)
-        resp = client.post(
-            reverse(
-                "meso:api_week_set_current",
-                kwargs={"plan_id": plan.pk, "week_id": week2.pk},
-            )
-        )
-        assert resp.status_code == 200
-        week2.refresh_from_db()
-        assert week2.is_current is True
-
-        resp = client.post(undo_url(plan))
-        assert resp.status_code == 200
-        week1.refresh_from_db()
-        week2.refresh_from_db()
-        assert week1.is_current is True
-        assert week2.is_current is False
 
 
 # ---------------------------------------------------------------------------

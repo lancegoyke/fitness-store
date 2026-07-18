@@ -213,11 +213,6 @@ urlpatterns = [
         views.api_mesocycle_grid,
         name="api_mesocycle_grid",
     ),
-    path(
-        "api/plan/<int:plan_id>/week/<int:week_id>/current/",
-        views.week_set_current,
-        name="api_week_set_current",
-    ),
     # Soft-delete a week (designer framework Phase 0, issue #401).
     path(
         "api/plan/<int:plan_id>/week/<int:week_id>/delete/",

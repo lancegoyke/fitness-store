@@ -59,9 +59,7 @@ def make_session(athlete, *, coach=None, unit=Unit.KILOGRAMS, prescriptions=()):
     )
     plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE, unit=unit)
     meso = MesocycleFactory(plan=plan, name="Block", order=0)
-    week = WeekFactory(
-        mesocycle=meso, index=1, is_current=True, delivered_at=timezone.now()
-    )
+    week = WeekFactory(mesocycle=meso, index=1, delivered_at=timezone.now())
     session = day(week, day_number=1, name="Lower")
     presc = [
         build_presc(session, order=i, **spec) for i, spec in enumerate(prescriptions)

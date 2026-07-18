@@ -63,7 +63,7 @@ def _plan_with_prescription(coach, athlete=None):
     )
     plan = PlanFactory(relationship=rel, status=Plan.Status.ACTIVE)
     meso = MesocycleFactory(plan=plan, order=0)
-    week = WeekFactory(mesocycle=meso, index=1, is_current=True)
+    week = WeekFactory(mesocycle=meso, index=1)
     session = day(week, day_number=1, name="Lower")
     cell = presc(session, name="Back Squat")
     return plan, session, cell

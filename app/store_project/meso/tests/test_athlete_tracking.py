@@ -11,8 +11,7 @@ The endpoint mirrors ``athlete_log_session``'s discipline: athlete-scoped
 (only a session they own through an active coach link), every out-of-scope
 target a flat 404, bad input a 400 that writes nothing, and the write is an
 idempotent upsert (re-writing the same cell updates the one row). It records
-NO coach ``PlanAction`` and advances ``is_current`` forward-only, exactly like
-logging. The undo-interaction block pins the ``athlete_authored`` isolation:
+NO coach ``PlanAction``. The undo-interaction block pins the ``athlete_authored`` isolation:
 snapshots omit athlete cells, and restore never overwrites/deletes them — even
 when an older snapshot still holds a coach version of that same pk.
 """
@@ -31,12 +30,9 @@ from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.history import serialize_plan_snapshot
 from store_project.meso.models import CoachAthlete
-from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import Plan
 from store_project.meso.models import PlanAction
 from store_project.meso.models import Prescription
-from store_project.meso.models import SessionSlot
-from store_project.meso.models import Week
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
 from store_project.meso.tests._helpers import sub_line
@@ -63,7 +59,6 @@ def seed(
     week = WeekFactory(
         mesocycle=meso,
         index=2,
-        is_current=True,
         delivered_at=timezone.now() if delivered else None,
     )
     session = day(week, day_number=1, name="Lower", bias="Quad")
@@ -289,76 +284,6 @@ class TestSubLineScoping:
 
 
 # -- current-week advance (parity with ``athlete_log_session``) ------------
-
-
-def _two_week_plan(*, current_index=1, other_index=2):
-    """One mesocycle, two weeks sharing a day/row, each independently writable."""
-    coach = UserFactory()
-    athlete = UserFactory()
-    rel = CoachAthleteFactory(
-        coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
-    )
-    plan = PlanFactory(
-        relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
-    )
-    meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
-    now = timezone.now()
-    slot = SessionSlot.objects.create(
-        mesocycle=meso, day_number=1, name="Lower", bias="Quad", order=0
-    )
-    ex = ExerciseSlot.objects.create(session_slot=slot, name="Box Squat", order=0)
-    week_a = WeekFactory(
-        mesocycle=meso, index=current_index, is_current=True, delivered_at=now
-    )
-    week_b = WeekFactory(
-        mesocycle=meso, index=other_index, is_current=False, delivered_at=now
-    )
-    session_a = day(week_a, session_slot=slot)
-    session_b = day(week_b, session_slot=slot)
-    cell_a = presc(
-        exercise_slot=ex, week=week_a, sets="3", reps="6", load="70", rpe="7"
-    )
-    cell_b = presc(
-        exercise_slot=ex, week=week_b, sets="3", reps="6", load="75", rpe="7"
-    )
-    return SimpleNamespace(
-        athlete=athlete,
-        plan=plan,
-        week_a=week_a,
-        week_b=week_b,
-        session_a=session_a,
-        session_b=session_b,
-        cell_a=cell_a,
-        cell_b=cell_b,
-    )
-
-
-class TestSubLineAdvancesCurrentWeek:
-    def test_athlete_sub_line_advances_current_week(self, client):
-        s = _two_week_plan()  # week_a (idx 1) current, week_b (idx 2) later
-        client.force_login(s.athlete)
-        resp = post(
-            client, s.session_b, {"exercise_id": s.cell_b.pk, "line": 1, "text": "x"}
-        )
-        assert resp.status_code == 200
-        s.week_a.refresh_from_db()
-        s.week_b.refresh_from_db()
-        assert s.week_b.is_current is True
-        assert s.week_a.is_current is False
-        assert Week.objects.filter(mesocycle__plan=s.plan, is_current=True).count() == 1
-
-    def test_athlete_sub_line_advance_is_forward_only(self, client):
-        # week_a (idx 2) current; week_b (idx 1) earlier — a write there is a no-op.
-        s = _two_week_plan(current_index=2, other_index=1)
-        client.force_login(s.athlete)
-        resp = post(
-            client, s.session_b, {"exercise_id": s.cell_b.pk, "line": 1, "text": "x"}
-        )
-        assert resp.status_code == 200
-        s.week_a.refresh_from_db()
-        s.week_b.refresh_from_db()
-        assert s.week_a.is_current is True
-        assert s.week_b.is_current is False
 
 
 # -- undo interaction: athlete cells are invisible to coach undo/redo -------

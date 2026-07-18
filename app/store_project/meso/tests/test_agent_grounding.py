@@ -23,11 +23,15 @@ pytestmark = pytest.mark.django_db
 
 
 def test_context_includes_whole_block():
-    # P4 whole-block grounding: the agent sees EVERY live week of the current
-    # mesocycle — its full session/cell grid (numbers incl. ``rest``) plus each
-    # week's volume/intensity/is_current — so it can program across the block.
-    plan, session, _ = make_plan()  # week 1 (current) with a day + "Back Squat"
-    week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2, is_current=False)
+    # P4 whole-block grounding: the agent sees EVERY live week of the
+    # grounded mesocycle — its full session/cell grid (numbers incl.
+    # ``rest``) plus each week's volume/intensity — so it can program across
+    # the block. (Which block gets grounded on is being redesigned to persist
+    # the coach's viewed block on the agent batch — docs/meso/remove-current-
+    # week-plan.md §4b — a separate commit; this test only pins today's
+    # earliest-live-week fallback shape.)
+    plan, session, _ = make_plan()  # week 1 with a day + "Back Squat"
+    week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2)
     w2_session = day(week2, day_number=1, name="Lower")
     presc(w2_session, name="Front Squat")
 
@@ -38,12 +42,11 @@ def test_context_includes_whole_block():
         # Week meta exposes the progression levers.
         assert "volume" in w["week"]
         assert "intensity" in w["week"]
-        assert "is_current" in w["week"]
         # Each cell exposes its full numbers, including ``rest``.
         for s in w["sessions"]:
             for ex in s["exercises"]:
                 assert "rest" in ex
-    # Week 2's cell is visible — the agent sees beyond the current week.
+    # Week 2's cell is visible — the agent sees beyond the first week.
     names = {
         ex["name"]
         for w in block["weeks"]
