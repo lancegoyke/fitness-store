@@ -638,6 +638,24 @@ def current_week(plan, week=None):
     return weeks[0] if weeks else None
 
 
+def first_live_week(mesocycle):
+    """The earliest live week of one **block**, or ``None`` if it has none.
+
+    The block-scoped counterpart to ``current_week``: where that one answers
+    "some week of this plan," this one stays inside a single mesocycle. Every
+    caller that has already resolved *which block* it means — the agent's
+    persisted ``batch.mesocycle`` (§4b), the grid/add-week default — wants this
+    one, because falling through to the plan's earliest live week would land
+    them in a different block than the one they resolved.
+
+    A block with no materialized weeks yet returns ``None``; callers degrade to
+    a no-op rather than silently retargeting.
+    """
+    if mesocycle is None:
+        return None
+    return mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index").first()
+
+
 def serialize_athlete_identity(plan):
     """The individual plan's athlete identity for the designer left rail (Phase 5).
 

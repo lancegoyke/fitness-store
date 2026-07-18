@@ -31,6 +31,7 @@ from ..models import Prescription
 from ..models import ProposedChange
 from ..parsing import compose_prescription_text
 from ..parsing import parse_prescription
+from ..serializers import first_live_week
 
 
 def _parsed_bits(cell):
@@ -187,12 +188,7 @@ def _apply_deload(change):
     if change.session_id:
         week = change.session.week
     else:
-        mesocycle = change.batch.mesocycle
-        week = (
-            mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index").first()
-            if mesocycle is not None
-            else None
-        )
+        week = first_live_week(change.batch.mesocycle)
     if week is None:
         return None
     if not week.is_deload:

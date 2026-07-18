@@ -459,7 +459,9 @@ describe("addWeek", () => {
 
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[0]![0]).toBe("/meso/api/plan/7/week/");
-    expect(calls[0]![1].body).toBe(null);
+    // The new week must land in the block this grid is SHOWING, so the post
+    // names it rather than letting the server pick a default that can diverge.
+    expect(JSON.parse(calls[0]![1].body)).toEqual({ mesocycle_id: 1 });
     expect(calls[1]![0]).toBe("/meso/api/plan/7/grid/");
     expect(result.current.grid?.weeks).toHaveLength(2);
   });

@@ -79,8 +79,18 @@ def build_context(plan, mesocycle):
     degrades to an empty block rather than silently falling back to a different
     one.
     """
+    # Both halves of the context must describe the SAME block. ``serialize_plan``
+    # resolves its own opening week via ``current_week(plan)`` — the plan's
+    # earliest live week — so left alone it would expose block 1's prescription
+    # ids beside block 2's ``block`` payload. The model can only see ids, not
+    # which block they belong to, so it would happily target the block-1 ones and
+    # validation would then drop them as outside ``batch.mesocycle``. Pin it to
+    # this block's first live week (``None`` → ``serialize_plan``'s own default,
+    # which is all a block with no materialized weeks could offer anyway).
     context = {
-        "plan": serializers.serialize_plan(plan),
+        "plan": serializers.serialize_plan(
+            plan, week=serializers.first_live_week(mesocycle)
+        ),
         "coach_style": _coach_style(plan.coach),
         "block": serializers.serialize_agent_block(plan, mesocycle),
     }

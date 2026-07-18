@@ -27,6 +27,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso.factories import CoachAthleteFactory
+from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import Session
@@ -237,6 +238,91 @@ class TestWeekAddEndpoint:
         plan = link.create_plan()
         client.force_login(link.coach)
         assert client.get(self._url(plan)).status_code == 405
+
+    # -----------------------------------------------------------------------
+    # ``mesocycle_id`` — "+ Add week" targets the block the coach is VIEWING,
+    # not whichever block ``current_week`` used to re-derive (§4b FIX 2).
+    # -----------------------------------------------------------------------
+
+    def test_posted_mesocycle_id_targets_that_block(self, client):
+        # The grid opens on whatever block the client already has loaded, and
+        # the client always knows its id — the designer sends it explicitly so
+        # "+ Add week" can never disagree with what's on screen.
+        link = CoachAthleteFactory()
+        plan = link.create_plan()
+        meso1 = plan.mesocycles.get()
+        meso2 = MesocycleFactory(plan=plan, order=1)
+        WeekFactory(mesocycle=meso2, index=1)
+        client.force_login(link.coach)
+
+        resp = client.post(
+            self._url(plan),
+            data=json.dumps({"mesocycle_id": meso2.pk}),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 201
+        assert meso2.weeks.count() == 2  # grew
+        assert meso1.weeks.count() == 1  # untouched
+
+    def test_foreign_mesocycle_id_is_404(self, client):
+        # ``plan=plan`` in the lookup IS the security check — a block that
+        # belongs to some other plan must 404 exactly like an unknown id
+        # would, never silently fall back to one of THIS plan's blocks.
+        link = CoachAthleteFactory()
+        plan = link.create_plan()
+        foreign_meso = MesocycleFactory()  # a different plan entirely
+        client.force_login(link.coach)
+
+        resp = client.post(
+            self._url(plan),
+            data=json.dumps({"mesocycle_id": foreign_meso.pk}),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 404
+        assert Week.objects.filter(mesocycle=foreign_meso).count() == 0
+
+    def test_non_integer_mesocycle_id_is_400(self, client):
+        link = CoachAthleteFactory()
+        plan = link.create_plan()
+        client.force_login(link.coach)
+
+        resp = client.post(
+            self._url(plan),
+            data=json.dumps({"mesocycle_id": "not-a-number"}),
+            content_type="application/json",
+        )
+
+        assert resp.status_code == 400
+
+    def test_bodyless_add_targets_the_plans_first_block_even_when_it_has_no_live_weeks(
+        self, client
+    ):
+        """REGRESSION GUARD: must not revert to ``current_week(plan).mesocycle``.
+
+        The old fallback picked the block of the plan's earliest LIVE week —
+        which is block 2 whenever block 1 hasn't been materialized yet. That
+        disagreed with the grid, which opens on ``_default_grid_mesocycle``
+        (the plan's first block, by ``order``, full stop): the coach would see
+        an empty block 1 on screen while "+ Add week" silently grew block 2,
+        leaving the new week unreachable from the grid the coach was looking
+        at. A bodyless post must land on block 1 regardless of which block
+        happens to have live weeks.
+        """
+        link = CoachAthleteFactory()
+        plan = link.create_plan()
+        meso1 = plan.mesocycles.get()
+        meso1.weeks.all().delete()  # block 1: no live weeks (the empty grid)
+        meso2 = MesocycleFactory(plan=plan, order=1)
+        WeekFactory(mesocycle=meso2, index=1)  # block 2: has a live week
+        client.force_login(link.coach)
+
+        resp = client.post(self._url(plan))  # no body
+
+        assert resp.status_code == 201
+        assert meso1.weeks.count() == 1  # landed on the FIRST block...
+        assert meso2.weeks.count() == 1  # ...block 2 is untouched
 
 
 # ---------------------------------------------------------------------------

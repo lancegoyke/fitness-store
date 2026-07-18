@@ -12,6 +12,7 @@ import pytest
 
 from store_project.meso.agent import service
 from store_project.meso.factories import LoggedSetFactory
+from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import SessionLogFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import SessionLog
@@ -20,6 +21,39 @@ from store_project.meso.tests._helpers import presc
 from store_project.meso.tests.test_agent_validation import make_plan
 
 pytestmark = pytest.mark.django_db
+
+
+def test_context_plan_and_block_halves_agree_on_a_non_first_block():
+    # §4b FIX 1 regression: ``context["block"]`` is the requested mesocycle,
+    # but ``context["plan"]`` used to come from a bare ``serializers.
+    # serialize_plan(plan)``, which resolves its OWN opening week via
+    # ``current_week(plan)`` — the plan's earliest LIVE week, i.e. block 1.
+    # For a block-2 run the model would see block 1's prescription ids sitting
+    # right next to block 2's ``block`` payload; it could target one of those
+    # block-1 ids, and validation would then silently drop the change as
+    # outside ``batch.mesocycle`` — an edit the coach asked for that just
+    # vanishes. Both halves must describe the SAME block.
+    plan, session, cell1 = make_plan()  # block 1 (order=0), week 1, "Back Squat"
+    meso2 = MesocycleFactory(plan=plan, order=1)
+    week2 = WeekFactory(mesocycle=meso2, index=1)
+    session2 = day(week2, day_number=1, name="Upper")
+    cell2 = presc(session2, name="Bench Press")
+
+    context = service.build_context(plan, meso2)
+
+    block_ids = {
+        ex["id"]
+        for w in context["block"]["weeks"]
+        for s in w["sessions"]
+        for ex in s["exercises"]
+    }
+    plan_ids = {ex["id"] for s in context["plan"]["program"] for ex in s["exercises"]}
+    assert cell2.pk in block_ids
+    # This is the failure mode: if ``build_context`` reverts to a bare
+    # ``serialize_plan(plan)``, ``plan_ids`` comes back as block 1's cells
+    # instead and both of the assertions below flip.
+    assert cell2.pk in plan_ids
+    assert cell1.pk not in plan_ids
 
 
 def test_context_includes_whole_block():

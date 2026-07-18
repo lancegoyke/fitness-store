@@ -13,7 +13,9 @@ import pytest
 from django.urls import reverse
 
 from store_project.meso.factories import AgentProposalBatchFactory
+from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import ProposedChangeFactory
+from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import ProposedChange
 from store_project.meso.tests.test_agent_validation import make_plan
@@ -147,6 +149,50 @@ class TestBatchApply:
         plan, _, batch, _ = make_batch_with_swap()
         client.force_login(plan.coach)
         assert client.get(apply_url(batch)).status_code == 405
+
+
+class TestBatchApplyDeliverUrl:
+    """§4b FIX 3: the post-apply deliver URL is pinned to the batch's own block.
+
+    A bare ``/meso/deliver/<plan>/`` resolves its week via ``current_week(plan)``
+    — the plan's earliest LIVE week, i.e. block 1 — so a coach who ran the agent
+    on block 2 would land on block 1 and see none of the changes they just
+    applied. ``batch_apply`` appends ``?week=<the batch's block's first live
+    week>`` so the deliver screen opens on the block that was actually edited.
+    """
+
+    def test_deliver_url_carries_the_batchs_block_first_live_week(self, client):
+        plan, presc, batch, _ = make_batch_with_swap()  # block 1 from make_plan()
+        meso2 = MesocycleFactory(plan=plan, order=1)
+        week2 = WeekFactory(mesocycle=meso2, index=1)
+        WeekFactory(mesocycle=meso2, index=2)  # a later week — "first" must win
+        batch.mesocycle = meso2
+        batch.save(update_fields=["mesocycle"])
+        client.force_login(plan.coach)
+
+        resp = client.post(apply_url(batch))
+
+        assert resp.status_code == 200
+        expected = (
+            reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk})
+            + f"?week={week2.pk}"
+        )
+        assert resp.json()["deliver_url"] == expected
+
+    def test_batch_with_no_block_returns_the_bare_deliver_url(self, client):
+        # ``mesocycle`` is nullable (``SET_NULL``) for legacy rows and any
+        # caller that never pinned a block (the eval harness, direct/test
+        # callers) — must degrade to the bare URL, not error.
+        plan, _, batch, _ = make_batch_with_swap()
+        assert batch.mesocycle_id is None  # factory default: no block pinned
+        client.force_login(plan.coach)
+
+        resp = client.post(apply_url(batch))
+
+        assert resp.status_code == 200
+        assert resp.json()["deliver_url"] == reverse(
+            "meso:deliver_plan", kwargs={"plan_id": plan.pk}
+        )
 
 
 class TestBatchDismiss:

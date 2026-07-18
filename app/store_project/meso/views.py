@@ -84,6 +84,7 @@ from .models import Week
 from .models import WeekDelivery
 from .personal_records import new_records_in
 from .serializers import current_week
+from .serializers import first_live_week
 from .serializers import serialize_chat_thread
 from .serializers import serialize_mesocycle_grid
 from .serializers import serialize_new_record
@@ -2852,26 +2853,41 @@ def api_mesocycle_grid(request, plan_id):
 def week_add(request, plan_id):
     """Materialize the next week in the plan's active block and open onto it.
 
-    The designer's "+ Add week": grows the mesocycle of ``current_week``'s
-    default block — or, lacking one, the plan's last block — by copying its
-    latest week's grid (``Mesocycle.append_week``). The new week is live and
-    editable immediately (programs are date-less; there's no "current" week
-    it could preempt). Scoped + edit-gated like the other designer writes (403
-    foreign, 402 over-limit). Row-locks the mesocycle so two concurrent
+    The designer's "+ Add week": grows the block the coach is **viewing** by
+    copying its latest week's grid (``Mesocycle.append_week``). The new week is
+    live and editable immediately (programs are date-less; there's no "current"
+    week it could preempt). Scoped + edit-gated like the other designer writes
+    (403 foreign, 402 over-limit). Row-locks the mesocycle so two concurrent
     submits can't both read the same max index and collide on
     ``unique_week_index`` (explicit transaction — prod views run in
     autocommit). Returns the plan pinned to the new week so the client
     switches to it.
+
+    The client posts ``mesocycle_id`` (the grid's open block); the ``plan=plan``
+    filter is the security check, so a foreign block 404s. Lacking one, this
+    falls back to ``_default_grid_mesocycle`` — the SAME default the grid itself
+    opens on. It used to fall back to ``current_week(plan).mesocycle``, the
+    earliest *live* week's block, which disagreed with the grid whenever the
+    plan's first block had no materialized weeks: the coach saw an empty block 1
+    but "+ Add week" appended to block 2, and the refetched grid still showed
+    block 1 empty — the week was unreachable.
     """
     plan, forbidden = _editable_plan_or_response(request, plan_id)
     if forbidden is not None:
         return forbidden
-    open_week = current_week(plan)
-    mesocycle = (
-        open_week.mesocycle
-        if open_week is not None
-        else plan.mesocycles.order_by("order").last()
-    )
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    mesocycle_id = payload.get("mesocycle_id")
+    if mesocycle_id is not None:
+        try:
+            mesocycle_id = int(mesocycle_id)
+        except (TypeError, ValueError):
+            return HttpResponseBadRequest("mesocycle_id must be an integer.")
+        mesocycle = get_object_or_404(Mesocycle, pk=mesocycle_id, plan=plan)
+    else:
+        mesocycle = _default_grid_mesocycle(plan)
     if mesocycle is None:
         return HttpResponseBadRequest("This plan has no block to add a week to.")
     with transaction.atomic():
@@ -3934,9 +3950,9 @@ def agent_propose(request, plan_id):
         # different (or, post-``is_current``, silently wrong-block) answer each
         # time. ``plan=plan`` in the lookup IS the security check: a block from
         # a foreign plan 404s exactly like a foreign plan id would, never
-        # leaking whether it exists. No ``mesocycle_id`` (today — the designer
-        # sending it is a follow-up commit) falls back to the plan's first
-        # block, same default the grid uses.
+        # leaking whether it exists. A request without ``mesocycle_id`` (a
+        # legacy or non-designer client) falls back to the plan's first block,
+        # the same default the grid uses.
         mesocycle_id = payload.get("mesocycle_id")
         if mesocycle_id is not None:
             try:
@@ -4086,8 +4102,17 @@ def batch_apply(request, batch_id):
     with transaction.atomic():
         record_plan_action(batch.plan, "Applied agent changes")
         result = agent_apply.apply_batch(batch)
-    # Where the review screen sends the coach next: the plan's deliver screen.
+    # Where the review screen sends the coach next: the deliver screen, pinned to
+    # the block the batch actually edited. A bare deliver URL resolves its own
+    # week via ``current_week(plan)`` — the plan's earliest live week — so a coach
+    # who ran the agent on block 2 would land on block 1 and see none of the
+    # changes they just applied. ``?week=`` is the deliver screen's own selector.
+    # Falls back to the bare URL when the batch has no block (a legacy row, or one
+    # hard-deleted since — ``SET_NULL``) or its block has no live weeks.
     next_url = reverse("meso:deliver_plan", kwargs={"plan_id": batch.plan_id})
+    applied_week = first_live_week(batch.mesocycle)
+    if applied_week is not None:
+        next_url = f"{next_url}?week={applied_week.pk}"
     return JsonResponse(
         {
             "ok": True,

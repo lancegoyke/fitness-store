@@ -374,15 +374,25 @@ export function useGrid(options: UseGridOptions) {
   const addWeek = useCallback(
     () =>
       runStructural(async () => {
+        // Post the block we're VIEWING. Without it the server falls back to the
+        // plan's first block, which is the same block the grid opens on today —
+        // but only by coincidence, and it silently diverged before (an empty
+        // first block sent the new week to a later one, where this grid would
+        // never show it).
+        const mesocycleId = grid?.mesocycle?.id;
         try {
-          await apiPost(`/meso/api/plan/${planId}/week/`, null, csrf);
+          await apiPost(
+            `/meso/api/plan/${planId}/week/`,
+            mesocycleId != null ? { mesocycle_id: mesocycleId } : null,
+            csrf,
+          );
         } catch (err) {
           console.error("Add week failed", err);
           return;
         }
         await refetchGrid();
       }),
-    [planId, csrf, runStructural, refetchGrid],
+    [grid, planId, csrf, runStructural, refetchGrid],
   );
 
   const removeWeek = useCallback(

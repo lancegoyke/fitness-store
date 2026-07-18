@@ -32,6 +32,7 @@ from store_project.meso.models import SessionLog
 from store_project.meso.models import Unit
 from store_project.meso.models import Week
 from store_project.meso.parsing import compose_prescription_text
+from store_project.meso.serializers import first_live_week
 from store_project.meso.serializers import serialize_athlete_identity
 from store_project.meso.serializers import serialize_mesocycle_grid
 from store_project.meso.serializers import serialize_plan
@@ -854,3 +855,43 @@ class TestSerializeMesocycleGridQueries:
         f = _build_grid_meso()
         with django_assert_num_queries(9):
             serialize_mesocycle_grid(f.meso)
+
+
+class TestFirstLiveWeek:
+    """``first_live_week`` — the block-scoped counterpart to ``current_week``.
+
+    §4b, docs/meso/remove-current-week-plan.md. Every caller that has already
+    resolved *which block* it means (the agent's persisted ``batch.mesocycle``,
+    the grid/add-week default, apply's deliver-URL pin) needs the earliest live
+    week of THAT block, not the plan's earliest live week overall — falling
+    through to ``current_week(plan)`` is exactly the bug this helper replaced.
+    """
+
+    def test_returns_the_earliest_live_week_of_the_block(self):
+        meso = MesocycleFactory()
+        week2 = WeekFactory(mesocycle=meso, index=2)
+        week1 = WeekFactory(mesocycle=meso, index=1)
+        WeekFactory(mesocycle=meso, index=3)
+        assert first_live_week(meso) == week1
+        assert week2 != week1  # sanity: index ordering, not creation order
+
+    def test_respects_index_ordering_not_pk_ordering(self):
+        # Create the low-index week SECOND (a higher pk) so a pk-ordered query
+        # would return the wrong one — only an explicit ``order_by("index")``
+        # gets this right.
+        meso = MesocycleFactory()
+        WeekFactory(mesocycle=meso, index=5)
+        earliest = WeekFactory(mesocycle=meso, index=1)
+        assert first_live_week(meso) == earliest
+
+    def test_a_block_with_only_soft_deleted_weeks_returns_none(self):
+        meso = MesocycleFactory()
+        week = WeekFactory(mesocycle=meso, index=1)
+        week.soft_delete()
+        assert first_live_week(meso) is None
+
+    def test_none_mesocycle_is_none_safe(self):
+        # The batch's ``mesocycle`` is ``SET_NULL`` (legacy rows, hard-deleted
+        # blocks) — callers pass it straight through without a None-check of
+        # their own, so this must not raise.
+        assert first_live_week(None) is None
