@@ -26,16 +26,16 @@ def test_context_includes_whole_block():
     # P4 whole-block grounding: the agent sees EVERY live week of the
     # grounded mesocycle — its full session/cell grid (numbers incl.
     # ``rest``) plus each week's volume/intensity — so it can program across
-    # the block. (Which block gets grounded on is being redesigned to persist
-    # the coach's viewed block on the agent batch — docs/meso/remove-current-
-    # week-plan.md §4b — a separate commit; this test only pins today's
-    # earliest-live-week fallback shape.)
+    # the block. (Which block gets grounded on is now the caller's explicit
+    # ``mesocycle`` — the coach's viewed block, persisted on the batch —
+    # docs/meso/remove-current-week-plan.md §4b; this test just pins the
+    # whole-block shape, not the scoping itself.)
     plan, session, _ = make_plan()  # week 1 with a day + "Back Squat"
     week2 = WeekFactory(mesocycle=session.week.mesocycle, index=2)
     w2_session = day(week2, day_number=1, name="Lower")
     presc(w2_session, name="Front Squat")
 
-    block = service.build_context(plan)["block"]
+    block = service.build_context(plan, plan.mesocycles.first())["block"]
 
     assert len(block["weeks"]) == 2
     for w in block["weeks"]:
@@ -58,7 +58,7 @@ def test_context_includes_whole_block():
 
 def test_context_has_empty_recent_logs_without_any():
     plan, _, _ = make_plan()
-    context = service.build_context(plan)
+    context = service.build_context(plan, plan.mesocycles.first())
     assert context["recent_logs"] == []
 
 
@@ -72,7 +72,7 @@ def test_context_includes_recent_logged_sets():
     )
     LoggedSetFactory(session_log=log, prescription=presc, reps="5", load="100", rpe="8")
 
-    context = service.build_context(plan)
+    context = service.build_context(plan, plan.mesocycles.first())
 
     logs = context["recent_logs"]
     assert len(logs) == 1
@@ -88,7 +88,7 @@ def test_recent_logs_are_scoped_to_the_plans_athlete():
     # A log on a different athlete/plan must not leak into this plan's grounding.
     SessionLogFactory(session=other_session, athlete=other_plan.athlete)
 
-    context = service.build_context(plan)
+    context = service.build_context(plan, plan.mesocycles.first())
 
     assert context["recent_logs"] == []
 
@@ -102,7 +102,7 @@ def test_recent_logs_are_capped_and_newest_first():
             date=datetime.date(2026, 6, day_num),
         )
 
-    logs = service.build_context(plan)["recent_logs"]
+    logs = service.build_context(plan, plan.mesocycles.first())["recent_logs"]
 
     assert len(logs) == service.RECENT_LOG_LIMIT
     # Newest first.

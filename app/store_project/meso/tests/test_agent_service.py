@@ -65,7 +65,11 @@ def test_persists_valid_changes_into_a_batch():
     )
 
     batch, rejected = service.propose_changes(
-        plan, "Make it knee-safe.", coach=plan.coach, client=fake
+        plan,
+        "Make it knee-safe.",
+        coach=plan.coach,
+        mesocycle=plan.mesocycles.first(),
+        client=fake,
     )
 
     assert rejected == []
@@ -105,7 +109,9 @@ def test_persisted_changes_carry_an_apply_payload():
         }
     )
 
-    batch, rejected = service.propose_changes(plan, "go", coach=plan.coach, client=fake)
+    batch, rejected = service.propose_changes(
+        plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first(), client=fake
+    )
 
     assert rejected == []
     changes = list(batch.changes.all())
@@ -121,7 +127,13 @@ def test_grounds_the_client_on_plan_and_contraindications():
     CoachProfileFactory(user=plan.coach, programming_style=["Compound-first"])
     fake = FakeClient({"summary": "", "changes": []})
 
-    service.propose_changes(plan, "Plan week 2.", coach=plan.coach, client=fake)
+    service.propose_changes(
+        plan,
+        "Plan week 2.",
+        coach=plan.coach,
+        mesocycle=plan.mesocycles.first(),
+        client=fake,
+    )
 
     assert fake.instruction == "Plan week 2."
     assert fake.context["plan"]["plan"]["id"] == plan.pk
@@ -152,7 +164,9 @@ def test_unsafe_change_is_rejected_not_persisted():
         }
     )
 
-    batch, rejected = service.propose_changes(plan, "go", coach=plan.coach, client=fake)
+    batch, rejected = service.propose_changes(
+        plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first(), client=fake
+    )
 
     assert batch.changes.count() == 0
     assert len(rejected) == 1
@@ -176,7 +190,9 @@ def test_foreign_target_is_rejected_not_persisted():
         }
     )
 
-    batch, rejected = service.propose_changes(plan, "go", coach=plan.coach, client=fake)
+    batch, rejected = service.propose_changes(
+        plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first(), client=fake
+    )
 
     assert batch.changes.count() == 0
     assert len(rejected) == 1
@@ -187,7 +203,9 @@ def test_raises_when_no_client_configured(monkeypatch):
     plan, _, _ = make_plan()
     monkeypatch.setattr(client_module, "get_default_client", lambda: None)
     with pytest.raises(service.AgentNotConfigured):
-        service.propose_changes(plan, "go", coach=plan.coach)
+        service.propose_changes(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
 
 
 class BoomClient:
@@ -202,5 +220,11 @@ class BoomClient:
 def test_provider_failure_wrapped_as_agent_error():
     plan, _, _ = make_plan()
     with pytest.raises(service.AgentError):
-        service.propose_changes(plan, "go", coach=plan.coach, client=BoomClient())
+        service.propose_changes(
+            plan,
+            "go",
+            coach=plan.coach,
+            mesocycle=plan.mesocycles.first(),
+            client=BoomClient(),
+        )
     assert not AgentProposalBatch.objects.exists()

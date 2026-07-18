@@ -31,7 +31,6 @@ from ..models import Prescription
 from ..models import ProposedChange
 from ..parsing import compose_prescription_text
 from ..parsing import parse_prescription
-from ..serializers import current_week
 
 
 def _parsed_bits(cell):
@@ -173,8 +172,27 @@ def _apply_add(change):
 
 
 def _apply_deload(change):
-    """Flag the change's week as a deload (its session's week, else current)."""
-    week = change.session.week if change.session_id else current_week(change.batch.plan)
+    """Flag the change's week as a deload (its session's week, else the batch's block).
+
+    A deload targets a whole week, not a specific row, so a candidate that
+    named no session (a plan-level "make this a deload week" edit) needs a
+    fallback week to flag. That fallback is the batch's *persisted* block's
+    earliest live week (``AgentProposalBatch.mesocycle``, §4b) — never a fresh
+    re-derivation, and never the plan's earliest-live week regardless of block.
+    Degrades to a safe no-op, not a wrong-block write, when the batch carries no
+    block (``mesocycle`` is ``None``: no block was ever resolved, or it was
+    hard-deleted after the run started — ``SET_NULL``) or that block has no
+    live week to flag.
+    """
+    if change.session_id:
+        week = change.session.week
+    else:
+        mesocycle = change.batch.mesocycle
+        week = (
+            mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index").first()
+            if mesocycle is not None
+            else None
+        )
     if week is None:
         return None
     if not week.is_deload:
@@ -234,7 +252,7 @@ def apply_batch(batch):
     with transaction.atomic():
         changes = batch.changes.exclude(
             status=ProposedChange.Status.REJECTED
-        ).select_related("prescription", "session__week")
+        ).select_related("prescription", "session__week", "batch__mesocycle")
         for change in changes:
             result = apply_change(change)
             if result is None:

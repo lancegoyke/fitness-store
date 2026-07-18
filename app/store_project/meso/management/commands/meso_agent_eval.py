@@ -39,6 +39,12 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         plan = self._resolve_plan(options["plan_id"])
+        # §4b: the harness has no "coach's viewed block" to inherit, so it
+        # evaluates against the plan's first block by order — same default the
+        # designer grid/agent fall back to when nothing pins one explicitly.
+        mesocycle = plan.mesocycles.order_by("order").first()
+        if mesocycle is None:
+            raise CommandError(f"Plan #{plan.pk} has no block to evaluate against.")
 
         if options["dry_run"]:
             client = evals.ScriptedEvalClient()
@@ -64,7 +70,9 @@ class Command(BaseCommand):
         try:
             with transaction.atomic():
                 for case in evals.GOLDEN_CASES:
-                    results.append(evals.evaluate(plan, case, client=client))
+                    results.append(
+                        evals.evaluate(plan, case, client=client, mesocycle=mesocycle)
+                    )
                 transaction.set_rollback(True)
         except Exception as exc:  # provider/db failure — surface, don't traceback
             raise CommandError(f"Eval run failed: {exc}") from exc

@@ -699,10 +699,14 @@ def _reserve_plan_draft(request, plan):
         "Drafting your program with the AI agent — review the proposed week in a "
         "moment.",
     )
+    # §4b: a freshly scaffolded plan (``Plan.scaffold``) has exactly one block,
+    # so "the block the coach had open" is unambiguous here — no ``mesocycle_id``
+    # to parse, unlike ``agent_propose``'s existing-plan path.
     return agent_service.create_drafting_batch(
         plan,
         agent_service.DRAFT_INSTRUCTION,
         coach=request.user,
+        mesocycle=_default_grid_mesocycle(plan),
         trigger=AgentProposalBatch.Trigger.DRAFT,
     )
 
@@ -2795,17 +2799,21 @@ def week_view(request, plan_id, week_id):
 
 
 def _default_grid_mesocycle(plan):
-    """The block the P1 grid opens onto when no ``?mesocycle=`` is given.
+    """The block that opens/grounds when nothing pins one explicitly.
 
-    Mirrors ``serialize_plan``'s block resolution: ``current_week``'s
-    earliest-live-week default's block, falling back to the plan's first
-    block for the rare case where the plan has a block but no materialized
-    weeks yet (a fresh, not-yet-designed block). ``None`` only when the plan
-    has no block at all.
+    Shared by the P1 grid default (§2.7) and the agent's block scope (§4b,
+    ``agent_propose``/``_reserve_plan_draft`` when the request carries no
+    ``mesocycle_id``): the plan's first block by ``order`` — full stop.
+    ``None`` only when the plan has no block at all.
+
+    This is a genuine simplification versus the old ``current_week``-routed
+    version, not just a rename: that one preferred the earliest-LIVE-week's
+    block, falling back to the first block only when that block had no
+    materialized weeks yet. Dropping the live-week detour means the answer no
+    longer depends on which weeks happen to be materialized/deleted — "the
+    plan's first block" is a single, stable fact, and it's what a coach
+    opening a fresh designer/grid/agent run actually expects to land on.
     """
-    open_week = current_week(plan)
-    if open_week is not None:
-        return open_week.mesocycle
     return plan.mesocycles.order_by("order").first()
 
 
@@ -3919,6 +3927,28 @@ def agent_propose(request, plan_id):
         if len(instruction) > MAX_INSTRUCTION_LENGTH:
             return HttpResponseBadRequest("Instruction is too long.")
 
+        # §4b (docs/meso/remove-current-week-plan.md): capture which block the
+        # coach had open, ONCE, right now, and freeze it onto the batch —
+        # grounding runs in a background job and apply on a later request, so
+        # neither can re-read a live "current" pointer without risking a
+        # different (or, post-``is_current``, silently wrong-block) answer each
+        # time. ``plan=plan`` in the lookup IS the security check: a block from
+        # a foreign plan 404s exactly like a foreign plan id would, never
+        # leaking whether it exists. No ``mesocycle_id`` (today — the designer
+        # sending it is a follow-up commit) falls back to the plan's first
+        # block, same default the grid uses.
+        mesocycle_id = payload.get("mesocycle_id")
+        if mesocycle_id is not None:
+            try:
+                mesocycle_id = int(mesocycle_id)
+            except (TypeError, ValueError):
+                return HttpResponseBadRequest("mesocycle_id must be an integer.")
+            mesocycle = get_object_or_404(Mesocycle, pk=mesocycle_id, plan=plan)
+        else:
+            mesocycle = _default_grid_mesocycle(plan)
+        if mesocycle is None:
+            return HttpResponseBadRequest("This plan has no block to program yet.")
+
         # Guard on the key here so we answer 503 without persisting a dead batch.
         if agent_client.get_default_client() is None:
             return JsonResponse(
@@ -3933,6 +3963,7 @@ def agent_propose(request, plan_id):
             plan,
             instruction,
             coach=request.user,
+            mesocycle=mesocycle,
             trigger=AgentProposalBatch.Trigger.MANUAL,
         )
     # The batch is committed; enqueue the worker run and bump the plan outside the

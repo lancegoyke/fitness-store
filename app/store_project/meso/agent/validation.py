@@ -19,7 +19,6 @@ import re
 
 from ..models import Prescription
 from ..models import Session
-from ..serializers import current_week
 
 VALID_KINDS = {"swap", "progress", "volume", "deload", "add"}
 
@@ -183,8 +182,18 @@ def _fmt_percent(value):
     return str(int(value)) if value == int(value) else str(value)
 
 
-def clean_change(raw, plan, *, forbidden=None):
+def clean_change(raw, plan, *, mesocycle, forbidden=None):
     """Validate and normalize one raw change dict.
+
+    ``mesocycle`` is the block this run is scoped to — the coach's *viewed*
+    block, captured on the batch at request time (§4b,
+    docs/meso/remove-current-week-plan.md). It is passed in, never re-derived:
+    this function used to call ``current_week(plan)`` itself, which — once
+    ``is_current`` was removed — would silently resolve to the plan's
+    earliest-live week's block instead of the one the coach actually reviewed,
+    dropping (or worse, misattributing) otherwise-valid edits. ``None`` is a
+    legitimate value (no block, or one hard-deleted after the run started) and
+    simply matches nothing, same as any other foreign scope.
 
     Returns ``(cleaned, errors)``: ``cleaned`` is a dict of model field values
     when valid (else ``None``); ``errors`` is a list of human-readable reasons
@@ -218,15 +227,13 @@ def clean_change(raw, plan, *, forbidden=None):
     rationale = raw.get("rationale", "")
     cleaned["rationale"] = rationale.strip() if isinstance(rationale, str) else ""
 
-    # Structural: targets must belong to the plan's CURRENT block, in any LIVE
-    # week (P4 block-wide semantics). The agent is grounded on that one block
-    # (``serialize_agent_block`` serializes only ``current_week(plan).mesocycle``),
-    # so a structural swap renames the block-shared slot and numeric edits address
-    # any *week* of that block — but a target from another block of the same plan
-    # (a past/future mesocycle the coach did not review) is out of contract and is
-    # dropped, just like a foreign-plan id.
-    week = current_week(plan)
-    mesocycle = week.mesocycle if week is not None else None
+    # Structural: targets must belong to the batch's block (``mesocycle``, the
+    # coach's viewed block, §4b), in any LIVE week (P4 block-wide semantics).
+    # The agent is grounded on that one block (``serialize_agent_block``), so a
+    # structural swap renames the block-shared slot and numeric edits address
+    # any *week* of that block — but a target from another block of the same
+    # plan (a past/future mesocycle the coach did not review) is out of
+    # contract and is dropped, just like a foreign-plan id.
     presc = _resolve(
         Prescription,
         raw.get("prescription_id"),

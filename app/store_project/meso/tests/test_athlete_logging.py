@@ -624,5 +624,5 @@ class TestLogFeedsBack:
         assert recent[0]["sets"][0]["exercise"] == "Box Squat"
         assert recent[0]["sets"][0]["load"] == "105"
         # And through the agent's context builder.
-        context = service.build_context(s.plan)
+        context = service.build_context(s.plan, s.plan.mesocycles.first())
         assert context["recent_logs"][0]["sets"][0]["load"] == "105"

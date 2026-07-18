@@ -2023,6 +2023,27 @@ class AgentProposalBatch(models.Model):
         related_name="proposal_batches",
         verbose_name=_("Plan"),
     )
+    # The block the coach was viewing when they kicked off this run (§4b,
+    # docs/meso/remove-current-week-plan.md) — captured once at request time
+    # and frozen here, because grounding + validation run in a BACKGROUND JOB
+    # and apply happens on a LATER coach request; nothing downstream can re-read
+    # a live "current" pointer across that time gap without risking a different
+    # answer each time (or, post-``is_current``, silently defaulting to block 1
+    # while the coach works block 2 — the exact regression this field fixes).
+    # ``SET_NULL`` IS LOAD-BEARING: this batch is also the usage/cost ledger
+    # (agent-usage tracking v1), so deleting a block must never cascade into
+    # deleting billing history. ``null=True`` additionally covers legacy rows
+    # (created before this field existed) and any caller that doesn't pin a
+    # block (the eval harness, direct/test callers) — those degrade to the
+    # empty-block grounding guard, never to a silent earliest-live re-derivation.
+    mesocycle = models.ForeignKey(
+        "Mesocycle",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="proposal_batches",
+        verbose_name=_("Block"),
+    )
     coach = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

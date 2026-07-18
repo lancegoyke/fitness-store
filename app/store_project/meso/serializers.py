@@ -976,24 +976,26 @@ def serialize_mesocycle_grid(mesocycle):
     }
 
 
-def serialize_agent_block(plan):
-    """The whole current block for the agent's grounding (P4).
+def serialize_agent_block(plan, mesocycle):
+    """The whole block ``mesocycle`` for the agent's grounding (P4, §4b).
 
-    Every live week of the plan's opening-default mesocycle (``current_week``'s
-    earliest-live-week fallback — see its docstring) with its full session/cell
-    grid (numbers incl. ``rest``) plus the week's phase/volume/intensity/deload
-    flags — so the agent programs progression across the block, not one week
-    in isolation. Reuses ``serialize_week_snapshot`` verbatim. A cell's pk is
-    stable, so ids here match ``serialize_plan``'s single-week ``program`` —
-    any id the agent returns resolves the same either way.
+    Every live week of ``mesocycle`` with its full session/cell grid (numbers
+    incl. ``rest``) plus the week's phase/volume/intensity/deload flags — so the
+    agent programs progression across the block, not one week in isolation.
+    Reuses ``serialize_week_snapshot`` verbatim. A cell's pk is stable, so ids
+    here match ``serialize_plan``'s single-week ``program`` — any id the agent
+    returns resolves the same either way.
 
-    NOTE: which block this grounds on is being redesigned (persist the coach's
-    *viewed* block on the agent batch, docs/meso/remove-current-week-plan.md
-    §4b) in a follow-up commit — this earliest-live fallback is a placeholder
-    until that lands.
+    ``mesocycle`` is passed in directly — the caller (``build_context``, from
+    ``AgentProposalBatch.mesocycle``) already resolved *which* block this run
+    is scoped to at request time; this function does no re-derivation of its
+    own (docs/meso/remove-current-week-plan.md §4b — re-deriving here, on every
+    call, is exactly what let the agent silently drift onto a different block
+    than the one the coach had open). ``None`` is a real, expected input — a
+    plan with no block, or a batch whose block was hard-deleted after the run
+    started (``SET_NULL``) — and degrades to the same empty shape a plan with
+    no live weeks would produce, never a fallback re-derivation.
     """
-    week = current_week(plan)
-    mesocycle = week.mesocycle if week else None
     if mesocycle is None:
         return {"name": "", "weeks": []}
     weeks = mesocycle.weeks.filter(deleted_at__isnull=True).order_by("index")
