@@ -1,8 +1,9 @@
 # Meso — remove the current-week (`is_current`) concept
 
-**Status:** planned 2026-07-18 · **not started** · both product decisions RESOLVED
-2026-07-18 (§4a cadence-based compliance; §4b persist the viewed block on the agent
-batch) · migration `0043`
+**Status:** planned 2026-07-18 · **IMPLEMENTED 2026-07-18** (branch
+`meso/remove-current-week`) · both product decisions RESOLVED 2026-07-18 (§4a
+cadence-based compliance; §4b persist the viewed block on the agent batch) ·
+migrations `0043` (RemoveField) + `0044` (agent-batch block FK)
 **Owner:** Lance
 **Supersedes:** the "Meso designer cleanup" MEMORY guardrail ("never delete
 `is_current`/Make-current — it's the load-bearing athlete live-week pointer").
@@ -646,18 +647,49 @@ vitest before pushing.
 
 - [x] §4a and §4b decided (2026-07-18): §4a cadence compliance (recency + 14-day
       count); §4b persist the viewed block on the agent batch.
-- [ ] `grep -rn is_current app/store_project/meso frontend/designer` returns only
-      the historical `migrations/0002_*` line.
-- [ ] Migration `0043` applies clean on a prod-shaped DB; `showmigrations` shows a
-      pure append after `0042`.
-- [ ] Athlete home renders **no** "current"/"Week N"/"This week" label; opens to
+- [x] `grep -rn is_current app/store_project/meso frontend/designer` returns only
+      the historical `migrations/0002_*` line — **plus `0043`'s own `RemoveField`
+      and ~8 prose mentions** in docstrings/test-module headers that explain the
+      *removed* concept to future readers (e.g. "'Has a program' no longer means
+      'has an `is_current` week'"). Deliberate: they exist to stop someone
+      re-adding the pointer. No live code reads the field.
+- [x] Migration `0043` applies clean; `showmigrations` shows a pure append after
+      `0042`, and `0044` (§4b's FK) appends after that. `makemigrations --check`
+      reports no drift.
+- [x] Athlete home renders **no** "current"/"Week N"/"This week" label; opens to
       the derived last-engaged program + scroll hint; `?week=` navigates freely.
-- [ ] Coach roster shows the §4a-chosen signal; `roster_activity` unchanged;
+- [x] Coach roster shows the §4a-chosen signal; `roster_activity` unchanged;
       `has_program` re-based onto "plan has a live week."
-- [ ] Agent grounds/validates/applies against the **posted** block, verified by a
+- [x] Agent grounds/validates/applies against the **posted** block, verified by a
       "coach viewing block 2" regression test.
-- [ ] Non-last live weeks deletable; last-live-week guard intact.
-- [ ] Full Django suite green (minus the 2 pre-existing `admin_honeypot`) **and**
-      `frontend/designer` vitest green.
-- [ ] PR body notes the superseded MEMORY guardrail and the intentional athlete
+- [x] Non-last live weeks deletable; last-live-week guard intact.
+- [x] Full Django suite green **and** `frontend/designer` vitest green
+      (2261 Django / 517 vitest; the 2 `admin_honeypot` failures did not
+      reproduce locally).
+- [x] PR body notes the superseded MEMORY guardrail and the intentional athlete
       behavior changes (§8.1, §7 `_touch_plan` loss).
+
+### Audit gaps found during implementation
+
+This doc's surface audit was accurate on the whole, but was wrong or silent in
+four places. Recorded so a future reader doesn't treat it as verified ground
+truth:
+
+1. **`agent/client.py`'s `SYSTEM_PROMPT`** told the model the plan context
+   includes "which week is current." §4b predicted a dangling contract might
+   exist but pointed at `agent/` generally; the string lives in a file §2 never
+   enumerates. Scrubbed.
+2. **`Mesocycle` has no `deleted_at`.** §4b specs `_default_grid_mesocycle` as
+   `plan.mesocycles.filter(deleted_at__isnull=True)…`, which does not compile —
+   only `Week`/`SessionSlot`/`ExerciseSlot` are soft-deletable. The filter was
+   dropped; the "block soft-deleted mid-run" edge case is really about the
+   block's *weeks*, which existing week-level filters already handle.
+3. **`components/BlockView.tsx`** is missing from §2.10 entirely, but reads
+   `w.current` in four places for timeline/calendar highlighting.
+4. **§4a's `has_program` re-base** onto "plan has a live week" cannot be a plain
+   `filter(mesocycles__weeks__deleted_at__isnull=True)` — that LEFT-JOINs and
+   silently matches plans with *zero* weeks (the joined row is NULL, and NULL
+   "is null"). It needs an `Exists` subquery.
+
+Also: §2.10 says to update a committed `static/js/dist` bundle, but that path is
+`.gitignore`d and CI builds it fresh — there is no artifact to commit.
