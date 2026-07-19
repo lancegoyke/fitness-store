@@ -676,6 +676,43 @@ describe("fill across weeks (Ctrl/Cmd+R keybinding)", () => {
     fireEvent.keyDown(screen.getByTestId("cell-line-new-100"), { key: "r", ctrlKey: true });
     expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
   });
+
+  // The retired Fill BUTTON committed the draft implicitly (clicking it blurred
+  // the input). A keybinding fires with focus still in the cell, so without an
+  // explicit commit the server would copy the stale stored stack to the other
+  // weeks and the refetch would clobber the in-progress edit.
+  it("commits an uncommitted prescription draft BEFORE dispatching the fill", () => {
+    const onPatchCell = vi.fn();
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ onPatchCell, onFillAcrossWeeks })} />);
+    const input = screen.getByTestId("cell-text-100");
+    input.focus();
+    fireEvent.change(input, { target: { value: "5 x 5" } });
+    expect(onPatchCell).not.toHaveBeenCalled(); // still an uncommitted draft
+
+    fireEvent.keyDown(input, { key: "r", ctrlKey: true });
+
+    expect(onPatchCell).toHaveBeenCalledWith(100, { text: "5 x 5" });
+    expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
+    expect(onPatchCell.mock.invocationCallOrder[0]).toBeLessThan(onFillAcrossWeeks.mock.invocationCallOrder[0]);
+    expect(document.activeElement).toBe(input); // anchor restored
+  });
+
+  it("commits an uncommitted SUB-LINE draft before dispatching the fill", () => {
+    const onWriteCellLine = vi.fn();
+    const onFillAcrossWeeks = vi.fn();
+    const LINES_GRID = grid({ days: [day({ rows: [row({ cells: { "1": cell({ lines: [{ id: 5, line: 1, text: "RPE 8" }] }) } })] })] });
+    render(<MesoTable {...baseProps({ grid: LINES_GRID, onWriteCellLine, onFillAcrossWeeks })} />);
+    const line = screen.getByTestId("cell-line-100-1");
+    line.focus();
+    fireEvent.change(line, { target: { value: "RPE 9" } });
+    expect(onWriteCellLine).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(line, { key: "r", ctrlKey: true });
+
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9");
+    expect(onWriteCellLine.mock.invocationCallOrder[0]).toBeLessThan(onFillAcrossWeeks.mock.invocationCallOrder[0]);
+  });
 });
 
 describe("add exercise this week", () => {

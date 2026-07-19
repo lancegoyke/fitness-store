@@ -376,6 +376,20 @@ function GridCellEditor({
     if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "r") return;
     e.preventDefault();
     if (busy) return;
+    // Commit the focused draft BEFORE dispatching. The retired Fill button
+    // committed implicitly — clicking it blurred the input — but a keybinding
+    // fires with focus still in the cell, so an in-progress edit would not yet
+    // be queued. fillAcrossWeeks' flushPendingWrites() only awaits writes
+    // ALREADY queued, and the server copies the source stack from the DB, so
+    // without this the fill spreads the stale stored text and the refetch then
+    // clobbers the edit. Blur runs commitIfDirty synchronously (queueing the
+    // write in time for the flush); refocus restores the grid anchor, and the
+    // re-fire of onFocus reseeds the Escape baseline past the commit.
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement && e.currentTarget.contains(active)) {
+      active.blur();
+      active.focus();
+    }
     onFillAcrossWeeks(cellId);
   }
 
