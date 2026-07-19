@@ -1,6 +1,15 @@
 name: Django CI
 
 on:
+  # Manual re-run for a given ref. Added after #488: a push to main was
+  # silently dropped by GitHub (no run of any kind was created for it), so
+  # Django CI never ran and the workflow_run-triggered Deploy below never
+  # fired — main sat un-deployed with no supported way to re-trigger CI for
+  # that commit short of an empty commit or a by-hand deploy. Dispatch this
+  # against `main` (or any ref) from the Actions tab or `gh workflow run` to
+  # re-run the same jobs; no inputs needed. Keep this even though it has no
+  # "normal" callers — it's the recovery path for the next dropped event.
+  workflow_dispatch:
   push:
     branches: ["main"]
     paths-ignore:
