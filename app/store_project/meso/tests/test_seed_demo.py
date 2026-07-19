@@ -23,6 +23,8 @@ import pytest
 from django.contrib.auth.hashers import make_password
 from django.core.management import call_command
 
+from store_project.meso.management.commands.seed_meso_demo import _ease_rpe
+from store_project.meso.management.commands.seed_meso_demo import _week_cell
 from store_project.meso.models import AthleteProfile
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachInvite
@@ -31,6 +33,7 @@ from store_project.meso.models import Contraindication
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import Plan
+from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Week
@@ -76,6 +79,42 @@ def _maya_logged_through_week(plan):
     """
     hypertrophy = plan.mesocycles.get(name="Hypertrophy")
     return hypertrophy.weeks.get(index=2)
+
+
+class TestWeekCellSplitsRpeOntoItsOwnLine:
+    """The seeder's cell shape is a vertical stack, not one crammed line.
+
+    The repo owner's real cells put sets×reps (+ load) on line 0 and RPE on
+    its own sub-line (line 1) — see the module docstring / spreadsheet-
+    parity-plan §2.1, §2.6. ``_week_cell`` composes line 0 the same way as
+    before, minus RPE, and (when the scheme carries an RPE) adds a ``"lines"``
+    sub-line matching ``compose_prescription_text``'s own RPE formatting.
+    """
+
+    def test_cell_with_rpe_has_no_rpe_on_line_0_and_rpe_on_line_1(self):
+        scheme = {"sets": 3, "reps": 12, "rpe": 6.5, "load": 100, "load_step": 0}
+        cell = _week_cell(scheme, week_index=1)
+        assert "RPE" not in cell["text"]
+        assert cell["text"] == "3 x 12, 100"
+        assert cell["lines"] == ["RPE 6.5"]
+
+    def test_cell_with_no_rpe_has_no_sub_line(self):
+        # The accessory rows (``rpe=None``) must not gain a blank sub-line.
+        scheme = {"sets": 4, "reps": 15, "rpe": None, "load": 55, "load_step": 0}
+        cell = _week_cell(scheme, week_index=1)
+        assert cell["text"] == "4 x 15, 55"
+        assert "lines" not in cell
+
+    def test_deload_week_still_puts_the_eased_rpe_on_line_1(self):
+        scheme = {"sets": 4, "reps": 9, "rpe": 7.5, "load": 100, "load_step": 0}
+        cell = _week_cell(scheme, week_index=4, deload_index=4)
+        assert cell["lines"] == [f"RPE {_ease_rpe(7.5)}"]
+        assert cell["lines"] == ["RPE 6"]
+        assert "RPE" not in cell["text"]
+
+    def test_blank_scheme_still_yields_a_blank_cell(self):
+        assert _week_cell(None, week_index=1) == {}
+        assert _week_cell({}, week_index=1) == {}
 
 
 class TestSeedCreatesDemo:
@@ -218,6 +257,38 @@ class TestSeedCreatesDemo:
         assert list(
             logged_through.cells.filter(line__gte=1).values_list("text", flat=True)
         ) == ["Cable Crunch"]
+
+    def test_generated_weeks_carry_rpe_as_a_line_1_sub_line(self):
+        # Week 1 of Hypertrophy is generator-built (unlike week 2's
+        # hand-authored fixture above), so this exercises ``_week_cell``'s
+        # real output end to end: the seeder runs without error and produces
+        # real ``Prescription`` rows at both line 0 (sets×reps, no RPE) and
+        # line 1 (the RPE sub-line) for every row whose scheme carries an
+        # RPE — and no line-1 row at all for the accessory rows that don't.
+        seed()
+        plan = _plan_for(User.objects.get(email=COACH_EMAIL), MAYA_EMAIL)
+        hypertrophy = plan.mesocycles.get(name="Hypertrophy")
+        week1 = hypertrophy.weeks.get(index=1)
+        lower_day = week1.sessions.get(session_slot__day_number=1).session_slot
+        rows = list(lower_day.exercise_slots.order_by("order"))
+        by_name = {row.name: row for row in rows}
+
+        box_squat = by_name["Box Squat (to parallel)"]
+        line0 = Prescription.objects.get(exercise_slot=box_squat, week=week1, line=0)
+        line1 = Prescription.objects.get(exercise_slot=box_squat, week=week1, line=1)
+        assert "RPE" not in line0.text
+        assert line1.text == "RPE 7"
+
+        # "Standing Calf Raise" is seeded with ``rpe=None`` (an accessory row)
+        # — it must not gain a blank/absent sub-line row at all.
+        calf_raise = by_name["Standing Calf Raise"]
+        calf_line0 = Prescription.objects.get(
+            exercise_slot=calf_raise, week=week1, line=0
+        )
+        assert "RPE" not in calf_line0.text
+        assert not Prescription.objects.filter(
+            exercise_slot=calf_raise, week=week1, line__gte=1
+        ).exists()
 
 
 class TestSamplePlanRoundTrips:

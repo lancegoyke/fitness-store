@@ -243,12 +243,20 @@ def _ease_rpe(rpe):
 
 
 def _week_cell(scheme, week_index, *, deload_index=None):
-    """One exercise's cell (``{"text": ...}``) for one week of its block.
+    """One exercise's cell (``{"text": ..., "lines": [...]}``) for one week.
 
     ``week_index`` is 1-based within the block; a deload week (``week_index
     == deload_index``) trims a set, eases RPE, and resets load back to the
     block's starting point rather than tapering off an already-progressed
     number. ``scheme`` absent (``None``/``{}``) yields a blank cell.
+
+    Matches the coach's real cell shape (docs/meso/spreadsheet-parity-
+    plan.md §2.1, §2.6): line 0 is sets×reps (+ load) with NO RPE packed in;
+    when the scheme carries an RPE, it moves to its own line-1 sub-line
+    (``"lines": ["RPE <value>"]``), formatted the same way
+    ``compose_prescription_text`` itself would format an RPE segment. A row
+    with ``rpe=None`` (an accessory row) gets no ``"lines"`` key at all — not
+    a blank sub-line.
     """
     if not scheme:
         return {}
@@ -265,15 +273,18 @@ def _week_cell(scheme, week_index, *, deload_index=None):
             rpe = _ease_rpe(rpe)
     else:
         load = _step_load(load, step, week_index - 1)
-    return {
+    cell = {
         "text": compose_prescription_text(
             sets=sets,
             reps=reps,
-            rpe="" if rpe is None else rpe,
+            rpe="",
             load="" if load is None else load,
             load_pct=scheme.get("load_pct", False),
         )
     }
+    if rpe is not None:
+        cell["lines"] = [compose_prescription_text(rpe=rpe)]
+    return cell
 
 
 def _cells_for_week(days, week_index, *, deload_index=None):
