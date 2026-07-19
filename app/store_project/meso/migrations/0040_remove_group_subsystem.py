@@ -22,6 +22,35 @@ def delete_shared_group_plans(apps, schema_editor):
     Plan.objects.filter(relationship__isnull=True).delete()
 
 
+def flush_deferred_constraints(apps, schema_editor):
+    """Force Postgres to check + clear the deferred RI triggers queued above.
+
+    HAZARD (do not remove): on PostgreSQL, the ORM cascade delete in
+    ``delete_shared_group_plans`` queues deferred RI trigger events on every
+    table FK'd off ``Plan`` (and its children — mesocycles, weeks, slots,
+    cells, ...), because this app's FK constraints are
+    ``DEFERRABLE INITIALLY DEFERRED``. Postgres refuses to ``ALTER TABLE`` a
+    table with pending trigger events *in the same transaction*, and the very
+    next operations below do exactly that to ``meso_plan``. On an empty
+    database the delete matches zero rows and queues nothing, so this only
+    bites a database that actually has group-rooted plans (a restore, or a
+    local/staging DB with real data) — which is why it can pass CI/prod and
+    still fail elsewhere. ``SET CONSTRAINTS ALL IMMEDIATE`` forces Postgres to
+    check and clear those queued events right here, before the ALTERs, while
+    keeping the whole migration in one atomic transaction. See 0036/0037 for
+    the earlier occurrence of this same hazard (there, split across two
+    migrations instead — not an option here since prod already has this
+    migration recorded as applied).
+
+    Guarded to Postgres only: ``SET CONSTRAINTS`` is invalid syntax on
+    SQLite, which is what this suite's default test settings
+    (``config.settings.test``) run on — an unconditional ``RunSQL`` here
+    breaks every migration-touching test.
+    """
+    if schema_editor.connection.vendor == "postgresql":
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -31,6 +60,9 @@ class Migration(migrations.Migration):
     operations = [
         migrations.RunPython(
             delete_shared_group_plans, migrations.RunPython.noop, elidable=True
+        ),
+        migrations.RunPython(
+            flush_deferred_constraints, migrations.RunPython.noop, elidable=True
         ),
         migrations.RemoveConstraint(
             model_name="groupmembership",
