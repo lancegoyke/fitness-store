@@ -1207,7 +1207,29 @@ def _logged_sets_from_cells(log, prescriptions):
     raises): a cell that doesn't fully parse still logs one set with whatever
     reps/load/rpe *did* parse (blank where it didn't) rather than crashing — a
     %1RM load token (``"72%"``, no absolute bar weight) logs with a blank load.
+
+    ``parse_prescription`` only classifies a cell's line 0 (see its own
+    docstring) — but the generator's cells (``_week_cell``) split RPE off
+    line 0 onto its own line-1 sub-line, so a generated cell's line 0 alone
+    never carries an RPE. Without recovering it from the sub-line, every
+    auto-logged set for a generated (non-hand-authored) cell would silently
+    log a blank RPE — the regression this sub-line lookup exists to fix.
+    Hand-authored cells that still pack RPE inline on line 0 are unaffected
+    (line 0's RPE wins when present). One query fetches every prescription's
+    sub-lines up front, keyed by ``(exercise_slot_id, week_id)``, instead of
+    one query per cell (N+1).
     """
+    sub_lines_by_cell = {}
+    if prescriptions:
+        slot_ids = {p.exercise_slot_id for p in prescriptions}
+        week_ids = {p.week_id for p in prescriptions}
+        sub_lines = Prescription.objects.filter(
+            exercise_slot_id__in=slot_ids, week_id__in=week_ids, line__gte=1
+        ).order_by("line")
+        for sub_line in sub_lines:
+            key = (sub_line.exercise_slot_id, sub_line.week_id)
+            sub_lines_by_cell.setdefault(key, []).append(sub_line)
+
     rows = []
     for prescription in prescriptions:
         parsed = parse_prescription(prescription.text) or {}
@@ -1222,6 +1244,15 @@ def _logged_sets_from_cells(log, prescriptions):
         if load.endswith("%"):
             load = ""  # a %1RM token isn't a bar weight — leave blank, not crash
         rpe = parsed.get("rpe") or ""
+        if not rpe:
+            # Line 0 didn't carry one — fall through to the sub-lines
+            # (RPE split, see the docstring) and take the first that parses.
+            key = (prescription.exercise_slot_id, prescription.week_id)
+            for sub_line in sub_lines_by_cell.get(key, []):
+                sub_rpe = (parse_prescription(sub_line.text) or {}).get("rpe") or ""
+                if sub_rpe:
+                    rpe = sub_rpe
+                    break
         for set_number in range(1, sets_count + 1):
             rows.append(
                 LoggedSet(
