@@ -37,6 +37,17 @@
   color: var(--dim);
   margin-right: 2px;
 }
+/* The fill-across-weeks hint — the ONE place that keybinding is advertised,
+   since fill has no per-cell control anymore (designer-simplify). Pushed to
+   the far end of the strip so it reads as ambient help, not another button.
+   Non-interactive by design. */
+.meso-week-strip-hint {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
 .meso-week-pill {
   display: inline-flex;
   align-items: center;

@@ -611,7 +611,7 @@ describe("add affordances", () => {
 // (parse_prescription classifies skip/skipped/-/— — parsing.py); the table
 // can no longer CREATE a skipped cell from the UI, only clear one via the
 // skipped branch's "Unskip" button (kept as-is). Fill-across-weeks moved to
-// a keybinding, Ctrl/Cmd+R, on GridCellEditor's wrapping div.
+// a keybinding, Ctrl/Cmd+Enter, on GridCellEditor's wrapping div.
 // `id` = prescription_id, `slotId` = session_slot_id, `weekId` = week id.
 
 describe("skip / unskip", () => {
@@ -640,32 +640,32 @@ describe("skip / unskip", () => {
   });
 });
 
-describe("fill across weeks (Ctrl/Cmd+R keybinding)", () => {
-  it("Ctrl+R inside the prescription input calls onFillAcrossWeeks(id)", () => {
+describe("fill across weeks (Ctrl/Cmd+Enter keybinding)", () => {
+  it("Ctrl+Enter inside the prescription input calls onFillAcrossWeeks(id)", () => {
     const onFillAcrossWeeks = vi.fn();
     render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
-    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "r", ctrlKey: true });
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", ctrlKey: true });
     expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
   });
 
-  it("Cmd+R (metaKey) also calls onFillAcrossWeeks(id)", () => {
+  it("Cmd+Enter (metaKey) also calls onFillAcrossWeeks(id)", () => {
     const onFillAcrossWeeks = vi.fn();
     render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
-    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "r", metaKey: true });
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", metaKey: true });
     expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
   });
 
   it("does nothing when busy", () => {
     const onFillAcrossWeeks = vi.fn();
     render(<MesoTable {...baseProps({ busy: true, onFillAcrossWeeks })} />);
-    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "r", ctrlKey: true });
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", ctrlKey: true });
     expect(onFillAcrossWeeks).not.toHaveBeenCalled();
   });
 
-  it("a plain 'r' (no modifier) does not fill", () => {
+  it("a plain Enter (no modifier) does not fill — that is commit-and-move-down", () => {
     const onFillAcrossWeeks = vi.fn();
     render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
-    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "r" });
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter" });
     expect(onFillAcrossWeeks).not.toHaveBeenCalled();
   });
 
@@ -673,7 +673,7 @@ describe("fill across weeks (Ctrl/Cmd+R keybinding)", () => {
     const onFillAcrossWeeks = vi.fn();
     const LINES_GRID = grid({ days: [day({ rows: [row({ cells: { "1": cell({ lines: [{ id: 5, line: 1, text: "RPE 8" }] }) } })] })] });
     render(<MesoTable {...baseProps({ grid: LINES_GRID, onFillAcrossWeeks })} />);
-    fireEvent.keyDown(screen.getByTestId("cell-line-new-100"), { key: "r", ctrlKey: true });
+    fireEvent.keyDown(screen.getByTestId("cell-line-new-100"), { key: "Enter", ctrlKey: true });
     expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
   });
 
@@ -690,7 +690,7 @@ describe("fill across weeks (Ctrl/Cmd+R keybinding)", () => {
     fireEvent.change(input, { target: { value: "5 x 5" } });
     expect(onPatchCell).not.toHaveBeenCalled(); // still an uncommitted draft
 
-    fireEvent.keyDown(input, { key: "r", ctrlKey: true });
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
 
     expect(onPatchCell).toHaveBeenCalledWith(100, { text: "5 x 5" });
     expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
@@ -708,21 +708,36 @@ describe("fill across weeks (Ctrl/Cmd+R keybinding)", () => {
     fireEvent.change(line, { target: { value: "RPE 9" } });
     expect(onWriteCellLine).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(line, { key: "r", ctrlKey: true });
+    fireEvent.keyDown(line, { key: "Enter", ctrlKey: true });
 
     expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9");
     expect(onWriteCellLine.mock.invocationCallOrder[0]!).toBeLessThan(onFillAcrossWeeks.mock.invocationCallOrder[0]!);
   });
 
-  it("Ctrl/Cmd+Shift+R (browser hard-refresh) does NOT fill", () => {
+  it("modified Ctrl/Cmd+Enter (Shift or Alt) does NOT fill", () => {
     const onFillAcrossWeeks = vi.fn();
     render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
-    // `key` is "R" (capital) when Shift is held — lowercasing alone would
-    // have matched and turned a hard-refresh into a cross-week mutation.
-    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "R", ctrlKey: true, shiftKey: true });
-    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "R", metaKey: true, shiftKey: true });
-    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "r", ctrlKey: true, altKey: true });
+    // Kept as one unambiguous chord, so a modified variant never mutates
+    // data by accident — the reason Ctrl/Cmd+R was abandoned in the first
+    // place (it shadowed the browser's reload and hard-refresh).
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", metaKey: true, shiftKey: true });
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", ctrlKey: true, altKey: true });
     expect(onFillAcrossWeeks).not.toHaveBeenCalled();
+  });
+
+  // Fill has no per-cell control anymore, so the keybinding would be
+  // undiscoverable without this. ONE hint per page (the week strip), not one
+  // per cell — reintroducing per-cell chrome is the thing this work removed.
+  it("advertises the keybinding once, in the week strip", () => {
+    render(
+      <MesoTable
+        {...baseProps({ grid: grid({ weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2" })] }) })}
+      />,
+    );
+    const hints = screen.getAllByTestId("week-strip-fill-hint");
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toHaveTextContent("Ctrl/⌘+Enter fills a cell across all weeks");
   });
 });
 

@@ -280,14 +280,18 @@ interface GridCellEditorProps {
  * designer-simplify retired the per-cell Skip/Fill button cluster
  * (CellActions) — unacceptable chrome at exercises × weeks cardinality, and
  * it grew the <td> on :focus-within, causing layout shift. Fill-across-weeks
- * is now a KEYBINDING, Ctrl/Cmd+R (the Sheets/Excel "fill right"
- * convention), bound on the wrapping `.meso-table-cell-editor` div so it
- * fires from the prescription input (line 0) OR any sub-line/ghost of the
- * same cell — keydown bubbles up from whichever input is focused. This
- * deliberately shadows the browser's own Ctrl/Cmd+R reload while focus is
- * anywhere inside a week cell, same as Sheets/Excel's own override. No arm/
- * confirm step: fill is recorded in plan history via record_plan_action
- * (views.py), so Ctrl+Z undoes an accidental fill same as any other edit.
+ * is now a KEYBINDING, Ctrl/Cmd+Enter, bound on the wrapping
+ * `.meso-table-cell-editor` div so it fires from the prescription input
+ * (line 0) OR any sub-line/ghost of the same cell — keydown bubbles up from
+ * whichever input is focused. It reads as "commit this — everywhere",
+ * extending the plain-Enter commit the grid already uses. Sheets/Excel's own
+ * fill binding is Ctrl/Cmd+R, but that shadows the browser's reload: a
+ * spreadsheet owns its whole page and can afford to steal it, a Django app
+ * in an ordinary tab cannot, and in practice it just read as "the page
+ * didn't refresh". Discoverability lives in the WeekManagerStrip hint (one
+ * per page) rather than per-cell chrome. No arm/confirm step: fill is
+ * recorded in plan history via record_plan_action (views.py), so Ctrl+Z
+ * undoes an accidental fill same as any other edit.
  * Skip has NO keybinding — the product decision (docs/meso/decisions.md) is
  * that a "skip" is typed text on a sub-line (parse_prescription classifies
  * skip/skipped/-/— — parsing.py), not a control; the table can no longer
@@ -367,16 +371,16 @@ function GridCellEditor({
     }
   }
 
-  // Ctrl/Cmd+R fill-across-weeks — see the doc comment above. Bound on the
-  // wrapping div (not a single input) so it fires from line 0 or any
+  // Ctrl/Cmd+Enter fill-across-weeks — see the doc comment above. Bound on
+  // the wrapping div (not a single input) so it fires from line 0 or any
   // sub-line/ghost via bubbling; useTableNav's own cellProps.onKeyDown
   // deliberately bails on ctrl/meta keys (it's a generic per-input grid
-  // handler, not the place for a one-off verb like this).
+  // handler, not the place for a one-off verb like this), so plain Enter
+  // still commits-and-moves-down there without ever reaching this.
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    // Shift/Alt must be absent: Ctrl/Cmd+SHIFT+R is the browser's hard-refresh
-    // chord, and `key` is "R" there, so lowercasing alone would turn a
-    // hard-refresh into a silent data mutation across every week.
-    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "r") return;
+    // Shift/Alt must be absent so this stays one unambiguous chord and never
+    // shadows a text-editing or browser combination.
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key !== "Enter") return;
     e.preventDefault();
     if (busy) return;
     // Commit the focused draft BEFORE dispatching. The retired Fill button
@@ -1215,6 +1219,14 @@ function WeekManagerStrip({ weeks, busy, isArmed, arm, disarm, onRemoveWeek, onA
       >
         + Add week
       </button>
+      {/* The one place fill-across-weeks is advertised. It lives here, not on
+          the cell, because per-cell chrome at exercises × weeks cardinality is
+          exactly what designer-simplify removed — and this strip is already
+          the week-scoped surface. Muted and non-interactive: a hint, not a
+          control. */}
+      <span className="meso-week-strip-hint" data-testid="week-strip-fill-hint">
+        Ctrl/⌘+Enter fills a cell across all weeks
+      </span>
     </div>
   );
 }
