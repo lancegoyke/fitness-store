@@ -34,6 +34,7 @@ from store_project.users.factories import UserFactory
 
 from ._helpers import day
 from ._helpers import presc as make_presc
+from ._helpers import sub_line
 
 pytestmark = pytest.mark.django_db
 
@@ -67,6 +68,38 @@ def seed(*, coach=None, athlete=None):
         load="80",
         rpe="8",
     )
+    return SimpleNamespace(
+        coach=coach,
+        athlete=athlete,
+        rel=rel,
+        plan=plan,
+        meso=meso,
+        week=week,
+        session=session,
+        squat=squat,
+        rdl=rdl,
+    )
+
+
+def seed_bare(*, coach=None, athlete=None):
+    """Same shape as ``seed()``, but line 0 carries NO inline RPE.
+
+    For the sub-line RPE recovery tests (issue #487): ``seed()``'s cells bake
+    RPE into line 0's composed text, which is exactly the case that already
+    worked. These give each prescription's line 0 no RPE at all, so a test
+    can add it back on its own sub-line and prove it's recovered.
+    """
+    coach = coach or UserFactory()
+    athlete = athlete or UserFactory(name="Maya Okonkwo")
+    rel = CoachAthleteFactory(coach=coach, athlete=athlete)
+    plan = PlanFactory(
+        relationship=rel, title="Hypertrophy Block", status=Plan.Status.ACTIVE
+    )
+    meso = MesocycleFactory(plan=plan, name="Hypertrophy", order=0)
+    week = WeekFactory(mesocycle=meso, index=2, delivered_at=timezone.now())
+    session = day(week, day_number=1, name="Lower")
+    squat = make_presc(session, name="Box Squat", order=0, text="3 x 6, 70")
+    rdl = make_presc(session, name="RDL", order=1, text="3 x 8, 80")
     return SimpleNamespace(
         coach=coach,
         athlete=athlete,
@@ -296,6 +329,119 @@ class TestSessionResultsPresenter:
         log_session(s, squat_sets=[("8", "70", "8"), ("6", "70", "9")])
         # Without the fallback this session would read 0% (0 prescribed sets).
         assert session_results(s.session)["summary"]["completion"] == 100
+
+
+class TestSessionResultsRecoversSubLineRpe:
+    """Issue #487: a coach's RPE on its own sub-line must still drive results.
+
+    ``parse_prescription`` only ever classifies line 0 (its own documented
+    contract), so a coach who follows the intended model — RPE on its own
+    sub-line, spreadsheet-parity plan §2.3/§2.6 — got no target RPE, no
+    over-target flag, and no ``avg_rpe_delta``. This class pins the read-path
+    fix: recover the RPE from the cell's coach-authored sub-lines when line 0
+    doesn't carry one, without ever mistaking the athlete's own tracking
+    sub-lines for a coach target.
+    """
+
+    def test_rpe_on_sub_line_recovers_target_flag_and_delta(self):
+        s = seed_bare()  # squat/RDL line 0 carry no RPE at all
+        sub_line(s.squat, "RPE 7")
+        log_session(s, squat_sets=[("6", "70", "9")] * 3)
+        ctx = session_results(s.session)
+        row = {r["name"]: r for r in ctx["rows"]}["Box Squat"]
+        # The label surfaces the recovered RPE — otherwise the flag below
+        # would be incoherent (a flag with no RPE visible on the target).
+        assert row["target"] == "3 x 6, 70, RPE 7"
+        assert row["rpe_state"] == "over"
+        assert "Box Squat" in ctx["summary"]["flag"]
+        assert ctx["summary"]["avg_rpe_delta"] == "+2.0"
+
+    def test_inline_line0_rpe_still_wins_over_a_conflicting_sub_line(self):
+        """No regression: line 0's own inline RPE must keep winning."""
+        s = seed()  # squat's line 0 already packs "RPE 7" inline
+        sub_line(s.squat, "RPE 2")  # a conflicting sub-line must be ignored
+        log_session(
+            s, squat_sets=[("6", "70", "9")] * 3, rdl_sets=[("8", "80", "8")] * 3
+        )
+        ctx = session_results(s.session)
+        row = {r["name"]: r for r in ctx["rows"]}["Box Squat"]
+        # Label unchanged — line 0's text already shows the (correct) RPE, so
+        # nothing is appended (that would duplicate it).
+        assert row["target"] == "3 x 6, RPE 7, 70"
+        assert row["rpe_state"] == "over"
+        # 9 - 7 (line 0's RPE), not 9 - 2 (the sub-line's) → the same +1.0
+        # mean this scenario yields without any sub-line at all.
+        assert ctx["summary"]["avg_rpe_delta"] == "+1.0"
+
+    def test_no_rpe_anywhere_degrades_gracefully(self):
+        s = seed_bare()
+        log_session(
+            s, squat_sets=[("6", "70", "9")] * 3, rdl_sets=[("8", "80", "8")] * 3
+        )
+        ctx = session_results(s.session)
+        row = {r["name"]: r for r in ctx["rows"]}["Box Squat"]
+        assert row["target"] == "3 x 6, 70"
+        assert row["rpe_state"] == "on"  # nothing to compare against, not a crash
+        assert ctx["summary"]["avg_rpe_delta"] == "—"
+        assert ctx["summary"]["flag_count"] == 0
+
+    def test_athlete_tracking_sub_line_does_not_leak_into_target(self):
+        s = seed_bare()
+        sub_line(s.squat, "RPE 8")  # the coach's real target
+        tracking = sub_line(s.squat, "135lbs x 12", line=3)
+        tracking.athlete_authored = True
+        tracking.save(update_fields=["athlete_authored"])
+        log_session(s, squat_sets=[("6", "70", "8")] * 3)
+        ctx = session_results(s.session)
+        row = {r["name"]: r for r in ctx["rows"]}["Box Squat"]
+        assert row["target"] == "3 x 6, 70, RPE 8"
+        assert "135" not in row["target"]
+        assert row["rpe_state"] == "on"
+
+    def test_athlete_authored_sub_line_is_never_read_as_a_target(self):
+        """Even RPE-shaped text on an athlete-authored line must be excluded.
+
+        ``athlete_authored`` is stamped per (slot, week, line) row by the
+        athlete's own write endpoint — verifying it's a reliable discriminator
+        here, not just an incidental flag.
+        """
+        s = seed_bare()
+        athlete_line = sub_line(s.squat, "RPE 9")
+        athlete_line.athlete_authored = True
+        athlete_line.save(update_fields=["athlete_authored"])
+        log_session(s, squat_sets=[("6", "70", "9")] * 3)
+        ctx = session_results(s.session)
+        row = {r["name"]: r for r in ctx["rows"]}["Box Squat"]
+        assert row["target"] == "3 x 6, 70"  # the athlete's line isn't a target
+        assert row["rpe_state"] == "on"
+        assert ctx["summary"]["avg_rpe_delta"] == "—"
+
+    def test_sub_line_lookup_is_batched_not_per_prescription(
+        self, django_assert_num_queries
+    ):
+        """The sub-line fetch is one query for the whole session, not one per cell."""
+        s = seed_bare()
+        extra = [
+            make_presc(s.session, name=f"Accessory {i}", order=2 + i, text="3 x 12")
+            for i in range(6)
+        ]
+        for cell in extra:
+            sub_line(cell, "RPE 6")
+        sub_line(s.squat, "RPE 7")
+        sub_line(s.rdl, "RPE 8")
+        log_session(
+            s, squat_sets=[("6", "70", "7")] * 3, rdl_sets=[("8", "80", "8")] * 3
+        )
+
+        # 11: line-0 cells, sub-lines (ONE query for the whole session's
+        # sub-line stack, batched — the fix), the session log + its sets,
+        # session -> week -> mesocycle -> plan (4 unbatched FK hops), and
+        # new_records_in's per-lift lookups. The precise count matters less
+        # than that it's fixed regardless of prescription/sub-line count —
+        # 8 prescriptions here (2 seeded + 6 extra), each with its own
+        # sub-line, still costs exactly one sub-line query, not eight.
+        with django_assert_num_queries(11):
+            session_results(s.session)
 
 
 class TestResultsDraftRedirect:

@@ -809,9 +809,25 @@ def _text_label(text):
     return " · ".join(parts) or "—"
 
 
-def _results_target_label(prescription):
-    """The prescribed target — the cell's freeform text, verbatim."""
-    return _text_label(prescription.text)
+def _results_target_label(prescription, recovered_rpe=None):
+    """The prescribed target — the cell's freeform text, verbatim.
+
+    ``recovered_rpe`` is appended (``3 x 12`` -> ``3 x 12, RPE 9``) when the
+    target RPE used for the over-target flag/``avg_rpe_delta`` came from a
+    coach sub-line rather than line 0 itself (see ``_sub_line_rpe``) — never
+    when line 0 already carries its own inline RPE, since that's already
+    visible in the verbatim text. Without this, a coach who follows the
+    intended model (RPE on its own sub-line — spreadsheet-parity plan
+    §2.3/§2.6) would see a target with no RPE sitting right next to a flag
+    computed from an RPE the label never showed — incoherent. Callers must
+    only pass a value here that line 0 didn't already yield (see
+    ``_exercise_result``/``_avg_rpe_delta``'s callers) — this function does
+    not re-check that itself.
+    """
+    label = _text_label(prescription.text)
+    if not recovered_rpe:
+        return label
+    return f"RPE {recovered_rpe}" if label == "—" else f"{label}, RPE {recovered_rpe}"
 
 
 def _logged_label(logged_sets, unit):
@@ -862,7 +878,47 @@ def _worst_rep_shortfall(prescription, logged_sets):
     return worst
 
 
-def _exercise_result(prescription, logged_sets, unit):
+def _coach_sub_lines_by_slot(session):
+    """This session's coach-authored sub-lines (line >= 1), keyed by exercise_slot id.
+
+    One query for the whole session (``Session.line_cells()``, already used
+    this way by ``serialize_session``) rather than one per prescription —
+    batched, matching the lookup ``seed_meso_demo.py``'s
+    ``_logged_sets_from_cells`` uses for the analogous (but cross-session)
+    case. A single session's cells all share one week, so grouping by slot id
+    alone is enough here (no need for that helper's ``(slot, week)`` key).
+
+    Athlete-authored lines (the athlete's own freeform tracking sub-rows —
+    ``135lbs x 12``, Phase 4a) are excluded: ``athlete_authored`` is stamped
+    per (slot, week, line) row by ``athlete_cell_write``/``cell_line_write``
+    (views.py) and flipped back on a coach edit, so it reliably marks exactly
+    the rows the *athlete* wrote — never the coach's own prescription, which
+    is what a results target must be derived from.
+    """
+    by_slot = defaultdict(list)
+    for line_cell in session.line_cells():
+        if not line_cell.athlete_authored:
+            by_slot[line_cell.exercise_slot_id].append(line_cell)
+    return by_slot
+
+
+def _sub_line_rpe(prescription, sub_lines_by_slot):
+    """The first RPE recovered from this cell's coach sub-lines, or None.
+
+    Walks the row's sub-lines in stack order (``_coach_sub_lines_by_slot``
+    sorts by ``line``) for the first that parses an RPE — the intended model
+    per spreadsheet-parity plan §2.3/§2.6, an "RPE row directly beneath the
+    prescription" reached by arrow-down. Only ever consulted when line 0
+    itself carries none (see the callers) — line 0's inline RPE always wins.
+    """
+    for sub_line in sub_lines_by_slot.get(prescription.exercise_slot_id, ()):
+        rpe = (sub_line.parsed() or {}).get("rpe")
+        if rpe:
+            return rpe
+    return None
+
+
+def _exercise_result(prescription, logged_sets, unit, sub_lines_by_slot):
     """One results row + its RPE overshoot (None when not comparable).
 
     The row mirrors the prototype's columns (target / logged / RPE / note); the
@@ -872,7 +928,14 @@ def _exercise_result(prescription, logged_sets, unit):
     meaningful RPE overshoot.
     """
     parsed = prescription.parsed() or {}
-    target_rpe = _num(parsed.get("rpe"))
+    line0_rpe = parsed.get("rpe")
+    # Line 0 wins when present (hand-authored cells that pack RPE inline are
+    # unaffected); otherwise recover it from a coach sub-line — and only then
+    # is it new information the label needs to surface (issue #487).
+    recovered_rpe = (
+        None if line0_rpe else _sub_line_rpe(prescription, sub_lines_by_slot)
+    )
+    target_rpe = _num(line0_rpe or recovered_rpe)
     logged_rpes = [_num(s.rpe) for s in logged_sets if _num(s.rpe) is not None]
     top_rpe = max(logged_rpes) if logged_rpes else None
     overshoot = (
@@ -893,7 +956,7 @@ def _exercise_result(prescription, logged_sets, unit):
         note = ""
     row = {
         "name": prescription.name,
-        "target": _results_target_label(prescription),
+        "target": _results_target_label(prescription, recovered_rpe),
         "logged": _logged_label(logged_sets, unit) if logged_sets else "—",
         "rpe": _fmt_num(top_rpe) if top_rpe is not None else "—",
         "rpe_state": "over" if overshoot is not None and overshoot > 0 else "on",
@@ -902,12 +965,19 @@ def _exercise_result(prescription, logged_sets, unit):
     return row, overshoot
 
 
-def _avg_rpe_delta(prescriptions, sets_by_prescription):
-    """Mean (logged − target) RPE across comparable sets, signed; "—" if none."""
+def _avg_rpe_delta(prescriptions, sets_by_prescription, sub_lines_by_slot):
+    """Mean (logged − target) RPE across comparable sets, signed; "—" if none.
+
+    Target RPE is line 0's inline value if present, else recovered from a
+    coach sub-line (``_sub_line_rpe`` — issue #487) — the same effective
+    target ``_exercise_result`` derives per row.
+    """
     deltas = []
     for prescription in prescriptions:
         parsed = prescription.parsed() or {}
-        target = _num(parsed.get("rpe"))
+        target = _num(
+            parsed.get("rpe") or _sub_line_rpe(prescription, sub_lines_by_slot)
+        )
         if target is None:
             continue
         for s in sets_by_prescription.get(prescription.pk, []):
@@ -945,6 +1015,7 @@ def session_results(session):
     plan = session.week.mesocycle.plan
     athlete = plan.athlete
     prescriptions = list(session.trainable_cells())
+    sub_lines_by_slot = _coach_sub_lines_by_slot(session)
     log = (
         SessionLog.objects.filter(
             session=session, athlete=athlete, status=SessionLog.Status.DONE
@@ -960,7 +1031,9 @@ def session_results(session):
                 sets_by_prescription[s.prescription_id].append(s)
 
     results = [
-        _exercise_result(p, sets_by_prescription.get(p.pk, []), plan.unit)
+        _exercise_result(
+            p, sets_by_prescription.get(p.pk, []), plan.unit, sub_lines_by_slot
+        )
         for p in prescriptions
     ]
     rows = [row for row, _ in results]
@@ -1010,7 +1083,9 @@ def session_results(session):
             "session": _session_label(session),
             "logged": _logged_date(log),
             "completion": completion,
-            "avg_rpe_delta": _avg_rpe_delta(prescriptions, sets_by_prescription),
+            "avg_rpe_delta": _avg_rpe_delta(
+                prescriptions, sets_by_prescription, sub_lines_by_slot
+            ),
             "flag": flag,
             "flag_count": len(flagged),
             "logged_state": log is not None,
