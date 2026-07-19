@@ -22,6 +22,7 @@ from .base import *  # noqa
 # Import these after base settings to prevent import order issues
 import unittest.mock  # noqa
 import requests  # noqa
+import dj_database_url  # noqa
 import stripe  # noqa
 
 # TESTING
@@ -93,18 +94,30 @@ requests.post = unittest.mock.Mock(
 
 # DATABASE
 # ------------------------------------------------------------------------------
-# Use fast in-memory SQLite database for testing
+# Use fast in-memory SQLite database for testing by default.
 # Benefits:
 # - Much faster than file-based databases (no disk I/O)
 # - Isolated - each test run gets a fresh database
 # - No cleanup required - database disappears when process ends
 # https://docs.djangoproject.com/en/dev/ref/settings/#databases
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": ":memory:",
+#
+# The production/dev DB is PostgreSQL, and a small number of behaviors
+# (deferred-constraint enforcement, in particular — see
+# meso/tests/test_migration_0040_pending_triggers.py) only exist on Postgres
+# and cannot be exercised on SQLite at all. ``TEST_DATABASE_URL`` is an
+# optional escape hatch: set it (e.g. in a dedicated CI job) to point the
+# suite at a real Postgres instead. Left unset, behavior is byte-for-byte
+# identical to before — this is the default local (`uv run pytest`) and main
+# CI path, and it must stay fast and hermetic.
+if TEST_DATABASE_URL := os.environ.get("TEST_DATABASE_URL"):
+    DATABASES = {"default": dj_database_url.parse(TEST_DATABASE_URL, conn_max_age=600)}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": ":memory:",
+        }
     }
-}
 
 # CACHES
 # ------------------------------------------------------------------------------

@@ -86,3 +86,94 @@ jobs:
       - name: Run Tests
         run: |
           uv run pytest
+
+  # The main "build" job above runs the full suite on fast, hermetic
+  # in-memory SQLite (deliberate — see config/settings/test.py). SQLite
+  # can't express PostgreSQL's deferred-constraint checks at all, which is
+  # exactly the class of bug that shipped twice (meso 0036/0037 and 0040:
+  # "cannot ALTER TABLE ... because it has pending trigger events", only
+  # reachable on Postgres with real data — an empty CI/prod DB never hits
+  # it). This job runs a real `migrate` from scratch against a Postgres
+  # service container and then the suite against that same Postgres, so the
+  # Postgres-only regression tests
+  # (`@pytest.mark.skipif(connection.vendor != "postgresql", ...)`) — which
+  # SKIP under the SQLite job above — actually execute somewhere. The SQLite
+  # job stays as the fast feedback path; the two run in parallel.
+  postgres:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        # Match production's major version (docker-compose.production.yml
+        # pins `postgres:17-alpine`, matching the Heroku Postgres 17 major
+        # this app was migrated from; the dev stack's docker-compose.yml
+        # also runs Postgres 17).
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      SECRET_KEY: NotSecureForTesting
+      PYTHONUNBUFFERED: 1
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      FB_APP_ID: ${{ secrets.FB_APP_ID }}
+      FB_SECRET_KEY: ${{ secrets.FB_SECRET_KEY }}
+      GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      STRIPE_ENDPOINT_SECRET: ${{ secrets.STRIPE_ENDPOINT_SECRET }}
+      STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      G_RECAPTCHA_SITE_KEY: test-recaptcha-site-key
+      G_RECAPTCHA_SECRET_KEY: test-recaptcha-secret-key
+      G_RECAPTCHA_ENDPOINT: https://test-recaptcha-endpoint.com
+      # Opts config.settings.test into the real Postgres service container
+      # instead of its default in-memory SQLite (config/settings/test.py).
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        id: setup_python
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+
+      - name: Cache UV dependencies
+        uses: actions/cache@v4
+        with:
+          key: venv-${{ runner.os }}-${{ steps.setup_python.outputs.python-version}}-${{ hashFiles('uv.lock') }}
+          path: .venv
+
+      - name: Install Python dependencies
+        run: uv sync --all-extras
+
+      - name: Migrate from scratch against PostgreSQL
+        run: cd app && uv run python manage.py migrate --settings=config.settings.test
+
+      # The WHOLE suite, not just the Postgres-marked tests. The suite is
+      # already Postgres-clean (verified: 2288 passed, zero failures) and
+      # GitHub runs jobs in parallel, so this costs no extra wall-clock over
+      # the SQLite job beside it — only runner minutes (~2.6 min vs ~50s).
+      # Narrow this back to the single regression test if minutes get tight;
+      # migrate-from-scratch above plus that one test is the floor that keeps
+      # the deferred-constraint class of bug catchable.
+      - name: Run the suite against PostgreSQL
+        run: |
+          uv run pytest
