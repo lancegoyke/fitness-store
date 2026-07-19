@@ -103,11 +103,11 @@ jobs:
   # "cannot ALTER TABLE ... because it has pending trigger events", only
   # reachable on Postgres with real data — an empty CI/prod DB never hits
   # it). This job runs a real `migrate` from scratch against a Postgres
-  # service container and then the suite against that same Postgres, so the
-  # Postgres-only regression tests
+  # service container and then the Postgres-only regression tests
   # (`@pytest.mark.skipif(connection.vendor != "postgresql", ...)`) — which
-  # SKIP under the SQLite job above — actually execute somewhere. The SQLite
-  # job stays as the fast feedback path; the two run in parallel.
+  # SKIP under the SQLite job above — so they actually execute somewhere. The
+  # SQLite job stays as the fast feedback path and still runs the FULL suite
+  # on every push; the two run in parallel.
   postgres:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
@@ -176,13 +176,20 @@ jobs:
       - name: Migrate from scratch against PostgreSQL
         run: cd app && uv run python manage.py migrate --settings=config.settings.test
 
-      # The WHOLE suite, not just the Postgres-marked tests. The suite is
-      # already Postgres-clean (verified: 2288 passed, zero failures) and
-      # GitHub runs jobs in parallel, so this costs no extra wall-clock over
-      # the SQLite job beside it — only runner minutes (~2.6 min vs ~50s).
-      # Narrow this back to the single regression test if minutes get tight;
-      # migrate-from-scratch above plus that one test is the floor that keeps
-      # the deferred-constraint class of bug catchable.
-      - name: Run the suite against PostgreSQL
+      # The Postgres-ONLY tests, not the whole suite. This job briefly ran
+      # everything, on the reasoning that the suite is Postgres-clean and
+      # parallel jobs cost no extra wall-clock. Both halves were wrong: the
+      # job became CI's long pole (~2.5 min -> ~8 min), and on a slower runner
+      # it took 15m17s, blew this job's own timeout-minutes, cancelled Django
+      # CI, and left a merged commit undeployed because Deploy keys off a
+      # SUCCESSFUL conclusion. Locally the same run is ~3.5 min — CI is 3-5x
+      # slower here, straddling the timeout, so it failed intermittently.
+      #
+      # migrate-from-scratch above + the deferred-constraint regression tests
+      # is the floor that keeps THAT class of bug catchable, which is the
+      # whole reason this job exists. The SQLite job beside it still runs the
+      # full suite on every push. If broad Postgres coverage is wanted later,
+      # give it its own schedule (nightly) rather than the deploy path.
+      - name: Run the PostgreSQL-only tests
         run: |
-          uv run pytest
+          uv run pytest app/store_project/meso/tests/test_migration_0040_pending_triggers.py
