@@ -373,7 +373,10 @@ function GridCellEditor({
   // deliberately bails on ctrl/meta keys (it's a generic per-input grid
   // handler, not the place for a one-off verb like this).
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "r") return;
+    // Shift/Alt must be absent: Ctrl/Cmd+SHIFT+R is the browser's hard-refresh
+    // chord, and `key` is "R" there, so lowercasing alone would turn a
+    // hard-refresh into a silent data mutation across every week.
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "r") return;
     e.preventDefault();
     if (busy) return;
     // Commit the focused draft BEFORE dispatching. The retired Fill button

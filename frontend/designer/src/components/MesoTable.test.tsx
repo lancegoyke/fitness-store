@@ -694,7 +694,7 @@ describe("fill across weeks (Ctrl/Cmd+R keybinding)", () => {
 
     expect(onPatchCell).toHaveBeenCalledWith(100, { text: "5 x 5" });
     expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
-    expect(onPatchCell.mock.invocationCallOrder[0]).toBeLessThan(onFillAcrossWeeks.mock.invocationCallOrder[0]);
+    expect(onPatchCell.mock.invocationCallOrder[0]!).toBeLessThan(onFillAcrossWeeks.mock.invocationCallOrder[0]!);
     expect(document.activeElement).toBe(input); // anchor restored
   });
 
@@ -711,7 +711,18 @@ describe("fill across weeks (Ctrl/Cmd+R keybinding)", () => {
     fireEvent.keyDown(line, { key: "r", ctrlKey: true });
 
     expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9");
-    expect(onWriteCellLine.mock.invocationCallOrder[0]).toBeLessThan(onFillAcrossWeeks.mock.invocationCallOrder[0]);
+    expect(onWriteCellLine.mock.invocationCallOrder[0]!).toBeLessThan(onFillAcrossWeeks.mock.invocationCallOrder[0]!);
+  });
+
+  it("Ctrl/Cmd+Shift+R (browser hard-refresh) does NOT fill", () => {
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
+    // `key` is "R" (capital) when Shift is held — lowercasing alone would
+    // have matched and turned a hard-refresh into a cross-week mutation.
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "R", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "R", metaKey: true, shiftKey: true });
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "r", ctrlKey: true, altKey: true });
+    expect(onFillAcrossWeeks).not.toHaveBeenCalled();
   });
 });
 
