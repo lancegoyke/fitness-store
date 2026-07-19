@@ -206,6 +206,20 @@ describe("cell sub-lines", () => {
     expect(screen.getByTestId("cell-line-new-100")).toHaveValue("");
   });
 
+  // designer-simplify: the ghost must stay a real, focusable keyboard grid
+  // stop AT ALL TIMES — ArrowUp from the row below reaches it via
+  // useTableNav's querySelector(...).focus(), and a shipped regression once
+  // hid it until :focus-within, which made .focus() a no-op and stranded the
+  // grid anchor (docs/meso/decisions.md ~1567-1585). It must render, and be
+  // focusable, with nothing else in the table holding focus.
+  it("the ghost cell-line-new-<id> is rendered and focusable without the cell having focus", () => {
+    render(<MesoTable {...baseProps({ grid: linesGrid() })} />);
+    const ghost = screen.getByTestId("cell-line-new-100");
+    expect(document.activeElement).not.toBe(ghost); // nothing in the table holds focus yet
+    ghost.focus();
+    expect(ghost).toHaveFocus();
+  });
+
   it("editing a sub-line commits via onWriteCellLine(slotId, weekId, line, text) on blur", async () => {
     const user = userEvent.setup();
     const onWriteCellLine = vi.fn();
@@ -591,17 +605,22 @@ describe("add affordances", () => {
   });
 });
 
-// --- P2 exceptions: skip / fill / add-this-week write UX ------------------
-// CONTRACT.md "MesoTable.tsx" — exact data-testids; `id` = prescription_id,
-// `slotId` = session_slot_id, `weekId` = week id.
+// --- designer-simplify: the per-cell Skip/Fill button cluster (CellActions)
+// is GONE — it grew the <td> on :focus-within (confusing layout shift at
+// exercises × weeks cardinality). A "skip" is now typed text on a sub-line
+// (parse_prescription classifies skip/skipped/-/— — parsing.py); the table
+// can no longer CREATE a skipped cell from the UI, only clear one via the
+// skipped branch's "Unskip" button (kept as-is). Fill-across-weeks moved to
+// a keybinding, Ctrl/Cmd+R, on GridCellEditor's wrapping div.
+// `id` = prescription_id, `slotId` = session_slot_id, `weekId` = week id.
 
 describe("skip / unskip", () => {
-  it("clicking skip on a non-skipped cell calls onSkipCell(id, true)", async () => {
-    const user = userEvent.setup();
-    const onSkipCell = vi.fn();
-    render(<MesoTable {...baseProps({ onSkipCell })} />);
-    await user.click(screen.getByTestId("cell-skip-100"));
-    expect(onSkipCell).toHaveBeenCalledWith(100, true);
+  it("renders no cell-skip-* or cell-fill-* controls on a non-skipped cell (CellActions removed)", () => {
+    render(<MesoTable {...baseProps()} />);
+    expect(screen.queryByTestId("cell-skip-100")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cell-fill-100")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cell-fill-confirm-100")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cell-fill-cancel-100")).not.toBeInTheDocument();
   });
 
   it("clicking unskip on a skipped cell calls onSkipCell(id, false)", async () => {
@@ -621,13 +640,40 @@ describe("skip / unskip", () => {
   });
 });
 
-describe("fill across weeks (arm -> confirm)", () => {
-  it("arms then confirms, calling onFillAcrossWeeks(id)", async () => {
-    const user = userEvent.setup();
+describe("fill across weeks (Ctrl/Cmd+R keybinding)", () => {
+  it("Ctrl+R inside the prescription input calls onFillAcrossWeeks(id)", () => {
     const onFillAcrossWeeks = vi.fn();
     render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
-    await user.click(screen.getByTestId("cell-fill-100"));
-    await user.click(screen.getByTestId("cell-fill-confirm-100"));
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "r", ctrlKey: true });
+    expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
+  });
+
+  it("Cmd+R (metaKey) also calls onFillAcrossWeeks(id)", () => {
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "r", metaKey: true });
+    expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
+  });
+
+  it("does nothing when busy", () => {
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ busy: true, onFillAcrossWeeks })} />);
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "r", ctrlKey: true });
+    expect(onFillAcrossWeeks).not.toHaveBeenCalled();
+  });
+
+  it("a plain 'r' (no modifier) does not fill", () => {
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "r" });
+    expect(onFillAcrossWeeks).not.toHaveBeenCalled();
+  });
+
+  it("bubbles from a sub-line/ghost input up to the cell editor's handler", () => {
+    const onFillAcrossWeeks = vi.fn();
+    const LINES_GRID = grid({ days: [day({ rows: [row({ cells: { "1": cell({ lines: [{ id: 5, line: 1, text: "RPE 8" }] }) } })] })] });
+    render(<MesoTable {...baseProps({ grid: LINES_GRID, onFillAcrossWeeks })} />);
+    fireEvent.keyDown(screen.getByTestId("cell-line-new-100"), { key: "r", ctrlKey: true });
     expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
   });
 });
@@ -986,18 +1032,18 @@ describe("keyboard grid navigation", () => {
       expect(screen.getByTestId("cell-text-900")).toHaveFocus();
     });
 
-    it("focusing an unmarked control (the skip button) across a grid identity change does NOT steal focus", () => {
+    it("focusing an unmarked control (the row drag handle) across a grid identity change does NOT steal focus", () => {
       const { rerender } = render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
       textInput.focus();
 
-      const skipButton = screen.getByTestId("cell-skip-900") as HTMLButtonElement;
-      skipButton.focus(); // the skip button is intentionally NOT data-grid-restore
+      const dragHandle = screen.getByTestId("row-drag-9") as HTMLButtonElement;
+      dragHandle.focus(); // the drag handle is intentionally NOT data-grid-restore
 
       const NEXT_GRID = grid({ weeks: NAV_GRID.weeks, days: NAV_GRID.days });
       rerender(<MesoTable {...baseProps({ grid: NEXT_GRID })} />);
 
-      expect(skipButton).toHaveFocus();
+      expect(dragHandle).toHaveFocus();
     });
   });
 });

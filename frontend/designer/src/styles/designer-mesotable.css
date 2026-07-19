@@ -184,16 +184,6 @@
   padding: 4px 2px;
 }
 
-/* P2 exceptions: skip / fill control cluster, shown alongside a
-   non-skipped cell's editor (CONTRACT.md "MesoTable.tsx — new props"). */
-.meso-table-cell-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  margin-top: 4px;
-}
-
 .meso-cell-action-btn {
   appearance: none;
   cursor: pointer;
@@ -208,41 +198,22 @@
 }
 
 /* --- Resting cells read like a spreadsheet (designer-simplify) ---
-   At rest a week cell shows only its prescription line(s). The trailing
-   "+ line" ghost input and the Skip / Fill actions appear only in the ACTIVE
-   cell — the one holding focus (:focus-within, set the moment the coach clicks
-   or arrows into it). Reveal is deliberately NOT on :hover: mousing across a
-   dense grid would otherwise reflow every row it passed. */
-
-/* Skip / Fill are mouse-reachable chrome, never a keyboard grid stop, so plain
-   display:none at rest is safe. */
-.meso-table-cell .meso-table-cell-actions {
-  display: none;
-}
-.meso-table-cell:focus-within .meso-table-cell-actions {
-  display: flex;
-}
-
-/* The ghost "+ line" IS a keyboard grid stop — arrow-up from the row below
-   focuses it (via useTableNav's querySelector(...).focus()) BEFORE its own
-   cell is active — so it must stay focusable. Collapse it to zero height
-   rather than display:none (which makes .focus() a no-op and strands the grid
-   anchor on an unfocusable node); it expands the instant the cell is active. */
-.meso-table-cell .meso-line-input--ghost {
-  height: 0;
-  min-height: 0;
-  padding-top: 0;
-  padding-bottom: 0;
+   The ghost "+ line" input renders at its natural height ALWAYS — it is a
+   real keyboard grid stop (arrow-up from the row below focuses it via
+   useTableNav's querySelector(...).focus(), BEFORE its own cell is active),
+   and a shipped regression once made it display:none at rest, which makes
+   .focus() a no-op and strands the grid anchor (docs/meso/decisions.md
+   ~1567-1585). Collapsing height/padding/opacity on it, or the old per-cell
+   Skip/Fill button cluster this file used to gate on :focus-within, both
+   grew/shrank the <td> in normal table flow every time focus moved — THAT
+   layout shift, not the ghost's mere visibility, was the bug. So the only
+   thing that changes on focus now is the ghost's placeholder opacity: text
+   only, never height/padding/display, so nothing in the grid ever resizes. */
+.meso-table-cell .meso-line-input--ghost::placeholder {
   opacity: 0;
-  overflow: hidden;
-  pointer-events: none;
 }
-.meso-table-cell:focus-within .meso-line-input--ghost {
-  height: auto;
+.meso-table-cell:focus-within .meso-line-input--ghost::placeholder {
   opacity: 1;
-  padding-top: revert;
-  padding-bottom: revert;
-  pointer-events: auto;
 }
 
 /* The sticky exercise column stays quiet while typing: the per-row remove ×

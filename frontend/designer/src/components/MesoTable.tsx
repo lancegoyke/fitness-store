@@ -54,7 +54,7 @@
 // weeks, add-this-week and move-to-day all stay. (The per-cell group
 // adjust badge went with the group subsystem itself.)
 import { useEffect, useRef, useState } from "react";
-import type { ClipboardEvent } from "react";
+import type { ClipboardEvent, KeyboardEvent } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -253,9 +253,11 @@ interface GridCellEditorProps {
   cell: GridCell;
   row: GridRow;
   week: GridWeek;
+  busy: boolean;
   tableNav: UseTableNavResult;
   onPatchCell(cellId: Id, patch: GridCellPatch): void;
   onWriteCellLine(exerciseSlotId: Id, weekId: Id, line: number, text: string): void;
+  onFillAcrossWeeks(cellId: number): void;
 }
 
 /** Phase 2a text-first cell: ONE freeform text input for the prescription
@@ -273,8 +275,34 @@ interface GridCellEditorProps {
  * and pasting MULTI-LINE text replaces the whole stack (line 0 via
  * onPatchCell, the rest via onWriteCellLine, any longer existing lines
  * blanked so the result equals the source). Single-line paste stays native
- * caret insertion into the draft. */
-function GridCellEditor({ cell, row, week, tableNav, onPatchCell, onWriteCellLine }: GridCellEditorProps) {
+ * caret insertion into the draft.
+ *
+ * designer-simplify retired the per-cell Skip/Fill button cluster
+ * (CellActions) — unacceptable chrome at exercises × weeks cardinality, and
+ * it grew the <td> on :focus-within, causing layout shift. Fill-across-weeks
+ * is now a KEYBINDING, Ctrl/Cmd+R (the Sheets/Excel "fill right"
+ * convention), bound on the wrapping `.meso-table-cell-editor` div so it
+ * fires from the prescription input (line 0) OR any sub-line/ghost of the
+ * same cell — keydown bubbles up from whichever input is focused. This
+ * deliberately shadows the browser's own Ctrl/Cmd+R reload while focus is
+ * anywhere inside a week cell, same as Sheets/Excel's own override. No arm/
+ * confirm step: fill is recorded in plan history via record_plan_action
+ * (views.py), so Ctrl+Z undoes an accidental fill same as any other edit.
+ * Skip has NO keybinding — the product decision (docs/meso/decisions.md) is
+ * that a "skip" is typed text on a sub-line (parse_prescription classifies
+ * skip/skipped/-/— — parsing.py), not a control; the table can no longer
+ * CREATE a skipped cell, only the skipped branch's "Unskip" button clears
+ * one (asymmetric, intentional). */
+function GridCellEditor({
+  cell,
+  row,
+  week,
+  busy,
+  tableNav,
+  onPatchCell,
+  onWriteCellLine,
+  onFillAcrossWeeks,
+}: GridCellEditorProps) {
   const [draft, setDraft] = useState(cell.text);
   const dirtyRef = useRef(false);
 
@@ -339,8 +367,20 @@ function GridCellEditor({ cell, row, week, tableNav, onPatchCell, onWriteCellLin
     }
   }
 
+  // Ctrl/Cmd+R fill-across-weeks — see the doc comment above. Bound on the
+  // wrapping div (not a single input) so it fires from line 0 or any
+  // sub-line/ghost via bubbling; useTableNav's own cellProps.onKeyDown
+  // deliberately bails on ctrl/meta keys (it's a generic per-input grid
+  // handler, not the place for a one-off verb like this).
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "r") return;
+    e.preventDefault();
+    if (busy) return;
+    onFillAcrossWeeks(cellId);
+  }
+
   return (
-    <div className="meso-table-cell-editor">
+    <div className="meso-table-cell-editor" onKeyDown={onKeyDown}>
       <input
         className="meso-cell meso-text-input"
         data-testid={`cell-text-${cellId}`}
@@ -441,81 +481,6 @@ function RowColumnInput({ row, field, label, tableNav, onPatchRowColumns }: RowC
   );
 }
 
-interface CellActionsProps {
-  cell: GridCell;
-  busy: boolean;
-  onSkipCell(cellId: number, skipped: boolean): void;
-  onFillAcrossWeeks(cellId: number): void;
-}
-
-/** P2 exceptions control cluster for a non-skipped cell — skip /
- * fill-across-weeks (arm -> confirm, mirroring the remove-exercise|day|week
- * arm/confirm pattern above, but scoped locally to this one cell rather than
- * the table-wide `armed` slot since several cells can each have their own
- * fill-confirm open at once). Phase 2a retired the swap control — a
- * substitution is sub-line text now, typed like any other line. */
-function CellActions({ cell, busy, onSkipCell, onFillAcrossWeeks }: CellActionsProps) {
-  const [fillArmed, setFillArmed] = useState(false);
-  const cellId = cell.prescription_id;
-
-  return (
-    <div className="meso-table-cell-actions">
-      <button
-        type="button"
-        data-testid={`cell-skip-${cellId}`}
-        className="meso-cell-action-btn"
-        disabled={busy}
-        aria-label="Skip this week"
-        title="Skip this week"
-        onClick={() => onSkipCell(cellId, true)}
-      >
-        Skip
-      </button>
-
-      {!fillArmed && (
-        <button
-          type="button"
-          data-testid={`cell-fill-${cellId}`}
-          className="meso-cell-action-btn"
-          disabled={busy}
-          aria-label="Fill across weeks"
-          title="Copy this week's prescription (all lines) to every other week"
-          onClick={() => setFillArmed(true)}
-        >
-          Fill →
-        </button>
-      )}
-      {fillArmed && (
-        <span className="meso-confirm-pair">
-          <button
-            type="button"
-            data-testid={`cell-fill-confirm-${cellId}`}
-            className="meso-confirm-btn"
-            disabled={busy}
-            aria-label="Confirm fill across weeks"
-            onClick={() => {
-              onFillAcrossWeeks(cellId);
-              setFillArmed(false);
-            }}
-          >
-            Confirm?
-          </button>
-          <button
-            type="button"
-            data-testid={`cell-fill-cancel-${cellId}`}
-            className="meso-cancel-btn"
-            disabled={busy}
-            aria-label="Cancel fill across weeks"
-            onClick={() => setFillArmed(false)}
-          >
-            Cancel
-          </button>
-        </span>
-      )}
-    </div>
-  );
-}
-
 interface RowNameEditorProps {
   row: GridRow;
   tableNav: UseTableNavResult;
@@ -578,7 +543,7 @@ interface AddThisWeekControlProps {
 /** P2: alongside the existing block-wide "+ Add exercise" — a toggle that
  * reveals a week picker (one button per live week), for adding an exercise
  * to just one week instead of the whole block. Local open/closed state,
- * mirroring CellActions' swap toggle above (independent per day). */
+ * independent per day. */
 function AddThisWeekControl({ day, weeks, busy, onAddExerciseThisWeek }: AddThisWeekControlProps) {
   const [open, setOpen] = useState(false);
   const slotId = day.session_slot_id;
@@ -757,22 +722,16 @@ function TableRow({
                 </button>
               </>
             ) : (
-              <>
-                <GridCellEditor
-                  cell={cell}
-                  row={row}
-                  week={week}
-                  tableNav={tableNav}
-                  onPatchCell={onPatchCell}
-                  onWriteCellLine={onWriteCellLine}
-                />
-                <CellActions
-                  cell={cell}
-                  busy={busy}
-                  onSkipCell={onSkipCell}
-                  onFillAcrossWeeks={onFillAcrossWeeks}
-                />
-              </>
+              <GridCellEditor
+                cell={cell}
+                row={row}
+                week={week}
+                busy={busy}
+                tableNav={tableNav}
+                onPatchCell={onPatchCell}
+                onWriteCellLine={onWriteCellLine}
+                onFillAcrossWeeks={onFillAcrossWeeks}
+              />
             )}
           </td>
         );
