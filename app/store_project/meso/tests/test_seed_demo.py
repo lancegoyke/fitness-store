@@ -23,6 +23,13 @@ import pytest
 from django.contrib.auth.hashers import make_password
 from django.core.management import call_command
 
+from store_project.meso.factories import SessionLogFactory
+from store_project.meso.factories import WeekFactory
+from store_project.meso.management.commands.seed_meso_demo import _ease_rpe
+from store_project.meso.management.commands.seed_meso_demo import (
+    _logged_sets_from_cells,
+)
+from store_project.meso.management.commands.seed_meso_demo import _week_cell
 from store_project.meso.models import AthleteProfile
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachInvite
@@ -31,6 +38,7 @@ from store_project.meso.models import Contraindication
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Mesocycle
 from store_project.meso.models import Plan
+from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.models import Week
@@ -38,6 +46,10 @@ from store_project.meso.parsing import parse_prescription
 from store_project.meso.presenters import session_results
 from store_project.meso.serializers import serialize_plan
 from store_project.users.models import User
+
+from ._helpers import day
+from ._helpers import presc
+from ._helpers import sub_line
 
 pytestmark = pytest.mark.django_db
 
@@ -76,6 +88,115 @@ def _maya_logged_through_week(plan):
     """
     hypertrophy = plan.mesocycles.get(name="Hypertrophy")
     return hypertrophy.weeks.get(index=2)
+
+
+class TestWeekCellSplitsRpeOntoItsOwnLine:
+    """The seeder's cell shape is a vertical stack, not one crammed line.
+
+    The repo owner's real cells put sets×reps (+ load) on line 0 and RPE on
+    its own sub-line (line 1) — see the module docstring / spreadsheet-
+    parity-plan §2.1, §2.6. ``_week_cell`` composes line 0 the same way as
+    before, minus RPE, and (when the scheme carries an RPE) adds a ``"lines"``
+    sub-line matching ``compose_prescription_text``'s own RPE formatting.
+    """
+
+    def test_cell_with_rpe_has_no_rpe_on_line_0_and_rpe_on_line_1(self):
+        scheme = {"sets": 3, "reps": 12, "rpe": 6.5, "load": 100, "load_step": 0}
+        cell = _week_cell(scheme, week_index=1)
+        assert "RPE" not in cell["text"]
+        assert cell["text"] == "3 x 12, 100"
+        assert cell["lines"] == ["RPE 6.5"]
+
+    def test_cell_with_no_rpe_has_no_sub_line(self):
+        # The accessory rows (``rpe=None``) must not gain a blank sub-line.
+        scheme = {"sets": 4, "reps": 15, "rpe": None, "load": 55, "load_step": 0}
+        cell = _week_cell(scheme, week_index=1)
+        assert cell["text"] == "4 x 15, 55"
+        assert "lines" not in cell
+
+    def test_deload_week_still_puts_the_eased_rpe_on_line_1(self):
+        scheme = {"sets": 4, "reps": 9, "rpe": 7.5, "load": 100, "load_step": 0}
+        cell = _week_cell(scheme, week_index=4, deload_index=4)
+        assert cell["lines"] == [f"RPE {_ease_rpe(7.5)}"]
+        assert cell["lines"] == ["RPE 6"]
+        assert "RPE" not in cell["text"]
+
+    def test_blank_scheme_still_yields_a_blank_cell(self):
+        assert _week_cell(None, week_index=1) == {}
+        assert _week_cell({}, week_index=1) == {}
+
+
+class TestLoggedSetsFromCellsRecoversRpeFromSubLine:
+    """The RPE split's fallout: ``_logged_sets_from_cells`` must not lose it.
+
+    ``parse_prescription`` only classifies a cell's line 0 — so once
+    ``_week_cell`` moved a generated cell's RPE onto its own line-1 sub-line
+    (the class above), parsing line 0 alone stopped finding any RPE at all.
+    ``_logged_sets_from_cells`` has to fall back to the cell's sub-lines when
+    line 0 doesn't carry one, without regressing hand-authored cells that
+    still pack RPE inline on line 0.
+    """
+
+    def test_rpe_recovered_from_line_1_when_line_0_has_none(self):
+        # The generator's real shape post-split: line 0 = sets×reps+load,
+        # line 1 = "RPE <value>" on its own.
+        week = WeekFactory()
+        session = day(week, day_number=1, name="Lower")
+        cell = presc(session, text="3 x 12, 85.6")
+        sub_line(cell, "RPE 6.5")
+        log = SessionLogFactory(session=session)
+
+        rows = _logged_sets_from_cells(log, [cell])
+
+        assert len(rows) == 3
+        assert all(row.rpe == "6.5" for row in rows)
+
+    def test_line_0_inline_rpe_still_wins_over_a_sub_line(self):
+        # A hand-authored cell (e.g. Maya's logged-through-week fixture)
+        # still packs RPE inline on line 0 — that must keep winning even if
+        # a (conflicting) sub-line is also present.
+        week = WeekFactory()
+        session = day(week, day_number=1, name="Lower")
+        cell = presc(session, text="3 x 10, RPE 7, 60")
+        sub_line(cell, "RPE 9")
+
+        log = SessionLogFactory(session=session)
+
+        rows = _logged_sets_from_cells(log, [cell])
+
+        assert all(row.rpe == "7" for row in rows)
+
+    def test_no_rpe_anywhere_yields_blank_and_does_not_raise(self):
+        week = WeekFactory()
+        session = day(week, day_number=1, name="Lower")
+        cell = presc(session, text="4 x 15, 60")  # accessory row, no RPE at all
+        log = SessionLogFactory(session=session)
+
+        rows = _logged_sets_from_cells(log, [cell])
+
+        assert rows  # didn't raise, still logged sets
+        assert all(row.rpe == "" for row in rows)
+
+    def test_sub_line_lookup_is_one_query_not_one_per_cell(
+        self, django_assert_num_queries
+    ):
+        # The function receives a whole session's worth of line-0 cells at
+        # once — the sub-line fetch must be a single batched query keyed by
+        # (exercise_slot, week), not one query per cell (N+1).
+        week = WeekFactory()
+        session = day(week, day_number=1, name="Lower")
+        cells = []
+        for i in range(6):
+            cell = presc(session, text=f"3 x 10, {60 + i}")
+            sub_line(cell, "RPE 7")
+            cells.append(cell)
+        log = SessionLogFactory(session=session)
+
+        with django_assert_num_queries(1):
+            rows = _logged_sets_from_cells(log, cells)
+
+        assert len(rows) == 18  # 6 cells x 3 sets
+        assert all(row.rpe == "7" for row in rows)
 
 
 class TestSeedCreatesDemo:
@@ -218,6 +339,38 @@ class TestSeedCreatesDemo:
         assert list(
             logged_through.cells.filter(line__gte=1).values_list("text", flat=True)
         ) == ["Cable Crunch"]
+
+    def test_generated_weeks_carry_rpe_as_a_line_1_sub_line(self):
+        # Week 1 of Hypertrophy is generator-built (unlike week 2's
+        # hand-authored fixture above), so this exercises ``_week_cell``'s
+        # real output end to end: the seeder runs without error and produces
+        # real ``Prescription`` rows at both line 0 (sets×reps, no RPE) and
+        # line 1 (the RPE sub-line) for every row whose scheme carries an
+        # RPE — and no line-1 row at all for the accessory rows that don't.
+        seed()
+        plan = _plan_for(User.objects.get(email=COACH_EMAIL), MAYA_EMAIL)
+        hypertrophy = plan.mesocycles.get(name="Hypertrophy")
+        week1 = hypertrophy.weeks.get(index=1)
+        lower_day = week1.sessions.get(session_slot__day_number=1).session_slot
+        rows = list(lower_day.exercise_slots.order_by("order"))
+        by_name = {row.name: row for row in rows}
+
+        box_squat = by_name["Box Squat (to parallel)"]
+        line0 = Prescription.objects.get(exercise_slot=box_squat, week=week1, line=0)
+        line1 = Prescription.objects.get(exercise_slot=box_squat, week=week1, line=1)
+        assert "RPE" not in line0.text
+        assert line1.text == "RPE 7"
+
+        # "Standing Calf Raise" is seeded with ``rpe=None`` (an accessory row)
+        # — it must not gain a blank/absent sub-line row at all.
+        calf_raise = by_name["Standing Calf Raise"]
+        calf_line0 = Prescription.objects.get(
+            exercise_slot=calf_raise, week=week1, line=0
+        )
+        assert "RPE" not in calf_line0.text
+        assert not Prescription.objects.filter(
+            exercise_slot=calf_raise, week=week1, line__gte=1
+        ).exists()
 
 
 class TestSamplePlanRoundTrips:
@@ -430,6 +583,43 @@ class TestDevonAndPriyaPrograms:
             assert not SessionLog.objects.filter(
                 session__week=week, athlete=athlete
             ).exists()
+
+    @pytest.mark.parametrize(
+        "email", [DEVON_EMAIL, PRIYA_EMAIL], ids=["devon", "priya"]
+    )
+    def test_logged_history_keeps_rpe_from_generated_cells(self, email):
+        # End-to-end regression check: Devon's and Priya's logged history is
+        # built entirely from generator cells (``_client_block``/``_week_cell``)
+        # — the RPE split (docs/meso/spreadsheet-parity-plan §2.1/§2.6) moved
+        # their RPE onto a line-1 sub-line, which is exactly what
+        # ``_logged_sets_from_cells`` has to recover from. Without the fix,
+        # every one of these ``LoggedSet`` rows would carry ``rpe == ""``.
+        seed()
+        coach = User.objects.get(email=COACH_EMAIL)
+        athlete = User.objects.get(email=email)
+        plan = _plan_for(coach, email)
+
+        rpe_sub_lines = Prescription.objects.filter(
+            exercise_slot__session_slot__mesocycle__plan=plan, line=1
+        )
+        assert rpe_sub_lines.exists()  # sanity: the generator did split RPE out
+
+        checked = 0
+        for sub in rpe_sub_lines:
+            parsed_rpe = (parse_prescription(sub.text) or {}).get("rpe")
+            if not parsed_rpe:
+                continue
+            line0 = Prescription.objects.filter(
+                exercise_slot=sub.exercise_slot, week=sub.week, line=0
+            ).first()
+            logged_set = LoggedSet.objects.filter(
+                prescription=line0, session_log__athlete=athlete
+            ).first()
+            if logged_set is None:
+                continue  # this week is past the logged-through cutoff
+            checked += 1
+            assert logged_set.rpe == parsed_rpe
+        assert checked > 0  # actually exercised the fallback, not a vacuous pass
 
     @pytest.mark.parametrize(
         "email", [DEVON_EMAIL, PRIYA_EMAIL], ids=["devon", "priya"]

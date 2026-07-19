@@ -206,6 +206,20 @@ describe("cell sub-lines", () => {
     expect(screen.getByTestId("cell-line-new-100")).toHaveValue("");
   });
 
+  // designer-simplify: the ghost must stay a real, focusable keyboard grid
+  // stop AT ALL TIMES — ArrowUp from the row below reaches it via
+  // useTableNav's querySelector(...).focus(), and a shipped regression once
+  // hid it until :focus-within, which made .focus() a no-op and stranded the
+  // grid anchor (docs/meso/decisions.md ~1567-1585). It must render, and be
+  // focusable, with nothing else in the table holding focus.
+  it("the ghost cell-line-new-<id> is rendered and focusable without the cell having focus", () => {
+    render(<MesoTable {...baseProps({ grid: linesGrid() })} />);
+    const ghost = screen.getByTestId("cell-line-new-100");
+    expect(document.activeElement).not.toBe(ghost); // nothing in the table holds focus yet
+    ghost.focus();
+    expect(ghost).toHaveFocus();
+  });
+
   it("editing a sub-line commits via onWriteCellLine(slotId, weekId, line, text) on blur", async () => {
     const user = userEvent.setup();
     const onWriteCellLine = vi.fn();
@@ -591,17 +605,22 @@ describe("add affordances", () => {
   });
 });
 
-// --- P2 exceptions: skip / fill / add-this-week write UX ------------------
-// CONTRACT.md "MesoTable.tsx" — exact data-testids; `id` = prescription_id,
-// `slotId` = session_slot_id, `weekId` = week id.
+// --- designer-simplify: the per-cell Skip/Fill button cluster (CellActions)
+// is GONE — it grew the <td> on :focus-within (confusing layout shift at
+// exercises × weeks cardinality). A "skip" is now typed text on a sub-line
+// (parse_prescription classifies skip/skipped/-/— — parsing.py); the table
+// can no longer CREATE a skipped cell from the UI, only clear one via the
+// skipped branch's "Unskip" button (kept as-is). Fill-across-weeks moved to
+// a keybinding, Ctrl/Cmd+Enter, on GridCellEditor's wrapping div.
+// `id` = prescription_id, `slotId` = session_slot_id, `weekId` = week id.
 
 describe("skip / unskip", () => {
-  it("clicking skip on a non-skipped cell calls onSkipCell(id, true)", async () => {
-    const user = userEvent.setup();
-    const onSkipCell = vi.fn();
-    render(<MesoTable {...baseProps({ onSkipCell })} />);
-    await user.click(screen.getByTestId("cell-skip-100"));
-    expect(onSkipCell).toHaveBeenCalledWith(100, true);
+  it("renders no cell-skip-* or cell-fill-* controls on a non-skipped cell (CellActions removed)", () => {
+    render(<MesoTable {...baseProps()} />);
+    expect(screen.queryByTestId("cell-skip-100")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cell-fill-100")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cell-fill-confirm-100")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cell-fill-cancel-100")).not.toBeInTheDocument();
   });
 
   it("clicking unskip on a skipped cell calls onSkipCell(id, false)", async () => {
@@ -621,14 +640,104 @@ describe("skip / unskip", () => {
   });
 });
 
-describe("fill across weeks (arm -> confirm)", () => {
-  it("arms then confirms, calling onFillAcrossWeeks(id)", async () => {
-    const user = userEvent.setup();
+describe("fill across weeks (Ctrl/Cmd+Enter keybinding)", () => {
+  it("Ctrl+Enter inside the prescription input calls onFillAcrossWeeks(id)", () => {
     const onFillAcrossWeeks = vi.fn();
     render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
-    await user.click(screen.getByTestId("cell-fill-100"));
-    await user.click(screen.getByTestId("cell-fill-confirm-100"));
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", ctrlKey: true });
     expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
+  });
+
+  it("Cmd+Enter (metaKey) also calls onFillAcrossWeeks(id)", () => {
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", metaKey: true });
+    expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
+  });
+
+  it("does nothing when busy", () => {
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ busy: true, onFillAcrossWeeks })} />);
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", ctrlKey: true });
+    expect(onFillAcrossWeeks).not.toHaveBeenCalled();
+  });
+
+  it("a plain Enter (no modifier) does not fill — that is commit-and-move-down", () => {
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter" });
+    expect(onFillAcrossWeeks).not.toHaveBeenCalled();
+  });
+
+  it("bubbles from a sub-line/ghost input up to the cell editor's handler", () => {
+    const onFillAcrossWeeks = vi.fn();
+    const LINES_GRID = grid({ days: [day({ rows: [row({ cells: { "1": cell({ lines: [{ id: 5, line: 1, text: "RPE 8" }] }) } })] })] });
+    render(<MesoTable {...baseProps({ grid: LINES_GRID, onFillAcrossWeeks })} />);
+    fireEvent.keyDown(screen.getByTestId("cell-line-new-100"), { key: "Enter", ctrlKey: true });
+    expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
+  });
+
+  // The retired Fill BUTTON committed the draft implicitly (clicking it blurred
+  // the input). A keybinding fires with focus still in the cell, so without an
+  // explicit commit the server would copy the stale stored stack to the other
+  // weeks and the refetch would clobber the in-progress edit.
+  it("commits an uncommitted prescription draft BEFORE dispatching the fill", () => {
+    const onPatchCell = vi.fn();
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ onPatchCell, onFillAcrossWeeks })} />);
+    const input = screen.getByTestId("cell-text-100");
+    input.focus();
+    fireEvent.change(input, { target: { value: "5 x 5" } });
+    expect(onPatchCell).not.toHaveBeenCalled(); // still an uncommitted draft
+
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+
+    expect(onPatchCell).toHaveBeenCalledWith(100, { text: "5 x 5" });
+    expect(onFillAcrossWeeks).toHaveBeenCalledWith(100);
+    expect(onPatchCell.mock.invocationCallOrder[0]!).toBeLessThan(onFillAcrossWeeks.mock.invocationCallOrder[0]!);
+    expect(document.activeElement).toBe(input); // anchor restored
+  });
+
+  it("commits an uncommitted SUB-LINE draft before dispatching the fill", () => {
+    const onWriteCellLine = vi.fn();
+    const onFillAcrossWeeks = vi.fn();
+    const LINES_GRID = grid({ days: [day({ rows: [row({ cells: { "1": cell({ lines: [{ id: 5, line: 1, text: "RPE 8" }] }) } })] })] });
+    render(<MesoTable {...baseProps({ grid: LINES_GRID, onWriteCellLine, onFillAcrossWeeks })} />);
+    const line = screen.getByTestId("cell-line-100-1");
+    line.focus();
+    fireEvent.change(line, { target: { value: "RPE 9" } });
+    expect(onWriteCellLine).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(line, { key: "Enter", ctrlKey: true });
+
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "RPE 9");
+    expect(onWriteCellLine.mock.invocationCallOrder[0]!).toBeLessThan(onFillAcrossWeeks.mock.invocationCallOrder[0]!);
+  });
+
+  it("modified Ctrl/Cmd+Enter (Shift or Alt) does NOT fill", () => {
+    const onFillAcrossWeeks = vi.fn();
+    render(<MesoTable {...baseProps({ onFillAcrossWeeks })} />);
+    // Kept as one unambiguous chord, so a modified variant never mutates
+    // data by accident — the reason Ctrl/Cmd+R was abandoned in the first
+    // place (it shadowed the browser's reload and hard-refresh).
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", metaKey: true, shiftKey: true });
+    fireEvent.keyDown(screen.getByTestId("cell-text-100"), { key: "Enter", ctrlKey: true, altKey: true });
+    expect(onFillAcrossWeeks).not.toHaveBeenCalled();
+  });
+
+  // Fill has no per-cell control anymore, so the keybinding would be
+  // undiscoverable without this. ONE hint per page (the week strip), not one
+  // per cell — reintroducing per-cell chrome is the thing this work removed.
+  it("advertises the keybinding once, in the week strip", () => {
+    render(
+      <MesoTable
+        {...baseProps({ grid: grid({ weeks: [week({ id: 1, label: "Wk 1" }), week({ id: 2, label: "Wk 2" })] }) })}
+      />,
+    );
+    const hints = screen.getAllByTestId("week-strip-fill-hint");
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toHaveTextContent("Ctrl/⌘+Enter fills a cell across all weeks");
   });
 });
 
@@ -986,18 +1095,18 @@ describe("keyboard grid navigation", () => {
       expect(screen.getByTestId("cell-text-900")).toHaveFocus();
     });
 
-    it("focusing an unmarked control (the skip button) across a grid identity change does NOT steal focus", () => {
+    it("focusing an unmarked control (the row drag handle) across a grid identity change does NOT steal focus", () => {
       const { rerender } = render(<MesoTable {...baseProps({ grid: NAV_GRID })} />);
       const textInput = screen.getByTestId("cell-text-900") as HTMLInputElement;
       textInput.focus();
 
-      const skipButton = screen.getByTestId("cell-skip-900") as HTMLButtonElement;
-      skipButton.focus(); // the skip button is intentionally NOT data-grid-restore
+      const dragHandle = screen.getByTestId("row-drag-9") as HTMLButtonElement;
+      dragHandle.focus(); // the drag handle is intentionally NOT data-grid-restore
 
       const NEXT_GRID = grid({ weeks: NAV_GRID.weeks, days: NAV_GRID.days });
       rerender(<MesoTable {...baseProps({ grid: NEXT_GRID })} />);
 
-      expect(skipButton).toHaveFocus();
+      expect(dragHandle).toHaveFocus();
     });
   });
 });
