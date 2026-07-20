@@ -1379,3 +1379,82 @@ class TestTheBlurPathOwnsOnlyAthleteLines:
 
         assert resp.status_code == 200
         assert LoggedSet.objects.filter(source_line=sub_cell(s.squat, 1)).exists()
+
+
+class TestAnUntouchedCoachLineIsNotClaimed:
+    def test_the_ownership_flag_is_left_alone(self, client):
+        """Blocking the upsert isn't enough — the flag itself must not flip.
+
+        The earlier guard prevented the set but the caller had already stamped
+        `athlete_authored=True`, which (a) re-hid a reclaimed line's set via
+        `HIDDEN_PARSED_SET` while the line showed coach text, and (b) made the
+        guard one-shot: the NEXT blur saw an athlete-owned line and parsed the
+        coach's text anyway.
+        """
+        s = seed()
+        coach_line = Prescription.objects.create(
+            exercise_slot=s.squat.exercise_slot,
+            week=s.week,
+            line=1,
+            text="225 x 5",
+            athlete_authored=False,
+        )
+
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        coach_line.refresh_from_db()
+        assert coach_line.athlete_authored is False
+
+    def test_repeated_blurs_never_fabricate_a_set(self, client):
+        # Durability: the one-shot version created the set on the second pass.
+        s = seed()
+        Prescription.objects.create(
+            exercise_slot=s.squat.exercise_slot,
+            week=s.week,
+            line=1,
+            text="225 x 5",
+            athlete_authored=False,
+        )
+
+        client.force_login(s.athlete)
+        for _ in range(3):
+            write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        assert not LoggedSet.objects.exists()
+        assert not SessionLog.objects.filter(session=s.session).exists()
+
+    def test_a_reclaimed_lines_set_stays_visible_across_blurs(self, client):
+        """Re-hiding it would make a counting set invisible to everyone."""
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        client.force_login(s.athlete)
+        for _ in range(2):
+            write_cell(client, s.session, s.squat, 1, "brace harder")
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert any(r["load"] == "225" for r in row["set_rows"])
+
+    def test_a_real_edit_still_claims_the_line(self, client):
+        # The guard must not freeze a coach line the athlete genuinely writes on.
+        s = seed()
+        Prescription.objects.create(
+            exercise_slot=s.squat.exercise_slot,
+            week=s.week,
+            line=1,
+            text="brace harder",
+            athlete_authored=False,
+        )
+
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        cell = sub_cell(s.squat, 1)
+        assert cell.athlete_authored is True
+        assert LoggedSet.objects.get(source_line=cell).load == "225"

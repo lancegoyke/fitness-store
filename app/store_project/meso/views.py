@@ -1567,25 +1567,37 @@ def athlete_cell_write(request, pk):
         cell, created_cell = Prescription.objects.get_or_create(
             exercise_slot=slot, week=session.week, line=line
         )
-        # Whose line was this BEFORE this write? The blur path stamps
-        # `athlete_authored=True` unconditionally, which erases the answer, so
-        # capture it first. A brand-new cell is the athlete's by construction.
-        was_athlete_authored = created_cell or cell.athlete_authored
-        cell.text = text
-        cell.athlete_authored = True
-        cell.save(update_fields=["text", "athlete_authored"])
-        _touch_plan(plan)
+        # The template posts on EVERY blur, so most requests carry text nobody
+        # touched — including the coach's own cues, which the athlete can focus
+        # and leave. Claiming authorship of those was doing real damage:
+        #
+        #   * a cue that happens to read like a set (`225 x 5`) became
+        #     athlete-authored and parsed into a pending LoggedSet and a PR for
+        #     a performance the athlete never did;
+        #   * a RECLAIMED line's set went back into hiding, because
+        #     `HIDDEN_PARSED_SET` keys on this flag — invisible everywhere while
+        #     still counting, and the delete below would then destroy it.
+        #
+        # Authorship follows actual authorship: a blur that changes nothing on a
+        # line the athlete doesn't own is a no-op, full stop. A genuine edit
+        # still claims the line (and re-parses it) as before.
+        untouched_coach_line = (
+            not created_cell and not cell.athlete_authored and cell.text == text
+        )
+        if not untouched_coach_line:
+            cell.text = text
+            cell.athlete_authored = True
+            cell.save(update_fields=["text", "athlete_authored"])
+            _touch_plan(plan)
         # Parse-at-commit (5a): derive a silent, structured LoggedSet from the
         # text just committed above. Defensively wrapped inside the helper — a
         # parse/upsert problem is logged and swallowed, never surfaced here.
         # The return is the optimistic-PR-toast payload (§7) — empty on any
         # failure, never raises.
-        new_records = _upsert_parsed_set(
-            session,
-            request.user,
-            line_zero[exercise_id],
-            cell,
-            was_athlete_authored=was_athlete_authored,
+        new_records = (
+            []
+            if untouched_coach_line
+            else _upsert_parsed_set(session, request.user, line_zero[exercise_id], cell)
         )
     return JsonResponse(
         {
@@ -1613,9 +1625,7 @@ def athlete_cell_write(request, pk):
     )
 
 
-def _upsert_parsed_set(
-    session, athlete, line_zero_cell, cell, *, was_athlete_authored=True
-):
+def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
     """Parse ``cell``'s just-committed text and upsert its derivative ``LoggedSet``.
 
     Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §5): the freeform
@@ -1666,27 +1676,11 @@ def _upsert_parsed_set(
             # more likely than before, because now EVERY blur can create the
             # log. The lock is a no-op on SQLite (which serializes writers
             # anyway) and does the real work on Postgres.
-            # Both guards run BEFORE anything is read or written. Placed after
-            # the log lookup they still prevented the set, but the log had
-            # already been created — leaving the empty PENDING row that reads as
+            # This guard runs BEFORE anything is read or written. Placed after
+            # the log lookup it still prevented the set, but the log had already
+            # been created — leaving the empty PENDING row that reads as
             # activity everywhere (see `_reap_empty_pending_log`).
             #
-            # This line wasn't the athlete's before this write — it was the
-            # coach's, either an original cue or one they reclaimed. Two things
-            # go wrong if we proceed:
-            #
-            #   * the template posts on EVERY blur, so a coach cue that happens
-            #     to read like a set (`225 x 5`) gets stamped athlete-authored
-            #     and fabricates a pending LoggedSet and a PR from coach text
-            #     the athlete never performed;
-            #   * a reclaimed line's set is VISIBLE and owned by the structured
-            #     logger, so the delete below would destroy real history — and
-            #     refresh away a DONE 1RM — just because the athlete tapped it.
-            #
-            # Own nothing we didn't already own. The text still saves.
-            if not was_athlete_authored:
-                return []
-
             # A skipped row is READ-ONLY to this path, not just un-writable.
             # The create guard below already declines to mint a set for one, but
             # letting the delete still run turned "coach skips a row" plus "the
