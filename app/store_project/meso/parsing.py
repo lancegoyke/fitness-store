@@ -588,3 +588,14 @@ def performed_text_shows(text, *, reps, load, rpe):
         and str(parsed.get("load", "")) == load
         and str(parsed.get("rpe", "")) == rpe
     )
+
+
+def performed_is_set(text):
+    """Does ``text`` claim to be a performed set at all?
+
+    The question behind "should this cell have produced a ``LoggedSet``" — used
+    by the presenter to tint a line whose text makes that claim while no such
+    row exists.
+    """
+    parsed = parse_performed(text)
+    return bool(parsed) and parsed.get("kind") == "set"

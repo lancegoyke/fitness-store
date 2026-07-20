@@ -36,6 +36,7 @@ from .models import parsed_set_is_hidden
 from .one_rm import key_str
 from .one_rm import one_rm_values
 from .parsing import cell_should_warn
+from .parsing import performed_is_set
 from .personal_records import new_records_in
 from .personal_records import personal_records
 from .serializers import _fmt_num
@@ -1538,21 +1539,43 @@ def athlete_session(session, athlete):
     for line_cell in session.line_cells():
         lines_by_slot[line_cell.exercise_slot_id].append(line_cell)
 
+    # Sub-lines whose text is currently backed by a parsed set — i.e. the row
+    # exists AND still matches what the line says. Reuses the same predicate the
+    # suppression rule uses, so "displayed by its line" means one thing here.
+    lines_with_a_parsed_set = {
+        row.source_line_id
+        for row in (log.sets.all() if log else ())
+        if parsed_set_is_hidden(row)
+    }
+
     def _sub_lines(slot_id):
         # The row's editable tracking stack (Phase 4a): its line>=1 cells for
         # this week as ``[{line, text, warn}]``. Blank cells are dropped from
         # the display (a cleared sub-line is a blank cell, not a deleted row).
         # ``warn`` (5a, plan §8) is derived on read, not stored: re-classify
-        # the cell's own text with ``parse_performed`` and flag it only when
-        # that read is ``unresolved-set`` — text that *looks* like a fat-
-        # fingered set attempt (``225 x``) but didn't resolve. Every other
-        # classification (skip/swap/note/duration/set) is a successful parse
-        # and never warns.
+        # the cell's own text with ``parse_performed``. Text that *looks* like a
+        # fat-fingered set attempt (``225 x``) warns; skip/swap/note/duration
+        # are successful parses and never do.
+        #
+        # A line whose text DOES resolve to a set also warns when no such row
+        # exists. Asking after the row rather than re-deriving "is this row
+        # loggable right now" catches every reason one can be missing — the
+        # coach had skipped the line when it was typed and later unskipped it,
+        # the values were too long to store, the tolerance guard swallowed a
+        # database error — and each of those leaves the same state this warning
+        # exists for: ordinary-looking performed text that quietly counts for
+        # nothing.
         return [
             {
                 "line": line_cell.line,
                 "text": line_cell.text,
-                "warn": cell_should_warn(line_cell.text),
+                "warn": (
+                    cell_should_warn(line_cell.text)
+                    or (
+                        performed_is_set(line_cell.text)
+                        and line_cell.pk not in lines_with_a_parsed_set
+                    )
+                ),
             }
             for line_cell in lines_by_slot.get(slot_id, ())
             if line_cell.text.strip()

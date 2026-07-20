@@ -487,15 +487,51 @@ class TestSubLinePresenter:
         assert pr["sub_lines"] == [{"line": 1, "text": "RPE 8", "warn": False}]
 
     def test_athlete_session_sub_lines_warn_only_on_unresolved_set(self, client):
-        # 5a §8: derive-on-read warn — only the `unresolved-set` classification
-        # (a fat-fingered set attempt) warns; a resolvable set does not.
+        # 5a §8: derive-on-read warn — a fat-fingered set attempt warns; a
+        # resolvable set that actually logged does not.
+        from store_project.meso.factories import LoggedSetFactory
+        from store_project.meso.factories import SessionLogFactory
+        from store_project.meso.models import SessionLog
+
         s = seed()
         sub_line(s.squat, "225 x", line=1)  # unresolved-set — warns
-        sub_line(s.squat, "225 x 5", line=2)  # a real set — no warn
+        logged_line = sub_line(s.squat, "225 x 5", line=2, athlete_authored=True)
+        # The row the real write path would have created. Without it the text
+        # claims a set that doesn't exist, which now warns on its own — see
+        # `test_sub_line_warns_when_its_set_never_logged`.
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
+        )
+        LoggedSetFactory(
+            session_log=log,
+            prescription=s.squat,
+            source_line=logged_line,
+            set_number=2,
+            reps="5",
+            load="225",
+            rpe="",
+        )
+
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
         warn_by_line = {entry["line"]: entry["warn"] for entry in row["sub_lines"]}
         assert warn_by_line == {1: True, 2: False}
+
+    def test_sub_line_warns_when_its_set_never_logged(self, client):
+        """Set-shaped text with no row behind it is the state warn exists for.
+
+        Reachable several ways — the coach had the row skipped when it was
+        typed and later unskipped it, the values were too long to store, the
+        tolerance guard swallowed a database error. Asking whether the ROW
+        exists covers all of them, where re-deriving "is this loggable now"
+        covered only the last state the row happened to be in.
+        """
+        s = seed()
+        sub_line(s.squat, "225 x 5", line=1, athlete_authored=True)
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert row["sub_lines"][0]["warn"] is True
 
     def test_athlete_session_set_rows_exclude_parsed_sets(self, client):
         # No double-display (5a §6): a LoggedSet derived from a sub-line

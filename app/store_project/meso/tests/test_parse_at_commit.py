@@ -1816,3 +1816,45 @@ class TestASkippedRowTellsTheAthleteItDidNotLog:
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
         assert resp.json()["cell"]["warn"] is False
+
+
+class TestUnskippingDoesNotSilenceTheWarning:
+    def test_text_typed_while_skipped_still_warns_after_unskip(self, client):
+        """The warning must outlive the condition that caused it.
+
+        Re-deriving `loggable` from the row's CURRENT state made the tint vanish
+        the moment the coach unskipped, leaving valid-looking text that still
+        counted for nothing until the athlete happened to blur again. Asking
+        whether the parsed row exists survives the state change.
+        """
+        s = seed()
+        s.squat.skipped = True
+        s.squat.save(update_fields=["skipped"])
+
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert not LoggedSet.objects.exists()
+
+        s.squat.skipped = False
+        s.squat.save(update_fields=["skipped"])
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert row["sub_lines"][0]["warn"] is True
+
+    def test_blurring_again_after_unskip_logs_it_and_clears_the_warning(self, client):
+        # The way out: the row is live now, so the next blur records it.
+        s = seed()
+        s.squat.skipped = True
+        s.squat.save(update_fields=["skipped"])
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        s.squat.skipped = False
+        s.squat.save(update_fields=["skipped"])
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        assert LoggedSet.objects.get(source_line=sub_cell(s.squat, 1)).load == "225"
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert row["sub_lines"][0]["warn"] is False
