@@ -445,3 +445,32 @@ def test_performed_reps_text_tolerates_none():
     from store_project.meso.parsing import performed_reps_text
 
     assert performed_reps_text(None) == ""
+
+
+@pytest.mark.parametrize("text", ["225 X 5", "30lbs X 8 each", "225 X 5-8"])
+def test_an_uppercase_x_is_still_a_set_operator(text):
+    """Phone keyboards auto-capitalize, so ``225 X 5`` is everyday input.
+
+    The split was case-sensitive while `_looks_like_set_attempt` was not, so an
+    uppercase X produced the worst combination: a real set refused, tinted as a
+    fat-finger, and never logged.
+    """
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "set"
+    assert not parsed.get("warn")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("225 x 8 each", "8 each"),
+        ("225 x 5 breaths", "5 breaths"),
+        ("225 x 8-10 each", "8-10 each"),
+        ("225 x 5", "5"),
+    ],
+)
+def test_performed_reps_text_keeps_the_unit_suffix(text, expected):
+    """``8 each`` means something different from a bare ``8``."""
+    from store_project.meso.parsing import performed_reps_text
+
+    assert performed_reps_text(parse_performed(text)) == expected

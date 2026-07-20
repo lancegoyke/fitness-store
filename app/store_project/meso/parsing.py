@@ -312,7 +312,12 @@ def _try_load_first(head):
     tried. Here it is tried first, so ``225 x 5`` resolves to
     ``load="225", reps=5`` instead of ``sets=225``.
     """
-    parts = re.split(r"\s*[x×]\s*", head, maxsplit=1)
+    # IGNORECASE is load-bearing: the athlete types this on a phone, where the
+    # keyboard auto-capitalizes, so ``225 X 5`` is everyday input. Without it
+    # the split failed while `_looks_like_set_attempt` (which IS case-
+    # insensitive) still recognized the `X` — so a perfectly good set was
+    # tinted as a fat-finger and never logged.
+    parts = re.split(r"\s*[x×]\s*", head, maxsplit=1, flags=re.IGNORECASE)
     if len(parts) != 2:
         return None
     left, right = parts[0].strip(), parts[1].strip()
@@ -464,11 +469,17 @@ def performed_reps_text(parsed):
     """
     if not parsed:
         return ""
+    # The suffix rides along: ``8 each`` and ``5 breaths`` mean something
+    # different from a bare 8 or 5, and dropping it would show the set as plain
+    # reps in coach results and recent-log grounding. (Time suffixes never
+    # reach here — `_classify_reps` routes those to ``duration``.)
+    unit = parsed.get("unit") or ""
+    suffix = f" {unit}" if unit else ""
     if "reps" in parsed:
-        return str(parsed["reps"])
+        return f"{parsed['reps']}{suffix}"
     if "reps_range" in parsed:
         low, high = parsed["reps_range"]
-        return f"{low}-{high}"
+        return f"{low}-{high}{suffix}"
     if parsed.get("duration"):
         return str(parsed["duration"])
     if parsed.get("amrap"):
