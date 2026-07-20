@@ -2200,6 +2200,20 @@ class ProposedChange(models.Model):
         return self.title
 
 
+# A parse-at-commit set (5a) that is STILL displayed as its own sub-line's
+# text, because that line is still ``athlete_authored``. Such a row is hidden
+# from every structured surface (``athlete_session``'s ``set_rows`` and
+# ``serialize_session_log``) to avoid double-display, so the structured logger
+# can neither see it, repost it, nor replace it.
+#
+# Define the rule ONCE. Visibility and the logger's replace-delete have to agree
+# exactly, and when they were written separately they drifted twice: keying the
+# delete on ``source_line__isnull=True`` alone first WIPED reclaimed rows, then
+# — once reclaimed rows became visible — let the client repost one and
+# DUPLICATE it. "The logger owns exactly the rows it can see" is the invariant.
+HIDDEN_PARSED_SET = models.Q(source_line__athlete_authored=True)
+
+
 class LoggedSet(models.Model):
     """A single set the athlete logged against a prescription."""
 

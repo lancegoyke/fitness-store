@@ -460,9 +460,7 @@ def serialize_session_log(log):
                 "load": s.load,
                 "rpe": s.rpe,
             }
-            for s in log.sets.exclude(source_line__athlete_authored=True).order_by(
-                "set_number"
-            )
+            for s in log.sets.exclude(models.HIDDEN_PARSED_SET).order_by("set_number")
         ],
     }
 

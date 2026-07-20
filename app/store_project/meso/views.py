@@ -62,6 +62,7 @@ from .history import HistoryUnavailable
 from .history import record_plan_action
 from .history import restore_plan_snapshot
 from .history import serialize_plan_snapshot
+from .models import HIDDEN_PARSED_SET
 from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
@@ -1395,15 +1396,19 @@ def athlete_log_session(request, pk):
         # a since-deleted/hidden/skipped cell — or one orphaned by an old hard
         # delete — is history, not draft state; wiping it here would silently
         # destroy the athlete's record on their next save (e.g. a row the coach
-        # marked skipped after the athlete already logged it). ``source_line__
-        # isnull=True`` scopes this delete to the STRUCTURED logger's own rows —
-        # a parsed set's ``prescription`` is also a trainable line-0 cell, so
-        # without this a "Save progress" would silently wipe every freeform-
-        # parsed set (5a, docs/meso/parse-at-commit-plan.md §5).
+        # marked skipped after the athlete already logged it).
+        #
+        # ``HIDDEN_PARSED_SET`` scopes the delete to rows the logger can
+        # actually see, which is the same set it can repost — see that constant
+        # for why the two must be defined together. A parsed set's
+        # ``prescription`` is also a trainable line-0 cell, so an unscoped
+        # delete would wipe every freeform-parsed set; scoping it to
+        # ``source_line__isnull=True`` instead would spare the hidden ones but
+        # leave a RECLAIMED row undeleted while the client reposts it, creating
+        # a duplicate (5a, docs/meso/parse-at-commit-plan.md §5, §6).
         log.sets.filter(
             prescription_id__in=[p.pk for p in session.trainable_cells()],
-            source_line__isnull=True,
-        ).delete()
+        ).exclude(HIDDEN_PARSED_SET).delete()
         LoggedSet.objects.bulk_create(
             [
                 LoggedSet(
