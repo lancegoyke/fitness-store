@@ -1840,21 +1840,47 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                     # rows being replaced are already deleted above, so an
                     # ordinary re-blur finds its own number free and keeps it
                     # (idempotent).
-                    taken = set(
-                        log.sets.filter(prescription=line_zero_cell).values_list(
-                            "set_number", flat=True
+                    # Restoring a reclaimed line to what it originally said is
+                    # not a new performance. `mine` is empty in that case — the
+                    # old row survived a reclaim, so `previous_text` (the coach's
+                    # cue) no longer describes it — and creating would leave two
+                    # identical rows on one source line, BOTH hidden by the
+                    # restored text and both counted, overstating the workout
+                    # with nothing on screen to show for it. Reuse the row.
+                    existing = next(
+                        (
+                            row
+                            for row in log.sets.filter(source_line=cell)
+                            if (row.reps, row.load, row.rpe)
+                            == (values["reps"], values["load"], values["rpe"])
+                        ),
+                        None,
+                    )
+                    if existing is not None:
+                        created = existing
+                        # It was already logged, so there is nothing to
+                        # re-celebrate.
+                        previous_values = (
+                            existing.reps,
+                            existing.load,
+                            existing.rpe,
                         )
-                    )
-                    number = cell.line
-                    while number in taken:
-                        number += 1
-                    created = LoggedSet.objects.create(
-                        session_log=log,
-                        prescription=line_zero_cell,
-                        source_line=cell,
-                        set_number=number,
-                        **values,
-                    )
+                    else:
+                        taken = set(
+                            log.sets.filter(prescription=line_zero_cell).values_list(
+                                "set_number", flat=True
+                            )
+                        )
+                        number = cell.line
+                        while number in taken:
+                            number += 1
+                        created = LoggedSet.objects.create(
+                            session_log=log,
+                            prescription=line_zero_cell,
+                            source_line=cell,
+                            set_number=number,
+                            **values,
+                        )
                     unchanged = previous_values == (
                         created.reps,
                         created.load,

@@ -1722,3 +1722,60 @@ class TestAnUnstorableSetTellsTheAthlete:
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
         assert resp.json()["cell"]["warn"] is False
+
+
+class TestRestoringAReclaimedLineDoesNotDuplicate:
+    def test_typing_the_original_text_back_reuses_the_row(self, client):
+        """Restoring is not a second performance.
+
+        The old row survived the reclaim, so `previous_text` (the coach's cue)
+        no longer describes it and `mine` is empty. Creating would leave two
+        identical rows on one source line — BOTH hidden by the restored text and
+        both counted, overstating the workout with nothing on screen to show it.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.status_code == 200
+
+        rows = LoggedSet.objects.filter(prescription=s.squat)
+        assert rows.count() == 1, list(rows.values_list("load", "reps"))
+        assert (rows.first().load, rows.first().reps) == ("225", "5")
+
+    def test_it_does_not_re_celebrate(self, client):
+        # The performance already existed; there is no new record to fire.
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.json()["new_records"] == []
+
+    def test_a_different_value_still_adds_a_second_row(self, client):
+        # The boundary: only an identical restore is a reuse.
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "230 x 3")
+
+        loads = sorted(
+            LoggedSet.objects.filter(prescription=s.squat).values_list(
+                "load", flat=True
+            )
+        )
+        assert loads == ["225", "230"]
