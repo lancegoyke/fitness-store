@@ -1367,6 +1367,13 @@ def athlete_log_session(request, pk):
         return error
 
     with transaction.atomic():
+        # Same lock `_upsert_parsed_set` takes, and it has to be BOTH sides to
+        # work: `(session, athlete)` has no uniqueness, so an athlete who types
+        # into a cell and immediately taps Save can have the blur POST and this
+        # one both find no log and each create one. Locking only the blur path
+        # leaves that race wide open. One workout split across two logs loses
+        # the older one's sets from every later read, which takes the newest.
+        Session.objects.select_for_update().filter(pk=session.pk).first()
         log = (
             SessionLog.objects.filter(session=session, athlete=request.user)
             .order_by("-created_at")
@@ -3445,12 +3452,16 @@ def _json_object_body(request):
 def _drop_parsed_sets(doomed_qs, unit):
     """Delete derived (parse-at-commit) sets and repair any 1RM they propped up.
 
-    Two coach actions can invalidate a set the athlete never touched: reclaiming
-    the sub-line it was parsed from (``cell_line_write``) and skipping its row
-    (``prescription_skip``). Both must clear it, because every structured
-    surface suppresses ``source_line`` rows — a survivor would be INVISIBLE to
-    coach and athlete alike while still feeding live PRs, coach results, and the
-    persisted 1RM.
+    Used by the reclaim path (``cell_line_write``) only: a coach overwriting the
+    sub-line replaces the very text the set was parsed from, so nothing supports
+    that performance any more. It matters because every structured surface
+    suppresses ``source_line`` rows — a survivor would be INVISIBLE to coach and
+    athlete alike while still feeding live PRs, coach results, and the persisted
+    1RM.
+
+    Deliberately NOT used for skipping a row. Skipping does not un-perform work
+    the athlete already did; see ``prescription_skip`` and
+    ``athlete_log_session``'s delete for that reasoning.
 
     The DONE logs' contributions are captured BEFORE the delete: those sets back
     the persisted ``AthleteOneRm``, so dropping them without recomputing leaves
@@ -3500,18 +3511,17 @@ def prescription_skip(request, plan_id, pk):
         )
         cell.skipped = skipped
         cell.save(update_fields=["skipped"])
-        if skipped:
-            # Skipping hides the row from the athlete, so the blur that would
-            # otherwise clear its derived sets may never come. Drop them here or
-            # a skipped row keeps feeding records and the persisted 1RM
-            # indefinitely. Parsed sets hang off this line-0 cell via
-            # `prescription`; `source_line__isnull=False` leaves the structured
-            # logger's own rows alone (those are the athlete's own history, not
-            # ours to delete).
-            _drop_parsed_sets(
-                LoggedSet.objects.filter(prescription=cell, source_line__isnull=False),
-                plan.unit,
-            )
+        # Deliberately does NOT touch already-derived LoggedSets. Skipping a row
+        # the athlete has already performed does not un-perform it: this
+        # codebase's settled position (see `athlete_log_session`'s delete, which
+        # scopes itself to `trainable_cells()` for exactly this reason) is that a
+        # set logged against a since-skipped cell is HISTORY, not draft state,
+        # and wiping it would silently destroy the athlete's record. A parsed set
+        # is no different from a structured one here. What 5a does add is a guard
+        # on the CREATE side — `_upsert_parsed_set` won't mint a NEW set for a
+        # row that is currently skipped — which is a separate question from
+        # preserving one already earned. Leaving them also means unskipping needs
+        # no re-derive: nothing was destroyed to restore.
         _touch_plan(plan)
     return JsonResponse({"ok": True, "history": serialize_plan_history(plan)})
 

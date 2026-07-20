@@ -841,14 +841,18 @@ class TestNonPlainRepsSurviveToTheLoggedSet:
         assert row.reps == reps
 
 
-class TestSkippingARowClearsItsParsedSets:
-    def test_the_skip_endpoint_drops_parsed_sets(self, client):
-        """Skipping hides the row, so the clearing blur may never come.
+class TestSkippingARowPreservesEarnedHistory:
+    """Skipping a row the athlete already performed does not un-perform it.
 
-        The round-2 guard only fires on a later `athlete_cell_write`. A coach
-        skipping through `prescription_skip` left the derived set feeding live
-        records and the persisted 1RM indefinitely.
-        """
+    An earlier round of review suggested deleting derived sets on skip, on the
+    reasoning that a hidden row can no longer be cleared by a blur. That was
+    followed and then reverted: it contradicts this codebase's settled position,
+    stated in `athlete_log_session`'s delete, that a set logged against a
+    since-skipped cell is HISTORY and wiping it silently destroys the athlete's
+    record. A parsed set is no different from a structured one here.
+    """
+
+    def test_the_skip_endpoint_keeps_parsed_sets(self, client):
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -865,40 +869,34 @@ class TestSkippingARowClearsItsParsedSets:
             content_type="application/json",
         )
         assert resp.status_code == 200
-        assert not LoggedSet.objects.filter(source_line=cell).exists()
+        assert LoggedSet.objects.filter(source_line=cell).exists(), (
+            "skipping a row destroyed work the athlete had already logged"
+        )
 
-    def test_the_skip_endpoint_leaves_structured_sets_alone(self, client):
-        """Only DERIVED sets are ours to delete — the logger's are history."""
+    def test_unskipping_needs_no_re_derive(self, client):
+        # The corollary of not destroying: restoring the row restores nothing,
+        # because nothing was lost. Parse-at-commit only runs from a blur, so a
+        # destructive skip would have left records missing until the athlete
+        # happened to edit that cell again.
         s = seed()
         client.force_login(s.athlete)
-        log_post(
-            client,
-            s.session,
-            {
-                "status": "done",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "225",
-                        "rpe": "8",
-                    }
-                ],
-            },
-        )
-        structured = LoggedSet.objects.get(source_line__isnull=True)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
 
         client.force_login(s.coach)
-        client.post(
-            reverse(
-                "meso:api_prescription_skip",
-                kwargs={"plan_id": s.plan.pk, "pk": s.squat.pk},
-            ),
-            data=json.dumps({"skipped": True}),
-            content_type="application/json",
+        url = reverse(
+            "meso:api_prescription_skip",
+            kwargs={"plan_id": s.plan.pk, "pk": s.squat.pk},
         )
-        assert LoggedSet.objects.filter(pk=structured.pk).exists()
+        for value in (True, False):
+            client.post(
+                url,
+                data=json.dumps({"skipped": value}),
+                content_type="application/json",
+            )
+
+        row = LoggedSet.objects.get(source_line=cell)
+        assert (row.load, row.reps) == ("225", "5")
 
 
 # -- Codex review round 5 ------------------------------------------------------
