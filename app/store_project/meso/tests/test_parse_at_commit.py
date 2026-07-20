@@ -1626,3 +1626,99 @@ class TestSetNumbersStayDistinctAcrossReclaims:
 
         row = LoggedSet.objects.get(prescription=s.squat)
         assert (row.set_number, row.load) == (2, "240")
+
+
+class TestStructuredSavesDoNotCollideWithHiddenRows:
+    def test_a_posted_set_number_pushes_the_hidden_row_aside(self, client):
+        """The mirror of round 21: the collision can come from either channel.
+
+        A hidden parsed row holding set 1 is invisible today, so a posted set 1
+        looks free — until a reclaim surfaces both and they collapse in
+        `athlete_session`'s (prescription, set_number) dict.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "8",
+                        "load": "185",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+
+        rows = LoggedSet.objects.filter(prescription=s.squat).order_by("set_number")
+        assert [(r.set_number, r.load) for r in rows] == [(1, "185"), (2, "225")]
+
+    def test_both_render_once_the_line_is_reclaimed(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "8",
+                        "load": "185",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        loads = sorted(r["load"] for r in row["set_rows"] if r["load"])
+        assert loads == ["185", "225"], loads
+
+
+class TestAnUnstorableSetTellsTheAthlete:
+    def test_a_set_too_long_to_store_warns(self, client):
+        """Silently not logging valid-looking text is the worst outcome.
+
+        The upsert declines a value past the column limit; without this the
+        response said warn=false, so the athlete saw ordinary text that never
+        counted toward their records.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        text = "1." + "0" * 35 + " x 5"
+        assert parse_performed(text)["kind"] == "set"
+
+        resp = write_cell(client, s.session, s.squat, 1, text)
+        assert resp.status_code == 200
+        assert resp.json()["cell"]["warn"] is True
+        assert not LoggedSet.objects.exists()
+
+    def test_the_presenter_agrees_on_reload(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "1." + "0" * 35 + " x 5")
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert row["sub_lines"][0]["warn"] is True
+
+    def test_an_ordinary_set_still_does_not_warn(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.json()["cell"]["warn"] is False

@@ -484,19 +484,45 @@ def parse_performed(text):
     return {"kind": "swap", "raw": raw}
 
 
-def is_unresolved_set(text):
-    """Derive-on-read ``warn`` (5a, plan §8): does ``text`` classify as ``unresolved-set``?
+# ``LoggedSet.reps``/``load``/``rpe`` are CharField(32). A parse that yields
+# something longer cannot be stored, and the cell has to say so.
+MAX_LOGGED_FIELD = 32
+
+
+def cell_should_warn(text):
+    """Derive-on-read ``warn`` (5a, plan §8): should this cell be tinted?
 
     A tiny wrapper around ``parse_performed`` shared by every surface that
     needs to color a cell — the athlete presenter (the sub-line stack) and the
     ``athlete_cell_write`` response (so a re-blur's answer updates live,
     without a full page reload). No stored flag, no new column: every call
-    re-classifies ``text`` from scratch. Only the ``unresolved-set`` kind
-    warns; ``set``/``skip``/``swap``/``note``/``duration`` (and an empty cell,
-    which parses to ``None``) never do.
+    re-classifies ``text`` from scratch.
+
+    Two reasons to warn, and they must be the same two the write path acts on:
+
+    1. ``unresolved-set`` — text shaped like a logging attempt that won't
+       resolve (``225 x``). ``skip``/``swap``/``note``/``duration`` and an empty
+       cell are all successful classifications and never warn.
+    2. a set that resolves but is TOO LONG to store. The upsert declines to
+       write a value past ``MAX_LOGGED_FIELD``, and reporting no warning there
+       left the athlete looking at valid-looking text that silently never
+       counted toward their records.
     """
     parsed = parse_performed(text)
-    return bool(parsed) and parsed.get("kind") == "unresolved-set"
+    if not parsed:
+        return False
+    if parsed.get("kind") == "unresolved-set":
+        return True
+    if parsed.get("kind") != "set":
+        return False
+    return any(
+        len(value) > MAX_LOGGED_FIELD
+        for value in (
+            performed_reps_text(parsed),
+            str(parsed.get("load", "")),
+            str(parsed.get("rpe", "")),
+        )
+    )
 
 
 def performed_reps_text(parsed):

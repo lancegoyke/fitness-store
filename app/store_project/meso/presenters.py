@@ -35,7 +35,7 @@ from .models import WeekDelivery
 from .models import parsed_set_is_hidden
 from .one_rm import key_str
 from .one_rm import one_rm_values
-from .parsing import is_unresolved_set
+from .parsing import cell_should_warn
 from .personal_records import new_records_in
 from .personal_records import personal_records
 from .serializers import _fmt_num
@@ -1548,7 +1548,7 @@ def athlete_session(session, athlete):
             {
                 "line": line_cell.line,
                 "text": line_cell.text,
-                "warn": is_unresolved_set(line_cell.text),
+                "warn": cell_should_warn(line_cell.text),
             }
             for line_cell in lines_by_slot.get(slot_id, ())
             if line_cell.text.strip()

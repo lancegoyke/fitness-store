@@ -84,7 +84,7 @@ from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
 from .models import parsed_set_is_hidden
-from .parsing import is_unresolved_set
+from .parsing import cell_should_warn
 from .parsing import parse_performed
 from .parsing import performed_reps_text
 from .personal_records import new_records_in
@@ -1415,6 +1415,32 @@ def athlete_log_session(request, pk):
             if not parsed_set_is_hidden(s)
         ]
         log.sets.filter(pk__in=replaceable).delete()
+
+        # Move any surviving HIDDEN row off a set number the client just posted.
+        # Its number is invisible today — nothing renders it — but the moment the
+        # sub-line is reclaimed or edited it surfaces, and two rows sharing
+        # (prescription, set_number) collapse in `athlete_session`'s dict, after
+        # which a save can delete both while reposting one. The client's
+        # numbering stays authoritative; the hidden row yields, because it is the
+        # one nobody is looking at.
+        posted = {(cs["prescription_id"], cs["set_number"]) for cs in cleaned_sets}
+        if posted:
+            for row in log.sets.select_related("source_line"):
+                if not parsed_set_is_hidden(row):
+                    continue
+                if (row.prescription_id, row.set_number) not in posted:
+                    continue
+                taken = set(
+                    log.sets.filter(prescription_id=row.prescription_id)
+                    .exclude(pk=row.pk)
+                    .values_list("set_number", flat=True)
+                ) | {n for (pid, n) in posted if pid == row.prescription_id}
+                number = row.set_number
+                while number in taken:
+                    number += 1
+                row.set_number = number
+                row.save(update_fields=["set_number"])
+
         LoggedSet.objects.bulk_create(
             [
                 LoggedSet(
@@ -1643,7 +1669,7 @@ def athlete_cell_write(request, pk):
                 # Derive-on-read warn (5a, plan §8) — re-classified from the
                 # just-committed text so a re-blur that fixes a fat-fingered
                 # set attempt clears the warning without a page reload.
-                "warn": is_unresolved_set(cell.text),
+                "warn": cell_should_warn(cell.text),
             },
             # Optimistic PR toast (5a, plan §7): any lift this parsed set just
             # beat the athlete's current LIVE best on — mirrors
@@ -1791,9 +1817,14 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                 # parsed value longer than the column raises on Postgres, and
                 # since we're inside the savepoint the guard would swallow it
                 # and roll the DELETE back too — leaving the OLD set counting
-                # while the response cheerfully reported warn=false. Better to
-                # store nothing: the athlete's text is kept either way.
-                if all(len(values[f]) <= limit for f, limit in LOG_SET_FIELDS.items()):
+                # while the response cheerfully reported warn=false.
+                #
+                # Same constant `cell_should_warn` tests, deliberately: storing
+                # nothing is fine, but the cell has to SAY so, and the two would
+                # be free to drift if each had its own limit.
+                if all(
+                    len(value) <= parsing.MAX_LOGGED_FIELD for value in values.values()
+                ):
                     # The sub-line's own position, NOT a constant 1. Every
                     # parsed row landing on set 1 was invisible while they
                     # stayed suppressed, but structured surfaces collapse by
