@@ -90,6 +90,7 @@ function createLogger() {
     queued: false, // a save is stashed locally, waiting for the network
     newRecords: [], // PRs the last save beat (Phase 4c) — the celebration toast
     _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
+    _cellSaves: {}, // per-cell promise chain, so blurs reach the server in order
 
     init() {
       const el = document.getElementById("meso-log-data");
@@ -511,12 +512,34 @@ function createLogger() {
       ex.sub_lines.push({ line: maxLine + 1, text: "" });
     },
 
+    // Serialize saves PER CELL. Two blurs for one sub-line can otherwise be in
+    // flight together and land at the server out of order — the older request
+    // last — so `athlete_cell_write` saves the stale text and re-parses its
+    // LoggedSet from it. Ignoring the stale *response* isn't enough: the UI
+    // would show the correction while the database and the records kept the
+    // stale parse, and a reload would surface it. Chaining means the newer text
+    // is always written second, and since the body is read at send time an
+    // intermediate blur simply coalesces into the latest value.
     // POST one exercise's sub-line cell. Modeled on `_postOneRm`: best-effort,
     // an unreachable network or an error leaves the typed value in-session and
     // retries on the next blur. Blank text clears the cell in place (the server
     // never deletes a sub-line).
-    async saveCell(ex, line) {
-      if (!this.cellUrl || !ex) return;
+    saveCell(ex, line) {
+      if (!this.cellUrl || !ex) return Promise.resolve();
+      const key = ex.id + ":" + line;
+      const previous = this._cellSaves[key] || Promise.resolve();
+      const run = previous
+        .catch(() => {}) // a failed save must not stall the cell's queue
+        .then(() => this._postCell(ex, line));
+      this._cellSaves[key] = run;
+      return run;
+    },
+
+    // POST one exercise's sub-line cell. Modeled on `_postOneRm`: best-effort,
+    // an unreachable network or an error leaves the typed value in-session and
+    // retries on the next blur. Blank text clears the cell in place (the server
+    // never deletes a sub-line).
+    async _postCell(ex, line) {
       const entry = (ex.sub_lines || []).find((l) => l.line === line);
       const text = entry ? entry.text || "" : "";
       if (entry) entry.saveError = false;

@@ -538,3 +538,23 @@ def test_segment_commas_are_untouched_by_the_fold():
     # The fold must not disturb ordinary comma-separated segments or prose.
     assert parse_performed("225 x 5, RPE 8")["rpe"] == "8"
     assert parse_performed("felt tight, then ok")["kind"] == "note"
+
+
+@pytest.mark.parametrize(
+    ("text", "load"),
+    [
+        ("225x5,230x3", "225"),
+        ("225x5,100% effort", "225"),
+        ("225 x 5,300 x 3", "225"),
+    ],
+)
+def test_a_segment_comma_before_three_digits_is_not_a_thousands_group(text, load):
+    """Anchoring matters: only the LEADING number can hold a separator.
+
+    A comma that merely happens to be followed by three digits is a segment
+    break. Folding it mangled the head into something unparsable (`225x5230x3`)
+    so a perfectly good first set logged nothing at all.
+    """
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == load

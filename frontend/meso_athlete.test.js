@@ -833,6 +833,45 @@ describe("saveCell", () => {
     expect(c.exercises[0].sub_lines[0].warn).toBeFalsy();
   });
 
+  it("serializes overlapping saves so the server writes them in order", async () => {
+    // Ignoring a stale RESPONSE isn't enough — by then the server has already
+    // written the stale text and re-parsed its LoggedSet from it. What matters
+    // is the order the server FINISHES the writes in, so `applied` records
+    // completion, not dispatch: unchained, the older request is still in flight
+    // when the newer one lands, so the older one finishes LAST and its text
+    // wins in the database while the UI shows the correction.
+    const c = cellLogger({
+      exercises: [
+        { id: 1, sub_lines: [{ line: 1, text: "225 x" }], set_rows: [] },
+      ],
+    });
+
+    const applied = [];
+    let releaseFirst;
+    const firstInFlight = new Promise((r) => {
+      releaseFirst = r;
+    });
+    let call = 0;
+    global.fetch = vi.fn().mockImplementation(async (_url, opts) => {
+      const body = JSON.parse(opts.body);
+      if (call++ === 0) await firstInFlight; // hold the OLDER request open
+      applied.push(body.text); // the write lands here
+      return res({
+        body: { ok: true, cell: { id: 5, line: 1, text: body.text, warn: false } },
+      });
+    });
+
+    const first = c.saveCell(c.exercises[0], 1);
+    c.exercises[0].sub_lines[0].text = "225 x 5";
+    const second = c.saveCell(c.exercises[0], 1);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    // The corrected text must be what the server wrote LAST.
+    expect(applied[applied.length - 1]).toBe("225 x 5");
+  });
+
   // -- 5a §7: optimistic PR toast off a cell blur ----------------------------
 
   it("surfaces new_records from the response as the PR toast", async () => {

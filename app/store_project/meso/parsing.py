@@ -61,13 +61,14 @@ _REPS = re.compile(
 # A thousands separator inside a number (``1,000``) — a digit, a comma, then
 # exactly three digits not followed by more. Distinguishes ``1,000 x 5`` from a
 # real segment comma (``225 x 5, RPE 8``), which never has that shape.
-_THOUSANDS = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
-# Any comma sitting between two digits — a numeric comma, well-formed or not.
-_NUMERIC_COMMA = re.compile(r"\d,\d")
-# A comma that separates SEGMENTS rather than digit groups: one that is either
-# not preceded by a digit, or not followed by exactly three digits. Splitting on
-# this leaves ``1,000`` whole while still breaking ``225 x 5, RPE 8``.
-_SEGMENT_COMMA = re.compile(r",(?!\d{3}(?!\d))|(?<!\d),")
+# The line OPENS with digits then a comma then a digit — a numeric comma in the
+# load position, well-formed or not. Anchored: a comma anywhere later is a
+# segment break, never a digit group.
+_LEADING_NUMERIC_COMMA = re.compile(r"^\d+,\d")
+# ...and the well-formed version of that: 1-3 digits, then one or more groups of
+# exactly three, not run on into a fourth (``1,000`` / ``12,345`` yes;
+# ``1,0000`` / ``12,34`` no).
+_LEADING_GROUPED = re.compile(r"^\d{1,3}(?:,\d{3})+(?!\d)")
 
 # Unit-word normalization for reps suffixes: ``e``/``ea`` → ``each``.
 _UNIT_ALIASES = {"e": "each", "ea": "each", "ea.": "each"}
@@ -436,29 +437,28 @@ def parse_performed(text):
             "duration": first_line.replace(" ", ""),
         }
 
-    # A comma between digits is a thousands separator, not a segment break.
-    # Splitting ``1,000 x 5`` on it leaves ``1`` — a perfectly good bare load —
-    # so the blur silently stored load=1 with no reps and no warning. Silently
-    # wrong data is worse than a refusal.
-    if _NUMERIC_COMMA.search(first_line):
-        # Only a well-formed group (digit, comma, exactly three digits) is
-        # readable. Anything else (``1,0000``, ``12,34``) would hand the head
-        # that same truncated-but-valid load, so refuse rather than guess.
-        if _NUMERIC_COMMA.search(_THOUSANDS.sub("", first_line)):
+    # A thousands separator can only be in the LEADING number — that is the
+    # load position, the only number a comma can legitimately sit inside.
+    # Anchoring here is what keeps the fold off ordinary segment commas: a
+    # comma that merely happens to be followed by three digits (``225x5,230x3``,
+    # ``225x5,100% effort``) is a segment break, and folding it mangled the head
+    # into something unparsable so nothing logged at all.
+    line = first_line.lstrip()
+    explicit_load = False
+    if _LEADING_NUMERIC_COMMA.match(line):
+        grouped = _LEADING_GROUPED.match(line)
+        if grouped is None:
+            # A leading comma we can't read (``1,0000``, ``12,34``). Splitting
+            # would hand the head a truncated but VALID-looking load — ``1`` —
+            # and store it silently. Refuse rather than guess.
             return {"kind": "unresolved-set", "raw": raw, "warn": True}
+        # Nobody types a comma by accident, so this load bypasses the
+        # plausibility ceiling that catches a doubled keystroke (``2255x5``).
+        explicit_load = True
+        line = grouped.group(0).replace(",", "") + line[grouped.end() :]
 
-    # Split on SEGMENT commas only, leaving thousands groups intact, so the
-    # separator can be attributed to the segment it actually sits in.
-    raw_segments = _SEGMENT_COMMA.split(first_line)
-    head_raw = raw_segments[0].strip()
-    # Scoped to the head: the plausibility exemption belongs to the load the
-    # athlete wrote with a separator, not to any comma anywhere on the line.
-    # Otherwise ``2255 x 5, note 1,000`` would let the bare ``2255`` through the
-    # ceiling that ``2255 x 5`` alone is caught by.
-    explicit_load = bool(_THOUSANDS.search(head_raw))
-
-    segments = [_THOUSANDS.sub("", s) for s in raw_segments]
-    head = _THOUSANDS.sub("", head_raw)
+    segments = line.split(",")
+    head = segments[0].strip()
     out = _classify_performed_head(head, explicit_load)
 
     if out is not None:
