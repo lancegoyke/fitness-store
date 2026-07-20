@@ -267,8 +267,9 @@ function createLogger() {
         const data = await res.json();
         this.status = data.log.status;
         this.syncFromLog(data.log);
-        // Any lift this (done) save beat — the server already filtered to DONE, so
-        // a "Save progress" comes back empty and shows no toast.
+        // Any lift this save beat. As of 5a the records read is LIVE — it counts
+        // pending sets too — so a "Save progress" no longer comes back empty and
+        // can legitimately surface a toast before the session is ever done.
         this.newRecords = data.new_records || [];
         this.saved = true;
         // Key the tour nudge off the log status the *server* persisted, not the

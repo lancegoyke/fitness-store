@@ -288,10 +288,42 @@ def test_performed_note_forms(text):
     assert parsed["kind"] == "note"
 
 
-@pytest.mark.parametrize("text", ["225 x", "2255x5"])
+@pytest.mark.parametrize("text", ["225 x", "2255x5", "225 x five", "225x5x5"])
 def test_performed_unresolved_set_forms(text):
     parsed = parse_performed(text)
     assert parsed["kind"] == "unresolved-set"
+
+
+@pytest.mark.parametrize("text", ["225 x five", "225x5x5", "225 x ?!"])
+def test_an_x_with_unreadable_reps_warns_rather_than_logging_load_only(text):
+    """An ``x`` means a set was attempted — a load-only salvage would lie.
+
+    The left side parses as a plausible load, so it is tempting to return
+    ``{"load": "225"}`` and call it a partial set. That would persist a repless
+    ``LoggedSet`` that can never count toward a record, while suppressing the
+    warning — the athlete sees no complaint and reasonably believes it logged.
+    Bare ``225`` (no ``x``, no attempt at reps) stays a legitimate partial.
+    """
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "unresolved-set"
+    assert parsed.get("warn") is True
+    assert "load" not in parsed
+
+
+def test_a_bare_load_is_still_a_partial_set():
+    parsed = parse_performed("225")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "225"
+    assert "reps" not in parsed
+
+
+def test_a_loaded_timed_set_survives_the_reps_guard():
+    # ``duration`` counts as recognized right-hand data — this is a real
+    # timed set (225 held for 30s), not a fat-finger.
+    parsed = parse_performed("225 x 30s")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "225"
+    assert parsed["duration"] == "30s"
 
 
 @pytest.mark.parametrize("text", ["30s", "20-60m"])

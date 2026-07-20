@@ -526,3 +526,112 @@ class TestToleranceGuard:
     # they pass with or without the savepoint. Only a genuinely aborted
     # transaction discriminates, and SQLite doesn't abort. That test lives in
     # ``test_parse_at_commit_postgres.py`` and runs in the Postgres CI job.
+
+
+# -- Codex review follow-ups ---------------------------------------------------
+
+
+class TestParsedSetsStayOutOfTheStructuredLogger:
+    """A parsed set must not masquerade as a structured input row (plan §6).
+
+    ``athlete_session`` already excludes them from ``set_rows``; the log
+    endpoint's own response is the second surface that has to agree, because
+    the client's ``syncFromLog`` maps every set it receives onto a
+    ``(prescription, set_number)`` input.
+    """
+
+    def test_the_log_response_omits_parsed_sets(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        resp = log_post(client, s.session, {"status": "pending", "sets": []})
+        assert resp.status_code == 200
+
+        returned = resp.json()["log"]["sets"]
+        cell = sub_cell(s.squat, 1)
+        parsed = LoggedSet.objects.get(source_line=cell)
+        assert parsed.pk not in {row["id"] for row in returned}, (
+            "the parsed set leaked into the structured logger's response — "
+            "syncFromLog would mark a set done that nobody posted"
+        )
+
+    def test_a_structured_save_still_echoes_its_own_sets(self, client):
+        # The filter must not swallow the logger's own rows.
+        s = seed()
+        client.force_login(s.athlete)
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "8",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()["log"]["sets"]) == 1
+
+
+class TestOptimisticToastIsScopedToThisBlur:
+    def test_an_unrelated_blur_does_not_refire_an_earlier_pr(self, client):
+        """Blurring a note must not re-celebrate a PR won on another line.
+
+        ``new_records_in`` reports every lift in the session beating its prior
+        best, so an unscoped read re-returns the earlier record on every
+        subsequent blur and the toast fires again and again.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+
+        first = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert first.json()["new_records"], "the first PR should be celebrated"
+
+        # A note on a different line — nothing was logged, so nothing to fire.
+        second = write_cell(client, s.session, s.rdl, 1, "felt tight")
+        assert second.json()["new_records"] == []
+
+    def test_a_blank_cell_reports_no_records(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cleared = write_cell(client, s.session, s.squat, 1, "")
+        assert cleared.json()["new_records"] == []
+
+
+class TestDoneLogEditsRefreshThePersistedOneRm:
+    def test_editing_a_parsed_cell_on_a_done_log_refreshes_the_one_rm(self, client):
+        """A DONE log's parsed sets feed the persisted AthleteOneRm.
+
+        Derivation is DONE-only, so once a log is DONE its parsed sets are part
+        of the confirmed record — editing one has to recompute, or percent-load
+        suggestions and the coach's designer keep quoting a stale estimate.
+        """
+        from store_project.meso.models import AthleteOneRm
+
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        log = the_log(s.session, s.athlete)
+        log.status = SessionLog.Status.DONE
+        log.save(update_fields=["status"])
+
+        # Seed the persisted estimate from the DONE state.
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        before = AthleteOneRm.objects.filter(athlete=s.athlete).first()
+        assert before is not None, "a DONE parsed set should derive a 1RM"
+
+        # A heavier set must raise it.
+        write_cell(client, s.session, s.squat, 1, "315 x 5")
+        after = AthleteOneRm.objects.get(pk=before.pk)
+        assert after.value > before.value, (
+            "the persisted 1RM went stale after a DONE parsed-cell edit"
+        )

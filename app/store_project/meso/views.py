@@ -1428,7 +1428,9 @@ def athlete_log_session(request, pk):
     meso_tour.advance_self_step_if_complete(request.user, "results")
     # Phase 4c: the lifts in this session that beat the athlete's prior best, so
     # the logger can celebrate a PR the instant it's logged. Pure detection off
-    # the just-committed rows — DONE-only, so a "Save progress" draft returns [].
+    # the just-committed rows. As of 5a this read is LIVE (it counts pending
+    # sets), so a "Save progress" draft can legitimately return records too —
+    # it is no longer DONE-gated.
     new_records = new_records_in(log)
     return JsonResponse(
         {
@@ -1641,12 +1643,13 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
 
             parsed = parse_performed(cell.text)
             log.sets.filter(source_line=cell).delete()
+            created = None
             if (
                 parsed
                 and parsed.get("kind") == "set"
                 and (parsed.get("reps") or parsed.get("load"))
             ):
-                LoggedSet.objects.create(
+                created = LoggedSet.objects.create(
                     session_log=log,
                     prescription=line_zero_cell,
                     source_line=cell,
@@ -1656,6 +1659,20 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
                     rpe=str(parsed.get("rpe", "")),
                 )
 
+            # Editing a cell on an already-DONE log changes the very sets the
+            # persisted AthleteOneRm is derived from, so it has to be recomputed
+            # — otherwise blanking a 150 x 5 (or adding a heavier set) leaves a
+            # stale estimate driving percent-load suggestions and the coach's
+            # designer until some later structured save happens to fix it.
+            # Gated on DONE because derivation is DONE-only by design; a PENDING
+            # log has nothing to promote yet (5b's settle does that).
+            if log.status == SessionLog.Status.DONE:
+                meso_one_rm.refresh_one_rms(
+                    athlete,
+                    list(session.trainable_cells()),
+                    session.week.mesocycle.plan.unit,
+                )
+
         # The toast read gets its OWN savepoint, deliberately. Inside the one
         # above, a failure here would roll back the upsert with it — throwing
         # away a perfectly good parsed set because a cosmetic 🎉 lookup broke,
@@ -1663,7 +1680,15 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
         # to edit this same cell again. Separated, the upsert is already
         # committed and a failed read costs nothing but the toast.
         with transaction.atomic():
-            new_records = new_records_in(log)
+            # Scoped to THIS blur's set. `new_records_in` reports every lift in
+            # the session that beats its prior best, so an unscoped read would
+            # re-return a PR won on an earlier line every time the athlete
+            # blurred an unrelated note — re-firing the same 🎉 over and over.
+            # No set written (blank/skip/swap/note) means nothing to celebrate.
+            if created is not None:
+                new_records = [
+                    r for r in new_records_in(log) if r.logged_set_id == created.pk
+                ]
     except Exception:
         logger.exception(
             "parse-at-commit: failed to upsert a LoggedSet for cell %s "

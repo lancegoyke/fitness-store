@@ -316,6 +316,16 @@ def _try_load_first(head):
         return None
     out = {"load": left.replace(" ", "")}
     _classify_reps(right, out)
+    # The athlete wrote an ``x``, so they were attempting a set — if the
+    # right-hand side yielded nothing recognizable (``225 x five``,
+    # ``225x5x5``), this is a fat-fingered attempt, NOT a load-only partial.
+    # Returning the load anyway would classify it ``set``, silently persist a
+    # repless LoggedSet that can never count toward a record, and skip the
+    # warning entirely — the athlete would think it logged. Bail so the
+    # caller falls through to ``unresolved-set``. (A bare ``225`` with no
+    # ``x`` is a different branch and still a legitimate partial set.)
+    if not any(k in out for k in ("reps", "reps_range", "duration", "amrap")):
+        return None
     return out
 
 
