@@ -58,6 +58,11 @@ _REPS = re.compile(
     r"^(\d+)(?:\s*-\s*(\d+))?\s*([a-z']+(?:\s+[a-z]+)*)?$", re.IGNORECASE
 )
 
+# A thousands separator inside a number (``1,000``) — a digit, a comma, then
+# exactly three digits not followed by more. Distinguishes ``1,000 x 5`` from a
+# real segment comma (``225 x 5, RPE 8``), which never has that shape.
+_THOUSANDS = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
+
 # Unit-word normalization for reps suffixes: ``e``/``ea`` → ``each``.
 _UNIT_ALIASES = {"e": "each", "ea": "each", "ea.": "each"}
 # Reps suffixes that are actually time units → the token is a duration.
@@ -238,7 +243,7 @@ _NOTE_SIGNAL_WORDS = {
 }
 
 
-def _load_is_plausible(token):
+def _load_is_plausible(token, *, explicit=False):
     """Guard against a digit run masquerading as a load (``2255x5``).
 
     ``_LOAD`` is deliberately permissive (any digit run). A bare, unit-less,
@@ -246,6 +251,11 @@ def _load_is_plausible(token):
     mistyped duplicate keystroke rather than a real single-exercise load —
     percent/lbs/kg-suffixed and decimal loads are exempt (their notation
     already disambiguates intent), as is the ``bw`` literal.
+
+    ``explicit`` is that same exemption for a load the athlete wrote with a
+    thousands separator (``1,000``). Nobody types a comma by accident, and a
+    four-figure load is real work on a sled or leg press — so the ceiling,
+    which exists to catch a doubled keystroke, must not refuse it.
     """
     match = _LOAD.match(token.strip())
     if not match:
@@ -253,7 +263,7 @@ def _load_is_plausible(token):
     number, unit = match.groups()
     if number is None:  # the ``bw`` branch
         return True
-    if unit or "." in number:
+    if unit or "." in number or explicit:
         return True
     return int(number) <= _MAX_BARE_LOAD
 
@@ -286,7 +296,7 @@ def _looks_like_note(segment):
     return any(word in _NOTE_SIGNAL_WORDS for word in words)
 
 
-def _try_at_form(head):
+def _try_at_form(head, explicit_load=False):
     """``5 @ 225`` — reps-at-load, the new operator for performed text."""
     parts = re.split(r"\s*@\s*", head, maxsplit=1)
     if len(parts) != 2:
@@ -294,7 +304,9 @@ def _try_at_form(head):
     reps_token, load_token = parts[0].strip(), parts[1].strip()
     if not reps_token or not load_token:
         return None
-    if not _LOAD.match(load_token) or not _load_is_plausible(load_token):
+    if not _LOAD.match(load_token) or not _load_is_plausible(
+        load_token, explicit=explicit_load
+    ):
         return None
     out = {}
     _classify_reps(reps_token, out)
@@ -308,7 +320,7 @@ def _try_at_form(head):
     return out
 
 
-def _try_load_first(head):
+def _try_load_first(head, explicit_load=False):
     """``225 x 5`` / ``30lbs x 8 each`` — load × reps, load claimed FIRST.
 
     This is the inversion vs. ``parse_prescription``: there, ``_SETS_X``
@@ -327,7 +339,7 @@ def _try_load_first(head):
     left, right = parts[0].strip(), parts[1].strip()
     if not left or not right:
         return None
-    if not _LOAD.match(left) or not _load_is_plausible(left):
+    if not _LOAD.match(left) or not _load_is_plausible(left, explicit=explicit_load):
         return None
     out = {"load": left.replace(" ", "")}
     _classify_reps(right, out)
@@ -344,7 +356,7 @@ def _try_load_first(head):
     return out
 
 
-def _classify_performed_head(head):
+def _classify_performed_head(head, explicit_load=False):
     """Best-effort classification of the line's first (only) recognized set.
 
     Tries, in order: the ``@`` form, the load-first ``x`` form, then a bare
@@ -352,13 +364,13 @@ def _classify_performed_head(head):
     ``None`` when none resolve, leaving the caller to decide between
     ``unresolved-set``/``swap``/``note``.
     """
-    result = _try_at_form(head)
+    result = _try_at_form(head, explicit_load)
     if result is not None:
         return result
-    result = _try_load_first(head)
+    result = _try_load_first(head, explicit_load)
     if result is not None:
         return result
-    if _LOAD.match(head) and _load_is_plausible(head):
+    if _LOAD.match(head) and _load_is_plausible(head, explicit=explicit_load):
         return {"load": head.replace(" ", "")}
     return None
 
@@ -418,9 +430,29 @@ def parse_performed(text):
             "duration": first_line.replace(" ", ""),
         }
 
-    segments = first_line.split(",")
+    # Fold a thousands separator BEFORE splitting on commas. ``1,000 x 5``
+    # otherwise split into ``1`` and ``000 x 5``, and ``1`` is a perfectly good
+    # bare load — so the blur silently stored load=1 with no reps and no
+    # warning. Silently wrong data is worse than a refusal. The lookahead keeps
+    # this off real segment commas: ``225 x 5, RPE 8`` has no digit-comma-3-digit
+    # run, so it is untouched.
+    normalized = _THOUSANDS.sub("", first_line)
+    explicit_load = normalized != first_line
+
+    # A comma still wedged between digits after normalizing is a separator we
+    # can't read (``1,0000``, ``12,34``). Splitting on it would hand the head a
+    # truncated but VALID-looking load — ``1`` — and store that silently, which
+    # is the same corruption the fold above prevents. Refuse instead.
+    # A comma still wedged between digits after normalizing is a separator we
+    # can't read (``1,0000``, ``12,34``). Splitting on it would hand the head a
+    # truncated but VALID-looking load — ``1`` — and store that silently, which
+    # is the same corruption the fold above prevents. Refuse instead.
+    if re.search(r"\d,\d", normalized):
+        return {"kind": "unresolved-set", "raw": raw, "warn": True}
+
+    segments = normalized.split(",")
     head = segments[0].strip()
-    out = _classify_performed_head(head)
+    out = _classify_performed_head(head, explicit_load)
 
     if out is not None:
         for segment in segments[1:]:

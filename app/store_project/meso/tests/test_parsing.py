@@ -497,3 +497,44 @@ def test_the_at_form_accepts_the_same_reps_as_the_x_form(text, reps):
     assert parsed["kind"] == "set"
     assert parsed["load"] == "225"
     assert performed_reps_text(parsed) == reps
+
+
+@pytest.mark.parametrize(
+    ("text", "load", "reps"),
+    [
+        ("1,000 x 5", "1000", "5"),
+        ("1,000 x 5, RPE 8", "1000", "5"),
+        ("2,500 x 3", "2500", "3"),
+        ("12,345 x 2", "12345", "2"),
+        ("1,000", "1000", ""),
+    ],
+)
+def test_a_thousands_separator_is_folded_not_split(text, load, reps):
+    """``1,000 x 5`` split into ``1`` and ``000 x 5``, storing load=1 SILENTLY.
+
+    ``1`` is a perfectly good bare load, so nothing warned — corrupt data rather
+    than a refused parse. Folding also has to survive the plausibility ceiling:
+    a comma is never typed by accident, and four figures is real work on a sled
+    or leg press.
+    """
+    from store_project.meso.parsing import performed_reps_text
+
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == load
+    assert performed_reps_text(parsed) == reps
+
+
+@pytest.mark.parametrize("text", ["1,0000 x 5", "12,34 x 5", "1,00 x 3"])
+def test_an_unreadable_separator_warns_instead_of_truncating(text):
+    """A comma we can't read must not yield a truncated but valid-looking load."""
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "unresolved-set"
+    assert parsed["warn"] is True
+    assert "load" not in parsed
+
+
+def test_segment_commas_are_untouched_by_the_fold():
+    # The fold must not disturb ordinary comma-separated segments or prose.
+    assert parse_performed("225 x 5, RPE 8")["rpe"] == "8"
+    assert parse_performed("felt tight, then ok")["kind"] == "note"
