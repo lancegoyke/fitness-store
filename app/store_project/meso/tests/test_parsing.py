@@ -558,3 +558,31 @@ def test_a_segment_comma_before_three_digits_is_not_a_thousands_group(text, load
     parsed = parse_performed(text)
     assert parsed["kind"] == "set"
     assert parsed["load"] == load
+
+
+@pytest.mark.parametrize(
+    ("text", "load", "rpe"),
+    [
+        ("5 @ 1,000", "1000", None),
+        ("5 @ 1,000, RPE 8", "1000", "8"),
+        ("1,000,000 x 5", "1000000", None),
+    ],
+)
+def test_a_grouped_load_survives_in_either_operator_position(text, load, rpe):
+    """The load can lead the line OR follow ``@`` — both are load positions.
+
+    Anchoring the fold to the line start alone missed `5 @ 1,000`, which then
+    split into `5 @ 1` and silently logged a load of 1.
+    """
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == load
+    assert parsed.get("rpe") == rpe
+
+
+@pytest.mark.parametrize("text", ["1,000,00 x 5", "1,0000 x 5", "12,34 x 5"])
+def test_a_partial_group_is_refused_not_truncated(text):
+    """`1,000,00` must not match just its `1,000` prefix and log 1000."""
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "unresolved-set"
+    assert parsed["warn"] is True

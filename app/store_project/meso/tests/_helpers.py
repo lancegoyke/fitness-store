@@ -109,10 +109,16 @@ def presc(
     )
 
 
-def sub_line(cell, text, *, line=None):
+def sub_line(cell, text, *, line=None, athlete_authored=False):
     """A freeform sub-line cell beneath ``cell``'s row for the same week.
 
     ``line`` defaults to one past the row's current max line for that week.
+
+    ``athlete_authored`` defaults False (a coach-written sub-line), matching
+    most callers. Pass True to simulate one the athlete typed — the only kind
+    ``athlete_cell_write`` produces, and the flag the 5a no-double-display
+    suppression keys on, so a parse-at-commit fixture MUST set it or it models
+    a state the app can't reach.
     """
     if line is None:
         current = (
@@ -124,5 +130,9 @@ def sub_line(cell, text, *, line=None):
         )
         line = (current.line if current else 0) + 1
     return Prescription.objects.create(
-        exercise_slot=cell.exercise_slot, week=cell.week, line=line, text=text
+        exercise_slot=cell.exercise_slot,
+        week=cell.week,
+        line=line,
+        text=text,
+        athlete_authored=athlete_authored,
     )

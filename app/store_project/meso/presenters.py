@@ -1501,21 +1501,27 @@ def athlete_session(session, athlete):
     log = (
         SessionLog.objects.filter(session=session, athlete=athlete)
         .order_by("-created_at")
-        .prefetch_related("sets")
+        .prefetch_related("sets__source_line")
         .first()
     )
     # No double-display (5a, plan §6): a freeform sub-line's text already
-    # renders itself (``_sub_lines`` below); a ``LoggedSet`` DERIVED from that
-    # same text (``source_line`` non-null, parse-at-commit) must be excluded
-    # here, or it would also render as a phantom structured input row. Only
-    # ``source_line__isnull=True`` — the structured logger's own rows — seed
-    # ``set_rows``. Filtered in Python (not a fresh queryset) to reuse the
-    # ``prefetch_related("sets")`` cache above.
+    # renders itself (``_sub_lines`` below), so a ``LoggedSet`` DERIVED from
+    # that same text must not ALSO render as a structured input row.
+    #
+    # The test is whether the source line still SHOWS that text — i.e. whether
+    # it is still ``athlete_authored`` — not merely whether ``source_line`` is
+    # set. Once a coach reclaims the sub-line (``cell_line_write`` flips the
+    # flag and overwrites the text), the athlete's performance is no longer
+    # displayed anywhere, so suppressing it here would hide a real logged set
+    # while it went on counting toward records. Keying on the flag lets the set
+    # surface again without mutating a single row of athlete data — which is
+    # what ``history.py`` requires ("undo must never touch ... athlete data"),
+    # since a coach edit is undoable.
     logged = (
         {
             (s.prescription_id, s.set_number): s
             for s in log.sets.all()
-            if s.source_line_id is None
+            if s.source_line_id is None or not s.source_line.athlete_authored
         }
         if log
         else {}

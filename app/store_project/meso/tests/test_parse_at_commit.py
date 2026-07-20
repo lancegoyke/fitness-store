@@ -23,6 +23,7 @@ import pytest
 from django.urls import reverse
 from django.utils import timezone
 
+from store_project.meso import presenters
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
@@ -653,22 +654,22 @@ def reclaim(client, s, text="coach cue: brace harder", line=1):
     )
 
 
-class TestReclaimDetachesRatherThanDeletes:
-    """A coach edit must not destroy the athlete's performance.
+class TestReclaimLeavesAthleteDataAlone:
+    """A coach edit must not touch the athlete's performance at all.
 
-    An earlier round deleted the derived set here, reasoning that the text it
-    was parsed from is gone so nothing supports it. That put athlete data inside
-    the coach's undo blast radius with no way out: `history.py` deliberately
-    keeps SessionLog/LoggedSet/AthleteOneRm out of the plan snapshot ("undo must
-    never touch delivery stamps or athlete data"), so Undo restored the cell
-    text while the performance stayed deleted.
+    This took three attempts. Deleting the derived set lost it with no way back
+    — `history.py` keeps SessionLog/LoggedSet/AthleteOneRm out of the plan
+    snapshot precisely because "undo must never touch ... athlete data", and a
+    coach edit is undoable. Detaching it (clearing `source_line`) preserved the
+    row but made it indistinguishable from a structured one, so the logger's own
+    delete wiped it on the athlete's next save.
 
-    Clearing `source_line` instead keeps the record and fixes the visibility
-    problem that motivated the delete — the row becomes an ordinary structured
-    set rather than one suppressed everywhere.
+    The row needs no mutation. Suppression keys on `source_line.athlete_authored`
+    — which `cell_line_write` already flips — so the set simply starts rendering
+    again, while `source_line` stays set and keeps the structured delete off it.
     """
 
-    def test_the_set_survives_the_reclaim(self, client):
+    def test_the_set_is_untouched_by_a_reclaim(self, client):
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -679,13 +680,14 @@ class TestReclaimDetachesRatherThanDeletes:
         assert reclaim(client, s).status_code == 200
 
         row.refresh_from_db()
-        assert (row.load, row.reps) == ("225", "5"), (
-            "a coach edit destroyed the athlete's logged performance"
+        assert (row.load, row.reps) == ("225", "5")
+        assert row.source_line_id == cell.pk, (
+            "the link must survive — it is what keeps the structured logger's "
+            "delete from treating this as one of its own rows"
         )
 
-    def test_the_set_is_detached_so_it_renders_again(self, client):
-        # Still linked, it stays suppressed from every structured surface —
-        # invisible while counting. NULL is the structured-logger origin.
+    def test_a_later_structured_save_does_not_wipe_it(self, client):
+        """The failure detaching introduced: the logger's delete matched it."""
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -694,40 +696,47 @@ class TestReclaimDetachesRatherThanDeletes:
         client.force_login(s.coach)
         reclaim(client, s)
 
-        assert not LoggedSet.objects.filter(source_line=cell).exists()
-        assert LoggedSet.objects.filter(source_line__isnull=True).count() == 1
+        client.force_login(s.athlete)
+        resp = log_post(client, s.session, {"status": "pending", "sets": []})
+        assert resp.status_code == 200
 
-    def test_the_detached_set_does_not_collide_with_logger_rows(self, client):
-        """`_set_rows` keys on (prescription, set_number) — a clash would hide one."""
+        assert LoggedSet.objects.filter(source_line=cell).exists(), (
+            "a structured save destroyed the performance the reclaim preserved"
+        )
+
+    def test_the_reclaimed_set_becomes_visible_again(self, client):
+        """Its text no longer shows it, so it must render as a structured row."""
         s = seed()
         client.force_login(s.athlete)
-        log_post(
-            client,
-            s.session,
-            {
-                "status": "pending",
-                "sets": [
-                    {
-                        "prescription": s.squat.pk,
-                        "set_number": 1,
-                        "reps": "5",
-                        "load": "185",
-                        "rpe": "7",
-                    }
-                ],
-            },
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert all(r["load"] == "" for r in row["set_rows"]), (
+            "while athlete-authored it renders as its sub-line text only"
         )
+
+        client.force_login(s.coach)
+        reclaim(client, s)
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert any(r["load"] == "225" for r in row["set_rows"]), (
+            "after the reclaim nothing else displays this performance, so "
+            "suppressing it would hide a set that still counts"
+        )
+
+    def test_the_reclaimed_set_reaches_the_logger_response(self, client):
+        s = seed()
+        client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         client.force_login(s.coach)
         reclaim(client, s)
 
-        numbers = sorted(
-            LoggedSet.objects.filter(prescription=s.squat).values_list(
-                "set_number", flat=True
-            )
-        )
-        assert numbers == [1, 2], numbers
+        client.force_login(s.athlete)
+        returned = log_post(client, s.session, {"status": "pending", "sets": []}).json()
+        assert [r["load"] for r in returned["log"]["sets"]] == ["225"]
 
 
 class TestSkippedRowsDoNotLog:
@@ -1152,24 +1161,25 @@ class TestOverlongParsedValuesDoNotCorruptState:
 
 
 class TestEmptyLogsAreReapedOnEveryPath:
-    def test_a_reclaim_leaves_the_log_intact(self, client):
-        """A reclaim no longer empties the log, so there is nothing to reap.
+    def test_a_reclaim_leaves_the_log_and_its_set_intact(self, client):
+        """A reclaim mutates no athlete data, so there is nothing to reap.
 
-        This pair previously asserted that reclaiming reaped the draft's log —
-        true only while the reclaim path DELETED the set. It detaches instead
-        (see `TestReclaimDetachesRatherThanDeletes`), so the log keeps its set
-        and must survive.
+        This assertion has flipped twice as the reclaim behaviour changed —
+        first it reaped the emptied log (when reclaim DELETED the set), then it
+        checked the detached row. Reclaim now leaves the set exactly as it is,
+        `source_line` and all.
         """
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
 
         client.force_login(s.coach)
         reclaim(client, s, text="brace harder")
 
         log = the_log(s.session, s.athlete)
         assert log.sets.count() == 1
-        assert log.sets.first().source_line_id is None
+        assert log.sets.first().source_line_id == cell.pk
 
     def test_a_first_blur_with_overlong_values_leaves_no_log(self, client):
         """The log is created before the length guard declines to insert.
@@ -1187,3 +1197,31 @@ class TestEmptyLogsAreReapedOnEveryPath:
         assert resp.status_code == 200
         assert sub_cell(s.squat, 1).text == text
         assert not SessionLog.objects.filter(session=s.session).exists()
+
+
+class TestReclaimedSetsSurviveTheStructuredLogger:
+    def test_two_sub_lines_one_reclaimed_keeps_both_performances(self, client):
+        """The exact shape that made detaching unsafe.
+
+        Detaching cleared `source_line`, which made the reclaimed row look like
+        one of the logger's own — so `athlete_log_session`'s delete (scoped to
+        `source_line__isnull=True`) removed it on the athlete's next save, since
+        their payload couldn't include a row that had been hidden from them.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        write_cell(client, s.session, s.squat, 2, "235 x 3")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder", line=1)
+
+        client.force_login(s.athlete)
+        log_post(client, s.session, {"status": "pending", "sets": []})
+
+        loads = sorted(
+            LoggedSet.objects.filter(prescription=s.squat).values_list(
+                "load", flat=True
+            )
+        )
+        assert loads == ["225", "235"], loads

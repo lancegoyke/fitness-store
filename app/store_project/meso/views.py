@@ -3521,51 +3521,6 @@ def _reap_empty_pending_log(log):
     return True
 
 
-def _detach_parsed_sets(orphaned_qs):
-    """Cut derived sets loose from their source line instead of deleting them.
-
-    Used by the reclaim path (``cell_line_write``): a coach overwriting an
-    athlete-authored sub-line replaces the text the set was parsed from, so the
-    set can no longer render as that text and would be INVISIBLE — suppressed
-    from every structured surface while still feeding records.
-
-    Deleting it was the obvious fix and the wrong one. ``history.py`` states the
-    rule plainly — "undo must never touch delivery stamps or athlete data" —
-    and deliberately keeps ``SessionLog``/``LoggedSet``/``AthleteOneRm`` out of
-    the plan snapshot. A coach edit IS undoable, so a delete here put athlete
-    data inside the coach's undo blast radius with no way back: Undo restored
-    the cell text while the performance stayed gone. (Same mistake as the
-    short-lived delete-on-skip; see ``prescription_skip``.)
-
-    Clearing ``source_line`` solves the visibility problem without destroying
-    anything. The row becomes an ordinary structured set — NULL is already the
-    structured-logger origin — so it renders in ``set_rows`` again, keeps
-    counting exactly as before (no read filters on ``source_line``, so no 1RM
-    refresh is needed), and is untouched by undo because it is no longer tied to
-    a plan row. It takes a free ``set_number`` so it cannot collide with the
-    logger's own rows in ``_set_rows``'s ``(prescription, set_number)`` map.
-    """
-    orphaned = list(orphaned_qs.select_related("session_log"))
-    if not orphaned:
-        return
-
-    for row in orphaned:
-        taken = set(
-            LoggedSet.objects.filter(
-                session_log_id=row.session_log_id,
-                prescription_id=row.prescription_id,
-            )
-            .exclude(pk=row.pk)
-            .values_list("set_number", flat=True)
-        )
-        number = row.set_number
-        while number in taken:
-            number += 1
-        row.source_line = None
-        row.set_number = number
-        row.save(update_fields=["source_line", "set_number"])
-
-
 @login_required
 @require_POST
 def prescription_skip(request, plan_id, pk):
@@ -3695,11 +3650,16 @@ def cell_line_write(request, plan_id, slot_id):
         # coach history — from here on it's snapshotted and undoable again.
         cell.athlete_authored = False
         cell.save(update_fields=["text", "athlete_authored"])
-        # A parse-at-commit set (5a) derived from this cell no longer has the
-        # text it came from, so it can't render as that text — but it is still
-        # the athlete's performance, and this edit is undoable. Cut it loose
-        # rather than delete it; see `_detach_parsed_sets`.
-        _detach_parsed_sets(LoggedSet.objects.filter(source_line=cell))
+        # Deliberately touches NO LoggedSet. A parse-at-commit set (5a) derived
+        # from this cell is the athlete's performance, and this edit is
+        # undoable — `history.py` keeps SessionLog/LoggedSet/AthleteOneRm out
+        # of the plan snapshot precisely so "undo must never touch ... athlete
+        # data". Deleting it here (an earlier attempt) lost the record with no
+        # way back; detaching it (a later one) made it look like a structured
+        # row, so the logger's own delete then wiped it on the next save. The
+        # set simply stays as it is: flipping `athlete_authored` above is
+        # enough, because the no-double-display suppression keys on THAT flag,
+        # so the performance starts rendering again on its own.
         _touch_plan(plan)
     return JsonResponse(
         {

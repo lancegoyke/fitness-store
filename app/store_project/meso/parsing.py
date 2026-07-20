@@ -61,14 +61,17 @@ _REPS = re.compile(
 # A thousands separator inside a number (``1,000``) — a digit, a comma, then
 # exactly three digits not followed by more. Distinguishes ``1,000 x 5`` from a
 # real segment comma (``225 x 5, RPE 8``), which never has that shape.
-# The line OPENS with digits then a comma then a digit — a numeric comma in the
-# load position, well-formed or not. Anchored: a comma anywhere later is a
-# segment break, never a digit group.
-_LEADING_NUMERIC_COMMA = re.compile(r"^\d+,\d")
-# ...and the well-formed version of that: 1-3 digits, then one or more groups of
-# exactly three, not run on into a fourth (``1,000`` / ``12,345`` yes;
-# ``1,0000`` / ``12,34`` no).
-_LEADING_GROUPED = re.compile(r"^\d{1,3}(?:,\d{3})+(?!\d)")
+# A numeric comma in a LOAD position — well-formed or not. The load is either
+# the first thing on the line (``1,000 x 5``) or the right side of the ``@``
+# operator (``5 @ 1,000``); a comma anywhere else is a segment break, never a
+# digit group, which is why this is anchored rather than global.
+_LOAD_NUMERIC_COMMA = re.compile(r"(?:^|@\s*)\d+,\d")
+# ...and the well-formed version: 1-3 digits, then one or more groups of exactly
+# three, running on into neither a fourth digit NOR another comma group
+# (``1,000`` / ``12,345`` / ``1,000,000`` yes; ``1,0000`` / ``12,34`` /
+# ``1,000,00`` no — that last one would otherwise match just the ``1,000``
+# prefix and silently log 1000).
+_LOAD_GROUPED = re.compile(r"(^|@\s*)(\d{1,3}(?:,\d{3})+)(?!\d)(?!,\d)")
 
 # Unit-word normalization for reps suffixes: ``e``/``ea`` → ``each``.
 _UNIT_ALIASES = {"e": "each", "ea": "each", "ea.": "each"}
@@ -445,17 +448,21 @@ def parse_performed(text):
     # into something unparsable so nothing logged at all.
     line = first_line.lstrip()
     explicit_load = False
-    if _LEADING_NUMERIC_COMMA.match(line):
-        grouped = _LEADING_GROUPED.match(line)
+    if _LOAD_NUMERIC_COMMA.search(line):
+        grouped = _LOAD_GROUPED.search(line)
         if grouped is None:
-            # A leading comma we can't read (``1,0000``, ``12,34``). Splitting
-            # would hand the head a truncated but VALID-looking load — ``1`` —
-            # and store it silently. Refuse rather than guess.
+            # A load comma we can't read (``1,0000``, ``12,34``, ``1,000,00``).
+            # Splitting would hand the head a truncated but VALID-looking load
+            # — ``1`` — and store it silently. Refuse rather than guess.
             return {"kind": "unresolved-set", "raw": raw, "warn": True}
         # Nobody types a comma by accident, so this load bypasses the
         # plausibility ceiling that catches a doubled keystroke (``2255x5``).
         explicit_load = True
-        line = grouped.group(0).replace(",", "") + line[grouped.end() :]
+        line = (
+            line[: grouped.start(2)]
+            + grouped.group(2).replace(",", "")
+            + line[grouped.end(2) :]
+        )
 
     segments = line.split(",")
     head = segments[0].strip()

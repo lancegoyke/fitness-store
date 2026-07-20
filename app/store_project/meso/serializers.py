@@ -433,15 +433,18 @@ def serialize_session_log(log):
     Echoes back what was persisted (status/date/notes + the logged sets) so the
     athlete's logger can confirm the write and the page can re-hydrate on reload.
 
-    **Structured rows only** (``source_line__isnull=True``). This is the
-    structured logger's own view of itself: the client's ``syncFromLog`` maps
-    each set onto a ``(prescription, set_number)`` input row. A parse-at-commit
-    set (5a) is derived from a freeform sub-line and already renders as that
-    sub-line's text, so echoing it here would make the logger mark set 1 done
-    that nobody posted, and let the next save persist a blank duplicate
-    structured set on top of it. Same no-double-display rule the athlete
-    presenter applies to ``set_rows`` (plan §6), enforced on the write path's
-    response too.
+    **Visible rows only.** This is the structured logger's own view of itself:
+    the client's ``syncFromLog`` maps each set onto a ``(prescription,
+    set_number)`` input row. A parse-at-commit set (5a) that still renders as
+    its sub-line's text would make the logger mark a set done that nobody
+    posted, and let the next save persist a blank duplicate on top of it — the
+    same no-double-display rule ``athlete_session`` applies to ``set_rows``
+    (plan §6), enforced on the write path's response too.
+
+    Excluded on ``source_line.athlete_authored``, NOT on ``source_line``
+    itself: once a coach reclaims the sub-line, its text no longer shows the
+    athlete's performance, so that set is a real logged row again and belongs
+    in the logger.
     """
     return {
         "id": log.pk,
@@ -457,7 +460,9 @@ def serialize_session_log(log):
                 "load": s.load,
                 "rpe": s.rpe,
             }
-            for s in log.sets.filter(source_line__isnull=True).order_by("set_number")
+            for s in log.sets.exclude(source_line__athlete_authored=True).order_by(
+                "set_number"
+            )
         ],
     }
 

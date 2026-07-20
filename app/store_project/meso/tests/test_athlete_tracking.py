@@ -506,7 +506,10 @@ class TestSubLinePresenter:
         from store_project.meso.models import SessionLog
 
         s = seed()
-        cell = sub_line(s.squat, "225 x 5")
+        # athlete_authored=True is load-bearing: the suppression keys on that
+        # flag (a reclaimed line stops suppressing), and it is the only state
+        # `athlete_cell_write` can produce.
+        cell = sub_line(s.squat, "225 x 5", athlete_authored=True)
         log = SessionLogFactory(
             session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
         )
