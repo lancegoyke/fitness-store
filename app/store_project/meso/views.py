@@ -1738,23 +1738,16 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
             # been created — leaving the empty PENDING row that reads as
             # activity everywhere (see `_reap_empty_pending_log`).
             #
-            # A skipped row is READ-ONLY to this path, not just un-writable.
-            # The create guard below already declines to mint a set for one, but
-            # letting the delete still run turned "coach skips a row" plus "the
-            # athlete's open page fires one more blur" into data loss —
-            # contradicting `prescription_skip`, which deliberately preserves
-            # work the athlete already did. Bail before touching anything; the
-            # cell's text is saved either way.
-            if line_zero_cell.skipped:
-                return []
-
-            # Re-read the line-0 cell UNDER A ROW LOCK. `line_zero` was built
-            # before the transaction, and the session lock doesn't help here —
-            # `prescription_skip` never touches the session row, so a coach
-            # toggling skip mid-blur left this instance saying False and the
-            # guard below minted a set for a row that is now skipped, which is
-            # the exact stale-page case it exists to block. Locking the
-            # Prescription makes that UPDATE wait for this transaction.
+            # Re-read the line-0 cell UNDER A ROW LOCK, and do it BEFORE the
+            # skip bail below. `line_zero` was built before the transaction, and
+            # the session lock doesn't help — `prescription_skip` never touches
+            # the session row. Locking the Prescription makes that UPDATE wait.
+            #
+            # Order matters as much as the lock: with the bail reading the stale
+            # instance first, a skip landing mid-blur only turned `wants_set`
+            # off, and execution still fell through to the delete — losing an
+            # already-logged performance on an unchanged stale blur, which is
+            # precisely the data loss the bail exists to prevent.
             line_zero_cell = (
                 Prescription.objects.select_for_update()
                 .filter(pk=line_zero_cell.pk)
@@ -1762,19 +1755,20 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                 or line_zero_cell
             )
 
+            # A skipped row is READ-ONLY to this path, not just un-writable.
+            # Declining to MINT a set isn't enough — letting the delete run
+            # turned "coach skips a row" plus "the athlete's open page fires one
+            # more blur" into data loss, contradicting `prescription_skip`,
+            # which deliberately preserves work the athlete already did. Bail
+            # before touching anything; the cell's text is saved either way.
+            if line_zero_cell.skipped:
+                return []
+
             parsed = parse_performed(cell.text)
-            # A skipped line-0 cell is not trainable: athlete surfaces don't
-            # render it and the structured logger rejects it via
-            # `trainable_cells()`. An athlete holding a stale page open after
-            # the coach skips the row still passes this view's `session.cells()`
-            # check, so without this guard a blur would mint a set — and a PR —
-            # for work the rest of the app agrees isn't loggable. The delete
-            # below still runs, so a skipped row's own edits still clean up.
             wants_set = bool(
                 parsed
                 and parsed.get("kind") == "set"
                 and (parsed.get("reps") or parsed.get("load"))
-                and not line_zero_cell.skipped
             )
 
             log = (

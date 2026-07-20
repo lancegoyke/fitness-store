@@ -1934,3 +1934,41 @@ class TestSkippedStateIsReadUnderTheLock:
         assert not LoggedSet.objects.exists(), (
             "a set was minted for a row the coach had already skipped"
         )
+
+
+class TestAConcurrentSkipDoesNotDeleteAnExistingSet:
+    def test_a_stale_blur_after_a_skip_preserves_the_logged_set(self, client):
+        """Ordering bug: the bail read stale state, the delete ran anyway.
+
+        A coach skipping between the view's `session.cells()` read and its
+        locked re-read left `wants_set` false but let execution fall through to
+        the delete — losing an already-logged performance on an unchanged stale
+        blur, the exact data loss the skip bail exists to prevent.
+        """
+        from django.db import transaction
+
+        from store_project.meso.views import _upsert_parsed_set
+
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+        assert LoggedSet.objects.filter(source_line=cell).exists()
+
+        # A stale line-0 instance (still live), while the coach's skip commits.
+        stale_line_zero = Prescription.objects.get(pk=s.squat.pk)
+        assert stale_line_zero.skipped is False
+        Prescription.objects.filter(pk=s.squat.pk).update(skipped=True)
+
+        with transaction.atomic():
+            _upsert_parsed_set(
+                s.session,
+                s.athlete,
+                stale_line_zero,
+                cell,
+                previous_text="225 x 5",
+            )
+
+        assert LoggedSet.objects.filter(source_line=cell).exists(), (
+            "a concurrent skip deleted a performance the athlete had logged"
+        )
