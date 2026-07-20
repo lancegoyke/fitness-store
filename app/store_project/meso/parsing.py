@@ -58,9 +58,6 @@ _REPS = re.compile(
     r"^(\d+)(?:\s*-\s*(\d+))?\s*([a-z']+(?:\s+[a-z]+)*)?$", re.IGNORECASE
 )
 
-# A thousands separator inside a number (``1,000``) — a digit, a comma, then
-# exactly three digits not followed by more. Distinguishes ``1,000 x 5`` from a
-# real segment comma (``225 x 5, RPE 8``), which never has that shape.
 # A numeric comma in a LOAD position — well-formed or not. The load is either
 # the first thing on the line (``1,000 x 5``) or the right side of the ``@``
 # operator (``5 @ 1,000``); a comma anywhere else is a segment break, never a
@@ -535,3 +532,29 @@ def performed_reps_text(parsed):
     if parsed.get("amrap"):
         return "AMRAP"
     return ""
+
+
+def performed_text_shows(text, *, reps, load, rpe):
+    """Does ``text`` still render exactly this performance?
+
+    The no-double-display test (5a §6). A parse-at-commit ``LoggedSet`` is
+    suppressed from structured surfaces precisely while its source sub-line is
+    ALREADY showing it — and ``_sub_lines`` renders every sub-line regardless of
+    who owns it, so ownership was never the right question. Earlier versions
+    keyed on ``source_line`` being set (which hid a set whose text the coach had
+    since replaced — invisible everywhere while still counting) and then on
+    ``athlete_authored`` (which double-displayed when a reclaim kept the same
+    text, or an undo restored it).
+
+    Comparing against the same three strings the upsert writes keeps the two
+    exactly in step: if a re-parse of the current text yields this row, the text
+    is displaying it.
+    """
+    parsed = parse_performed(text)
+    if not parsed or parsed.get("kind") != "set":
+        return False
+    return (
+        performed_reps_text(parsed) == reps
+        and str(parsed.get("load", "")) == load
+        and str(parsed.get("rpe", "")) == rpe
+    )

@@ -62,7 +62,6 @@ from .history import HistoryUnavailable
 from .history import record_plan_action
 from .history import restore_plan_snapshot
 from .history import serialize_plan_snapshot
-from .models import HIDDEN_PARSED_SET
 from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
@@ -83,6 +82,7 @@ from .models import SessionLog
 from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
+from .models import parsed_set_is_hidden
 from .parsing import is_unresolved_set
 from .parsing import parse_performed
 from .parsing import performed_reps_text
@@ -1398,17 +1398,22 @@ def athlete_log_session(request, pk):
         # destroy the athlete's record on their next save (e.g. a row the coach
         # marked skipped after the athlete already logged it).
         #
-        # ``HIDDEN_PARSED_SET`` scopes the delete to rows the logger can
-        # actually see, which is the same set it can repost — see that constant
-        # for why the two must be defined together. A parsed set's
+        # ``parsed_set_is_hidden`` scopes the delete to rows the logger can
+        # actually see, which is exactly the set it can repost — see that
+        # predicate for why the two must share one definition. A parsed set's
         # ``prescription`` is also a trainable line-0 cell, so an unscoped
-        # delete would wipe every freeform-parsed set; scoping it to
-        # ``source_line__isnull=True`` instead would spare the hidden ones but
-        # leave a RECLAIMED row undeleted while the client reposts it, creating
-        # a duplicate (5a, docs/meso/parse-at-commit-plan.md §5, §6).
-        log.sets.filter(
-            prescription_id__in=[p.pk for p in session.trainable_cells()],
-        ).exclude(HIDDEN_PARSED_SET).delete()
+        # delete would wipe every freeform-parsed set, while sparing them by
+        # ``source_line__isnull=True`` would leave a reclaimed row undeleted and
+        # let the client duplicate it (5a, plan §5, §6). Filtered in Python
+        # because the test re-parses cell text, which SQL can't express.
+        replaceable = [
+            s.pk
+            for s in log.sets.filter(
+                prescription_id__in=[p.pk for p in session.trainable_cells()],
+            ).select_related("source_line")
+            if not parsed_set_is_hidden(s)
+        ]
+        log.sets.filter(pk__in=replaceable).delete()
         LoggedSet.objects.bulk_create(
             [
                 LoggedSet(

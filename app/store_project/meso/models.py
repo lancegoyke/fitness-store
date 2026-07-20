@@ -20,6 +20,8 @@ from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+from . import parsing
+
 
 class Unit(models.TextChoices):
     KILOGRAMS = "kg", _("Kilograms")
@@ -2200,18 +2202,36 @@ class ProposedChange(models.Model):
         return self.title
 
 
-# A parse-at-commit set (5a) that is STILL displayed as its own sub-line's
-# text, because that line is still ``athlete_authored``. Such a row is hidden
-# from every structured surface (``athlete_session``'s ``set_rows`` and
-# ``serialize_session_log``) to avoid double-display, so the structured logger
-# can neither see it, repost it, nor replace it.
-#
-# Define the rule ONCE. Visibility and the logger's replace-delete have to agree
-# exactly, and when they were written separately they drifted twice: keying the
-# delete on ``source_line__isnull=True`` alone first WIPED reclaimed rows, then
-# — once reclaimed rows became visible — let the client repost one and
-# DUPLICATE it. "The logger owns exactly the rows it can see" is the invariant.
-HIDDEN_PARSED_SET = models.Q(source_line__athlete_authored=True)
+def parsed_set_is_hidden(logged_set):
+    """Is this set already on screen as its own sub-line's text (5a §6)?
+
+    Hidden means suppressed from every structured surface — ``athlete_session``'s
+    ``set_rows``, ``serialize_session_log``, and therefore also the structured
+    logger's replace-delete, which must never touch a row it cannot see.
+
+    **Define the rule ONCE.** Visibility and that delete have to agree exactly,
+    and every time they were expressed separately they drifted: keying on
+    ``source_line`` alone hid a set whose text the coach had replaced (invisible
+    yet still counting); scoping the delete to ``source_line__isnull=True``
+    first WIPED reclaimed rows and then, once those became visible, let the
+    client repost one and DUPLICATE it; and keying on ``athlete_authored``
+    double-displayed whenever a reclaim kept the same text or an undo restored
+    it. ``_sub_lines`` renders every sub-line regardless of who owns it, so
+    ownership was never the question — only whether the text still shows this
+    performance.
+
+    Not a queryset ``Q``: the test re-parses text, which SQL cannot express.
+    Callers filter in Python so all three surfaces share this one predicate.
+    """
+    line = logged_set.source_line
+    if line is None:
+        return False
+    return parsing.performed_text_shows(
+        line.text,
+        reps=logged_set.reps,
+        load=logged_set.load,
+        rpe=logged_set.rpe,
+    )
 
 
 class LoggedSet(models.Model):

@@ -520,6 +520,11 @@ class TestSubLinePresenter:
             set_number=1,
             reps="5",
             load="225",
+            # rpe="" because "225 x 5" carries none. The upsert always writes
+            # exactly what the text parsed to, so the factory's default rpe="7"
+            # would model a set the app can't produce — and suppression asks
+            # whether the text still shows THIS performance.
+            rpe="",
         )
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)

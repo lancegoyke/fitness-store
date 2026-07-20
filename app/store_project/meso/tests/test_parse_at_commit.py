@@ -1458,3 +1458,60 @@ class TestAnUntouchedCoachLineIsNotClaimed:
         cell = sub_cell(s.squat, 1)
         assert cell.athlete_authored is True
         assert LoggedSet.objects.get(source_line=cell).load == "225"
+
+
+class TestVisibilityFollowsTheDisplayedText:
+    """Suppression asks whether the sub-line still SHOWS this performance.
+
+    Ownership was only ever a proxy for that, and it broke in both directions:
+    keying on `source_line` hid a set whose text the coach had replaced, and
+    keying on `athlete_authored` double-displayed whenever a reclaim kept the
+    same text or an undo restored it.
+    """
+
+    def test_a_reclaim_that_keeps_the_text_does_not_double_display(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        # The coach reclaims the line but saves the SAME text.
+        client.force_login(s.coach)
+        reclaim(client, s, text="225 x 5")
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert row["sub_lines"] == [{"line": 1, "text": "225 x 5", "warn": False}]
+        assert all(r["load"] == "" for r in row["set_rows"]), (
+            "the sub-line still displays this set, so showing it again in "
+            "set_rows double-displays one performance"
+        )
+
+    def test_a_reclaim_that_replaces_the_text_shows_the_set(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert any(r["load"] == "225" for r in row["set_rows"]), (
+            "nothing displays this performance any more, so hiding it would "
+            "leave a counting set invisible to everyone"
+        )
+
+    def test_a_still_displayed_set_is_not_reposted_or_duplicated(self, client):
+        """The delete must agree with visibility, or the two drift again."""
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="225 x 5")
+
+        client.force_login(s.athlete)
+        returned = log_post(client, s.session, {"status": "pending", "sets": []}).json()
+        assert returned["log"]["sets"] == []
+        assert LoggedSet.objects.filter(source_line=cell).count() == 1

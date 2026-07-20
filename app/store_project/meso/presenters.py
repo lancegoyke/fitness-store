@@ -32,6 +32,7 @@ from .models import SessionLog
 from .models import TourEvent
 from .models import Week
 from .models import WeekDelivery
+from .models import parsed_set_is_hidden
 from .one_rm import key_str
 from .one_rm import one_rm_values
 from .parsing import is_unresolved_set
@@ -1508,20 +1509,17 @@ def athlete_session(session, athlete):
     # renders itself (``_sub_lines`` below), so a ``LoggedSet`` DERIVED from
     # that same text must not ALSO render as a structured input row.
     #
-    # The test is whether the source line still SHOWS that text — i.e. whether
-    # it is still ``athlete_authored`` — not merely whether ``source_line`` is
-    # set. Once a coach reclaims the sub-line (``cell_line_write`` flips the
-    # flag and overwrites the text), the athlete's performance is no longer
-    # displayed anywhere, so suppressing it here would hide a real logged set
-    # while it went on counting toward records. Keying on the flag lets the set
-    # surface again without mutating a single row of athlete data — which is
-    # what ``history.py`` requires ("undo must never touch ... athlete data"),
-    # since a coach edit is undoable.
+    # The test is literally whether the source line still SHOWS that text —
+    # see ``models.parsed_set_is_hidden``, the single predicate this and the
+    # logger's replace-delete both use so they cannot drift apart. Nothing is
+    # mutated to make a reclaimed set reappear, which is what ``history.py``
+    # requires ("undo must never touch ... athlete data") since a coach edit
+    # is undoable.
     logged = (
         {
             (s.prescription_id, s.set_number): s
             for s in log.sets.all()
-            if s.source_line_id is None or not s.source_line.athlete_authored
+            if not parsed_set_is_hidden(s)
         }
         if log
         else {}

@@ -441,10 +441,10 @@ def serialize_session_log(log):
     same no-double-display rule ``athlete_session`` applies to ``set_rows``
     (plan §6), enforced on the write path's response too.
 
-    Excluded on ``source_line.athlete_authored``, NOT on ``source_line``
-    itself: once a coach reclaims the sub-line, its text no longer shows the
-    athlete's performance, so that set is a real logged row again and belongs
-    in the logger.
+    Excluded via ``models.parsed_set_is_hidden`` — the one predicate shared
+    with the presenter and the logger's replace-delete. Once the source line
+    stops showing a performance (the coach reclaims and rewrites it), that set
+    is a real logged row again and belongs in the logger.
     """
     return {
         "id": log.pk,
@@ -460,7 +460,8 @@ def serialize_session_log(log):
                 "load": s.load,
                 "rpe": s.rpe,
             }
-            for s in log.sets.exclude(models.HIDDEN_PARSED_SET).order_by("set_number")
+            for s in log.sets.select_related("source_line").order_by("set_number")
+            if not models.parsed_set_is_hidden(s)
         ],
     }
 
