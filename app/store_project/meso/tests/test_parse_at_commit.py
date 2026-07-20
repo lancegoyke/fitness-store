@@ -1,4 +1,4 @@
-"""Parse-at-commit — the write hook (5a stage 3, docs/meso/parse-at-commit-plan.md §5).
+"""Parse-at-commit — the write hook (5a stages 3+4, docs/meso/parse-at-commit-plan.md §5, §7, §8).
 
 ``athlete_cell_write`` (the freeform sub-line save, Phase 4a) now also parses
 the just-saved text with ``parse_performed`` and upserts a silent, derivative
@@ -9,6 +9,11 @@ clobber each other: the structured logger's own delete is scoped to
 ``source_line__isnull=True`` so a "Save progress" never wipes a freeform-parsed
 set (and vice versa, since the cell-write upsert only ever touches its own
 ``source_line``).
+
+Stage 4 adds two more things to the same response, both inside the same
+tolerance guard: an **optimistic PR toast** (``new_records``, §7 — off the LIVE,
+PENDING-inclusive read in ``personal_records.py``) and a **derive-on-read
+``warn`` flag** (§8 — re-classifies the just-committed text, no stored column).
 """
 
 import json
@@ -353,6 +358,128 @@ class TestSessionLogStatus:
         assert row.session_log_id == newest.pk
         first.refresh_from_db()
         assert first.sets.count() == 0
+
+
+# -- optimistic PR toast (5a stage 4, plan §7) --------------------------------
+#
+# A blur that parses into a set can beat the athlete's current LIVE best —
+# mirrors athlete_log_session's wiring of new_records_in/serialize_new_record,
+# but off the live (PENDING-inclusive, personal_records.py) read, so it can
+# fire before the session ever reaches DONE.
+
+
+class TestOptimisticPrToast:
+    def test_first_ever_set_is_reported_as_a_first_pr(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "120 x 5")
+        assert resp.status_code == 200
+        prs = resp.json()["new_records"]
+        assert len(prs) == 1
+        assert prs[0]["name"] == "Box Squat"
+        assert prs[0]["is_first"] is True
+        assert prs[0]["previous"] is None
+        assert prs[0]["value"] == "140"  # 120 * (1 + 5/30)
+
+    def test_beating_a_prior_pending_write_reports_the_delta(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "120 x 5")  # live best: 140
+
+        other = day(s.week, day_number=2, name="Upper", order=2)
+        other_squat = presc(other, name="Box Squat", order=0, text="")
+        resp = write_cell(client, other, other_squat, 1, "150 x 5")  # 175
+        prs = resp.json()["new_records"]
+        assert len(prs) == 1
+        assert prs[0]["is_first"] is False
+        assert prs[0]["previous"] == "140"
+        assert prs[0]["value"] == "175"
+
+    def test_a_lighter_write_reports_no_new_records(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "150 x 5")  # live best: 175
+
+        other = day(s.week, day_number=2, name="Upper", order=2)
+        other_squat = presc(other, name="Box Squat", order=0, text="")
+        resp = write_cell(client, other, other_squat, 1, "120 x 5")  # 140, lighter
+        assert resp.status_code == 200
+        assert resp.json()["new_records"] == []
+
+    def test_a_non_set_write_reports_no_new_records(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "felt tight")
+        assert resp.status_code == 200
+        assert resp.json()["new_records"] == []
+
+    def test_correcting_a_cell_self_heals_the_live_best(self, client):
+        # "Live and self-healing" (plan §7): a re-blur that lowers the load
+        # changes what the next read of the records panel returns, no
+        # invalidation step needed.
+        from store_project.meso.presenters import athlete_personal_records
+
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "120 x 5")
+        assert athlete_personal_records(s.athlete)["rows"][0]["e1rm"] == "140"
+
+        write_cell(client, s.session, s.squat, 1, "90 x 5")  # the athlete corrects it
+        rows = athlete_personal_records(s.athlete)["rows"]
+        assert rows[0]["e1rm"] == "105"  # 90 * (1 + 5/30)
+
+
+# -- warn flag (5a stage 4, plan §8) ------------------------------------------
+#
+# Derive-on-read from the just-committed text — no stored column. Only the
+# `unresolved-set` classification (a fat-fingered set attempt) warns; every
+# other classification (a real set, skip/swap/note/duration) does not. The
+# classification corpus itself is pinned in test_parsing.py; here we pin that
+# the write endpoint surfaces it on the response.
+
+
+class TestCellWriteWarnFlag:
+    @pytest.mark.parametrize(
+        "text,expected_warn",
+        [
+            ("225 x", True),  # unresolved-set: looks like a set, doesn't resolve
+            ("2255x5", True),  # unresolved-set: implausible fat-fingered load
+            ("225 x 5", False),  # a real set
+            ("225", False),  # a bare partial set (load only)
+            ("skip", False),
+            ("-", False),
+            ("DB pullover", False),  # swap
+            ("felt tight", False),  # note
+            ("20-60m", False),  # duration
+            ("", False),  # blank clears the cell — parse_performed returns None
+        ],
+    )
+    def test_response_warn_matches_the_classification(
+        self, client, text, expected_warn
+    ):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, text)
+        assert resp.status_code == 200
+        assert resp.json()["cell"]["warn"] is expected_warn
+
+    def test_warn_clears_on_a_fixing_reblur(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp1 = write_cell(client, s.session, s.squat, 1, "225 x")
+        assert resp1.json()["cell"]["warn"] is True
+
+        resp2 = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp2.json()["cell"]["warn"] is False
+
+    def test_warn_appears_on_a_breaking_reblur(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp1 = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp1.json()["cell"]["warn"] is False
+
+        resp2 = write_cell(client, s.session, s.squat, 1, "225 x")
+        assert resp2.json()["cell"]["warn"] is True
 
 
 # -- tolerance guard -----------------------------------------------------------

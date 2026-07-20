@@ -533,7 +533,27 @@ function createLogger() {
         if (entry) entry.saveError = true;
         return; // offline — keep the in-session value; next blur re-attempts
       }
-      if (entry && (res.redirected || !res.ok)) entry.saveError = true;
+      if (res.redirected || !res.ok) {
+        if (entry) entry.saveError = true;
+        return;
+      }
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        return; // saved server-side regardless; warn/PR state reconciles next blur/reload
+      }
+      // Derive-on-read warn (5a §8): re-classified server-side from the
+      // just-committed text, so fixing a fat-fingered attempt (or typing one)
+      // updates the cell's color right away, without a page reload.
+      if (entry) entry.warn = !!(data.cell && data.cell.warn);
+      // Optimistic PR toast (5a §7) — the same celebration `save()` shows,
+      // fired straight off a cell blur instead of a full log save. Only
+      // overwrite when THIS blur actually produced a new record, so an
+      // unrelated edit can't clobber a toast already on screen.
+      if (Array.isArray(data.new_records) && data.new_records.length) {
+        this.newRecords = data.new_records;
+      }
     },
   };
 }

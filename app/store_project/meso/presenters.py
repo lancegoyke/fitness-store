@@ -34,6 +34,7 @@ from .models import Week
 from .models import WeekDelivery
 from .one_rm import key_str
 from .one_rm import one_rm_values
+from .parsing import is_unresolved_set
 from .personal_records import new_records_in
 from .personal_records import personal_records
 from .serializers import _fmt_num
@@ -1451,6 +1452,12 @@ def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
     logged so a reload never hides logged data — but ``hard_cap`` bounds the
     render unconditionally so a stray large ``set_number`` can never balloon the
     page (the log endpoint also rejects set numbers above its own ceiling).
+
+    ``logged`` must already be scoped to ``source_line__isnull=True`` by the
+    caller (``athlete_session``) — a parse-at-commit ``LoggedSet`` derived from
+    a freeform sub-line (5a) renders itself as that sub-line's text, so
+    admitting it here too would double-display the same performed data as a
+    phantom structured input row (plan §6).
     """
     prescribed = _prescribed_set_count(prescription) or default
     logged_numbers = [n for (pid, n) in logged if pid == prescription.pk]
@@ -1497,8 +1504,21 @@ def athlete_session(session, athlete):
         .prefetch_related("sets")
         .first()
     )
+    # No double-display (5a, plan §6): a freeform sub-line's text already
+    # renders itself (``_sub_lines`` below); a ``LoggedSet`` DERIVED from that
+    # same text (``source_line`` non-null, parse-at-commit) must be excluded
+    # here, or it would also render as a phantom structured input row. Only
+    # ``source_line__isnull=True`` — the structured logger's own rows — seed
+    # ``set_rows``. Filtered in Python (not a fresh queryset) to reuse the
+    # ``prefetch_related("sets")`` cache above.
     logged = (
-        {(s.prescription_id, s.set_number): s for s in log.sets.all()} if log else {}
+        {
+            (s.prescription_id, s.set_number): s
+            for s in log.sets.all()
+            if s.source_line_id is None
+        }
+        if log
+        else {}
     )
     done = log is not None and log.status == SessionLog.Status.DONE
     week = session.week
@@ -1512,10 +1532,20 @@ def athlete_session(session, athlete):
 
     def _sub_lines(slot_id):
         # The row's editable tracking stack (Phase 4a): its line>=1 cells for
-        # this week as ``[{line, text}]``. Blank cells are dropped from the
-        # display (a cleared sub-line is a blank cell, not a deleted row).
+        # this week as ``[{line, text, warn}]``. Blank cells are dropped from
+        # the display (a cleared sub-line is a blank cell, not a deleted row).
+        # ``warn`` (5a, plan §8) is derived on read, not stored: re-classify
+        # the cell's own text with ``parse_performed`` and flag it only when
+        # that read is ``unresolved-set`` — text that *looks* like a fat-
+        # fingered set attempt (``225 x``) but didn't resolve. Every other
+        # classification (skip/swap/note/duration/set) is a successful parse
+        # and never warns.
         return [
-            {"line": line_cell.line, "text": line_cell.text}
+            {
+                "line": line_cell.line,
+                "text": line_cell.text,
+                "warn": is_unresolved_set(line_cell.text),
+            }
             for line_cell in lines_by_slot.get(slot_id, ())
             if line_cell.text.strip()
         ]

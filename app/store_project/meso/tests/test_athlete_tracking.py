@@ -478,12 +478,79 @@ class TestSubLinePresenter:
         sub_line(s.squat, "RPE 8")  # a line-1 cell beneath the squat row
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        assert row["sub_lines"] == [{"line": 1, "text": "RPE 8"}]
+        # "RPE 8" isn't a set attempt (5a §8) — warn is False.
+        assert row["sub_lines"] == [{"line": 1, "text": "RPE 8", "warn": False}]
 
         payload = presenters.athlete_log_payload(ctx)
         assert payload["cell_url"] == cell_url(s.session)
         pr = next(e for e in payload["exercises"] if e["id"] == s.squat.pk)
-        assert pr["sub_lines"] == [{"line": 1, "text": "RPE 8"}]
+        assert pr["sub_lines"] == [{"line": 1, "text": "RPE 8", "warn": False}]
+
+    def test_athlete_session_sub_lines_warn_only_on_unresolved_set(self, client):
+        # 5a §8: derive-on-read warn — only the `unresolved-set` classification
+        # (a fat-fingered set attempt) warns; a resolvable set does not.
+        s = seed()
+        sub_line(s.squat, "225 x", line=1)  # unresolved-set — warns
+        sub_line(s.squat, "225 x 5", line=2)  # a real set — no warn
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        warn_by_line = {entry["line"]: entry["warn"] for entry in row["sub_lines"]}
+        assert warn_by_line == {1: True, 2: False}
+
+    def test_athlete_session_set_rows_exclude_parsed_sets(self, client):
+        # No double-display (5a §6): a LoggedSet derived from a sub-line
+        # (source_line set) must render only as that sub-line's text, never
+        # also as a phantom structured set-input row.
+        from store_project.meso.factories import LoggedSetFactory
+        from store_project.meso.factories import SessionLogFactory
+        from store_project.meso.models import SessionLog
+
+        s = seed()
+        cell = sub_line(s.squat, "225 x 5")
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
+        )
+        LoggedSetFactory(
+            session_log=log,
+            prescription=s.squat,
+            source_line=cell,
+            set_number=1,
+            reps="5",
+            load="225",
+        )
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        # The parsed set shows once, as sub_lines text...
+        assert row["sub_lines"] == [{"line": 1, "text": "225 x 5", "warn": False}]
+        # ...and never a second time as a filled/"done" structured set row.
+        assert all(not r["done"] for r in row["set_rows"])
+        assert all(r["reps"] == "" and r["load"] == "" for r in row["set_rows"])
+
+    def test_athlete_session_set_rows_include_structured_sets(self, client):
+        # A structured-logger set (source_line NULL) still hydrates set_rows —
+        # only the parsed-derivative channel is excluded.
+        from store_project.meso.factories import LoggedSetFactory
+        from store_project.meso.factories import SessionLogFactory
+        from store_project.meso.models import SessionLog
+
+        s = seed()
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
+        )
+        LoggedSetFactory(
+            session_log=log,
+            prescription=s.squat,
+            source_line=None,
+            set_number=1,
+            reps="6",
+            load="70",
+        )
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        done_rows = [r for r in row["set_rows"] if r["done"]]
+        assert len(done_rows) == 1
+        assert done_rows[0]["reps"] == "6"
+        assert done_rows[0]["load"] == "70"
 
     def test_athlete_session_target_is_prescription_only(self, client):
         # The now-editable sub-line stack must not double-display inside the

@@ -87,3 +87,36 @@ def test_a_database_error_in_the_upsert_does_not_roll_back_the_cell_text(
 
     # No derivative set survives the failure, and none is fabricated.
     assert not LoggedSet.objects.filter(source_line=cell).exists()
+
+
+def test_a_failing_toast_read_does_not_discard_the_parsed_set(client, monkeypatch):
+    """The optimistic 🎉 lookup is cosmetic — it must not cost a real set.
+
+    ``new_records_in`` runs after the upsert, under its own savepoint. If it
+    shared the upsert's savepoint, a failure in this purely decorative read
+    would roll the parsed ``LoggedSet`` back with it — and since the upsert
+    only ever runs on a cell write, that set would not return until the
+    athlete happened to edit the very same cell again.
+    """
+
+    def boom(_log):
+        with connection.cursor() as cur:
+            cur.execute("SELECT * FROM a_table_that_does_not_exist")
+
+    monkeypatch.setattr("store_project.meso.views.new_records_in", boom)
+
+    s = seed()
+    client.force_login(s.athlete)
+    resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+    assert resp.status_code == 200
+    assert resp.json()["new_records"] == []  # the toast is simply absent
+
+    cell = sub_cell(s.squat, 1)
+    assert cell.text == "225 x 5"
+
+    row = LoggedSet.objects.get(source_line=cell)
+    assert (row.load, row.reps) == ("225", "5"), (
+        "the parsed set was rolled back by a failed toast read — "
+        "new_records_in needs its own savepoint"
+    )

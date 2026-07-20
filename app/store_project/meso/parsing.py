@@ -414,3 +414,18 @@ def parse_performed(text):
         return {"kind": "note", "raw": raw}
 
     return {"kind": "swap", "raw": raw}
+
+
+def is_unresolved_set(text):
+    """Derive-on-read ``warn`` (5a, plan §8): does ``text`` classify as ``unresolved-set``?
+
+    A tiny wrapper around ``parse_performed`` shared by every surface that
+    needs to color a cell — the athlete presenter (the sub-line stack) and the
+    ``athlete_cell_write`` response (so a re-blur's answer updates live,
+    without a full page reload). No stored flag, no new column: every call
+    re-classifies ``text`` from scratch. Only the ``unresolved-set`` kind
+    warns; ``set``/``skip``/``swap``/``note``/``duration`` (and an empty cell,
+    which parses to ``None``) never do.
+    """
+    parsed = parse_performed(text)
+    return bool(parsed) and parsed.get("kind") == "unresolved-set"

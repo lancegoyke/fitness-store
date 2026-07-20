@@ -206,6 +206,18 @@ button.meso-card,
   border-color: var(--soft-line);
   background: var(--surface);
 }
+/* Parse-at-commit warn (5a, docs/meso/parse-at-commit-plan.md §8): a sub-line
+   cell whose text looks like a fat-fingered set attempt but didn't resolve
+   into a set. Derived on read (no stored flag) — see `parsing.is_unresolved_set`
+   and `_sub_lines` in presenters.py. The text is never rejected, only tinted. */
+.meso .meso-phone-input--warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: var(--warn-soft);
+}
+.meso .meso-phone-input--warn:focus {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
 .meso .meso-composer:focus-within {
   border-color: var(--soft-line);
   box-shadow: 0 0 0 3px var(--soft);

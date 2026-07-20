@@ -771,6 +771,79 @@ describe("saveCell", () => {
       text: "",
     });
   });
+
+  // -- 5a §8: derive-on-read warn, mirrored from the cell response ----------
+
+  it("sets the sub-line's warn flag from the response's cell.warn", async () => {
+    const c = cellLogger({
+      exercises: [
+        { id: 1, sub_lines: [{ line: 1, text: "225 x" }], set_rows: [] },
+      ],
+    });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: { ok: true, cell: { id: 5, line: 1, text: "225 x", warn: true } },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.exercises[0].sub_lines[0].warn).toBe(true);
+  });
+
+  it("clears a stale warn once the response reports it resolved", async () => {
+    const c = cellLogger({
+      exercises: [
+        {
+          id: 1,
+          sub_lines: [{ line: 1, text: "225 x 5", warn: true }],
+          set_rows: [],
+        },
+      ],
+    });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          ok: true,
+          cell: { id: 5, line: 1, text: "225 x 5", warn: false },
+        },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.exercises[0].sub_lines[0].warn).toBe(false);
+  });
+
+  // -- 5a §7: optimistic PR toast off a cell blur ----------------------------
+
+  it("surfaces new_records from the response as the PR toast", async () => {
+    const c = cellLogger();
+    const pr = { key: "name:back squat", name: "Back Squat", value: "140" };
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          ok: true,
+          cell: { id: 5, line: 1, text: "RPE 8", warn: false },
+          new_records: [pr],
+        },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.newRecords).toEqual([pr]);
+  });
+
+  it("does not clobber an existing toast when this blur has no new record", async () => {
+    const existing = [{ key: "name:bench", name: "Bench", value: "100" }];
+    const c = cellLogger({ newRecords: existing });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          ok: true,
+          cell: { id: 5, line: 1, text: "RPE 8", warn: false },
+          new_records: [],
+        },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.newRecords).toBe(existing); // untouched, not reset to []
+  });
 });
 
 describe("addLine", () => {

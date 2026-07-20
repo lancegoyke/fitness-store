@@ -82,6 +82,7 @@ from .models import SessionLog
 from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
+from .parsing import is_unresolved_set
 from .parsing import parse_performed
 from .personal_records import new_records_in
 from .serializers import current_week
@@ -1558,7 +1559,11 @@ def athlete_cell_write(request, pk):
         # Parse-at-commit (5a): derive a silent, structured LoggedSet from the
         # text just committed above. Defensively wrapped inside the helper — a
         # parse/upsert problem is logged and swallowed, never surfaced here.
-        _upsert_parsed_set(session, request.user, line_zero[exercise_id], cell)
+        # The return is the optimistic-PR-toast payload (§7) — empty on any
+        # failure, never raises.
+        new_records = _upsert_parsed_set(
+            session, request.user, line_zero[exercise_id], cell
+        )
     return JsonResponse(
         {
             "ok": True,
@@ -1568,7 +1573,19 @@ def athlete_cell_write(request, pk):
                 "week_id": session.week_id,
                 "line": cell.line,
                 "text": cell.text,
+                # Derive-on-read warn (5a, plan §8) — re-classified from the
+                # just-committed text so a re-blur that fixes a fat-fingered
+                # set attempt clears the warning without a page reload.
+                "warn": is_unresolved_set(cell.text),
             },
+            # Optimistic PR toast (5a, plan §7): any lift this parsed set just
+            # beat the athlete's current LIVE best on — mirrors
+            # athlete_log_session's wiring of new_records_in/
+            # serialize_new_record, but off the *live* (PENDING-inclusive)
+            # read, so it can fire before the session ever reaches DONE. Can
+            # occasionally be a false alarm if the set is later corrected —
+            # the accepted trade for in-the-moment feedback (5b settles it).
+            "new_records": [serialize_new_record(r) for r in new_records],
         }
     )
 
@@ -1587,13 +1604,20 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
     left at its default ``PENDING`` status, and an existing log's status is
     never touched here, so a DONE log is never downgraded.
 
+    Returns the list of ``personal_records.NewRecord``s this upsert unlocks
+    (§7) — computed off the same, now-PENDING-inclusive ``new_records_in``
+    ``athlete_log_session`` already uses, so a blur can surface the same
+    optimistic 🎉 the structured logger does, without waiting for DONE. Always
+    ``[]`` when nothing beat the live best, or when the guard below caught an
+    error.
+
     **Tolerance guard (non-negotiable):** ``cell.save`` already committed the
-    raw text before this runs. The entire parse+upsert is wrapped so ANY
-    unexpected error is logged and swallowed — the athlete's text is never
-    lost and the response never turns into a 4xx/5xx over a parse problem.
-    ``parse_performed`` is itself total (never raises), so this is
-    belt-and-suspenders against everything else in the upsert (DB errors,
-    future parser changes, etc).
+    raw text before this runs. The entire parse+upsert (including the
+    new-records read) is wrapped so ANY unexpected error is logged and
+    swallowed — the athlete's text is never lost and the response never turns
+    into a 4xx/5xx over a parse problem. ``parse_performed`` is itself total
+    (never raises), so this is belt-and-suspenders against everything else in
+    the upsert (DB errors, future parser changes, etc).
 
     The inner ``transaction.atomic()`` is **load-bearing, not decorative**.
     This runs inside the caller's atomic block, and a *database* error marks
@@ -1604,6 +1628,7 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
     savepoint, so a DB failure here rolls back only the upsert and leaves the
     cell write intact.
     """
+    new_records = []
     try:
         with transaction.atomic():  # savepoint — see the docstring
             log = (
@@ -1630,6 +1655,15 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
                     load=str(parsed.get("load", "")),
                     rpe=str(parsed.get("rpe", "")),
                 )
+
+        # The toast read gets its OWN savepoint, deliberately. Inside the one
+        # above, a failure here would roll back the upsert with it — throwing
+        # away a perfectly good parsed set because a cosmetic 🎉 lookup broke,
+        # and that set would then only ever come back if the athlete happened
+        # to edit this same cell again. Separated, the upsert is already
+        # committed and a failed read costs nothing but the toast.
+        with transaction.atomic():
+            new_records = new_records_in(log)
     except Exception:
         logger.exception(
             "parse-at-commit: failed to upsert a LoggedSet for cell %s "
@@ -1638,6 +1672,7 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
             session.pk,
             athlete.pk,
         )
+    return new_records
 
 
 def _clean_logged_sets(raw_sets, session):
