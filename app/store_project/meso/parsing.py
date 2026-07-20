@@ -62,6 +62,12 @@ _REPS = re.compile(
 # exactly three digits not followed by more. Distinguishes ``1,000 x 5`` from a
 # real segment comma (``225 x 5, RPE 8``), which never has that shape.
 _THOUSANDS = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
+# Any comma sitting between two digits — a numeric comma, well-formed or not.
+_NUMERIC_COMMA = re.compile(r"\d,\d")
+# A comma that separates SEGMENTS rather than digit groups: one that is either
+# not preceded by a digit, or not followed by exactly three digits. Splitting on
+# this leaves ``1,000`` whole while still breaking ``225 x 5, RPE 8``.
+_SEGMENT_COMMA = re.compile(r",(?!\d{3}(?!\d))|(?<!\d),")
 
 # Unit-word normalization for reps suffixes: ``e``/``ea`` → ``each``.
 _UNIT_ALIASES = {"e": "each", "ea": "each", "ea.": "each"}
@@ -430,28 +436,29 @@ def parse_performed(text):
             "duration": first_line.replace(" ", ""),
         }
 
-    # Fold a thousands separator BEFORE splitting on commas. ``1,000 x 5``
-    # otherwise split into ``1`` and ``000 x 5``, and ``1`` is a perfectly good
-    # bare load — so the blur silently stored load=1 with no reps and no
-    # warning. Silently wrong data is worse than a refusal. The lookahead keeps
-    # this off real segment commas: ``225 x 5, RPE 8`` has no digit-comma-3-digit
-    # run, so it is untouched.
-    normalized = _THOUSANDS.sub("", first_line)
-    explicit_load = normalized != first_line
+    # A comma between digits is a thousands separator, not a segment break.
+    # Splitting ``1,000 x 5`` on it leaves ``1`` — a perfectly good bare load —
+    # so the blur silently stored load=1 with no reps and no warning. Silently
+    # wrong data is worse than a refusal.
+    if _NUMERIC_COMMA.search(first_line):
+        # Only a well-formed group (digit, comma, exactly three digits) is
+        # readable. Anything else (``1,0000``, ``12,34``) would hand the head
+        # that same truncated-but-valid load, so refuse rather than guess.
+        if _NUMERIC_COMMA.search(_THOUSANDS.sub("", first_line)):
+            return {"kind": "unresolved-set", "raw": raw, "warn": True}
 
-    # A comma still wedged between digits after normalizing is a separator we
-    # can't read (``1,0000``, ``12,34``). Splitting on it would hand the head a
-    # truncated but VALID-looking load — ``1`` — and store that silently, which
-    # is the same corruption the fold above prevents. Refuse instead.
-    # A comma still wedged between digits after normalizing is a separator we
-    # can't read (``1,0000``, ``12,34``). Splitting on it would hand the head a
-    # truncated but VALID-looking load — ``1`` — and store that silently, which
-    # is the same corruption the fold above prevents. Refuse instead.
-    if re.search(r"\d,\d", normalized):
-        return {"kind": "unresolved-set", "raw": raw, "warn": True}
+    # Split on SEGMENT commas only, leaving thousands groups intact, so the
+    # separator can be attributed to the segment it actually sits in.
+    raw_segments = _SEGMENT_COMMA.split(first_line)
+    head_raw = raw_segments[0].strip()
+    # Scoped to the head: the plausibility exemption belongs to the load the
+    # athlete wrote with a separator, not to any comma anywhere on the line.
+    # Otherwise ``2255 x 5, note 1,000`` would let the bare ``2255`` through the
+    # ceiling that ``2255 x 5`` alone is caught by.
+    explicit_load = bool(_THOUSANDS.search(head_raw))
 
-    segments = normalized.split(",")
-    head = segments[0].strip()
+    segments = [_THOUSANDS.sub("", s) for s in raw_segments]
+    head = _THOUSANDS.sub("", head_raw)
     out = _classify_performed_head(head, explicit_load)
 
     if out is not None:

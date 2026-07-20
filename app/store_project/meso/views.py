@@ -3521,48 +3521,49 @@ def _reap_empty_pending_log(log):
     return True
 
 
-def _drop_parsed_sets(doomed_qs, unit):
-    """Delete derived (parse-at-commit) sets and repair any 1RM they propped up.
+def _detach_parsed_sets(orphaned_qs):
+    """Cut derived sets loose from their source line instead of deleting them.
 
-    Used by the reclaim path (``cell_line_write``) only: a coach overwriting the
-    sub-line replaces the very text the set was parsed from, so nothing supports
-    that performance any more. It matters because every structured surface
-    suppresses ``source_line`` rows — a survivor would be INVISIBLE to coach and
-    athlete alike while still feeding live PRs, coach results, and the persisted
-    1RM.
+    Used by the reclaim path (``cell_line_write``): a coach overwriting an
+    athlete-authored sub-line replaces the text the set was parsed from, so the
+    set can no longer render as that text and would be INVISIBLE — suppressed
+    from every structured surface while still feeding records.
 
-    Deliberately NOT used for skipping a row. Skipping does not un-perform work
-    the athlete already did; see ``prescription_skip`` and
-    ``athlete_log_session``'s delete for that reasoning.
+    Deleting it was the obvious fix and the wrong one. ``history.py`` states the
+    rule plainly — "undo must never touch delivery stamps or athlete data" —
+    and deliberately keeps ``SessionLog``/``LoggedSet``/``AthleteOneRm`` out of
+    the plan snapshot. A coach edit IS undoable, so a delete here put athlete
+    data inside the coach's undo blast radius with no way back: Undo restored
+    the cell text while the performance stayed gone. (Same mistake as the
+    short-lived delete-on-skip; see ``prescription_skip``.)
 
-    The DONE logs' contributions are captured BEFORE the delete: those sets back
-    the persisted ``AthleteOneRm``, so dropping them without recomputing leaves
-    percent-load suggestions and designer badges quoting a performance that no
-    longer exists. PENDING logs need no refresh — nothing was promoted yet.
+    Clearing ``source_line`` solves the visibility problem without destroying
+    anything. The row becomes an ordinary structured set — NULL is already the
+    structured-logger origin — so it renders in ``set_rows`` again, keeps
+    counting exactly as before (no read filters on ``source_line``, so no 1RM
+    refresh is needed), and is untouched by undo because it is no longer tied to
+    a plan row. It takes a free ``set_number`` so it cannot collide with the
+    logger's own rows in ``_set_rows``'s ``(prescription, set_number)`` map.
     """
-    doomed = list(doomed_qs.select_related("session_log", "prescription"))
-    if not doomed:
+    orphaned = list(orphaned_qs.select_related("session_log"))
+    if not orphaned:
         return
-    settled = [s for s in doomed if s.session_log.status == SessionLog.Status.DONE]
-    doomed_qs.delete()
 
-    by_athlete = {}
-    for s in settled:
-        by_athlete.setdefault(s.session_log.athlete, []).append(s.prescription)
-    for athlete, prescriptions in by_athlete.items():
-        meso_one_rm.refresh_one_rms(athlete, prescriptions, unit)
-
-    # Reclaiming the only parsed sub-line of a draft can empty its log outright,
-    # and an empty log still reads as activity everywhere. Same reaping the
-    # athlete's own blanking blur does — the log shouldn't survive just because
-    # it was the coach who removed the last set.
-    for log in {s.session_log_id: s.session_log for s in doomed}.values():
-        _reap_empty_pending_log(log)
-
-    # Reclaiming the only parsed sub-line of a draft can empty its log outright,
-    # and an empty log still reads as activity everywhere. Same reaping the
-    # athlete's own blanking blur does — the log shouldn't survive just because
-    # it was the coach who removed the last set.
+    for row in orphaned:
+        taken = set(
+            LoggedSet.objects.filter(
+                session_log_id=row.session_log_id,
+                prescription_id=row.prescription_id,
+            )
+            .exclude(pk=row.pk)
+            .values_list("set_number", flat=True)
+        )
+        number = row.set_number
+        while number in taken:
+            number += 1
+        row.source_line = None
+        row.set_number = number
+        row.save(update_fields=["source_line", "set_number"])
 
 
 @login_required
@@ -3694,16 +3695,11 @@ def cell_line_write(request, plan_id, slot_id):
         # coach history — from here on it's snapshotted and undoable again.
         cell.athlete_authored = False
         cell.save(update_fields=["text", "athlete_authored"])
-        # Any parse-at-commit set (5a) derived from this cell was derived from
-        # the text the coach just replaced, and the cell is no longer
-        # athlete-authored — so nothing supports that performance any more.
-        # Leaving it would be worse than merely stale: presenters and
-        # `serialize_session_log` suppress `source_line` rows from structured
-        # display, so it would be INVISIBLE to both coach and athlete while
-        # still feeding live PRs, coach results, and the DONE-log 1RM refresh.
-        # Delete it rather than re-parse — a coach-owned line is a
-        # prescription, not a logged performance.
-        _drop_parsed_sets(LoggedSet.objects.filter(source_line=cell), plan.unit)
+        # A parse-at-commit set (5a) derived from this cell no longer has the
+        # text it came from, so it can't render as that text — but it is still
+        # the athlete's performance, and this edit is undoable. Cut it loose
+        # rather than delete it; see `_detach_parsed_sets`.
+        _detach_parsed_sets(LoggedSet.objects.filter(source_line=cell))
         _touch_plan(plan)
     return JsonResponse(
         {

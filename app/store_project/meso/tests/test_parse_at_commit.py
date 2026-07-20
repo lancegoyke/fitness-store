@@ -641,39 +641,93 @@ class TestDoneLogEditsRefreshThePersistedOneRm:
 # -- Codex review round 2 ------------------------------------------------------
 
 
-class TestParsedSetsDoNotOutliveTheirSourceLine:
-    def test_a_coach_reclaiming_the_sub_line_drops_the_parsed_set(self, client):
-        """A coach edit replaces the text the set was derived from.
+def reclaim(client, s, text="coach cue: brace harder", line=1):
+    """The coach overwrites an athlete-authored sub-line."""
+    return client.post(
+        reverse(
+            "meso:api_cell_line_write",
+            kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot.pk},
+        ),
+        data=json.dumps({"week_id": s.week.pk, "line": line, "text": text}),
+        content_type="application/json",
+    )
 
-        The reclaim path (`cell_line_write`) flips `athlete_authored` off and
-        overwrites the text. A surviving parsed set would be worse than stale:
-        every structured surface suppresses `source_line` rows, so it would be
-        invisible to both coach and athlete while still feeding live PRs, coach
-        results, and the DONE-log 1RM refresh.
-        """
+
+class TestReclaimDetachesRatherThanDeletes:
+    """A coach edit must not destroy the athlete's performance.
+
+    An earlier round deleted the derived set here, reasoning that the text it
+    was parsed from is gone so nothing supports it. That put athlete data inside
+    the coach's undo blast radius with no way out: `history.py` deliberately
+    keeps SessionLog/LoggedSet/AthleteOneRm out of the plan snapshot ("undo must
+    never touch delivery stamps or athlete data"), so Undo restored the cell
+    text while the performance stayed deleted.
+
+    Clearing `source_line` instead keeps the record and fixes the visibility
+    problem that motivated the delete — the row becomes an ordinary structured
+    set rather than one suppressed everywhere.
+    """
+
+    def test_the_set_survives_the_reclaim(self, client):
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
         cell = sub_cell(s.squat, 1)
-        assert LoggedSet.objects.filter(source_line=cell).exists()
+        row = LoggedSet.objects.get(source_line=cell)
 
         client.force_login(s.coach)
-        resp = client.post(
-            reverse(
-                "meso:api_cell_line_write",
-                kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot.pk},
-            ),
-            data=json.dumps(
-                {"week_id": s.week.pk, "line": 1, "text": "coach cue: brace harder"}
-            ),
-            content_type="application/json",
-        )
-        assert resp.status_code == 200
+        assert reclaim(client, s).status_code == 200
 
-        assert not LoggedSet.objects.filter(source_line=cell).exists(), (
-            "the parsed set outlived the text it was derived from — it is now "
-            "invisible everywhere but still counts toward records"
+        row.refresh_from_db()
+        assert (row.load, row.reps) == ("225", "5"), (
+            "a coach edit destroyed the athlete's logged performance"
         )
+
+    def test_the_set_is_detached_so_it_renders_again(self, client):
+        # Still linked, it stays suppressed from every structured surface —
+        # invisible while counting. NULL is the structured-logger origin.
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+
+        client.force_login(s.coach)
+        reclaim(client, s)
+
+        assert not LoggedSet.objects.filter(source_line=cell).exists()
+        assert LoggedSet.objects.filter(source_line__isnull=True).count() == 1
+
+    def test_the_detached_set_does_not_collide_with_logger_rows(self, client):
+        """`_set_rows` keys on (prescription, set_number) — a clash would hide one."""
+        s = seed()
+        client.force_login(s.athlete)
+        log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "185",
+                        "rpe": "7",
+                    }
+                ],
+            },
+        )
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s)
+
+        numbers = sorted(
+            LoggedSet.objects.filter(prescription=s.squat).values_list(
+                "set_number", flat=True
+            )
+        )
+        assert numbers == [1, 2], numbers
 
 
 class TestSkippedRowsDoNotLog:
@@ -768,9 +822,16 @@ class TestDoneSubjectsCompareAgainstSettledHistory:
         assert new_records_in(pending)
 
 
-class TestPersistedOneRmNeverOutlivesItsSet:
-    def test_a_coach_reclaim_refreshes_a_done_logs_one_rm(self, client):
-        """Deleting a DONE log's parsed set must recompute the estimate."""
+class TestPersistedOneRmTracksItsSet:
+    def test_a_reclaim_leaves_the_one_rm_standing(self, client):
+        """The set survives a reclaim, so its estimate must too.
+
+        This test previously asserted the opposite — that reclaiming cleared the
+        1RM — back when the reclaim path deleted the set. It doesn't: deleting
+        athlete data on an undoable coach edit was the bug (see
+        `TestReclaimDetachesRatherThanDeletes`). The performance is merely
+        detached, so it keeps counting, and the estimate should not move.
+        """
         from store_project.meso.models import AthleteOneRm
 
         s = seed()
@@ -780,23 +841,13 @@ class TestPersistedOneRmNeverOutlivesItsSet:
         log.status = SessionLog.Status.DONE
         log.save(update_fields=["status"])
         write_cell(client, s.session, s.squat, 1, "315 x 5")
-        assert AthleteOneRm.objects.filter(athlete=s.athlete).exists()
+        before = AthleteOneRm.objects.get(athlete=s.athlete)
 
-        # The coach reclaims the line — the performance is gone.
         client.force_login(s.coach)
-        client.post(
-            reverse(
-                "meso:api_cell_line_write",
-                kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot.pk},
-            ),
-            data=json.dumps({"week_id": s.week.pk, "line": 1, "text": "brace harder"}),
-            content_type="application/json",
-        )
+        reclaim(client, s, text="brace harder")
 
-        remaining = AthleteOneRm.objects.filter(athlete=s.athlete, value__gt=0)
-        assert not remaining.exists(), (
-            "the persisted 1RM outlived the set it was derived from"
-        )
+        after = AthleteOneRm.objects.get(pk=before.pk)
+        assert after.value == before.value
 
     def test_skipping_a_row_refreshes_its_lift_despite_trainable_cells(self, client):
         """`trainable_cells()` excludes skipped rows — the refresh must not.
@@ -1101,42 +1152,24 @@ class TestOverlongParsedValuesDoNotCorruptState:
 
 
 class TestEmptyLogsAreReapedOnEveryPath:
-    def test_a_coach_reclaim_reaps_the_emptied_draft_log(self, client):
-        """The log shouldn't survive just because the COACH removed the last set."""
+    def test_a_reclaim_leaves_the_log_intact(self, client):
+        """A reclaim no longer empties the log, so there is nothing to reap.
+
+        This pair previously asserted that reclaiming reaped the draft's log —
+        true only while the reclaim path DELETED the set. It detaches instead
+        (see `TestReclaimDetachesRatherThanDeletes`), so the log keeps its set
+        and must survive.
+        """
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
-        assert SessionLog.objects.filter(session=s.session).exists()
 
         client.force_login(s.coach)
-        client.post(
-            reverse(
-                "meso:api_cell_line_write",
-                kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot.pk},
-            ),
-            data=json.dumps({"week_id": s.week.pk, "line": 1, "text": "brace harder"}),
-            content_type="application/json",
-        )
+        reclaim(client, s, text="brace harder")
 
-        assert not SessionLog.objects.filter(session=s.session).exists()
-
-    def test_a_reclaim_leaves_a_log_that_still_has_sets(self, client):
-        s = seed()
-        client.force_login(s.athlete)
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-        write_cell(client, s.session, s.rdl, 1, "185 x 8")
-
-        client.force_login(s.coach)
-        client.post(
-            reverse(
-                "meso:api_cell_line_write",
-                kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot.pk},
-            ),
-            data=json.dumps({"week_id": s.week.pk, "line": 1, "text": "brace harder"}),
-            content_type="application/json",
-        )
-
-        assert the_log(s.session, s.athlete).sets.count() == 1
+        log = the_log(s.session, s.athlete)
+        assert log.sets.count() == 1
+        assert log.sets.first().source_line_id is None
 
     def test_a_first_blur_with_overlong_values_leaves_no_log(self, client):
         """The log is created before the length guard declines to insert.
