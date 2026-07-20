@@ -944,3 +944,70 @@ class TestParseCreatedLogsAreWellFormed:
         assert (
             SessionLog.objects.filter(session=s.session, athlete=s.athlete).count() == 1
         )
+
+
+# -- Codex review round 8 ------------------------------------------------------
+
+
+class TestABlurOnlyCreatesALogWhenItHasSomethingToStore:
+    def test_an_empty_sub_line_creates_no_session_log(self, client):
+        """Tapping "add a line" and leaving it blank is not training activity.
+
+        `_scroll_hint`, `_athlete_default_plan_id` and `serialize_recent_logs`
+        all read ANY SessionLog as activity, so an empty dated PENDING log moved
+        the athlete's last-trained week and polluted recent-log grounding.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "")
+
+        assert resp.status_code == 200
+        assert not SessionLog.objects.filter(
+            session=s.session, athlete=s.athlete
+        ).exists()
+
+    @pytest.mark.parametrize("text", ["felt tight", "DB pullover", "skip", "225 x"])
+    def test_a_non_set_blur_creates_no_session_log(self, client, text):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, text)
+
+        assert not SessionLog.objects.filter(
+            session=s.session, athlete=s.athlete
+        ).exists()
+        # The text itself is still saved — never block entry.
+        assert sub_cell(s.squat, 1).text == text
+
+    def test_an_existing_log_is_still_cleaned_up_by_a_blanking_blur(self, client):
+        # The "don't create" rule must not stop a real edit from clearing a set.
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+        assert LoggedSet.objects.filter(source_line=cell).exists()
+
+        write_cell(client, s.session, s.squat, 1, "")
+        assert not LoggedSet.objects.filter(source_line=cell).exists()
+
+
+class TestAnUnchangedReblurDoesNotRecelebrate:
+    def test_reblurring_the_same_text_fires_no_second_toast(self, client):
+        """The upsert always recreates, so the row's pk is always fresh.
+
+        The `created.pk` filter alone therefore matched on every re-blur, and
+        merely focusing and leaving a PR-winning cell re-fired the celebration.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        first = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert first.json()["new_records"], "the first PR should be celebrated"
+
+        again = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert again.json()["new_records"] == []
+
+    def test_a_real_improvement_still_celebrates(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        better = write_cell(client, s.session, s.squat, 1, "315 x 5")
+        assert better.json()["new_records"]

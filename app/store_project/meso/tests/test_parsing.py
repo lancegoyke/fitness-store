@@ -474,3 +474,26 @@ def test_performed_reps_text_keeps_the_unit_suffix(text, expected):
     from store_project.meso.parsing import performed_reps_text
 
     assert performed_reps_text(parse_performed(text)) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "reps"),
+    [
+        ("AMRAP @ 225", "AMRAP"),
+        ("30s @ 225", "30s"),
+        ("5-8 @ 225", "5-8"),
+        ("8 each @ 225", "8 each"),
+    ],
+)
+def test_the_at_form_accepts_the_same_reps_as_the_x_form(text, reps):
+    """The two operators must not disagree about what a set is.
+
+    `225 x AMRAP` and `225 x 30s` logged fine while `AMRAP @ 225` and
+    `30s @ 225` were refused as unresolved.
+    """
+    from store_project.meso.parsing import performed_reps_text
+
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "225"
+    assert performed_reps_text(parsed) == reps

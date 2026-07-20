@@ -1652,12 +1652,38 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
             # log. The lock is a no-op on SQLite (which serializes writers
             # anyway) and does the real work on Postgres.
             Session.objects.select_for_update().filter(pk=session.pk).first()
+
+            parsed = parse_performed(cell.text)
+            # A skipped line-0 cell is not trainable: athlete surfaces don't
+            # render it and the structured logger rejects it via
+            # `trainable_cells()`. An athlete holding a stale page open after
+            # the coach skips the row still passes this view's `session.cells()`
+            # check, so without this guard a blur would mint a set — and a PR —
+            # for work the rest of the app agrees isn't loggable. The delete
+            # below still runs, so a skipped row's own edits still clean up.
+            wants_set = bool(
+                parsed
+                and parsed.get("kind") == "set"
+                and (parsed.get("reps") or parsed.get("load"))
+                and not line_zero_cell.skipped
+            )
+
             log = (
                 SessionLog.objects.filter(session=session, athlete=athlete)
                 .order_by("-created_at")
                 .first()
             )
             if log is None:
+                # Parse BEFORE creating. Creating up front meant a no-op blur —
+                # tapping "add a line" and leaving it empty — persisted a dated
+                # PENDING log with no sets, and `_scroll_hint`,
+                # `_athlete_default_plan_id` and `serialize_recent_logs` all
+                # read ANY SessionLog as activity. So an idle UI gesture moved
+                # the athlete's last-trained week and polluted recent-log
+                # grounding. With no log there is also nothing to delete, so
+                # nothing to do at all.
+                if not wants_set:
+                    return []
                 # Stamp the date like `athlete_log_session` does, even for a
                 # pending draft. Left NULL, these logs sort BEFORE real dates
                 # under Postgres's `-date` (NULLs first in DESC), so an old
@@ -1667,23 +1693,17 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
                     session=session, athlete=athlete, date=timezone.localdate()
                 )
 
-            parsed = parse_performed(cell.text)
+            # What this cell held before, so an unchanged re-blur can be told
+            # apart from a real edit (see the toast filter below).
+            previous = log.sets.filter(source_line=cell).first()
+            previous_values = (
+                (previous.reps, previous.load, previous.rpe) if previous else None
+            )
             log.sets.filter(source_line=cell).delete()
+
             created = None
-            # A skipped line-0 cell is not trainable: athlete surfaces don't
-            # render it and the structured logger rejects it via
-            # `trainable_cells()`. An athlete holding a stale page open after
-            # the coach skips the row still passes this view's `session.cells()`
-            # check, so without this guard a blur would mint a set — and a PR —
-            # for work the rest of the app agrees isn't loggable. The delete
-            # above still runs, so skipping a row also clears any set already
-            # derived from it.
-            if (
-                parsed
-                and parsed.get("kind") == "set"
-                and (parsed.get("reps") or parsed.get("load"))
-                and not line_zero_cell.skipped
-            ):
+            unchanged = False
+            if wants_set:
                 created = LoggedSet.objects.create(
                     session_log=log,
                     prescription=line_zero_cell,
@@ -1696,6 +1716,11 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
                     reps=performed_reps_text(parsed),
                     load=str(parsed.get("load", "")),
                     rpe=str(parsed.get("rpe", "")),
+                )
+                unchanged = previous_values == (
+                    created.reps,
+                    created.load,
+                    created.rpe,
                 )
 
             # Editing a cell on an already-DONE log changes the very sets the
@@ -1732,7 +1757,13 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
             # re-return a PR won on an earlier line every time the athlete
             # blurred an unrelated note — re-firing the same 🎉 over and over.
             # No set written (blank/skip/swap/note) means nothing to celebrate.
-            if created is not None:
+            #
+            # `unchanged` suppresses a re-blur that altered nothing. The upsert
+            # deletes and recreates, so the row always has a FRESH pk — the
+            # `created.pk` filter alone therefore matched every time, and simply
+            # focusing and leaving a PR-winning cell re-fired the 🎉 for work
+            # already celebrated. A blur is only news if the values moved.
+            if created is not None and not unchanged:
                 new_records = [
                     r for r in new_records_in(log) if r.logged_set_id == created.pk
                 ]

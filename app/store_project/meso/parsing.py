@@ -298,7 +298,11 @@ def _try_at_form(head):
         return None
     out = {}
     _classify_reps(reps_token, out)
-    if "reps" not in out and "reps_range" not in out:
+    # Same four keys the ``x`` form accepts. Allowing only reps/reps_range here
+    # made the two operators disagree: ``225 x AMRAP`` and ``225 x 30s`` logged
+    # fine while ``AMRAP @ 225`` and ``30s @ 225`` fell through to
+    # ``unresolved-set`` and were refused.
+    if not any(k in out for k in ("reps", "reps_range", "duration", "amrap")):
         return None
     out["load"] = load_token.replace(" ", "")
     return out
