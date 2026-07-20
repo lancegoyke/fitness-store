@@ -1644,10 +1644,19 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
             parsed = parse_performed(cell.text)
             log.sets.filter(source_line=cell).delete()
             created = None
+            # A skipped line-0 cell is not trainable: athlete surfaces don't
+            # render it and the structured logger rejects it via
+            # `trainable_cells()`. An athlete holding a stale page open after
+            # the coach skips the row still passes this view's `session.cells()`
+            # check, so without this guard a blur would mint a set — and a PR —
+            # for work the rest of the app agrees isn't loggable. The delete
+            # above still runs, so skipping a row also clears any set already
+            # derived from it.
             if (
                 parsed
                 and parsed.get("kind") == "set"
                 and (parsed.get("reps") or parsed.get("load"))
+                and not line_zero_cell.skipped
             ):
                 created = LoggedSet.objects.create(
                     session_log=log,
@@ -3520,6 +3529,16 @@ def cell_line_write(request, plan_id, slot_id):
         # coach history — from here on it's snapshotted and undoable again.
         cell.athlete_authored = False
         cell.save(update_fields=["text", "athlete_authored"])
+        # Any parse-at-commit set (5a) derived from this cell was derived from
+        # the text the coach just replaced, and the cell is no longer
+        # athlete-authored — so nothing supports that performance any more.
+        # Leaving it would be worse than merely stale: presenters and
+        # `serialize_session_log` suppress `source_line` rows from structured
+        # display, so it would be INVISIBLE to both coach and athlete while
+        # still feeding live PRs, coach results, and the DONE-log 1RM refresh.
+        # Delete it rather than re-parse — a coach-owned line is a
+        # prescription, not a logged performance.
+        LoggedSet.objects.filter(source_line=cell).delete()
         _touch_plan(plan)
     return JsonResponse(
         {

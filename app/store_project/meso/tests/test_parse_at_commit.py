@@ -635,3 +635,79 @@ class TestDoneLogEditsRefreshThePersistedOneRm:
         assert after.value > before.value, (
             "the persisted 1RM went stale after a DONE parsed-cell edit"
         )
+
+
+# -- Codex review round 2 ------------------------------------------------------
+
+
+class TestParsedSetsDoNotOutliveTheirSourceLine:
+    def test_a_coach_reclaiming_the_sub_line_drops_the_parsed_set(self, client):
+        """A coach edit replaces the text the set was derived from.
+
+        The reclaim path (`cell_line_write`) flips `athlete_authored` off and
+        overwrites the text. A surviving parsed set would be worse than stale:
+        every structured surface suppresses `source_line` rows, so it would be
+        invisible to both coach and athlete while still feeding live PRs, coach
+        results, and the DONE-log 1RM refresh.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+        assert LoggedSet.objects.filter(source_line=cell).exists()
+
+        client.force_login(s.coach)
+        resp = client.post(
+            reverse(
+                "meso:api_cell_line_write",
+                kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot.pk},
+            ),
+            data=json.dumps(
+                {"week_id": s.week.pk, "line": 1, "text": "coach cue: brace harder"}
+            ),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+
+        assert not LoggedSet.objects.filter(source_line=cell).exists(), (
+            "the parsed set outlived the text it was derived from — it is now "
+            "invisible everywhere but still counts toward records"
+        )
+
+
+class TestSkippedRowsDoNotLog:
+    def test_a_blur_on_a_skipped_row_writes_no_set(self, client):
+        """A skipped row isn't trainable, so it can't be logged.
+
+        `athlete_cell_write` validates against `session.cells()`, which INCLUDES
+        skipped cells, so an athlete on a stale page can still post here after
+        the coach skips the row. The structured logger would reject the same
+        work via `trainable_cells()`.
+        """
+        s = seed()
+        s.squat.skipped = True
+        s.squat.save(update_fields=["skipped"])
+
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        # The text is still saved — never block entry.
+        assert resp.status_code == 200
+        cell = sub_cell(s.squat, 1)
+        assert cell.text == "225 x 5"
+        assert not LoggedSet.objects.filter(source_line=cell).exists()
+        assert resp.json()["new_records"] == []
+
+    def test_skipping_a_row_clears_a_set_already_derived_from_it(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+        assert LoggedSet.objects.filter(source_line=cell).exists()
+
+        s.squat.skipped = True
+        s.squat.save(update_fields=["skipped"])
+
+        # The next blur runs the delete but recreates nothing.
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert not LoggedSet.objects.filter(source_line=cell).exists()
