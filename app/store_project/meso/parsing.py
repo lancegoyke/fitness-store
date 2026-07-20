@@ -269,7 +269,13 @@ def _looks_like_set_attempt(segment):
     """
     if not re.search(r"\d", segment):
         return False
-    if re.search(r"[x×@]", segment, re.IGNORECASE):
+    # ``x`` must be used as an OPERATOR, not just present as a letter. A bare
+    # ``[x×@]`` search fires on ordinary exercise names that happen to contain
+    # one — "Box squat 225", "Flexion 3" — and warns at the athlete for typing
+    # a perfectly good swap. Require the operator to sit against a digit on at
+    # least one side (``225 x``, ``x 5``, ``5 @ 225``), which is what an actual
+    # fat-fingered set attempt looks like.
+    if re.search(r"(\d\s*[x×@])|([x×@]\s*\d)", segment, re.IGNORECASE):
         return True
     return bool(_LOAD.match(segment.strip()))
 

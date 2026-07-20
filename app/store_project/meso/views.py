@@ -1676,9 +1676,17 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
             # Gated on DONE because derivation is DONE-only by design; a PENDING
             # log has nothing to promote yet (5b's settle does that).
             if log.status == SessionLog.Status.DONE:
+                # `trainable_cells()` excludes SKIPPED rows — but skipping is
+                # exactly when the delete above strips a set the persisted 1RM
+                # was derived from, so scoping the refresh to trainable cells
+                # alone would leave that lift's estimate standing on a set that
+                # no longer exists. Always include this cell's own lift.
+                cells = list(session.trainable_cells())
+                if not any(c.pk == line_zero_cell.pk for c in cells):
+                    cells.append(line_zero_cell)
                 meso_one_rm.refresh_one_rms(
                     athlete,
-                    list(session.trainable_cells()),
+                    cells,
                     session.week.mesocycle.plan.unit,
                 )
 
@@ -3538,7 +3546,33 @@ def cell_line_write(request, plan_id, slot_id):
         # still feeding live PRs, coach results, and the DONE-log 1RM refresh.
         # Delete it rather than re-parse — a coach-owned line is a
         # prescription, not a logged performance.
+        doomed = list(
+            LoggedSet.objects.filter(source_line=cell).select_related(
+                "session_log", "prescription"
+            )
+        )
+        # Capture what a DONE log is about to lose BEFORE the delete: those sets
+        # feed the persisted AthleteOneRm, so removing them without recomputing
+        # leaves percent-load suggestions and designer badges quoting a
+        # performance that no longer exists.
+        settled = [s for s in doomed if s.session_log.status == SessionLog.Status.DONE]
         LoggedSet.objects.filter(source_line=cell).delete()
+        unit = plan.unit
+        for athlete_id in {s.session_log.athlete_id for s in settled}:
+            athlete = next(
+                s.session_log.athlete
+                for s in settled
+                if s.session_log.athlete_id == athlete_id
+            )
+            meso_one_rm.refresh_one_rms(
+                athlete,
+                [
+                    s.prescription
+                    for s in settled
+                    if s.session_log.athlete_id == athlete_id
+                ],
+                unit,
+            )
         _touch_plan(plan)
     return JsonResponse(
         {

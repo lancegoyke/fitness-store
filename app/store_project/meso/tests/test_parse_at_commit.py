@@ -711,3 +711,112 @@ class TestSkippedRowsDoNotLog:
         # The next blur runs the delete but recreates nothing.
         write_cell(client, s.session, s.squat, 1, "225 x 5")
         assert not LoggedSet.objects.filter(source_line=cell).exists()
+
+
+# -- Codex review round 3 ------------------------------------------------------
+
+
+class TestDoneSubjectsCompareAgainstSettledHistory:
+    def test_a_later_pending_draft_does_not_erase_a_finished_sessions_pr(self, client):
+        """A DONE session's PR must not depend on a draft saved afterwards.
+
+        `new_records_in` powers both the live athlete toast and the coach's
+        `session_results`. Once the live read started counting PENDING sets, a
+        draft in a LATER session became eligible as the "prior best" for an
+        already-finished one — so the coach's view of a completed session could
+        silently stop showing its record because the athlete typed something
+        heavier into a draft elsewhere.
+        """
+        from store_project.meso.personal_records import new_records_in
+
+        s = seed()
+        client.force_login(s.athlete)
+
+        # A finished 225x5 on the squat.
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        done = the_log(s.session, s.athlete)
+        done.status = SessionLog.Status.DONE
+        done.save(update_fields=["status"])
+        assert new_records_in(done), "the finished session should hold a PR"
+
+        # A heavier PENDING draft in a different session.
+        other = day(s.week, day_number=2, name="Lower B", bias="Quad")
+        other_squat = presc(
+            other, name="Box Squat", order=0, sets="3", reps="5", load="70", rpe="8"
+        )
+        write_cell(client, other, other_squat, 1, "315 x 5")
+        draft = SessionLog.objects.get(session=other, athlete=s.athlete)
+        assert draft.status == SessionLog.Status.PENDING
+
+        assert new_records_in(done), (
+            "a pending draft in another session retroactively erased the "
+            "finished session's PR — a DONE subject must compare against "
+            "settled history only"
+        )
+
+    def test_a_pending_subject_still_uses_the_live_baseline(self, client):
+        # The optimistic path is unchanged: a live draft compares against live
+        # history, which is what makes the blur toast possible at all.
+        from store_project.meso.personal_records import new_records_in
+
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        pending = the_log(s.session, s.athlete)
+        assert pending.status == SessionLog.Status.PENDING
+        assert new_records_in(pending)
+
+
+class TestPersistedOneRmNeverOutlivesItsSet:
+    def test_a_coach_reclaim_refreshes_a_done_logs_one_rm(self, client):
+        """Deleting a DONE log's parsed set must recompute the estimate."""
+        from store_project.meso.models import AthleteOneRm
+
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "315 x 5")
+        log = the_log(s.session, s.athlete)
+        log.status = SessionLog.Status.DONE
+        log.save(update_fields=["status"])
+        write_cell(client, s.session, s.squat, 1, "315 x 5")
+        assert AthleteOneRm.objects.filter(athlete=s.athlete).exists()
+
+        # The coach reclaims the line — the performance is gone.
+        client.force_login(s.coach)
+        client.post(
+            reverse(
+                "meso:api_cell_line_write",
+                kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot.pk},
+            ),
+            data=json.dumps({"week_id": s.week.pk, "line": 1, "text": "brace harder"}),
+            content_type="application/json",
+        )
+
+        remaining = AthleteOneRm.objects.filter(athlete=s.athlete, value__gt=0)
+        assert not remaining.exists(), (
+            "the persisted 1RM outlived the set it was derived from"
+        )
+
+    def test_skipping_a_row_refreshes_its_lift_despite_trainable_cells(self, client):
+        """`trainable_cells()` excludes skipped rows — the refresh must not.
+
+        Skipping is precisely when the parsed set gets stripped, so scoping the
+        refresh to trainable cells would leave that lift's estimate standing on
+        a set that no longer exists.
+        """
+        from store_project.meso.models import AthleteOneRm
+
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "315 x 5")
+        log = the_log(s.session, s.athlete)
+        log.status = SessionLog.Status.DONE
+        log.save(update_fields=["status"])
+        write_cell(client, s.session, s.squat, 1, "315 x 5")
+        assert AthleteOneRm.objects.filter(athlete=s.athlete, value__gt=0).exists()
+
+        s.squat.skipped = True
+        s.squat.save(update_fields=["skipped"])
+        write_cell(client, s.session, s.squat, 1, "315 x 5")
+
+        assert not AthleteOneRm.objects.filter(athlete=s.athlete, value__gt=0).exists()

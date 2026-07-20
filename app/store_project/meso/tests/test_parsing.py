@@ -396,3 +396,25 @@ def test_performed_corpus_never_raises_and_always_carries_raw(text):
         "unresolved-set",
         "duration",
     }
+
+
+@pytest.mark.parametrize(
+    "text", ["Box squat 225", "max effort 3", "Flexion 3", "Hex bar 185"]
+)
+def test_a_plain_x_in_a_name_is_not_a_set_attempt(text):
+    """``x`` has to be an OPERATOR before it can mean a fat-fingered set.
+
+    Searching for a bare ``x`` anywhere fires on ordinary exercise names that
+    happen to contain one — "Box squat", "Flexion", "Hex bar" — so an athlete
+    typing a perfectly good swap with a load next to it got warned at.
+    """
+    parsed = parse_performed(text)
+    assert parsed["kind"] != "unresolved-set"
+    assert not parsed.get("warn")
+
+
+@pytest.mark.parametrize("text", ["225 x", "x 5", "5 @", "225 x five"])
+def test_a_digit_adjacent_operator_still_warns(text):
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "unresolved-set"
+    assert parsed["warn"] is True

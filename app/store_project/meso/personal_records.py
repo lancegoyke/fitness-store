@@ -214,6 +214,15 @@ def new_records_in(session_log):
     prior_qs = _live_logged_sets(session_log.athlete, unit=unit).exclude(
         session_log=session_log
     )
+    # Compare like with like. A DONE subject is a settled performance — it is
+    # what the coach's `session_results` judges — so it must be measured against
+    # settled history only. Without this, a PENDING draft saved later would
+    # retroactively decide whether an already-completed session was a PR: log a
+    # done 120x5, later draft a pending 150x5, and the coach's view of the
+    # finished session silently stops showing its record. A PENDING subject is
+    # the live/optimistic path and keeps the live baseline.
+    if session_log.status == models.SessionLog.Status.DONE:
+        prior_qs = prior_qs.filter(session_log__status=models.SessionLog.Status.DONE)
     prior_best = _best_per_lift(_performed_sets(prior_qs, unit=unit))
 
     records = []
