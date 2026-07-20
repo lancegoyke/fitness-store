@@ -811,6 +811,28 @@ describe("saveCell", () => {
     expect(c.exercises[0].sub_lines[0].warn).toBe(false);
   });
 
+  it("ignores a stale response whose text is no longer in the input", async () => {
+    // Two saves for one sub-line can be in flight at once and the OLDER reply
+    // can land last. Without a guard, correcting "225 x" to "225 x 5" re-applies
+    // the first reply's warn and strands the tint on text that no longer exists.
+    const c = cellLogger({
+      exercises: [
+        { id: 1, sub_lines: [{ line: 1, text: "225 x" }], set_rows: [] },
+      ],
+    });
+    global.fetch = vi.fn().mockImplementation(async () => {
+      // While the request is in flight the athlete finishes typing.
+      c.exercises[0].sub_lines[0].text = "225 x 5";
+      return res({
+        body: { ok: true, cell: { id: 5, line: 1, text: "225 x", warn: true } },
+      });
+    });
+
+    await c.saveCell(c.exercises[0], 1);
+
+    expect(c.exercises[0].sub_lines[0].warn).toBeFalsy();
+  });
+
   // -- 5a §7: optimistic PR toast off a cell blur ----------------------------
 
   it("surfaces new_records from the response as the PR toast", async () => {

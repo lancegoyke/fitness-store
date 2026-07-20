@@ -820,3 +820,82 @@ class TestPersistedOneRmNeverOutlivesItsSet:
         write_cell(client, s.session, s.squat, 1, "315 x 5")
 
         assert not AthleteOneRm.objects.filter(athlete=s.athlete, value__gt=0).exists()
+
+
+# -- Codex review round 4 ------------------------------------------------------
+
+
+class TestNonPlainRepsSurviveToTheLoggedSet:
+    @pytest.mark.parametrize(
+        ("text", "reps"),
+        [("225 x 5-8", "5-8"), ("225 x 30s", "30s"), ("225 x AMRAP", "AMRAP")],
+    )
+    def test_ranges_durations_and_amrap_are_stored(self, client, text, reps):
+        """Writing only `parsed["reps"]` blanked these, rendering `— @ 225`."""
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, text)
+
+        row = LoggedSet.objects.get(source_line=sub_cell(s.squat, 1))
+        assert row.load == "225"
+        assert row.reps == reps
+
+
+class TestSkippingARowClearsItsParsedSets:
+    def test_the_skip_endpoint_drops_parsed_sets(self, client):
+        """Skipping hides the row, so the clearing blur may never come.
+
+        The round-2 guard only fires on a later `athlete_cell_write`. A coach
+        skipping through `prescription_skip` left the derived set feeding live
+        records and the persisted 1RM indefinitely.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+        assert LoggedSet.objects.filter(source_line=cell).exists()
+
+        client.force_login(s.coach)
+        resp = client.post(
+            reverse(
+                "meso:api_prescription_skip",
+                kwargs={"plan_id": s.plan.pk, "pk": s.squat.pk},
+            ),
+            data=json.dumps({"skipped": True}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        assert not LoggedSet.objects.filter(source_line=cell).exists()
+
+    def test_the_skip_endpoint_leaves_structured_sets_alone(self, client):
+        """Only DERIVED sets are ours to delete — the logger's are history."""
+        s = seed()
+        client.force_login(s.athlete)
+        log_post(
+            client,
+            s.session,
+            {
+                "status": "done",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "8",
+                    }
+                ],
+            },
+        )
+        structured = LoggedSet.objects.get(source_line__isnull=True)
+
+        client.force_login(s.coach)
+        client.post(
+            reverse(
+                "meso:api_prescription_skip",
+                kwargs={"plan_id": s.plan.pk, "pk": s.squat.pk},
+            ),
+            data=json.dumps({"skipped": True}),
+            content_type="application/json",
+        )
+        assert LoggedSet.objects.filter(pk=structured.pk).exists()

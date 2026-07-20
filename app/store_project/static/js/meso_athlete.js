@@ -544,10 +544,16 @@ function createLogger() {
       } catch (e) {
         return; // saved server-side regardless; warn/PR state reconciles next blur/reload
       }
+      // Drop a stale response. Two saves for the same sub-line can be in
+      // flight at once, and the older one can land last — so fixing `225 x`
+      // to `225 x 5` could re-apply the first reply's warn and leave the cell
+      // tinted for text that no longer exists. Only trust a reply whose text
+      // is still what's in the input.
       // Derive-on-read warn (5a §8): re-classified server-side from the
       // just-committed text, so fixing a fat-fingered attempt (or typing one)
       // updates the cell's color right away, without a page reload.
-      if (entry) entry.warn = !!(data.cell && data.cell.warn);
+      if (!entry || (entry.text || "") !== text) return;
+      entry.warn = !!(data.cell && data.cell.warn);
       // Optimistic PR toast (5a §7) — the same celebration `save()` shows,
       // fired straight off a cell blur instead of a full log save. Only
       // overwrite when THIS blur actually produced a new record, so an

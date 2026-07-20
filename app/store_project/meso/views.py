@@ -84,6 +84,7 @@ from .models import Week
 from .models import WeekDelivery
 from .parsing import is_unresolved_set
 from .parsing import parse_performed
+from .parsing import performed_reps_text
 from .personal_records import new_records_in
 from .serializers import current_week
 from .serializers import first_live_week
@@ -1663,7 +1664,11 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
                     prescription=line_zero_cell,
                     source_line=cell,
                     set_number=1,
-                    reps=str(parsed.get("reps", "")),
+                    # NOT `parsed["reps"]` — a set's right-hand side lands in
+                    # one of four keys, and reading only `reps` blanked every
+                    # range (`225 x 5-8`), timed set (`225 x 30s`) and AMRAP,
+                    # rendering them `— @ 225` in coach results.
+                    reps=performed_reps_text(parsed),
                     load=str(parsed.get("load", "")),
                     rpe=str(parsed.get("rpe", "")),
                 )
@@ -3419,6 +3424,34 @@ def _json_object_body(request):
     return payload, None
 
 
+def _drop_parsed_sets(doomed_qs, unit):
+    """Delete derived (parse-at-commit) sets and repair any 1RM they propped up.
+
+    Two coach actions can invalidate a set the athlete never touched: reclaiming
+    the sub-line it was parsed from (``cell_line_write``) and skipping its row
+    (``prescription_skip``). Both must clear it, because every structured
+    surface suppresses ``source_line`` rows — a survivor would be INVISIBLE to
+    coach and athlete alike while still feeding live PRs, coach results, and the
+    persisted 1RM.
+
+    The DONE logs' contributions are captured BEFORE the delete: those sets back
+    the persisted ``AthleteOneRm``, so dropping them without recomputing leaves
+    percent-load suggestions and designer badges quoting a performance that no
+    longer exists. PENDING logs need no refresh — nothing was promoted yet.
+    """
+    doomed = list(doomed_qs.select_related("session_log", "prescription"))
+    if not doomed:
+        return
+    settled = [s for s in doomed if s.session_log.status == SessionLog.Status.DONE]
+    doomed_qs.delete()
+
+    by_athlete = {}
+    for s in settled:
+        by_athlete.setdefault(s.session_log.athlete, []).append(s.prescription)
+    for athlete, prescriptions in by_athlete.items():
+        meso_one_rm.refresh_one_rms(athlete, prescriptions, unit)
+
+
 @login_required
 @require_POST
 def prescription_skip(request, plan_id, pk):
@@ -3449,6 +3482,18 @@ def prescription_skip(request, plan_id, pk):
         )
         cell.skipped = skipped
         cell.save(update_fields=["skipped"])
+        if skipped:
+            # Skipping hides the row from the athlete, so the blur that would
+            # otherwise clear its derived sets may never come. Drop them here or
+            # a skipped row keeps feeding records and the persisted 1RM
+            # indefinitely. Parsed sets hang off this line-0 cell via
+            # `prescription`; `source_line__isnull=False` leaves the structured
+            # logger's own rows alone (those are the athlete's own history, not
+            # ours to delete).
+            _drop_parsed_sets(
+                LoggedSet.objects.filter(prescription=cell, source_line__isnull=False),
+                plan.unit,
+            )
         _touch_plan(plan)
     return JsonResponse({"ok": True, "history": serialize_plan_history(plan)})
 
@@ -3546,33 +3591,7 @@ def cell_line_write(request, plan_id, slot_id):
         # still feeding live PRs, coach results, and the DONE-log 1RM refresh.
         # Delete it rather than re-parse — a coach-owned line is a
         # prescription, not a logged performance.
-        doomed = list(
-            LoggedSet.objects.filter(source_line=cell).select_related(
-                "session_log", "prescription"
-            )
-        )
-        # Capture what a DONE log is about to lose BEFORE the delete: those sets
-        # feed the persisted AthleteOneRm, so removing them without recomputing
-        # leaves percent-load suggestions and designer badges quoting a
-        # performance that no longer exists.
-        settled = [s for s in doomed if s.session_log.status == SessionLog.Status.DONE]
-        LoggedSet.objects.filter(source_line=cell).delete()
-        unit = plan.unit
-        for athlete_id in {s.session_log.athlete_id for s in settled}:
-            athlete = next(
-                s.session_log.athlete
-                for s in settled
-                if s.session_log.athlete_id == athlete_id
-            )
-            meso_one_rm.refresh_one_rms(
-                athlete,
-                [
-                    s.prescription
-                    for s in settled
-                    if s.session_log.athlete_id == athlete_id
-                ],
-                unit,
-            )
+        _drop_parsed_sets(LoggedSet.objects.filter(source_line=cell), plan.unit)
         _touch_plan(plan)
     return JsonResponse(
         {

@@ -445,3 +445,32 @@ def is_unresolved_set(text):
     """
     parsed = parse_performed(text)
     return bool(parsed) and parsed.get("kind") == "unresolved-set"
+
+
+def performed_reps_text(parsed):
+    """The reps a performed ``set`` should store, as ``LoggedSet.reps`` text.
+
+    ``parse_performed`` splits the right-hand side of a set across four keys
+    depending on what the athlete wrote — ``reps`` (``225 x 5``),
+    ``reps_range`` (``225 x 5-8``), ``duration`` (``225 x 30s``) and ``amrap``
+    (``225 x AMRAP``). Reading only ``reps`` drops the other three on the
+    floor, writing a blank so the set renders as ``— @ 225`` in coach results
+    and recent-log grounding even though the athlete recorded something
+    perfectly meaningful.
+
+    ``LoggedSet.reps`` is a free-text ``CharField`` (the structured logger
+    stores plain strings too), so each form round-trips as the athlete's own
+    notation. Returns ``""`` when nothing was recognized.
+    """
+    if not parsed:
+        return ""
+    if "reps" in parsed:
+        return str(parsed["reps"])
+    if "reps_range" in parsed:
+        low, high = parsed["reps_range"]
+        return f"{low}-{high}"
+    if parsed.get("duration"):
+        return str(parsed["duration"])
+    if parsed.get("amrap"):
+        return "AMRAP"
+    return ""

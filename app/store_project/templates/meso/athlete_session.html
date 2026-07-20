@@ -122,8 +122,14 @@
           <div class="meso-row-meta meso-mono" style="margin-bottom:6px;">your notes</div>
           <template x-for="l in ex.sub_lines" :key="l.line">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              {# The border/background go through --cell-line/--cell-bg so the
+                 warn class can actually win: an inline `border`/`background`
+                 beats any class selector, but the custom property it resolves
+                 is NOT declared inline, so `.meso-phone-input--warn` can set
+                 it. Tinting the cell is the whole user-visible payload of the
+                 warn flag (plan §8) — declared inline it silently did nothing. #}
               <input class="meso-phone-input" :class="l.warn ? 'meso-phone-input--warn' : ''" x-model="l.text" @blur="saveCell(ex, l.line)" placeholder="RPE, cues, how it felt…" inputmode="text"
-                     style="flex:1;min-width:0;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 8px;outline:none;color:var(--ink);" />
+                     style="flex:1;min-width:0;appearance:none;border:1px solid var(--cell-line,var(--line));border-radius:7px;background:var(--cell-bg,var(--rail));font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 8px;outline:none;color:var(--ink);" />
               <span class="meso-row-meta meso-mono" style="color:var(--warn);white-space:nowrap;" x-show="l.saveError" x-cloak>couldn&#8217;t save</span>
               <span class="meso-row-meta meso-mono" style="color:var(--warn);white-space:nowrap;" x-show="l.warn && !l.saveError" x-cloak title="Saved, but this doesn&#8217;t look like a complete set — it won&#8217;t count toward your records.">not logged as a set</span>
             </div>

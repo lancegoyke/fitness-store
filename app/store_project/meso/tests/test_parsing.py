@@ -418,3 +418,30 @@ def test_a_digit_adjacent_operator_still_warns(text):
     parsed = parse_performed(text)
     assert parsed["kind"] == "unresolved-set"
     assert parsed["warn"] is True
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("225 x 5", "5"),
+        ("225 x 5-8", "5-8"),
+        ("225 x 30s", "30s"),
+        ("225 x AMRAP", "AMRAP"),
+        ("225", ""),
+    ],
+)
+def test_performed_reps_text_keeps_every_recognized_form(text, expected):
+    """A set's right-hand side lands in one of four keys, not just ``reps``.
+
+    Reading only ``reps`` blanked ranges, timed sets and AMRAP, so a real
+    performance rendered as ``— @ 225`` in coach results.
+    """
+    from store_project.meso.parsing import performed_reps_text
+
+    assert performed_reps_text(parse_performed(text)) == expected
+
+
+def test_performed_reps_text_tolerates_none():
+    from store_project.meso.parsing import performed_reps_text
+
+    assert performed_reps_text(None) == ""
