@@ -899,3 +899,50 @@ class TestSkippingARowClearsItsParsedSets:
             content_type="application/json",
         )
         assert LoggedSet.objects.filter(pk=structured.pk).exists()
+
+
+# -- Codex review round 5 ------------------------------------------------------
+
+
+class TestParseCreatedLogsAreWellFormed:
+    def test_a_blur_created_log_is_dated(self, client):
+        """A NULL date would sort FIRST under Postgres's `-date` (NULLs first).
+
+        `athlete_log_session` stamps today even for a pending draft. When the
+        first write for a session is a blur instead, an unstamped log would pose
+        as the newest in recent-log grounding and record provenance would lose
+        its workout date.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        log = the_log(s.session, s.athlete)
+        assert log.date == timezone.localdate()
+
+    def test_repeated_blurs_reuse_one_log(self, client):
+        """Every blur can create the log, so they must all land on the same one.
+
+        Two logs would split one workout, and since later reads take only the
+        newest, the sets stranded on the older one disappear from DONE coach
+        results and the 1RM refresh.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        write_cell(client, s.session, s.rdl, 1, "185 x 8")
+        write_cell(client, s.session, s.squat, 2, "235 x 3")
+
+        logs = SessionLog.objects.filter(session=s.session, athlete=s.athlete)
+        assert logs.count() == 1
+        assert logs.first().sets.count() == 3
+
+    def test_a_blur_after_a_structured_save_reuses_that_log(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        log_post(client, s.session, {"status": "pending", "sets": []})
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        assert (
+            SessionLog.objects.filter(session=s.session, athlete=s.athlete).count() == 1
+        )

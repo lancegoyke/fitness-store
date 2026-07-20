@@ -1634,13 +1634,31 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
     new_records = []
     try:
         with transaction.atomic():  # savepoint — see the docstring
+            # Serialize the fetch-or-create on the session row. `(session,
+            # athlete)` has no uniqueness, so two overlapping first writes —
+            # two sub-line blurs, or a blur racing the full log save — can both
+            # see `log is None` and each create one. That splits a single
+            # workout across two logs, and since every later read takes only the
+            # NEWEST, the parsed sets stranded on the older one silently vanish
+            # from DONE coach results and the 1RM refresh. 5a makes this far
+            # more likely than before, because now EVERY blur can create the
+            # log. The lock is a no-op on SQLite (which serializes writers
+            # anyway) and does the real work on Postgres.
+            Session.objects.select_for_update().filter(pk=session.pk).first()
             log = (
                 SessionLog.objects.filter(session=session, athlete=athlete)
                 .order_by("-created_at")
                 .first()
             )
             if log is None:
-                log = SessionLog.objects.create(session=session, athlete=athlete)
+                # Stamp the date like `athlete_log_session` does, even for a
+                # pending draft. Left NULL, these logs sort BEFORE real dates
+                # under Postgres's `-date` (NULLs first in DESC), so an old
+                # parsed draft would pose as the newest log in recent-log
+                # grounding, and record provenance would lose its workout date.
+                log = SessionLog.objects.create(
+                    session=session, athlete=athlete, date=timezone.localdate()
+                )
 
             parsed = parse_performed(cell.text)
             log.sets.filter(source_line=cell).delete()
