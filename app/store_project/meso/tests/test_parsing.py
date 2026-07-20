@@ -5,10 +5,15 @@ Every case here is a VERBATIM cell from Lance's template library
 from the filled client workbook (§2.6) — not invented notation. The parser is
 tolerant/best-effort: asserting a subset of keys is the point; a case that
 parses to nothing still carries ``raw``.
+
+``parse_performed`` (5a, docs/meso/parse-at-commit-plan.md §3) gets its own
+pinned corpus below, one function per §3 table row plus the load-first
+inversion assertion that is the whole point of that slice.
 """
 
 import pytest
 
+from store_project.meso.parsing import parse_performed
 from store_project.meso.parsing import parse_prescription
 
 
@@ -187,3 +192,175 @@ def test_corpus_never_raises_and_always_carries_raw(text):
     parsed = parse_prescription(text)
     assert parsed is not None
     assert parsed["raw"] == text.strip()
+
+
+# ---------------------------------------------------------------------------
+# parse_performed (5a) — docs/meso/parse-at-commit-plan.md §3
+# ---------------------------------------------------------------------------
+
+
+def test_performed_empty_and_none_parse_to_none():
+    assert parse_performed(None) is None
+    assert parse_performed("") is None
+    assert parse_performed("   ") is None
+
+
+def test_performed_load_first_inversion():
+    # THE point of 5a: prescription grammar reads a leading "N x M" as sets;
+    # performed grammar reads it as load x reps.
+    prescribed = parse_prescription("225 x 5")
+    assert prescribed["sets"] == 225
+    assert prescribed["reps"] == 5
+
+    performed = parse_performed("225 x 5")
+    assert performed["kind"] == "set"
+    assert performed["load"] == "225"
+    assert performed["reps"] == 5
+
+
+def test_performed_plain_set_no_space():
+    parsed = parse_performed("135x5")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "135"
+    assert parsed["reps"] == 5
+
+
+def test_performed_set_with_rpe():
+    parsed = parse_performed("225 x 5, RPE 8")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "225"
+    assert parsed["reps"] == 5
+    assert parsed["rpe"] == "8"
+
+
+def test_performed_suffixed_and_percent_loads():
+    parsed = parse_performed("30lbs x 8 each")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "30lbs"
+    assert parsed["reps"] == 8
+    assert parsed["unit"] == "each"
+
+    parsed = parse_performed("102.5kg x 3")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "102.5kg"
+    assert parsed["reps"] == 3
+
+    parsed = parse_performed("85% x 5")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "85%"
+    assert parsed["reps"] == 5
+
+    parsed = parse_performed("bw x 12")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "bw"
+    assert parsed["reps"] == 12
+
+
+def test_performed_at_form():
+    parsed = parse_performed("5 @ 225")
+    assert parsed["kind"] == "set"
+    assert parsed["reps"] == 5
+    assert parsed["load"] == "225"
+
+
+def test_performed_bare_load_is_a_partial_set():
+    parsed = parse_performed("225")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "225"
+    assert "reps" not in parsed
+
+
+@pytest.mark.parametrize("text", ["skip", "-", "—"])
+def test_performed_skip_forms(text):
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "skip"
+
+
+@pytest.mark.parametrize("text", ["DB pullover", "R SL L glute max"])
+def test_performed_swap_forms(text):
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "swap"
+
+
+@pytest.mark.parametrize("text", ["felt tight", "paired with lat hang"])
+def test_performed_note_forms(text):
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "note"
+
+
+@pytest.mark.parametrize("text", ["225 x", "2255x5"])
+def test_performed_unresolved_set_forms(text):
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "unresolved-set"
+
+
+@pytest.mark.parametrize("text", ["30s", "20-60m"])
+def test_performed_duration_forms(text):
+    parsed = parse_performed(text)
+    assert parsed["kind"] == "duration"
+
+
+def test_performed_warns_only_on_unresolved_set():
+    assert parse_performed("225 x").get("warn") is True
+    assert parse_performed("2255x5").get("warn") is True
+
+    assert not parse_performed("skip").get("warn")
+    assert not parse_performed("DB pullover").get("warn")
+    assert not parse_performed("felt tight").get("warn")
+    assert not parse_performed("225 x 5").get("warn")
+
+
+def test_performed_one_set_per_line_only():
+    # Multi-set-per-line is explicitly out of scope (plan §3) — only the
+    # first recognized set on the line is returned.
+    parsed = parse_performed("225x5, 230x3")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "225"
+    assert parsed["reps"] == 5
+
+
+def test_performed_multiline_cell_classifies_first_line_only():
+    parsed = parse_performed("225 x 5\npaired with lat hang")
+    assert parsed["kind"] == "set"
+    assert parsed["load"] == "225"
+    assert parsed["reps"] == 5
+    assert parsed["raw"].endswith("lat hang")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "225 x 5",
+        "135x5",
+        "225 x 5, RPE 8",
+        "30lbs x 8 each",
+        "102.5kg x 3",
+        "85% x 5",
+        "bw x 12",
+        "5 @ 225",
+        "225",
+        "skip",
+        "-",
+        "—",
+        "DB pullover",
+        "R SL L glute max",
+        "felt tight",
+        "paired with lat hang",
+        "225 x",
+        "2255x5",
+        "30s",
+        "20-60m",
+    ],
+)
+def test_performed_corpus_never_raises_and_always_carries_raw(text):
+    parsed = parse_performed(text)
+    assert parsed is not None
+    assert parsed["raw"] == text.strip()
+    assert parsed["kind"] in {
+        "set",
+        "skip",
+        "swap",
+        "note",
+        "unresolved-set",
+        "duration",
+    }

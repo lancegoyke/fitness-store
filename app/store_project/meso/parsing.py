@@ -8,6 +8,15 @@ a cell ONE freeform text string — ``4 x 6, RPE 9, 225`` / ``3 x 12-15`` /
     parse_prescription(text) -> {sets?, reps?, reps_range?, rpe?, load?,
                                  unit?, duration?, amrap?, skip?, raw} | None
 
+Slice 5a (docs/meso/parse-at-commit-plan.md §3) adds a second total function
+for the *performed* side of the same cell:
+
+    parse_performed(text) -> {kind, raw, ...} | None
+
+``parse_performed`` classifies a cell into ``set`` / ``skip`` / ``swap`` /
+``note`` / ``unresolved-set`` / ``duration`` — see its own docstring for the
+load-first inversion that is the whole point of that function.
+
 Contract (deliberately loose — the templates are heterogeneous):
 
 - Never raises, never blocks entry: unparseable text still returns ``{"raw"}``
@@ -187,3 +196,221 @@ def parse_prescription(text):
     for segment in re.split(r",|@", first_line):
         _classify_segment(segment, out)
     return out
+
+
+# ---------------------------------------------------------------------------
+# parse_performed — the *performed* side (5a, parse-at-commit-plan.md §3)
+# ---------------------------------------------------------------------------
+
+# A bare, unit-less, non-decimal load over this many digits' worth of value
+# is treated as an implausible fat-finger (e.g. ``2255`` from a doubled
+# keystroke on ``225``) rather than a real single-exercise load, so it fails
+# to resolve into a set — see ``_load_is_plausible``.
+_MAX_BARE_LOAD = 999
+
+# Keyword heuristic for the swap-vs-note split (§3): a swap is typically a
+# bare exercise name (``DB pullover``, ``R SL L glute max``); a note reads
+# like a sentence/comment (``felt tight``, ``paired with lat hang``). The
+# plan gives examples, not a grammar, so this is a best-effort word list, not
+# a formal rule.
+_NOTE_SIGNAL_WORDS = {
+    "felt",
+    "feels",
+    "feeling",
+    "paired",
+    "note",
+    "notes",
+    "comment",
+    "comments",
+    "with",
+    "instead",
+    "sore",
+    "tired",
+    "good",
+    "bad",
+    "easy",
+    "hard",
+    "tight",
+    "rough",
+    "great",
+    "ok",
+    "okay",
+}
+
+
+def _load_is_plausible(token):
+    """Guard against a digit run masquerading as a load (``2255x5``).
+
+    ``_LOAD`` is deliberately permissive (any digit run). A bare, unit-less,
+    non-decimal number over ``_MAX_BARE_LOAD`` is almost certainly a
+    mistyped duplicate keystroke rather than a real single-exercise load —
+    percent/lbs/kg-suffixed and decimal loads are exempt (their notation
+    already disambiguates intent), as is the ``bw`` literal.
+    """
+    match = _LOAD.match(token.strip())
+    if not match:
+        return False
+    number, unit = match.groups()
+    if number is None:  # the ``bw`` branch
+        return True
+    if unit or "." in number:
+        return True
+    return int(number) <= _MAX_BARE_LOAD
+
+
+def _looks_like_set_attempt(segment):
+    """Does ``segment`` have the *shape* of a logging attempt (§8)?
+
+    Used only after every real parse route has failed — a digit alongside
+    an ``x``/``×``/``@`` operator, or something that structurally matches
+    ``_LOAD`` on its own (an implausible bare number), reads as a fat-finger
+    rather than prose/a swap, so it warns instead of silently falling to
+    ``swap``/``note``.
+    """
+    if not re.search(r"\d", segment):
+        return False
+    if re.search(r"[x×@]", segment, re.IGNORECASE):
+        return True
+    return bool(_LOAD.match(segment.strip()))
+
+
+def _looks_like_note(segment):
+    """Best-effort note-vs-swap split — see ``_NOTE_SIGNAL_WORDS``."""
+    words = re.findall(r"[a-z']+", segment.lower())
+    return any(word in _NOTE_SIGNAL_WORDS for word in words)
+
+
+def _try_at_form(head):
+    """``5 @ 225`` — reps-at-load, the new operator for performed text."""
+    parts = re.split(r"\s*@\s*", head, maxsplit=1)
+    if len(parts) != 2:
+        return None
+    reps_token, load_token = parts[0].strip(), parts[1].strip()
+    if not reps_token or not load_token:
+        return None
+    if not _LOAD.match(load_token) or not _load_is_plausible(load_token):
+        return None
+    out = {}
+    _classify_reps(reps_token, out)
+    if "reps" not in out and "reps_range" not in out:
+        return None
+    out["load"] = load_token.replace(" ", "")
+    return out
+
+
+def _try_load_first(head):
+    """``225 x 5`` / ``30lbs x 8 each`` — load × reps, load claimed FIRST.
+
+    This is the inversion vs. ``parse_prescription``: there, ``_SETS_X``
+    claims a leading integer-then-``x`` as *sets* before this shape is ever
+    tried. Here it is tried first, so ``225 x 5`` resolves to
+    ``load="225", reps=5`` instead of ``sets=225``.
+    """
+    parts = re.split(r"\s*[x×]\s*", head, maxsplit=1)
+    if len(parts) != 2:
+        return None
+    left, right = parts[0].strip(), parts[1].strip()
+    if not left or not right:
+        return None
+    if not _LOAD.match(left) or not _load_is_plausible(left):
+        return None
+    out = {"load": left.replace(" ", "")}
+    _classify_reps(right, out)
+    return out
+
+
+def _classify_performed_head(head):
+    """Best-effort classification of the line's first (only) recognized set.
+
+    Tries, in order: the ``@`` form, the load-first ``x`` form, then a bare
+    load with no operator at all (``225`` — a partial set, load only). Returns
+    ``None`` when none resolve, leaving the caller to decide between
+    ``unresolved-set``/``swap``/``note``.
+    """
+    result = _try_at_form(head)
+    if result is not None:
+        return result
+    result = _try_load_first(head)
+    if result is not None:
+        return result
+    if _LOAD.match(head) and _load_is_plausible(head):
+        return {"load": head.replace(" ", "")}
+    return None
+
+
+def parse_performed(text):
+    """Derive best-effort structure from what an athlete typed into a cell.
+
+    Total function — never raises, parity with ``parse_prescription``.
+    Returns ``None`` for empty/whitespace text, else a dict always carrying
+    ``raw`` (the stripped text) plus ``kind``, one of:
+
+    - ``"set"`` — a recognized load/reps (``{load?, reps?, reps_range?,
+      unit?, rpe?}``), a `LoggedSet` candidate.
+    - ``"skip"`` — the freeform skip convention (``skip`` / ``-`` / ``—``).
+    - ``"swap"`` — a substitute exercise name typed in place of a set.
+    - ``"note"`` — prose/commentary, not a logging attempt.
+
+      The ``swap``/``note`` split is a **best-effort keyword heuristic**
+      (``_NOTE_SIGNAL_WORDS``), not a grammar — the plan gives examples only.
+      In 5a the two are **behaviourally identical** (no set, no warn), so a
+      misclassification is invisible. Do NOT make this distinction
+      load-bearing without first replacing the word list with a real rule.
+
+    - ``"unresolved-set"`` — text that has the *shape* of a set attempt
+      (digit + ``x``/``×``/``@``) but doesn't resolve; the only kind that
+      should warn (§8) — everything else is a successful classification.
+    - ``"duration"`` — a bare timed cell (``30s``, ``20-60m``), not a lift.
+
+    **Load-first is the whole point** (plan §3): unlike ``parse_prescription``
+    (where a leading ``N x M`` is *sets*), here it's *load × reps* — reused
+    verbatim are the ``_LOAD``/``_REPS``/``_RPE``/``_DURATION`` token regexes,
+    plus the ``@`` operator (``5 @ 225``) and a swap/note branch for
+    non-numeric text.
+
+    **One set per line.** Only the line's first recognized set is returned;
+    a later comma segment is only ever read for a trailing RPE (``225 x 5,
+    RPE 8``). Multi-set-per-line text (``225x5, 230x3``) is explicitly OUT
+    OF SCOPE — the second set is silently dropped, not an error.
+    """
+    if text is None:
+        return None
+    raw = str(text).strip()
+    if not raw:
+        return None
+
+    first_line = raw.splitlines()[0].strip()
+    lowered = first_line.lower()
+
+    if lowered in ("skip", "skipped", "-", "—"):
+        return {"kind": "skip", "raw": raw}
+
+    duration = _DURATION.match(first_line)
+    if duration:
+        return {
+            "kind": "duration",
+            "raw": raw,
+            "duration": first_line.replace(" ", ""),
+        }
+
+    segments = first_line.split(",")
+    head = segments[0].strip()
+    out = _classify_performed_head(head)
+
+    if out is not None:
+        for segment in segments[1:]:
+            segment = segment.strip().rstrip(".")
+            rpe = _RPE.match(segment)
+            if rpe:
+                out.setdefault("rpe", re.sub(r"\s*", "", rpe.group(1)))
+        out["kind"] = "set"
+        out["raw"] = raw
+        return out
+
+    if _looks_like_set_attempt(first_line):
+        return {"kind": "unresolved-set", "raw": raw, "warn": True}
+
+    if _looks_like_note(first_line):
+        return {"kind": "note", "raw": raw}
+
+    return {"kind": "swap", "raw": raw}
