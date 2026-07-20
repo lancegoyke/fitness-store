@@ -82,6 +82,7 @@ from .models import SessionLog
 from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
+from .parsing import parse_performed
 from .personal_records import new_records_in
 from .serializers import current_week
 from .serializers import first_live_week
@@ -1385,9 +1386,14 @@ def athlete_log_session(request, pk):
         # a since-deleted/hidden/skipped cell — or one orphaned by an old hard
         # delete — is history, not draft state; wiping it here would silently
         # destroy the athlete's record on their next save (e.g. a row the coach
-        # marked skipped after the athlete already logged it).
+        # marked skipped after the athlete already logged it). ``source_line__
+        # isnull=True`` scopes this delete to the STRUCTURED logger's own rows —
+        # a parsed set's ``prescription`` is also a trainable line-0 cell, so
+        # without this a "Save progress" would silently wipe every freeform-
+        # parsed set (5a, docs/meso/parse-at-commit-plan.md §5).
         log.sets.filter(
-            prescription_id__in=[p.pk for p in session.trainable_cells()]
+            prescription_id__in=[p.pk for p in session.trainable_cells()],
+            source_line__isnull=True,
         ).delete()
         LoggedSet.objects.bulk_create(
             [
@@ -1549,6 +1555,10 @@ def athlete_cell_write(request, pk):
         cell.athlete_authored = True
         cell.save(update_fields=["text", "athlete_authored"])
         _touch_plan(plan)
+        # Parse-at-commit (5a): derive a silent, structured LoggedSet from the
+        # text just committed above. Defensively wrapped inside the helper — a
+        # parse/upsert problem is logged and swallowed, never surfaced here.
+        _upsert_parsed_set(session, request.user, line_zero[exercise_id], cell)
     return JsonResponse(
         {
             "ok": True,
@@ -1561,6 +1571,73 @@ def athlete_cell_write(request, pk):
             },
         }
     )
+
+
+def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
+    """Parse ``cell``'s just-committed text and upsert its derivative ``LoggedSet``.
+
+    Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §5): the freeform
+    sub-line stays the athlete's source of truth; this derives a silent,
+    machine-readable ``LoggedSet`` alongside it, scoped to ``(session_log,
+    source_line=cell)`` so a re-blur deletes-then-recreates rather than
+    appending. A blank/unparseable/skip/swap/note/duration cell just runs the
+    delete — mirroring "blank clears the cell".
+
+    A blur is a draft, not a completion: a newly created ``SessionLog`` is
+    left at its default ``PENDING`` status, and an existing log's status is
+    never touched here, so a DONE log is never downgraded.
+
+    **Tolerance guard (non-negotiable):** ``cell.save`` already committed the
+    raw text before this runs. The entire parse+upsert is wrapped so ANY
+    unexpected error is logged and swallowed — the athlete's text is never
+    lost and the response never turns into a 4xx/5xx over a parse problem.
+    ``parse_performed`` is itself total (never raises), so this is
+    belt-and-suspenders against everything else in the upsert (DB errors,
+    future parser changes, etc).
+
+    The inner ``transaction.atomic()`` is **load-bearing, not decorative**.
+    This runs inside the caller's atomic block, and a *database* error marks
+    the whole transaction ``needs_rollback`` — merely catching it would NOT
+    save us: the outer block would still roll back on exit and take the
+    already-committed ``cell.save`` with it, losing the athlete's text (the
+    exact thing this guard exists to prevent). The nested block is a
+    savepoint, so a DB failure here rolls back only the upsert and leaves the
+    cell write intact.
+    """
+    try:
+        with transaction.atomic():  # savepoint — see the docstring
+            log = (
+                SessionLog.objects.filter(session=session, athlete=athlete)
+                .order_by("-created_at")
+                .first()
+            )
+            if log is None:
+                log = SessionLog.objects.create(session=session, athlete=athlete)
+
+            parsed = parse_performed(cell.text)
+            log.sets.filter(source_line=cell).delete()
+            if (
+                parsed
+                and parsed.get("kind") == "set"
+                and (parsed.get("reps") or parsed.get("load"))
+            ):
+                LoggedSet.objects.create(
+                    session_log=log,
+                    prescription=line_zero_cell,
+                    source_line=cell,
+                    set_number=1,
+                    reps=str(parsed.get("reps", "")),
+                    load=str(parsed.get("load", "")),
+                    rpe=str(parsed.get("rpe", "")),
+                )
+    except Exception:
+        logger.exception(
+            "parse-at-commit: failed to upsert a LoggedSet for cell %s "
+            "(session=%s, athlete=%s); the cell's text was preserved.",
+            cell.pk,
+            session.pk,
+            athlete.pk,
+        )
 
 
 def _clean_logged_sets(raw_sets, session):

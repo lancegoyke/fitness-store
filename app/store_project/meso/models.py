@@ -2221,6 +2221,24 @@ class LoggedSet(models.Model):
     reps = models.CharField(_("Reps"), max_length=32, blank=True)
     load = models.CharField(_("Load"), max_length=32, blank=True)
     rpe = models.CharField(_("RPE"), max_length=32, blank=True)
+    # Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §4). Points at the
+    # athlete-authored sub-line cell (line >= 1) whose freeform text
+    # ``parse_performed`` classified into this set. NULL = a structured-logger
+    # origin (``athlete_log_session``). Triple duty: discriminator (the
+    # structured logger's delete scopes around parsed rows), de-dup link
+    # (presenters suppress one display channel), and idempotency key
+    # (``(session_log, source_line)`` — a re-blur deletes-then-recreates rather
+    # than appending). SET_NULL on a hard-deleted sub-line intentionally
+    # orphans the set as structured-origin-like (it survives, ``prescription``
+    # still points at line-0).
+    source_line = models.ForeignKey(
+        Prescription,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="parsed_sets",
+        verbose_name=_("Source line"),
+    )
 
     class Meta:
         ordering = ["set_number"]
