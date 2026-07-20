@@ -807,22 +807,28 @@ class TestSkippedRowsDoNotLog:
         assert not LoggedSet.objects.filter(source_line=cell).exists()
         assert resp.json()["new_records"] == []
 
-    def test_skipping_a_row_clears_a_set_already_derived_from_it(self, client):
+    def test_a_stale_blur_on_a_skipped_row_preserves_the_existing_set(self, client):
+        """Skip + a stale blur must not become data loss.
+
+        This assertion used to be the opposite — that the next blur cleared the
+        set — which contradicted `prescription_skip`'s deliberate preservation
+        of earned history. A skipped row is READ-ONLY to the blur path: it mints
+        nothing new and destroys nothing old.
+        """
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
         cell = sub_cell(s.squat, 1)
-        assert LoggedSet.objects.filter(source_line=cell).exists()
 
         s.squat.skipped = True
         s.squat.save(update_fields=["skipped"])
 
-        # The next blur runs the delete but recreates nothing.
-        write_cell(client, s.session, s.squat, 1, "225 x 5")
-        assert not LoggedSet.objects.filter(source_line=cell).exists()
+        # The athlete's open page fires one more blur.
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.status_code == 200
 
-
-# -- Codex review round 3 ------------------------------------------------------
+        row = LoggedSet.objects.get(source_line=cell)
+        assert (row.load, row.reps) == ("225", "5")
 
 
 class TestDoneSubjectsCompareAgainstSettledHistory:
@@ -903,12 +909,11 @@ class TestPersistedOneRmTracksItsSet:
         after = AthleteOneRm.objects.get(pk=before.pk)
         assert after.value == before.value
 
-    def test_skipping_a_row_refreshes_its_lift_despite_trainable_cells(self, client):
-        """`trainable_cells()` excludes skipped rows — the refresh must not.
+    def test_skipping_a_row_leaves_its_one_rm_standing(self, client):
+        """Nothing is deleted on skip, so the estimate has nothing to lose.
 
-        Skipping is precisely when the parsed set gets stripped, so scoping the
-        refresh to trainable cells would leave that lift's estimate standing on
-        a set that no longer exists.
+        The inverse of this ran while a blur on a skipped row stripped the set.
+        It doesn't: the performance survives, so its 1RM must too.
         """
         from store_project.meso.models import AthleteOneRm
 
@@ -919,13 +924,13 @@ class TestPersistedOneRmTracksItsSet:
         log.status = SessionLog.Status.DONE
         log.save(update_fields=["status"])
         write_cell(client, s.session, s.squat, 1, "315 x 5")
-        assert AthleteOneRm.objects.filter(athlete=s.athlete, value__gt=0).exists()
+        before = AthleteOneRm.objects.get(athlete=s.athlete)
 
         s.squat.skipped = True
         s.squat.save(update_fields=["skipped"])
         write_cell(client, s.session, s.squat, 1, "315 x 5")
 
-        assert not AthleteOneRm.objects.filter(athlete=s.athlete, value__gt=0).exists()
+        assert AthleteOneRm.objects.get(pk=before.pk).value == before.value
 
 
 # -- Codex review round 4 ------------------------------------------------------
@@ -1274,3 +1279,45 @@ class TestVisibilityAndDeleteScopeAgree:
             )
         )
         assert remaining == ["235"], remaining
+
+
+class TestParsedSetsGetDistinctSetNumbers:
+    def test_each_sub_line_takes_its_own_set_number(self, client):
+        """All-set-1 collapsed under `(prescription, set_number)`.
+
+        Invisible while suppressed, but once a reclaim surfaced them two
+        tracking lines rendered and reposted as ONE set, and results labelled
+        both "set 1".
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        write_cell(client, s.session, s.squat, 2, "235 x 3")
+
+        rows = LoggedSet.objects.filter(prescription=s.squat).order_by("set_number")
+        assert [(r.set_number, r.load) for r in rows] == [(1, "225"), (2, "235")]
+
+    def test_a_reblur_keeps_the_same_number(self, client):
+        # Idempotent: the number comes from the line, not a running count.
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 2, "235 x 3")
+        write_cell(client, s.session, s.squat, 2, "240 x 2")
+
+        row = LoggedSet.objects.get(prescription=s.squat)
+        assert (row.set_number, row.load) == (2, "240")
+
+    def test_both_survive_and_stay_distinct_after_a_reclaim(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        write_cell(client, s.session, s.squat, 2, "235 x 3")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder", line=1)
+        reclaim(client, s, text="and again", line=2)
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        loads = sorted(r["load"] for r in row["set_rows"] if r["load"])
+        assert loads == ["225", "235"], loads

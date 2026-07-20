@@ -1698,6 +1698,24 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
                     session=session, athlete=athlete, date=timezone.localdate()
                 )
 
+            # A skipped row is READ-ONLY to this path, not just un-writable.
+            # The create guard below already declines to mint a set for one, but
+            # letting the delete still run turned "coach skips a row" plus "the
+            # athlete's open page fires one more blur" into data loss —
+            # contradicting `prescription_skip`, which deliberately preserves
+            # work the athlete already did. Bail before touching anything; the
+            # cell's text is saved either way.
+
+            # A skipped row is READ-ONLY to this path, not just un-writable.
+            # The create guard below already declines to mint a set for one, but
+            # letting the delete still run turned "coach skips a row" plus "the
+            # athlete's open page fires one more blur" into data loss —
+            # contradicting `prescription_skip`, which deliberately preserves
+            # work the athlete already did. Bail before touching anything; the
+            # cell's text is saved either way.
+            if line_zero_cell.skipped:
+                return []
+
             # What this cell held before, so an unchanged re-blur can be told
             # apart from a real edit (see the toast filter below).
             previous = log.sets.filter(source_line=cell).first()
@@ -1729,7 +1747,16 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
                         session_log=log,
                         prescription=line_zero_cell,
                         source_line=cell,
-                        set_number=1,
+                        # The sub-line's own position, NOT a constant 1. Every
+                        # parsed row landing on set 1 was invisible while they
+                        # stayed suppressed, but structured surfaces collapse by
+                        # (prescription, set_number) — so once reclaim made them
+                        # visible, two tracking lines showed and reposted as one
+                        # set, and results labelled both "set 1". Line numbers
+                        # are 1-based and capped below MAX_LOGGED_SET_NUMBER, so
+                        # they map straight across, and a re-blur of the same
+                        # line keeps the same number (idempotent).
+                        set_number=cell.line,
                         **values,
                     )
                     unchanged = previous_values == (
@@ -1754,11 +1781,13 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
             # Gated on DONE because derivation is DONE-only by design; a PENDING
             # log has nothing to promote yet (5b's settle does that).
             if log.status == SessionLog.Status.DONE:
-                # `trainable_cells()` excludes SKIPPED rows — but skipping is
-                # exactly when the delete above strips a set the persisted 1RM
-                # was derived from, so scoping the refresh to trainable cells
-                # alone would leave that lift's estimate standing on a set that
-                # no longer exists. Always include this cell's own lift.
+                # Always include this cell's own lift. `trainable_cells()` is a
+                # session-wide list that can omit the very row just edited, and
+                # the refresh has to cover the lift whose sets actually changed.
+                # (This originally guarded the skipped case, where the delete
+                # stripped a set from a non-trainable row; a skipped row is now
+                # read-only to this path, but the belt-and-braces include is
+                # still correct and costs one list append.)
                 cells = list(session.trainable_cells())
                 if not any(c.pk == line_zero_cell.pk for c in cells):
                     cells.append(line_zero_cell)
