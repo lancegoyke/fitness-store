@@ -1564,9 +1564,13 @@ def athlete_cell_write(request, pk):
         return HttpResponseBadRequest("text is too long.")
 
     with transaction.atomic():
-        cell, _created = Prescription.objects.get_or_create(
+        cell, created_cell = Prescription.objects.get_or_create(
             exercise_slot=slot, week=session.week, line=line
         )
+        # Whose line was this BEFORE this write? The blur path stamps
+        # `athlete_authored=True` unconditionally, which erases the answer, so
+        # capture it first. A brand-new cell is the athlete's by construction.
+        was_athlete_authored = created_cell or cell.athlete_authored
         cell.text = text
         cell.athlete_authored = True
         cell.save(update_fields=["text", "athlete_authored"])
@@ -1577,7 +1581,11 @@ def athlete_cell_write(request, pk):
         # The return is the optimistic-PR-toast payload (§7) — empty on any
         # failure, never raises.
         new_records = _upsert_parsed_set(
-            session, request.user, line_zero[exercise_id], cell
+            session,
+            request.user,
+            line_zero[exercise_id],
+            cell,
+            was_athlete_authored=was_athlete_authored,
         )
     return JsonResponse(
         {
@@ -1605,7 +1613,9 @@ def athlete_cell_write(request, pk):
     )
 
 
-def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
+def _upsert_parsed_set(
+    session, athlete, line_zero_cell, cell, *, was_athlete_authored=True
+):
     """Parse ``cell``'s just-committed text and upsert its derivative ``LoggedSet``.
 
     Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §5): the freeform
@@ -1656,6 +1666,37 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
             # more likely than before, because now EVERY blur can create the
             # log. The lock is a no-op on SQLite (which serializes writers
             # anyway) and does the real work on Postgres.
+            # Both guards run BEFORE anything is read or written. Placed after
+            # the log lookup they still prevented the set, but the log had
+            # already been created — leaving the empty PENDING row that reads as
+            # activity everywhere (see `_reap_empty_pending_log`).
+            #
+            # This line wasn't the athlete's before this write — it was the
+            # coach's, either an original cue or one they reclaimed. Two things
+            # go wrong if we proceed:
+            #
+            #   * the template posts on EVERY blur, so a coach cue that happens
+            #     to read like a set (`225 x 5`) gets stamped athlete-authored
+            #     and fabricates a pending LoggedSet and a PR from coach text
+            #     the athlete never performed;
+            #   * a reclaimed line's set is VISIBLE and owned by the structured
+            #     logger, so the delete below would destroy real history — and
+            #     refresh away a DONE 1RM — just because the athlete tapped it.
+            #
+            # Own nothing we didn't already own. The text still saves.
+            if not was_athlete_authored:
+                return []
+
+            # A skipped row is READ-ONLY to this path, not just un-writable.
+            # The create guard below already declines to mint a set for one, but
+            # letting the delete still run turned "coach skips a row" plus "the
+            # athlete's open page fires one more blur" into data loss —
+            # contradicting `prescription_skip`, which deliberately preserves
+            # work the athlete already did. Bail before touching anything; the
+            # cell's text is saved either way.
+            if line_zero_cell.skipped:
+                return []
+
             Session.objects.select_for_update().filter(pk=session.pk).first()
 
             parsed = parse_performed(cell.text)
@@ -1697,24 +1738,6 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
                 log = SessionLog.objects.create(
                     session=session, athlete=athlete, date=timezone.localdate()
                 )
-
-            # A skipped row is READ-ONLY to this path, not just un-writable.
-            # The create guard below already declines to mint a set for one, but
-            # letting the delete still run turned "coach skips a row" plus "the
-            # athlete's open page fires one more blur" into data loss —
-            # contradicting `prescription_skip`, which deliberately preserves
-            # work the athlete already did. Bail before touching anything; the
-            # cell's text is saved either way.
-
-            # A skipped row is READ-ONLY to this path, not just un-writable.
-            # The create guard below already declines to mint a set for one, but
-            # letting the delete still run turned "coach skips a row" plus "the
-            # athlete's open page fires one more blur" into data loss —
-            # contradicting `prescription_skip`, which deliberately preserves
-            # work the athlete already did. Bail before touching anything; the
-            # cell's text is saved either way.
-            if line_zero_cell.skipped:
-                return []
 
             # What this cell held before, so an unchanged re-blur can be told
             # apart from a real edit (see the toast filter below).

@@ -1321,3 +1321,61 @@ class TestParsedSetsGetDistinctSetNumbers:
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
         loads = sorted(r["load"] for r in row["set_rows"] if r["load"])
         assert loads == ["225", "235"], loads
+
+
+class TestTheBlurPathOwnsOnlyAthleteLines:
+    def test_a_coach_cue_that_reads_like_a_set_is_not_logged(self, client):
+        """The template posts on EVERY blur, including untouched coach text.
+
+        A coach cue reading `225 x 5` would otherwise be stamped
+        athlete-authored and fabricate a pending LoggedSet — and a PR — for a
+        performance the athlete never did.
+        """
+        s = seed()
+        # A coach-authored sub-line, not the athlete's.
+        coach_line = Prescription.objects.create(
+            exercise_slot=s.squat.exercise_slot,
+            week=s.week,
+            line=1,
+            text="225 x 5",
+            athlete_authored=False,
+        )
+
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        assert resp.status_code == 200
+        assert resp.json()["new_records"] == []
+        assert not LoggedSet.objects.filter(source_line=coach_line).exists()
+        assert not SessionLog.objects.filter(session=s.session).exists()
+
+    def test_blurring_a_reclaimed_line_does_not_destroy_its_set(self, client):
+        """A reclaimed set is the logger's history — not the blur path's to drop.
+
+        Merely tapping the cue the coach left behind would otherwise delete the
+        athlete's real performance and refresh away a DONE 1RM with it.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        # The athlete taps the reclaimed line.
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "brace harder")
+        assert resp.status_code == 200
+
+        row = LoggedSet.objects.get(source_line=cell)
+        assert (row.load, row.reps) == ("225", "5")
+
+    def test_a_brand_new_line_is_the_athletes_own(self, client):
+        # The guard must not block the normal case: a line the athlete creates.
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        assert resp.status_code == 200
+        assert LoggedSet.objects.filter(source_line=sub_cell(s.squat, 1)).exists()
