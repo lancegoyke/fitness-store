@@ -489,7 +489,7 @@ def parse_performed(text):
 MAX_LOGGED_FIELD = 32
 
 
-def cell_should_warn(text):
+def cell_should_warn(text, *, loggable=True):
     """Derive-on-read ``warn`` (5a, plan §8): should this cell be tinted?
 
     A tiny wrapper around ``parse_performed`` shared by every surface that
@@ -503,10 +503,12 @@ def cell_should_warn(text):
     1. ``unresolved-set`` — text shaped like a logging attempt that won't
        resolve (``225 x``). ``skip``/``swap``/``note``/``duration`` and an empty
        cell are all successful classifications and never warn.
-    2. a set that resolves but is TOO LONG to store. The upsert declines to
-       write a value past ``MAX_LOGGED_FIELD``, and reporting no warning there
-       left the athlete looking at valid-looking text that silently never
-       counted toward their records.
+    2. a set that resolves but WON'T BE STORED. Either it is too long — the
+       upsert declines a value past ``MAX_LOGGED_FIELD`` — or ``loggable`` is
+       False because the row isn't accepting sets at all (the coach skipped it
+       while the athlete had the page open). Both cases used to report no
+       warning, leaving the athlete looking at ordinary-looking text that
+       silently never counted toward their records.
     """
     parsed = parse_performed(text)
     if not parsed:
@@ -515,6 +517,8 @@ def cell_should_warn(text):
         return True
     if parsed.get("kind") != "set":
         return False
+    if not loggable:
+        return True
     return any(
         len(value) > MAX_LOGGED_FIELD
         for value in (

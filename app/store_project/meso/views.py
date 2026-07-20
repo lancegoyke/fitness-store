@@ -1669,7 +1669,13 @@ def athlete_cell_write(request, pk):
                 # Derive-on-read warn (5a, plan §8) — re-classified from the
                 # just-committed text so a re-blur that fixes a fat-fingered
                 # set attempt clears the warning without a page reload.
-                "warn": cell_should_warn(cell.text),
+                # `loggable` carries the one reason the TEXT can't reveal: a
+                # skipped row accepts no sets, so set-shaped text on a stale
+                # page is saved but never logged, and saying nothing would let
+                # the athlete believe it counted.
+                "warn": cell_should_warn(
+                    cell.text, loggable=not line_zero[exercise_id].skipped
+                ),
             },
             # Optimistic PR toast (5a, plan §7): any lift this parsed set just
             # beat the athlete's current LIVE best on — mirrors

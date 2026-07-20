@@ -1497,7 +1497,11 @@ def athlete_session(session, athlete):
     ``session`` is already athlete-scoped by the view; this formats
     the prescribed grid into set-input rows, pre-filled from the athlete's own
     most-recent ``SessionLog``, and reports its done status. Cells are read via
-    ``session.cells()`` (P0 fixed-lineup cutover), already live-filtered.
+    ``session.trainable_cells()`` (P0 fixed-lineup cutover) — live AND
+    non-skipped, so a skipped row is never presented to the athlete as
+    loggable. (The docstring said ``session.cells()``; the code has used
+    ``trainable_cells()`` since, and the difference matters: it is why a skipped
+    row needs no warn handling on reload, only in the cell-write response.)
     """
     log = (
         SessionLog.objects.filter(session=session, athlete=athlete)

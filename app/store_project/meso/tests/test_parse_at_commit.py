@@ -1779,3 +1779,40 @@ class TestRestoringAReclaimedLineDoesNotDuplicate:
             )
         )
         assert loads == ["225", "230"]
+
+
+class TestASkippedRowTellsTheAthleteItDidNotLog:
+    def test_set_text_on_a_skipped_row_warns(self, client):
+        """The stale-page case the skip guard exists for, from the athlete's side.
+
+        The guard correctly refuses to log, but the response derived `warn` from
+        the text alone — which is perfectly valid — so the athlete was told
+        nothing while their work was excluded from records.
+        """
+        s = seed()
+        s.squat.skipped = True
+        s.squat.save(update_fields=["skipped"])
+
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        assert resp.status_code == 200
+        assert resp.json()["cell"]["warn"] is True
+        assert sub_cell(s.squat, 1).text == "225 x 5"
+        assert not LoggedSet.objects.exists()
+
+    def test_a_note_on_a_skipped_row_does_not_warn(self, client):
+        # Only set-shaped text is making a claim that could go unmet.
+        s = seed()
+        s.squat.skipped = True
+        s.squat.save(update_fields=["skipped"])
+
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "felt tight")
+        assert resp.json()["cell"]["warn"] is False
+
+    def test_set_text_on_a_live_row_still_does_not_warn(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.json()["cell"]["warn"] is False
