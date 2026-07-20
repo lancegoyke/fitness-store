@@ -1,6 +1,14 @@
 # Meso — rename top-nav "Coaching" → "Meso"
 
-Status: **PLANNED** — not started. Tracking issue: [#390](https://github.com/lancegoyke/fitness-store/issues/390).
+Status: **COMPLETE** — shipped 2026-07-01 in
+[#391](https://github.com/lancegoyke/fitness-store/pull/391) (`64c9df3`).
+Tracking issue: [#390](https://github.com/lancegoyke/fitness-store/issues/390) (closed).
+
+> **Doc-accuracy note.** This plan sat at "PLANNED — not started" until 2026-07-20,
+> three weeks after the work actually shipped. A later audit that trusted the status
+> line nearly re-did the rename. The nav has read **Meso** since `64c9df3`; the only
+> surviving "Coaching" strings are the two this plan explicitly scoped out (the
+> `landing.html` marketing eyebrow and the `TestStartCoaching` class name).
 
 ## Why
 
