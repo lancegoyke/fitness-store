@@ -1733,23 +1733,12 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
                         created.rpe,
                     )
 
-            # A log that now holds nothing says nothing — but `_scroll_hint`,
-            # `_athlete_default_plan_id` and `serialize_recent_logs` all read ANY
-            # SessionLog as activity, so a mistyped entry the athlete then
-            # cleared would go on moving their last-trained week forever. Scoped
-            # to the correction path: only when THIS call emptied it (there was
-            # a parsed set, there is none now), and only for a PENDING log with
-            # no notes. A DONE log, a log with notes, or one the structured
-            # logger opened on its own is never touched here.
-
-            if (
-                previous is not None
-                and created is None
-                and log.status == SessionLog.Status.PENDING
-                and not (log.notes or "").strip()
-                and not log.sets.exists()
-            ):
-                log.delete()
+            # This blur left no set on the cell, so the log may now hold
+            # nothing. An earlier version scoped this to "there WAS a set before"
+            # — too narrow: a first blur whose values overrun the column limits
+            # creates the log, then declines to insert, and left an empty one
+            # behind. The invariant is simply that an empty log is noise.
+            if created is None and _reap_empty_pending_log(log):
                 return []
 
             # Editing a cell on an already-DONE log changes the very sets the
@@ -3509,6 +3498,29 @@ def _json_object_body(request):
     return payload, None
 
 
+def _reap_empty_pending_log(log):
+    """Delete ``log`` if it now holds nothing at all. Returns whether it went.
+
+    ``_scroll_hint``, ``_athlete_default_plan_id`` and ``serialize_recent_logs``
+    all read ANY ``SessionLog`` as athlete activity, so a log with no sets and no
+    notes is not harmless — it keeps moving the athlete's last-trained week and
+    polluting recent-log grounding, for work that was mistyped and cleared, or
+    never landed at all.
+
+    Only PENDING, only with no notes, only with no remaining sets. A DONE log is
+    a finished performance and is never reaped, and neither is one carrying the
+    athlete's notes — those hold information even with zero sets.
+    """
+    if (
+        log.status != SessionLog.Status.PENDING
+        or (log.notes or "").strip()
+        or log.sets.exists()
+    ):
+        return False
+    log.delete()
+    return True
+
+
 def _drop_parsed_sets(doomed_qs, unit):
     """Delete derived (parse-at-commit) sets and repair any 1RM they propped up.
 
@@ -3539,6 +3551,18 @@ def _drop_parsed_sets(doomed_qs, unit):
         by_athlete.setdefault(s.session_log.athlete, []).append(s.prescription)
     for athlete, prescriptions in by_athlete.items():
         meso_one_rm.refresh_one_rms(athlete, prescriptions, unit)
+
+    # Reclaiming the only parsed sub-line of a draft can empty its log outright,
+    # and an empty log still reads as activity everywhere. Same reaping the
+    # athlete's own blanking blur does — the log shouldn't survive just because
+    # it was the coach who removed the last set.
+    for log in {s.session_log_id: s.session_log for s in doomed}.values():
+        _reap_empty_pending_log(log)
+
+    # Reclaiming the only parsed sub-line of a draft can empty its log outright,
+    # and an empty log still reads as activity everywhere. Same reaping the
+    # athlete's own blanking blur does — the log shouldn't survive just because
+    # it was the coach who removed the last set.
 
 
 @login_required

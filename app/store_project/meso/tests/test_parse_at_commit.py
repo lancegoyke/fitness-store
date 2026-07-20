@@ -1095,3 +1095,62 @@ class TestOverlongParsedValuesDoNotCorruptState:
         assert cell.text == text
         # The stale set is gone rather than silently preserved.
         assert not LoggedSet.objects.filter(source_line=cell).exists()
+
+
+# -- Codex review round 10 -----------------------------------------------------
+
+
+class TestEmptyLogsAreReapedOnEveryPath:
+    def test_a_coach_reclaim_reaps_the_emptied_draft_log(self, client):
+        """The log shouldn't survive just because the COACH removed the last set."""
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert SessionLog.objects.filter(session=s.session).exists()
+
+        client.force_login(s.coach)
+        client.post(
+            reverse(
+                "meso:api_cell_line_write",
+                kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot.pk},
+            ),
+            data=json.dumps({"week_id": s.week.pk, "line": 1, "text": "brace harder"}),
+            content_type="application/json",
+        )
+
+        assert not SessionLog.objects.filter(session=s.session).exists()
+
+    def test_a_reclaim_leaves_a_log_that_still_has_sets(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        write_cell(client, s.session, s.rdl, 1, "185 x 8")
+
+        client.force_login(s.coach)
+        client.post(
+            reverse(
+                "meso:api_cell_line_write",
+                kwargs={"plan_id": s.plan.pk, "slot_id": s.squat.exercise_slot.pk},
+            ),
+            data=json.dumps({"week_id": s.week.pk, "line": 1, "text": "brace harder"}),
+            content_type="application/json",
+        )
+
+        assert the_log(s.session, s.athlete).sets.count() == 1
+
+    def test_a_first_blur_with_overlong_values_leaves_no_log(self, client):
+        """The log is created before the length guard declines to insert.
+
+        `previous` is None on a first blur, so the earlier correction-path-only
+        cleanup didn't run and malformed input still registered as activity.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+
+        text = "1." + "0" * 35 + " x 5"
+        assert parse_performed(text)["kind"] == "set"
+
+        resp = write_cell(client, s.session, s.squat, 1, text)
+        assert resp.status_code == 200
+        assert sub_cell(s.squat, 1).text == text
+        assert not SessionLog.objects.filter(session=s.session).exists()
