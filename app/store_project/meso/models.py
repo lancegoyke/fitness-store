@@ -2234,6 +2234,37 @@ def parsed_set_is_hidden(logged_set):
     )
 
 
+def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
+    """Should this athlete sub-line be tinted (5a §8)?
+
+    Three reasons, and every surface has to give the same answer or the tint
+    flickers — the cell-write response clearing it only for a reload to put it
+    back:
+
+    1. the text is shaped like a set attempt but won't resolve (``225 x``);
+    2. it resolves but can't be stored — too long, or ``loggable`` is False
+       because the row isn't accepting sets at all;
+    3. it resolves and SHOULD have a row, but none exists. Asking after the row
+       covers every cause at once (skipped when typed and later unskipped, a
+       coach line that was never parsed, a database error the tolerance guard
+       swallowed) where checking any single cause covers only that one.
+
+    ``backing_sets`` lets a caller pass rows it already has in memory; without
+    it the row is looked up. Reuses ``parsed_set_is_hidden``, so "backed by its
+    own line" means one thing across the slice.
+    """
+    if parsing.cell_should_warn(cell.text, loggable=loggable):
+        return True
+    if not parsing.performed_is_set(cell.text):
+        return False
+    rows = (
+        backing_sets
+        if backing_sets is not None
+        else LoggedSet.objects.filter(source_line=cell).select_related("source_line")
+    )
+    return not any(parsed_set_is_hidden(row) for row in rows)
+
+
 class LoggedSet(models.Model):
     """A single set the athlete logged against a prescription."""
 

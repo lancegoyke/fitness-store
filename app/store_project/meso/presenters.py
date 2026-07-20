@@ -33,10 +33,9 @@ from .models import TourEvent
 from .models import Week
 from .models import WeekDelivery
 from .models import parsed_set_is_hidden
+from .models import sub_line_should_warn
 from .one_rm import key_str
 from .one_rm import one_rm_values
-from .parsing import cell_should_warn
-from .parsing import performed_is_set
 from .personal_records import new_records_in
 from .personal_records import personal_records
 from .serializers import _fmt_num
@@ -1542,11 +1541,9 @@ def athlete_session(session, athlete):
     # Sub-lines whose text is currently backed by a parsed set — i.e. the row
     # exists AND still matches what the line says. Reuses the same predicate the
     # suppression rule uses, so "displayed by its line" means one thing here.
-    lines_with_a_parsed_set = {
-        row.source_line_id
-        for row in (log.sets.all() if log else ())
-        if parsed_set_is_hidden(row)
-    }
+    sets_by_line = {}
+    for row in log.sets.all() if log else ():
+        sets_by_line.setdefault(row.source_line_id, []).append(row)
 
     def _sub_lines(slot_id):
         # The row's editable tracking stack (Phase 4a): its line>=1 cells for
@@ -1569,12 +1566,8 @@ def athlete_session(session, athlete):
             {
                 "line": line_cell.line,
                 "text": line_cell.text,
-                "warn": (
-                    cell_should_warn(line_cell.text)
-                    or (
-                        performed_is_set(line_cell.text)
-                        and line_cell.pk not in lines_with_a_parsed_set
-                    )
+                "warn": sub_line_should_warn(
+                    line_cell, backing_sets=sets_by_line.get(line_cell.pk, ())
                 ),
             }
             for line_cell in lines_by_slot.get(slot_id, ())

@@ -1858,3 +1858,79 @@ class TestUnskippingDoesNotSilenceTheWarning:
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
         assert row["sub_lines"][0]["warn"] is False
+
+
+class TestTheResponseAgreesWithTheReload:
+    def test_an_unlogged_coach_set_line_warns_in_the_response(self, client):
+        """The response and the presenter must give the same answer.
+
+        A coach cue reading `225 x 5` has no backing row (nothing parses coach
+        text), so the presenter warns. The response used a different rule and
+        said warn=false, so the tint cleared on blur and reappeared on reload.
+        """
+        s = seed()
+        Prescription.objects.create(
+            exercise_slot=s.squat.exercise_slot,
+            week=s.week,
+            line=1,
+            text="225 x 5",
+            athlete_authored=False,
+        )
+
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.json()["cell"]["warn"] is True
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert row["sub_lines"][0]["warn"] is True
+
+    def test_a_logged_set_agrees_the_other_way(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.json()["cell"]["warn"] is False
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert row["sub_lines"][0]["warn"] is False
+
+
+class TestSkippedStateIsReadUnderTheLock:
+    def test_a_stale_line_zero_instance_does_not_mint_a_set(self, client):
+        """`line_zero` is built BEFORE the transaction opens.
+
+        A coach committing a skip mid-blur leaves that pre-transaction instance
+        saying `skipped=False`, so the guard waved through a set for a row that
+        is now skipped — the stale-page case it exists to block. Driven at the
+        helper, because the staleness lives in the gap between the view's read
+        and its transaction, which a request-level test can't open.
+        """
+        from store_project.meso.views import _upsert_parsed_set
+
+        s = seed()
+        client.force_login(s.athlete)
+        cell = Prescription.objects.create(
+            exercise_slot=s.squat.exercise_slot,
+            week=s.week,
+            line=1,
+            text="225 x 5",
+            athlete_authored=True,
+        )
+
+        # The in-memory instance still believes the row is live...
+        stale_line_zero = Prescription.objects.get(pk=s.squat.pk)
+        assert stale_line_zero.skipped is False
+        # ...while the coach's skip has already committed.
+        Prescription.objects.filter(pk=s.squat.pk).update(skipped=True)
+
+        from django.db import transaction
+
+        with transaction.atomic():
+            _upsert_parsed_set(
+                s.session, s.athlete, stale_line_zero, cell, previous_text=""
+            )
+
+        assert not LoggedSet.objects.exists(), (
+            "a set was minted for a row the coach had already skipped"
+        )

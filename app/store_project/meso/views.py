@@ -84,7 +84,7 @@ from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
 from .models import parsed_set_is_hidden
-from .parsing import cell_should_warn
+from .models import sub_line_should_warn
 from .parsing import parse_performed
 from .parsing import performed_reps_text
 from .personal_records import new_records_in
@@ -1673,8 +1673,11 @@ def athlete_cell_write(request, pk):
                 # skipped row accepts no sets, so set-shaped text on a stale
                 # page is saved but never logged, and saying nothing would let
                 # the athlete believe it counted.
-                "warn": cell_should_warn(
-                    cell.text, loggable=not line_zero[exercise_id].skipped
+                # Same rule the presenter applies, so the tint can't clear
+                # here only to come back on reload. `loggable` carries the one
+                # reason the text can't reveal: a skipped row accepts no sets.
+                "warn": sub_line_should_warn(
+                    cell, loggable=not line_zero[exercise_id].skipped
                 ),
             },
             # Optimistic PR toast (5a, plan §7): any lift this parsed set just
@@ -1744,6 +1747,20 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
             # cell's text is saved either way.
             if line_zero_cell.skipped:
                 return []
+
+            # Re-read the line-0 cell UNDER A ROW LOCK. `line_zero` was built
+            # before the transaction, and the session lock doesn't help here —
+            # `prescription_skip` never touches the session row, so a coach
+            # toggling skip mid-blur left this instance saying False and the
+            # guard below minted a set for a row that is now skipped, which is
+            # the exact stale-page case it exists to block. Locking the
+            # Prescription makes that UPDATE wait for this transaction.
+            line_zero_cell = (
+                Prescription.objects.select_for_update()
+                .filter(pk=line_zero_cell.pk)
+                .first()
+                or line_zero_cell
+            )
 
             parsed = parse_performed(cell.text)
             # A skipped line-0 cell is not trainable: athlete surfaces don't
