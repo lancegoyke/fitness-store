@@ -1570,6 +1570,22 @@ def athlete_cell_write(request, pk):
         return HttpResponseBadRequest("text is too long.")
 
     with transaction.atomic():
+        # Serialize the WHOLE write on the session row, before anything is read.
+        #
+        # `(session, athlete)` has no uniqueness, so two overlapping blurs can
+        # each see no SessionLog and create one, splitting a workout across two
+        # logs — every later read takes only the newest, so the sets stranded on
+        # the older one vanish from DONE coach results and the 1RM refresh.
+        #
+        # The lock has to sit ABOVE the `previous_text` read, not inside the
+        # upsert: two writes for the same sub-line (two tabs, an offline retry)
+        # could otherwise both read the old text, and the later one would judge
+        # the row the earlier one just created against stale text, find nothing
+        # of "its own" to replace, and append a duplicate. The client-side
+        # promise chain orders one page's saves; only this orders the server.
+        #
+        # A no-op on SQLite (which serializes writers anyway), real on Postgres.
+        Session.objects.select_for_update().filter(pk=session.pk).first()
         cell, created_cell = Prescription.objects.get_or_create(
             exercise_slot=slot, week=session.week, line=line
         )
@@ -1682,16 +1698,6 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
     new_records = []
     try:
         with transaction.atomic():  # savepoint — see the docstring
-            # Serialize the fetch-or-create on the session row. `(session,
-            # athlete)` has no uniqueness, so two overlapping first writes —
-            # two sub-line blurs, or a blur racing the full log save — can both
-            # see `log is None` and each create one. That splits a single
-            # workout across two logs, and since every later read takes only the
-            # NEWEST, the parsed sets stranded on the older one silently vanish
-            # from DONE coach results and the 1RM refresh. 5a makes this far
-            # more likely than before, because now EVERY blur can create the
-            # log. The lock is a no-op on SQLite (which serializes writers
-            # anyway) and does the real work on Postgres.
             # This guard runs BEFORE anything is read or written. Placed after
             # the log lookup it still prevented the set, but the log had already
             # been created — leaving the empty PENDING row that reads as
@@ -1706,8 +1712,6 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
             # cell's text is saved either way.
             if line_zero_cell.skipped:
                 return []
-
-            Session.objects.select_for_update().filter(pk=session.pk).first()
 
             parsed = parse_performed(cell.text)
             # A skipped line-0 cell is not trainable: athlete surfaces don't
@@ -1790,20 +1794,34 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                 # while the response cheerfully reported warn=false. Better to
                 # store nothing: the athlete's text is kept either way.
                 if all(len(values[f]) <= limit for f, limit in LOG_SET_FIELDS.items()):
+                    # The sub-line's own position, NOT a constant 1. Every
+                    # parsed row landing on set 1 was invisible while they
+                    # stayed suppressed, but structured surfaces collapse by
+                    # (prescription, set_number) — so once reclaim made them
+                    # visible, two tracking lines showed and reposted as one
+                    # set, and results labelled both "set 1".
+                    #
+                    # ...but the line's number can already be taken, by history
+                    # this same line left behind: a reclaimed set is preserved,
+                    # and a new set typed on that line would otherwise collide
+                    # with it, and collapse the moment a second reclaim made
+                    # both visible. Fall through to the next free number. The
+                    # rows being replaced are already deleted above, so an
+                    # ordinary re-blur finds its own number free and keeps it
+                    # (idempotent).
+                    taken = set(
+                        log.sets.filter(prescription=line_zero_cell).values_list(
+                            "set_number", flat=True
+                        )
+                    )
+                    number = cell.line
+                    while number in taken:
+                        number += 1
                     created = LoggedSet.objects.create(
                         session_log=log,
                         prescription=line_zero_cell,
                         source_line=cell,
-                        # The sub-line's own position, NOT a constant 1. Every
-                        # parsed row landing on set 1 was invisible while they
-                        # stayed suppressed, but structured surfaces collapse by
-                        # (prescription, set_number) — so once reclaim made them
-                        # visible, two tracking lines showed and reposted as one
-                        # set, and results labelled both "set 1". Line numbers
-                        # are 1-based and capped below MAX_LOGGED_SET_NUMBER, so
-                        # they map straight across, and a re-blur of the same
-                        # line keeps the same number (idempotent).
-                        set_number=cell.line,
+                        set_number=number,
                         **values,
                     )
                     unchanged = previous_values == (

@@ -1576,3 +1576,53 @@ class TestEditingAReclaimedLineKeepsItsHistory:
         rows = LoggedSet.objects.filter(prescription=s.squat)
         assert rows.count() == 1
         assert rows.first().load == "230"
+
+
+class TestSetNumbersStayDistinctAcrossReclaims:
+    def test_history_and_a_new_set_on_one_line_get_different_numbers(self, client):
+        """A line's preserved history already occupies its number.
+
+        Both rows taking `cell.line` collapsed under (prescription, set_number)
+        the moment a second reclaim made them both visible — `athlete_session`
+        would drop one from its dict, and the next structured save could delete
+        both while reposting only one.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "230 x 3")
+
+        rows = LoggedSet.objects.filter(prescription=s.squat).order_by("set_number")
+        assert [(r.set_number, r.load) for r in rows] == [(1, "225"), (2, "230")]
+
+    def test_both_render_after_a_second_reclaim(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "230 x 3")
+        client.force_login(s.coach)
+        reclaim(client, s, text="and again")
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        loads = sorted(r["load"] for r in row["set_rows"] if r["load"])
+        assert loads == ["225", "230"], loads
+
+    def test_an_ordinary_reblur_keeps_its_line_number(self, client):
+        # The boundary: nothing else holds the number, so it stays stable.
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 2, "235 x 3")
+        write_cell(client, s.session, s.squat, 2, "240 x 2")
+
+        row = LoggedSet.objects.get(prescription=s.squat)
+        assert (row.set_number, row.load) == (2, "240")
