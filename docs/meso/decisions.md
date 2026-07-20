@@ -52,8 +52,13 @@ The store already has a sellable `Program` product; a Meso plan is a different t
 exist if programs are versioned.)
 
 - **Rec:** distinct from store `Program`; full hierarchy; yes to draft/published versioning + a `ProposedChange` entity (load-bearing for the agent + review gate).
-- **Status:** 🟡 Proposed (architect's call once B1/B2 land).
-- **Decision:** _tbd_
+- **Status:** ✅ Decided (settled in build form, Phase 2 2026-06-27; recorded here 2026-07-20).
+- **Decision:** **Distinct entities, full hierarchy** — a Meso plan is separate from the
+  sellable store `Program`. Draft/active/archived status lives on `Plan`. **No separate
+  `ProposedChange` entity** was built; the agent slice covers proposals via
+  `AgentProposal`/batch instead. Note the hierarchy has since been reshaped by the
+  fixed-selection work to `SessionSlot → ExerciseSlot → Prescription` (cell) — see
+  [`../archive/meso/fixed-selection-plan.md`](../archive/meso/fixed-selection-plan.md).
 
 ### B4 · Exercise source — catalog FK, free text, or hybrid?
 There's an `exercises` app with videos + alternatives. The prototype lets a coach type any
@@ -75,8 +80,12 @@ Every interactive screen is ephemeral client state today. To persist, pick a for
 designer grid). Shapes how all five screens get wired; hard to reverse.
 
 - **Rec:** htmx for roster/profile/review/deliver/results; a small JSON-autosave endpoint for the designer grid specifically. Don't adopt DRF wholesale unless the athlete app forces it.
-- **Status:** 🟡 Proposed (architect's call; depends on B2).
-- **Decision:** _tbd_
+- **Status:** ✅ Decided (settled in build form 2026-06-27; recorded here 2026-07-20).
+- **Decision:** **Per the recommendation** — htmx server-rendered partials for
+  roster/profile/review/deliver/results, with JSON endpoints for the designer grid.
+  DRF was not adopted. The designer has since become a React island (`MesoTable`) over
+  those JSON endpoints — see
+  [`../archive/meso/designer-framework-plan.md`](../archive/meso/designer-framework-plan.md).
 
 ### B6 · The agent — architecture, grounding, guardrails, execution.
 Provider is **Claude** (project standing guidance). Real decisions:
