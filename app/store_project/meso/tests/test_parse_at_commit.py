@@ -32,6 +32,7 @@ from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
 from store_project.meso.models import Prescription
 from store_project.meso.models import SessionLog
+from store_project.meso.parsing import parse_performed
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
 from store_project.users.factories import UserFactory
@@ -1011,3 +1012,86 @@ class TestAnUnchangedReblurDoesNotRecelebrate:
         write_cell(client, s.session, s.squat, 1, "225 x 5")
         better = write_cell(client, s.session, s.squat, 1, "315 x 5")
         assert better.json()["new_records"]
+
+
+# -- Codex review round 9 ------------------------------------------------------
+
+
+class TestClearingACellCleansUpAnEmptyLog:
+    def test_blanking_the_only_parsed_set_removes_the_empty_pending_log(self, client):
+        """A cleared mistype must not keep counting as training activity.
+
+        Round 8 stopped an empty blur from CREATING a log; this is the other
+        half — a log created by a real set, then emptied. `_scroll_hint`,
+        `_athlete_default_plan_id` and `serialize_recent_logs` read any
+        SessionLog as activity, so the leftover row moved the athlete's
+        last-trained week forever.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert SessionLog.objects.filter(session=s.session).exists()
+
+        write_cell(client, s.session, s.squat, 1, "")
+        assert not SessionLog.objects.filter(session=s.session).exists()
+
+    def test_a_log_with_other_sets_survives(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        write_cell(client, s.session, s.rdl, 1, "185 x 8")
+
+        write_cell(client, s.session, s.squat, 1, "")
+        log = the_log(s.session, s.athlete)
+        assert log.sets.count() == 1
+
+    def test_a_log_with_notes_survives(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        log = the_log(s.session, s.athlete)
+        log.notes = "tweaked my back"
+        log.save(update_fields=["notes"])
+
+        write_cell(client, s.session, s.squat, 1, "")
+        assert SessionLog.objects.filter(pk=log.pk).exists()
+
+    def test_a_done_log_survives(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        log = the_log(s.session, s.athlete)
+        log.status = SessionLog.Status.DONE
+        log.save(update_fields=["status"])
+
+        write_cell(client, s.session, s.squat, 1, "")
+        assert SessionLog.objects.filter(pk=log.pk).exists()
+
+
+class TestOverlongParsedValuesDoNotCorruptState:
+    def test_an_overlong_load_stores_nothing_and_keeps_the_text(self, client):
+        """A value past the column length raises on Postgres INSIDE the savepoint.
+
+        The guard would swallow it and roll the DELETE back with it, leaving the
+        OLD set counting while the response reported warn=false. Bounding the
+        fields first means we simply store nothing.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        # A long DECIMAL, deliberately: a long bare integer is already rejected
+        # by `_load_is_plausible` (>999), so it never reaches the create and
+        # would exercise nothing. Decimals are exempt from that guard, so this
+        # is a genuine `set` whose load is 37 chars — past the 32-char column.
+        long_load = "1." + "0" * 35
+        text = f"{long_load} x 5"
+        assert parse_performed(text)["kind"] == "set", "must reach the create"
+
+        resp = write_cell(client, s.session, s.squat, 1, text)
+        assert resp.status_code == 200
+
+        cell = sub_cell(s.squat, 1)
+        assert cell.text == text
+        # The stale set is gone rather than silently preserved.
+        assert not LoggedSet.objects.filter(source_line=cell).exists()

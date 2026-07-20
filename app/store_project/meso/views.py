@@ -1704,24 +1704,53 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
             created = None
             unchanged = False
             if wants_set:
-                created = LoggedSet.objects.create(
-                    session_log=log,
-                    prescription=line_zero_cell,
-                    source_line=cell,
-                    set_number=1,
+                values = {
                     # NOT `parsed["reps"]` — a set's right-hand side lands in
                     # one of four keys, and reading only `reps` blanked every
                     # range (`225 x 5-8`), timed set (`225 x 30s`) and AMRAP,
                     # rendering them `— @ 225` in coach results.
-                    reps=performed_reps_text(parsed),
-                    load=str(parsed.get("load", "")),
-                    rpe=str(parsed.get("rpe", "")),
-                )
-                unchanged = previous_values == (
-                    created.reps,
-                    created.load,
-                    created.rpe,
-                )
+                    "reps": performed_reps_text(parsed),
+                    "load": str(parsed.get("load", "")),
+                    "rpe": str(parsed.get("rpe", "")),
+                }
+                # Bound the fields the same way the structured logger does. A
+                # parsed value longer than the column raises on Postgres, and
+                # since we're inside the savepoint the guard would swallow it
+                # and roll the DELETE back too — leaving the OLD set counting
+                # while the response cheerfully reported warn=false. Better to
+                # store nothing: the athlete's text is kept either way.
+                if all(len(values[f]) <= limit for f, limit in LOG_SET_FIELDS.items()):
+                    created = LoggedSet.objects.create(
+                        session_log=log,
+                        prescription=line_zero_cell,
+                        source_line=cell,
+                        set_number=1,
+                        **values,
+                    )
+                    unchanged = previous_values == (
+                        created.reps,
+                        created.load,
+                        created.rpe,
+                    )
+
+            # A log that now holds nothing says nothing — but `_scroll_hint`,
+            # `_athlete_default_plan_id` and `serialize_recent_logs` all read ANY
+            # SessionLog as activity, so a mistyped entry the athlete then
+            # cleared would go on moving their last-trained week forever. Scoped
+            # to the correction path: only when THIS call emptied it (there was
+            # a parsed set, there is none now), and only for a PENDING log with
+            # no notes. A DONE log, a log with notes, or one the structured
+            # logger opened on its own is never touched here.
+
+            if (
+                previous is not None
+                and created is None
+                and log.status == SessionLog.Status.PENDING
+                and not (log.notes or "").strip()
+                and not log.sets.exists()
+            ):
+                log.delete()
+                return []
 
             # Editing a cell on an already-DONE log changes the very sets the
             # persisted AthleteOneRm is derived from, so it has to be recomputed
