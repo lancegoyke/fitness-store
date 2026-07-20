@@ -1515,3 +1515,64 @@ class TestVisibilityFollowsTheDisplayedText:
         returned = log_post(client, s.session, {"status": "pending", "sets": []}).json()
         assert returned["log"]["sets"] == []
         assert LoggedSet.objects.filter(source_line=cell).count() == 1
+
+
+class TestEditingAReclaimedLineKeepsItsHistory:
+    """A reclaim hands the set to the logger; the blur path stops owning it.
+
+    Rounds 17-18 stopped an UNCHANGED blur from destroying it. A genuine edit
+    still did: the delete was keyed on `source_line`, so typing a note over the
+    coach's cue erased a performance the athlete had already earned.
+    """
+
+    @pytest.mark.parametrize("new_text", ["felt tight", "", "230 x 3"])
+    def test_the_old_performance_survives_any_edit(self, client, new_text):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, new_text)
+        assert resp.status_code == 200
+
+        loads = sorted(
+            LoggedSet.objects.filter(prescription=s.squat).values_list(
+                "load", flat=True
+            )
+        )
+        assert "225" in loads, (
+            f"editing the reclaimed line to {new_text!r} erased the athlete's "
+            "earlier performance"
+        )
+
+    def test_a_new_set_on_a_reclaimed_line_is_added_not_swapped(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "230 x 3")
+
+        loads = sorted(
+            LoggedSet.objects.filter(prescription=s.squat).values_list(
+                "load", flat=True
+            )
+        )
+        assert loads == ["225", "230"], loads
+
+    def test_a_normal_reblur_still_replaces(self, client):
+        """The boundary: on a line the athlete owns, edits replace as before."""
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        write_cell(client, s.session, s.squat, 1, "230 x 3")
+
+        rows = LoggedSet.objects.filter(prescription=s.squat)
+        assert rows.count() == 1
+        assert rows.first().load == "230"

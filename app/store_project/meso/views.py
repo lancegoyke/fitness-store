@@ -46,6 +46,7 @@ from store_project.notifications.emails import send_coach_request_email
 from . import adherence as meso_adherence
 from . import demo as meso_demo
 from . import one_rm as meso_one_rm
+from . import parsing
 from . import presenters
 from . import push as meso_push
 from . import sandbox as meso_sandbox
@@ -1586,6 +1587,10 @@ def athlete_cell_write(request, pk):
         # Authorship follows actual authorship: a blur that changes nothing on a
         # line the athlete doesn't own is a no-op, full stop. A genuine edit
         # still claims the line (and re-parses it) as before.
+        # What this line was DISPLAYING before this write. The upsert needs it to
+        # tell its own rows — the ones this line was showing — from history
+        # handed to the structured logger by a reclaim.
+        previous_text = "" if created_cell else cell.text
         untouched_coach_line = (
             not created_cell and not cell.athlete_authored and cell.text == text
         )
@@ -1602,7 +1607,13 @@ def athlete_cell_write(request, pk):
         new_records = (
             []
             if untouched_coach_line
-            else _upsert_parsed_set(session, request.user, line_zero[exercise_id], cell)
+            else _upsert_parsed_set(
+                session,
+                request.user,
+                line_zero[exercise_id],
+                cell,
+                previous_text=previous_text,
+            )
         )
     return JsonResponse(
         {
@@ -1630,7 +1641,7 @@ def athlete_cell_write(request, pk):
     )
 
 
-def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
+def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=""):
     """Parse ``cell``'s just-committed text and upsert its derivative ``LoggedSet``.
 
     Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §5): the freeform
@@ -1738,13 +1749,27 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell):
                     session=session, athlete=athlete, date=timezone.localdate()
                 )
 
+            # Replace only the rows THIS LINE WAS SHOWING. A set the line no
+            # longer displays was handed to the structured logger by a reclaim
+            # and is now visible history — the athlete editing this line to a
+            # note, a blank, or a different set must not erase a performance
+            # they already earned. Judged against `previous_text`, not the text
+            # just saved: under the NEW text a normal re-blur's own row looks
+            # unrelated too, and sparing it would append instead of replace.
+            mine = [
+                row
+                for row in log.sets.filter(source_line=cell)
+                if parsing.performed_text_shows(
+                    previous_text, reps=row.reps, load=row.load, rpe=row.rpe
+                )
+            ]
             # What this cell held before, so an unchanged re-blur can be told
             # apart from a real edit (see the toast filter below).
-            previous = log.sets.filter(source_line=cell).first()
+            previous = mine[0] if mine else None
             previous_values = (
                 (previous.reps, previous.load, previous.rpe) if previous else None
             )
-            log.sets.filter(source_line=cell).delete()
+            log.sets.filter(pk__in=[row.pk for row in mine]).delete()
 
             created = None
             unchanged = False
