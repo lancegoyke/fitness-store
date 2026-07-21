@@ -1612,6 +1612,23 @@ def athlete_cell_write(request, pk):
         #
         # A no-op on SQLite (which serializes writers anyway), real on Postgres.
         Session.objects.select_for_update().filter(pk=session.pk).first()
+
+        # Lock the line-0 row NOW, before `_touch_plan` takes the Plan lock.
+        # `prescription_skip` locks this same Prescription and then touches the
+        # plan; if this path took the Plan lock first (via `_touch_plan`) and
+        # the Prescription second (via the upsert's re-read), the two would hold
+        # each other's next lock and deadlock on Postgres — a 500 for the very
+        # stale-page skip race the upsert is meant to handle. Taking Prescription
+        # before Plan here matches `prescription_skip`'s order, so one simply
+        # waits for the other. It also hands the upsert the already-fresh row.
+        locked_line_zero = (
+            Prescription.objects.select_for_update()
+            .filter(pk=line_zero[exercise_id].pk)
+            .first()
+        )
+        if locked_line_zero is not None:
+            line_zero[exercise_id] = locked_line_zero
+
         cell, created_cell = Prescription.objects.get_or_create(
             exercise_slot=slot, week=session.week, line=line
         )
