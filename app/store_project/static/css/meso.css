@@ -207,9 +207,9 @@ button.meso-card,
   background: var(--surface);
 }
 /* Parse-at-commit warn (5a, docs/meso/parse-at-commit-plan.md §8): a sub-line
-   cell whose text looks like a fat-fingered set attempt but didn't resolve
-   into a set. Derived on read (no stored flag) — see `parsing.is_unresolved_set`
-   and `_sub_lines` in presenters.py. The text is never rejected, only tinted.
+   cell whose text looks like a set attempt but won't be logged. Derived on read
+   (no stored flag) — see `models.sub_line_should_warn` (and `parsing
+   .cell_should_warn`) and `_sub_lines` in presenters.py. Never rejected, tinted.
 
    Set via --cell-line/--cell-bg, NOT border-color/background: the sub-line
    input declares those two properties inline, and an inline declaration beats

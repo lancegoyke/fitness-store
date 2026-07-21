@@ -1612,23 +1612,6 @@ def athlete_cell_write(request, pk):
         #
         # A no-op on SQLite (which serializes writers anyway), real on Postgres.
         Session.objects.select_for_update().filter(pk=session.pk).first()
-
-        # Lock the line-0 row NOW, before `_touch_plan` takes the Plan lock.
-        # `prescription_skip` locks this same Prescription and then touches the
-        # plan; if this path took the Plan lock first (via `_touch_plan`) and
-        # the Prescription second (via the upsert's re-read), the two would hold
-        # each other's next lock and deadlock on Postgres — a 500 for the very
-        # stale-page skip race the upsert is meant to handle. Taking Prescription
-        # before Plan here matches `prescription_skip`'s order, so one simply
-        # waits for the other. It also hands the upsert the already-fresh row.
-        locked_line_zero = (
-            Prescription.objects.select_for_update()
-            .filter(pk=line_zero[exercise_id].pk)
-            .first()
-        )
-        if locked_line_zero is not None:
-            line_zero[exercise_id] = locked_line_zero
-
         cell, created_cell = Prescription.objects.get_or_create(
             exercise_slot=slot, week=session.week, line=line
         )
@@ -1657,6 +1640,16 @@ def athlete_cell_write(request, pk):
             cell.text = text
             cell.athlete_authored = True
             cell.save(update_fields=["text", "athlete_authored"])
+            # LOCK ORDER — load-bearing. `_touch_plan` locks the Plan row;
+            # `_upsert_parsed_set` below locks the line-0 Prescription (its
+            # re-read is `select_for_update`). Plan MUST be taken first, because
+            # `prescription_skip` locks Plan (`record_plan_action`,
+            # history.py) then that same Prescription (`cell.save`). A coach
+            # skip racing an athlete blur on the same row deadlocks on Postgres
+            # if the two disagree on order — so never move the Prescription lock
+            # ahead of this `_touch_plan`. (This is exactly what a review round
+            # got wrong: `prescription_skip` is Plan→Prescription, not the
+            # reverse.)
             _touch_plan(plan)
         # Parse-at-commit (5a): derive a silent, structured LoggedSet from the
         # text just committed above. Defensively wrapped inside the helper — a
@@ -3847,9 +3840,12 @@ def cell_line_write(request, plan_id, slot_id):
         # data". Deleting it here (an earlier attempt) lost the record with no
         # way back; detaching it (a later one) made it look like a structured
         # row, so the logger's own delete then wiped it on the next save. The
-        # set simply stays as it is: flipping `athlete_authored` above is
-        # enough, because the no-double-display suppression keys on THAT flag,
-        # so the performance starts rendering again on its own.
+        # set simply stays as it is: overwriting the text above is enough,
+        # because the no-double-display suppression (`parsed_set_is_hidden`)
+        # asks whether the source line still SHOWS this performance — it
+        # re-parses the cell text, it does NOT read `athlete_authored` — so once
+        # the coach's text no longer matches the set, it starts rendering again
+        # on its own.
         _touch_plan(plan)
     return JsonResponse(
         {
