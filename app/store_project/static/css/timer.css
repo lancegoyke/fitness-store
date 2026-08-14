@@ -153,15 +153,25 @@ progress.rest {
   accent-color: #e74c3c;
 }
 
+/* Two real columns, shared by every row, so the controls line up as a column.
+   `flex: 1` could not do that: with `box-sizing: border-box` a zero flex basis
+   is floored at the item's own padding + border, so each control came out wider
+   than half its row by exactly its own padding -- and a `<select>` reserves
+   34px on the right for the chevron against the number input's 12px, which put
+   the selects 11px wider and 11px further left. A grid track is sized by the
+   track, not by what sits in it. */
 .field {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: center;
   gap: 1rem;
   width: 100%;
 }
 
+/* Grid items floor at min-content too, and a number input asks for ~226px --
+   enough to blow the column open (and the label's share shut) on a phone. */
 .field > * {
-  flex: 1;
+  min-width: 0;
 }
 
 .field > label {
@@ -169,7 +179,7 @@ progress.rest {
 }
 
 /* `.field` is declared after `.hidden` at the same specificity, so its
-   `display: flex` would otherwise win and the hidden fields would still show. */
+   `display: grid` would otherwise win and the hidden fields would still show. */
 .field.hidden {
   display: none;
 }
@@ -193,14 +203,14 @@ progress.rest {
   border-color: var(--accent);
 }
 
+/* Same story one row down: Start carries no border and Reset carries 2px, so as
+   flex items they came out 2px apart. Equal columns instead -- which also lands
+   them under the label / control columns above. */
 .buttons {
-  display: flex;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 1rem;
-  justify-content: center;
-}
-
-.buttons * {
-  flex: 1;
 }
 
 .button.reset {
