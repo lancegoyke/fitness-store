@@ -57,9 +57,9 @@ function stampTimeline(mode, segments) {
 
 // Everything left to play after `previous`, cut from the given settings.
 // Segments with no duration are skipped, so a rest of 0 collapses into a
-// straight repeat. `previous` is the segment already under way: only its round
-// number and phase matter here, because the round it belongs to may still owe
-// a rest before the next round can start.
+// straight repeat. `previous` describes the round already under way: which
+// number it carries, and whether it still owes a rest before the next round
+// can start.
 function segmentsAfter(previous, config) {
   const { mode, rounds, workSeconds, restSeconds, intervalSeconds } = config;
   const segments = [];
@@ -75,9 +75,9 @@ function segmentsAfter(previous, config) {
     return segments;
   }
 
-  // A round in its work phase still owes its rest -- unless it is now the last
-  // round, where the trailing rest is dropped so the workout ends on work.
-  if (previous.kind === "work" && previous.round < rounds) {
+  // Pay off the rest the round under way still owes -- unless it is now the
+  // last round, where the trailing rest is dropped so the workout ends on work.
+  if (previous.owesRest && previous.round < rounds) {
     push(previous.round, "rest", restSeconds);
   }
   for (let round = previous.round + 1; round <= rounds; round++) {
@@ -88,13 +88,13 @@ function segmentsAfter(previous, config) {
 }
 
 // Compile the form's settings into a timeline. A fresh workout is just
-// "everything after a round zero that has already had its rest" -- sharing one
-// cut with reviseTimeline below, so a workout can't come out shaped one way on
-// Start and another way after an edit.
+// "everything after a round zero that owes nothing" -- sharing one cut with
+// reviseTimeline below, so a workout can't come out shaped one way on Start
+// and another way after an edit.
 function buildTimeline(config) {
   return stampTimeline(
     config.mode,
-    segmentsAfter({ round: 0, kind: "rest" }, config)
+    segmentsAfter({ round: 0, owesRest: false }, config)
   );
 }
 
@@ -104,14 +104,12 @@ function buildTimeline(config) {
 // and the new settings take over from the next segment on. Nothing at or
 // before the clock ever moves, so an edit can't drop the athlete into a
 // different part of the workout -- the rounds already banked stay banked, and
-// the round in progress plays out as it was started.
+// the round in progress plays out as it was started, from its first second on.
 function reviseTimeline(timeline, position, config) {
   const current = segmentAt(timeline, position);
 
-  // Nothing under way -- the workout has finished, or has yet to play its
-  // first second (the prep countdown is still running). No round to protect,
-  // so the edit lands whole.
-  if (!current || position <= 0) return buildTimeline(config);
+  // The workout is over: no round left to protect, so the edit lands whole.
+  if (!current) return buildTimeline(config);
 
   const played = timeline.segments.slice(
     0,
@@ -120,7 +118,16 @@ function reviseTimeline(timeline, position, config) {
 
   return stampTimeline(config.mode, [
     ...played.map((segment) => ({ ...segment })),
-    ...segmentsAfter(current, config),
+    // An EMOM cycle is a whole round, self-paced work and its own rest in one
+    // segment -- so unlike a work/rest work phase, it owes nothing on the way
+    // out and the next round starts clean.
+    ...segmentsAfter(
+      {
+        round: current.round,
+        owesRest: timeline.mode !== MODE_EMOM && current.kind === "work",
+      },
+      config
+    ),
   ]);
 }
 
@@ -337,14 +344,21 @@ function initTimer() {
     if (!form.checkValidity()) return;
 
     const position = clockPosition();
-    timeline = reviseTimeline(timeline, position, readConfig());
+
+    // While the prep countdown still owes seconds -- ticking, or paused
+    // mid-count -- not one second of the workout has been played, so there is
+    // no round to protect and the edit lands whole. It also still owns the
+    // face: painting the workout's first second over it would swallow the
+    // count. Once it hands over at zero the workout is under way, first second
+    // included, and edits go to the rounds still to come.
+    const counting = prepCounter > 0;
+    timeline = counting
+      ? buildTimeline(readConfig())
+      : reviseTimeline(timeline, position, readConfig());
 
     createProgressBars();
     showTotalRounds();
-    // The prep countdown owns the face until it hands over at zero -- running
-    // or paused mid-count -- and painting the workout's first second over it
-    // would swallow the count.
-    if (!prepCounter) paint(position);
+    if (!counting) paint(position);
   }
 
   function render() {

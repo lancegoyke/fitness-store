@@ -384,18 +384,37 @@ describe("reviseTimeline", () => {
     ]);
   });
 
-  it("rebuilds from scratch before the clock has moved", () => {
-    // Nothing has been played yet -- during the prep countdown, say -- so
-    // there is no round in progress to protect.
+  it("protects the round in progress from its very first second", () => {
+    // The clock sits on second 0 for a whole second before it ticks. Round 1
+    // is under way in that window, not pending -- so it plays out as started.
     const after = reviseTimeline(running(), 0, { ...settings, workSeconds: 45 });
 
-    expect(after).toEqual(buildTimeline({ ...settings, workSeconds: 45 }));
+    expect(shape(after).slice(0, 3)).toEqual([
+      [1, "work", 20],
+      [1, "rest", 10],
+      [2, "work", 45],
+    ]);
   });
 
   it("rebuilds from scratch once the workout is over", () => {
     const after = reviseTimeline(running(), 110, { ...settings, rounds: 2 });
 
     expect(after).toEqual(buildTimeline({ ...settings, rounds: 2 }));
+  });
+
+  it("owes no rest for an EMOM cycle that turns into work / rest", () => {
+    // A cycle is a whole round -- self-paced work and its own rest in one
+    // segment -- so nothing is owed on the way out of it.
+    const after = reviseTimeline(emom({ rounds: 3, intervalSeconds: 60 }), 90, {
+      ...settings,
+      rounds: 3,
+    });
+
+    expect(shape(after)).toEqual([
+      [1, "work", 60],
+      [2, "work", 60], // the cycle under way, unchanged
+      [3, "work", 20], // ...and straight into round 3, no rest wedged in
+    ]);
   });
 
   it("survives an EMOM cycle change without moving the cycle it is in", () => {
@@ -712,6 +731,20 @@ describe("initTimer: running an EMOM", () => {
     vi.advanceTimersByTime(3000 + 12000);
     expect(ui.content.classList.contains("finished")).toBe(true);
     expect(ui.round()).toBe("3");
+  });
+
+  it("protects cycle one during the first second, before the first tick", () => {
+    // The clock sits on second 0 for a whole second after the prep hands over.
+    // Cycle one is under way in that window -- an edit can't shorten it.
+    const ui = startEmom({ rounds: 2, interval: 6, prep: 1 });
+    expect(ui.face()).toBe("00:06");
+
+    ui.set("interval", 2);
+
+    expect(ui.face()).toBe("00:06");
+    vi.advanceTimersByTime(6000); // cycle one runs its full six seconds
+    expect(ui.round()).toBe("2");
+    expect(ui.face()).toBe("00:02");
   });
 
   it("holds the timeline steady while a field is half-typed", () => {
