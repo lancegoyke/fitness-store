@@ -106,6 +106,14 @@ class TimerViewTests(TestCase):
         for element_id in ("mode", "rounds", "work", "rest", "interval", "prep"):
             assert f'id="{element_id}"' in html
 
+    def test_says_the_form_can_be_edited_mid_workout(self):
+        # The form stays live while the clock runs (issue #496), which nothing
+        # about a form makes obvious.
+        html = self.client.get("/timer/").content.decode()
+
+        assert 'id="timer-hint"' in html
+        assert "Editing while the clock runs" in html
+
     def test_offers_the_repeating_emom_type(self):
         html = self.client.get("/timer/").content.decode()
 

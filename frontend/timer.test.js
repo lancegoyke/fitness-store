@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import {
   initTimer,
   buildTimeline,
+  reviseTimeline,
   segmentAt,
   stateAt,
   cueAt,
@@ -264,6 +265,198 @@ describe("cueAt: EMOM", () => {
 });
 
 /*
+ * Editing a workout that is already under way (issue #496). The contract: what
+ * has been played is history and never moves -- neither the rounds behind the
+ * clock nor the one it is standing in -- and the new settings take over from
+ * the next segment on. An edit can therefore never drop the athlete into a
+ * different part of the workout, however hard the numbers change.
+ */
+describe("reviseTimeline", () => {
+  const settings = {
+    mode: "work-rest",
+    rounds: 4,
+    workSeconds: 20,
+    restSeconds: 10,
+    intervalSeconds: 60,
+  };
+  // w1 0-20, r1 20-30, w2 30-50, r2 50-60, w3 60-80, r3 80-90, w4 90-110
+  const running = () => buildTimeline(settings);
+  const shape = (timeline) =>
+    timeline.segments.map((s) => [s.round, s.kind, s.seconds]);
+
+  it("keeps the rounds already played, and the round in progress, intact", () => {
+    const before = running();
+    const position = 65; // five seconds into round 3's work
+
+    const after = reviseTimeline(before, position, {
+      ...settings,
+      restSeconds: 5, // "shorten the rest by five" -- from here on
+    });
+
+    // Same second, same place in the workout: same round, same phase, same
+    // time left on the face. This is the whole point of the exercise.
+    expect(stateAt(after, position)).toEqual(stateAt(before, position));
+    expect(after.segments.slice(0, 5)).toEqual(before.segments.slice(0, 5));
+    expect(shape(after)).toEqual([
+      [1, "work", 20],
+      [1, "rest", 10], // played at the old cadence
+      [2, "work", 20],
+      [2, "rest", 10],
+      [3, "work", 20], // the round in progress -- untouched
+      [3, "rest", 5], // the new cadence starts here
+      [4, "work", 20],
+    ]);
+    expect(after.totalDuration).toBe(105);
+  });
+
+  it("re-cuts from the next round when the clock is mid-rest", () => {
+    const after = reviseTimeline(running(), 25, {
+      ...settings,
+      workSeconds: 45,
+      restSeconds: 5,
+    });
+
+    expect(shape(after)).toEqual([
+      [1, "work", 20],
+      [1, "rest", 10], // still resting in it; it plays out as set
+      [2, "work", 45],
+      [2, "rest", 5],
+      [3, "work", 45],
+      [3, "rest", 5],
+      [4, "work", 45],
+    ]);
+  });
+
+  it("adds rounds on the end without disturbing the ones behind", () => {
+    const after = reviseTimeline(running(), 35, { ...settings, rounds: 6 });
+
+    expect(stateAt(after, 35)).toEqual(stateAt(running(), 35));
+    // Round 4 used to be last, so it had no rest after it. It does now.
+    expect(shape(after).slice(-5)).toEqual([
+      [4, "work", 20],
+      [4, "rest", 10],
+      [5, "work", 20],
+      [5, "rest", 10],
+      [6, "work", 20],
+    ]);
+  });
+
+  it("drops the rounds still to come when the count shrinks", () => {
+    const after = reviseTimeline(running(), 65, { ...settings, rounds: 3 });
+
+    // Round 3 was under way, so it finishes -- without the trailing rest that
+    // only belonged there because a round 4 used to follow.
+    expect(shape(after)).toEqual([
+      [1, "work", 20],
+      [1, "rest", 10],
+      [2, "work", 20],
+      [2, "rest", 10],
+      [3, "work", 20],
+    ]);
+    expect(after.totalDuration).toBe(80);
+    expect(stateAt(after, 80).finished).toBe(true);
+  });
+
+  it("ends after the round in progress when the count drops below it", () => {
+    // Three rounds in, told to do one. The two already banked can't be undone.
+    const after = reviseTimeline(running(), 65, { ...settings, rounds: 1 });
+
+    expect(shape(after).at(-1)).toEqual([3, "work", 20]);
+    expect(after.totalDuration).toBe(80);
+  });
+
+  it("switches timer type from the next round on", () => {
+    const after = reviseTimeline(running(), 35, {
+      ...settings,
+      mode: "emom",
+      intervalSeconds: 90,
+    });
+
+    expect(after.mode).toBe("emom");
+    expect(shape(after)).toEqual([
+      [1, "work", 20],
+      [1, "rest", 10],
+      [2, "work", 20], // the round under way plays out as the work it is
+      // ...but the rest it would have owed is a work/rest idea, and this is
+      // not a work/rest workout any more. Cycles from here.
+      [3, "work", 90],
+      [4, "work", 90],
+    ]);
+  });
+
+  it("protects the round in progress from its very first second", () => {
+    // The clock sits on second 0 for a whole second before it ticks. Round 1
+    // is under way in that window, not pending -- so it plays out as started.
+    const after = reviseTimeline(running(), 0, { ...settings, workSeconds: 45 });
+
+    expect(shape(after).slice(0, 3)).toEqual([
+      [1, "work", 20],
+      [1, "rest", 10],
+      [2, "work", 45],
+    ]);
+  });
+
+  it("rebuilds from scratch once the workout is over", () => {
+    const after = reviseTimeline(running(), 110, { ...settings, rounds: 2 });
+
+    expect(after).toEqual(buildTimeline({ ...settings, rounds: 2 }));
+  });
+
+  it("owes no rest for an EMOM cycle that turns into work / rest", () => {
+    // A cycle is a whole round -- self-paced work and its own rest in one
+    // segment -- so nothing is owed on the way out of it.
+    const after = reviseTimeline(emom({ rounds: 3, intervalSeconds: 60 }), 90, {
+      ...settings,
+      rounds: 3,
+    });
+
+    expect(shape(after)).toEqual([
+      [1, "work", 60],
+      [2, "work", 60], // the cycle under way, unchanged
+      [3, "work", 20], // ...and straight into round 3, no rest wedged in
+    ]);
+  });
+
+  it("keeps that straight through a second edit", () => {
+    // The switched timeline is work / rest now, but the cycle it preserved is
+    // still a cycle. A later edit must not decide, from the timer type it
+    // finds, that the cycle owes a rest after all.
+    const switched = reviseTimeline(
+      emom({ rounds: 3, intervalSeconds: 60 }),
+      90,
+      { ...settings, rounds: 3 }
+    );
+    const again = reviseTimeline(switched, 90, { ...settings, rounds: 4 });
+
+    expect(shape(again)).toEqual([
+      [1, "work", 60],
+      [2, "work", 60], // no rest has crept in behind the round under way
+      [3, "work", 20],
+      [3, "rest", 10],
+      [4, "work", 20],
+    ]);
+  });
+
+  it("survives an EMOM cycle change without moving the cycle it is in", () => {
+    const before = emom({ rounds: 3, intervalSeconds: 60 });
+    const after = reviseTimeline(before, 90, {
+      mode: "emom",
+      rounds: 3,
+      workSeconds: 30,
+      restSeconds: 30,
+      intervalSeconds: 120,
+    });
+
+    expect(stateAt(after, 90)).toEqual(stateAt(before, 90)); // round 2, 30 left
+    expect(shape(after)).toEqual([
+      [1, "work", 60],
+      [2, "work", 60],
+      [3, "work", 120],
+    ]);
+  });
+});
+
+/*
  * The DOM controller, over a fake clock. Mirrors pages/timer.html.
  */
 
@@ -501,16 +694,90 @@ describe("initTimer: running an EMOM", () => {
     expect(ui.startLabel()).toBe("Start");
   });
 
-  it("ignores form edits while the clock is running", () => {
+  it("hands a new cycle length to the cycles still to come", () => {
     const ui = startEmom({ rounds: 2, interval: 4, prep: 1 });
     vi.advanceTimersByTime(1000);
     expect(ui.face()).toBe("00:03");
 
-    ui.set("interval", 60); // second thoughts, mid-cycle
+    ui.set("interval", 10); // second thoughts, mid-cycle
 
     expect(ui.face()).toBe("00:03"); // still on the cycle it started
     vi.advanceTimersByTime(3000);
     expect(ui.round()).toBe("2");
+    expect(ui.face()).toBe("00:10"); // ...and cycle 2 runs on the new one
+  });
+
+  it("adds cycles mid-workout without moving the one in progress", () => {
+    const ui = startEmom({ rounds: 2, interval: 4, prep: 1 });
+    vi.advanceTimersByTime(1000);
+    expect(ui.totalRounds()).toBe("2");
+
+    ui.set("rounds", 5);
+
+    expect(ui.face()).toBe("00:03");
+    expect(ui.round()).toBe("1");
+    expect(ui.totalRounds()).toBe("5");
+    expect(ui.bars()).toHaveLength(5);
+
+    // The three added cycles really do run: the workout no longer ends at 8s.
+    vi.advanceTimersByTime(8000);
+    expect(ui.round()).toBe("3");
+    expect(ui.content.classList.contains("finished")).toBe(false);
+  });
+
+  it("edits during the prep countdown without swallowing the count", () => {
+    const ui = mountTimer();
+    ui.chooseMode("emom");
+    ui.set("rounds", 2);
+    ui.set("interval", 4);
+    ui.set("prep", 5);
+    ui.start();
+    vi.advanceTimersByTime(2000);
+    expect(ui.face()).toBe("00:03"); // three seconds of prep left
+
+    ui.set("rounds", 4);
+
+    expect(ui.face()).toBe("00:03"); // the prep count still owns the face
+    expect(ui.totalRounds()).toBe("4");
+    expect(ui.bars()).toHaveLength(4);
+
+    ui.start(); // pause, still mid-count
+    ui.set("rounds", 3);
+    expect(ui.face()).toBe("00:03"); // and it still owns it while paused
+    expect(ui.totalRounds()).toBe("3");
+    ui.start(); // resume the countdown
+
+    // Not a second has been played, so the edits landed whole: three cycles.
+    vi.advanceTimersByTime(3000 + 12000);
+    expect(ui.content.classList.contains("finished")).toBe(true);
+    expect(ui.round()).toBe("3");
+  });
+
+  it("protects cycle one during the first second, before the first tick", () => {
+    // The clock sits on second 0 for a whole second after the prep hands over.
+    // Cycle one is under way in that window -- an edit can't shorten it.
+    const ui = startEmom({ rounds: 2, interval: 6, prep: 1 });
+    expect(ui.face()).toBe("00:06");
+
+    ui.set("interval", 2);
+
+    expect(ui.face()).toBe("00:06");
+    vi.advanceTimersByTime(6000); // cycle one runs its full six seconds
+    expect(ui.round()).toBe("2");
+    expect(ui.face()).toBe("00:02");
+  });
+
+  it("holds the timeline steady while a field is half-typed", () => {
+    const ui = startEmom({ rounds: 2, interval: 4, prep: 1 });
+    vi.advanceTimersByTime(1000);
+
+    ui.set("rounds", ""); // mid-keystroke: no usable number yet
+    ui.set("interval", "");
+
+    expect(ui.totalRounds()).toBe("2");
+    expect(ui.bars()).toHaveLength(2);
+    vi.advanceTimersByTime(3000);
+    expect(ui.round()).toBe("2"); // still running the workout it started
     expect(ui.face()).toBe("00:04");
   });
 
@@ -536,7 +803,7 @@ describe("initTimer: running an EMOM", () => {
     expect(ui.face()).not.toBe(stopped);
   });
 
-  it("ignores form edits while paused, and resumes where it left off", () => {
+  it("takes edits made while paused, and resumes where it left off", () => {
     const ui = startEmom({ rounds: 3, interval: 4, prep: 1 });
     vi.advanceTimersByTime(2000); // two seconds into cycle 1
     expect(ui.face()).toBe("00:02");
@@ -544,14 +811,13 @@ describe("initTimer: running an EMOM", () => {
     ui.start(); // the Start button is a Pause button now
     expect(ui.startLabel()).toBe("Resume");
 
-    ui.set("interval", 60); // a new timeline would strand elapsedSeconds
-    ui.chooseMode("work-rest");
-    expect(ui.face()).toBe("00:02");
+    ui.set("interval", 60); // pausing to fix a number is the obvious way in
+    expect(ui.face()).toBe("00:02"); // the paused cycle keeps its place
 
     ui.start();
     vi.advanceTimersByTime(2000); // cycle 1 runs out on its original length
     expect(ui.round()).toBe("2");
-    expect(ui.face()).toBe("00:04");
+    expect(ui.face()).toBe("01:00"); // cycle 2 on the edited length
   });
 
   it("resets back to the idle preview", () => {
@@ -596,6 +862,63 @@ describe("initTimer: running work / rest", () => {
     expect(ui.face()).toBe("00:05");
     expect(ui.round()).toBe("2");
     expect(ui.content.classList.contains("working")).toBe(true);
+  });
+
+  // The issue's own example: three rounds in, the rest turns out to be too
+  // long and the round count too short. Neither correction may move the clock.
+  it("re-cuts the rounds still to come without moving the clock", () => {
+    const ui = mountTimer();
+    ui.set("rounds", 2);
+    ui.set("work", 3);
+    ui.set("rest", 2);
+    ui.set("prep", 1);
+    ui.start();
+    vi.advanceTimersByTime(1000); // prep done
+    vi.advanceTimersByTime(4000); // four seconds in: round 1's rest
+
+    expect(ui.face()).toBe("00:04");
+    expect(ui.content.classList.contains("resting")).toBe(true);
+
+    ui.set("rounds", 4);
+    ui.set("rest", 1);
+
+    expect(ui.face()).toBe("00:04"); // same second of the same rest
+    expect(ui.round()).toBe("1");
+    expect(ui.content.classList.contains("resting")).toBe(true);
+    expect(ui.totalRounds()).toBe("4");
+    expect(ui.bars()).toHaveLength(7); // w r w r w r w
+
+    vi.advanceTimersByTime(1000); // the rest it was already in plays out at 2s
+    expect(ui.round()).toBe("2");
+    expect(ui.content.classList.contains("working")).toBe(true);
+
+    vi.advanceTimersByTime(3000); // round 2's work done
+    expect(ui.content.classList.contains("resting")).toBe(true);
+    vi.advanceTimersByTime(1000); // ...and its rest is the new, shorter one
+    expect(ui.round()).toBe("3");
+    expect(ui.content.classList.contains("working")).toBe(true);
+  });
+
+  it("switches timer type from the next round on", () => {
+    const ui = mountTimer();
+    ui.set("rounds", 2);
+    ui.set("work", 3);
+    ui.set("rest", 2);
+    ui.set("prep", 1);
+    ui.set("interval", 5);
+    ui.start();
+    vi.advanceTimersByTime(2000); // prep, then one second of round 1's work
+
+    ui.chooseMode("emom");
+
+    // The face flips to the EMOM countdown, still inside round 1's work: two
+    // of its three seconds left.
+    expect(ui.face()).toBe("00:02");
+    expect(ui.round()).toBe("1");
+
+    vi.advanceTimersByTime(2000); // round 1 ends on its own terms
+    expect(ui.round()).toBe("2");
+    expect(ui.face()).toBe("00:05"); // and round 2 is a cycle, not work + rest
   });
 
   it("stays put when there is nothing to run", () => {
