@@ -120,6 +120,12 @@
   background-color: #2ecc71;
 }
 
+/* EMOM rounds are back-to-back work, so neighbouring bars can't rely on the
+   work/rest colour change to tell them apart -- give them a seam. */
+#progress-container .progress-bar + .progress-bar {
+  border-left: var(--border-thin) solid rgba(255, 255, 255, 0.6);
+}
+
 .progress-bar-danger {
   background-color: #e74c3c;
 }
@@ -160,6 +166,12 @@ progress.rest {
 
 .field > label {
   text-align: right;
+}
+
+/* `.field` is declared after `.hidden` at the same specificity, so its
+   `display: flex` would otherwise win and the hidden fields would still show. */
+.field.hidden {
+  display: none;
 }
 
 .buttons {

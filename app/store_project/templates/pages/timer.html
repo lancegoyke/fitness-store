@@ -5,8 +5,8 @@
 {% block head_title %}{% trans "Interval Timer" %}{% endblock head_title %}
 
 {% block header %}
-  <meta name="description" property="og:description" content="An interval timer for your fitness -- tabata, sprints, and more">
-  <meta name="keywords" content="timer, interval timer, tabata timer, fitness, health, strength, endurance, running, training, biking">
+  <meta name="description" property="og:description" content="An interval timer for your fitness -- tabata, EMOM, sprints, and more">
+  <meta name="keywords" content="timer, interval timer, tabata timer, emom timer, fitness, health, strength, endurance, running, training, biking">
   <meta property="og:image" content="{% static 'png/favicon-black.png' %}" />
   <meta property="og:image:alt" content="Mastering Fitness" />
   <link rel="stylesheet" href="{% static 'css/timer.css' %}" />
@@ -34,18 +34,31 @@
 
   <form class="stack" id="timer-form">
     <div class="field">
+      <label for="mode">Timer type:</label>
+      <select id="mode" name="mode" tabindex="1">
+        <option value="work-rest">Work / Rest</option>
+        <option value="emom">Repeating (EMOM)</option>
+      </select>
+    </div>
+
+    <div class="field">
       <label for="rounds">Rounds:</label>
       <input type="number" id="rounds" name="rounds" min="1" value="30" tabindex="1" required />
     </div>
 
-    <div class="field">
+    <div class="field" data-mode="work-rest">
       <label for="work">Work duration (seconds):</label>
       <input type="number" id="work" name="work" min="1" value="30" tabindex="1" required />
     </div>
 
-    <div class="field">
+    <div class="field" data-mode="work-rest">
       <label for="rest">Rest duration (seconds):</label>
       <input type="number" id="rest" name="rest" min="1" value="30" tabindex="1" required />
+    </div>
+
+    <div class="field hidden" data-mode="emom">
+      <label for="interval">Start a round every (seconds):</label>
+      <input type="number" id="interval" name="interval" min="1" value="60" tabindex="1" />
     </div>
 
     <div class="field">
