@@ -514,9 +514,10 @@ describe("initTimer: running an EMOM", () => {
     expect(ui.face()).toBe("00:04");
   });
 
-  it("pauses on a real click even with a field mid-edit", () => {
-    // Pause shares the submit button with Start, so a half-typed interval
-    // would fail validation, swallow the submit, and leave Pause dead.
+  it("pauses and resumes on real clicks even with a field mid-edit", () => {
+    // Pause and Resume share the submit button with Start, so a half-typed
+    // interval would fail validation, swallow the submit, and leave the
+    // button dead -- pointing at a field that isn't even read on those paths.
     const ui = startEmom({ rounds: 3, interval: 4, prep: 1 });
     vi.advanceTimersByTime(1000);
     ui.set("interval", ""); // second thoughts about the next run
@@ -527,6 +528,12 @@ describe("initTimer: running an EMOM", () => {
     const stopped = ui.face();
     vi.advanceTimersByTime(3000);
     expect(ui.face()).toBe(stopped);
+
+    ui.press();
+
+    expect(ui.startLabel()).toBe("Pause");
+    vi.advanceTimersByTime(1000);
+    expect(ui.face()).not.toBe(stopped);
   });
 
   it("ignores form edits while paused, and resumes where it left off", () => {
