@@ -9,6 +9,7 @@
 // over a fake clock to cover the wiring the pure functions can't see: which
 // fields each timer type shows, and what the face reads while it runs.
 
+import { readFileSync } from "node:fs";
 import {
   initTimer,
   buildTimeline,
@@ -268,6 +269,16 @@ describe("cueAt: EMOM", () => {
 
 const CUE_NAMES = ["one", "two", "three", "rest", "go"];
 
+// The real stylesheet, mounted with the markup. Hiding a field is a cascade
+// question -- `.field { display: flex }` is declared after `.hidden` at the
+// same specificity -- so a class check alone proves nothing. Read from disk
+// rather than imported: vitest stubs `.css` imports out to an empty module.
+// (Path is relative to the repo root, where vitest runs.)
+const TIMER_CSS = readFileSync(
+  "app/store_project/static/css/timer.css",
+  "utf8"
+);
+
 // The audio bank the template declares ahead of timer.js, stubbed so the tests
 // can read back the cue order the controller actually played.
 function stubAudio() {
@@ -279,6 +290,10 @@ function stubAudio() {
 }
 
 function mountTimer() {
+  const style = document.createElement("style");
+  style.textContent = TIMER_CSS;
+  document.head.replaceChildren(style);
+
   document.body.innerHTML = `
     <main class="content">
       <div id="timer-display">
@@ -329,6 +344,8 @@ function mountTimer() {
     bars: () =>
       Array.from(document.querySelectorAll("#progress-container .progress-bar")),
     fieldFor: (id) => $(`#${id}`).closest(".field"),
+    shows: (id) =>
+      window.getComputedStyle($(`#${id}`).closest(".field")).display !== "none",
     set(id, value) {
       const input = $(`#${id}`);
       input.value = String(value);
@@ -352,16 +369,25 @@ describe("initTimer: choosing a timer type", () => {
 
   it("swaps work/rest for the repeat interval, and back", () => {
     const ui = mountTimer();
-    expect(ui.fieldFor("interval").classList.contains("hidden")).toBe(true);
+    // Computed display, not the class: `.field { display: flex }` is declared
+    // after `.hidden` at the same specificity, so a class check would pass
+    // while both sets of inputs stayed on screen.
+    expect(ui.shows("work")).toBe(true);
+    expect(ui.shows("interval")).toBe(false);
 
     ui.chooseMode("emom");
-    expect(ui.fieldFor("work").classList.contains("hidden")).toBe(true);
-    expect(ui.fieldFor("rest").classList.contains("hidden")).toBe(true);
-    expect(ui.fieldFor("interval").classList.contains("hidden")).toBe(false);
+    expect(ui.shows("work")).toBe(false);
+    expect(ui.shows("rest")).toBe(false);
+    expect(ui.shows("interval")).toBe(true);
 
     ui.chooseMode("work-rest");
-    expect(ui.fieldFor("work").classList.contains("hidden")).toBe(false);
-    expect(ui.fieldFor("interval").classList.contains("hidden")).toBe(true);
+    expect(ui.shows("work")).toBe(true);
+    expect(ui.shows("rest")).toBe(true);
+    expect(ui.shows("interval")).toBe(false);
+
+    // Rounds and prep belong to both types.
+    expect(ui.shows("rounds")).toBe(true);
+    expect(ui.shows("prep")).toBe(true);
   });
 
   it("drops `required` from the hidden fields so they can't block submit", () => {

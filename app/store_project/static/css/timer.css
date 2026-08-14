@@ -168,6 +168,12 @@ progress.rest {
   text-align: right;
 }
 
+/* `.field` is declared after `.hidden` at the same specificity, so its
+   `display: flex` would otherwise win and the hidden fields would still show. */
+.field.hidden {
+  display: none;
+}
+
 .buttons {
   display: flex;
   gap: 1rem;
