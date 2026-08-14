@@ -89,3 +89,27 @@ class RobotsTxtTests(TestCase):
         response = self.client.post("/robots.txt")
 
         assert response.status_code == HTTPStatus.METHOD_NOT_ALLOWED
+
+
+class TimerViewTests(TestCase):
+    def test_get(self):
+        response = self.client.get("/timer/")
+
+        assert response.status_code == HTTPStatus.OK
+        self.assertTemplateUsed(response, "pages/timer.html")
+
+    def test_renders_the_controls_timer_js_binds_to(self):
+        # timer.js looks these up by id; a template rename would break it
+        # silently in the browser.
+        html = self.client.get("/timer/").content.decode()
+
+        for element_id in ("mode", "rounds", "work", "rest", "interval", "prep"):
+            assert f'id="{element_id}"' in html
+
+    def test_offers_the_repeating_emom_type(self):
+        html = self.client.get("/timer/").content.decode()
+
+        assert '<option value="emom">' in html
+        # The repeat cycle is configurable, not pinned to 60 seconds.
+        assert 'id="interval"' in html
+        assert 'data-mode="emom"' in html

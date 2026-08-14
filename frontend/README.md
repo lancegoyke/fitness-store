@@ -1,15 +1,16 @@
 # Front-end tests
 
-Vitest unit tests for the meso app's hand-written JavaScript — the only place in
-the repo with non-trivial client-side logic worth testing in isolation:
+Vitest unit tests for the site's hand-written JavaScript — the places with
+non-trivial client-side logic worth testing in isolation:
 
 - **`meso_athlete.test.js`** — the athlete session logger
   (`app/store_project/static/js/meso_athlete.js`): the offline write queue
   (stash on network failure, one save per session, replay on reconnect) and the
   save/flush state machine.
-- **`meso.test.js`** — the designer's agent poll loop
-  (`app/store_project/static/js/meso.js`): `pollBatch` (drafting → resolve /
-  fail / timeout / error) plus the response-shaping helpers.
+- **`timer.test.js`** — the interval timer
+  (`app/store_project/static/js/timer.js`): the timeline engine that compiles a
+  work/rest or EMOM setup into segments and answers "where am I?" / "what cue
+  is owed?" each second, plus a DOM pass over the controller on a fake clock.
 
 ## Running
 
@@ -22,12 +23,12 @@ npm run test:coverage
 
 ## How the source is imported
 
-The meso JS files are served to the browser as classic `<script>`s (Alpine.js),
-so they can't use ES module `export`. Each file defines a factory
-(`createLogger()` / `createMeso()`), registers it on `alpine:init` when running
-in a browser, and exposes it via `module.exports` for Node-based runners. The
-tests import that factory and exercise the methods directly — no Alpine runtime,
-no DOM rendering. DOM-bound helpers (`$nextTick`, `$refs`) are stubbed per test.
+These files are served to the browser as classic `<script>`s (Alpine.js), so
+they can't use ES module `export`. Each defines a factory (`createLogger()`) or
+an init function (`initTimer()`), wires itself up when running in a browser, and
+exposes the internals via `module.exports` for Node-based runners. The tests
+import those and exercise them directly — no Alpine runtime, and only the markup
+a test needs. DOM-bound helpers (`$nextTick`, `$refs`) are stubbed per test.
 
 ## CI & deploys
 

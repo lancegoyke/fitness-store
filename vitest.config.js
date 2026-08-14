@@ -8,7 +8,8 @@ import react from "@vitejs/plugin-react";
 // meso*.test.js suites) AND the Phase 2 designer island under
 // frontend/designer/ (React + TSX, built separately by
 // frontend/designer/vite.config.ts — see Decision 3 in
-// docs/meso/designer-framework-plan.md). Tests live under frontend/ — kept out
+// docs/meso/designer-framework-plan.md), plus the interval timer's timeline
+// engine (app/store_project/static/js/timer.js). Tests live under frontend/ — kept out
 // of app/store_project/static/ so they are never collected/served by Django,
 // and so test-only changes can be excluded from the deploy-triggering Django CI.
 export default defineConfig({
@@ -20,7 +21,7 @@ export default defineConfig({
     setupFiles: ["frontend/designer/vitest-setup.ts"],
     coverage: {
       provider: "v8",
-      include: ["app/store_project/static/js/meso_athlete.js", "app/store_project/static/js/meso_onboarding.js", "app/store_project/static/js/meso_deliver.js", "app/store_project/static/js/meso_tour.js"],
+      include: ["app/store_project/static/js/meso_athlete.js", "app/store_project/static/js/meso_onboarding.js", "app/store_project/static/js/meso_deliver.js", "app/store_project/static/js/meso_tour.js", "app/store_project/static/js/timer.js"],
       reporter: ["text", "html"],
     },
   },

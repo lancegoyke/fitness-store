@@ -3,65 +3,27 @@
  * Author: Lance Goyke
  * Site: https://mastering.fitness/timer/
  *
+ * Two timer types share one engine:
+ *
+ *   work-rest  Alternating work and rest, the classic tabata shape. The
+ *              trailing rest is dropped so the workout ends on work.
+ *   emom       Every-X-on-the-X. There is no explicit rest: each round is one
+ *              repeat cycle, the work is self-paced, and whatever is left of
+ *              the cycle is the rest. The cycle length is configurable, so
+ *              this covers E2MOM, E90s, and friends -- not just the minute.
+ *
+ * Both are compiled up front into a timeline of segments. The ticking clock
+ * only ever asks the timeline two questions: "where am I?" (stateAt) and
+ * "what should I play?" (cueAt). Those three functions are pure and are unit
+ * tested in frontend/timer.test.js.
  */
 
-// DOM Elements
-const countdown = document.querySelector("#countdown");
-const countdownMinutes = document.querySelector("#minutes");
-const countdownSeconds = document.querySelector("#seconds");
-const cycles = document.querySelector("#cycles");
-const form = document.querySelector("#timer-form");
-const startButton = document.querySelector(".start");
-const resetButton = document.querySelector(".reset");
-const currentRoundElement = document.querySelector("#current-round");
-const totalRoundsElement = document.querySelector("#total-rounds");
-const content = document.querySelector(".content");
-const roundsInput = form.querySelector("#rounds");
-const workInput = form.querySelector("#work");
-const restInput = form.querySelector("#rest");
-const prepInput = form.querySelector("#prep");
-
-// Global Variables
-let timer;
-let prepTimer;
-let prepCounter;
-let totalRoundSeconds;
-let elapsedSeconds = 1;
-let currentRound = 1;
-let isResting = false;
-let isPaused = false;
-let rounds = parseInt(roundsInput.value);
-let workSeconds = parseInt(workInput.value);
-let restSeconds = parseInt(restInput.value);
-let prepSeconds = parseInt(prepInput.value);
-
-if (audio == undefined) {
-  console.log("Audio not loaded. Timer will be silent.");
-} else {
-  console.log("Audio loaded.");
-}
-
-// Event Listeners
-roundsInput.addEventListener("input", render);
-workInput.addEventListener("input", render);
-restInput.addEventListener("input", render);
-prepInput.addEventListener("input", render);
-form.addEventListener("submit", startTimer);
-resetButton.addEventListener("click", resetTimer);
-
-// Set initial state
-render();
+const MODE_WORK_REST = "work-rest";
+const MODE_EMOM = "emom";
 
 /*
 /* Utility Functions
 */
-function clearTimers() {
-  clearInterval(timer);
-  clearInterval(prepTimer);
-  timer = null;
-  prepTimer = null;
-}
-
 function getMinutes(seconds) {
   return `${Math.floor(seconds / 60)}`.padStart(2, "0");
 }
@@ -70,227 +32,371 @@ function getSeconds(seconds) {
   return `${seconds % 60}`.padStart(2, "0");
 }
 
+function toInt(value) {
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 /*
-/* Display Functions
+/* Timeline Functions (pure)
 */
-function createProgressBars() {
-  const totalDuration = rounds * (workSeconds + restSeconds) - restSeconds;
-  const progressContainer = document.querySelector("#progress-container");
-  progressContainer.innerHTML = "";
-  const progressOverlay = document.querySelector("#progress-overlay");
-  progressOverlay.innerHTML = "";
 
-  for (let i = 1; i <= rounds; i++) {
-    const workBar = document.createElement("div");
-    workBar.className = "progress-bar progress-bar-success";
-    workBar.style.width = `${(workSeconds / totalDuration) * 100}%`;
-    workBar.textContent = i;
-    progressContainer.appendChild(workBar);
+// Compile the form's settings into an ordered list of segments, each stamped
+// with the second it starts on and the second it ends on. Segments with no
+// duration are skipped, so a rest of 0 collapses into a straight repeat.
+function buildTimeline({
+  mode,
+  rounds,
+  workSeconds,
+  restSeconds,
+  intervalSeconds,
+}) {
+  const segments = [];
 
-    if (i !== rounds) {
-      const restBar = document.createElement("div");
-      restBar.className = "progress-bar progress-bar-danger";
-      restBar.style.width = `${(restSeconds / totalDuration) * 100}%`;
-      progressContainer.appendChild(restBar);
+  function push(round, kind, seconds) {
+    if (seconds > 0) segments.push({ round, kind, seconds });
+  }
+
+  for (let round = 1; round <= rounds; round++) {
+    if (mode === MODE_EMOM) {
+      push(round, "work", intervalSeconds);
+    } else {
+      push(round, "work", workSeconds);
+      if (round !== rounds) push(round, "rest", restSeconds);
     }
   }
-  const elapsedBar = document.createElement("div");
-  elapsedBar.className = "progress-bar progress-bar-elapsed";
-  elapsedBar.style.width = "0%";
-  progressOverlay.appendChild(elapsedBar);
+
+  let elapsed = 0;
+  for (const segment of segments) {
+    segment.start = elapsed;
+    elapsed += segment.seconds;
+    segment.end = elapsed;
+  }
+
+  return { mode, segments, totalDuration: elapsed };
 }
 
-function render() {
-  // Get new values
-  rounds = parseInt(form.querySelector("#rounds").value);
-  workSeconds = parseInt(form.querySelector("#work").value);
-  restSeconds = parseInt(form.querySelector("#rest").value);
+// The segment covering `elapsedSeconds`, or null once the workout is over.
+function segmentAt(timeline, elapsedSeconds) {
+  return (
+    timeline.segments.find((segment) => elapsedSeconds < segment.end) || null
+  );
+}
 
-  // Set new values
-  minutes.innerHTML = getMinutes(workSeconds);
-  seconds.innerHTML = getSeconds(workSeconds);
-  currentRoundElement.innerHTML = 1;
-  totalRoundsElement.innerHTML = rounds;
+function stateAt(timeline, elapsedSeconds) {
+  const current = segmentAt(timeline, elapsedSeconds);
+  if (!current) {
+    const last = timeline.segments[timeline.segments.length - 1];
+    return {
+      round: last ? last.round : 1,
+      kind: "finished",
+      secondsLeft: 0,
+      finished: true,
+    };
+  }
+  return {
+    round: current.round,
+    kind: current.kind,
+    secondsLeft: current.end - elapsedSeconds,
+    finished: false,
+  };
+}
 
-  // Create progress bars
-  createProgressBars();
+// The audio cue owed at `elapsedSeconds`, or null for a silent second. The
+// second a segment starts on gets its opening cue; the three seconds before a
+// segment ends get the 3-2-1 countdown into it.
+function cueAt(timeline, elapsedSeconds) {
+  const current = segmentAt(timeline, elapsedSeconds);
+  if (!current) return "rest"; // the workout just ended
+  if (elapsedSeconds > 0 && elapsedSeconds === current.start) {
+    return current.kind === "work" ? "go" : "rest";
+  }
+  const secondsLeft = current.end - elapsedSeconds;
+  if (secondsLeft === 3) return "three";
+  if (secondsLeft === 2) return "two";
+  if (secondsLeft === 1) return "one";
+  return null;
 }
 
 /*
-/* Timer Functions
+/* DOM Controller
 */
-function startTimer(e) {
-  e.preventDefault();
-  console.log("Starting timer");
-  console.log("isPaused: ", isPaused);
+function initTimer() {
+  const form = document.querySelector("#timer-form");
+  if (!form) return;
 
-  clearTimers();
+  const countdownMinutes = document.querySelector("#minutes");
+  const countdownSeconds = document.querySelector("#seconds");
+  const currentRoundElement = document.querySelector("#current-round");
+  const totalRoundsElement = document.querySelector("#total-rounds");
+  const progressContainer = document.querySelector("#progress-container");
+  const progressOverlay = document.querySelector("#progress-overlay");
+  const content = document.querySelector(".content");
+  const startButton = form.querySelector(".start");
+  const resetButton = form.querySelector(".reset");
+  const modeInput = form.querySelector("#mode");
+  const roundsInput = form.querySelector("#rounds");
+  const workInput = form.querySelector("#work");
+  const restInput = form.querySelector("#rest");
+  const intervalInput = form.querySelector("#interval");
+  const prepInput = form.querySelector("#prep");
 
-  // Make timer pauseable
-  startButton.innerHTML = "Pause";
-  form.removeEventListener("submit", startTimer);
-  form.addEventListener("submit", pauseTimer);
-
-  // Start preparation countdown
-  if (!isPaused) {
-    prepSeconds = parseInt(prepInput.value);
-    prepCounter = prepSeconds;
-    countdownMinutes.innerHTML = getMinutes(prepCounter);
-    countdownSeconds.innerHTML = getSeconds(prepCounter);
-    content.classList.add("preparing");
-
-    // Update the preparation countdown every second
-    prepTimer = setInterval(() => {
-      prepCounter--;
-      countdownMinutes.innerHTML = getMinutes(prepCounter);
-      countdownSeconds.innerHTML = getSeconds(prepCounter);
-
-      if (prepCounter === 3) {
-        audio["three"].play();
-      }
-      if (prepCounter === 2) {
-        audio["two"].play();
-      }
-      if (prepCounter === 1) {
-        audio["one"].play();
-      }
-      if (prepCounter === 0) {
-        audio["go"].play();
-        clearInterval(prepTimer);
-        startWorkout();
-      }
-    }, 1000);
+  // The audio bank is declared by the template, ahead of this script.
+  const cues = typeof audio === "undefined" ? null : audio;
+  if (cues) {
+    console.log("Audio loaded.");
   } else {
-    // Resuming a paused timer
-    if (prepCounter > 0) {
-      prepTimer = setInterval(() => {
-        prepCounter--;
-        countdownMinutes.innerHTML = getMinutes(prepCounter);
-        countdownSeconds.innerHTML = getSeconds(prepCounter);
+    console.log("Audio not loaded. Timer will be silent.");
+  }
 
-        if (prepCounter === 0) {
-          audio["go"].play();
-          clearInterval(prepTimer);
-          startWorkout();
-        }
-      }, 1000);
+  let timer;
+  let prepTimer;
+  let prepCounter;
+  let elapsedSeconds = 1;
+  let isPaused = false;
+  let timeline = buildTimeline(readConfig());
+
+  // Event Listeners
+  modeInput.addEventListener("change", () => {
+    applyMode();
+    render();
+  });
+  roundsInput.addEventListener("input", render);
+  workInput.addEventListener("input", render);
+  restInput.addEventListener("input", render);
+  intervalInput.addEventListener("input", render);
+  prepInput.addEventListener("input", render);
+  form.addEventListener("submit", startTimer);
+  resetButton.addEventListener("click", resetTimer);
+
+  // Set initial state
+  applyMode();
+  render();
+
+  function clearTimers() {
+    clearInterval(timer);
+    clearInterval(prepTimer);
+    timer = null;
+    prepTimer = null;
+  }
+
+  function play(cue) {
+    if (cue && cues && cues[cue]) cues[cue].play();
+  }
+
+  function readConfig() {
+    return {
+      mode: modeInput.value,
+      rounds: toInt(roundsInput.value),
+      workSeconds: toInt(workInput.value),
+      restSeconds: toInt(restInput.value),
+      intervalSeconds: toInt(intervalInput.value),
+    };
+  }
+
+  function showTime(seconds) {
+    countdownMinutes.innerHTML = getMinutes(seconds);
+    countdownSeconds.innerHTML = getSeconds(seconds);
+  }
+
+  /*
+  /* Display Functions
+  */
+
+  // Show only the fields the selected timer type uses, and drop `required`
+  // from the hidden ones so they can't block submission from off-screen.
+  function applyMode() {
+    const active = modeInput.value;
+    for (const field of form.querySelectorAll("[data-mode]")) {
+      const visible = field.dataset.mode === active;
+      field.classList.toggle("hidden", !visible);
+      for (const input of field.querySelectorAll("input")) {
+        input.required = visible;
+      }
+    }
+  }
+
+  function createProgressBars() {
+    progressContainer.innerHTML = "";
+    progressOverlay.innerHTML = "";
+
+    for (const segment of timeline.segments) {
+      const bar = document.createElement("div");
+      const tone = segment.kind === "work" ? "success" : "danger";
+      bar.className = `progress-bar progress-bar-${tone}`;
+      bar.style.width = `${(segment.seconds / timeline.totalDuration) * 100}%`;
+      if (segment.kind === "work") bar.textContent = segment.round;
+      progressContainer.appendChild(bar);
+    }
+
+    const elapsedBar = document.createElement("div");
+    elapsedBar.className = "progress-bar progress-bar-elapsed";
+    elapsedBar.style.width = "0%";
+    progressOverlay.appendChild(elapsedBar);
+  }
+
+  // Draw the workout as it stands after `elapsed` seconds. Work/rest shows the
+  // running total; EMOM shows the time left in the cycle, which is the number
+  // you actually train off.
+  function paint(elapsed) {
+    const state = stateAt(timeline, elapsed);
+    showTime(timeline.mode === MODE_EMOM ? state.secondsLeft : elapsed);
+    currentRoundElement.innerHTML = state.round;
+
+    const elapsedBar = document.querySelector(".progress-bar-elapsed");
+    if (elapsedBar && timeline.totalDuration > 0) {
+      const progress = Math.min(elapsed / timeline.totalDuration, 1);
+      elapsedBar.style.width = `${progress * 100}%`;
+    }
+    return state;
+  }
+
+  function render() {
+    // Editing the form mid-workout would swap the timeline out from under the
+    // running clock. Leave it be; the edits land on the next start.
+    if (timer || prepTimer) return;
+
+    timeline = buildTimeline(readConfig());
+
+    // Preview the first segment: the work duration, or the EMOM cycle.
+    showTime(stateAt(timeline, 0).secondsLeft);
+    currentRoundElement.innerHTML = 1;
+    totalRoundsElement.innerHTML = toInt(roundsInput.value);
+
+    createProgressBars();
+  }
+
+  /*
+  /* Timer Functions
+  */
+  function makePauseable() {
+    startButton.innerHTML = "Pause";
+    form.removeEventListener("submit", startTimer);
+    form.addEventListener("submit", pauseTimer);
+  }
+
+  function makeStartable(label) {
+    startButton.innerHTML = label;
+    form.removeEventListener("submit", pauseTimer);
+    form.addEventListener("submit", startTimer);
+  }
+
+  function startTimer(e) {
+    e.preventDefault();
+    clearTimers();
+
+    if (!isPaused) {
+      const next = buildTimeline(readConfig());
+      if (next.totalDuration <= 0) return; // nothing to run; stay put
+
+      timeline = next;
+      elapsedSeconds = 1;
+      prepCounter = toInt(prepInput.value);
+      totalRoundsElement.innerHTML = toInt(roundsInput.value);
+      createProgressBars();
+      showTime(prepCounter);
+      content.classList.remove("working", "resting", "finished");
+      content.classList.add("preparing");
+    }
+    isPaused = false;
+    makePauseable();
+
+    if (prepCounter > 0) {
+      runPrep();
     } else {
-      clearInterval(prepTimer);
       startWorkout();
     }
   }
-}
 
-function startWorkout() {
-  // Update the DOM
-  rounds = parseInt(form.querySelector("#rounds").value);
-  workSeconds = parseInt(form.querySelector("#work").value);
-  restSeconds = parseInt(form.querySelector("#rest").value);
-  // audioCue
-  content.classList.remove("preparing");
-  content.classList.add("working");
-  const elapsedBar = document.querySelector(".progress-bar-elapsed");
+  function runPrep() {
+    prepTimer = setInterval(() => {
+      prepCounter--;
+      showTime(prepCounter);
 
-  // Set initial values
-  isResting = false;
-  if (!isPaused) {
-    minutes.innerHTML = getMinutes(0);
-    seconds.innerHTML = getSeconds(0);
-    totalRoundsElement.innerHTML = rounds;
-  } else {
-    isPaused = false;
+      if (prepCounter === 3) play("three");
+      if (prepCounter === 2) play("two");
+      if (prepCounter === 1) play("one");
+      if (prepCounter === 0) {
+        play("go");
+        clearInterval(prepTimer);
+        prepTimer = null;
+        startWorkout();
+      }
+    }, 1000);
   }
-  totalRoundSeconds = workSeconds + restSeconds;
-  totalDuration = rounds * (workSeconds + restSeconds) - restSeconds;
 
-  // Update the display every 1000 milliseconds
-  timer = setInterval(() => {
-    // Waits 1 second before running
-    minutes.innerHTML = getMinutes(elapsedSeconds);
-    seconds.innerHTML = getSeconds(elapsedSeconds);
+  function startWorkout() {
+    content.classList.remove("preparing");
 
-    secondsLeftInRound =
-      totalRoundSeconds - (elapsedSeconds % totalRoundSeconds);
+    // Draw the second the clock is about to advance past, so a fresh start
+    // opens on 00:00 (or a full EMOM cycle) instead of a blank face, and a
+    // resume comes back on the segment it was paused in.
+    const resumed = paint(elapsedSeconds - 1);
+    content.classList.toggle("working", resumed.kind === "work");
+    content.classList.toggle("resting", resumed.kind === "rest");
 
-    if (currentRound === rounds && secondsLeftInRound === restSeconds) {
-      // We finished the last round
-      audio["rest"].play();
-      console.log("Confetti!");
-      clearInterval(timer);
-      content.classList.remove("working");
-      content.classList.remove("resting");
-      content.classList.add("finished");
-    } else if (secondsLeftInRound === totalRoundSeconds) {
-      // We just started a new round
-      audio["go"].play();
-      currentRound++;
-      currentRoundElement.innerHTML = currentRound;
-      isResting = !isResting;
-      content.classList.add("working");
-      content.classList.remove("resting");
-    } else if (secondsLeftInRound === restSeconds) {
-      // We finished working and now we're resting
-      audio["rest"].play();
-      isResting = !isResting;
-      content.classList.remove("working");
-      content.classList.add("resting");
-    } else if (
-      (secondsLeftInRound === 3) |
-      (secondsLeftInRound - restSeconds === 3)
-    ) {
-      audio["three"].play();
-    } else if (
-      (secondsLeftInRound === 2) |
-      (secondsLeftInRound - restSeconds === 2)
-    ) {
-      audio["two"].play();
-    } else if (
-      (secondsLeftInRound === 1) |
-      (secondsLeftInRound - restSeconds === 1)
-    ) {
-      audio["one"].play();
-    }
+    timer = setInterval(() => {
+      const state = paint(elapsedSeconds);
+      play(cueAt(timeline, elapsedSeconds));
 
-    // Update the progress bar
-    elapsedBar.style.width = `${(elapsedSeconds / totalDuration) * 100}%`;
+      if (state.finished) {
+        console.log("Confetti!");
+        clearTimers();
+        content.classList.remove("working", "resting");
+        content.classList.add("finished");
+        makeStartable("Start");
+        return;
+      }
 
-    elapsedSeconds++;
-  }, 1000);
+      content.classList.toggle("working", state.kind === "work");
+      content.classList.toggle("resting", state.kind === "rest");
+
+      elapsedSeconds++;
+    }, 1000);
+  }
+
+  function pauseTimer(e) {
+    e.preventDefault();
+    isPaused = true;
+    clearTimers();
+    makeStartable("Resume");
+  }
+
+  function resetTimer(e) {
+    e.preventDefault();
+
+    clearTimers();
+    isPaused = false;
+    elapsedSeconds = 1;
+
+    render();
+    makeStartable("Start");
+    content.classList.remove("preparing", "working", "resting", "finished");
+  }
 }
 
-function pauseTimer(e) {
-  e.preventDefault();
-  console.log("Pausing timer");
-  console.log(`Elapsed seconds: ${elapsedSeconds}`);
-  isPaused = true;
-  console.log(`isPaused: ${isPaused}`);
-  clearTimers();
-
-  // Change the button from pause to resume
-  startButton.innerHTML = "Resume";
-  form.removeEventListener("submit", pauseTimer);
-  form.addEventListener("submit", startTimer);
+// Wire up the page. Guarded so Node-based test runners, which import this file
+// for the pure timeline helpers, don't try to build a timer without a form.
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initTimer);
+  } else {
+    initTimer();
+  }
 }
 
-function resetTimer(e) {
-  e.preventDefault();
-
-  // Reset timers
-  clearTimers();
-  isPaused = false;
-  prepSeconds = parseInt(prepInput.value);
-  currentRound = 1;
-  elapsedSeconds = 1;
-
-  // Reset the DOM
-  render();
-  startButton.innerHTML = "Start";
-  form.removeEventListener("submit", pauseTimer);
-  form.addEventListener("submit", startTimer);
-  content.classList.remove("preparing");
-  content.classList.remove("working");
-  content.classList.remove("resting");
-  content.classList.remove("finished");
-
-  console.log("Reset timer");
+// Test hook: expose the timeline engine to Node-based runners (vitest).
+// Skipped in the browser, where `module` is undefined.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    MODE_WORK_REST,
+    MODE_EMOM,
+    initTimer,
+    buildTimeline,
+    segmentAt,
+    stateAt,
+    cueAt,
+    getMinutes,
+    getSeconds,
+  };
 }
