@@ -417,6 +417,26 @@ describe("reviseTimeline", () => {
     ]);
   });
 
+  it("keeps that straight through a second edit", () => {
+    // The switched timeline is work / rest now, but the cycle it preserved is
+    // still a cycle. A later edit must not decide, from the timer type it
+    // finds, that the cycle owes a rest after all.
+    const switched = reviseTimeline(
+      emom({ rounds: 3, intervalSeconds: 60 }),
+      90,
+      { ...settings, rounds: 3 }
+    );
+    const again = reviseTimeline(switched, 90, { ...settings, rounds: 4 });
+
+    expect(shape(again)).toEqual([
+      [1, "work", 60],
+      [2, "work", 60], // no rest has crept in behind the round under way
+      [3, "work", 20],
+      [3, "rest", 10],
+      [4, "work", 20],
+    ]);
+  });
+
   it("survives an EMOM cycle change without moving the cycle it is in", () => {
     const before = emom({ rounds: 3, intervalSeconds: 60 });
     const after = reviseTimeline(before, 90, {

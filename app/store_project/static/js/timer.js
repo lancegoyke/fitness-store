@@ -57,18 +57,22 @@ function stampTimeline(mode, segments) {
 
 // Everything left to play after `previous`, cut from the given settings.
 // Segments with no duration are skipped, so a rest of 0 collapses into a
-// straight repeat. `previous` describes the round already under way: which
-// number it carries, and whether it still owes a rest before the next round
-// can start.
+// straight repeat. `previous` is the segment already under way, and the only
+// thing asked of it is `owesRest`: whether its round still has a rest coming
+// before the next round can start. Each segment carries that answer for
+// itself, cut into it here -- deriving it later from a phase and a timer type
+// would get an EMOM cycle wrong the moment the type changed under it.
 function segmentsAfter(previous, config) {
   const { mode, rounds, workSeconds, restSeconds, intervalSeconds } = config;
   const segments = [];
 
-  function push(round, kind, seconds) {
-    if (seconds > 0) segments.push({ round, kind, seconds });
+  function push(round, kind, seconds, owesRest = false) {
+    if (seconds > 0) segments.push({ round, kind, seconds, owesRest });
   }
 
   if (mode === MODE_EMOM) {
+    // A cycle is a whole round -- self-paced work and whatever is left of the
+    // cycle as its rest, in one segment. Nothing is owed after it.
     for (let round = previous.round + 1; round <= rounds; round++) {
       push(round, "work", intervalSeconds);
     }
@@ -81,7 +85,7 @@ function segmentsAfter(previous, config) {
     push(previous.round, "rest", restSeconds);
   }
   for (let round = previous.round + 1; round <= rounds; round++) {
-    push(round, "work", workSeconds);
+    push(round, "work", workSeconds, true);
     if (round !== rounds) push(round, "rest", restSeconds);
   }
   return segments;
@@ -118,16 +122,7 @@ function reviseTimeline(timeline, position, config) {
 
   return stampTimeline(config.mode, [
     ...played.map((segment) => ({ ...segment })),
-    // An EMOM cycle is a whole round, self-paced work and its own rest in one
-    // segment -- so unlike a work/rest work phase, it owes nothing on the way
-    // out and the next round starts clean.
-    ...segmentsAfter(
-      {
-        round: current.round,
-        owesRest: timeline.mode !== MODE_EMOM && current.kind === "work",
-      },
-      config
-    ),
+    ...segmentsAfter(current, config),
   ]);
 }
 
