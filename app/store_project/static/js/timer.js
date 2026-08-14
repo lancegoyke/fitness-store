@@ -14,8 +14,10 @@
  *
  * Both are compiled up front into a timeline of segments. The ticking clock
  * only ever asks the timeline two questions: "where am I?" (stateAt) and
- * "what should I play?" (cueAt). Those three functions are pure and are unit
- * tested in frontend/timer.test.js.
+ * "what should I play?" (cueAt). A form edit mid-workout re-cuts the timeline
+ * ahead of the clock (reviseTimeline) without touching a second of what has
+ * already been played. All of these are pure and are unit tested in
+ * frontend/timer.test.js.
  */
 
 const MODE_WORK_REST = "work-rest";
@@ -41,39 +43,85 @@ function toInt(value) {
 /* Timeline Functions (pure)
 */
 
-// Compile the form's settings into an ordered list of segments, each stamped
-// with the second it starts on and the second it ends on. Segments with no
-// duration are skipped, so a rest of 0 collapses into a straight repeat.
-function buildTimeline({
-  mode,
-  rounds,
-  workSeconds,
-  restSeconds,
-  intervalSeconds,
-}) {
-  const segments = [];
-
-  function push(round, kind, seconds) {
-    if (seconds > 0) segments.push({ round, kind, seconds });
-  }
-
-  for (let round = 1; round <= rounds; round++) {
-    if (mode === MODE_EMOM) {
-      push(round, "work", intervalSeconds);
-    } else {
-      push(round, "work", workSeconds);
-      if (round !== rounds) push(round, "rest", restSeconds);
-    }
-  }
-
+// Lay segments end to end, stamping each with the second it starts on and the
+// second it ends on -- the form the clock reads.
+function stampTimeline(mode, segments) {
   let elapsed = 0;
   for (const segment of segments) {
     segment.start = elapsed;
     elapsed += segment.seconds;
     segment.end = elapsed;
   }
-
   return { mode, segments, totalDuration: elapsed };
+}
+
+// Everything left to play after `previous`, cut from the given settings.
+// Segments with no duration are skipped, so a rest of 0 collapses into a
+// straight repeat. `previous` is the segment already under way: only its round
+// number and phase matter here, because the round it belongs to may still owe
+// a rest before the next round can start.
+function segmentsAfter(previous, config) {
+  const { mode, rounds, workSeconds, restSeconds, intervalSeconds } = config;
+  const segments = [];
+
+  function push(round, kind, seconds) {
+    if (seconds > 0) segments.push({ round, kind, seconds });
+  }
+
+  if (mode === MODE_EMOM) {
+    for (let round = previous.round + 1; round <= rounds; round++) {
+      push(round, "work", intervalSeconds);
+    }
+    return segments;
+  }
+
+  // A round in its work phase still owes its rest -- unless it is now the last
+  // round, where the trailing rest is dropped so the workout ends on work.
+  if (previous.kind === "work" && previous.round < rounds) {
+    push(previous.round, "rest", restSeconds);
+  }
+  for (let round = previous.round + 1; round <= rounds; round++) {
+    push(round, "work", workSeconds);
+    if (round !== rounds) push(round, "rest", restSeconds);
+  }
+  return segments;
+}
+
+// Compile the form's settings into a timeline. A fresh workout is just
+// "everything after a round zero that has already had its rest" -- sharing one
+// cut with reviseTimeline below, so a workout can't come out shaped one way on
+// Start and another way after an edit.
+function buildTimeline(config) {
+  return stampTimeline(
+    config.mode,
+    segmentsAfter({ round: 0, kind: "rest" }, config)
+  );
+}
+
+// Re-cut a workout that is already under way against edited settings
+// (issue #496). What has been played is history: the segments behind
+// `position` and the one the clock is standing in are carried over verbatim,
+// and the new settings take over from the next segment on. Nothing at or
+// before the clock ever moves, so an edit can't drop the athlete into a
+// different part of the workout -- the rounds already banked stay banked, and
+// the round in progress plays out as it was started.
+function reviseTimeline(timeline, position, config) {
+  const current = segmentAt(timeline, position);
+
+  // Nothing under way -- the workout has finished, or has yet to play its
+  // first second (the prep countdown is still running). No round to protect,
+  // so the edit lands whole.
+  if (!current || position <= 0) return buildTimeline(config);
+
+  const played = timeline.segments.slice(
+    0,
+    timeline.segments.indexOf(current) + 1
+  );
+
+  return stampTimeline(config.mode, [
+    ...played.map((segment) => ({ ...segment })),
+    ...segmentsAfter(current, config),
+  ]);
 }
 
 // The segment covering `elapsedSeconds`, or null once the workout is over.
@@ -159,13 +207,13 @@ function initTimer() {
   // Event Listeners
   modeInput.addEventListener("change", () => {
     applyMode();
-    render();
+    handleEdit();
   });
-  roundsInput.addEventListener("input", render);
-  workInput.addEventListener("input", render);
-  restInput.addEventListener("input", render);
-  intervalInput.addEventListener("input", render);
-  prepInput.addEventListener("input", render);
+  roundsInput.addEventListener("input", handleEdit);
+  workInput.addEventListener("input", handleEdit);
+  restInput.addEventListener("input", handleEdit);
+  intervalInput.addEventListener("input", handleEdit);
+  prepInput.addEventListener("input", handleEdit);
   form.addEventListener("submit", startTimer);
   resetButton.addEventListener("click", resetTimer);
 
@@ -254,18 +302,58 @@ function initTimer() {
     return state;
   }
 
-  function render() {
-    // Editing the form mid-workout would swap the timeline out from under the
-    // clock -- and a paused workout still has an `elapsedSeconds` to resume
-    // against. Leave it be; the edits land on the next fresh start.
-    if (timer || prepTimer || isPaused) return;
+  // The round count the face advertises: the last round the timeline actually
+  // reaches. Mid-workout that can sit below the number in the box -- winding a
+  // 10-round workout back to 2 on round 6 finishes round 6, it can't unspend
+  // the five before it. Falls back to the box when there is nothing to run, so
+  // an unusable form still previews the count it is aiming at.
+  function showTotalRounds() {
+    const last = timeline.segments[timeline.segments.length - 1];
+    totalRoundsElement.innerHTML = last ? last.round : toInt(roundsInput.value);
+  }
 
+  // The clock's position: the second currently on the face. The interval has
+  // already queued the second after it, which is what `elapsedSeconds` holds.
+  function clockPosition() {
+    return elapsedSeconds - 1;
+  }
+
+  // A form edit. Idle, it re-previews the workout from scratch. Mid-workout --
+  // running or paused -- it re-cuts only the rounds still to come, so the
+  // round in progress and every round already banked stay exactly as played
+  // (issue #496).
+  function handleEdit() {
+    if (!timer && !prepTimer && !isPaused) {
+      render();
+      return;
+    }
+
+    // Half-typed is not an instruction. A blank rounds box or an out-of-range
+    // duration would otherwise re-cut the workout on every keystroke of a
+    // number the athlete is still in the middle of typing. (Constraint
+    // validation still answers here even though submit-time validation is off
+    // while the clock runs, and it skips the disabled fields of the other
+    // timer type.)
+    if (!form.checkValidity()) return;
+
+    const position = clockPosition();
+    timeline = reviseTimeline(timeline, position, readConfig());
+
+    createProgressBars();
+    showTotalRounds();
+    // The prep countdown owns the face until it hands over at zero -- running
+    // or paused mid-count -- and painting the workout's first second over it
+    // would swallow the count.
+    if (!prepCounter) paint(position);
+  }
+
+  function render() {
     timeline = buildTimeline(readConfig());
 
     // Preview the first segment: the work duration, or the EMOM cycle.
     showTime(stateAt(timeline, 0).secondsLeft);
     currentRoundElement.innerHTML = 1;
-    totalRoundsElement.innerHTML = toInt(roundsInput.value);
+    showTotalRounds();
 
     createProgressBars();
   }
@@ -303,7 +391,7 @@ function initTimer() {
       timeline = next;
       elapsedSeconds = 1;
       prepCounter = toInt(prepInput.value);
-      totalRoundsElement.innerHTML = toInt(roundsInput.value);
+      showTotalRounds();
       createProgressBars();
       showTime(prepCounter);
       content.classList.remove("working", "resting", "finished");
@@ -342,7 +430,7 @@ function initTimer() {
     // Draw the second the clock is about to advance past, so a fresh start
     // opens on 00:00 (or a full EMOM cycle) instead of a blank face, and a
     // resume comes back on the segment it was paused in.
-    const resumed = paint(elapsedSeconds - 1);
+    const resumed = paint(clockPosition());
     content.classList.toggle("working", resumed.kind === "work");
     content.classList.toggle("resting", resumed.kind === "rest");
 
@@ -404,6 +492,7 @@ if (typeof module !== "undefined" && module.exports) {
     MODE_EMOM,
     initTimer,
     buildTimeline,
+    reviseTimeline,
     segmentAt,
     stateAt,
     cueAt,

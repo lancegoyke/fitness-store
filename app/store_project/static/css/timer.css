@@ -203,6 +203,17 @@ progress.rest {
   border-color: var(--accent);
 }
 
+/* The form stays live once the clock starts -- an edit re-cuts the rounds still
+   to come (issue #496) -- which is not something a form advertises about
+   itself. This line says so. It has to read on the white idle page *and* on the
+   blue / green / red washes `.content` takes on while a timer runs, so it takes
+   the same near-black as the field frames rather than a muted gray. */
+#timer-hint {
+  text-align: center;
+  font-size: var(--s-1);
+  color: var(--main-color-dark-gray);
+}
+
 /* Same story one row down: Start carries no border and Reset carries 2px, so as
    flex items they came out 2px apart. Equal columns instead -- which also lands
    them under the label / control columns above. */
