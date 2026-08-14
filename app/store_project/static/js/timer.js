@@ -273,14 +273,20 @@ function initTimer() {
   /*
   /* Timer Functions
   */
+  // Start and Pause are the same submit button. Validation is welcome on the
+  // way in -- it's how a blank field gets its "fill this out" prompt -- but
+  // never on the way out: a half-typed value would block the submit event and
+  // leave Pause dead while the clock ran on.
   function makePauseable() {
     startButton.innerHTML = "Pause";
+    form.noValidate = true;
     form.removeEventListener("submit", startTimer);
     form.addEventListener("submit", pauseTimer);
   }
 
   function makeStartable(label) {
     startButton.innerHTML = label;
+    form.noValidate = false;
     form.removeEventListener("submit", pauseTimer);
     form.addEventListener("submit", startTimer);
   }

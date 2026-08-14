@@ -357,6 +357,8 @@ function mountTimer() {
     },
     start: () =>
       $("#timer-form").dispatchEvent(new Event("submit", { cancelable: true })),
+    // A real click, so native constraint validation gets its say.
+    press: () => $("#start").click(),
     startLabel: () => $("#start").innerHTML,
     reset: () => $("#reset").dispatchEvent(new Event("click", { bubbles: true })),
   };
@@ -510,6 +512,21 @@ describe("initTimer: running an EMOM", () => {
     vi.advanceTimersByTime(3000);
     expect(ui.round()).toBe("2");
     expect(ui.face()).toBe("00:04");
+  });
+
+  it("pauses on a real click even with a field mid-edit", () => {
+    // Pause shares the submit button with Start, so a half-typed interval
+    // would fail validation, swallow the submit, and leave Pause dead.
+    const ui = startEmom({ rounds: 3, interval: 4, prep: 1 });
+    vi.advanceTimersByTime(1000);
+    ui.set("interval", ""); // second thoughts about the next run
+
+    ui.press();
+
+    expect(ui.startLabel()).toBe("Resume");
+    const stopped = ui.face();
+    vi.advanceTimersByTime(3000);
+    expect(ui.face()).toBe(stopped);
   });
 
   it("ignores form edits while paused, and resumes where it left off", () => {
