@@ -203,8 +203,10 @@ function initTimer() {
   /* Display Functions
   */
 
-  // Show only the fields the selected timer type uses, and drop `required`
-  // from the hidden ones so they can't block submission from off-screen.
+  // Show only the fields the selected timer type uses. Hidden inputs are
+  // disabled, not just un-required: a leftover out-of-range value would
+  // otherwise fail validation from off-screen and silently swallow the submit,
+  // making Start look broken. Disabled inputs are still readable by value.
   function applyMode() {
     const active = modeInput.value;
     for (const field of form.querySelectorAll("[data-mode]")) {
@@ -212,6 +214,7 @@ function initTimer() {
       field.classList.toggle("hidden", !visible);
       for (const input of field.querySelectorAll("input")) {
         input.required = visible;
+        input.disabled = !visible;
       }
     }
   }
@@ -253,8 +256,9 @@ function initTimer() {
 
   function render() {
     // Editing the form mid-workout would swap the timeline out from under the
-    // running clock. Leave it be; the edits land on the next start.
-    if (timer || prepTimer) return;
+    // clock -- and a paused workout still has an `elapsedSeconds` to resume
+    // against. Leave it be; the edits land on the next fresh start.
+    if (timer || prepTimer || isPaused) return;
 
     timeline = buildTimeline(readConfig());
 

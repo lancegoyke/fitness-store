@@ -390,14 +390,37 @@ describe("initTimer: choosing a timer type", () => {
     expect(ui.shows("prep")).toBe(true);
   });
 
-  it("drops `required` from the hidden fields so they can't block submit", () => {
+  it("disables the hidden fields so they can't block submit", () => {
     const ui = mountTimer();
     expect(document.querySelector("#interval").required).toBe(false);
+    expect(document.querySelector("#interval").disabled).toBe(true);
 
     ui.chooseMode("emom");
     expect(document.querySelector("#work").required).toBe(false);
-    expect(document.querySelector("#rest").required).toBe(false);
+    expect(document.querySelector("#work").disabled).toBe(true);
+    expect(document.querySelector("#rest").disabled).toBe(true);
     expect(document.querySelector("#interval").required).toBe(true);
+    expect(document.querySelector("#interval").disabled).toBe(false);
+  });
+
+  it("keeps the form submittable with an out-of-range value hidden", () => {
+    // A disabled control is barred from validation; an un-required one is not,
+    // so `min="1"` on an off-screen 0 would block Start with nothing to click.
+    const ui = mountTimer();
+    const valid = () => document.querySelector("#timer-form").checkValidity();
+
+    ui.set("work", 0); // visible: the min really does bite
+    expect(valid()).toBe(false);
+    ui.set("work", 30);
+    expect(valid()).toBe(true);
+
+    ui.set("interval", 0); // hidden: same value, no longer in the way
+    expect(valid()).toBe(true);
+
+    ui.chooseMode("emom"); // now work is the hidden one
+    ui.set("interval", 60);
+    ui.set("work", 0);
+    expect(valid()).toBe(true);
   });
 
   it("previews the cycle length and one bar per round", () => {
@@ -485,6 +508,24 @@ describe("initTimer: running an EMOM", () => {
 
     expect(ui.face()).toBe("00:03"); // still on the cycle it started
     vi.advanceTimersByTime(3000);
+    expect(ui.round()).toBe("2");
+    expect(ui.face()).toBe("00:04");
+  });
+
+  it("ignores form edits while paused, and resumes where it left off", () => {
+    const ui = startEmom({ rounds: 3, interval: 4, prep: 1 });
+    vi.advanceTimersByTime(2000); // two seconds into cycle 1
+    expect(ui.face()).toBe("00:02");
+
+    ui.start(); // the Start button is a Pause button now
+    expect(ui.startLabel()).toBe("Resume");
+
+    ui.set("interval", 60); // a new timeline would strand elapsedSeconds
+    ui.chooseMode("work-rest");
+    expect(ui.face()).toBe("00:02");
+
+    ui.start();
+    vi.advanceTimersByTime(2000); // cycle 1 runs out on its original length
     expect(ui.round()).toBe("2");
     expect(ui.face()).toBe("00:04");
   });
