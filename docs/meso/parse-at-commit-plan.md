@@ -2,7 +2,7 @@
 
 **Status:** planned 2026-07-18 · **not started** · design decided this session ·
 **prerequisite:** the current-week removal
-([`remove-current-week-plan.md`](remove-current-week-plan.md)) lands first (both
+([`remove-current-week-plan.md`](../archive/meso/remove-current-week-plan.md)) lands first (both
 edit `athlete_cell_write`) · migration adds `LoggedSet.source_line`
 **Owner:** Lance
 **North star:** the athlete logs by **typing into grid cells** — one freeform
@@ -30,7 +30,7 @@ in a code read of `parsing.py`, `models.py` (`LoggedSet` 2263), `views.py`
   `LoggedSet` is a derivative linked back by a new `LoggedSet.source_line` FK. No
   double-display, no clobbering the structured logger.
 - **Records go live.** Because there is no "I'm done" button (see
-  [`remove-current-week-plan.md`](remove-current-week-plan.md) and §7), the
+  [`remove-current-week-plan.md`](../archive/meso/remove-current-week-plan.md) and §7), the
   derive-on-read reads that feed the personal-records panel + the PR toast count
   **pending** sets and re-derive on every edit (self-healing).
 - **PR celebration = optimistic + confirmed.** 5a fires an **optimistic** 🎉 on
@@ -145,7 +145,8 @@ source_line = models.ForeignKey(
   results only fetch line-0 cells).
 
 **Migration:** additive nullable FK. Number it the next free slot — if the
-current-week removal (`0043`) has landed, this is `0044`; otherwise `0043`. **Pure
+latest on disk is `0044_agent_proposal_batch_mesocycle` (the current-week removal
+landed as `0043`), so this is **`0045`** — *re-verify before writing it.* **Pure
 append, no renumber, no backfill** (existing rows default NULL = structured
 origin). *Verify the latest migration on disk before numbering.*
 
@@ -306,8 +307,8 @@ pre-existing on main.
   snapshots + `PlanAction`, never on `LoggedSet`, so it can't revert a parsed set.
   If a sub-line is hard-deleted, `source_line` `SET_NULL`s and the set survives
   with `prescription` still line-0 (existing orphan semantics).
-- **Migration numbering** — append after the latest on disk (0043 if the removal
-  landed, else 0043 for this); pure append, never renumber (MEMORY gotcha).
+- **Migration numbering** — append after the latest on disk (`0044` as of
+  2026-07-20 → this is `0045`); pure append, never renumber (MEMORY gotcha).
 - **`ATOMIC_REQUESTS` is inert** — keep the explicit `transaction.atomic()`; no
   `select_for_update` is added here so the SQLite-vs-Postgres caveat doesn't apply.
 - **Don't run a JS/TS formatter** on the designer island / athlete JS — match hand
