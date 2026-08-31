@@ -130,8 +130,11 @@ multi-set-per-line (`225x5, 230x3`) is out of scope — document it.
 
 ```python
 source_line = models.ForeignKey(
-    "Prescription", on_delete=models.SET_NULL,
-    null=True, blank=True, related_name="parsed_sets",
+    "Prescription",
+    on_delete=models.SET_NULL,
+    null=True,
+    blank=True,
+    related_name="parsed_sets",
 )
 ```
 
@@ -167,9 +170,12 @@ After `cell.save(...)` (~`views.py:1550`), inside the existing
    log.sets.filter(source_line=cell).delete()
    if parsed and parsed["kind"] == "set" and (parsed.get("reps") or parsed.get("load")):
        LoggedSet.objects.create(
-           session_log=log, prescription=line_zero[exercise_id],
-           source_line=cell, set_number=1,
-           reps=str(parsed.get("reps", "")), load=str(parsed.get("load", "")),
+           session_log=log,
+           prescription=line_zero[exercise_id],
+           source_line=cell,
+           set_number=1,
+           reps=str(parsed.get("reps", "")),
+           load=str(parsed.get("load", "")),
            rpe=str(parsed.get("rpe", "")),
        )
    ```
