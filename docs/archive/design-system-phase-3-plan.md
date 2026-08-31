@@ -271,16 +271,22 @@ both already used in `test_design_system_phase2.py`:
 from pathlib import Path
 from django.test import SimpleTestCase
 
-APP_ROOT = Path(__file__).resolve().parents[2]   # -> app/store_project
+APP_ROOT = Path(__file__).resolve().parents[2]  # -> app/store_project
 BASE_CSS = APP_ROOT / "static" / "css" / "base.css"
 
+
 def _css_block(css: str, selector: str) -> str:
-    start = css.index(selector); brace = css.index("{", start); end = css.index("}", brace)
+    start = css.index(selector)
+    brace = css.index("{", start)
+    end = css.index("}", brace)
     return css[brace : end + 1]
+
 
 class Phase3CssTests(SimpleTestCase):
     def test_button_block_is_full_width(self):
-        block = _css_block(BASE_CSS.read_text(), "\n.button.block {")  # \n anchors line-start
+        block = _css_block(
+            BASE_CSS.read_text(), "\n.button.block {"
+        )  # \n anchors line-start
         self.assertIn("width: 100%", block)
 ```
 (`SimpleTestCase` — no DB; anchor selectors with a leading `\n` to force
@@ -290,6 +296,7 @@ line-start matching, as the phase-2 suite does.)
 ```python
 from django.test import TestCase
 from django.urls import reverse
+
 
 class Phase3LoginTemplateTests(TestCase):
     def test_login_uses_the_card(self):

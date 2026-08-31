@@ -16,11 +16,16 @@ override works for everything except `select_for_update` semantics.
    ```python
    # <scratch>/verify_settings.py
    from config.settings.test import *  # noqa
-   DEBUG = False              # DEBUG=True pulls in debug_toolbar → crash
-   ENVIRONMENT = "TESTING"    # "DEVELOPMENT" makes urls.py import debug_toolbar
+
+   DEBUG = False  # DEBUG=True pulls in debug_toolbar → crash
+   ENVIRONMENT = "TESTING"  # "DEVELOPMENT" makes urls.py import debug_toolbar
    ALLOWED_HOSTS = ["*"]
-   DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3",
-                            "NAME": "<scratch>/verify.sqlite3"}}
+   DATABASES = {
+       "default": {
+           "ENGINE": "django.db.backends.sqlite3",
+           "NAME": "<scratch>/verify.sqlite3",
+       }
+   }
    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
    ```
 
