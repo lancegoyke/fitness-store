@@ -53,7 +53,7 @@ services:
       - .env
     environment:
       # Infra wiring set here (overrides anything in .env). App secrets
-      # (Stripe, AWS, OAuth, reCAPTCHA, Sentry, DOMAIN_URL, CORS, ...) come
+      # (Stripe, AWS, OAuth, Turnstile, Sentry, DOMAIN_URL, CORS, ...) come
       # from env_file. DATABASE_URL is intentionally NOT set so the SQL_* path
       # is used (no forced sslmode=require against the local postgres).
       - DJANGO_SETTINGS_MODULE=config.settings.production
