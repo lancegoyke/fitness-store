@@ -1,14 +1,13 @@
-This is just a confirmation that your contact form has been sent. Someone will reach out to you if your message requires it.
+Thanks for getting in touch. This is a confirmation that your
+message reached Mastering Fitness. Someone will reach out to you
+if your message requires it.
 
-For your records, here's what you sent us:
+For your privacy, we don't repeat your message back to you here.
+If you'd like a copy for your records, keep this email alongside
+whatever you sent.
 
-=====
-
-{{ msg|safe }}
-
-=====
-
-Thanks for the feedback! Hope you're having and continue to have a swell day.
+Thanks for the feedback! Hope you're having and continue to have
+a swell day.
 
 Lance Goyke
 lance@lancegoyke.com

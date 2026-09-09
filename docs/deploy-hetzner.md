@@ -73,9 +73,24 @@ STRIPE_PUBLISHABLE_KEY  STRIPE_SECRET_KEY  STRIPE_ENDPOINT_SECRET
 FB_APP_ID  FB_SECRET_KEY
 GOOGLE_CLIENT_ID  GOOGLE_CLIENT_SECRET  GOOGLE_API_KEY
 GOOGLE_ANALYTICS_GTAG_PROPERTY_ID
-G_RECAPTCHA_SITE_KEY  G_RECAPTCHA_SECRET_KEY  G_RECAPTCHA_ENDPOINT
 CORS_ALLOWED_ORIGINS  DOMAIN_URL  SENTRY_DSN
 ```
+
+Set these three separately — they are **not** on Heroku. They replaced the old
+`G_RECAPTCHA_*` keys when the contact form moved to Cloudflare Turnstile, and
+their values come from the
+[Turnstile dashboard](https://dash.cloudflare.com/?to=/:account/turnstile):
+
+```
+TURNSTILE_SITE_KEY           # public; 0x4AAAAAAEuD5W9Lpmi2nRbl for mastering.fitness
+TURNSTILE_SECRET_KEY         # secret; never commit it
+TURNSTILE_ALLOWED_HOSTNAMES  # "mastering.fitness www.mastering.fitness"
+```
+
+`TURNSTILE_ALLOWED_HOSTNAMES` is what rejects tokens farmed on someone else's
+page; leaving it unset falls back to `DJANGO_ALLOWED_HOSTS`, which is usually
+right but worth setting explicitly. Without `TURNSTILE_SECRET_KEY` the contact
+form rejects every submission by design, so set it before the first deploy.
 
 Do **not** copy: `DATABASE_URL`, `REDIS_URL` (compose provides them),
 `DJANGO_ALLOWED_HOSTS`, `DJANGO_SETTINGS_MODULE`, `DEBUG`, `ENVIRONMENT`

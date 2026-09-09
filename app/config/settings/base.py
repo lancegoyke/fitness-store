@@ -362,6 +362,40 @@ MESO_SANDBOX_MAX_CONCURRENT = int(os.environ.get("MESO_SANDBOX_MAX_CONCURRENT", 
 MESO_DEMO_VIDEO_URL = os.environ.get("MESO_DEMO_VIDEO_URL", "")
 MESO_DEMO_VIDEO_POSTER_URL = os.environ.get("MESO_DEMO_VIDEO_POSTER_URL", "")
 
+# Cloudflare Turnstile (contact form bot protection)
+# ------------------------------------------------------------------------------
+# Replaces Google reCAPTCHA v2, whose checkbox is now solved in bulk for a
+# fraction of a cent. Keys come from the Turnstile dashboard:
+# https://dash.cloudflare.com/?to=/:account/turnstile
+#
+# The site key is public -- it ships in the HTML of the contact page. The secret
+# key must only ever come from the environment. Verification fails closed when
+# it is unset, so a misconfigured deploy rejects submissions rather than
+# accepting everything (see store_project.pages.turnstile).
+TURNSTILE_SITE_KEY = os.environ.get("TURNSTILE_SITE_KEY", "")
+TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
+# ``or`` rather than a get() default: the key is present but blank in .env, and
+# a blank endpoint would send verification to nowhere.
+TURNSTILE_ENDPOINT = (
+    os.environ.get("TURNSTILE_ENDPOINT")
+    or "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+)
+
+# The action the widget stamps onto its token (``data-action`` in contact.html),
+# echoed back by siteverify so a token minted elsewhere cannot be replayed here.
+TURNSTILE_ACTION = "contact"
+
+# Hostnames a challenge may legitimately have been served from. The sitekey is
+# public, so anyone can embed the widget on their own page and farm solves --
+# those tokens verify as success, and the hostname is the only thing that gives
+# them away. Space-separated; defaults to ALLOWED_HOSTS, which is already the
+# list of hosts this site answers to.
+TURNSTILE_ALLOWED_HOSTNAMES = [
+    hostname
+    for hostname in os.environ.get("TURNSTILE_ALLOWED_HOSTNAMES", "").split(" ")
+    if hostname
+] or [host for host in ALLOWED_HOSTS if host != "*"]
+
 # Cache
 
 DEFAULT_CACHE_TIMEOUT = 604800  # one week

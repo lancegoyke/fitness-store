@@ -59,9 +59,9 @@ jobs:
       STRIPE_ENDPOINT_SECRET: ${{ secrets.STRIPE_ENDPOINT_SECRET }}
       STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-      G_RECAPTCHA_SITE_KEY: test-recaptcha-site-key
-      G_RECAPTCHA_SECRET_KEY: test-recaptcha-secret-key
-      G_RECAPTCHA_ENDPOINT: https://test-recaptcha-endpoint.com
+      TURNSTILE_SITE_KEY: test-turnstile-site-key
+      TURNSTILE_SECRET_KEY: test-turnstile-secret-key
+      TURNSTILE_ENDPOINT: https://test-turnstile-endpoint.com
 
     steps:
       - uses: actions/checkout@v4
@@ -143,9 +143,9 @@ jobs:
       STRIPE_ENDPOINT_SECRET: ${{ secrets.STRIPE_ENDPOINT_SECRET }}
       STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-      G_RECAPTCHA_SITE_KEY: test-recaptcha-site-key
-      G_RECAPTCHA_SECRET_KEY: test-recaptcha-secret-key
-      G_RECAPTCHA_ENDPOINT: https://test-recaptcha-endpoint.com
+      TURNSTILE_SITE_KEY: test-turnstile-site-key
+      TURNSTILE_SECRET_KEY: test-turnstile-secret-key
+      TURNSTILE_ENDPOINT: https://test-turnstile-endpoint.com
       # Opts config.settings.test into the real Postgres service container
       # instead of its default in-memory SQLite (config/settings/test.py).
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
