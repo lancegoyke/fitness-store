@@ -58,14 +58,18 @@
         </label>
       </p>
 
-      <div class="g-recaptcha" data-sitekey="{{ G_RECAPTCHA_SITE_KEY }}"></div>
+      {# Cloudflare Turnstile. data-action is echoed back by siteverify so a #}
+      {# token minted elsewhere cannot be replayed against this form. #}
+      <div class="cf-turnstile"
+           data-sitekey="{{ TURNSTILE_SITE_KEY }}"
+           data-action="contact"></div>
 
-      <button class="button g-recaptcha" type="submit">{% trans "Send Message" %}</button>
+      <button class="button" type="submit">{% trans "Send Message" %}</button>
     </form>
   </div>
 
 {% endblock content %}
 
 {% block javascript %}
-  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 {% endblock javascript %}

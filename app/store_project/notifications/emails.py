@@ -1,24 +1,49 @@
+import logging
+
 from django.conf import settings
 from django.core.mail import EmailMessage
 from django.core.mail import EmailMultiAlternatives
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 
+logger = logging.getLogger(__name__)
 
-def send_contact_emails(message_subject: str, message: str, user_email: str) -> None:
-    """Takes the fields from a user-submitted form and sends two emails.
+
+def send_contact_emails(message_subject: str, message: str, user_email: str) -> bool:
+    """Take the fields from a contact form submission and send two emails.
 
     The two emails are:
-        1. A confirmation email to the user submitting the form.
-        2. A notification email to the DEFAULT_FROM_EMAIL located in settings.
+        1. A notification to the site owner, carrying the whole message.
+        2. An acknowledgement to the person who filled in the form, so they know
+           it arrived rather than vanishing into nothing.
+
+    The acknowledgement deliberately repeats **nothing** from the form -- not
+    the subject, not the body. Both are attacker-controlled, and the address it
+    goes to is attacker-chosen, so echoing them turns this form into a way to
+    send arbitrary text to arbitrary strangers over our own domain. That costs
+    us sender reputation on SES and is exactly what the spam runs were using it
+    for. The owner's copy still contains everything.
+
+    Args:
+        message_subject: the subject the sender typed (owner's copy only).
+        message: the message body (owner's copy only).
+        user_email: the sender's address, used as the owner's reply-to and as
+            the acknowledgement's recipient.
+
+    Returns:
+        ``True`` if the acknowledgement reached the sender's address, ``False``
+        if it could not be sent. The owner's notification is sent first and is
+        not best-effort: if that one fails the exception propagates, because a
+        message we cannot deliver to the owner is a message that was lost.
     """
     subject = render_to_string(
         "notifications/contact_email_subject.txt", {"subject": message_subject}
     ).strip()
-    msg = message
 
     # Email the admin
-    admin_text_msg = render_to_string("notifications/contact_admin.md", {"msg": msg})
+    admin_text_msg = render_to_string(
+        "notifications/contact_admin.md", {"msg": message}
+    )
     email_for_admin = EmailMessage(
         subject,
         admin_text_msg,
@@ -30,11 +55,14 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
     )
     email_for_admin.send()
 
-    # TODO: Email the user
-    user_text_msg = render_to_string("notifications/contact_user.md", {"msg": msg})
+    # Acknowledge to the sender. Best-effort: a bounced or rejected
+    # acknowledgement must not lose a message the owner has already received,
+    # so a failure here is reported back, not raised.
+    ack_subject = render_to_string("notifications/contact_user_subject.txt").strip()
+    ack_text_msg = render_to_string("notifications/contact_user.md")
     email_for_user = EmailMessage(
-        subject,
-        user_text_msg,
+        ack_subject,
+        ack_text_msg,
         settings.SERVER_EMAIL,
         [
             user_email,
@@ -43,7 +71,15 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
             settings.DEFAULT_FROM_EMAIL,
         ],
     )
-    email_for_user.send()
+    try:
+        email_for_user.send()
+    except Exception:
+        logger.warning(
+            "Could not send the contact acknowledgement to the sender.",
+            exc_info=True,
+        )
+        return False
+    return True
 
 
 def send_coach_invite_email(*, coach, email, accept_url) -> bool:

@@ -1,6 +1,4 @@
-import os
-
-import requests
+from django.conf import settings
 from django.contrib import messages
 from django.core.mail import BadHeaderError
 from django.http import HttpResponse
@@ -11,8 +9,28 @@ from django.views.generic.detail import DetailView
 from markdownx.utils import markdownify
 
 from store_project.notifications.emails import send_contact_emails
+from store_project.pages import turnstile
 from store_project.pages.forms import ContactForm
 from store_project.pages.models import Page
+
+# Where to send someone whose message could not go through the form.
+EMAIL_FALLBACK = "email me directly: lance [at] lancegoyke [dot] com"
+
+# The acknowledgement a visitor sees on the page. Contact forms that say nothing
+# leave people wondering whether the message went anywhere, so this states
+# plainly that we have it.
+CONTACT_RECEIVED = (
+    "Got it! Your message is in our inbox. We sent an acknowledgement to the "
+    "address you gave us, and someone will reply if your message needs one."
+)
+
+# Same, for when the acknowledgement email itself could not be delivered -- the
+# message is still safely received, which is the part that matters.
+CONTACT_RECEIVED_NO_EMAIL = (
+    "Got it! Your message is in our inbox and someone will reply if it needs "
+    "one. We couldn't send an acknowledgement to the address you gave us, so "
+    "please double-check it if you're expecting a reply."
+)
 
 
 class HomePageView(TemplateView):
@@ -30,49 +48,61 @@ class SinglePageView(DetailView):
         return context
 
 
+def _turnstile_error_message(result):
+    """What to tell a visitor whose submission did not pass the bot check."""
+    if result.is_unavailable:
+        return (
+            "Our bot check is temporarily unavailable, so your message wasn't "
+            f"sent. Please try again in a minute, or {EMAIL_FALLBACK}"
+        )
+    if result.is_misconfigured:
+        return (
+            "Our bot check isn't working right now, so your message wasn't "
+            f"sent. Sorry about that. Please {EMAIL_FALLBACK}"
+        )
+    return (
+        "The bot check didn't pass, so your message wasn't sent. If you're not "
+        f"a bot, please try it again, or {EMAIL_FALLBACK}"
+    )
+
+
+def _send_contact_message(request, form):
+    """Send a verified contact message, then report the outcome to the visitor."""
+    try:
+        acknowledged = send_contact_emails(
+            form.cleaned_data["subject"],
+            form.cleaned_data["message"],
+            form.cleaned_data["user_email"],
+        )
+    except BadHeaderError:
+        messages.error(
+            request,
+            "The server couldn't send the email because it found an invalid header.",  # noqa: E501
+        )
+        return
+    messages.success(
+        request, CONTACT_RECEIVED if acknowledged else CONTACT_RECEIVED_NO_EMAIL
+    )
+
+
 def contact_view(request):
-    G_RECAPTCHA_SITE_KEY = os.environ.get("G_RECAPTCHA_SITE_KEY")
-    G_RECAPTCHA_SECRET_KEY = os.environ.get("G_RECAPTCHA_SECRET_KEY")
-    G_RECAPTCHA_ENDPOINT = os.environ.get("G_RECAPTCHA_ENDPOINT")
     if request.method == "GET":
         # Render the form
         form = ContactForm()
     else:
         form = ContactForm(request.POST)
         if form.is_valid():
-            # Check if they are a bot
-            g_recaptcha_token = request.POST.get("g-recaptcha-response")
-            data = {
-                "secret": G_RECAPTCHA_SECRET_KEY,
-                "response": g_recaptcha_token,
-            }
-            g_recaptcha_response = requests.post(G_RECAPTCHA_ENDPOINT, data=data).json()
-            if g_recaptcha_response["success"] is True:
-                # Send the email
-                subject = form.cleaned_data["subject"]
-                message = form.cleaned_data["message"]
-                user_email = form.cleaned_data["user_email"]
-                try:
-                    send_contact_emails(subject, message, user_email)
-                    messages.success(
-                        request,
-                        "Your message was sent! Thanks for the feedback. We emailed you a copy for your records. If needed, someone from our team will reach out to you.",  # noqa: E501
-                    )
-                except BadHeaderError:
-                    messages.error(
-                        request,
-                        "The server couldn't send the email because it found an invalid header.",  # noqa: E501
-                    )
-            elif g_recaptcha_response["error-codes"]:
-                for error in g_recaptcha_response["error-codes"]:
-                    messages.error(
-                        request, f"Something went wrong with Google reCAPTCHA ({error})"
-                    )
+            # Check if they are a bot. Cloudflare Turnstile is the only thing
+            # standing between this form and the mail path, so a token that
+            # cannot be verified never reaches send_contact_emails.
+            result = turnstile.verify(
+                request.POST.get(turnstile.TOKEN_FIELD, ""),
+                remote_ip=turnstile.client_ip(request),
+            )
+            if result.success:
+                _send_contact_message(request, form)
             else:
-                messages.error(
-                    request,
-                    "Google reCAPTCHA said you were a bot! If you're not, maybe try again? Or email me directly: lance [at] lancegoyke [dot] com",  # noqa: E501
-                )
+                messages.error(request, _turnstile_error_message(result))
         else:
             messages.error(
                 request, "Sorry, the form you filled out was invalid. Maybe try again?"
@@ -81,7 +111,7 @@ def contact_view(request):
     return render(
         request,
         "pages/contact.html",
-        {"form": form, "G_RECAPTCHA_SITE_KEY": G_RECAPTCHA_SITE_KEY},
+        {"form": form, "TURNSTILE_SITE_KEY": settings.TURNSTILE_SITE_KEY},
     )
 
 

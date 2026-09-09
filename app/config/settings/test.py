@@ -13,9 +13,9 @@ os.environ.setdefault("STRIPE_ENDPOINT_SECRET", "test-stripe-endpoint-secret")
 os.environ.setdefault("STRIPE_PUBLISHABLE_KEY", "test-stripe-publishable-key")
 os.environ.setdefault("STRIPE_SECRET_KEY", "test-stripe-secret-key")
 os.environ.setdefault("MESO_STRIPE_WEBHOOK_SECRET", "test-meso-webhook-secret")
-os.environ.setdefault("G_RECAPTCHA_SITE_KEY", "test-recaptcha-site-key")
-os.environ.setdefault("G_RECAPTCHA_SECRET_KEY", "test-recaptcha-secret-key")
-os.environ.setdefault("G_RECAPTCHA_ENDPOINT", "https://test-recaptcha-endpoint.com")
+os.environ.setdefault("TURNSTILE_SITE_KEY", "test-turnstile-site-key")
+os.environ.setdefault("TURNSTILE_SECRET_KEY", "test-turnstile-secret-key")
+os.environ.setdefault("TURNSTILE_ENDPOINT", "https://test-turnstile-endpoint.com")
 
 from .base import *  # noqa
 
@@ -87,9 +87,24 @@ stripe.Webhook.construct_event = unittest.mock.Mock(
     }
 )
 
-# Mock requests.post for reCAPTCHA testing
+# CLOUDFLARE TURNSTILE
+# ------------------------------------------------------------------------------
+# The Django test client serves requests as "testserver", so that is the
+# hostname a token would legitimately carry here.
+TURNSTILE_ALLOWED_HOSTNAMES = ["testserver"]
+
+# Mock requests.post so no test reaches Cloudflare's siteverify. The default is a
+# well-formed pass; tests that need a rejection patch
+# ``store_project.pages.turnstile.requests.post`` themselves.
 requests.post = unittest.mock.Mock(
-    return_value=unittest.mock.Mock(json=lambda: {"success": True})
+    return_value=unittest.mock.Mock(
+        json=lambda: {
+            "success": True,
+            "hostname": "testserver",
+            "action": "contact",
+            "error-codes": [],
+        }
+    )
 )
 
 # DATABASE
