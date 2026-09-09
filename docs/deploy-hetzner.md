@@ -34,7 +34,7 @@ Repo files that drive this:
 ## One-time migration from Heroku (app `mastering-fitness`)
 
 Domain stays `mastering.fitness`, so **no third-party reconfiguration is needed**
-(Stripe webhook, Google/Facebook OAuth, SES, reCAPTCHA, the Sites row, and
+(Stripe webhook, Google/Facebook OAuth, SES, Turnstile, the Sites row, and
 `DOMAIN_URL` are all keyed on the domain, not the host). Only the DNS records move.
 
 ### 0. Prerequisites
@@ -197,7 +197,7 @@ The web container's healthcheck performs an internal HTTPS-style GET, so a
 
 - `curl -fsSI https://mastering.fitness/ | grep -i strict-transport-security`
 - Log in (email + Google + Facebook), load an exercise/program page, submit the
-  contact form (reCAPTCHA), and run a Stripe **test**-mode checkout to confirm the
+  contact form (Turnstile), and run a Stripe **test**-mode checkout to confirm the
   webhook reaches `https://mastering.fitness/payments/webhook/` and the
   confirmation email sends via SES.
 - Leave Heroku in maintenance for a stability window, then scale down / delete the
