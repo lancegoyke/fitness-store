@@ -2021,8 +2021,52 @@ class TestTheLoggerOnlyReplacesWhatTheClientHeld:
             "the athlete had already logged"
         )
 
-    def test_a_save_that_does_post_it_still_replaces_it(self, client):
-        """The client's proof it was looking: it posted that slot."""
+    def test_a_save_that_restates_it_replaces_it(self, client):
+        """The client's proof it was looking: it posted the row back verbatim.
+
+        Round 3 tightened this from "posted that slot". A parsed row is numbered
+        by its sub-line while the structured grid numbers from 1, so the two
+        share a numbering space — an athlete typing a DIFFERENT set into
+        structured row 1 posted the same slot, which read as proof of seeing a
+        parsed row that also happened to be set 1, and the delete destroyed a
+        performance nobody had asked to change.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        client.force_login(s.athlete)
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        rows = list(LoggedSet.objects.filter(session_log__session=s.session))
+        assert len(rows) == 1
+        assert (rows[0].load, rows[0].reps) == ("225", "5")
+
+    def test_an_unrelated_set_at_the_same_number_keeps_both(self, client):
+        """The collision case: a different performance, not an edit of this one.
+
+        The athlete typed into a blank structured row 1 while a parsed row was
+        also numbered 1. Both are real work, so both survive — and the parsed
+        one yields its number so the two can't collapse into one another.
+        """
         s = seed()
         client.force_login(s.athlete)
         write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -2048,9 +2092,15 @@ class TestTheLoggerOnlyReplacesWhatTheClientHeld:
             },
         )
         assert resp.status_code == 200
-        rows = list(LoggedSet.objects.filter(session_log__session=s.session))
-        assert len(rows) == 1
-        assert (rows[0].load, rows[0].reps) == ("245", "8")
+        rows = sorted(
+            LoggedSet.objects.filter(session_log__session=s.session),
+            key=lambda r: r.set_number,
+        )
+        assert [(r.load, r.reps) for r in rows] == [("245", "8"), ("225", "5")], (
+            "the earned 225 x 5 was destroyed by an unrelated set at the same "
+            "set number"
+        )
+        assert len({r.set_number for r in rows}) == 2, "the two rows collapse"
 
 
 class TestAStaleRepostDoesNotCloneASurvivingSet:
@@ -2387,3 +2437,69 @@ class TestAnExerciseNameIsNotAFatFinger:
         client.force_login(s.athlete)
         resp = write_cell(client, s.session, s.squat, 1, text)
         assert resp.json()["cell"]["warn"] is True, f"{text!r} should warn"
+
+
+# -- adversarial review, round 3 (the cap) ------------------------------------
+
+
+class TestADurationHasManySpellings:
+    """``30s`` and ``30 seconds`` are one timed set — the BW/8.0 class again."""
+
+    def test_an_equivalent_duration_keeps_the_set_hidden(self, client):
+        from store_project.meso.models import parsed_set_is_hidden
+
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 30s")
+        cell = sub_cell(s.squat, 1)
+        row = LoggedSet.objects.get(source_line=cell)
+        assert row.reps == "30s"
+
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="225 x 30 seconds", line=1).status_code == 200
+
+        row.refresh_from_db()
+        assert parsed_set_is_hidden(row), (
+            "the line still displays this timed performance, so it must not "
+            "also render as a structured row"
+        )
+
+
+class TestARecordIsCelebratedOnce:
+    """The blur already celebrated it; a save that changed nothing must not."""
+
+    def test_a_save_does_not_recelebrate_a_blurs_record(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        first = write_cell(client, s.session, s.squat, 1, "120 x 5")
+        assert first.json()["new_records"], "the blur celebrates the first log"
+
+        second = log_post(client, s.session, {"status": "pending", "sets": []})
+        assert second.status_code == 200
+        assert second.json()["new_records"] == [], (
+            "the save re-celebrated a record the blur had already shown"
+        )
+
+    def test_a_save_still_celebrates_its_own_record(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "140",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["new_records"], (
+            "a structured save's own first log is still a PR"
+        )

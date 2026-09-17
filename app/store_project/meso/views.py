@@ -1430,10 +1430,7 @@ def athlete_log_session(request, pk):
         ).select_related("source_line"):
             if parsed_set_is_hidden(row):
                 continue
-            if (
-                row.source_line_id is not None
-                and (row.prescription_id, row.set_number) not in posted
-            ):
+            if row.source_line_id is not None and not _client_held(row, cleaned_sets):
                 continue
             replaceable.append(row.pk)
         log.sets.filter(pk__in=replaceable).delete()
@@ -1481,16 +1478,21 @@ def athlete_log_session(request, pk):
         cleaned_sets = keep
         posted = {(cs["prescription_id"], cs["set_number"]) for cs in cleaned_sets}
 
-        # Move any surviving HIDDEN row off a set number the client just posted.
-        # Its number is invisible today — nothing renders it — but the moment the
-        # sub-line is reclaimed or edited it surfaces, and two rows sharing
-        # (prescription, set_number) collapse in `athlete_session`'s dict, after
-        # which a save can delete both while reposting one. The client's
-        # numbering stays authoritative; the hidden row yields, because it is the
-        # one nobody is looking at.
+        # Move any surviving PARSED row off a set number the client just posted.
+        # Two rows sharing (prescription, set_number) collapse in
+        # `athlete_session`'s dict, after which a save can delete both while
+        # reposting one. The client's numbering stays authoritative; the parsed
+        # row yields, because the client is the one with a page to keep in step.
+        #
+        # Covers the visible rows too, not just the hidden ones. A parsed row is
+        # numbered by its sub-line while the structured grid numbers from 1, so
+        # an athlete typing into structured row 1 collides with a parsed row on
+        # sub-line 1 — and since such a row is now SPARED rather than deleted
+        # (see `_client_held`), sparing it without renumbering simply moved the
+        # collision one step later.
         if posted:
             for row in log.sets.select_related("source_line"):
-                if not parsed_set_is_hidden(row):
+                if row.source_line_id is None:
                     continue
                 if (row.prescription_id, row.set_number) not in posted:
                     continue
@@ -1540,7 +1542,20 @@ def athlete_log_session(request, pk):
     # the just-committed rows. As of 5a this read is LIVE (it counts pending
     # sets), so a "Save progress" draft can legitimately return records too —
     # it is no longer DONE-gated.
-    new_records = new_records_in(log)
+    #
+    # Minus anything this save did not actually log. A parsed row that is still
+    # displayed by its own sub-line was celebrated by the blur that created it
+    # (``_upsert_parsed_set`` fires the optimistic toast), and it survives this
+    # save untouched — so reporting it here congratulated the athlete a second
+    # time for a record they had already seen, on a save that changed nothing.
+    hidden_set_pks = {
+        row.pk
+        for row in log.sets.select_related("source_line")
+        if parsed_set_is_hidden(row)
+    }
+    new_records = [
+        r for r in new_records_in(log) if r.logged_set_id not in hidden_set_pks
+    ]
     return JsonResponse(
         {
             "ok": True,
@@ -2059,6 +2074,37 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
             athlete.pk,
         )
     return new_records
+
+
+def _client_held(row, cleaned_sets):
+    """Did this save's payload actually come from a page showing ``row``?
+
+    Only asked of a VISIBLE parsed row — one a coach rewrite surfaced after the
+    athlete's page had loaded. The replace-delete needs to know whether the
+    client was looking at it, and the payload is the only evidence there is.
+
+    Posting the row's slot is not enough on its own. A parsed row is numbered by
+    its sub-line (``cell.line``), and the structured grid numbers its own rows
+    from 1, so the two share a numbering space: an athlete typing a different
+    set into structured row 1 posts ``(prescription, 1)`` and would have looked
+    like proof of seeing a parsed row that also happens to be set 1 — and the
+    delete then destroyed a performance nobody asked to change.
+
+    So the payload must RE-STATE the row: same slot, same values. An edit to a
+    visible parsed row still replaces it (the athlete posts the slot with new
+    values only after the old ones were rendered there — see the collision
+    renumbering, which moves the row aside instead). Preferring a visible
+    duplicate over a silent deletion is the same call the rest of this slice
+    makes.
+    """
+    return any(
+        (cs["prescription_id"], cs["set_number"])
+        == (row.prescription_id, row.set_number)
+        and parsing.same_logged_set(
+            (row.reps, row.load, row.rpe), (cs["reps"], cs["load"], cs["rpe"])
+        )
+        for cs in cleaned_sets
+    )
 
 
 def _cell_warn_or_false(cell, line_zero_cell):

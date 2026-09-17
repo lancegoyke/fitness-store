@@ -661,7 +661,43 @@ def same_logged_value(left, right):
     try:
         return float(left) == float(right)
     except ValueError:
-        return False
+        pass
+    left_duration, right_duration = _duration_key(left), _duration_key(right)
+    return left_duration is not None and left_duration == right_duration
+
+
+# ``s``/``sec``/``seconds`` are one unit; the parser recognises all of them but
+# ``performed_reps_text`` keeps whichever the athlete typed. Folding them to a
+# family here is what stops ``30s`` and ``30 seconds`` reading as two different
+# performances of the same timed set.
+_TIME_UNIT_FAMILIES = {
+    "s": "s",
+    "sec": "s",
+    "secs": "s",
+    "second": "s",
+    "seconds": "s",
+    "m": "m",
+    "min": "m",
+    "mins": "m",
+    "minute": "m",
+    "minutes": "m",
+    "'": "m",
+    "h": "h",
+    "hour": "h",
+    "hours": "h",
+}
+
+
+def _duration_key(token):
+    """``("30", "s")`` for any spelling of a timed token, else ``None``."""
+    match = _DURATION.match(token.strip())
+    if not match:
+        return None
+    amount, unit = match.groups()
+    family = _TIME_UNIT_FAMILIES.get(unit.lower())
+    if family is None:
+        return None
+    return (amount.replace(" ", ""), family)
 
 
 def same_logged_set(left, right):
