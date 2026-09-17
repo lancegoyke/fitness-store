@@ -315,11 +315,23 @@ def restore_plan_snapshot(plan, snapshot):
     live_week_pks_in_snapshot = {
         pk for pk, row in week_rows.items() if row["deleted_at"] is None
     }
+    #
+    # ``parsed_sets`` joins the same exclusion for a reason the flag misses: a
+    # RECLAIMED sub-line is ``athlete_authored=False``, so undoing back past its
+    # creation hard-deleted it — and ``LoggedSet.source_line`` is SET_NULL, so
+    # the athlete's derived set survived as a source-LESS row. That strips the
+    # protection the link carries (the structured logger's replace-delete spares
+    # a parsed row it didn't post for, but cannot recognise one whose link is
+    # gone), and the next ordinary save destroyed an earned performance. Undo
+    # already refuses to touch athlete data; a cell some athlete data POINTS AT
+    # is the same promise one join away.
     models.Prescription.objects.filter(
         week__mesocycle__plan=plan,
         exercise_slot_id__in=live_exercise_slot_pks_in_snapshot,
         week_id__in=live_week_pks_in_snapshot,
-    ).exclude(pk__in=cell_pks).exclude(athlete_authored=True).delete()
+    ).exclude(pk__in=cell_pks).exclude(athlete_authored=True).exclude(
+        parsed_sets__isnull=False
+    ).delete()
 
 
 def record_plan_action(plan, label):

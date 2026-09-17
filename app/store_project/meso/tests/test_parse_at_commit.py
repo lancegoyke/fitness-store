@@ -2225,3 +2225,165 @@ class TestTheToastFollowsTheRecord:
         assert (row.load, row.reps, row.rpe) == ("120", "5", "9"), (
             "the correction itself must still be stored"
         )
+
+
+# -- adversarial review, round 2 ----------------------------------------------
+#
+# Re-running the same six angles against the round-1 fixes found seven more,
+# including one the round-1 de-duplication introduced.
+
+
+class TestTwoIdenticalSetsStayTwoSets:
+    """225 x 5 twice is two performances, not one written twice.
+
+    Round 1 absorbed a posted row that matched a surviving parsed set by value,
+    to stop a stale repost cloning a row undo had re-hidden. Matching on value
+    ALONE let the untouched second row absorb the replacement for the first —
+    which had just been deleted — so one of the two performances vanished. The
+    set number is what tells the two apart.
+    """
+
+    def test_reclaiming_one_of_them_does_not_swallow_the_other(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        write_cell(client, s.session, s.squat, 2, "225 x 5")
+        assert LoggedSet.objects.filter(prescription=s.squat).count() == 2
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder", line=1)
+
+        # The athlete's page shows the reclaimed row, so their save carries it.
+        client.force_login(s.athlete)
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        assert LoggedSet.objects.filter(prescription=s.squat).count() == 2, (
+            "one of two identical performances was swallowed by the other"
+        )
+
+
+class TestUndoDoesNotOrphanASetsSourceCell:
+    """Undo must not strip a logged set of the link that protects it.
+
+    A reclaimed sub-line is coach-owned, so undoing back past its creation
+    hard-deleted it — and ``source_line`` is SET_NULL, so the athlete's derived
+    set survived as a source-LESS row. The structured logger spares a parsed row
+    it didn't post for, but cannot recognise one whose link is gone, so the next
+    ordinary save destroyed an earned performance.
+    """
+
+    def test_a_cell_backing_a_logged_set_survives_a_restore(self, client):
+        s = seed()
+        client.force_login(s.coach)
+        # A snapshot that predates the athlete's line.
+        assert reclaim(client, s, text="tempo cue", line=3).status_code == 200
+
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+        row = LoggedSet.objects.get(source_line=cell)
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder", line=1)
+        undo_url = reverse("meso:api_plan_undo", kwargs={"plan_id": s.plan.pk})
+        for _ in range(3):
+            client.post(undo_url, content_type="application/json")
+
+        row.refresh_from_db()
+        assert row.source_line_id is not None, (
+            "undo orphaned the set, stripping the link the logger relies on"
+        )
+
+        client.force_login(s.athlete)
+        log_post(client, s.session, {"status": "pending", "sets": []})
+        assert LoggedSet.objects.filter(pk=row.pk).exists(), (
+            "the orphaned set was then destroyed by an ordinary save"
+        )
+
+
+class TestOneValueManySpellings:
+    """``BW``/``bw`` and ``8``/``8.0`` are one value. Every site must agree.
+
+    Three sites compared stored sets with their own spelling of the comparison,
+    and each produced a different bug: a set displayed in both channels, a
+    restored line creating a twin instead of reusing its own row, and a
+    reformatted load re-firing a PR toast already celebrated.
+    """
+
+    def test_restoring_with_different_case_reuses_the_row(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "BW x 12")
+        cell = sub_cell(s.squat, 1)
+        row = LoggedSet.objects.get(source_line=cell)
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder", line=1)
+
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "bw x 12")
+
+        rows = list(LoggedSet.objects.filter(source_line=cell))
+        assert len(rows) == 1, f"one performance became {len(rows)} rows"
+        assert rows[0].pk == row.pk, "the surviving row should have been reused"
+
+    def test_an_equivalent_rpe_spelling_keeps_the_set_hidden(self, client):
+        from store_project.meso.models import parsed_set_is_hidden
+
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5, RPE 8.0")
+        cell = sub_cell(s.squat, 1)
+        row = LoggedSet.objects.get(source_line=cell)
+        assert row.rpe == "8.0"
+
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="225 x 5, RPE 8", line=1).status_code == 200
+
+        row.refresh_from_db()
+        assert parsed_set_is_hidden(row), "the line still displays this performance"
+
+    def test_reformatting_the_load_does_not_refire_the_toast(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        first = write_cell(client, s.session, s.squat, 1, "120 x 5")
+        assert first.json()["new_records"], "the first log of a lift is a PR"
+
+        second = write_cell(client, s.session, s.squat, 1, "120.0 x 5")
+        assert second.json()["new_records"] == [], (
+            "the same e1RM was celebrated twice over a formatting change"
+        )
+
+
+class TestAnExerciseNameIsNotAFatFinger:
+    """``TRX 45° row`` is a swap. The ``x`` is a letter, not an operator."""
+
+    @pytest.mark.parametrize("text", ["TRX 45° row", "DB pullover", "Box squat 225"])
+    def test_a_swap_is_not_tinted(self, client, text):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, text)
+        assert resp.status_code == 200
+        assert resp.json()["cell"]["warn"] is False, f"{text!r} was tinted"
+
+    @pytest.mark.parametrize("text", ["225 x", "2255x5", "225x"])
+    def test_a_real_fat_finger_still_warns(self, client, text):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, text)
+        assert resp.json()["cell"]["warn"] is True, f"{text!r} should warn"

@@ -319,7 +319,14 @@ def _looks_like_set_attempt(segment):
     # a perfectly good swap. Require the operator to sit against a digit on at
     # least one side (``225 x``, ``x 5``, ``5 @ 225``), which is what an actual
     # fat-fingered set attempt looks like.
-    if re.search(r"(\d\s*[x×@])|([x×@]\s*\d)", segment, re.IGNORECASE):
+    # ...and the operator must not be a letter INSIDE a word: "TRX 45° row" and
+    # "Box 3" are exercise names, and tinting them told the athlete their swap
+    # wasn't logged as a set when nothing about it was an attempt to log one.
+    if re.search(
+        r"(\d\s*(?<![a-z])[x×@])|((?<![a-z])[x×@](?![a-z])\s*\d)",
+        segment,
+        re.IGNORECASE,
+    ):
         return True
     return bool(_LOAD.match(segment.strip()))
 
@@ -626,16 +633,40 @@ def performed_text_shows(text, *, reps, load, rpe):
     # tidying ``BW x 12`` to ``bw x 12`` — read as "the text no longer shows
     # this set", which un-hid a row the line was plainly still displaying: the
     # same performance in both channels, and repostable as a duplicate.
-    return (
-        _same_token(performed_reps_text(parsed), reps)
-        and _same_token(str(parsed.get("load", "")), load)
-        and _same_token(str(parsed.get("rpe", "")), rpe)
+    return same_logged_set(
+        (
+            performed_reps_text(parsed),
+            str(parsed.get("load", "")),
+            str(parsed.get("rpe", "")),
+        ),
+        (reps, load, rpe),
     )
 
 
-def _same_token(left, right):
-    """Do these two stored-set tokens denote the same thing, ignoring case?"""
-    return left.casefold() == right.casefold()
+def same_logged_value(left, right):
+    """Do these two stored-set tokens denote the same thing?
+
+    ``LoggedSet.reps``/``load``/``rpe`` hold the athlete's own notation, so one
+    value has many spellings: ``BW``/``bw`` (the load keeps the case it was
+    typed in) and ``8``/``8.0``/``120``/``120.0`` (a decimal point survives the
+    parse). Every comparison of two stored sets in this slice asks the same
+    question — is this the same performance? — so they all route through here.
+    Letting each site spell the comparison itself is what produced three
+    separate bugs: the same set displayed in both channels, a restored line
+    creating a twin row instead of reusing its own, and a reformatted load
+    re-firing a PR toast already celebrated.
+    """
+    if left.casefold() == right.casefold():
+        return True
+    try:
+        return float(left) == float(right)
+    except ValueError:
+        return False
+
+
+def same_logged_set(left, right):
+    """Do two ``(reps, load, rpe)`` triples denote the same performance?"""
+    return all(same_logged_value(a, b) for a, b in zip(left, right, strict=True))
 
 
 def performed_is_set(text):

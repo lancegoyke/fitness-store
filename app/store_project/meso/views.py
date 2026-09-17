@@ -1443,24 +1443,34 @@ def athlete_log_session(request, pk):
         # undone: a row the client saw (and so posted) can be hidden again by the
         # time the save lands, in which case it is NOT replaced above — and
         # creating it would leave the same performance twice in one log, once as
-        # the parsed row and once as a source-less clone of it. Matched on value
-        # rather than set number because the renumbering below is free to move
-        # the survivor.
-        surviving = [
+        # the parsed row and once as a source-less clone of it.
+        #
+        # Keyed on SET NUMBER as well as value, which is what separates "the
+        # client is re-posting THIS row" from "the client is posting a set that
+        # happens to look like a different one". Two identical performances on
+        # two sub-lines are an ordinary thing to do — 225 x 5 twice — and
+        # matching by value alone let the untouched survivor absorb the
+        # replacement for the row just deleted, so that performance vanished.
+        # The client reports the number ``serialize_session_log`` gave it, so
+        # the row it means still carries that number here (the renumbering
+        # below runs after this).
+        available = [
             row
             for row in log.sets.select_related("source_line")
             if row.source_line_id is not None
         ]
-        available = list(surviving)
         keep = []
         for cs in cleaned_sets:
             twin = next(
                 (
                     row
                     for row in available
-                    if row.prescription_id == cs["prescription_id"]
-                    and (row.reps, row.load, row.rpe)
-                    == (cs["reps"], cs["load"], cs["rpe"])
+                    if (row.prescription_id, row.set_number)
+                    == (cs["prescription_id"], cs["set_number"])
+                    and parsing.same_logged_set(
+                        (row.reps, row.load, row.rpe),
+                        (cs["reps"], cs["load"], cs["rpe"]),
+                    )
                 ),
                 None,
             )
@@ -1810,12 +1820,22 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
             # off, and execution still fell through to the delete — losing an
             # already-logged performance on an unchanged stale blur, which is
             # precisely the data loss the bail exists to prevent.
-            line_zero_cell = (
+            fresh_line_zero = (
                 Prescription.objects.select_for_update()
                 .filter(pk=line_zero_cell.pk)
                 .first()
-                or line_zero_cell
             )
+            if fresh_line_zero is None:
+                # The row is gone (a history restore hard-deletes a stray cell).
+                # Falling back to the stale instance wrote its dead pk as the
+                # new set's FK; PostgreSQL defers that constraint to COMMIT, so
+                # the violation surfaced in the OUTER transaction — past this
+                # savepoint AND past the guard below — taking the athlete's
+                # just-saved text down with it and returning a 500. There is no
+                # prescription left to log against, and the text is already
+                # saved either way.
+                return []
+            line_zero_cell = fresh_line_zero
 
             # A skipped row is READ-ONLY to this path, not just un-writable.
             # Declining to MINT a set isn't enough — letting the delete run
@@ -1930,8 +1950,10 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                         (
                             row
                             for row in log.sets.filter(source_line=cell)
-                            if (row.reps, row.load, row.rpe)
-                            == (values["reps"], values["load"], values["rpe"])
+                            if parsing.same_logged_set(
+                                (row.reps, row.load, row.rpe),
+                                (values["reps"], values["load"], values["rpe"]),
+                            )
                         ),
                         None,
                     )
@@ -1967,9 +1989,11 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                     # performance: the row is deleted and recreated with a fresh
                     # pk, so the toast filter matched, and the athlete was
                     # congratulated a second time for the identical e1RM.
-                    unchanged = previous_values is not None and previous_values[:2] == (
-                        created.reps,
-                        created.load,
+                    # Compared as VALUES, not strings: `120` and `120.0` are one
+                    # record, so spelling one of them differently re-fired a 🎉
+                    # already celebrated.
+                    unchanged = previous_values is not None and parsing.same_logged_set(
+                        previous_values[:2], (created.reps, created.load)
                     )
 
             # This blur left no set on the cell, so the log may now hold
