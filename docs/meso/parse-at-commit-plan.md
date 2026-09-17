@@ -28,6 +28,43 @@ landed in #484
 >   settled position (`athlete_log_session`'s delete) is that a set logged
 >   against a since-skipped cell is history.
 
+## Adversarial review (pre-PR, 2026-09-17)
+
+Six angles derived from this slice's own promises, three rounds plus a
+verification pass. Sixteen findings confirmed and fixed; the rest are decisions,
+recorded here so they are not re-litigated.
+
+**Declined — `3 x 10` logs as 3 lb × 10** (Lance, 2026-09-17). Load-first makes
+it a 3 lb set of ten, but an athlete may mean three sets of ten; the notation is
+genuinely ambiguous and the alternative (tinting small bare loads) would false-
+alarm on real light-dumbbell work like `5 x 10`. Shipping as-is and watching what
+athletes actually type. The unambiguous half IS caught: a rep count over
+`_MAX_PLAUSIBLE_REPS` doesn't resolve, so `5 x 225` tints instead of banking 225
+reps of 5 lb.
+
+**Deferred to 5b — the client must name the rows it held.** The structured
+logger's replace-delete has to decide whether a payload came from a page that
+was showing a given parsed row, and the payload is its only evidence. Two
+identical performances — one from a client that saw the row, one from a client
+that didn't — are byte-identical on the wire, so no server-side heuristic can
+separate them. Three rounds of tightening only moved which sequence loses:
+
+- a stale page logging a second, identical set at the same set number after a
+  reclaim replaces the earned one rather than adding to it;
+- a repost-then-restore, or a replay after another tab renumbers a row, leaves a
+  visible duplicate (not a loss);
+- an equal-best entered on an earlier sub-line can re-fire one toast.
+
+Every one of these needs a reclaim plus a stale tab. The fix is a payload
+change — the logger posts the ids it rendered — which belongs with 5b's
+retirement of that logger, not bolted onto 5a.
+
+**Known trade, shipped deliberately:** after a coach reclaims a sub-line, the
+athlete can no longer clear that set to nothing from the structured logger
+(posting new values still replaces it). A cleared row and a row the client never
+saw are the same empty payload, and keeping unasked-for work beats destroying
+it.
+
 **Owner:** Lance
 **North star:** the athlete logs by **typing into grid cells** — one freeform
 textbox per cell, like a spreadsheet. On blur we parse the text into a structured
