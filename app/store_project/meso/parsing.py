@@ -663,7 +663,10 @@ def same_logged_value(left, right):
     except ValueError:
         pass
     left_duration, right_duration = _duration_key(left), _duration_key(right)
-    return left_duration is not None and left_duration == right_duration
+    if left_duration is not None and left_duration == right_duration:
+        return True
+    left_load, right_load = _load_key(left), _load_key(right)
+    return left_load is not None and left_load == right_load
 
 
 # ``s``/``sec``/``seconds`` are one unit; the parser recognises all of them but
@@ -686,6 +689,31 @@ _TIME_UNIT_FAMILIES = {
     "hour": "h",
     "hours": "h",
 }
+
+
+# ``_LOAD`` accepts ``lb``/``lbs`` and ``kg``/``kgs``/``kilos`` alike, and the
+# parser keeps whichever the athlete typed — so these fold too, for the same
+# reason the time units do.
+_WEIGHT_UNIT_FAMILIES = {
+    "lb": "lb",
+    "lbs": "lb",
+    "kg": "kg",
+    "kgs": "kg",
+    "kilo": "kg",
+    "kilos": "kg",
+    "%": "%",
+}
+
+
+def _load_key(token):
+    """``(225.0, "lb")`` for any spelling of a load token, else ``None``."""
+    match = _LOAD.match(token.strip())
+    if not match:
+        return None
+    number, unit = match.groups()
+    if number is None:  # the ``bw`` branch — casefold already covers it
+        return None
+    return (float(number), _WEIGHT_UNIT_FAMILIES.get((unit or "").lower(), ""))
 
 
 def _duration_key(token):

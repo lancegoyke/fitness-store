@@ -2503,3 +2503,65 @@ class TestARecordIsCelebratedOnce:
         assert resp.json()["new_records"], (
             "a structured save's own first log is still a PR"
         )
+
+
+class TestASettledVerdictIsFixedInTime:
+    """Whether a session was a PR is a fact about the day it happened."""
+
+    def test_a_later_session_does_not_erase_an_earlier_record(self, client):
+        import datetime
+
+        from store_project.meso.personal_records import new_records_in
+
+        s = seed()
+        client.force_login(s.athlete)
+
+        earlier = SessionLog.objects.create(
+            session=s.session,
+            athlete=s.athlete,
+            status=SessionLog.Status.DONE,
+            date=datetime.date(2026, 9, 1),
+        )
+        LoggedSet.objects.create(
+            session_log=earlier,
+            prescription=s.squat,
+            set_number=1,
+            reps="5",
+            load="120",
+        )
+        assert new_records_in(earlier), "the first log of a lift is a PR"
+
+        later = SessionLog.objects.create(
+            session=s.session,
+            athlete=s.athlete,
+            status=SessionLog.Status.DONE,
+            date=datetime.date(2026, 9, 8),
+        )
+        LoggedSet.objects.create(
+            session_log=later, prescription=s.squat, set_number=1, reps="5", load="150"
+        )
+
+        assert new_records_in(earlier), (
+            "a session that settled later erased the earlier session's record"
+        )
+        assert new_records_in(later), "the heavier later session is a PR too"
+
+
+class TestOneLoadManySuffixes:
+    """``225 lb`` and ``225 lbs`` are one load — the last spelling in the class."""
+
+    def test_an_equivalent_suffix_keeps_the_set_hidden(self, client):
+        from store_project.meso.models import parsed_set_is_hidden
+
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 lb x 5")
+        cell = sub_cell(s.squat, 1)
+        row = LoggedSet.objects.get(source_line=cell)
+        assert row.load == "225lb"
+
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="225 lbs x 5", line=1).status_code == 200
+
+        row.refresh_from_db()
+        assert parsed_set_is_hidden(row), "the line still displays this performance"

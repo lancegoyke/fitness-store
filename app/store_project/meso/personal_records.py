@@ -38,6 +38,8 @@ can drive the SAME computation by yielding the same tuples — no rework here.
 from dataclasses import dataclass
 from datetime import date as date_cls
 
+from django.db.models import Q
+
 from . import models
 from .one_rm import epley_one_rm
 from .one_rm import key_str
@@ -183,6 +185,36 @@ def personal_records(athlete, *, unit):
     return _best_per_lift(_performed_sets(logged_sets, unit=unit))
 
 
+def _logged_before(session_log):
+    """Sets from logs that PRECEDE ``session_log``, by the model's own order.
+
+    Restricting a settled subject to settled history was only half the rule.
+    ``session_results`` recomputes this on every read, so without a chronology
+    a session that settles LATER also rewrote the earlier verdict: a coach
+    opening a finished session saw its PR badge simply gone, because the athlete
+    has since out-lifted it. Whether that session was a record is a fact about
+    the day it happened, and a later one cannot change it.
+
+    Ordered like ``SessionLog.Meta`` — ``date`` first, ``created_at`` as the
+    tiebreak — with an undated log falling back to when it was written, since
+    ``date__lt`` would otherwise drop it from the baseline entirely.
+    """
+    when = session_log.date
+    if when is None:
+        return Q(session_log__created_at__lt=session_log.created_at)
+    return (
+        Q(session_log__date__lt=when)
+        | Q(
+            session_log__date=when,
+            session_log__created_at__lt=session_log.created_at,
+        )
+        | Q(
+            session_log__date__isnull=True,
+            session_log__created_at__lt=session_log.created_at,
+        )
+    )
+
+
 def new_records_in(session_log):
     """Lifts in ``session_log`` that beat the athlete's prior LIVE best — pure detection.
 
@@ -222,7 +254,9 @@ def new_records_in(session_log):
     # finished session silently stops showing its record. A PENDING subject is
     # the live/optimistic path and keeps the live baseline.
     if session_log.status == models.SessionLog.Status.DONE:
-        prior_qs = prior_qs.filter(session_log__status=models.SessionLog.Status.DONE)
+        prior_qs = prior_qs.filter(
+            session_log__status=models.SessionLog.Status.DONE
+        ).filter(_logged_before(session_log))
     prior_best = _best_per_lift(_performed_sets(prior_qs, unit=unit))
 
     records = []
