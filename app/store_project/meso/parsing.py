@@ -220,6 +220,33 @@ def parse_prescription(text):
 # to resolve into a set — see ``_load_is_plausible``.
 _MAX_BARE_LOAD = 999
 
+# The mirror of ``_MAX_BARE_LOAD`` on the other side of the ``x``. Load-first
+# grammar means ``5 x 225`` reads as 5 lb for 225 reps — but nobody performs 225
+# reps, so that text is far likelier to be the athlete typing REPS first (the
+# order the structured inputs beside it used to ask for). Guessing either way
+# would be wrong: storing it silently records a set the athlete never did and
+# feeds a junk e1RM, and silently inverting it would invent a performance from
+# notation the athlete didn't use. So an implausible rep count simply doesn't
+# resolve — the text is kept, no set is written, and the cell tints (§8), which
+# is the one outcome that tells the athlete the truth and lets them fix it.
+_MAX_PLAUSIBLE_REPS = 100
+
+
+def _reps_are_plausible(out):
+    """Could ``out``'s rep count be a rep count a human actually performed?
+
+    Bounds ``reps``/``reps_range`` the way ``_load_is_plausible`` bounds a bare
+    load. ``duration``/``amrap`` are not counts and are never refused here.
+    """
+    reps = out.get("reps")
+    if reps is not None and reps > _MAX_PLAUSIBLE_REPS:
+        return False
+    low_high = out.get("reps_range")
+    if low_high is not None and max(low_high) > _MAX_PLAUSIBLE_REPS:
+        return False
+    return True
+
+
 # Keyword heuristic for the swap-vs-note split (§3): a swap is typically a
 # bare exercise name (``DB pullover``, ``R SL L glute max``); a note reads
 # like a sentence/comment (``felt tight``, ``paired with lat hang``). The
@@ -323,6 +350,10 @@ def _try_at_form(head, explicit_load=False):
     # ``unresolved-set`` and were refused.
     if not any(k in out for k in ("reps", "reps_range", "duration", "amrap")):
         return None
+    # ``225 @ 5`` — 225 reps at a load of 5 — is the inverted form of this
+    # operator, and refusing it here is what routes it to ``unresolved-set``.
+    if not _reps_are_plausible(out):
+        return None
     out["load"] = load_token.replace(" ", "")
     return out
 
@@ -359,6 +390,12 @@ def _try_load_first(head, explicit_load=False):
     # caller falls through to ``unresolved-set``. (A bare ``225`` with no
     # ``x`` is a different branch and still a legitimate partial set.)
     if not any(k in out for k in ("reps", "reps_range", "duration", "amrap")):
+        return None
+    # ...and a right-hand side too large to be reps (``5 x 225``) is the
+    # reps-first inversion — see ``_MAX_PLAUSIBLE_REPS``. Bail so the caller
+    # falls through to ``unresolved-set`` and the athlete is told, rather than
+    # silently banking 225 reps of 5 lb.
+    if not _reps_are_plausible(out):
         return None
     return out
 
@@ -583,11 +620,22 @@ def performed_text_shows(text, *, reps, load, rpe):
     parsed = parse_performed(text)
     if not parsed or parsed.get("kind") != "set":
         return False
+    # Case-insensitively, because a load token keeps the case the athlete typed
+    # (``BW`` vs ``bw``) while nothing else about the set changes. An exact
+    # comparison made a case-only rewrite of the source line — a coach reclaim
+    # tidying ``BW x 12`` to ``bw x 12`` — read as "the text no longer shows
+    # this set", which un-hid a row the line was plainly still displaying: the
+    # same performance in both channels, and repostable as a duplicate.
     return (
-        performed_reps_text(parsed) == reps
-        and str(parsed.get("load", "")) == load
-        and str(parsed.get("rpe", "")) == rpe
+        _same_token(performed_reps_text(parsed), reps)
+        and _same_token(str(parsed.get("load", "")), load)
+        and _same_token(str(parsed.get("rpe", "")), rpe)
     )
+
+
+def _same_token(left, right):
+    """Do these two stored-set tokens denote the same thing, ignoring case?"""
+    return left.casefold() == right.casefold()
 
 
 def performed_is_set(text):

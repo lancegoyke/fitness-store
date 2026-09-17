@@ -1250,17 +1250,26 @@ class TestEmptyLogsAreReapedOnEveryPath:
 
 
 class TestVisibilityAndDeleteScopeAgree:
-    def test_a_hidden_sibling_survives_a_save_that_clears_the_reclaimed_one(
-        self, client
-    ):
+    def test_an_empty_save_clears_neither_parsed_row(self, client):
         """The invariant, on one exercise with both kinds of row.
 
         Sub-line 2 is still athlete-authored, so it stays hidden and the logger
-        cannot touch it. Sub-line 1 was reclaimed, so it is visible and the
-        logger owns it — an empty save clears it exactly as it would any
-        structured row. Scoping the delete and the visibility rule separately is
-        what let these two drift: first the delete wiped the hidden one, then it
-        spared the visible one and the client duplicated it.
+        cannot touch it. Sub-line 1 was reclaimed, so it is visible — and this
+        test used to assert an empty save cleared it, "exactly as it would any
+        structured row".
+
+        The adversarial review showed why that premise is unsafe: an empty
+        payload is what BOTH "the athlete cleared this row" and "this page was
+        loaded before the coach's rewrite, so it never held the row" look like
+        on the wire, and guessing the first silently destroyed an earned set.
+        A visible parsed row is now only replaceable when the request posts its
+        slot (see ``athlete_log_session``), so an empty save clears neither.
+
+        The bounded cost: after a reclaim, clearing that set to nothing from the
+        structured logger no longer works — changing its values still does
+        (``test_a_save_that_does_post_it_still_replaces_it``). Closing that gap
+        properly means the client telling the server which rows it actually
+        held, which is a payload change for 5b, not a guess for 5a.
         """
         s = seed()
         client.force_login(s.athlete)
@@ -1273,12 +1282,12 @@ class TestVisibilityAndDeleteScopeAgree:
         client.force_login(s.athlete)
         log_post(client, s.session, {"status": "pending", "sets": []})
 
-        remaining = list(
+        remaining = sorted(
             LoggedSet.objects.filter(prescription=s.squat).values_list(
                 "load", flat=True
             )
         )
-        assert remaining == ["235"], remaining
+        assert remaining == ["225", "235"], remaining
 
 
 class TestParsedSetsGetDistinctSetNumbers:
@@ -1971,4 +1980,248 @@ class TestAConcurrentSkipDoesNotDeleteAnExistingSet:
 
         assert LoggedSet.objects.filter(source_line=cell).exists(), (
             "a concurrent skip deleted a performance the athlete had logged"
+        )
+
+
+# -- adversarial review (pre-PR) ----------------------------------------------
+#
+# Six angles derived from this slice's own promises, run as isolated reviewer
+# passes. Every finding below was confirmed against the code before it was
+# fixed; each test pins the behaviour the fix restores.
+
+
+class TestTheLoggerOnlyReplacesWhatTheClientHeld:
+    """A save must not destroy a parsed set the page never showed the athlete.
+
+    The replace-delete judged visibility from the CURRENT cell text, but the
+    payload describes what the page RENDERED. A coach rewriting the source line
+    in between flips a row from hidden to visible without the athlete's open tab
+    ever learning it exists — so an ordinary "Save progress" covered a row the
+    client never held, deleted it, and reposted nothing.
+    """
+
+    def test_a_save_that_does_not_post_it_leaves_a_rewritten_set_alone(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+        row = LoggedSet.objects.get(source_line=cell)
+
+        # The coach rewrites the line; the row is now "visible" server-side,
+        # but the athlete's open page still has empty structured inputs.
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="brace harder").status_code == 200
+
+        client.force_login(s.athlete)
+        resp = log_post(client, s.session, {"status": "pending", "sets": []})
+        assert resp.status_code == 200
+
+        assert LoggedSet.objects.filter(pk=row.pk).exists(), (
+            "a save that posted nothing for this slot destroyed a performance "
+            "the athlete had already logged"
+        )
+
+    def test_a_save_that_does_post_it_still_replaces_it(self, client):
+        """The client's proof it was looking: it posted that slot."""
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+
+        client.force_login(s.athlete)
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "8",
+                        "load": "245",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        rows = list(LoggedSet.objects.filter(session_log__session=s.session))
+        assert len(rows) == 1
+        assert (rows[0].load, rows[0].reps) == ("245", "8")
+
+
+class TestAStaleRepostDoesNotCloneASurvivingSet:
+    """Undo can re-hide a row the client already saw — and then posted.
+
+    A reclaim makes a parsed row visible; the athlete's tab loads it into the
+    structured inputs; a coach undo restores the source text, hiding the row
+    again. The stale tab then posts its copy. Without value de-duplication the
+    save appends a source-less clone and one performance is logged twice.
+    """
+
+    def test_the_posted_copy_is_absorbed_by_the_survivor(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+        row = LoggedSet.objects.get(source_line=cell)
+
+        client.force_login(s.coach)
+        reclaim(client, s, text="brace harder")
+        undo = client.post(
+            reverse("meso:api_plan_undo", kwargs={"plan_id": s.plan.pk}),
+            content_type="application/json",
+        )
+        assert undo.status_code == 200
+        cell.refresh_from_db()
+        assert cell.text == "225 x 5", "undo should restore the athlete's text"
+
+        # The stale tab still holds the row it saw while the line was reclaimed.
+        client.force_login(s.athlete)
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+        rows = list(LoggedSet.objects.filter(session_log__session=s.session))
+        assert len(rows) == 1, (
+            f"one performance became {len(rows)} rows: "
+            f"{[(r.pk, r.source_line_id, r.set_number) for r in rows]}"
+        )
+        assert rows[0].pk == row.pk, "the parsed row is the survivor"
+
+
+class TestTheDisplayTestIgnoresLoadCase:
+    """``BW`` and ``bw`` are the same load; only the typing differs.
+
+    ``performed_text_shows`` compared the stored load to a re-parse of the cell
+    text exactly, so a case-only rewrite of the source line read as "this text
+    no longer shows that set" — un-hiding a row the line was plainly still
+    displaying, in both channels at once.
+    """
+
+    def test_a_case_only_rewrite_keeps_the_set_hidden(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "BW x 12")
+        cell = sub_cell(s.squat, 1)
+        row = LoggedSet.objects.get(source_line=cell)
+        assert row.load == "BW"
+
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="bw x 12").status_code == 200
+
+        from store_project.meso.models import parsed_set_is_hidden
+
+        row.refresh_from_db()
+        assert parsed_set_is_hidden(row), (
+            "the line still displays this performance, so it must not also "
+            "render as a structured row"
+        )
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        rendered = [
+            r
+            for ex in ctx["exercises"]
+            for r in ex["set_rows"]
+            if (r.get("reps") or r.get("load"))
+        ]
+        assert rendered == [], "the performance is displayed twice"
+
+
+class TestRepsFirstEntryIsNotSilentlyBanked:
+    """``5 x 225`` is the reps-first inversion, not a 5 lb set of 225 reps.
+
+    Load-first grammar made it parse cleanly, so it was stored, counted toward
+    the athlete's records at a nonsense e1RM, and shown with no tint at all —
+    the athlete had no way to know. An implausible rep count now simply doesn't
+    resolve (the mirror of ``_MAX_BARE_LOAD``): text kept, no set, cell tinted.
+    """
+
+    @pytest.mark.parametrize("text", ["5 x 225", "3 x 315", "225 @ 5"])
+    def test_it_warns_instead_of_logging(self, client, text):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, text)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cell"]["warn"] is True, f"{text!r} was banked silently"
+        assert body["cell"]["text"] == text, "the athlete's text must survive"
+        assert not LoggedSet.objects.filter(source_line=sub_cell(s.squat, 1)).exists()
+
+    @pytest.mark.parametrize("text", ["225 x 5", "bw x 50", "100 x 100", "5 @ 225"])
+    def test_plausible_sets_still_log(self, client, text):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, text)
+        assert resp.status_code == 200
+        assert resp.json()["cell"]["warn"] is False, f"{text!r} is a real set"
+        assert LoggedSet.objects.filter(source_line=sub_cell(s.squat, 1)).exists()
+
+
+class TestTheWarnReadCannotBreakTheResponse:
+    """The tolerance guarantee covers the whole request, not just the upsert.
+
+    The warn flag is derived while BUILDING the response — outside the upsert's
+    savepoint and outside its ``except``. A parser failure there escaped as a
+    500 even though the athlete's text had already committed.
+    """
+
+    def test_a_failing_warn_read_still_returns_the_saved_cell(
+        self, client, monkeypatch
+    ):
+        s = seed()
+        client.force_login(s.athlete)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("store_project.meso.views.sub_line_should_warn", boom)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        assert resp.status_code == 200, "a warn failure must not 500 the blur"
+        assert resp.json()["cell"]["text"] == "225 x 5"
+        assert resp.json()["cell"]["warn"] is False
+        sub_cell(s.squat, 1).refresh_from_db()
+        assert sub_cell(s.squat, 1).text == "225 x 5"
+
+
+class TestTheToastFollowsTheRecord:
+    """A PR is (reps, load). Editing anything else is not a new record.
+
+    ``unchanged`` compared all three stored values, so a pure RPE correction
+    deleted and recreated the row with a fresh pk, matched the toast filter, and
+    congratulated the athlete a second time for the identical e1RM.
+    """
+
+    def test_an_rpe_only_correction_does_not_refire(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+
+        first = write_cell(client, s.session, s.squat, 1, "120 x 5, RPE 8")
+        assert first.json()["new_records"], "the first log of a lift is a PR"
+
+        second = write_cell(client, s.session, s.squat, 1, "120 x 5, RPE 9")
+        assert second.status_code == 200
+        assert second.json()["new_records"] == [], (
+            "the e1RM did not move, so there is nothing new to celebrate"
+        )
+        row = LoggedSet.objects.get(source_line=sub_cell(s.squat, 1))
+        assert (row.load, row.reps, row.rpe) == ("120", "5", "9"), (
+            "the correction itself must still be stored"
         )

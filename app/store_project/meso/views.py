@@ -1407,14 +1407,69 @@ def athlete_log_session(request, pk):
         # ``source_line__isnull=True`` would leave a reclaimed row undeleted and
         # let the client duplicate it (5a, plan §5, §6). Filtered in Python
         # because the test re-parses cell text, which SQL can't express.
-        replaceable = [
-            s.pk
-            for s in log.sets.filter(
-                prescription_id__in=[p.pk for p in session.trainable_cells()],
-            ).select_related("source_line")
-            if not parsed_set_is_hidden(s)
-        ]
+        #
+        # A VISIBLE parsed row is only replaceable when this request posted its
+        # slot. Visibility is judged from the CURRENT cell text, but the payload
+        # was composed from what the page rendered — and a coach rewriting the
+        # source line in between flips a row from hidden to visible without the
+        # athlete's open page ever learning it exists. Deleting on visibility
+        # alone therefore let an ordinary "Save progress" destroy an earned set
+        # nobody had asked to change: the replace covered a row the client never
+        # held, so nothing reposted it. Posting the slot is the client's proof it
+        # was actually looking at that row.
+        #
+        # The cost is the mirror case — a reclaimed set the athlete clears from
+        # the logger now survives, because a cleared row and a row the client
+        # never saw are the same empty payload. Keeping unasked-for work beats
+        # destroying it (the same call ``prescription_skip`` makes), and the
+        # athlete's own sub-line is unaffected either way.
+        posted = {(cs["prescription_id"], cs["set_number"]) for cs in cleaned_sets}
+        replaceable = []
+        for row in log.sets.filter(
+            prescription_id__in=[p.pk for p in session.trainable_cells()],
+        ).select_related("source_line"):
+            if parsed_set_is_hidden(row):
+                continue
+            if (
+                row.source_line_id is not None
+                and (row.prescription_id, row.set_number) not in posted
+            ):
+                continue
+            replaceable.append(row.pk)
         log.sets.filter(pk__in=replaceable).delete()
+
+        # Drop any posted row that merely re-states a surviving parsed set. The
+        # payload is a snapshot of what the page rendered, and a reclaim can be
+        # undone: a row the client saw (and so posted) can be hidden again by the
+        # time the save lands, in which case it is NOT replaced above — and
+        # creating it would leave the same performance twice in one log, once as
+        # the parsed row and once as a source-less clone of it. Matched on value
+        # rather than set number because the renumbering below is free to move
+        # the survivor.
+        surviving = [
+            row
+            for row in log.sets.select_related("source_line")
+            if row.source_line_id is not None
+        ]
+        available = list(surviving)
+        keep = []
+        for cs in cleaned_sets:
+            twin = next(
+                (
+                    row
+                    for row in available
+                    if row.prescription_id == cs["prescription_id"]
+                    and (row.reps, row.load, row.rpe)
+                    == (cs["reps"], cs["load"], cs["rpe"])
+                ),
+                None,
+            )
+            if twin is not None:
+                available.remove(twin)  # one survivor absorbs one posted row
+                continue
+            keep.append(cs)
+        cleaned_sets = keep
+        posted = {(cs["prescription_id"], cs["set_number"]) for cs in cleaned_sets}
 
         # Move any surviving HIDDEN row off a set number the client just posted.
         # Its number is invisible today — nothing renders it — but the moment the
@@ -1423,7 +1478,6 @@ def athlete_log_session(request, pk):
         # which a save can delete both while reposting one. The client's
         # numbering stays authoritative; the hidden row yields, because it is the
         # one nobody is looking at.
-        posted = {(cs["prescription_id"], cs["set_number"]) for cs in cleaned_sets}
         if posted:
             for row in log.sets.select_related("source_line"):
                 if not parsed_set_is_hidden(row):
@@ -1686,9 +1740,7 @@ def athlete_cell_write(request, pk):
                 # Same rule the presenter applies, so the tint can't clear
                 # here only to come back on reload. `loggable` carries the one
                 # reason the text can't reveal: a skipped row accepts no sets.
-                "warn": sub_line_should_warn(
-                    cell, loggable=not line_zero[exercise_id].skipped
-                ),
+                "warn": _cell_warn_or_false(cell, line_zero[exercise_id]),
             },
             # Optimistic PR toast (5a, plan §7): any lift this parsed set just
             # beat the athlete's current LIVE best on — mirrors
@@ -1908,10 +1960,16 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                             set_number=number,
                             **values,
                         )
-                    unchanged = previous_values == (
+                    # Reps and load ONLY. The record is derived from those two
+                    # (`personal_records._performed_sets` never reads RPE), so
+                    # including RPE here made a pure RPE correction —
+                    # ``120 x 5, RPE 8`` to ``RPE 9`` — look like a new
+                    # performance: the row is deleted and recreated with a fresh
+                    # pk, so the toast filter matched, and the athlete was
+                    # congratulated a second time for the identical e1RM.
+                    unchanged = previous_values is not None and previous_values[:2] == (
                         created.reps,
                         created.load,
-                        created.rpe,
                     )
 
             # This blur left no set on the cell, so the log may now hold
@@ -1977,6 +2035,32 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
             athlete.pk,
         )
     return new_records
+
+
+def _cell_warn_or_false(cell, line_zero_cell):
+    """``sub_line_should_warn`` for the cell-write response, guarded.
+
+    The tolerance guarantee (plan §11) is that a blur never turns into a
+    4xx/5xx over a parse problem — but this read happens while BUILDING the
+    response, outside ``_upsert_parsed_set``'s savepoint and outside its
+    ``except``. So a parser or database failure here escaped as a 500 even
+    though the athlete's text had already committed: the one outcome the
+    guarantee exists to rule out, and the harder one to spot because the write
+    itself succeeded.
+
+    A tint we cannot compute is reported as no tint. That is the safe
+    direction — the cell reloads with the presenter's own, independently
+    derived answer — and it is strictly better than losing the response.
+    """
+    try:
+        return sub_line_should_warn(cell, loggable=not line_zero_cell.skipped)
+    except Exception:
+        logger.exception(
+            "parse-at-commit: failed to derive the warn flag for cell %s; "
+            "reporting no warning (the reload derives its own).",
+            cell.pk,
+        )
+        return False
 
 
 def _clean_logged_sets(raw_sets, session):
