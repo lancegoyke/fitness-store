@@ -73,7 +73,7 @@
         <span style="font-size:18px;line-height:1.3;">💡</span>
         <span style="flex:1;min-width:0;">
           <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">How to log a set</span>
-          <span class="meso-row-meta">For each set, type the reps and weight you did, then tap the circle on the right to check it off. When you're done, tap <strong>Log session</strong> at the bottom.</span>
+          <span class="meso-row-meta">For each set, type the weight and reps you did, then tap the circle on the right to check it off. When you're done, tap <strong>Log session</strong> at the bottom.</span>
         </span>
         <button type="button" data-coachmark-dismiss aria-label="Dismiss tip" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;">&times;</button>
       </div>
@@ -100,11 +100,11 @@
         <template x-for="r in ex.set_rows" :key="r.set_number">
           <div style="display:flex;align-items:center;gap:9px;padding:9px 16px;border-bottom:1px solid var(--line-2);">
             <div class="meso-mono" style="width:42px;font-size:11px;font-weight:700;color:var(--dim);">Set <span x-text="r.set_number"></span></div>
-            <input class="meso-phone-input" x-model="r.reps" placeholder="reps" inputmode="numeric"
-                   style="width:52px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 4px;outline:none;color:var(--ink);" />
-            <span style="font-size:11px;color:var(--dim);">&#215;</span>
             <input class="meso-phone-input" x-model="r.load" placeholder="load" inputmode="decimal"
                    style="width:60px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 4px;outline:none;color:var(--ink);" />
+            <span style="font-size:11px;color:var(--dim);">&#215;</span>
+            <input class="meso-phone-input" x-model="r.reps" placeholder="reps" inputmode="numeric"
+                   style="width:52px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 4px;outline:none;color:var(--ink);" />
             <input class="meso-phone-input" x-model="r.rpe" placeholder="rpe" inputmode="decimal"
                    style="width:48px;text-align:center;appearance:none;border:1px solid var(--line);border-radius:7px;background:var(--rail);font:inherit;font-family:'IBM Plex Mono',monospace;font-size:13px;padding:6px 4px;outline:none;color:var(--ink);" />
             <template x-if="isPercentLift(ex)">
