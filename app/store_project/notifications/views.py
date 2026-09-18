@@ -145,6 +145,11 @@ class ScopedSESEventWebhookView(SESEventWebhookView):
             # Malformed JSON: let the base view produce its own 400.
             return super().post(request, *args, **kwargs)
 
+        if not isinstance(notification, dict):
+            # Valid JSON that isn't an object (a list, null, a string, a
+            # number, ...) has no "TopicArn" to check: .get() would raise.
+            return HttpResponseBadRequest("The request body must be a JSON object.")
+
         topic_arn = notification.get("TopicArn")
         if topic_arn not in settings.AWS_SES_EVENT_TOPIC_ARNS:
             logger.warning(

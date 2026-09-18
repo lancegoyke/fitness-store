@@ -420,6 +420,22 @@ class TestWebhookRobustness:
 
         assert response.status_code == 400
 
+    @pytest.mark.parametrize("body", [[], None, "x", 1])
+    def test_non_object_json_body_returns_400(self, client, body):
+        """Valid JSON that isn't an object must not reach ``.get("TopicArn")``.
+
+        ``[]``, ``null``, a bare string, and a bare number are all valid
+        JSON but have no ``.get()``, which would otherwise blow up with a 500.
+        """
+        response = client.post(
+            reverse("ses_events"),
+            data=json.dumps(body),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+        assert EmailEvent.objects.count() == 0
+
     @mock.patch("django_ses.views.utils.verify_event_message", return_value=False)
     def test_unverified_signature_returns_400_and_records_nothing(
         self, _verify, client
