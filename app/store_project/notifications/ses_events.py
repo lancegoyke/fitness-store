@@ -25,13 +25,19 @@ because it runs inline in the request that is *sending* the email, where a
 DB blip must never fail a send SES already accepted.
 
 The ``*_received`` receivers below (via ``_record_event``) are the one
-exception: a ``django.db.DatabaseError`` — Postgres restarting mid-deploy, a
-dropped connection, anything transient — is deliberately **not** swallowed.
-Letting it propagate turns the response into a 500, so SNS retries, and the
-retry is safe: idempotency is handled by keying ``EmailEvent`` rows on
-``(sns_message_id, recipient)`` via ``get_or_create`` — the same pair the
-model's ``UniqueConstraint`` enforces. Every other exception in
-``_record_event`` is still swallowed and logged, same as everywhere else.
+exception: a *transient* ``django.db.DatabaseError`` — Postgres restarting
+mid-deploy, a dropped connection, anything that will clear up on its own —
+is deliberately **not** swallowed. Letting it propagate turns the response
+into a 500, so SNS retries, and the retry is safe: idempotency is handled by
+keying ``EmailEvent`` rows on ``(sns_message_id, recipient)`` via
+``get_or_create`` — the same pair the model's ``UniqueConstraint`` enforces.
+A *permanent* ``django.db.DataError`` — an oversized value a ``varchar(n)``
+column refuses, which retrying can never fix — is not: bounded string
+fields are truncated to their column width before insert (``_fit``), and
+whatever that doesn't catch is logged and swallowed rather than propagated,
+or SNS would redeliver the same uninsertable event for hours. Every other
+exception in ``_record_event`` is still swallowed and logged, same as
+everywhere else.
 """
 
 import json
@@ -39,6 +45,7 @@ import logging
 from email.utils import parseaddr
 
 from django.db import DatabaseError
+from django.db import DataError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -114,6 +121,24 @@ def _occurred_at(timestamp):
     return timezone.now()
 
 
+def _fit(field_name: str, value: str) -> str:
+    """Truncate ``value`` to ``EmailEvent``'s ``field_name`` column width.
+
+    SES/SNS payloads are not bounded to our column widths — a redirect-heavy
+    click ``link`` or a verbose ``userAgent`` can outgrow the model field
+    that stores it. Postgres is strict about ``varchar(n)`` and raises
+    ``django.db.DataError`` on an oversized insert (SQLite, which the test
+    suite runs on, is not, so this is the thing that actually keeps
+    production inserts from failing). Truncating first keeps a too-long
+    payload insertable instead of relying solely on ``_record_event``'s
+    ``DataError`` fallback below.
+    """
+    max_length = EmailEvent._meta.get_field(field_name).max_length
+    if max_length is None or value is None:
+        return value
+    return value[:max_length]
+
+
 def _record_event(
     *,
     event_type,
@@ -130,16 +155,21 @@ def _record_event(
     writes one ``EmailEvent`` per recipient, idempotent on
     ``(sns_message_id, recipient)`` via ``get_or_create`` (which already
     absorbs the unique-race ``IntegrityError`` itself, so no special case is
-    needed here). A ``django.db.DatabaseError`` propagates — a transient
-    failure should turn into a 500 so SNS retries the (idempotent) delivery
-    rather than losing the event forever. Everything else (malformed
-    payloads, etc.) is swallowed and logged instead, since a bad event must
-    not take the webhook down with it.
+    needed here). Every bounded string field is truncated to its column
+    width first (``_fit``), since SES/SNS payloads aren't bounded to ours. A
+    ``django.db.DatabaseError`` propagates — a transient failure should turn
+    into a 500 so SNS retries the (idempotent) delivery rather than losing
+    the event forever — *except* ``django.db.DataError``, a permanent
+    failure (an oversized value truncation didn't catch): that's logged and
+    swallowed like any other bad payload, or SNS would redeliver an
+    uninsertable event for hours. Everything else (malformed payloads, etc.)
+    is likewise swallowed and logged, since a bad event must not take the
+    webhook down with it.
     """
     try:
         mail_obj = mail_obj or {}
-        ses_message_id = mail_obj.get("messageId", "") or ""
-        sns_message_id = _sns_message_id(raw_message)
+        ses_message_id = _fit("ses_message_id", mail_obj.get("messageId", "") or "")
+        sns_message_id = _fit("sns_message_id", _sns_message_id(raw_message))
         if not sns_message_id:
             logger.warning(
                 "%s event with no SNS MessageId; recording with an empty key.",
@@ -160,6 +190,7 @@ def _record_event(
         for recipient in recipients or []:
             if not recipient:
                 continue
+            recipient = _fit("recipient", recipient.lower())
             defaults = {
                 "sent_email": sent_email,
                 "event_type": event_type,
@@ -168,12 +199,18 @@ def _record_event(
                 "occurred_at": occurred_at,
                 "raw": raw,
             }
-            defaults.update(extra_fields or {})
+            defaults.update(
+                {key: _fit(key, value) for key, value in (extra_fields or {}).items()}
+            )
             EmailEvent.objects.get_or_create(
                 sns_message_id=sns_message_id,
-                recipient=recipient.lower(),
+                recipient=recipient,
                 defaults=defaults,
             )
+    except DataError:
+        logger.exception(
+            "Failed to record %s event: permanently uninsertable data", event_type
+        )
     except DatabaseError:
         raise
     except Exception:

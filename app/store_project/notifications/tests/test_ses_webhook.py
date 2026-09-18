@@ -39,6 +39,7 @@ import json
 from unittest import mock
 
 import pytest
+from django.db import DataError
 from django.db import OperationalError
 from django.urls import reverse
 from django_ses.models import BlacklistedEmail
@@ -126,7 +127,11 @@ def complaint_message(
 
 
 def open_message(
-    *, message_id="ses-msg-open", recipient="athlete@example.com", tags=None
+    *,
+    message_id="ses-msg-open",
+    recipient="athlete@example.com",
+    tags=None,
+    user_agent=None,
 ):
     return {
         "eventType": "Open",
@@ -140,7 +145,9 @@ def open_message(
         "open": {
             "timestamp": "2026-09-18T19:10:59.633Z",
             "userAgent": (
-                "Mozilla/5.0 (Windows NT 5.1; rv:11.0) Gecko Firefox/11.0 "
+                user_agent
+                if user_agent is not None
+                else "Mozilla/5.0 (Windows NT 5.1; rv:11.0) Gecko Firefox/11.0 "
                 "(via ggpht.com GoogleImageProxy)"
             ),
             "ipAddress": "66.102.8.97",
@@ -149,7 +156,9 @@ def open_message(
     }
 
 
-def click_message(*, message_id="ses-msg-click", recipient="athlete@example.com"):
+def click_message(
+    *, message_id="ses-msg-click", recipient="athlete@example.com", link=None
+):
     return {
         "eventType": "Click",
         "mail": {
@@ -162,7 +171,7 @@ def click_message(*, message_id="ses-msg-click", recipient="athlete@example.com"
             "timestamp": "2026-09-18T19:11:05.000Z",
             "userAgent": "Mozilla/5.0",
             "ipAddress": "66.102.8.97",
-            "link": "https://mastering.fitness/meso/me/",
+            "link": link if link is not None else "https://mastering.fitness/meso/me/",
             "linkTags": {},
         },
     }
@@ -477,6 +486,59 @@ class TestTransientDatabaseErrors:
         ):
             post_notification(client, open_message(), sns_message_id="sns-db-error-1")
 
+        assert EmailEvent.objects.count() == 0
+
+
+class TestPermanentDataErrors:
+    """A permanent ``DataError`` must not make SNS retry forever.
+
+    An oversized value Postgres's ``varchar(n)`` columns refuse, unlike a
+    transient ``DatabaseError`` (see ``TestTransientDatabaseErrors`` above).
+    Bounded string fields are truncated to their column width before insert
+    so a too-long payload is fit rather than rejected in the first place;
+    the fallback below covers whatever truncation doesn't (or can't) catch.
+    """
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_oversized_click_link_is_truncated_to_the_column_width(
+        self, _verify, client
+    ):
+        response = post_notification(
+            client,
+            click_message(link="https://mastering.fitness/?r=" + "x" * 5000),
+            sns_message_id="sns-click-oversized",
+        )
+
+        assert response.status_code == 200
+        event = EmailEvent.objects.get(sns_message_id="sns-click-oversized")
+        assert len(event.link) == 2048
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_oversized_user_agent_is_truncated_to_the_column_width(
+        self, _verify, client
+    ):
+        response = post_notification(
+            client,
+            open_message(user_agent="Mozilla/5.0 " + "x" * 1000),
+            sns_message_id="sns-open-oversized",
+        )
+
+        assert response.status_code == 200
+        event = EmailEvent.objects.get(sns_message_id="sns-open-oversized")
+        assert len(event.user_agent) == 512
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_data_error_is_logged_and_acked_not_retried(self, _verify, client):
+        with mock.patch.object(
+            EmailEvent.objects,
+            "get_or_create",
+            side_effect=DataError("value too long for type character varying(16)"),
+        ):
+            response = post_notification(
+                client, open_message(), sns_message_id="sns-data-error-1"
+            )
+
+        assert response.status_code == 200
         assert EmailEvent.objects.count() == 0
 
 
