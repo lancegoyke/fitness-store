@@ -874,9 +874,19 @@ describe("saveCell", () => {
 
   // -- 5a §7: optimistic PR toast off a cell blur ----------------------------
 
-  it("surfaces new_records from the response as the PR toast", async () => {
+  // The page-top card belongs to `save()` — "Log session" is a whole-session
+  // act. A blur happens wherever the athlete is typing, so its celebration is
+  // marked on the line that earned it; UAT found the card firing off-screen
+  // every time.
+
+  it("marks the line that earned the record, not the page-top card", async () => {
     const c = cellLogger();
-    const pr = { key: "name:back squat", name: "Back Squat", value: "140" };
+    const pr = {
+      key: "name:back squat",
+      name: "Back Squat",
+      value: "140",
+      unit: "kg",
+    };
     global.fetch = vi.fn().mockResolvedValue(
       res({
         body: {
@@ -887,10 +897,29 @@ describe("saveCell", () => {
       }),
     );
     await c.saveCell(c.exercises[0], 1);
-    expect(c.newRecords).toEqual([pr]);
+    const entry = c.exercises[0].sub_lines.find((l) => l.line === 1);
+    expect(entry.pr).toBe("140 kg");
+    expect(c.newRecords).toEqual([]); // the card is `save()`'s, untouched here
   });
 
-  it("does not clobber an existing toast when this blur has no new record", async () => {
+  it("clears the line's mark once it no longer wins anything", async () => {
+    const c = cellLogger();
+    const entry = c.exercises[0].sub_lines.find((l) => l.line === 1);
+    entry.pr = "140 kg";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          ok: true,
+          cell: { id: 5, line: 1, text: "RPE 8", warn: false },
+          new_records: [],
+        },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(entry.pr).toBe("");
+  });
+
+  it("leaves a card raised by Log session alone", async () => {
     const existing = [{ key: "name:bench", name: "Bench", value: "100" }];
     const c = cellLogger({ newRecords: existing });
     global.fetch = vi.fn().mockResolvedValue(

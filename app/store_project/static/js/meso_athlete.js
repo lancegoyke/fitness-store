@@ -577,13 +577,21 @@ function createLogger() {
       // updates the cell's color right away, without a page reload.
       if (!entry || (entry.text || "") !== text) return;
       entry.warn = !!(data.cell && data.cell.warn);
-      // Optimistic PR toast (5a §7) — the same celebration `save()` shows,
-      // fired straight off a cell blur instead of a full log save. Only
-      // overwrite when THIS blur actually produced a new record, so an
-      // unrelated edit can't clobber a toast already on screen.
-      if (Array.isArray(data.new_records) && data.new_records.length) {
-        this.newRecords = data.new_records;
-      }
+      // Optimistic PR (5a §7), marked ON THE LINE THAT EARNED IT rather than in
+      // `newRecords`. That card renders at the top of the page, which is right
+      // for `save()` — "Log session" is a whole-session act — but wrong here: a
+      // blur happens wherever the athlete is typing, and UAT found the
+      // celebration firing off-screen every time. The point of the optimistic
+      // path is feedback in the moment, so it belongs beside the cell, in the
+      // same slot as this line's other status labels.
+      //
+      // Cleared when the line no longer wins anything, so correcting a set down
+      // takes its badge with it — derive-on-read, exactly like `warn`.
+      const earned =
+        Array.isArray(data.new_records) && data.new_records.length
+          ? data.new_records[0]
+          : null;
+      entry.pr = earned ? `${earned.value} ${earned.unit}` : "";
     },
   };
 }
