@@ -231,6 +231,36 @@ The web container's healthcheck performs an internal HTTPS-style GET, so a
   Quick un-monitored dump: `just prod-backup` (`deploy backup run -a fitness-store`).
   Restore: `deploy backup restore -a fitness-store <dump>`.
 
+### SES email events (#507)
+
+- **Webhook:** `https://mastering.fitness/ses/events/` — signature-verified
+  (`AWS_SES_VERIFY_EVENT_SIGNATURES` defaults on), mounted in every
+  environment via `config.urls`. It parses each SNS notification and fans it
+  out to `store_project.notifications.ses_events`, which writes `SentEmail`
+  and `EmailEvent` rows (see `app/store_project/notifications/models.py`).
+- **SNS subscription:** in the AWS console → SNS (region **us-east-2**) →
+  topic `EmailOpens` → **Create subscription** → protocol HTTPS, endpoint the
+  webhook URL above. django-ses confirms the resulting
+  `SubscriptionConfirmation` automatically — check `just prod-logs web` for
+  "Received subscription confirmation" to verify it went through.
+- **SES configuration set:** SES → Configuration sets → `Tracking` → Event
+  destinations → make sure **Send, Delivery, Open, Click, Bounce, Complaint**
+  are selected (Reject, DeliveryDelay, and RenderingFailure are logged by the
+  webhook but not stored yet — see `ses_events.py`).
+- **Dashboard:** `/backside/email/` (staff only) — totals, a per-kind
+  breakdown, a per-day trend, recent events, bounce/complaint problems, and
+  the current SES blacklist, with a recipient lookup (`?q=`) and a
+  7/30/90-day window (`?days=`).
+- **Blacklist:** a permanent bounce or a complaint auto-blacklists the
+  recipient (django-ses's own signal handlers; `SESBackend` then skips
+  blacklisted recipients on send). Clear one from the dashboard once the
+  underlying problem is fixed (mailbox reactivated, complaint was a mistake)
+  to let SES try that recipient again.
+- **Migration tail:** keep the existing Gmail email subscription on the
+  `EmailOpens` topic until the dashboard has matched it for a week, then
+  remove it. Once the new HTTPS subscription is confirmed, the legacy
+  `ses/bounce/` mount (production-only, in `config.urls`) can be removed.
+
 ## GitHub Actions auto-deploy
 
 `.github/workflows/deploy.yml` triggers after the **Django CI** workflow succeeds

@@ -106,7 +106,7 @@ uv run ruff check
 - `payments` - Stripe Checkout integration
 - `pages` - Markdown-powered CMS pages
 - `cardio` - Self-generated cardio workout system
-- `notifications` - Email notification system
+- `notifications` - Email notification system; also consumes SES send/delivery/open/click/bounce/complaint events (SNS → `ses/events/` webhook → `SentEmail`/`EmailEvent`) with a staff deliverability dashboard at `/backside/email/`
 - `analytics` - Google Analytics integration
 
 ### Custom User Model
