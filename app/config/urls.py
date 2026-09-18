@@ -5,6 +5,7 @@ from django.contrib.sitemaps.views import sitemap
 from django.urls import include
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
+from django_ses.views import SESEventWebhookView
 from store_project.exercises.sitemaps import ExerciseSitemap
 from store_project.pages.sitemaps import PageSitemap
 from store_project.products.sitemaps import BookSitemap
@@ -44,6 +45,16 @@ urlpatterns = [
     path("users/", include("store_project.users.urls")),
     path("feed/", include("store_project.feed.urls")),
     path("accounts/", include("allauth.urls")),
+    # SES → SNS event webhook (#507): send/delivery/open/click/bounce/complaint
+    # notifications for the "Tracking" configuration set. Mounted in every
+    # environment (not just PRODUCTION) — SNS signature verification stays on
+    # by default (`AWS_SES_VERIFY_EVENT_SIGNATURES`), so the endpoint is safe
+    # to expose everywhere, and tests need it reachable too.
+    path(
+        "ses/events/",
+        csrf_exempt(SESEventWebhookView.as_view()),
+        name="ses_events",
+    ),
     path("", include("store_project.products.urls")),
     path("", include("store_project.pages.urls")),
 ]
@@ -57,6 +68,10 @@ if settings.ENVIRONMENT == "DEVELOPMENT":
     ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 if settings.ENVIRONMENT == "PRODUCTION":
+    # Legacy: the old email-only bounce endpoint + the django-ses admin
+    # dashboard. Superseded by `ses/events/` above (#507); left in place until
+    # the SNS subscription is repointed at the new endpoint and confirmed, then
+    # this block gets removed.
     from django_ses.views import handle_bounce
 
     urlpatterns += [
