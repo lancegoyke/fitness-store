@@ -111,16 +111,30 @@ function createLogger() {
       // Default the freeform tracking stack (Phase 4a) so the template's
       // `x-for` over `ex.sub_lines` is safe even for an exercise with none.
       //
-      // ...and open with ONE empty line ready to type in. Blank cells aren't
-      // persisted (the presenter drops them), so an exercise with nothing typed
-      // yet arrives with an empty stack — which rendered as a bare "+ add a
-      // line" button under three labelled set inputs. Nobody would choose to
-      // add their data there, so the freeform path (5a, the one meant to become
-      // canonical) was effectively invisible. An empty line costs nothing: it
-      // only posts on blur, and only a non-blank blur writes anything.
+      // ...and open with ONE EMPTY LINE PER PRESCRIBED SET, so the stack the
+      // athlete types into lines up with the sets they were asked for. Blank
+      // cells aren't persisted (the presenter drops them), so an exercise with
+      // nothing typed yet arrives EMPTY — which rendered as a bare "+ add a
+      // line" button under three labelled set inputs, and nobody would choose
+      // to put their data there. `set_rows` is already sized to the
+      // prescription server-side (its own default and caps applied), so
+      // matching it keeps one source of truth for "how many sets is this".
+      //
+      // Gaps are filled by NUMBER, not appended: a cleared line leaves a hole
+      // (the server drops the blank but keeps later ones), and `line` is also
+      // the parsed set's `set_number`, so a stack must rebuild identically on
+      // every reload. Filling 1..n by number does that; appending would walk
+      // the numbers up on each visit. Lines the athlete has beyond the
+      // prescription are always kept.
       for (const ex of this.exercises) {
         if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
-        if (!ex.sub_lines.length) ex.sub_lines.push({ line: 1, text: "" });
+        const rows = Array.isArray(ex.set_rows) ? ex.set_rows.length : 0;
+        const want = Math.min(Math.max(rows, 1), MAX_CELL_LINE);
+        const present = new Set(ex.sub_lines.map((l) => l.line));
+        for (let n = 1; n <= want; n += 1) {
+          if (!present.has(n)) ex.sub_lines.push({ line: n, text: "" });
+        }
+        ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));
       }
       // Each exercise carries the athlete's persisted 1RM (`one_rm`) and its
       // `one_rm_source`. A `manual` value is the athlete's own number — it seeds

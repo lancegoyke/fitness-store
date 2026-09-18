@@ -1006,11 +1006,97 @@ describe("sub-line hydration", () => {
     c.init();
     expect(c.cellUrl).toBe(CELL_URL);
     expect(c.exercises[0].sub_lines).toEqual([{ line: 1, text: "RPE 8" }]);
-    // An exercise with nothing typed yet OPENS with one empty line rather than
-    // an empty stack. Blank cells aren't persisted, so "no sub-lines" is the
-    // normal state — and it rendered as a bare "+ add a line" button beneath
-    // three labelled set inputs, which made the freeform path invisible.
+    // An exercise with nothing typed yet OPENS with a line per prescribed set
+    // rather than an empty stack. Blank cells aren't persisted, so "no
+    // sub-lines" is the normal state — and it rendered as a bare "+ add a line"
+    // button beneath three labelled set inputs, which made the freeform path
+    // invisible. (No set_rows here, so the floor of one applies.)
     expect(c.exercises[1].sub_lines).toEqual([{ line: 1, text: "" }]);
+  });
+
+  it("opens with one empty line per prescribed set", () => {
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "3 x 10",
+            one_rm: "",
+            one_rm_source: "",
+            set_rows: [{ set_number: 1 }, { set_number: 2 }, { set_number: 3 }],
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    expect(c.exercises[0].sub_lines).toEqual([
+      { line: 1, text: "" },
+      { line: 2, text: "" },
+      { line: 3, text: "" },
+    ]);
+  });
+
+  it("fills gaps by number and keeps what the athlete typed", () => {
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "3 x 10",
+            one_rm: "",
+            one_rm_source: "",
+            set_rows: [{ set_number: 1 }, { set_number: 2 }, { set_number: 3 }],
+            // line 2 was cleared, so the server dropped it and kept line 3
+            sub_lines: [{ line: 3, text: "100 x 5" }],
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    // Rebuilt by NUMBER, so `line` (and the parsed set_number it becomes) is
+    // identical on every reload.
+    expect(c.exercises[0].sub_lines).toEqual([
+      { line: 1, text: "" },
+      { line: 2, text: "" },
+      { line: 3, text: "100 x 5" },
+    ]);
+  });
+
+  it("keeps lines the athlete added beyond the prescription", () => {
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "1 x 10",
+            one_rm: "",
+            one_rm_source: "",
+            set_rows: [{ set_number: 1 }],
+            sub_lines: [
+              { line: 1, text: "100 x 5" },
+              { line: 2, text: "105 x 5" },
+            ],
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    expect(c.exercises[0].sub_lines).toHaveLength(2);
   });
 
   it("does not add a second empty line when one already exists", () => {
