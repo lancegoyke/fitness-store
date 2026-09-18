@@ -478,12 +478,123 @@ class TestSubLinePresenter:
         sub_line(s.squat, "RPE 8")  # a line-1 cell beneath the squat row
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        assert row["sub_lines"] == [{"line": 1, "text": "RPE 8"}]
+        # "RPE 8" isn't a set attempt (5a §8) — warn is False.
+        assert row["sub_lines"] == [{"line": 1, "text": "RPE 8", "warn": False}]
 
         payload = presenters.athlete_log_payload(ctx)
         assert payload["cell_url"] == cell_url(s.session)
         pr = next(e for e in payload["exercises"] if e["id"] == s.squat.pk)
-        assert pr["sub_lines"] == [{"line": 1, "text": "RPE 8"}]
+        assert pr["sub_lines"] == [{"line": 1, "text": "RPE 8", "warn": False}]
+
+    def test_athlete_session_sub_lines_warn_only_on_unresolved_set(self, client):
+        # 5a §8: derive-on-read warn — a fat-fingered set attempt warns; a
+        # resolvable set that actually logged does not.
+        from store_project.meso.factories import LoggedSetFactory
+        from store_project.meso.factories import SessionLogFactory
+        from store_project.meso.models import SessionLog
+
+        s = seed()
+        sub_line(s.squat, "225 x", line=1)  # unresolved-set — warns
+        logged_line = sub_line(s.squat, "225 x 5", line=2, athlete_authored=True)
+        # The row the real write path would have created. Without it the text
+        # claims a set that doesn't exist, which now warns on its own — see
+        # `test_sub_line_warns_when_its_set_never_logged`.
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
+        )
+        LoggedSetFactory(
+            session_log=log,
+            prescription=s.squat,
+            source_line=logged_line,
+            set_number=2,
+            reps="5",
+            load="225",
+            rpe="",
+        )
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        warn_by_line = {entry["line"]: entry["warn"] for entry in row["sub_lines"]}
+        assert warn_by_line == {1: True, 2: False}
+
+    def test_sub_line_warns_when_its_set_never_logged(self, client):
+        """Set-shaped text with no row behind it is the state warn exists for.
+
+        Reachable several ways — the coach had the row skipped when it was
+        typed and later unskipped it, the values were too long to store, the
+        tolerance guard swallowed a database error. Asking whether the ROW
+        exists covers all of them, where re-deriving "is this loggable now"
+        covered only the last state the row happened to be in.
+        """
+        s = seed()
+        sub_line(s.squat, "225 x 5", line=1, athlete_authored=True)
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        assert row["sub_lines"][0]["warn"] is True
+
+    def test_athlete_session_set_rows_exclude_parsed_sets(self, client):
+        # No double-display (5a §6): a LoggedSet derived from a sub-line
+        # (source_line set) must render only as that sub-line's text, never
+        # also as a phantom structured set-input row.
+        from store_project.meso.factories import LoggedSetFactory
+        from store_project.meso.factories import SessionLogFactory
+        from store_project.meso.models import SessionLog
+
+        s = seed()
+        # athlete_authored=True is load-bearing: the suppression keys on that
+        # flag (a reclaimed line stops suppressing), and it is the only state
+        # `athlete_cell_write` can produce.
+        cell = sub_line(s.squat, "225 x 5", athlete_authored=True)
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
+        )
+        LoggedSetFactory(
+            session_log=log,
+            prescription=s.squat,
+            source_line=cell,
+            set_number=1,
+            reps="5",
+            load="225",
+            # rpe="" because "225 x 5" carries none. The upsert always writes
+            # exactly what the text parsed to, so the factory's default rpe="7"
+            # would model a set the app can't produce — and suppression asks
+            # whether the text still shows THIS performance.
+            rpe="",
+        )
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        # The parsed set shows once, as sub_lines text...
+        assert row["sub_lines"] == [{"line": 1, "text": "225 x 5", "warn": False}]
+        # ...and never a second time as a filled/"done" structured set row.
+        assert all(not r["done"] for r in row["set_rows"])
+        assert all(r["reps"] == "" and r["load"] == "" for r in row["set_rows"])
+
+    def test_athlete_session_set_rows_include_structured_sets(self, client):
+        # A structured-logger set (source_line NULL) still hydrates set_rows —
+        # only the parsed-derivative channel is excluded.
+        from store_project.meso.factories import LoggedSetFactory
+        from store_project.meso.factories import SessionLogFactory
+        from store_project.meso.models import SessionLog
+
+        s = seed()
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
+        )
+        LoggedSetFactory(
+            session_log=log,
+            prescription=s.squat,
+            source_line=None,
+            set_number=1,
+            reps="6",
+            load="70",
+        )
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        done_rows = [r for r in row["set_rows"] if r["done"]]
+        assert len(done_rows) == 1
+        assert done_rows[0]["reps"] == "6"
+        assert done_rows[0]["load"] == "70"
 
     def test_athlete_session_target_is_prescription_only(self, client):
         # The now-editable sub-line stack must not double-display inside the

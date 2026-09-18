@@ -46,6 +46,7 @@ from store_project.notifications.emails import send_coach_request_email
 from . import adherence as meso_adherence
 from . import demo as meso_demo
 from . import one_rm as meso_one_rm
+from . import parsing
 from . import presenters
 from . import push as meso_push
 from . import sandbox as meso_sandbox
@@ -82,6 +83,10 @@ from .models import SessionLog
 from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
+from .models import parsed_set_is_hidden
+from .models import sub_line_should_warn
+from .parsing import parse_performed
+from .parsing import performed_reps_text
 from .personal_records import new_records_in
 from .serializers import current_week
 from .serializers import first_live_week
@@ -1364,6 +1369,13 @@ def athlete_log_session(request, pk):
         return error
 
     with transaction.atomic():
+        # Same lock `_upsert_parsed_set` takes, and it has to be BOTH sides to
+        # work: `(session, athlete)` has no uniqueness, so an athlete who types
+        # into a cell and immediately taps Save can have the blur POST and this
+        # one both find no log and each create one. Locking only the blur path
+        # leaves that race wide open. One workout split across two logs loses
+        # the older one's sets from every later read, which takes the newest.
+        Session.objects.select_for_update().filter(pk=session.pk).first()
         log = (
             SessionLog.objects.filter(session=session, athlete=request.user)
             .order_by("-created_at")
@@ -1386,9 +1398,115 @@ def athlete_log_session(request, pk):
         # delete — is history, not draft state; wiping it here would silently
         # destroy the athlete's record on their next save (e.g. a row the coach
         # marked skipped after the athlete already logged it).
-        log.sets.filter(
-            prescription_id__in=[p.pk for p in session.trainable_cells()]
-        ).delete()
+        #
+        # ``parsed_set_is_hidden`` scopes the delete to rows the logger can
+        # actually see, which is exactly the set it can repost — see that
+        # predicate for why the two must share one definition. A parsed set's
+        # ``prescription`` is also a trainable line-0 cell, so an unscoped
+        # delete would wipe every freeform-parsed set, while sparing them by
+        # ``source_line__isnull=True`` would leave a reclaimed row undeleted and
+        # let the client duplicate it (5a, plan §5, §6). Filtered in Python
+        # because the test re-parses cell text, which SQL can't express.
+        #
+        # A VISIBLE parsed row is only replaceable when this request posted its
+        # slot. Visibility is judged from the CURRENT cell text, but the payload
+        # was composed from what the page rendered — and a coach rewriting the
+        # source line in between flips a row from hidden to visible without the
+        # athlete's open page ever learning it exists. Deleting on visibility
+        # alone therefore let an ordinary "Save progress" destroy an earned set
+        # nobody had asked to change: the replace covered a row the client never
+        # held, so nothing reposted it. Posting the slot is the client's proof it
+        # was actually looking at that row.
+        #
+        # The cost is the mirror case — a reclaimed set the athlete clears from
+        # the logger now survives, because a cleared row and a row the client
+        # never saw are the same empty payload. Keeping unasked-for work beats
+        # destroying it (the same call ``prescription_skip`` makes), and the
+        # athlete's own sub-line is unaffected either way.
+        posted = {(cs["prescription_id"], cs["set_number"]) for cs in cleaned_sets}
+        replaceable = []
+        for row in log.sets.filter(
+            prescription_id__in=[p.pk for p in session.trainable_cells()],
+        ).select_related("source_line"):
+            if parsed_set_is_hidden(row):
+                continue
+            if row.source_line_id is not None and not _client_held(row, cleaned_sets):
+                continue
+            replaceable.append(row.pk)
+        log.sets.filter(pk__in=replaceable).delete()
+
+        # Drop any posted row that merely re-states a surviving parsed set. The
+        # payload is a snapshot of what the page rendered, and a reclaim can be
+        # undone: a row the client saw (and so posted) can be hidden again by the
+        # time the save lands, in which case it is NOT replaced above — and
+        # creating it would leave the same performance twice in one log, once as
+        # the parsed row and once as a source-less clone of it.
+        #
+        # Keyed on SET NUMBER as well as value, which is what separates "the
+        # client is re-posting THIS row" from "the client is posting a set that
+        # happens to look like a different one". Two identical performances on
+        # two sub-lines are an ordinary thing to do — 225 x 5 twice — and
+        # matching by value alone let the untouched survivor absorb the
+        # replacement for the row just deleted, so that performance vanished.
+        # The client reports the number ``serialize_session_log`` gave it, so
+        # the row it means still carries that number here (the renumbering
+        # below runs after this).
+        available = [
+            row
+            for row in log.sets.select_related("source_line")
+            if row.source_line_id is not None
+        ]
+        keep = []
+        for cs in cleaned_sets:
+            twin = next(
+                (
+                    row
+                    for row in available
+                    if (row.prescription_id, row.set_number)
+                    == (cs["prescription_id"], cs["set_number"])
+                    and parsing.same_logged_set(
+                        (row.reps, row.load, row.rpe),
+                        (cs["reps"], cs["load"], cs["rpe"]),
+                    )
+                ),
+                None,
+            )
+            if twin is not None:
+                available.remove(twin)  # one survivor absorbs one posted row
+                continue
+            keep.append(cs)
+        cleaned_sets = keep
+        posted = {(cs["prescription_id"], cs["set_number"]) for cs in cleaned_sets}
+
+        # Move any surviving PARSED row off a set number the client just posted.
+        # Two rows sharing (prescription, set_number) collapse in
+        # `athlete_session`'s dict, after which a save can delete both while
+        # reposting one. The client's numbering stays authoritative; the parsed
+        # row yields, because the client is the one with a page to keep in step.
+        #
+        # Covers the visible rows too, not just the hidden ones. A parsed row is
+        # numbered by its sub-line while the structured grid numbers from 1, so
+        # an athlete typing into structured row 1 collides with a parsed row on
+        # sub-line 1 — and since such a row is now SPARED rather than deleted
+        # (see `_client_held`), sparing it without renumbering simply moved the
+        # collision one step later.
+        if posted:
+            for row in log.sets.select_related("source_line"):
+                if row.source_line_id is None:
+                    continue
+                if (row.prescription_id, row.set_number) not in posted:
+                    continue
+                taken = set(
+                    log.sets.filter(prescription_id=row.prescription_id)
+                    .exclude(pk=row.pk)
+                    .values_list("set_number", flat=True)
+                ) | {n for (pid, n) in posted if pid == row.prescription_id}
+                number = row.set_number
+                while number in taken:
+                    number += 1
+                row.set_number = number
+                row.save(update_fields=["set_number"])
+
         LoggedSet.objects.bulk_create(
             [
                 LoggedSet(
@@ -1421,8 +1539,23 @@ def athlete_log_session(request, pk):
     meso_tour.advance_self_step_if_complete(request.user, "results")
     # Phase 4c: the lifts in this session that beat the athlete's prior best, so
     # the logger can celebrate a PR the instant it's logged. Pure detection off
-    # the just-committed rows — DONE-only, so a "Save progress" draft returns [].
-    new_records = new_records_in(log)
+    # the just-committed rows. As of 5a this read is LIVE (it counts pending
+    # sets), so a "Save progress" draft can legitimately return records too —
+    # it is no longer DONE-gated.
+    #
+    # Minus anything this save did not actually log. A parsed row that is still
+    # displayed by its own sub-line was celebrated by the blur that created it
+    # (``_upsert_parsed_set`` fires the optimistic toast), and it survives this
+    # save untouched — so reporting it here congratulated the athlete a second
+    # time for a record they had already seen, on a save that changed nothing.
+    hidden_set_pks = {
+        row.pk
+        for row in log.sets.select_related("source_line")
+        if parsed_set_is_hidden(row)
+    }
+    new_records = [
+        r for r in new_records_in(log) if r.logged_set_id not in hidden_set_pks
+    ]
     return JsonResponse(
         {
             "ok": True,
@@ -1542,13 +1675,77 @@ def athlete_cell_write(request, pk):
         return HttpResponseBadRequest("text is too long.")
 
     with transaction.atomic():
-        cell, _created = Prescription.objects.get_or_create(
+        # Serialize the WHOLE write on the session row, before anything is read.
+        #
+        # `(session, athlete)` has no uniqueness, so two overlapping blurs can
+        # each see no SessionLog and create one, splitting a workout across two
+        # logs — every later read takes only the newest, so the sets stranded on
+        # the older one vanish from DONE coach results and the 1RM refresh.
+        #
+        # The lock has to sit ABOVE the `previous_text` read, not inside the
+        # upsert: two writes for the same sub-line (two tabs, an offline retry)
+        # could otherwise both read the old text, and the later one would judge
+        # the row the earlier one just created against stale text, find nothing
+        # of "its own" to replace, and append a duplicate. The client-side
+        # promise chain orders one page's saves; only this orders the server.
+        #
+        # A no-op on SQLite (which serializes writers anyway), real on Postgres.
+        Session.objects.select_for_update().filter(pk=session.pk).first()
+        cell, created_cell = Prescription.objects.get_or_create(
             exercise_slot=slot, week=session.week, line=line
         )
-        cell.text = text
-        cell.athlete_authored = True
-        cell.save(update_fields=["text", "athlete_authored"])
-        _touch_plan(plan)
+        # The template posts on EVERY blur, so most requests carry text nobody
+        # touched — including the coach's own cues, which the athlete can focus
+        # and leave. Claiming authorship of those was doing real damage:
+        #
+        #   * a cue that happens to read like a set (`225 x 5`) became
+        #     athlete-authored and parsed into a pending LoggedSet and a PR for
+        #     a performance the athlete never did;
+        #   * a RECLAIMED line's set went back into hiding, because
+        #     `HIDDEN_PARSED_SET` keys on this flag — invisible everywhere while
+        #     still counting, and the delete below would then destroy it.
+        #
+        # Authorship follows actual authorship: a blur that changes nothing on a
+        # line the athlete doesn't own is a no-op, full stop. A genuine edit
+        # still claims the line (and re-parses it) as before.
+        # What this line was DISPLAYING before this write. The upsert needs it to
+        # tell its own rows — the ones this line was showing — from history
+        # handed to the structured logger by a reclaim.
+        previous_text = "" if created_cell else cell.text
+        untouched_coach_line = (
+            not created_cell and not cell.athlete_authored and cell.text == text
+        )
+        if not untouched_coach_line:
+            cell.text = text
+            cell.athlete_authored = True
+            cell.save(update_fields=["text", "athlete_authored"])
+            # LOCK ORDER — load-bearing. `_touch_plan` locks the Plan row;
+            # `_upsert_parsed_set` below locks the line-0 Prescription (its
+            # re-read is `select_for_update`). Plan MUST be taken first, because
+            # `prescription_skip` locks Plan (`record_plan_action`,
+            # history.py) then that same Prescription (`cell.save`). A coach
+            # skip racing an athlete blur on the same row deadlocks on Postgres
+            # if the two disagree on order — so never move the Prescription lock
+            # ahead of this `_touch_plan`. (This is exactly what a review round
+            # got wrong: `prescription_skip` is Plan→Prescription, not the
+            # reverse.)
+            _touch_plan(plan)
+        # Parse-at-commit (5a): derive a silent, structured LoggedSet from the
+        # text just committed above. Defensively wrapped inside the helper — a
+        # parse/upsert problem is logged and swallowed, never surfaced here.
+        # The return is the optimistic-PR-toast payload (§7) — empty on any
+        # failure, never raises.
+        new_records = (
+            []
+            if untouched_coach_line
+            else _upsert_parsed_set(
+                session,
+                request.user,
+                line_zero[exercise_id],
+                cell,
+                previous_text=previous_text,
+            )
+        )
     return JsonResponse(
         {
             "ok": True,
@@ -1558,9 +1755,382 @@ def athlete_cell_write(request, pk):
                 "week_id": session.week_id,
                 "line": cell.line,
                 "text": cell.text,
+                # Derive-on-read warn (5a, plan §8) — re-classified from the
+                # just-committed text so a re-blur that fixes a fat-fingered
+                # set attempt clears the warning without a page reload.
+                # `loggable` carries the one reason the TEXT can't reveal: a
+                # skipped row accepts no sets, so set-shaped text on a stale
+                # page is saved but never logged, and saying nothing would let
+                # the athlete believe it counted.
+                # Same rule the presenter applies, so the tint can't clear
+                # here only to come back on reload. `loggable` carries the one
+                # reason the text can't reveal: a skipped row accepts no sets.
+                "warn": _cell_warn_or_false(cell, line_zero[exercise_id]),
             },
+            # Optimistic PR toast (5a, plan §7): any lift this parsed set just
+            # beat the athlete's current LIVE best on — mirrors
+            # athlete_log_session's wiring of new_records_in/
+            # serialize_new_record, but off the *live* (PENDING-inclusive)
+            # read, so it can fire before the session ever reaches DONE. Can
+            # occasionally be a false alarm if the set is later corrected —
+            # the accepted trade for in-the-moment feedback (5b settles it).
+            "new_records": [serialize_new_record(r) for r in new_records],
         }
     )
+
+
+def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=""):
+    """Parse ``cell``'s just-committed text and upsert its derivative ``LoggedSet``.
+
+    Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §5): the freeform
+    sub-line stays the athlete's source of truth; this derives a silent,
+    machine-readable ``LoggedSet`` alongside it, scoped to ``(session_log,
+    source_line=cell)`` so a re-blur deletes-then-recreates rather than
+    appending. A blank/unparseable/skip/swap/note/duration cell just runs the
+    delete — mirroring "blank clears the cell".
+
+    A blur is a draft, not a completion: a newly created ``SessionLog`` is
+    left at its default ``PENDING`` status, and an existing log's status is
+    never touched here, so a DONE log is never downgraded.
+
+    Returns the list of ``personal_records.NewRecord``s this upsert unlocks
+    (§7) — computed off the same, now-PENDING-inclusive ``new_records_in``
+    ``athlete_log_session`` already uses, so a blur can surface the same
+    optimistic 🎉 the structured logger does, without waiting for DONE. Always
+    ``[]`` when nothing beat the live best, or when the guard below caught an
+    error.
+
+    **Tolerance guard (non-negotiable):** ``cell.save`` already committed the
+    raw text before this runs. The entire parse+upsert (including the
+    new-records read) is wrapped so ANY unexpected error is logged and
+    swallowed — the athlete's text is never lost and the response never turns
+    into a 4xx/5xx over a parse problem. ``parse_performed`` is itself total
+    (never raises), so this is belt-and-suspenders against everything else in
+    the upsert (DB errors, future parser changes, etc).
+
+    The inner ``transaction.atomic()`` is **load-bearing, not decorative**.
+    This runs inside the caller's atomic block, and a *database* error marks
+    the whole transaction ``needs_rollback`` — merely catching it would NOT
+    save us: the outer block would still roll back on exit and take the
+    already-committed ``cell.save`` with it, losing the athlete's text (the
+    exact thing this guard exists to prevent). The nested block is a
+    savepoint, so a DB failure here rolls back only the upsert and leaves the
+    cell write intact.
+    """
+    new_records = []
+    try:
+        with transaction.atomic():  # savepoint — see the docstring
+            # This guard runs BEFORE anything is read or written. Placed after
+            # the log lookup it still prevented the set, but the log had already
+            # been created — leaving the empty PENDING row that reads as
+            # activity everywhere (see `_reap_empty_pending_log`).
+            #
+            # Re-read the line-0 cell UNDER A ROW LOCK, and do it BEFORE the
+            # skip bail below. `line_zero` was built before the transaction, and
+            # the session lock doesn't help — `prescription_skip` never touches
+            # the session row. Locking the Prescription makes that UPDATE wait.
+            #
+            # Order matters as much as the lock: with the bail reading the stale
+            # instance first, a skip landing mid-blur only turned `wants_set`
+            # off, and execution still fell through to the delete — losing an
+            # already-logged performance on an unchanged stale blur, which is
+            # precisely the data loss the bail exists to prevent.
+            fresh_line_zero = (
+                Prescription.objects.select_for_update()
+                .filter(pk=line_zero_cell.pk)
+                .first()
+            )
+            if fresh_line_zero is None:
+                # The row is gone (a history restore hard-deletes a stray cell).
+                # Falling back to the stale instance wrote its dead pk as the
+                # new set's FK; PostgreSQL defers that constraint to COMMIT, so
+                # the violation surfaced in the OUTER transaction — past this
+                # savepoint AND past the guard below — taking the athlete's
+                # just-saved text down with it and returning a 500. There is no
+                # prescription left to log against, and the text is already
+                # saved either way.
+                return []
+            line_zero_cell = fresh_line_zero
+
+            # A skipped row is READ-ONLY to this path, not just un-writable.
+            # Declining to MINT a set isn't enough — letting the delete run
+            # turned "coach skips a row" plus "the athlete's open page fires one
+            # more blur" into data loss, contradicting `prescription_skip`,
+            # which deliberately preserves work the athlete already did. Bail
+            # before touching anything; the cell's text is saved either way.
+            if line_zero_cell.skipped:
+                return []
+
+            parsed = parse_performed(cell.text)
+            wants_set = bool(
+                parsed
+                and parsed.get("kind") == "set"
+                and (parsed.get("reps") or parsed.get("load"))
+            )
+
+            log = (
+                SessionLog.objects.filter(session=session, athlete=athlete)
+                .order_by("-created_at")
+                .first()
+            )
+            if log is None:
+                # Parse BEFORE creating. Creating up front meant a no-op blur —
+                # tapping "add a line" and leaving it empty — persisted a dated
+                # PENDING log with no sets, and `_scroll_hint`,
+                # `_athlete_default_plan_id` and `serialize_recent_logs` all
+                # read ANY SessionLog as activity. So an idle UI gesture moved
+                # the athlete's last-trained week and polluted recent-log
+                # grounding. With no log there is also nothing to delete, so
+                # nothing to do at all.
+                if not wants_set:
+                    return []
+                # Stamp the date like `athlete_log_session` does, even for a
+                # pending draft. Left NULL, these logs sort BEFORE real dates
+                # under Postgres's `-date` (NULLs first in DESC), so an old
+                # parsed draft would pose as the newest log in recent-log
+                # grounding, and record provenance would lose its workout date.
+                log = SessionLog.objects.create(
+                    session=session, athlete=athlete, date=timezone.localdate()
+                )
+
+            # Replace only the rows THIS LINE WAS SHOWING. A set the line no
+            # longer displays was handed to the structured logger by a reclaim
+            # and is now visible history — the athlete editing this line to a
+            # note, a blank, or a different set must not erase a performance
+            # they already earned. Judged against `previous_text`, not the text
+            # just saved: under the NEW text a normal re-blur's own row looks
+            # unrelated too, and sparing it would append instead of replace.
+            mine = [
+                row
+                for row in log.sets.filter(source_line=cell)
+                if parsing.performed_text_shows(
+                    previous_text, reps=row.reps, load=row.load, rpe=row.rpe
+                )
+            ]
+            # What this cell held before, so an unchanged re-blur can be told
+            # apart from a real edit (see the toast filter below).
+            previous = mine[0] if mine else None
+            previous_values = (
+                (previous.reps, previous.load, previous.rpe) if previous else None
+            )
+            log.sets.filter(pk__in=[row.pk for row in mine]).delete()
+
+            created = None
+            unchanged = False
+            if wants_set:
+                values = {
+                    # NOT `parsed["reps"]` — a set's right-hand side lands in
+                    # one of four keys, and reading only `reps` blanked every
+                    # range (`225 x 5-8`), timed set (`225 x 30s`) and AMRAP,
+                    # rendering them `— @ 225` in coach results.
+                    "reps": performed_reps_text(parsed),
+                    "load": str(parsed.get("load", "")),
+                    "rpe": str(parsed.get("rpe", "")),
+                }
+                # Bound the fields the same way the structured logger does. A
+                # parsed value longer than the column raises on Postgres, and
+                # since we're inside the savepoint the guard would swallow it
+                # and roll the DELETE back too — leaving the OLD set counting
+                # while the response cheerfully reported warn=false.
+                #
+                # Same constant `cell_should_warn` tests, deliberately: storing
+                # nothing is fine, but the cell has to SAY so, and the two would
+                # be free to drift if each had its own limit.
+                if all(
+                    len(value) <= parsing.MAX_LOGGED_FIELD for value in values.values()
+                ):
+                    # The sub-line's own position, NOT a constant 1. Every
+                    # parsed row landing on set 1 was invisible while they
+                    # stayed suppressed, but structured surfaces collapse by
+                    # (prescription, set_number) — so once reclaim made them
+                    # visible, two tracking lines showed and reposted as one
+                    # set, and results labelled both "set 1".
+                    #
+                    # ...but the line's number can already be taken, by history
+                    # this same line left behind: a reclaimed set is preserved,
+                    # and a new set typed on that line would otherwise collide
+                    # with it, and collapse the moment a second reclaim made
+                    # both visible. Fall through to the next free number. The
+                    # rows being replaced are already deleted above, so an
+                    # ordinary re-blur finds its own number free and keeps it
+                    # (idempotent).
+                    # Restoring a reclaimed line to what it originally said is
+                    # not a new performance. `mine` is empty in that case — the
+                    # old row survived a reclaim, so `previous_text` (the coach's
+                    # cue) no longer describes it — and creating would leave two
+                    # identical rows on one source line, BOTH hidden by the
+                    # restored text and both counted, overstating the workout
+                    # with nothing on screen to show for it. Reuse the row.
+                    existing = next(
+                        (
+                            row
+                            for row in log.sets.filter(source_line=cell)
+                            if parsing.same_logged_set(
+                                (row.reps, row.load, row.rpe),
+                                (values["reps"], values["load"], values["rpe"]),
+                            )
+                        ),
+                        None,
+                    )
+                    if existing is not None:
+                        created = existing
+                        # It was already logged, so there is nothing to
+                        # re-celebrate.
+                        previous_values = (
+                            existing.reps,
+                            existing.load,
+                            existing.rpe,
+                        )
+                    else:
+                        taken = set(
+                            log.sets.filter(prescription=line_zero_cell).values_list(
+                                "set_number", flat=True
+                            )
+                        )
+                        number = cell.line
+                        while number in taken:
+                            number += 1
+                        created = LoggedSet.objects.create(
+                            session_log=log,
+                            prescription=line_zero_cell,
+                            source_line=cell,
+                            set_number=number,
+                            **values,
+                        )
+                    # Reps and load ONLY. The record is derived from those two
+                    # (`personal_records._performed_sets` never reads RPE), so
+                    # including RPE here made a pure RPE correction —
+                    # ``120 x 5, RPE 8`` to ``RPE 9`` — look like a new
+                    # performance: the row is deleted and recreated with a fresh
+                    # pk, so the toast filter matched, and the athlete was
+                    # congratulated a second time for the identical e1RM.
+                    # Compared as VALUES, not strings: `120` and `120.0` are one
+                    # record, so spelling one of them differently re-fired a 🎉
+                    # already celebrated.
+                    unchanged = previous_values is not None and parsing.same_logged_set(
+                        previous_values[:2], (created.reps, created.load)
+                    )
+
+            # This blur left no set on the cell, so the log may now hold
+            # nothing. An earlier version scoped this to "there WAS a set before"
+            # — too narrow: a first blur whose values overrun the column limits
+            # creates the log, then declines to insert, and left an empty one
+            # behind. The invariant is simply that an empty log is noise.
+            if created is None and _reap_empty_pending_log(log):
+                return []
+
+            # Editing a cell on an already-DONE log changes the very sets the
+            # persisted AthleteOneRm is derived from, so it has to be recomputed
+            # — otherwise blanking a 150 x 5 (or adding a heavier set) leaves a
+            # stale estimate driving percent-load suggestions and the coach's
+            # designer until some later structured save happens to fix it.
+            # Gated on DONE because derivation is DONE-only by design; a PENDING
+            # log has nothing to promote yet (5b's settle does that).
+            if log.status == SessionLog.Status.DONE:
+                # Always include this cell's own lift. `trainable_cells()` is a
+                # session-wide list that can omit the very row just edited, and
+                # the refresh has to cover the lift whose sets actually changed.
+                # (This originally guarded the skipped case, where the delete
+                # stripped a set from a non-trainable row; a skipped row is now
+                # read-only to this path, but the belt-and-braces include is
+                # still correct and costs one list append.)
+                cells = list(session.trainable_cells())
+                if not any(c.pk == line_zero_cell.pk for c in cells):
+                    cells.append(line_zero_cell)
+                meso_one_rm.refresh_one_rms(
+                    athlete,
+                    cells,
+                    session.week.mesocycle.plan.unit,
+                )
+
+        # The toast read gets its OWN savepoint, deliberately. Inside the one
+        # above, a failure here would roll back the upsert with it — throwing
+        # away a perfectly good parsed set because a cosmetic 🎉 lookup broke,
+        # and that set would then only ever come back if the athlete happened
+        # to edit this same cell again. Separated, the upsert is already
+        # committed and a failed read costs nothing but the toast.
+        with transaction.atomic():
+            # Scoped to THIS blur's set. `new_records_in` reports every lift in
+            # the session that beats its prior best, so an unscoped read would
+            # re-return a PR won on an earlier line every time the athlete
+            # blurred an unrelated note — re-firing the same 🎉 over and over.
+            # No set written (blank/skip/swap/note) means nothing to celebrate.
+            #
+            # `unchanged` suppresses a re-blur that altered nothing. The upsert
+            # deletes and recreates, so the row always has a FRESH pk — the
+            # `created.pk` filter alone therefore matched every time, and simply
+            # focusing and leaving a PR-winning cell re-fired the 🎉 for work
+            # already celebrated. A blur is only news if the values moved.
+            if created is not None and not unchanged:
+                new_records = [
+                    r for r in new_records_in(log) if r.logged_set_id == created.pk
+                ]
+    except Exception:
+        logger.exception(
+            "parse-at-commit: failed to upsert a LoggedSet for cell %s "
+            "(session=%s, athlete=%s); the cell's text was preserved.",
+            cell.pk,
+            session.pk,
+            athlete.pk,
+        )
+    return new_records
+
+
+def _client_held(row, cleaned_sets):
+    """Did this save's payload actually come from a page showing ``row``?
+
+    Only asked of a VISIBLE parsed row — one a coach rewrite surfaced after the
+    athlete's page had loaded. The replace-delete needs to know whether the
+    client was looking at it, and the payload is the only evidence there is.
+
+    Posting the row's slot is not enough on its own. A parsed row is numbered by
+    its sub-line (``cell.line``), and the structured grid numbers its own rows
+    from 1, so the two share a numbering space: an athlete typing a different
+    set into structured row 1 posts ``(prescription, 1)`` and would have looked
+    like proof of seeing a parsed row that also happens to be set 1 — and the
+    delete then destroyed a performance nobody asked to change.
+
+    So the payload must RE-STATE the row: same slot, same values. An edit to a
+    visible parsed row still replaces it (the athlete posts the slot with new
+    values only after the old ones were rendered there — see the collision
+    renumbering, which moves the row aside instead). Preferring a visible
+    duplicate over a silent deletion is the same call the rest of this slice
+    makes.
+    """
+    return any(
+        (cs["prescription_id"], cs["set_number"])
+        == (row.prescription_id, row.set_number)
+        and parsing.same_logged_set(
+            (row.reps, row.load, row.rpe), (cs["reps"], cs["load"], cs["rpe"])
+        )
+        for cs in cleaned_sets
+    )
+
+
+def _cell_warn_or_false(cell, line_zero_cell):
+    """``sub_line_should_warn`` for the cell-write response, guarded.
+
+    The tolerance guarantee (plan §11) is that a blur never turns into a
+    4xx/5xx over a parse problem — but this read happens while BUILDING the
+    response, outside ``_upsert_parsed_set``'s savepoint and outside its
+    ``except``. So a parser or database failure here escaped as a 500 even
+    though the athlete's text had already committed: the one outcome the
+    guarantee exists to rule out, and the harder one to spot because the write
+    itself succeeded.
+
+    A tint we cannot compute is reported as no tint. That is the safe
+    direction — the cell reloads with the presenter's own, independently
+    derived answer — and it is strictly better than losing the response.
+    """
+    try:
+        return sub_line_should_warn(cell, loggable=not line_zero_cell.skipped)
+    except Exception:
+        logger.exception(
+            "parse-at-commit: failed to derive the warn flag for cell %s; "
+            "reporting no warning (the reload derives its own).",
+            cell.pk,
+        )
+        return False
 
 
 def _clean_logged_sets(raw_sets, session):
@@ -3265,6 +3835,29 @@ def _json_object_body(request):
     return payload, None
 
 
+def _reap_empty_pending_log(log):
+    """Delete ``log`` if it now holds nothing at all. Returns whether it went.
+
+    ``_scroll_hint``, ``_athlete_default_plan_id`` and ``serialize_recent_logs``
+    all read ANY ``SessionLog`` as athlete activity, so a log with no sets and no
+    notes is not harmless — it keeps moving the athlete's last-trained week and
+    polluting recent-log grounding, for work that was mistyped and cleared, or
+    never landed at all.
+
+    Only PENDING, only with no notes, only with no remaining sets. A DONE log is
+    a finished performance and is never reaped, and neither is one carrying the
+    athlete's notes — those hold information even with zero sets.
+    """
+    if (
+        log.status != SessionLog.Status.PENDING
+        or (log.notes or "").strip()
+        or log.sets.exists()
+    ):
+        return False
+    log.delete()
+    return True
+
+
 @login_required
 @require_POST
 def prescription_skip(request, plan_id, pk):
@@ -3295,6 +3888,17 @@ def prescription_skip(request, plan_id, pk):
         )
         cell.skipped = skipped
         cell.save(update_fields=["skipped"])
+        # Deliberately does NOT touch already-derived LoggedSets. Skipping a row
+        # the athlete has already performed does not un-perform it: this
+        # codebase's settled position (see `athlete_log_session`'s delete, which
+        # scopes itself to `trainable_cells()` for exactly this reason) is that a
+        # set logged against a since-skipped cell is HISTORY, not draft state,
+        # and wiping it would silently destroy the athlete's record. A parsed set
+        # is no different from a structured one here. What 5a does add is a guard
+        # on the CREATE side — `_upsert_parsed_set` won't mint a NEW set for a
+        # row that is currently skipped — which is a separate question from
+        # preserving one already earned. Leaving them also means unskipping needs
+        # no re-derive: nothing was destroyed to restore.
         _touch_plan(plan)
     return JsonResponse({"ok": True, "history": serialize_plan_history(plan)})
 
@@ -3383,6 +3987,19 @@ def cell_line_write(request, plan_id, slot_id):
         # coach history — from here on it's snapshotted and undoable again.
         cell.athlete_authored = False
         cell.save(update_fields=["text", "athlete_authored"])
+        # Deliberately touches NO LoggedSet. A parse-at-commit set (5a) derived
+        # from this cell is the athlete's performance, and this edit is
+        # undoable — `history.py` keeps SessionLog/LoggedSet/AthleteOneRm out
+        # of the plan snapshot precisely so "undo must never touch ... athlete
+        # data". Deleting it here (an earlier attempt) lost the record with no
+        # way back; detaching it (a later one) made it look like a structured
+        # row, so the logger's own delete then wiped it on the next save. The
+        # set simply stays as it is: overwriting the text above is enough,
+        # because the no-double-display suppression (`parsed_set_is_hidden`)
+        # asks whether the source line still SHOWS this performance — it
+        # re-parses the cell text, it does NOT read `athlete_authored` — so once
+        # the coach's text no longer matches the set, it starts rendering again
+        # on its own.
         _touch_plan(plan)
     return JsonResponse(
         {

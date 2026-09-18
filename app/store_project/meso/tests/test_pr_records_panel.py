@@ -117,10 +117,17 @@ class TestAthletePersonalRecordsPresenter:
         assert squat["reps"] == "3"
         assert squat["load"] == "140"
 
-    def test_pending_draft_is_not_a_record(self):
+    def test_pending_draft_still_shows_a_live_record(self):
+        # 5a (plan §7): relaxed from DONE-only — the records panel is a LIVE,
+        # derive-on-read view, so a PENDING draft's set counts. (Was
+        # `test_pending_draft_is_not_a_record`, pinning the dropped DONE-only
+        # gate; ``one_rm``'s *persisted* ``AthleteOneRm`` path is unaffected
+        # and stays DONE-only — see ``test_one_rm.py``.)
         s = seed()
         log_done(s, squat=[("5", "120", "8")], status=SessionLog.Status.PENDING)
-        assert athlete_personal_records(s.athlete)["rows"] == []
+        rows = athlete_personal_records(s.athlete)["rows"]
+        assert [r["name"] for r in rows] == ["Box Squat"]
+        assert rows[0]["e1rm"] == "140"
 
     def test_empty_without_logs(self):
         s = seed()

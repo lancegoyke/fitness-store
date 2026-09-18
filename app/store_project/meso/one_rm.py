@@ -16,6 +16,17 @@ promoted out of per-device localStorage (Phase 2b) into ``AthleteOneRm`` rows:
 Identity follows the hybrid B4 rule (``serializers._exercise_key``): a
 catalog-linked lift by FK, a free-text lift by normalized name. See
 ``docs/archive/meso/one-rm-plan.md``.
+
+**DONE-only, deliberately, even after 5a.** ``derive_one_rm_values`` /
+``refresh_one_rms`` write and read the *persisted* ``AthleteOneRm`` — the
+confirmed/settled estimate the coach designer and the logger's suggested-load
+default are built on. ``personal_records.py`` (5a, docs/meso/
+parse-at-commit-plan.md §7) deliberately went the other way for its **live**
+reads: it counts PENDING parse-at-commit sets too, so the records panel/PR
+toast are live and self-healing. The two modules now intentionally disagree —
+this one stays DONE-only because a pending "Save progress" draft is not a
+finished performance to permanently write down; 5b's 24 h quiet-period settle
+is what eventually promotes a live best into this module's confirmed record.
 """
 
 import math
@@ -62,6 +73,11 @@ def derive_one_rm_values(athlete, *, keys=None, unit=None):
     same). Returns ``{key: float}`` — the maximum implied 1RM across every set of
     that lift. ``keys``, when given, restricts the scan to those lift identities
     (the lifts in a session just logged); a lift with no usable set is absent.
+
+    Deliberately DONE-only even though ``personal_records.personal_records``
+    (5a) counts PENDING sets for its *live* reads — see this module's
+    docstring for why the two are allowed to disagree: this one feeds the
+    persisted, confirmed ``AthleteOneRm``, not a live/self-healing panel.
 
     ``unit`` scopes the scan to logged sets from plans in that unit — a logged
     ``load`` is a bare number whose unit is the plan's, so pooling kg and lb sets

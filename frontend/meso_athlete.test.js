@@ -771,6 +771,169 @@ describe("saveCell", () => {
       text: "",
     });
   });
+
+  // -- 5a §8: derive-on-read warn, mirrored from the cell response ----------
+
+  it("sets the sub-line's warn flag from the response's cell.warn", async () => {
+    const c = cellLogger({
+      exercises: [
+        { id: 1, sub_lines: [{ line: 1, text: "225 x" }], set_rows: [] },
+      ],
+    });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: { ok: true, cell: { id: 5, line: 1, text: "225 x", warn: true } },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.exercises[0].sub_lines[0].warn).toBe(true);
+  });
+
+  it("clears a stale warn once the response reports it resolved", async () => {
+    const c = cellLogger({
+      exercises: [
+        {
+          id: 1,
+          sub_lines: [{ line: 1, text: "225 x 5", warn: true }],
+          set_rows: [],
+        },
+      ],
+    });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          ok: true,
+          cell: { id: 5, line: 1, text: "225 x 5", warn: false },
+        },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.exercises[0].sub_lines[0].warn).toBe(false);
+  });
+
+  it("ignores a stale response whose text is no longer in the input", async () => {
+    // Two saves for one sub-line can be in flight at once and the OLDER reply
+    // can land last. Without a guard, correcting "225 x" to "225 x 5" re-applies
+    // the first reply's warn and strands the tint on text that no longer exists.
+    const c = cellLogger({
+      exercises: [
+        { id: 1, sub_lines: [{ line: 1, text: "225 x" }], set_rows: [] },
+      ],
+    });
+    global.fetch = vi.fn().mockImplementation(async () => {
+      // While the request is in flight the athlete finishes typing.
+      c.exercises[0].sub_lines[0].text = "225 x 5";
+      return res({
+        body: { ok: true, cell: { id: 5, line: 1, text: "225 x", warn: true } },
+      });
+    });
+
+    await c.saveCell(c.exercises[0], 1);
+
+    expect(c.exercises[0].sub_lines[0].warn).toBeFalsy();
+  });
+
+  it("serializes overlapping saves so the server writes them in order", async () => {
+    // Ignoring a stale RESPONSE isn't enough — by then the server has already
+    // written the stale text and re-parsed its LoggedSet from it. What matters
+    // is the order the server FINISHES the writes in, so `applied` records
+    // completion, not dispatch: unchained, the older request is still in flight
+    // when the newer one lands, so the older one finishes LAST and its text
+    // wins in the database while the UI shows the correction.
+    const c = cellLogger({
+      exercises: [
+        { id: 1, sub_lines: [{ line: 1, text: "225 x" }], set_rows: [] },
+      ],
+    });
+
+    const applied = [];
+    let releaseFirst;
+    const firstInFlight = new Promise((r) => {
+      releaseFirst = r;
+    });
+    let call = 0;
+    global.fetch = vi.fn().mockImplementation(async (_url, opts) => {
+      const body = JSON.parse(opts.body);
+      if (call++ === 0) await firstInFlight; // hold the OLDER request open
+      applied.push(body.text); // the write lands here
+      return res({
+        body: { ok: true, cell: { id: 5, line: 1, text: body.text, warn: false } },
+      });
+    });
+
+    const first = c.saveCell(c.exercises[0], 1);
+    c.exercises[0].sub_lines[0].text = "225 x 5";
+    const second = c.saveCell(c.exercises[0], 1);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    // The corrected text must be what the server wrote LAST.
+    expect(applied[applied.length - 1]).toBe("225 x 5");
+  });
+
+  // -- 5a §7: optimistic PR toast off a cell blur ----------------------------
+
+  // The page-top card belongs to `save()` — "Log session" is a whole-session
+  // act. A blur happens wherever the athlete is typing, so its celebration is
+  // marked on the line that earned it; UAT found the card firing off-screen
+  // every time.
+
+  it("marks the line that earned the record, not the page-top card", async () => {
+    const c = cellLogger();
+    const pr = {
+      key: "name:back squat",
+      name: "Back Squat",
+      value: "140",
+      unit: "kg",
+    };
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          ok: true,
+          cell: { id: 5, line: 1, text: "RPE 8", warn: false },
+          new_records: [pr],
+        },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    const entry = c.exercises[0].sub_lines.find((l) => l.line === 1);
+    expect(entry.pr).toBe("140 kg");
+    expect(c.newRecords).toEqual([]); // the card is `save()`'s, untouched here
+  });
+
+  it("clears the line's mark once it no longer wins anything", async () => {
+    const c = cellLogger();
+    const entry = c.exercises[0].sub_lines.find((l) => l.line === 1);
+    entry.pr = "140 kg";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          ok: true,
+          cell: { id: 5, line: 1, text: "RPE 8", warn: false },
+          new_records: [],
+        },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(entry.pr).toBe("");
+  });
+
+  it("leaves a card raised by Log session alone", async () => {
+    const existing = [{ key: "name:bench", name: "Bench", value: "100" }];
+    const c = cellLogger({ newRecords: existing });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          ok: true,
+          cell: { id: 5, line: 1, text: "RPE 8", warn: false },
+          new_records: [],
+        },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.newRecords).toBe(existing); // untouched, not reset to []
+  });
 });
 
 describe("addLine", () => {
@@ -843,6 +1006,120 @@ describe("sub-line hydration", () => {
     c.init();
     expect(c.cellUrl).toBe(CELL_URL);
     expect(c.exercises[0].sub_lines).toEqual([{ line: 1, text: "RPE 8" }]);
-    expect(c.exercises[1].sub_lines).toEqual([]); // defaulted so x-for is safe
+    // An exercise with nothing typed yet OPENS with a line per prescribed set
+    // rather than an empty stack. Blank cells aren't persisted, so "no
+    // sub-lines" is the normal state — and it rendered as a bare "+ add a line"
+    // button beneath three labelled set inputs, which made the freeform path
+    // invisible. (No set_rows here, so the floor of one applies.)
+    expect(c.exercises[1].sub_lines).toEqual([{ line: 1, text: "" }]);
+  });
+
+  it("opens with one empty line per prescribed set", () => {
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "3 x 10",
+            one_rm: "",
+            one_rm_source: "",
+            set_rows: [{ set_number: 1 }, { set_number: 2 }, { set_number: 3 }],
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    expect(c.exercises[0].sub_lines).toEqual([
+      { line: 1, text: "" },
+      { line: 2, text: "" },
+      { line: 3, text: "" },
+    ]);
+  });
+
+  it("fills gaps by number and keeps what the athlete typed", () => {
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "3 x 10",
+            one_rm: "",
+            one_rm_source: "",
+            set_rows: [{ set_number: 1 }, { set_number: 2 }, { set_number: 3 }],
+            // line 2 was cleared, so the server dropped it and kept line 3
+            sub_lines: [{ line: 3, text: "100 x 5" }],
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    // Rebuilt by NUMBER, so `line` (and the parsed set_number it becomes) is
+    // identical on every reload.
+    expect(c.exercises[0].sub_lines).toEqual([
+      { line: 1, text: "" },
+      { line: 2, text: "" },
+      { line: 3, text: "100 x 5" },
+    ]);
+  });
+
+  it("keeps lines the athlete added beyond the prescription", () => {
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "1 x 10",
+            one_rm: "",
+            one_rm_source: "",
+            set_rows: [{ set_number: 1 }],
+            sub_lines: [
+              { line: 1, text: "100 x 5" },
+              { line: 2, text: "105 x 5" },
+            ],
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    expect(c.exercises[0].sub_lines).toHaveLength(2);
+  });
+
+  it("does not add a second empty line when one already exists", () => {
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "3 x 10",
+            one_rm: "",
+            one_rm_source: "",
+            set_rows: [],
+            sub_lines: [{ line: 1, text: "" }],
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    expect(c.exercises[0].sub_lines).toEqual([{ line: 1, text: "" }]);
   });
 });

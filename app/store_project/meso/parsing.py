@@ -8,6 +8,15 @@ a cell ONE freeform text string — ``4 x 6, RPE 9, 225`` / ``3 x 12-15`` /
     parse_prescription(text) -> {sets?, reps?, reps_range?, rpe?, load?,
                                  unit?, duration?, amrap?, skip?, raw} | None
 
+Slice 5a (docs/meso/parse-at-commit-plan.md §3) adds a second total function
+for the *performed* side of the same cell:
+
+    parse_performed(text) -> {kind, raw, ...} | None
+
+``parse_performed`` classifies a cell into ``set`` / ``skip`` / ``swap`` /
+``note`` / ``unresolved-set`` / ``duration`` — see its own docstring for the
+load-first inversion that is the whole point of that function.
+
 Contract (deliberately loose — the templates are heterogeneous):
 
 - Never raises, never blocks entry: unparseable text still returns ``{"raw"}``
@@ -48,6 +57,18 @@ _LOAD = re.compile(r"^(\d+(?:\.\d+)?)\s*(%|lbs?|kgs?|kilos?)?$|^bw$", re.IGNOREC
 _REPS = re.compile(
     r"^(\d+)(?:\s*-\s*(\d+))?\s*([a-z']+(?:\s+[a-z]+)*)?$", re.IGNORECASE
 )
+
+# A numeric comma in a LOAD position — well-formed or not. The load is either
+# the first thing on the line (``1,000 x 5``) or the right side of the ``@``
+# operator (``5 @ 1,000``); a comma anywhere else is a segment break, never a
+# digit group, which is why this is anchored rather than global.
+_LOAD_NUMERIC_COMMA = re.compile(r"(?:^|@\s*)\d+,\d")
+# ...and the well-formed version: 1-3 digits, then one or more groups of exactly
+# three, running on into neither a fourth digit NOR another comma group
+# (``1,000`` / ``12,345`` / ``1,000,000`` yes; ``1,0000`` / ``12,34`` /
+# ``1,000,00`` no — that last one would otherwise match just the ``1,000``
+# prefix and silently log 1000).
+_LOAD_GROUPED = re.compile(r"(^|@\s*)(\d{1,3}(?:,\d{3})+)(?!\d)(?!,\d)")
 
 # Unit-word normalization for reps suffixes: ``e``/``ea`` → ``each``.
 _UNIT_ALIASES = {"e": "each", "ea": "each", "ea.": "each"}
@@ -187,3 +208,537 @@ def parse_prescription(text):
     for segment in re.split(r",|@", first_line):
         _classify_segment(segment, out)
     return out
+
+
+# ---------------------------------------------------------------------------
+# parse_performed — the *performed* side (5a, parse-at-commit-plan.md §3)
+# ---------------------------------------------------------------------------
+
+# A bare, unit-less, non-decimal load over this many digits' worth of value
+# is treated as an implausible fat-finger (e.g. ``2255`` from a doubled
+# keystroke on ``225``) rather than a real single-exercise load, so it fails
+# to resolve into a set — see ``_load_is_plausible``.
+_MAX_BARE_LOAD = 999
+
+# The mirror of ``_MAX_BARE_LOAD`` on the other side of the ``x``. Load-first
+# grammar means ``5 x 225`` reads as 5 lb for 225 reps — but nobody performs 225
+# reps, so that text is far likelier to be the athlete typing REPS first (the
+# order the structured inputs beside it used to ask for). Guessing either way
+# would be wrong: storing it silently records a set the athlete never did and
+# feeds a junk e1RM, and silently inverting it would invent a performance from
+# notation the athlete didn't use. So an implausible rep count simply doesn't
+# resolve — the text is kept, no set is written, and the cell tints (§8), which
+# is the one outcome that tells the athlete the truth and lets them fix it.
+_MAX_PLAUSIBLE_REPS = 100
+
+
+def _reps_are_plausible(out):
+    """Could ``out``'s rep count be a rep count a human actually performed?
+
+    Bounds ``reps``/``reps_range`` the way ``_load_is_plausible`` bounds a bare
+    load. ``duration``/``amrap`` are not counts and are never refused here.
+    """
+    reps = out.get("reps")
+    if reps is not None and reps > _MAX_PLAUSIBLE_REPS:
+        return False
+    low_high = out.get("reps_range")
+    if low_high is not None and max(low_high) > _MAX_PLAUSIBLE_REPS:
+        return False
+    return True
+
+
+# Keyword heuristic for the swap-vs-note split (§3): a swap is typically a
+# bare exercise name (``DB pullover``, ``R SL L glute max``); a note reads
+# like a sentence/comment (``felt tight``, ``paired with lat hang``). The
+# plan gives examples, not a grammar, so this is a best-effort word list, not
+# a formal rule.
+_NOTE_SIGNAL_WORDS = {
+    "felt",
+    "feels",
+    "feeling",
+    "paired",
+    "note",
+    "notes",
+    "comment",
+    "comments",
+    "with",
+    "instead",
+    "sore",
+    "tired",
+    "good",
+    "bad",
+    "easy",
+    "hard",
+    "tight",
+    "rough",
+    "great",
+    "ok",
+    "okay",
+}
+
+
+def _load_is_plausible(token, *, explicit=False):
+    """Guard against a digit run masquerading as a load (``2255x5``).
+
+    ``_LOAD`` is deliberately permissive (any digit run). A bare, unit-less,
+    non-decimal number over ``_MAX_BARE_LOAD`` is almost certainly a
+    mistyped duplicate keystroke rather than a real single-exercise load —
+    percent/lbs/kg-suffixed and decimal loads are exempt (their notation
+    already disambiguates intent), as is the ``bw`` literal.
+
+    ``explicit`` is that same exemption for a load the athlete wrote with a
+    thousands separator (``1,000``). Nobody types a comma by accident, and a
+    four-figure load is real work on a sled or leg press — so the ceiling,
+    which exists to catch a doubled keystroke, must not refuse it.
+    """
+    match = _LOAD.match(token.strip())
+    if not match:
+        return False
+    number, unit = match.groups()
+    if number is None:  # the ``bw`` branch
+        return True
+    if unit or "." in number or explicit:
+        return True
+    return int(number) <= _MAX_BARE_LOAD
+
+
+def _looks_like_set_attempt(segment):
+    """Does ``segment`` have the *shape* of a logging attempt (§8)?
+
+    Used only after every real parse route has failed — a digit alongside
+    an ``x``/``×``/``@`` operator, or something that structurally matches
+    ``_LOAD`` on its own (an implausible bare number), reads as a fat-finger
+    rather than prose/a swap, so it warns instead of silently falling to
+    ``swap``/``note``.
+    """
+    if not re.search(r"\d", segment):
+        return False
+    # ``x`` must be used as an OPERATOR, not just present as a letter. A bare
+    # ``[x×@]`` search fires on ordinary exercise names that happen to contain
+    # one — "Box squat 225", "Flexion 3" — and warns at the athlete for typing
+    # a perfectly good swap. Require the operator to sit against a digit on at
+    # least one side (``225 x``, ``x 5``, ``5 @ 225``), which is what an actual
+    # fat-fingered set attempt looks like.
+    # ...and the operator must not be a letter INSIDE a word: "TRX 45° row" and
+    # "Box 3" are exercise names, and tinting them told the athlete their swap
+    # wasn't logged as a set when nothing about it was an attempt to log one.
+    if re.search(
+        r"(\d\s*(?<![a-z])[x×@])|((?<![a-z])[x×@](?![a-z])\s*\d)",
+        segment,
+        re.IGNORECASE,
+    ):
+        return True
+    return bool(_LOAD.match(segment.strip()))
+
+
+def _looks_like_note(segment):
+    """Best-effort note-vs-swap split — see ``_NOTE_SIGNAL_WORDS``."""
+    words = re.findall(r"[a-z']+", segment.lower())
+    return any(word in _NOTE_SIGNAL_WORDS for word in words)
+
+
+def _try_at_form(head, explicit_load=False):
+    """``5 @ 225`` — reps-at-load, the new operator for performed text."""
+    parts = re.split(r"\s*@\s*", head, maxsplit=1)
+    if len(parts) != 2:
+        return None
+    reps_token, load_token = parts[0].strip(), parts[1].strip()
+    if not reps_token or not load_token:
+        return None
+    if not _LOAD.match(load_token) or not _load_is_plausible(
+        load_token, explicit=explicit_load
+    ):
+        return None
+    out = {}
+    _classify_reps(reps_token, out)
+    # Same four keys the ``x`` form accepts. Allowing only reps/reps_range here
+    # made the two operators disagree: ``225 x AMRAP`` and ``225 x 30s`` logged
+    # fine while ``AMRAP @ 225`` and ``30s @ 225`` fell through to
+    # ``unresolved-set`` and were refused.
+    if not any(k in out for k in ("reps", "reps_range", "duration", "amrap")):
+        return None
+    # ``225 @ 5`` — 225 reps at a load of 5 — is the inverted form of this
+    # operator, and refusing it here is what routes it to ``unresolved-set``.
+    if not _reps_are_plausible(out):
+        return None
+    out["load"] = load_token.replace(" ", "")
+    return out
+
+
+def _try_load_first(head, explicit_load=False):
+    """``225 x 5`` / ``30lbs x 8 each`` — load × reps, load claimed FIRST.
+
+    This is the inversion vs. ``parse_prescription``: there, ``_SETS_X``
+    claims a leading integer-then-``x`` as *sets* before this shape is ever
+    tried. Here it is tried first, so ``225 x 5`` resolves to
+    ``load="225", reps=5`` instead of ``sets=225``.
+    """
+    # IGNORECASE is load-bearing: the athlete types this on a phone, where the
+    # keyboard auto-capitalizes, so ``225 X 5`` is everyday input. Without it
+    # the split failed while `_looks_like_set_attempt` (which IS case-
+    # insensitive) still recognized the `X` — so a perfectly good set was
+    # tinted as a fat-finger and never logged.
+    parts = re.split(r"\s*[x×]\s*", head, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) != 2:
+        return None
+    left, right = parts[0].strip(), parts[1].strip()
+    if not left or not right:
+        return None
+    if not _LOAD.match(left) or not _load_is_plausible(left, explicit=explicit_load):
+        return None
+    out = {"load": left.replace(" ", "")}
+    _classify_reps(right, out)
+    # The athlete wrote an ``x``, so they were attempting a set — if the
+    # right-hand side yielded nothing recognizable (``225 x five``,
+    # ``225x5x5``), this is a fat-fingered attempt, NOT a load-only partial.
+    # Returning the load anyway would classify it ``set``, silently persist a
+    # repless LoggedSet that can never count toward a record, and skip the
+    # warning entirely — the athlete would think it logged. Bail so the
+    # caller falls through to ``unresolved-set``. (A bare ``225`` with no
+    # ``x`` is a different branch and still a legitimate partial set.)
+    if not any(k in out for k in ("reps", "reps_range", "duration", "amrap")):
+        return None
+    # ...and a right-hand side too large to be reps (``5 x 225``) is the
+    # reps-first inversion — see ``_MAX_PLAUSIBLE_REPS``. Bail so the caller
+    # falls through to ``unresolved-set`` and the athlete is told, rather than
+    # silently banking 225 reps of 5 lb.
+    if not _reps_are_plausible(out):
+        return None
+    return out
+
+
+def _classify_performed_head(head, explicit_load=False):
+    """Best-effort classification of the line's first (only) recognized set.
+
+    Tries, in order: the ``@`` form, the load-first ``x`` form, then a bare
+    load with no operator at all (``225`` — a partial set, load only). Returns
+    ``None`` when none resolve, leaving the caller to decide between
+    ``unresolved-set``/``swap``/``note``.
+    """
+    result = _try_at_form(head, explicit_load)
+    if result is not None:
+        return result
+    result = _try_load_first(head, explicit_load)
+    if result is not None:
+        return result
+    if _LOAD.match(head) and _load_is_plausible(head, explicit=explicit_load):
+        return {"load": head.replace(" ", "")}
+    return None
+
+
+def parse_performed(text):
+    """Derive best-effort structure from what an athlete typed into a cell.
+
+    Total function — never raises, parity with ``parse_prescription``.
+    Returns ``None`` for empty/whitespace text, else a dict always carrying
+    ``raw`` (the stripped text) plus ``kind``, one of:
+
+    - ``"set"`` — a recognized load/reps (``{load?, reps?, reps_range?,
+      unit?, rpe?}``), a `LoggedSet` candidate.
+    - ``"skip"`` — the freeform skip convention (``skip`` / ``-`` / ``—``).
+    - ``"swap"`` — a substitute exercise name typed in place of a set.
+    - ``"note"`` — prose/commentary, not a logging attempt.
+
+      The ``swap``/``note`` split is a **best-effort keyword heuristic**
+      (``_NOTE_SIGNAL_WORDS``), not a grammar — the plan gives examples only.
+      In 5a the two are **behaviourally identical** (no set, no warn), so a
+      misclassification is invisible. Do NOT make this distinction
+      load-bearing without first replacing the word list with a real rule.
+
+    - ``"unresolved-set"`` — text that has the *shape* of a set attempt
+      (digit + ``x``/``×``/``@``) but doesn't resolve; the only kind that
+      should warn (§8) — everything else is a successful classification.
+    - ``"duration"`` — a bare timed cell (``30s``, ``20-60m``), not a lift.
+
+    **Load-first is the whole point** (plan §3): unlike ``parse_prescription``
+    (where a leading ``N x M`` is *sets*), here it's *load × reps* — reused
+    verbatim are the ``_LOAD``/``_REPS``/``_RPE``/``_DURATION`` token regexes,
+    plus the ``@`` operator (``5 @ 225``) and a swap/note branch for
+    non-numeric text.
+
+    **One set per line.** Only the line's first recognized set is returned;
+    a later comma segment is only ever read for a trailing RPE (``225 x 5,
+    RPE 8``). Multi-set-per-line text (``225x5, 230x3``) is explicitly OUT
+    OF SCOPE — the second set is silently dropped, not an error.
+    """
+    if text is None:
+        return None
+    raw = str(text).strip()
+    if not raw:
+        return None
+
+    first_line = raw.splitlines()[0].strip()
+    lowered = first_line.lower()
+
+    if lowered in ("skip", "skipped", "-", "—"):
+        return {"kind": "skip", "raw": raw}
+
+    duration = _DURATION.match(first_line)
+    if duration:
+        return {
+            "kind": "duration",
+            "raw": raw,
+            "duration": first_line.replace(" ", ""),
+        }
+
+    # A thousands separator can only be in the LEADING number — that is the
+    # load position, the only number a comma can legitimately sit inside.
+    # Anchoring here is what keeps the fold off ordinary segment commas: a
+    # comma that merely happens to be followed by three digits (``225x5,230x3``,
+    # ``225x5,100% effort``) is a segment break, and folding it mangled the head
+    # into something unparsable so nothing logged at all.
+    line = first_line.lstrip()
+    explicit_load = False
+    if _LOAD_NUMERIC_COMMA.search(line):
+        grouped = _LOAD_GROUPED.search(line)
+        if grouped is None:
+            # A load comma we can't read (``1,0000``, ``12,34``, ``1,000,00``).
+            # Splitting would hand the head a truncated but VALID-looking load
+            # — ``1`` — and store it silently. Refuse rather than guess.
+            return {"kind": "unresolved-set", "raw": raw, "warn": True}
+        # Nobody types a comma by accident, so this load bypasses the
+        # plausibility ceiling that catches a doubled keystroke (``2255x5``).
+        explicit_load = True
+        line = (
+            line[: grouped.start(2)]
+            + grouped.group(2).replace(",", "")
+            + line[grouped.end(2) :]
+        )
+
+    segments = line.split(",")
+    head = segments[0].strip()
+    out = _classify_performed_head(head, explicit_load)
+
+    if out is not None:
+        for segment in segments[1:]:
+            segment = segment.strip().rstrip(".")
+            rpe = _RPE.match(segment)
+            if rpe:
+                out.setdefault("rpe", re.sub(r"\s*", "", rpe.group(1)))
+        out["kind"] = "set"
+        out["raw"] = raw
+        return out
+
+    if _looks_like_set_attempt(first_line):
+        return {"kind": "unresolved-set", "raw": raw, "warn": True}
+
+    if _looks_like_note(first_line):
+        return {"kind": "note", "raw": raw}
+
+    return {"kind": "swap", "raw": raw}
+
+
+# ``LoggedSet.reps``/``load``/``rpe`` are CharField(32). A parse that yields
+# something longer cannot be stored, and the cell has to say so.
+MAX_LOGGED_FIELD = 32
+
+
+def cell_should_warn(text, *, loggable=True):
+    """Derive-on-read ``warn`` (5a, plan §8): should this cell be tinted?
+
+    A tiny wrapper around ``parse_performed`` shared by every surface that
+    needs to color a cell — the athlete presenter (the sub-line stack) and the
+    ``athlete_cell_write`` response (so a re-blur's answer updates live,
+    without a full page reload). No stored flag, no new column: every call
+    re-classifies ``text`` from scratch.
+
+    Two reasons to warn, and they must be the same two the write path acts on:
+
+    1. ``unresolved-set`` — text shaped like a logging attempt that won't
+       resolve (``225 x``). ``skip``/``swap``/``note``/``duration`` and an empty
+       cell are all successful classifications and never warn.
+    2. a set that resolves but WON'T BE STORED. Either it is too long — the
+       upsert declines a value past ``MAX_LOGGED_FIELD`` — or ``loggable`` is
+       False because the row isn't accepting sets at all (the coach skipped it
+       while the athlete had the page open). Both cases used to report no
+       warning, leaving the athlete looking at ordinary-looking text that
+       silently never counted toward their records.
+    """
+    parsed = parse_performed(text)
+    if not parsed:
+        return False
+    if parsed.get("kind") == "unresolved-set":
+        return True
+    if parsed.get("kind") != "set":
+        return False
+    if not loggable:
+        return True
+    return any(
+        len(value) > MAX_LOGGED_FIELD
+        for value in (
+            performed_reps_text(parsed),
+            str(parsed.get("load", "")),
+            str(parsed.get("rpe", "")),
+        )
+    )
+
+
+def performed_reps_text(parsed):
+    """The reps a performed ``set`` should store, as ``LoggedSet.reps`` text.
+
+    ``parse_performed`` splits the right-hand side of a set across four keys
+    depending on what the athlete wrote — ``reps`` (``225 x 5``),
+    ``reps_range`` (``225 x 5-8``), ``duration`` (``225 x 30s``) and ``amrap``
+    (``225 x AMRAP``). Reading only ``reps`` drops the other three on the
+    floor, writing a blank so the set renders as ``— @ 225`` in coach results
+    and recent-log grounding even though the athlete recorded something
+    perfectly meaningful.
+
+    ``LoggedSet.reps`` is a free-text ``CharField`` (the structured logger
+    stores plain strings too), so each form round-trips as the athlete's own
+    notation. Returns ``""`` when nothing was recognized.
+    """
+    if not parsed:
+        return ""
+    # The suffix rides along: ``8 each`` and ``5 breaths`` mean something
+    # different from a bare 8 or 5, and dropping it would show the set as plain
+    # reps in coach results and recent-log grounding. (Time suffixes never
+    # reach here — `_classify_reps` routes those to ``duration``.)
+    unit = parsed.get("unit") or ""
+    suffix = f" {unit}" if unit else ""
+    if "reps" in parsed:
+        return f"{parsed['reps']}{suffix}"
+    if "reps_range" in parsed:
+        low, high = parsed["reps_range"]
+        return f"{low}-{high}{suffix}"
+    if parsed.get("duration"):
+        return str(parsed["duration"])
+    if parsed.get("amrap"):
+        return "AMRAP"
+    return ""
+
+
+def performed_text_shows(text, *, reps, load, rpe):
+    """Does ``text`` still render exactly this performance?
+
+    The no-double-display test (5a §6). A parse-at-commit ``LoggedSet`` is
+    suppressed from structured surfaces precisely while its source sub-line is
+    ALREADY showing it — and ``_sub_lines`` renders every sub-line regardless of
+    who owns it, so ownership was never the right question. Earlier versions
+    keyed on ``source_line`` being set (which hid a set whose text the coach had
+    since replaced — invisible everywhere while still counting) and then on
+    ``athlete_authored`` (which double-displayed when a reclaim kept the same
+    text, or an undo restored it).
+
+    Comparing against the same three strings the upsert writes keeps the two
+    exactly in step: if a re-parse of the current text yields this row, the text
+    is displaying it.
+    """
+    parsed = parse_performed(text)
+    if not parsed or parsed.get("kind") != "set":
+        return False
+    # Case-insensitively, because a load token keeps the case the athlete typed
+    # (``BW`` vs ``bw``) while nothing else about the set changes. An exact
+    # comparison made a case-only rewrite of the source line — a coach reclaim
+    # tidying ``BW x 12`` to ``bw x 12`` — read as "the text no longer shows
+    # this set", which un-hid a row the line was plainly still displaying: the
+    # same performance in both channels, and repostable as a duplicate.
+    return same_logged_set(
+        (
+            performed_reps_text(parsed),
+            str(parsed.get("load", "")),
+            str(parsed.get("rpe", "")),
+        ),
+        (reps, load, rpe),
+    )
+
+
+def same_logged_value(left, right):
+    """Do these two stored-set tokens denote the same thing?
+
+    ``LoggedSet.reps``/``load``/``rpe`` hold the athlete's own notation, so one
+    value has many spellings: ``BW``/``bw`` (the load keeps the case it was
+    typed in) and ``8``/``8.0``/``120``/``120.0`` (a decimal point survives the
+    parse). Every comparison of two stored sets in this slice asks the same
+    question — is this the same performance? — so they all route through here.
+    Letting each site spell the comparison itself is what produced three
+    separate bugs: the same set displayed in both channels, a restored line
+    creating a twin row instead of reusing its own, and a reformatted load
+    re-firing a PR toast already celebrated.
+    """
+    if left.casefold() == right.casefold():
+        return True
+    try:
+        return float(left) == float(right)
+    except ValueError:
+        pass
+    left_duration, right_duration = _duration_key(left), _duration_key(right)
+    if left_duration is not None and left_duration == right_duration:
+        return True
+    left_load, right_load = _load_key(left), _load_key(right)
+    return left_load is not None and left_load == right_load
+
+
+# ``s``/``sec``/``seconds`` are one unit; the parser recognises all of them but
+# ``performed_reps_text`` keeps whichever the athlete typed. Folding them to a
+# family here is what stops ``30s`` and ``30 seconds`` reading as two different
+# performances of the same timed set.
+_TIME_UNIT_FAMILIES = {
+    "s": "s",
+    "sec": "s",
+    "secs": "s",
+    "second": "s",
+    "seconds": "s",
+    "m": "m",
+    "min": "m",
+    "mins": "m",
+    "minute": "m",
+    "minutes": "m",
+    "'": "m",
+    "h": "h",
+    "hour": "h",
+    "hours": "h",
+}
+
+
+# ``_LOAD`` accepts ``lb``/``lbs`` and ``kg``/``kgs``/``kilos`` alike, and the
+# parser keeps whichever the athlete typed — so these fold too, for the same
+# reason the time units do.
+_WEIGHT_UNIT_FAMILIES = {
+    "lb": "lb",
+    "lbs": "lb",
+    "kg": "kg",
+    "kgs": "kg",
+    "kilo": "kg",
+    "kilos": "kg",
+    "%": "%",
+}
+
+
+def _load_key(token):
+    """``(225.0, "lb")`` for any spelling of a load token, else ``None``."""
+    match = _LOAD.match(token.strip())
+    if not match:
+        return None
+    number, unit = match.groups()
+    if number is None:  # the ``bw`` branch — casefold already covers it
+        return None
+    return (float(number), _WEIGHT_UNIT_FAMILIES.get((unit or "").lower(), ""))
+
+
+def _duration_key(token):
+    """``("30", "s")`` for any spelling of a timed token, else ``None``."""
+    match = _DURATION.match(token.strip())
+    if not match:
+        return None
+    amount, unit = match.groups()
+    family = _TIME_UNIT_FAMILIES.get(unit.lower())
+    if family is None:
+        return None
+    return (amount.replace(" ", ""), family)
+
+
+def same_logged_set(left, right):
+    """Do two ``(reps, load, rpe)`` triples denote the same performance?"""
+    return all(same_logged_value(a, b) for a, b in zip(left, right, strict=True))
+
+
+def performed_is_set(text):
+    """Does ``text`` claim to be a performed set at all?
+
+    The question behind "should this cell have produced a ``LoggedSet``" — used
+    by the presenter to tint a line whose text makes that claim while no such
+    row exists.
+    """
+    parsed = parse_performed(text)
+    return bool(parsed) and parsed.get("kind") == "set"

@@ -32,6 +32,8 @@ from .models import SessionLog
 from .models import TourEvent
 from .models import Week
 from .models import WeekDelivery
+from .models import parsed_set_is_hidden
+from .models import sub_line_should_warn
 from .one_rm import key_str
 from .one_rm import one_rm_values
 from .personal_records import new_records_in
@@ -1451,6 +1453,12 @@ def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
     logged so a reload never hides logged data — but ``hard_cap`` bounds the
     render unconditionally so a stray large ``set_number`` can never balloon the
     page (the log endpoint also rejects set numbers above its own ceiling).
+
+    ``logged`` must already be scoped to ``source_line__isnull=True`` by the
+    caller (``athlete_session``) — a parse-at-commit ``LoggedSet`` derived from
+    a freeform sub-line (5a) renders itself as that sub-line's text, so
+    admitting it here too would double-display the same performed data as a
+    phantom structured input row (plan §6).
     """
     prescribed = _prescribed_set_count(prescription) or default
     logged_numbers = [n for (pid, n) in logged if pid == prescription.pk]
@@ -1489,16 +1497,36 @@ def athlete_session(session, athlete):
     ``session`` is already athlete-scoped by the view; this formats
     the prescribed grid into set-input rows, pre-filled from the athlete's own
     most-recent ``SessionLog``, and reports its done status. Cells are read via
-    ``session.cells()`` (P0 fixed-lineup cutover), already live-filtered.
+    ``session.trainable_cells()`` (P0 fixed-lineup cutover) — live AND
+    non-skipped, so a skipped row is never presented to the athlete as
+    loggable. (The docstring said ``session.cells()``; the code has used
+    ``trainable_cells()`` since, and the difference matters: it is why a skipped
+    row needs no warn handling on reload, only in the cell-write response.)
     """
     log = (
         SessionLog.objects.filter(session=session, athlete=athlete)
         .order_by("-created_at")
-        .prefetch_related("sets")
+        .prefetch_related("sets__source_line")
         .first()
     )
+    # No double-display (5a, plan §6): a freeform sub-line's text already
+    # renders itself (``_sub_lines`` below), so a ``LoggedSet`` DERIVED from
+    # that same text must not ALSO render as a structured input row.
+    #
+    # The test is literally whether the source line still SHOWS that text —
+    # see ``models.parsed_set_is_hidden``, the single predicate this and the
+    # logger's replace-delete both use so they cannot drift apart. Nothing is
+    # mutated to make a reclaimed set reappear, which is what ``history.py``
+    # requires ("undo must never touch ... athlete data") since a coach edit
+    # is undoable.
     logged = (
-        {(s.prescription_id, s.set_number): s for s in log.sets.all()} if log else {}
+        {
+            (s.prescription_id, s.set_number): s
+            for s in log.sets.all()
+            if not parsed_set_is_hidden(s)
+        }
+        if log
+        else {}
     )
     done = log is not None and log.status == SessionLog.Status.DONE
     week = session.week
@@ -1510,12 +1538,38 @@ def athlete_session(session, athlete):
     for line_cell in session.line_cells():
         lines_by_slot[line_cell.exercise_slot_id].append(line_cell)
 
+    # Sub-lines whose text is currently backed by a parsed set — i.e. the row
+    # exists AND still matches what the line says. Reuses the same predicate the
+    # suppression rule uses, so "displayed by its line" means one thing here.
+    sets_by_line = {}
+    for row in log.sets.all() if log else ():
+        sets_by_line.setdefault(row.source_line_id, []).append(row)
+
     def _sub_lines(slot_id):
         # The row's editable tracking stack (Phase 4a): its line>=1 cells for
-        # this week as ``[{line, text}]``. Blank cells are dropped from the
-        # display (a cleared sub-line is a blank cell, not a deleted row).
+        # this week as ``[{line, text, warn}]``. Blank cells are dropped from
+        # the display (a cleared sub-line is a blank cell, not a deleted row).
+        # ``warn`` (5a, plan §8) is derived on read, not stored: re-classify
+        # the cell's own text with ``parse_performed``. Text that *looks* like a
+        # fat-fingered set attempt (``225 x``) warns; skip/swap/note/duration
+        # are successful parses and never do.
+        #
+        # A line whose text DOES resolve to a set also warns when no such row
+        # exists. Asking after the row rather than re-deriving "is this row
+        # loggable right now" catches every reason one can be missing — the
+        # coach had skipped the line when it was typed and later unskipped it,
+        # the values were too long to store, the tolerance guard swallowed a
+        # database error — and each of those leaves the same state this warning
+        # exists for: ordinary-looking performed text that quietly counts for
+        # nothing.
         return [
-            {"line": line_cell.line, "text": line_cell.text}
+            {
+                "line": line_cell.line,
+                "text": line_cell.text,
+                "warn": sub_line_should_warn(
+                    line_cell, backing_sets=sets_by_line.get(line_cell.pk, ())
+                ),
+            }
             for line_cell in lines_by_slot.get(slot_id, ())
             if line_cell.text.strip()
         ]

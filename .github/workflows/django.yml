@@ -185,11 +185,20 @@ jobs:
       # SUCCESSFUL conclusion. Locally the same run is ~3.5 min — CI is 3-5x
       # slower here, straddling the timeout, so it failed intermittently.
       #
-      # migrate-from-scratch above + the deferred-constraint regression tests
-      # is the floor that keeps THAT class of bug catchable, which is the
-      # whole reason this job exists. The SQLite job beside it still runs the
-      # full suite on every push. If broad Postgres coverage is wanted later,
-      # give it its own schedule (nightly) rather than the deploy path.
+      # migrate-from-scratch above + the Postgres-only regression tests is the
+      # floor that keeps THAT class of bug catchable, which is the whole
+      # reason this job exists. The SQLite job beside it still runs the full
+      # suite on every push. If broad Postgres coverage is wanted later, give
+      # it its own schedule (nightly) rather than the deploy path.
+      #
+      # The list below is deliberately narrow: a test earns a place here only
+      # if SQLite CANNOT express the behaviour it pins, so the SQLite job
+      # would pass regardless. Two classes qualify so far — deferred
+      # constraints (0040) and transaction-abort semantics
+      # (test_parse_at_commit_postgres: SQLite keeps a connection usable after
+      # a failed statement, so a missing savepoint is invisible there).
       - name: Run the PostgreSQL-only tests
         run: |
-          uv run pytest app/store_project/meso/tests/test_migration_0040_pending_triggers.py
+          uv run pytest \
+            app/store_project/meso/tests/test_migration_0040_pending_triggers.py \
+            app/store_project/meso/tests/test_parse_at_commit_postgres.py

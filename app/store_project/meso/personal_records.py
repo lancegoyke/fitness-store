@@ -10,9 +10,20 @@ this slice adds the two things that make a *record* rather than a bare number:
 Both ride on the same structured performed record, ``LoggedSet`` — never parsed
 free text — and reuse the pinned Epley math verbatim (``one_rm.epley_one_rm``) and
 the hybrid B4 lift identity (``serializers._exercise_key`` via
-``one_rm.key_str``). The scan is DONE-only and unit-scoped exactly as
-``derive_one_rm_values`` (a bare logged load is denominated in its plan's unit, so
-kg and lb sets for one lift must never pool).
+``one_rm.key_str``). The scan is unit-scoped exactly as ``derive_one_rm_values``
+(a bare logged load is denominated in its plan's unit, so kg and lb sets for one
+lift must never pool).
+
+**LIVE, not DONE-only (5a, plan §7).** There is no "I'm done" button anymore —
+completion dissolved into a 24 h quiet-period settle (5b). So unlike
+``one_rm.derive_one_rm_values`` (which stays DONE-only — it writes the
+*persisted*, confirmed ``AthleteOneRm``, see that module's docstring), this
+module's reads count **PENDING** sets too: a "best so far" that's live and
+self-healing — edit/correct a cell and the next read re-derives off the
+corrected text, no separate reconciliation step. The trade is an occasional
+false-positive PR (a set later corrected downward) in exchange for
+in-the-moment feedback; 5b's settle sweep is what eventually promotes a live
+best into the confirmed, persisted record.
 
 Nothing is persisted (no ``PersonalRecord`` table — that is a deliberate later
 slice) and ``new_records_in`` has no side effects (no writes, no ``PlanAction``).
@@ -26,6 +37,8 @@ can drive the SAME computation by yielding the same tuples — no rework here.
 
 from dataclasses import dataclass
 from datetime import date as date_cls
+
+from django.db.models import Q
 
 from . import models
 from .one_rm import epley_one_rm
@@ -83,16 +96,20 @@ class NewRecord:
     logged_set_id: int
 
 
-def _completed_logged_sets(athlete, *, unit):
-    """The athlete's DONE, prescription-linked logged sets, scoped to ``unit``.
+def _live_logged_sets(athlete, *, unit):
+    """The athlete's LIVE, prescription-linked logged sets, scoped to ``unit``.
 
-    Mirrors ``one_rm.derive_one_rm_values``'s query: a pending "Save progress"
-    draft is not a finished performance, and a bare logged load is denominated in
-    its plan's unit — pooling kg and lb sets for one lift would be unit-confused.
+    Unlike ``one_rm.derive_one_rm_values``'s query (which this used to mirror
+    exactly, DONE-only), this one is deliberately **not** status-filtered
+    (5a, plan §7): a PENDING "Save progress"/parse-at-commit draft counts
+    toward the *live* best, because there is no "I'm done" button anymore —
+    only a 24 h settle (5b) that later promotes a live best into the
+    persisted, confirmed ``AthleteOneRm``. A bare logged load is still
+    denominated in its plan's unit, so kg and lb sets for one lift must never
+    pool — that scoping is unchanged.
     """
     return models.LoggedSet.objects.filter(
         session_log__athlete=athlete,
-        session_log__status=models.SessionLog.Status.DONE,
         session_log__session__week__mesocycle__plan__unit=unit,
         prescription__isnull=False,
     ).select_related("prescription__exercise_slot", "session_log")
@@ -154,31 +171,68 @@ def _session_unit(session_log):
 
 
 def personal_records(athlete, *, unit):
-    """Best e1RM per lift for ``athlete`` in ``unit``, keyed by B4 identity.
+    """Best LIVE e1RM per lift for ``athlete`` in ``unit``, keyed by B4 identity.
 
     Derive-on-read (nothing persisted): ``{key: PersonalRecord}`` over the
-    athlete's DONE, same-unit logged sets, each record carrying the display name,
-    best Epley e1RM (the raw ``epley_one_rm`` value), the winning reps/load
-    strings, the date, and the source ``LoggedSet``/``SessionLog`` ids. A lift
-    with no usable set is absent.
+    athlete's same-unit logged sets — PENDING included (5a, plan §7; see the
+    module docstring) — each record carrying the display name, best Epley
+    e1RM (the raw ``epley_one_rm`` value), the winning reps/load strings, the
+    date, and the source ``LoggedSet``/``SessionLog`` ids. A lift with no
+    usable set is absent. Self-healing: correcting the set that produced a
+    best simply changes what the next call returns, no invalidation needed.
     """
-    logged_sets = _completed_logged_sets(athlete, unit=unit)
+    logged_sets = _live_logged_sets(athlete, unit=unit)
     return _best_per_lift(_performed_sets(logged_sets, unit=unit))
 
 
+def _logged_before(session_log):
+    """Sets from logs that PRECEDE ``session_log``, by the model's own order.
+
+    Restricting a settled subject to settled history was only half the rule.
+    ``session_results`` recomputes this on every read, so without a chronology
+    a session that settles LATER also rewrote the earlier verdict: a coach
+    opening a finished session saw its PR badge simply gone, because the athlete
+    has since out-lifted it. Whether that session was a record is a fact about
+    the day it happened, and a later one cannot change it.
+
+    Ordered like ``SessionLog.Meta`` — ``date`` first, ``created_at`` as the
+    tiebreak — with an undated log falling back to when it was written, since
+    ``date__lt`` would otherwise drop it from the baseline entirely.
+    """
+    when = session_log.date
+    if when is None:
+        return Q(session_log__created_at__lt=session_log.created_at)
+    return (
+        Q(session_log__date__lt=when)
+        | Q(
+            session_log__date=when,
+            session_log__created_at__lt=session_log.created_at,
+        )
+        | Q(
+            session_log__date__isnull=True,
+            session_log__created_at__lt=session_log.created_at,
+        )
+    )
+
+
 def new_records_in(session_log):
-    """Lifts in ``session_log`` that beat the athlete's prior best — pure detection.
+    """Lifts in ``session_log`` that beat the athlete's prior LIVE best — pure detection.
 
     No side effects (no writes, no ``PlanAction``): returns a list of
-    :class:`NewRecord`, one per lift in this DONE session whose best e1RM exceeds
-    the athlete's best over *all other* same-unit DONE sets. The comparison
+    :class:`NewRecord`, one per lift in this session whose best e1RM exceeds the
+    athlete's best over *all other* same-unit logged sets. The comparison
     excludes the session under test, so a lone first-ever log is a PR (``previous``
     is ``None``) rather than a tie against itself; a tie or a lighter session is
-    not a PR. A pending session (not a finished performance) yields nothing.
-    """
-    if session_log.status != models.SessionLog.Status.DONE:
-        return []
+    not a PR.
 
+    **PENDING counts too (5a, plan §7)** — there is no "I'm done" button
+    anymore, and this is what powers the *optimistic* toast fired straight off
+    a grid-cell blur (``athlete_cell_write``), before the session ever settles
+    to DONE. That's an accepted trade: an optimistic PR can occasionally be a
+    false alarm if the set is later corrected downward — the *confirmed*
+    celebration (5b) is what settles it after a 24 h quiet period. A session
+    with no usable set yields nothing.
+    """
     unit = _session_unit(session_log)
     this_sets = models.LoggedSet.objects.filter(
         session_log=session_log, prescription__isnull=False
@@ -187,11 +241,22 @@ def new_records_in(session_log):
     if not this_best:
         return []
 
-    # Prior best over the athlete's OTHER same-unit DONE sets — excluding this
-    # session, so the session can't be its own prior record.
-    prior_qs = _completed_logged_sets(session_log.athlete, unit=unit).exclude(
+    # Prior best over the athlete's OTHER same-unit logged sets — excluding
+    # this session, so the session can't be its own prior record.
+    prior_qs = _live_logged_sets(session_log.athlete, unit=unit).exclude(
         session_log=session_log
     )
+    # Compare like with like. A DONE subject is a settled performance — it is
+    # what the coach's `session_results` judges — so it must be measured against
+    # settled history only. Without this, a PENDING draft saved later would
+    # retroactively decide whether an already-completed session was a PR: log a
+    # done 120x5, later draft a pending 150x5, and the coach's view of the
+    # finished session silently stops showing its record. A PENDING subject is
+    # the live/optimistic path and keeps the live baseline.
+    if session_log.status == models.SessionLog.Status.DONE:
+        prior_qs = prior_qs.filter(
+            session_log__status=models.SessionLog.Status.DONE
+        ).filter(_logged_before(session_log))
     prior_best = _best_per_lift(_performed_sets(prior_qs, unit=unit))
 
     records = []

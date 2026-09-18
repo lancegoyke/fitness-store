@@ -20,6 +20,8 @@ from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+from . import parsing
+
 
 class Unit(models.TextChoices):
     KILOGRAMS = "kg", _("Kilograms")
@@ -2200,6 +2202,69 @@ class ProposedChange(models.Model):
         return self.title
 
 
+def parsed_set_is_hidden(logged_set):
+    """Is this set already on screen as its own sub-line's text (5a §6)?
+
+    Hidden means suppressed from every structured surface — ``athlete_session``'s
+    ``set_rows``, ``serialize_session_log``, and therefore also the structured
+    logger's replace-delete, which must never touch a row it cannot see.
+
+    **Define the rule ONCE.** Visibility and that delete have to agree exactly,
+    and every time they were expressed separately they drifted: keying on
+    ``source_line`` alone hid a set whose text the coach had replaced (invisible
+    yet still counting); scoping the delete to ``source_line__isnull=True``
+    first WIPED reclaimed rows and then, once those became visible, let the
+    client repost one and DUPLICATE it; and keying on ``athlete_authored``
+    double-displayed whenever a reclaim kept the same text or an undo restored
+    it. ``_sub_lines`` renders every sub-line regardless of who owns it, so
+    ownership was never the question — only whether the text still shows this
+    performance.
+
+    Not a queryset ``Q``: the test re-parses text, which SQL cannot express.
+    Callers filter in Python so all three surfaces share this one predicate.
+    """
+    line = logged_set.source_line
+    if line is None:
+        return False
+    return parsing.performed_text_shows(
+        line.text,
+        reps=logged_set.reps,
+        load=logged_set.load,
+        rpe=logged_set.rpe,
+    )
+
+
+def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
+    """Should this athlete sub-line be tinted (5a §8)?
+
+    Three reasons, and every surface has to give the same answer or the tint
+    flickers — the cell-write response clearing it only for a reload to put it
+    back:
+
+    1. the text is shaped like a set attempt but won't resolve (``225 x``);
+    2. it resolves but can't be stored — too long, or ``loggable`` is False
+       because the row isn't accepting sets at all;
+    3. it resolves and SHOULD have a row, but none exists. Asking after the row
+       covers every cause at once (skipped when typed and later unskipped, a
+       coach line that was never parsed, a database error the tolerance guard
+       swallowed) where checking any single cause covers only that one.
+
+    ``backing_sets`` lets a caller pass rows it already has in memory; without
+    it the row is looked up. Reuses ``parsed_set_is_hidden``, so "backed by its
+    own line" means one thing across the slice.
+    """
+    if parsing.cell_should_warn(cell.text, loggable=loggable):
+        return True
+    if not parsing.performed_is_set(cell.text):
+        return False
+    rows = (
+        backing_sets
+        if backing_sets is not None
+        else LoggedSet.objects.filter(source_line=cell).select_related("source_line")
+    )
+    return not any(parsed_set_is_hidden(row) for row in rows)
+
+
 class LoggedSet(models.Model):
     """A single set the athlete logged against a prescription."""
 
@@ -2221,6 +2286,24 @@ class LoggedSet(models.Model):
     reps = models.CharField(_("Reps"), max_length=32, blank=True)
     load = models.CharField(_("Load"), max_length=32, blank=True)
     rpe = models.CharField(_("RPE"), max_length=32, blank=True)
+    # Parse-at-commit (5a, docs/meso/parse-at-commit-plan.md §4). Points at the
+    # athlete-authored sub-line cell (line >= 1) whose freeform text
+    # ``parse_performed`` classified into this set. NULL = a structured-logger
+    # origin (``athlete_log_session``). Triple duty: discriminator (the
+    # structured logger's delete scopes around parsed rows), de-dup link
+    # (presenters suppress one display channel), and idempotency key
+    # (``(session_log, source_line)`` — a re-blur deletes-then-recreates rather
+    # than appending). SET_NULL on a hard-deleted sub-line intentionally
+    # orphans the set as structured-origin-like (it survives, ``prescription``
+    # still points at line-0).
+    source_line = models.ForeignKey(
+        Prescription,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="parsed_sets",
+        verbose_name=_("Source line"),
+    )
 
     class Meta:
         ordering = ["set_number"]

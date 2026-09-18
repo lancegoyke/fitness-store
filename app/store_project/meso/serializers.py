@@ -432,6 +432,19 @@ def serialize_session_log(log):
 
     Echoes back what was persisted (status/date/notes + the logged sets) so the
     athlete's logger can confirm the write and the page can re-hydrate on reload.
+
+    **Visible rows only.** This is the structured logger's own view of itself:
+    the client's ``syncFromLog`` maps each set onto a ``(prescription,
+    set_number)`` input row. A parse-at-commit set (5a) that still renders as
+    its sub-line's text would make the logger mark a set done that nobody
+    posted, and let the next save persist a blank duplicate on top of it — the
+    same no-double-display rule ``athlete_session`` applies to ``set_rows``
+    (plan §6), enforced on the write path's response too.
+
+    Excluded via ``models.parsed_set_is_hidden`` — the one predicate shared
+    with the presenter and the logger's replace-delete. Once the source line
+    stops showing a performance (the coach reclaims and rewrites it), that set
+    is a real logged row again and belongs in the logger.
     """
     return {
         "id": log.pk,
@@ -447,7 +460,8 @@ def serialize_session_log(log):
                 "load": s.load,
                 "rpe": s.rpe,
             }
-            for s in log.sets.order_by("set_number")
+            for s in log.sets.select_related("source_line").order_by("set_number")
+            if not models.parsed_set_is_hidden(s)
         ],
     }
 

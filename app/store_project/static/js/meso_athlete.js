@@ -90,6 +90,7 @@ function createLogger() {
     queued: false, // a save is stashed locally, waiting for the network
     newRecords: [], // PRs the last save beat (Phase 4c) — the celebration toast
     _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
+    _cellSaves: {}, // per-cell promise chain, so blurs reach the server in order
 
     init() {
       const el = document.getElementById("meso-log-data");
@@ -109,8 +110,31 @@ function createLogger() {
       this.exercises = data.exercises || [];
       // Default the freeform tracking stack (Phase 4a) so the template's
       // `x-for` over `ex.sub_lines` is safe even for an exercise with none.
+      //
+      // ...and open with ONE EMPTY LINE PER PRESCRIBED SET, so the stack the
+      // athlete types into lines up with the sets they were asked for. Blank
+      // cells aren't persisted (the presenter drops them), so an exercise with
+      // nothing typed yet arrives EMPTY — which rendered as a bare "+ add a
+      // line" button under three labelled set inputs, and nobody would choose
+      // to put their data there. `set_rows` is already sized to the
+      // prescription server-side (its own default and caps applied), so
+      // matching it keeps one source of truth for "how many sets is this".
+      //
+      // Gaps are filled by NUMBER, not appended: a cleared line leaves a hole
+      // (the server drops the blank but keeps later ones), and `line` is also
+      // the parsed set's `set_number`, so a stack must rebuild identically on
+      // every reload. Filling 1..n by number does that; appending would walk
+      // the numbers up on each visit. Lines the athlete has beyond the
+      // prescription are always kept.
       for (const ex of this.exercises) {
         if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
+        const rows = Array.isArray(ex.set_rows) ? ex.set_rows.length : 0;
+        const want = Math.min(Math.max(rows, 1), MAX_CELL_LINE);
+        const present = new Set(ex.sub_lines.map((l) => l.line));
+        for (let n = 1; n <= want; n += 1) {
+          if (!present.has(n)) ex.sub_lines.push({ line: n, text: "" });
+        }
+        ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));
       }
       // Each exercise carries the athlete's persisted 1RM (`one_rm`) and its
       // `one_rm_source`. A `manual` value is the athlete's own number — it seeds
@@ -267,8 +291,9 @@ function createLogger() {
         const data = await res.json();
         this.status = data.log.status;
         this.syncFromLog(data.log);
-        // Any lift this (done) save beat — the server already filtered to DONE, so
-        // a "Save progress" comes back empty and shows no toast.
+        // Any lift this save beat. As of 5a the records read is LIVE — it counts
+        // pending sets too — so a "Save progress" no longer comes back empty and
+        // can legitimately surface a toast before the session is ever done.
         this.newRecords = data.new_records || [];
         this.saved = true;
         // Key the tour nudge off the log status the *server* persisted, not the
@@ -510,12 +535,34 @@ function createLogger() {
       ex.sub_lines.push({ line: maxLine + 1, text: "" });
     },
 
+    // Serialize saves PER CELL. Two blurs for one sub-line can otherwise be in
+    // flight together and land at the server out of order — the older request
+    // last — so `athlete_cell_write` saves the stale text and re-parses its
+    // LoggedSet from it. Ignoring the stale *response* isn't enough: the UI
+    // would show the correction while the database and the records kept the
+    // stale parse, and a reload would surface it. Chaining means the newer text
+    // is always written second, and since the body is read at send time an
+    // intermediate blur simply coalesces into the latest value.
     // POST one exercise's sub-line cell. Modeled on `_postOneRm`: best-effort,
     // an unreachable network or an error leaves the typed value in-session and
     // retries on the next blur. Blank text clears the cell in place (the server
     // never deletes a sub-line).
-    async saveCell(ex, line) {
-      if (!this.cellUrl || !ex) return;
+    saveCell(ex, line) {
+      if (!this.cellUrl || !ex) return Promise.resolve();
+      const key = ex.id + ":" + line;
+      const previous = this._cellSaves[key] || Promise.resolve();
+      const run = previous
+        .catch(() => {}) // a failed save must not stall the cell's queue
+        .then(() => this._postCell(ex, line));
+      this._cellSaves[key] = run;
+      return run;
+    },
+
+    // POST one exercise's sub-line cell. Modeled on `_postOneRm`: best-effort,
+    // an unreachable network or an error leaves the typed value in-session and
+    // retries on the next blur. Blank text clears the cell in place (the server
+    // never deletes a sub-line).
+    async _postCell(ex, line) {
       const entry = (ex.sub_lines || []).find((l) => l.line === line);
       const text = entry ? entry.text || "" : "";
       if (entry) entry.saveError = false;
@@ -533,7 +580,41 @@ function createLogger() {
         if (entry) entry.saveError = true;
         return; // offline — keep the in-session value; next blur re-attempts
       }
-      if (entry && (res.redirected || !res.ok)) entry.saveError = true;
+      if (res.redirected || !res.ok) {
+        if (entry) entry.saveError = true;
+        return;
+      }
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        return; // saved server-side regardless; warn/PR state reconciles next blur/reload
+      }
+      // Drop a stale response. Two saves for the same sub-line can be in
+      // flight at once, and the older one can land last — so fixing `225 x`
+      // to `225 x 5` could re-apply the first reply's warn and leave the cell
+      // tinted for text that no longer exists. Only trust a reply whose text
+      // is still what's in the input.
+      // Derive-on-read warn (5a §8): re-classified server-side from the
+      // just-committed text, so fixing a fat-fingered attempt (or typing one)
+      // updates the cell's color right away, without a page reload.
+      if (!entry || (entry.text || "") !== text) return;
+      entry.warn = !!(data.cell && data.cell.warn);
+      // Optimistic PR (5a §7), marked ON THE LINE THAT EARNED IT rather than in
+      // `newRecords`. That card renders at the top of the page, which is right
+      // for `save()` — "Log session" is a whole-session act — but wrong here: a
+      // blur happens wherever the athlete is typing, and UAT found the
+      // celebration firing off-screen every time. The point of the optimistic
+      // path is feedback in the moment, so it belongs beside the cell, in the
+      // same slot as this line's other status labels.
+      //
+      // Cleared when the line no longer wins anything, so correcting a set down
+      // takes its badge with it — derive-on-read, exactly like `warn`.
+      const earned =
+        Array.isArray(data.new_records) && data.new_records.length
+          ? data.new_records[0]
+          : null;
+      entry.pr = earned ? `${earned.value} ${earned.unit}` : "";
     },
   };
 }

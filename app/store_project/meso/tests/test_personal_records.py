@@ -2,15 +2,20 @@
 
 The first PR slice: derive-on-read best estimated-1RM *with provenance* from the
 athlete's structured performed record (``LoggedSet``), and detect whether a
-just-logged session beat the athlete's prior best. It rides on the same DONE-only,
-unit-scoped Epley scan as ``one_rm.derive_one_rm_values`` — reusing
-``epley_one_rm`` and the ``_exercise_key`` identity — but adds (a) which logged
-set on which date produced the best, and (b) new-PR detection.
+just-logged session beat the athlete's prior best. It reuses the pinned
+``epley_one_rm`` and the ``_exercise_key`` identity from ``one_rm.py``, but adds
+(a) which logged set on which date produced the best, and (b) new-PR detection.
+
+**LIVE, not DONE-only (5a, plan §7)** — unlike ``one_rm.derive_one_rm_values``,
+which stays DONE-only for the persisted/confirmed record (see ``test_one_rm.py``),
+this module's scan counts PENDING sets too, so the panel/toast are live and
+self-healing (correcting a set changes the very next read).
 
 These tests pin: the Epley tie, best-per-lift with provenance, lift-identity
-keying (catalog FK vs case-folded name), unit scoping, DONE-only, non-numeric
-skipping, and ``new_records_in`` true/false/tie against the best EXCLUDING the
-session under test.
+keying (catalog FK vs case-folded name), unit scoping, PENDING-inclusive
+(live) reads + self-healing on edit, non-numeric skipping, and
+``new_records_in`` true/false/tie against the best EXCLUDING the session
+under test.
 """
 
 import datetime
@@ -173,7 +178,12 @@ class TestPersonalRecords:
         assert kg["name:back squat"].e1rm == 150
         assert lb["name:back squat"].e1rm == 300
 
-    def test_pending_log_is_ignored(self):
+    def test_pending_log_counts_live(self):
+        # 5a (plan §7): relaxed from DONE-only — a PENDING parse-at-commit
+        # draft counts toward the LIVE best (was `test_pending_log_is_ignored`,
+        # pinning the old DONE-only behaviour this module deliberately dropped
+        # for its live reads; ``one_rm.derive_one_rm_values`` keeps that gate
+        # for the persisted path — see ``test_one_rm.py``).
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}]
@@ -184,7 +194,35 @@ class TestPersonalRecords:
             [(squat, 1, "1", "200", "9")],
             status=SessionLog.Status.PENDING,
         )
-        assert pr.personal_records(athlete, unit=Unit.KILOGRAMS) == {}
+        records = pr.personal_records(athlete, unit=Unit.KILOGRAMS)
+        assert records["name:back squat"].e1rm == 200
+
+    def test_editing_a_pending_set_self_heals_the_live_best(self):
+        # 5a (plan §7): "live and self-healing" — correcting the set that
+        # produced a best changes what the very next read returns, no
+        # invalidation step needed.
+        athlete = UserFactory()
+        _, session, (squat,) = make_session(
+            athlete, prescriptions=[{"name": "Back Squat"}]
+        )
+        log = log_session(
+            athlete,
+            session,
+            [(squat, 1, "1", "200", "9")],
+            status=SessionLog.Status.PENDING,
+        )
+        assert (
+            pr.personal_records(athlete, unit=Unit.KILOGRAMS)["name:back squat"].e1rm
+            == 200
+        )
+        # The athlete corrects the fat-fingered load down to 150.
+        the_set = log.sets.get()
+        the_set.load = "150"
+        the_set.save()
+        assert (
+            pr.personal_records(athlete, unit=Unit.KILOGRAMS)["name:back squat"].e1rm
+            == 150
+        )
 
     def test_non_numeric_sets_are_skipped(self):
         athlete = UserFactory()
@@ -286,7 +324,12 @@ class TestNewRecordsIn:
         assert len(records) == 1
         assert records[0].previous is None
 
-    def test_pending_session_yields_no_records(self):
+    def test_pending_session_still_fires_the_optimistic_toast(self):
+        # 5a (plan §7): relaxed from DONE-only — a PENDING session's first-ever
+        # lift is still a live/optimistic PR (was
+        # `test_pending_session_yields_no_records`, pinning the dropped
+        # DONE-only gate; this is what makes ``athlete_cell_write``'s
+        # optimistic toast possible before the session ever settles to DONE).
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}]
@@ -297,7 +340,10 @@ class TestNewRecordsIn:
             [(squat, 1, "1", "160", "9")],
             status=SessionLog.Status.PENDING,
         )
-        assert pr.new_records_in(log) == []
+        records = pr.new_records_in(log)
+        assert len(records) == 1
+        assert records[0].value == 160
+        assert records[0].previous is None
 
     def test_non_numeric_session_yields_no_records(self):
         athlete = UserFactory()

@@ -206,6 +206,23 @@ button.meso-card,
   border-color: var(--soft-line);
   background: var(--surface);
 }
+/* Parse-at-commit warn (5a, docs/meso/parse-at-commit-plan.md §8): a sub-line
+   cell whose text looks like a set attempt but won't be logged. Derived on read
+   (no stored flag) — see `models.sub_line_should_warn` (and `parsing
+   .cell_should_warn`) and `_sub_lines` in presenters.py. Never rejected, tinted.
+
+   Set via --cell-line/--cell-bg, NOT border-color/background: the sub-line
+   input declares those two properties inline, and an inline declaration beats
+   any class selector. The custom properties are not declared inline, so these
+   win — which is what makes the tint visible at all. */
+.meso .meso-phone-input--warn {
+  --cell-line: color-mix(in srgb, var(--warn) 45%, var(--line));
+  --cell-bg: var(--warn-soft);
+}
+.meso .meso-phone-input--warn:focus {
+  --cell-line: var(--warn);
+  --cell-bg: var(--warn-soft);
+}
 .meso .meso-composer:focus-within {
   border-color: var(--soft-line);
   box-shadow: 0 0 0 3px var(--soft);

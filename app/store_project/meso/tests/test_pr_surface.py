@@ -9,11 +9,19 @@ matters:
 - **coach** — ``session_results`` surfaces the same PRs for the session, both as a
   ``summary["new_records"]`` list and a per-row ``pr`` flag.
 
-Both read the structured ``LoggedSet`` performed record (D4), reuse the pinned
-Epley e1RM, and are DONE-only: a pending "Save progress" draft is not a finished
-performance and yields no PR. The engine's own edge cases (tie, exclude-self,
-identity, unit scoping) are pinned in ``test_personal_records.py``; here we pin
-the *surface* — that each host wires the detector in and formats it.
+Both read the structured ``LoggedSet`` performed record (D4) and reuse the pinned
+Epley e1RM. **5a (plan §7) relaxed the athlete host to LIVE, not DONE-only**:
+``new_records_in`` itself dropped its DONE gate, so ``athlete_log_session`` now
+reports a PR off a PENDING "Save progress" too (the same live read that also
+powers ``athlete_cell_write``'s optimistic toast — pinned in
+``test_parse_at_commit.py``). The **coach** host stays DONE-only in effect —
+not because ``new_records_in`` gates on it anymore, but because
+``session_results`` only ever fetches the athlete's DONE ``SessionLog`` in the
+first place (a pending draft "is not feedback yet", see its docstring) — so
+``new_records_in`` never even runs against a pending session there. The
+engine's own edge cases (tie, exclude-self, identity, unit scoping) are pinned
+in ``test_personal_records.py``; here we pin the *surface* — that each host
+wires the detector in and formats it.
 
 The e1RM math is exact for the loads chosen: Epley is ``load * (1 + reps/30)``,
 so reps=5 gives ``load * 7/6`` — 120→140, 150→175 — whole numbers that pin the
@@ -140,7 +148,12 @@ class TestAthleteLogNewRecords:
         assert pr["value"] == "140"  # 120 * (1 + 5/30) = 140
         assert pr["unit"] == "kg"
 
-    def test_pending_save_is_not_a_pr(self, client):
+    def test_pending_save_still_reports_a_live_pr(self, client):
+        # 5a (plan §7): relaxed from DONE-only — ``new_records_in`` now counts
+        # PENDING sets too, so a "Save progress" (not just "Log session") can
+        # surface the same optimistic toast. (Was `test_pending_save_is_not_a_pr`,
+        # pinning the DONE-only gate this slice deliberately dropped for live
+        # reads — see ``personal_records.py``'s module docstring.)
         s = seed()
         client.force_login(s.athlete)
         resp = post_log(
@@ -149,7 +162,10 @@ class TestAthleteLogNewRecords:
             {"status": "pending", "sets": [squat_set(s.squat.pk, "5", "120")]},
         )
         assert resp.status_code == 200
-        assert resp.json()["new_records"] == []
+        prs = resp.json()["new_records"]
+        assert len(prs) == 1
+        assert prs[0]["is_first"] is True
+        assert prs[0]["value"] == "140"  # 120 * (1 + 5/30) = 140
 
     def test_pr_reports_delta_over_previous_best(self, client):
         s = seed()
@@ -227,6 +243,10 @@ class TestSessionResultsNewRecords:
         assert rows["Box Squat"]["pr"] is False
 
     def test_pending_draft_has_no_prs(self):
+        # Still green post-5a: `session_results` only ever fetches the
+        # athlete's DONE log to begin with (see its docstring), so
+        # `new_records_in` never runs against a pending session here — this
+        # isn't `new_records_in`'s own (now-relaxed) DONE gate at work.
         s = seed()
         log_done(
             s.session,
