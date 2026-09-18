@@ -42,7 +42,9 @@
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
       <span class="meso-mono" style="font-size:12px;font-weight:700;color:var(--ink);" x-text="doneSets + '/' + totalSets"></span>
-      <span class="meso-row-meta">sets logged — fill in what you did, then log the session.</span>
+      {% comment %} The count is checked-off Set rows only; a typed line never
+         ticks it. So it says "checked off", not "logged". {% endcomment %}
+      <span class="meso-row-meta">sets checked off. When you're done, tap <strong>Log session</strong>.</span>
     </div>
 
     <!-- New-PR celebration (Phase 4c): populated from the log response; dismissible. -->
@@ -72,8 +74,11 @@
            style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;border:1px solid var(--line);border-left:3px solid var(--accent);">
         <span style="font-size:18px;line-height:1.3;">💡</span>
         <span style="flex:1;min-width:0;">
-          <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">How to log a set</span>
-          <span class="meso-row-meta">For each set, type the weight and reps you did, then tap the circle on the right to check it off. When you're done, tap <strong>Log session</strong> at the bottom.</span>
+          {% comment %} Both entry paths, in page order, with no favourite. Which
+             one stays is 5b's call (it retires the structured logger), so
+             rewrite this when 5b lands, not before. {% endcomment %}
+          <span style="display:block;font-size:14px;font-weight:700;letter-spacing:-0.01em;">Two ways to log a set</span>
+          <span class="meso-row-meta">Type it on a line under <strong>what you did</strong>, like <span style="white-space:nowrap;">225 x 5, RPE 8</span>. Or fill in a Set row below and tap its circle to check it off. Pick one for each set, not both. When you're done, tap <strong>Log session</strong> at the bottom.</span>
         </span>
         <button type="button" data-coachmark-dismiss aria-label="Dismiss tip" class="meso-btn meso-btn--ghost" style="padding:4px 8px;font-size:14px;line-height:1;">&times;</button>
       </div>
