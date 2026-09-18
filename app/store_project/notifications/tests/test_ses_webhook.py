@@ -39,6 +39,7 @@ import json
 from unittest import mock
 
 import pytest
+from django.db import OperationalError
 from django.urls import reverse
 from django_ses.models import BlacklistedEmail
 
@@ -440,6 +441,11 @@ class TestWebhookRobustness:
 
     @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
     def test_a_receiver_exception_still_returns_200(self, _verify, client):
+        """A non-database exception is swallowed and logged, not propagated.
+
+        See ``TestTransientDatabaseErrors`` below for the one kind of
+        exception (``DatabaseError``) that's allowed through.
+        """
         with mock.patch.object(
             EmailEvent.objects, "get_or_create", side_effect=RuntimeError("boom")
         ):
@@ -448,6 +454,30 @@ class TestWebhookRobustness:
             )
 
         assert response.status_code == 200
+
+
+class TestTransientDatabaseErrors:
+    """A transient ``DatabaseError`` must propagate, not get swallowed.
+
+    Postgres restarting mid-deploy, a dropped connection, and the like must
+    make SNS see something other than a 200 so it retries. Redelivery is
+    safe: ``EmailEvent`` rows are idempotent on ``(sns_message_id,
+    recipient)`` via ``get_or_create``.
+    """
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_database_error_propagates_and_records_nothing(self, _verify, client):
+        with (
+            mock.patch.object(
+                EmailEvent.objects,
+                "get_or_create",
+                side_effect=OperationalError("connection to server was lost"),
+            ),
+            pytest.raises(OperationalError),
+        ):
+            post_notification(client, open_message(), sns_message_id="sns-db-error-1")
+
+        assert EmailEvent.objects.count() == 0
 
 
 class TestTopicGuard:

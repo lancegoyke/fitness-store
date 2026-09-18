@@ -15,20 +15,30 @@ Two independent signal sources feed the tracking tables in ``models.py``:
 Both signal sources are connected in ``NotificationsConfig.ready()``.
 
 These receivers run inside the SNS webhook's request/response cycle (SNS
-POSTs, the view returns 200), so **none of them may ever raise**: SNS
-interprets anything but a 200 as failure and retries the same notification
-for hours. Every receiver therefore wraps its body in a bare
-``try/except Exception`` and logs instead of propagating. Idempotency (SNS
-*will* redeliver a notification that timed out, got a transient 5xx from a
-deploy, etc.) is handled by keying ``EmailEvent`` rows on
+POSTs, the view returns 200), so most of what can go wrong in them must never
+raise: a malformed payload, an unexpected shape, or any other non-database
+exception is swallowed and logged, because retrying a fixed set of bad input
+forever would just retry the same failure for hours (SNS interprets anything
+but a 200 as failure and keeps redelivering). ``record_sent_email`` (the
+``message_sent`` receiver — see its own docstring) always follows this rule,
+because it runs inline in the request that is *sending* the email, where a
+DB blip must never fail a send SES already accepted.
+
+The ``*_received`` receivers below (via ``_record_event``) are the one
+exception: a ``django.db.DatabaseError`` — Postgres restarting mid-deploy, a
+dropped connection, anything transient — is deliberately **not** swallowed.
+Letting it propagate turns the response into a 500, so SNS retries, and the
+retry is safe: idempotency is handled by keying ``EmailEvent`` rows on
 ``(sns_message_id, recipient)`` via ``get_or_create`` — the same pair the
-model's ``UniqueConstraint`` enforces.
+model's ``UniqueConstraint`` enforces. Every other exception in
+``_record_event`` is still swallowed and logged, same as everywhere else.
 """
 
 import json
 import logging
 from email.utils import parseaddr
 
+from django.db import DatabaseError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -52,7 +62,10 @@ def record_sent_email(sender, message, **kwargs):
 
     A message with no ``message_id`` (anything that didn't go through
     ``SESBackend``, or a send that failed before SES assigned one) is skipped
-    silently — there is nothing to key a row on. Never raises.
+    silently — there is nothing to key a row on. Never raises, deliberately
+    including a ``DatabaseError``: unlike ``_record_event`` below, this runs
+    inline in the request that is *sending* the email, so a transient DB
+    blip here must not fail a send SES has already accepted.
     """
     try:
         ses_message_id = (message.extra_headers or {}).get("message_id")
@@ -115,8 +128,13 @@ def _record_event(
 
     Resolves the ``SentEmail`` match (if any) and the event's ``kind``, then
     writes one ``EmailEvent`` per recipient, idempotent on
-    ``(sns_message_id, recipient)``. Never raises — SNS retries anything but
-    a 200 for hours, and a bad event must not take the webhook down with it.
+    ``(sns_message_id, recipient)`` via ``get_or_create`` (which already
+    absorbs the unique-race ``IntegrityError`` itself, so no special case is
+    needed here). A ``django.db.DatabaseError`` propagates — a transient
+    failure should turn into a 500 so SNS retries the (idempotent) delivery
+    rather than losing the event forever. Everything else (malformed
+    payloads, etc.) is swallowed and logged instead, since a bad event must
+    not take the webhook down with it.
     """
     try:
         mail_obj = mail_obj or {}
@@ -156,6 +174,8 @@ def _record_event(
                 recipient=recipient.lower(),
                 defaults=defaults,
             )
+    except DatabaseError:
+        raise
     except Exception:
         logger.exception("Failed to record %s event", event_type)
 
