@@ -2,13 +2,18 @@
 
 Production's SES configuration set ("Tracking") publishes every send,
 delivery, open, click, bounce, and complaint event to an SNS topic, which
-POSTs the notification to ``django_ses.views.SESEventWebhookView`` (mounted at
-``ses/events/`` — see ``config.urls``). That view verifies the SNS envelope's
-signature, then fires one of ``django_ses.signals.{bounce,complaint,delivery,
-send,open,click}_received``.
+POSTs the notification to ``ScopedSESEventWebhookView`` (mounted at
+``ses/events/`` and, for the legacy payload shape, ``ses/bounce/`` — see
+``config.urls``). That view first checks the notification's ``TopicArn``
+against ``settings.AWS_SES_EVENT_TOPIC_ARNS`` (see ``TestTopicGuard`` below),
+then verifies the SNS envelope's signature, then fires one of
+``django_ses.signals.{bounce,complaint,delivery,send,open,click}_received``.
 
 This file exercises the webhook end to end, one behaviour at a time:
 
+- A notification for a ``TopicArn`` that isn't allow-listed is rejected
+  before the signature is ever checked and nothing is recorded
+  (``TestTopicGuard``).
 - ``django_ses`` is installed everywhere (not just production), so its own
   built-in bounce/complaint handlers run in tests too: a permanent bounce or a
   complaint blacklists the recipient in ``django_ses.models.BlacklistedEmail``
@@ -43,15 +48,23 @@ from store_project.notifications.models import SentEmail
 
 pytestmark = pytest.mark.django_db
 
+# Must match `settings.AWS_SES_EVENT_TOPIC_ARNS` in `config.settings.test`.
+SNS_TOPIC_ARN = "arn:aws:sns:us-east-2:497780720908:EmailOpens"
+FOREIGN_TOPIC_ARN = "arn:aws:sns:us-east-2:999999999999:SomeoneElsesTopic"
+
 
 def sns_envelope(
-    message: dict, *, sns_message_id="sns-msg-1", notif_type="Notification"
+    message: dict,
+    *,
+    sns_message_id="sns-msg-1",
+    notif_type="Notification",
+    topic_arn=SNS_TOPIC_ARN,
 ):
     """Wrap an SES event ``message`` dict in an SNS ``Notification`` envelope."""
     return {
         "Type": notif_type,
         "MessageId": sns_message_id,
-        "TopicArn": "arn:aws:sns:us-east-2:497780720908:EmailOpens",
+        "TopicArn": topic_arn,
         "Subject": "Amazon SES Email Event Notification",
         "Message": json.dumps(message),
         "Timestamp": "2026-09-18T19:10:59.633Z",
@@ -200,10 +213,46 @@ def reject_message(*, message_id="ses-msg-reject", recipient="athlete@example.co
     }
 
 
-def post_notification(client, message, **kwargs):
+def legacy_bounce_message(
+    *, message_id="ses-msg-legacy-bounce", recipient="legacy@example.com"
+):
+    """The old ``notificationType`` payload shape ``ses/bounce/`` used to see.
+
+    ``ScopedSESEventWebhookView`` (like the base ``SESEventWebhookView`` it
+    subclasses) dispatches on ``eventType`` first, falling back to
+    ``notificationType`` — this is what SNS sent before the event webhook
+    switched configuration sets to the newer ``eventType`` field.
+    """
+    return {
+        "notificationType": "Bounce",
+        "mail": {
+            "timestamp": "2026-09-18T19:10:53.918Z",
+            "source": "Lance Goyke <lance@lancegoyke.com>",
+            "messageId": message_id,
+            "destination": [recipient],
+            "tags": {},
+        },
+        "bounce": {
+            "bounceType": "Permanent",
+            "bounceSubType": "General",
+            "bouncedRecipients": [
+                {
+                    "emailAddress": recipient,
+                    "action": "failed",
+                    "status": "5.1.1",
+                    "diagnosticCode": "smtp; 550 5.1.1 unknown user",
+                }
+            ],
+            "timestamp": "2026-09-18T19:11:00.000Z",
+            "feedbackId": "feedback-legacy",
+        },
+    }
+
+
+def post_notification(client, message, *, url_name="ses_events", **kwargs):
     envelope = sns_envelope(message, **kwargs)
     return client.post(
-        reverse("ses_events"),
+        reverse(url_name),
         data=json.dumps(envelope),
         content_type="application/json",
     )
@@ -399,3 +448,79 @@ class TestWebhookRobustness:
             )
 
         assert response.status_code == 200
+
+
+class TestTopicGuard:
+    """The topic allow-list is checked before the SNS signature.
+
+    ``ScopedSESEventWebhookView`` rejects any notification whose ``TopicArn``
+    isn't in ``settings.AWS_SES_EVENT_TOPIC_ARNS`` — an attacker who
+    subscribes our URL to their own topic must never get a certificate
+    fetch, let alone a confirmed subscription or a recorded event.
+    """
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_foreign_topic_is_rejected_and_signature_never_checked(
+        self, verify, client
+    ):
+        response = post_notification(
+            client,
+            bounce_message(recipient="attacker-controlled@example.com"),
+            sns_message_id="sns-foreign-1",
+            topic_arn=FOREIGN_TOPIC_ARN,
+        )
+
+        assert response.status_code == 400
+        assert EmailEvent.objects.count() == 0
+        assert not BlacklistedEmail.objects.filter(
+            email="attacker-controlled@example.com"
+        ).exists()
+        verify.assert_not_called()
+
+    @mock.patch("django_ses.views.utils.confirm_sns_subscription")
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_subscription_confirmation_for_foreign_topic_is_rejected(
+        self, verify, confirm, client
+    ):
+        envelope = sns_envelope({}, notif_type="SubscriptionConfirmation")
+        envelope["TopicArn"] = FOREIGN_TOPIC_ARN
+        envelope["SubscribeURL"] = "https://sns.us-east-2.amazonaws.com/confirm"
+
+        response = client.post(
+            reverse("ses_events"),
+            data=json.dumps(envelope),
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+        confirm.assert_not_called()
+        verify.assert_not_called()
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_empty_allow_list_rejects_an_otherwise_valid_envelope(
+        self, _verify, client, settings
+    ):
+        settings.AWS_SES_EVENT_TOPIC_ARNS = []
+
+        response = post_notification(
+            client, open_message(), sns_message_id="sns-no-allow-list"
+        )
+
+        assert response.status_code == 400
+        assert EmailEvent.objects.count() == 0
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_legacy_bounce_endpoint_on_allow_listed_topic_records_a_row(
+        self, _verify, client
+    ):
+        response = post_notification(
+            client,
+            legacy_bounce_message(recipient="legacy-bounced@example.com"),
+            sns_message_id="sns-legacy-bounce-1",
+            url_name="ses_bounce",
+        )
+
+        assert response.status_code == 200
+        event = EmailEvent.objects.get(sns_message_id="sns-legacy-bounce-1")
+        assert event.event_type == EmailEvent.EventType.BOUNCE
+        assert event.recipient == "legacy-bounced@example.com"

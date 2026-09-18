@@ -434,6 +434,21 @@ AWS_SES_ADD_BOUNCE_TO_BLACKLIST = True
 AWS_SES_ADD_COMPLAINT_TO_BLACKLIST = True
 AWS_SES_USE_BLACKLIST = True
 
+# The SNS topic(s) the webhook accepts notifications from. django-ses's
+# `SESEventWebhookView` verifies the SNS signature is genuinely Amazon's, but
+# never checks *which* topic a message came from — without this, anyone with
+# an AWS account could subscribe our webhook URL to their own topic and
+# publish forged Bounce/Complaint events (each one blacklists a real
+# recipient via `AWS_SES_USE_BLACKLIST` above) or flood the event table.
+# `store_project.notifications.views.ScopedSESEventWebhookView` rejects any
+# notification whose `TopicArn` isn't in this list. Comma-separated in the
+# env var; fail-closed — an empty list rejects every notification.
+AWS_SES_EVENT_TOPIC_ARNS = [
+    arn.strip()
+    for arn in os.environ.get("AWS_SES_EVENT_TOPIC_ARNS", "").split(",")
+    if arn.strip()
+]
+
 
 # django-q2 — the app-managed scheduler / task queue.
 #

@@ -1,10 +1,10 @@
-"""The staff-gated email deliverability dashboard (issue #507 part 2).
+"""Views for issue #507: the SES/SNS event webhook and the staff dashboard.
 
-Reads the SES event ledger ``presenters.email_dashboard`` aggregates:
-``SentEmail`` (written the moment ``SESBackend`` hands a message to SES) and
-``EmailEvent`` (one row per SES send/delivery/open/click/bounce/complaint
-event, matched back to the ``SentEmail`` it belongs to when possible — see
-``ses_events`` and ``models``).
+The dashboard (part 2) reads the SES event ledger ``presenters.email_dashboard``
+aggregates: ``SentEmail`` (written the moment ``SESBackend`` hands a message
+to SES) and ``EmailEvent`` (one row per SES send/delivery/open/click/bounce/
+complaint event, matched back to the ``SentEmail`` it belongs to when
+possible — see ``ses_events`` and ``models``).
 
 Gate + window handling mirror ``meso.views.TourFunnelView`` /
 ``UsageDashboardView`` exactly: anonymous → login redirect (the
@@ -13,7 +13,9 @@ logged-in coach or athlete can't probe org-wide delivery data), staff → 200.
 """
 
 import datetime
+import logging
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
@@ -24,10 +26,12 @@ from django.utils import timezone
 from django.views.generic import TemplateView
 from django.views.generic import View
 from django_ses.models import BlacklistedEmail
+from django_ses.views import SESEventWebhookView
 
 from . import presenters
 
 DEFAULT_DAYS = 30
+logger = logging.getLogger(__name__)
 VALID_DAYS = (7, 30, 90)
 
 
@@ -108,3 +112,35 @@ class EmailDashboardBlacklistClearView(UserPassesTestMixin, View):
         entry.delete()
         messages.success(request, f"Removed {entry.email} from the SES blacklist.")
         return redirect(reverse("notifications:email_dashboard"))
+
+
+class ScopedSESEventWebhookView(SESEventWebhookView):
+    """``SESEventWebhookView``, restricted to an allow-listed SNS topic.
+
+    django-ses's ``verify_event_message`` verifies the SNS signature is
+    genuinely Amazon's, but never checks *which* topic a message came from.
+    Left unguarded, anyone with an AWS account could subscribe our webhook
+    URL to their own topic and publish forged Bounce/Complaint events — each
+    one creates a ``BlacklistedEmail`` row (suppressing real mail via
+    ``AWS_SES_USE_BLACKLIST``) or floods ``EmailEvent`` — since a valid
+    Amazon signature says only "Amazon signed this", not "this came from our
+    configuration set".
+
+    The base view's ``post()`` calls ``self.verify_event_message(...)``
+    before it ever looks at ``notification["Type"]``, so overriding it here
+    guards ``SubscriptionConfirmation`` too — an attacker's subscription is
+    never confirmed. The topic check runs *before* deferring to
+    ``super().verify_event_message()`` (the actual signature check, which
+    fetches Amazon's signing certificate), so a rejected topic never costs a
+    certificate fetch.
+    """
+
+    def verify_event_message(self, notification):
+        topic_arn = notification.get("TopicArn")
+        if topic_arn not in settings.AWS_SES_EVENT_TOPIC_ARNS:
+            logger.warning(
+                "Rejected SNS notification for non-allow-listed TopicArn: %s",
+                topic_arn,
+            )
+            return False
+        return super().verify_event_message(notification)
