@@ -9,6 +9,7 @@ from django.test import Client
 from django.test import RequestFactory
 from django.test import TestCase
 
+from store_project.notifications.emails import ContactOwnerCopyNotSent
 from store_project.pages import turnstile
 from store_project.pages.factories import PageFactory
 from store_project.pages.views import HomePageView
@@ -135,6 +136,22 @@ class ContactViewTests(TestCase):
         assert response.status_code == HTTPStatus.OK
         assert b"Your message is in our inbox" in response.content
         assert b"double-check it" in response.content
+
+    def test_owner_copy_not_sent_is_not_caught_here(self):
+        """The view only catches BadHeaderError.
+
+        A filtered owner copy is a different failure
+        (ContactOwnerCopyNotSent) and is not swallowed into a success or
+        acknowledgement-failed message -- it propagates, same as any other
+        unhandled error from the helper.
+        """
+        with mock.patch(
+            "store_project.notifications.emails.EmailMessage.send", return_value=0
+        ):
+            with pytest.raises(ContactOwnerCopyNotSent):
+                self._post()
+
+        assert mail.outbox == []
 
     def test_post_error(self):
         response = self._post(message="")

@@ -16,6 +16,7 @@ from unittest import mock
 import pytest
 from django.core import mail
 
+from store_project.notifications.emails import ContactOwnerCopyNotSent
 from store_project.notifications.emails import kind_from_headers
 from store_project.notifications.emails import kind_from_tags
 from store_project.notifications.emails import send_block_delivered_email
@@ -235,10 +236,45 @@ class TestBlacklistedSendReportsFailure:
 
         assert sent is False
 
-    def test_send_contact_emails_ack_returns_false_when_nothing_sent(self):
-        with mock.patch("django.core.mail.EmailMessage.send", return_value=0):
+    def test_send_contact_emails_returns_false_when_only_the_ack_is_not_sent(self):
+        with mock.patch(
+            "django.core.mail.EmailMessage.send", side_effect=[1, 0]
+        ) as mock_send:
             acknowledged = send_contact_emails(
                 "Question", "Hello there", "visitor@example.com"
             )
 
         assert acknowledged is False
+        assert mock_send.call_count == 2
+
+
+class TestSendContactEmailsOwnerCopy:
+    """The owner's copy is not best-effort.
+
+    If ``AWS_SES_USE_BLACKLIST`` filters it out entirely -- e.g.
+    ``settings.DEFAULT_FROM_EMAIL`` itself landed in ``BlacklistedEmail`` --
+    ``send()`` returns ``0`` without raising, and a message we can't deliver
+    to the owner is a message that was lost. That must stop the
+    acknowledgement from going out and surface as ``ContactOwnerCopyNotSent``,
+    not silently succeed.
+    """
+
+    def test_raises_and_skips_the_acknowledgement_when_owner_copy_not_sent(self):
+        with mock.patch(
+            "django.core.mail.EmailMessage.send", return_value=0
+        ) as mock_send:
+            with pytest.raises(ContactOwnerCopyNotSent):
+                send_contact_emails("Question", "Hello there", "visitor@example.com")
+
+        assert mock_send.call_count == 1
+
+    def test_returns_true_and_sends_both_when_owner_copy_is_sent(self):
+        with mock.patch(
+            "django.core.mail.EmailMessage.send", return_value=1
+        ) as mock_send:
+            acknowledged = send_contact_emails(
+                "Question", "Hello there", "visitor@example.com"
+            )
+
+        assert acknowledged is True
+        assert mock_send.call_count == 2

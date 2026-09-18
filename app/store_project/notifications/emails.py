@@ -9,6 +9,19 @@ from .models import EmailKind
 
 logger = logging.getLogger(__name__)
 
+
+class ContactOwnerCopyNotSent(RuntimeError):
+    """The owner's copy of a contact-form submission could not be delivered.
+
+    Raised by ``send_contact_emails`` when ``EmailMessage.send()`` reports
+    ``0`` for the owner's copy -- which happens without raising whenever
+    ``AWS_SES_USE_BLACKLIST`` causes django-ses's ``SESBackend`` to filter out
+    every recipient (e.g. ``settings.DEFAULT_FROM_EMAIL`` itself is in
+    ``BlacklistedEmail``). A filtered owner copy must behave like a failed
+    owner copy, not a silent success.
+    """
+
+
 # SES's own custom message-tag header. Set on the way out by tag_kind(); SES
 # copies it onto every event it later reports for the message, as
 # mail.tags["kind"] (read back by kind_from_tags()) — see
@@ -98,9 +111,17 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
 
     Returns:
         ``True`` if the acknowledgement reached the sender's address, ``False``
-        if it could not be sent. The owner's notification is sent first and is
-        not best-effort: if that one fails the exception propagates, because a
-        message we cannot deliver to the owner is a message that was lost.
+        if it could not be sent.
+
+    Raises:
+        ContactOwnerCopyNotSent: the owner's copy is sent first and is not
+            best-effort. If ``send()`` raises, that exception propagates
+            as-is. If ``send()`` instead reports ``0`` -- which happens
+            without raising whenever ``AWS_SES_USE_BLACKLIST`` filters out
+            every recipient, e.g. the owner's own address is blacklisted --
+            this is raised instead and the acknowledgement is not attempted,
+            because a message we cannot deliver to the owner is a message
+            that was lost.
     """
     subject = render_to_string(
         "notifications/contact_email_subject.txt", {"subject": message_subject}
@@ -120,7 +141,18 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
         reply_to=[user_email],
     )
     tag_kind(email_for_admin, EmailKind.CONTACT_OWNER)
-    email_for_admin.send()
+    sent_to_owner = email_for_admin.send()
+    if not sent_to_owner:
+        logger.error(
+            "Contact form owner copy not sent: %s appears to be filtered "
+            "(e.g. blacklisted). Skipping the sender acknowledgement.",
+            settings.DEFAULT_FROM_EMAIL,
+        )
+        raise ContactOwnerCopyNotSent(
+            f"The owner address ({settings.DEFAULT_FROM_EMAIL}) appears to be "
+            "blacklisted or otherwise filtered -- the contact form submission "
+            "was not delivered."
+        )
 
     # Acknowledge to the sender. Best-effort: a bounced or rejected
     # acknowledgement must not lose a message the owner has already received,
