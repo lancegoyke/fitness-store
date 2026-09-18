@@ -1006,6 +1006,34 @@ describe("sub-line hydration", () => {
     c.init();
     expect(c.cellUrl).toBe(CELL_URL);
     expect(c.exercises[0].sub_lines).toEqual([{ line: 1, text: "RPE 8" }]);
-    expect(c.exercises[1].sub_lines).toEqual([]); // defaulted so x-for is safe
+    // An exercise with nothing typed yet OPENS with one empty line rather than
+    // an empty stack. Blank cells aren't persisted, so "no sub-lines" is the
+    // normal state — and it rendered as a bare "+ add a line" button beneath
+    // three labelled set inputs, which made the freeform path invisible.
+    expect(c.exercises[1].sub_lines).toEqual([{ line: 1, text: "" }]);
+  });
+
+  it("does not add a second empty line when one already exists", () => {
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "3 x 10",
+            one_rm: "",
+            one_rm_source: "",
+            set_rows: [],
+            sub_lines: [{ line: 1, text: "" }],
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    expect(c.exercises[0].sub_lines).toEqual([{ line: 1, text: "" }]);
   });
 });

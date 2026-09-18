@@ -110,8 +110,17 @@ function createLogger() {
       this.exercises = data.exercises || [];
       // Default the freeform tracking stack (Phase 4a) so the template's
       // `x-for` over `ex.sub_lines` is safe even for an exercise with none.
+      //
+      // ...and open with ONE empty line ready to type in. Blank cells aren't
+      // persisted (the presenter drops them), so an exercise with nothing typed
+      // yet arrives with an empty stack — which rendered as a bare "+ add a
+      // line" button under three labelled set inputs. Nobody would choose to
+      // add their data there, so the freeform path (5a, the one meant to become
+      // canonical) was effectively invisible. An empty line costs nothing: it
+      // only posts on blur, and only a non-blank blur writes anything.
       for (const ex of this.exercises) {
         if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
+        if (!ex.sub_lines.length) ex.sub_lines.push({ line: 1, text: "" });
       }
       // Each exercise carries the athlete's persisted 1RM (`one_rm`) and its
       // `one_rm_source`. A `manual` value is the athlete's own number — it seeds
