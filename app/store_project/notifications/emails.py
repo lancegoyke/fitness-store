@@ -3,10 +3,76 @@ import logging
 from django.conf import settings
 from django.core.mail import EmailMessage
 from django.core.mail import EmailMultiAlternatives
-from django.core.mail import send_mail
 from django.template.loader import render_to_string
 
+from .models import EmailKind
+
 logger = logging.getLogger(__name__)
+
+# SES's own custom message-tag header. Set on the way out by tag_kind(); SES
+# copies it onto every event it later reports for the message, as
+# mail.tags["kind"] (read back by kind_from_tags()) — see
+# notifications.ses_events for the receiver side.
+SES_MESSAGE_TAGS_HEADER = "X-SES-MESSAGE-TAGS"
+
+
+def tag_kind(message, kind: EmailKind) -> None:
+    """Tag an outgoing message with its ``EmailKind`` for SES and the dashboard.
+
+    Sets SES's ``X-SES-MESSAGE-TAGS`` header to ``kind=<value>``. SES echoes
+    custom message tags back on every event (open, click, bounce, ...) it
+    reports for the message as ``mail.tags["kind"]``, which
+    ``notifications.ses_events`` reads via ``kind_from_tags`` to denormalise
+    ``EmailEvent.kind`` even when the ``SentEmail`` row can't be matched.
+
+    SES restricts message-tag values to ``[A-Za-z0-9_-]`` — exactly the
+    alphabet ``EmailKind``'s values use, so no escaping is needed here.
+
+    Args:
+        message: any ``django.core.mail`` message instance (mutated in place).
+        kind: the ``EmailKind`` (or its string value) this message is.
+    """
+    message.extra_headers[SES_MESSAGE_TAGS_HEADER] = f"kind={kind}"
+
+
+def kind_from_headers(extra_headers: dict) -> EmailKind:
+    """Recover the ``EmailKind`` ``tag_kind()`` set, from ``message.extra_headers``.
+
+    Used by ``notifications.ses_events.record_sent_email``, which still has
+    the outgoing ``EmailMessage`` in hand (via ``message_sent``) rather than
+    an SES event's ``mail.tags`` — see ``kind_from_tags`` for that side.
+
+    Returns ``EmailKind.OTHER`` when the header is missing or unrecognised.
+    """
+    raw = (extra_headers or {}).get(SES_MESSAGE_TAGS_HEADER, "")
+    for pair in raw.split(","):
+        key, _, value = pair.partition("=")
+        if key.strip() == "kind":
+            try:
+                return EmailKind(value.strip())
+            except ValueError:
+                return EmailKind.OTHER
+    return EmailKind.OTHER
+
+
+def kind_from_tags(tags: dict) -> EmailKind:
+    """Recover the ``EmailKind`` from an SES event's ``mail.tags`` dict.
+
+    SES echoes the ``X-SES-MESSAGE-TAGS`` header ``tag_kind()`` set back on
+    every event for a message sent through the "Tracking" configuration set,
+    as ``tags["kind"]`` (a list — SES's tag values are always lists).
+
+    Returns ``EmailKind.OTHER`` when the tag is missing or unrecognised (for
+    instance, a message sent before this app existed, or via some other
+    path).
+    """
+    values = (tags or {}).get("kind") or []
+    if not values:
+        return EmailKind.OTHER
+    try:
+        return EmailKind(values[0])
+    except ValueError:
+        return EmailKind.OTHER
 
 
 def send_contact_emails(message_subject: str, message: str, user_email: str) -> bool:
@@ -53,6 +119,7 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
         ],
         reply_to=[user_email],
     )
+    tag_kind(email_for_admin, EmailKind.CONTACT_OWNER)
     email_for_admin.send()
 
     # Acknowledge to the sender. Best-effort: a bounced or rejected
@@ -71,6 +138,7 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
             settings.DEFAULT_FROM_EMAIL,
         ],
     )
+    tag_kind(email_for_user, EmailKind.CONTACT_ACK)
     try:
         email_for_user.send()
     except Exception:
@@ -113,14 +181,15 @@ def send_coach_invite_email(*, coach, email, accept_url) -> bool:
     ).strip()
     msg_plain = render_to_string("notifications/coach_invite.md", context)
     msg_html = render_to_string("notifications/coach_invite.html", context)
-    send_mail(
+    message = EmailMultiAlternatives(
         subject=subject,
-        message=msg_plain,
-        html_message=msg_html,
+        body=msg_plain,
         from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
-        recipient_list=[email],
-        fail_silently=False,
+        to=[email],
     )
+    message.attach_alternative(msg_html, "text/html")
+    tag_kind(message, EmailKind.COACH_INVITE)
+    message.send(fail_silently=False)
     return True
 
 
@@ -155,14 +224,15 @@ def send_coach_invite_reminder_email(*, coach, email, accept_url) -> bool:
     ).strip()
     msg_plain = render_to_string("notifications/coach_invite_reminder.md", context)
     msg_html = render_to_string("notifications/coach_invite_reminder.html", context)
-    send_mail(
+    message = EmailMultiAlternatives(
         subject=subject,
-        message=msg_plain,
-        html_message=msg_html,
+        body=msg_plain,
         from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
-        recipient_list=[email],
-        fail_silently=False,
+        to=[email],
     )
+    message.attach_alternative(msg_html, "text/html")
+    tag_kind(message, EmailKind.INVITE_REMINDER)
+    message.send(fail_silently=False)
     return True
 
 
@@ -198,14 +268,15 @@ def send_coach_request_email(*, athlete, coach, roster_url) -> bool:
     ).strip()
     msg_plain = render_to_string("notifications/coach_request.md", context)
     msg_html = render_to_string("notifications/coach_request.html", context)
-    send_mail(
+    message = EmailMultiAlternatives(
         subject=subject,
-        message=msg_plain,
-        html_message=msg_html,
+        body=msg_plain,
         from_email=None,  # defaults to settings.DEFAULT_FROM_EMAIL
-        recipient_list=[coach.email],
-        fail_silently=False,
+        to=[coach.email],
     )
+    message.attach_alternative(msg_html, "text/html")
+    tag_kind(message, EmailKind.COACH_REQUEST)
+    message.send(fail_silently=False)
     return True
 
 
@@ -259,14 +330,15 @@ def send_margin_alert_email(*, alerts, month_label, threshold) -> bool:
     ).strip()
     msg_plain = render_to_string("notifications/margin_alert.md", context)
     msg_html = render_to_string("notifications/margin_alert.html", context)
-    send_mail(
+    message = EmailMultiAlternatives(
         subject=subject,
-        message=msg_plain,
-        html_message=msg_html,
+        body=msg_plain,
         from_email=settings.SERVER_EMAIL,  # the robot, not the owner's own address
-        recipient_list=recipients,
-        fail_silently=False,
+        to=recipients,
     )
+    message.attach_alternative(msg_html, "text/html")
+    tag_kind(message, EmailKind.MARGIN_ALERT)
+    message.send(fail_silently=False)
     return True
 
 
@@ -329,5 +401,6 @@ def send_block_delivered_email(
         headers=headers,
     )
     message.attach_alternative(msg_html, "text/html")
+    tag_kind(message, EmailKind.BLOCK_DELIVERED)
     message.send(fail_silently=False)
     return True
