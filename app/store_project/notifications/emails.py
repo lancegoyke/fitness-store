@@ -140,14 +140,14 @@ def send_contact_emails(message_subject: str, message: str, user_email: str) -> 
     )
     tag_kind(email_for_user, EmailKind.CONTACT_ACK)
     try:
-        email_for_user.send()
+        sent = email_for_user.send()
     except Exception:
         logger.warning(
             "Could not send the contact acknowledgement to the sender.",
             exc_info=True,
         )
         return False
-    return True
+    return sent > 0
 
 
 def send_coach_invite_email(*, coach, email, accept_url) -> bool:
@@ -165,7 +165,8 @@ def send_coach_invite_email(*, coach, email, accept_url) -> bool:
 
     Returns:
         ``True`` if a message was sent, ``False`` if skipped because there is no
-        address to send to.
+        address to send to, or because the backend accepted no recipients (e.g.
+        every recipient is blacklisted — ``AWS_SES_USE_BLACKLIST``).
 
     Raises a mail backend exception (``fail_silently=False``); callers that must
     not fail the request on a bounced email should treat this as best-effort.
@@ -189,8 +190,8 @@ def send_coach_invite_email(*, coach, email, accept_url) -> bool:
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.COACH_INVITE)
-    message.send(fail_silently=False)
-    return True
+    sent = message.send(fail_silently=False)
+    return sent > 0
 
 
 def send_coach_invite_reminder_email(*, coach, email, accept_url) -> bool:
@@ -208,7 +209,8 @@ def send_coach_invite_reminder_email(*, coach, email, accept_url) -> bool:
 
     Returns:
         ``True`` if a message was sent, ``False`` if skipped because there is no
-        address to send to.
+        address to send to, or because the backend accepted no recipients (e.g.
+        every recipient is blacklisted — ``AWS_SES_USE_BLACKLIST``).
 
     Raises a mail backend exception (``fail_silently=False``); callers that must
     not fail the sweep on a bounced email should treat this as best-effort.
@@ -232,8 +234,8 @@ def send_coach_invite_reminder_email(*, coach, email, accept_url) -> bool:
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.INVITE_REMINDER)
-    message.send(fail_silently=False)
-    return True
+    sent = message.send(fail_silently=False)
+    return sent > 0
 
 
 def send_coach_request_email(*, athlete, coach, roster_url) -> bool:
@@ -252,7 +254,9 @@ def send_coach_request_email(*, athlete, coach, roster_url) -> bool:
 
     Returns:
         ``True`` if a message was sent, ``False`` if skipped because the coach
-        has no email address on file.
+        has no email address on file, or because the backend accepted no
+        recipients (e.g. every recipient is blacklisted —
+        ``AWS_SES_USE_BLACKLIST``).
 
     Raises a mail backend exception (``fail_silently=False``); callers that must
     not fail the request on a bounced email should treat this as best-effort.
@@ -276,8 +280,8 @@ def send_coach_request_email(*, athlete, coach, roster_url) -> bool:
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.COACH_REQUEST)
-    message.send(fail_silently=False)
-    return True
+    sent = message.send(fail_silently=False)
+    return sent > 0
 
 
 def send_margin_alert_email(*, alerts, month_label, threshold) -> bool:
@@ -298,7 +302,8 @@ def send_margin_alert_email(*, alerts, month_label, threshold) -> bool:
 
     Returns:
         ``True`` if a message was sent, ``False`` if skipped because there were no
-        alerts or no admin address to send to.
+        alerts or no admin address to send to, or because the backend accepted no
+        recipients (e.g. every recipient is blacklisted — ``AWS_SES_USE_BLACKLIST``).
 
     Raises a mail backend exception (``fail_silently=False``); callers that must
     not fail a scheduled sweep on a bounced email should treat this as best-effort.
@@ -338,8 +343,8 @@ def send_margin_alert_email(*, alerts, month_label, threshold) -> bool:
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.MARGIN_ALERT)
-    message.send(fail_silently=False)
-    return True
+    sent = message.send(fail_silently=False)
+    return sent > 0
 
 
 def send_block_delivered_email(
@@ -367,7 +372,9 @@ def send_block_delivered_email(
 
     Returns:
         ``True`` if a message was sent, ``False`` if skipped because the athlete
-        has no email address on file.
+        has no email address on file, or because the backend accepted no
+        recipients (e.g. every recipient is blacklisted —
+        ``AWS_SES_USE_BLACKLIST``).
 
     Raises a mail backend exception (``fail_silently=False``); callers that must
     not let a delivery fail on a bounced email should treat this as best-effort.
@@ -402,5 +409,5 @@ def send_block_delivered_email(
     )
     message.attach_alternative(msg_html, "text/html")
     tag_kind(message, EmailKind.BLOCK_DELIVERED)
-    message.send(fail_silently=False)
-    return True
+    sent = message.send(fail_silently=False)
+    return sent > 0

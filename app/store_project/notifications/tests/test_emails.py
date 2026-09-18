@@ -11,6 +11,8 @@ readers: the first off a still-in-hand ``message.extra_headers`` (used by
 (used by the event receivers).
 """
 
+from unittest import mock
+
 import pytest
 from django.core import mail
 
@@ -147,3 +149,96 @@ class TestSendersTagTheirMessages:
         )
 
         assert mail.outbox[0].extra_headers[TAG_HEADER] == "kind=block_delivered"
+
+
+class TestBlacklistedSendReportsFailure:
+    """A ``send()`` that reports 0 sent must not be reported as success.
+
+    ``AWS_SES_USE_BLACKLIST=True`` (``base.py``) makes django-ses's
+    ``SESBackend.send_messages`` strip blacklisted recipients and, if none
+    remain, skip the message entirely — ``EmailMessage.send()`` then returns
+    ``0`` without raising. Every helper below must surface that as ``False``
+    rather than claiming success.
+    """
+
+    def test_send_coach_invite_email_returns_false_when_nothing_sent(self):
+        coach = UserFactory()
+
+        with mock.patch("django.core.mail.EmailMultiAlternatives.send", return_value=0):
+            sent = send_coach_invite_email(
+                coach=coach,
+                email="athlete@example.com",
+                accept_url="https://x.test/claim/",
+            )
+
+        assert sent is False
+
+    def test_send_coach_invite_reminder_email_returns_false_when_nothing_sent(self):
+        coach = UserFactory()
+
+        with mock.patch("django.core.mail.EmailMultiAlternatives.send", return_value=0):
+            sent = send_coach_invite_reminder_email(
+                coach=coach,
+                email="athlete@example.com",
+                accept_url="https://x.test/claim/",
+            )
+
+        assert sent is False
+
+    def test_send_coach_request_email_returns_false_when_nothing_sent(self):
+        athlete = UserFactory()
+        coach = UserFactory(email="coach@example.com")
+
+        with mock.patch("django.core.mail.EmailMultiAlternatives.send", return_value=0):
+            sent = send_coach_request_email(
+                athlete=athlete, coach=coach, roster_url="https://x.test/meso/"
+            )
+
+        assert sent is False
+
+    def test_send_margin_alert_email_returns_false_when_nothing_sent(self, settings):
+        settings.ADMINS = [("Lance Goyke", "lance@lancegoyke.com")]
+        alert = type(
+            "Alert",
+            (),
+            {
+                "label": "Coach X",
+                "billing_status": "active",
+                "billable_seats": 1,
+                "totals": type("Totals", (), {"runs": 1, "cost": 1})(),
+                "revenue": 2,
+                "margin": 1,
+                "cost_to_revenue_ratio": 0.5,
+            },
+        )()
+
+        with mock.patch("django.core.mail.EmailMultiAlternatives.send", return_value=0):
+            sent = send_margin_alert_email(
+                alerts=[alert], month_label="2026-06", threshold=0.5
+            )
+
+        assert sent is False
+
+    def test_send_block_delivered_email_returns_false_when_nothing_sent(self):
+        athlete = UserFactory()
+        coach = UserFactory()
+        plan = type("Plan", (), {"title": "Hypertrophy Block"})()
+
+        with mock.patch("django.core.mail.EmailMultiAlternatives.send", return_value=0):
+            sent = send_block_delivered_email(
+                athlete=athlete,
+                coach=coach,
+                plan=plan,
+                week_count=2,
+                home_url="https://x.test/meso/me/",
+            )
+
+        assert sent is False
+
+    def test_send_contact_emails_ack_returns_false_when_nothing_sent(self):
+        with mock.patch("django.core.mail.EmailMessage.send", return_value=0):
+            acknowledged = send_contact_emails(
+                "Question", "Hello there", "visitor@example.com"
+            )
+
+        assert acknowledged is False
