@@ -34,6 +34,13 @@ urlpatterns = [
     ),
     path("markdownx/", include("markdownx.urls")),
     path("backside/clearcache/", include("clearcache.urls")),
+    # Staff email deliverability dashboard (#507 part 2). Must precede the
+    # bare "backside/" admin mount below — that one catches everything else
+    # under backside/.
+    path(
+        "backside/email/",
+        include("store_project.notifications.urls", namespace="notifications"),
+    ),
     path("backside/", admin.site.urls),
     path("cardio/", include("store_project.cardio.urls")),
     path("meso/", include("store_project.meso.urls", namespace="meso")),
