@@ -3,7 +3,10 @@
 Both models are system-written (``notifications.ses_events``, off SES/SNS
 webhook events and the ``message_sent`` signal) — there is nothing a person
 should hand-edit here, so both are read-only browsing surfaces pending the
-staff deliverability dashboard (#507, part 2).
+staff deliverability dashboard (#507, part 2). Add, change, and delete are
+all disabled; ``has_view_permission`` falls back to the ``view`` *or*
+``change`` Django permission, so a staff user still gets read-only browsing
+without needing the ``change`` permission specifically.
 """
 
 from django.contrib import admin
@@ -28,6 +31,12 @@ class SentEmailAdmin(admin.ModelAdmin):
     )
 
     def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False
 
 
@@ -55,4 +64,10 @@ class EmailEventAdmin(admin.ModelAdmin):
     )
 
     def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False
