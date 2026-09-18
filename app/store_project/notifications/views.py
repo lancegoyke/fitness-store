@@ -13,12 +13,14 @@ logged-in coach or athlete can't probe org-wide delivery data), staff → 200.
 """
 
 import datetime
+import json
 import logging
 
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
+from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -126,21 +128,29 @@ class ScopedSESEventWebhookView(SESEventWebhookView):
     Amazon signature says only "Amazon signed this", not "this came from our
     configuration set".
 
-    The base view's ``post()`` calls ``self.verify_event_message(...)``
-    before it ever looks at ``notification["Type"]``, so overriding it here
-    guards ``SubscriptionConfirmation`` too — an attacker's subscription is
-    never confirmed. The topic check runs *before* deferring to
-    ``super().verify_event_message()`` (the actual signature check, which
-    fetches Amazon's signing certificate), so a rejected topic never costs a
-    certificate fetch.
+    The base view's ``post()`` only calls ``verify_event_message`` at all
+    when ``settings.AWS_SES_VERIFY_EVENT_SIGNATURES`` is true, so the topic
+    guard can't live inside that hook (an unguarded ``post()`` would let the
+    check be bypassed entirely by turning signature verification off — a
+    supported configuration, e.g. local testing). Overriding ``post()``
+    instead means the guard runs unconditionally, before the base view's own
+    signature check, so a rejected topic never costs a certificate fetch and
+    an attacker's subscription is never confirmed.
     """
 
-    def verify_event_message(self, notification):
+    def post(self, request, *args, **kwargs):
+        try:
+            notification = json.loads(request.body.decode("utf-8"))
+        except ValueError:
+            # Malformed JSON: let the base view produce its own 400.
+            return super().post(request, *args, **kwargs)
+
         topic_arn = notification.get("TopicArn")
         if topic_arn not in settings.AWS_SES_EVENT_TOPIC_ARNS:
             logger.warning(
                 "Rejected SNS notification for non-allow-listed TopicArn: %s",
                 topic_arn,
             )
-            return False
-        return super().verify_event_message(notification)
+            return HttpResponseBadRequest("Unexpected SNS topic.")
+
+        return super().post(request, *args, **kwargs)

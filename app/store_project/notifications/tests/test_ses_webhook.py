@@ -554,3 +554,50 @@ class TestTopicGuard:
         event = EmailEvent.objects.get(sns_message_id="sns-legacy-bounce-1")
         assert event.event_type == EmailEvent.EventType.BOUNCE
         assert event.recipient == "legacy-bounced@example.com"
+
+
+class TestTopicGuardWithoutSignatureVerification:
+    """The topic guard must run even when signature verification is off.
+
+    ``AWS_SES_VERIFY_EVENT_SIGNATURES=False`` is a supported configuration
+    (e.g. local testing). django-ses's own ``SESEventWebhookView.post()``
+    only calls ``verify_event_message`` at all when that setting is true, so
+    a guard that lives solely inside ``verify_event_message`` would never run
+    in this mode. Nothing here patches
+    ``django_ses.views.utils.verify_event_message`` — the unverified path
+    runs for real, proving the guard doesn't depend on it.
+    """
+
+    def test_foreign_topic_is_rejected_without_signature_verification(
+        self, client, settings
+    ):
+        settings.AWS_SES_VERIFY_EVENT_SIGNATURES = False
+
+        response = post_notification(
+            client,
+            bounce_message(recipient="attacker-controlled@example.com"),
+            sns_message_id="sns-foreign-unverified",
+            topic_arn=FOREIGN_TOPIC_ARN,
+        )
+
+        assert response.status_code == 400
+        assert EmailEvent.objects.count() == 0
+        assert not BlacklistedEmail.objects.filter(
+            email="attacker-controlled@example.com"
+        ).exists()
+
+    def test_allow_listed_topic_still_works_without_signature_verification(
+        self, client, settings
+    ):
+        settings.AWS_SES_VERIFY_EVENT_SIGNATURES = False
+
+        response = post_notification(
+            client,
+            bounce_message(recipient="bounced-unverified@example.com"),
+            sns_message_id="sns-allow-listed-unverified",
+        )
+
+        assert response.status_code == 200
+        assert EmailEvent.objects.filter(
+            sns_message_id="sns-allow-listed-unverified"
+        ).exists()
