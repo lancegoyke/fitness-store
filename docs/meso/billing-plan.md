@@ -177,12 +177,58 @@ That predicate closes four traps a Stripe trial would otherwise fall into:
    marker `start_trial` sets once, and the product-analytics dashboard (#509)
    reads it for "trial started."
 
+An adversarial review of this slice found two more, both in the webhook's
+event-ordering assumptions (Stripe doesn't guarantee delivery order, so a
+handler has to treat every event as possibly late or retried):
+
+5. **A canceled subscription id looked reopenable.** A late/retried
+   `created`/`updated` for the *same* id as an already-CANCELED row would flip
+   it back to TRIALING/ACTIVE — and, per trap 1, a TRIALING row with a
+   `stripe_subscription_id` never lazily expires, so that reopen would be
+   *permanent*, with no later event able to correct it. Stripe never
+   reactivates a canceled subscription (`canceled`/`incomplete_expired` are
+   terminal states), so this follows straight from Stripe's own semantics: a
+   non-delete event for the same id as a CANCELED row is ignored outright. A
+   duplicate `deleted` stays idempotent as before.
+6. **A stale `trialing` event could look current.** Stripe moves a
+   subscription out of `trialing` at its own `trial_end` (to `active`, or to
+   `past_due` on a failed first charge). A `created`/`updated(trialing)`
+   delivered late — after the real `updated(active)`/`updated(past_due)` — but
+   reporting a `trial_end` already in the past can't be describing the
+   subscription's current state; applying it anyway would flip an
+   already-charged coach back to "Pro — first charge on `<past date>`" and
+   misreport them as unpaid. Fix: a `trialing` event whose own `trial_end` has
+   already passed is ignored before the mirror write. A `trialing` event with
+   no `trial_end` is unaffected (trap 4's "left alone" case).
+
 **Analytics (#509):** `subscription_started` fires exactly once — on
 `created(trialing)` — not again when the subscription flips to `active` at
 trial end. The existing `already_live` / ledger check already gives that: the
 `created(trialing)` event isn't `already_live` (no matching `stripe_subscription_id`
 yet) so it tracks; the later `updated(active)` *is* already live (same
 subscription id, a status already in `ACTIVE_STATUSES`) so it doesn't.
+
+**Local timezone display.** Dates are shown in the coach's local timezone (a
+small script rewrites the server's UTC date), matching Stripe's own Checkout
+page.
+
+**Verified in Stripe test mode (2026-09-19).** Checkout Sessions with
+`subscription_data.trial_end` 47h and 47h59m out were rejected ("The
+`trial_end` date has to be at least 2 days in the future."); 48h+1min,
+48h+5min, and 10 days out were accepted. A trial session has `amount_total`
+0 and `payment_method_collection` `"always"`. Stripe's hosted page read "9
+days free · Then $19.00 per month starting September 29, 2026 · Total due
+today $0.00" with a "Start trial" button for a 10-day `trial_end`. On a test
+clock (API `2020-08-27`) a subscription with `trial_end` was created
+`trialing` with `current_period_end == trial_end` and a paid $0
+`subscription_create` invoice, and at trial end sent
+`updated(active, previous=trialing)` *before* the charge, then either
+`invoice.paid` ($19) or, for a failing card, `invoice.payment_failed` then
+`updated(past_due)`. Those real payloads replayed through the handler gave
+the expected rows with exactly one `subscription_started`. Not verified:
+completing a hosted Checkout end to end — a test-mode endpoint forwards
+`checkout.session.completed` to production's store webhook, so we didn't
+complete one.
 
 ### Subscribing + managing (Stripe)
 
