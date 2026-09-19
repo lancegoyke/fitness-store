@@ -72,6 +72,11 @@ def construct_event(payload, sig_header):
 
 def handle_event(event):
     """Apply a verified billing event to the local mirror (idempotent)."""
+    # stripe 15's ``StripeObject`` is no longer a ``dict`` (no ``.get``, #543):
+    # flatten the verified event to plain dicts once, so everything below reads
+    # dicts whichever way the event was built.
+    if isinstance(event, stripe.StripeObject):
+        event = event.to_dict()
     event_type = event["type"]
     obj = event["data"]["object"]
     if event_type in (
