@@ -93,6 +93,14 @@ function isSameCell(item, url, exerciseId, line) {
   );
 }
 
+// A line write that never reached the endpoint as its own account: bounced to
+// login (an expired session), a failed CSRF check (a stale token, e.g. on a
+// page the service worker cached), or a 409 because another account is signed
+// in now. The write itself is fine; it waits for its owner.
+function isWrongAccount(res) {
+  return res.redirected || res.status === 403 || res.status === 409;
+}
+
 // A line write the server couldn't take right now, as opposed to one it read
 // and refused: it failed (5xx), timed out (408) or asked us to slow down (429).
 // Worth sending again as it is.
@@ -609,11 +617,15 @@ function createLogger() {
       if (ex) return this.saveCell(ex, item.body.line, { fromQueue: true });
       let res;
       try {
-        res = await postJson(item.url, item.body, this.csrf);
+        res = await postJson(
+          item.url,
+          item.owner ? { ...item.body, owner: item.owner } : item.body,
+          this.csrf,
+        );
       } catch (netErr) {
         return "offline";
       }
-      if (res.redirected || res.status === 403) return "offline";
+      if (isWrongAccount(res)) return "offline";
       if (isRetryableStatus(res.status)) return "kept";
       // Refused for good (a 4xx won't change on retry), but a line from
       // another session is dropped only on its own page, where the athlete
@@ -826,10 +838,9 @@ function createLogger() {
     // acts on:
     //
     //   "saved"    the server has this text.
-    //   "offline"  the network is down, or the request was bounced to login or
-    //              failed its CSRF check (a stale token) — the write never
-    //              reached the endpoint. It's queued (#527) and the line says
-    //              it will sync.
+    //   "offline"  the network is down, or the write never reached the
+    //              endpoint as its own account (`isWrongAccount`). It stays
+    //              queued (#527) and the line says it will sync.
     //   "kept"     a 5xx (or 408/429): the server failed, not the write.
     //              Queued the same way.
     //   "rejected" any other 4xx: the server read the write and refused it, so
@@ -886,12 +897,16 @@ function createLogger() {
       if (entry) entry.saveError = false;
       let res;
       try {
-        res = await postJson(this.cellUrl, body, this.csrf);
+        res = await postJson(
+          this.cellUrl,
+          this.owner ? { ...body, owner: this.owner } : body,
+          this.csrf,
+        );
       } catch (netErr) {
         this._holdCell(entry, ex.id, line, !!sent);
         return "offline";
       }
-      if (res.redirected || res.status === 403) {
+      if (isWrongAccount(res)) {
         this._holdCell(entry, ex.id, line, !!sent);
         return "offline";
       }

@@ -2639,3 +2639,44 @@ class TestOfflineReplay:
         assert row.session_log_id == log.pk
         assert row.load == "100"
         assert row.reps == "5"
+
+    def test_a_write_queued_by_another_account_is_a_conflict_not_a_404(self, client):
+        # Athlete A's page, left open, flushes A's queued line after athlete B
+        # signed in on another tab. A 404 would read as "refused" and the
+        # client would drop A's only copy; a 409 keeps it queued for A.
+        s = seed()
+        other = UserFactory()
+        client.force_login(other)
+        resp = cell_post(
+            client,
+            s.session,
+            {
+                "exercise_id": s.squat.pk,
+                "line": 1,
+                "text": "100 x 5",
+                "owner": str(s.athlete.pk),
+            },
+        )
+        assert resp.status_code == 409
+        assert not LoggedSet.objects.exists()
+
+    def test_the_owners_own_stamped_write_goes_through(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = cell_post(
+            client,
+            s.session,
+            {
+                "exercise_id": s.squat.pk,
+                "line": 1,
+                "text": "100 x 5",
+                "owner": str(s.athlete.pk),
+            },
+        )
+        assert resp.status_code == 200
+        assert LoggedSet.objects.filter(source_line=sub_cell(s.squat, 1)).exists()
+
+    def test_an_unstamped_write_to_a_foreign_session_is_still_a_404(self, client):
+        s = seed()
+        client.force_login(UserFactory())
+        assert write_cell(client, s.session, s.squat, 1, "100 x 5").status_code == 404

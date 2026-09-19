@@ -1645,6 +1645,29 @@ describe("queue ownership — one athlete never flushes another's writes (#527)"
     expect(c.exercises[0].sub_lines[0].queued).toBe(false);
   });
 
+  it("sends the owner with a line write", async () => {
+    const c = cellLogger({ owner: "athlete-a" });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "RPE 8" } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).owner).toBe("athlete-a");
+  });
+
+  it("keeps a line queued when the server says another account is signed in", async () => {
+    // Athlete A's page, left open, flushes after B signed in on another tab.
+    const c = cellLogger({ owner: "athlete-a", logUrl: LOG_URL });
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "100 x 5" });
+    c.enqueue({ status: "done", sets: [] });
+    c.exercises[0].sub_lines[0].queued = true;
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 409 }));
+    await c.flushQueue();
+    expect(global.fetch).toHaveBeenCalledTimes(1); // the pass stops there
+    expect(c.readQueue()).toHaveLength(2);
+    expect(c.exercises[0].sub_lines[0].queued).toBe(true);
+    expect(c.exercises[0].sub_lines[0].saveError).toBeFalsy();
+  });
+
   it("still flushes an entry queued before entries had an owner", async () => {
     const c = cellLogger({ owner: "athlete-a", logUrl: LOG_URL });
     c.writeQueue([{ url: LOG_URL, body: { status: "done", sets: [] } }]);
