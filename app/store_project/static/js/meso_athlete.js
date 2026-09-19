@@ -523,12 +523,14 @@ function createLogger() {
 
     // Queue one line's write, replacing any earlier one for the same cell:
     // retyping a line offline overwrites it rather than stacking a second set.
+    // Returns the entry as stored, or null when storage refused it.
     enqueueCell(body) {
       const queue = this.readQueue().filter(
         (item) => !isSameCell(item, this.cellUrl, body.exercise_id, body.line),
       );
-      queue.push(this.stamp({ kind: "cell", url: this.cellUrl, body }));
-      return this.writeQueue(queue);
+      const item = this.stamp({ kind: "cell", url: this.cellUrl, body });
+      queue.push(item);
+      return this.writeQueue(queue) ? item : null;
     },
 
     queuedCell(exerciseId, line) {
@@ -837,13 +839,15 @@ function createLogger() {
     async _postCell(ex, line, fromQueue = false) {
       const entry = (ex.sub_lines || []).find((l) => l.line === line);
       let text;
+      // The outbox entry this write stands for.
+      let sent = null;
       if (fromQueue) {
         // Send what the queue holds for this cell NOW. A blur that ran first
         // may already have saved newer text and dropped the entry; replaying
         // the older text would overwrite it.
-        const item = this.queuedCell(ex.id, line);
-        if (!item) return "skipped";
-        text = item.body.text;
+        sent = this.queuedCell(ex.id, line);
+        if (!sent) return "skipped";
+        text = sent.body.text;
       } else {
         text = entry ? entry.text || "" : "";
         // Don't POST a line whose text the server already has (#527): tabbing
@@ -865,40 +869,38 @@ function createLogger() {
         }
       }
       const body = { exercise_id: ex.id, line, text };
-      // What the queue held for this cell as the write went out. This write
-      // supersedes that entry, but not one queued meanwhile by another tab
-      // on the same session, which may be newer.
-      const pending = this.queuedCell(ex.id, line);
+      // Write ahead: the line is in the outbox BEFORE the request goes out,
+      // so closing the page mid-request — a POST stalled on gym wifi — can't
+      // lose it. It replaces any older entry for the cell (latest text wins);
+      // success or a refusal takes it back out. Only this entry, by its id:
+      // another tab on the session may queue newer text for the line
+      // meanwhile, and that one stays.
+      if (!fromQueue) sent = this.enqueueCell(body);
       if (entry) entry.saveError = false;
       let res;
       try {
         res = await postJson(this.cellUrl, body, this.csrf);
       } catch (netErr) {
-        this._holdCell(entry, body, fromQueue, pending);
+        this._holdCell(entry, ex.id, line, !!sent);
         return "offline";
       }
       if (res.redirected || res.status === 403) {
-        this._holdCell(entry, body, fromQueue, pending);
+        this._holdCell(entry, ex.id, line, !!sent);
         return "offline";
       }
       if (isRetryableStatus(res.status)) {
-        this._holdCell(entry, body, fromQueue, pending);
+        this._holdCell(entry, ex.id, line, !!sent);
         return "kept";
       }
       if (!res.ok) {
-        // The latest text for this cell was refused, so an older queued one
-        // is stale: replaying it later would undo whatever the athlete types
-        // next. Drop it with the rejection.
-        if (pending) this.dropEntry(pending);
+        if (sent) this.dropEntry(sent);
         if (entry) {
           entry.queued = false;
           entry.saveError = true;
         }
         return "rejected";
       }
-      // Saved. The entry queued before this write is older — this line's
-      // saves run in order — so the server now has the newest.
-      if (pending) this.dropEntry(pending);
+      if (sent) this.dropEntry(sent);
       if (entry) entry.queued = false;
       let data;
       try {
@@ -938,22 +940,16 @@ function createLogger() {
       return "saved";
     },
 
-    // Keep a line's write for the next flush, and say so on the line. A write
-    // replayed from the queue is still there, so only a fresh one is added. If
-    // storage refused it, nothing will sync: the line says it couldn't save.
-    //
-    // Nor is one added over a different entry queued while this write was in
-    // flight: that came from another tab on the same session, later than this
-    // text, so it wins.
-    _holdCell(entry, body, fromQueue, pending) {
-      const current = this.queuedCell(body.exercise_id, body.line);
-      const newer =
-        !!current && JSON.stringify(current) !== JSON.stringify(pending);
-      const kept = fromQueue || newer || this.enqueueCell(body);
-      if (entry) {
-        entry.queued = kept;
-        entry.saveError = !kept;
-      }
+    // A line's write didn't land; say what the outbox holds for it. Written
+    // ahead, it's there for the next flush — unless storage refused it, and
+    // then nothing will sync, so the line says it couldn't save. (If another
+    // tab flushed it meanwhile, it's neither: the line stays dirty and the
+    // next blur sends it again.)
+    _holdCell(entry, exerciseId, line, persisted) {
+      if (!entry) return;
+      const held = !!this.queuedCell(exerciseId, line);
+      entry.queued = held;
+      entry.saveError = !held && !persisted;
     },
   };
 }

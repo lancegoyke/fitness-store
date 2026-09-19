@@ -1711,15 +1711,37 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
   it("still queues a failed write when another tab flushed the old entry away", async () => {
     const c = cellLogger();
     c.exercises[0].sub_lines[0].text = "110 x 5";
-    c.writeQueue([
-      { kind: "cell", url: CELL_URL, body: { exercise_id: 1, line: 1, text: "100 x 5" } },
-    ]);
+    const old = c.enqueueCell({ exercise_id: 1, line: 1, text: "100 x 5" });
     global.fetch = vi.fn().mockImplementation(async () => {
-      c.writeQueue([]); // the other tab synced "100 x 5"
+      c.dropEntry(old); // the other tab synced "100 x 5" and drops that entry
       throw new TypeError("Failed to fetch");
     });
     await c.saveCell(c.exercises[0], 1);
     expect(c.readQueue().map((i) => i.body.text)).toEqual(["110 x 5"]);
+  });
+
+  it("puts a line in the outbox before its request goes out", async () => {
+    // Closing the page mid-request (a POST stalled on gym wifi) must not
+    // lose the line: it's already queued, and only a landed save takes it out.
+    const c = cellLogger();
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    let land;
+    global.fetch = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          land = () =>
+            resolve(
+              res({ body: { ok: true, cell: { line: 1, text: "100 x 5" } } }),
+            );
+        }),
+    );
+    const saving = c.saveCell(c.exercises[0], 1);
+    await vi.waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    expect(c.readQueue().map((i) => i.body.text)).toEqual(["100 x 5"]);
+    expect(c.exercises[0].sub_lines[0].queued).toBeFalsy(); // sending, not waiting
+    land();
+    await saving;
+    expect(c.readQueue()).toHaveLength(0);
   });
 
   it("clears the footer's 'will sync' once a queued line saves on a later blur", async () => {
