@@ -1208,8 +1208,16 @@ class TestSubscribeViewDeferredCharge:
         page = c.get(self.BILLING_URL)
         body = page.content.decode()
         expected_date = dateformat.format(trial_end, "M j")
-        assert f"you won't be charged until {expected_date}" in body
-        assert '<input type="hidden" name="first_charge" value="deferred">' in body
+        # The date is wrapped in a `<time>` (#555 P1-C — local-timezone rewrite).
+        assert "you won't be charged until" in body
+        assert f">{expected_date}</time>" in body
+        # The hidden marker carries the promised unix timestamp, not a bare
+        # "deferred" flag (#555 P2-1).
+        expected_promise = str(int(trial_end.timestamp()))
+        assert (
+            f'<input type="hidden" name="first_charge" value="{expected_promise}">'
+            in body
+        )
 
     def test_forty_seven_hours_left_charges_today(self, settings):
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
@@ -1277,6 +1285,30 @@ class TestSubscribeViewDeferredCharge:
         create.assert_not_called()
         texts = [m.message for m in get_messages(resp.wsgi_request)]
         assert any("subscribing now starts billing today" in t for t in texts)
+
+    def test_promised_date_mismatch_bounces_without_opening_checkout(self, settings):
+        """The trial_end moved since the page was rendered (#555 P2-1).
+
+        The stale-page marker now carries the *promised* unix timestamp, not a
+        bare "deferred" flag — so a trial_end that changed underneath the page
+        (an admin edit, a Stripe event) is caught even while still deferrable.
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        trial_end = timezone.now() + timedelta(days=10)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=trial_end,
+        )
+        stale_promised = str(int(trial_end.timestamp()) + 3600)
+        with mock.patch(GATEWAY_CHECKOUT) as create:
+            resp = c.post(self.URL, data={"first_charge": stale_promised})
+        assert resp.status_code == 302
+        assert resp.url == "/meso/"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("trial end date changed" in t for t in texts)
 
 
 class TestPortalView:

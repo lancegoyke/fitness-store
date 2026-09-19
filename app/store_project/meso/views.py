@@ -5234,17 +5234,28 @@ def billing_subscribe(request):
     # ``deferred_first_charge`` is the local trial_end when there's enough of it
     # left for Stripe to accept as ``subscription_data.trial_end``, else None.
     trial_end = billing_access.deferred_first_charge(request.user)
-    # Stale-page guard: the billing page promised a deferred charge (rendered a
-    # hidden ``first_charge=deferred`` on the Subscribe form) but the trial has
-    # since dropped under the 48h+margin threshold between page load and this
-    # POST — don't silently charge today instead of what the coach saw.
-    if request.POST.get("first_charge") == "deferred" and trial_end is None:
-        messages.info(
-            request,
-            "Your trial has less than 2 days left, so subscribing now starts "
-            "billing today. Click Subscribe again to continue.",
-        )
-        return redirect("meso:roster")
+    # Stale-page guard: the billing page promised a deferred charge, rendering
+    # a hidden ``first_charge=<unix timestamp>`` on the Subscribe form carrying
+    # the *promised* date (#555 P2) — but the trial may have since dropped
+    # under the 48h+margin threshold, or its end date moved (an admin edit, a
+    # Stripe event) between page load and this POST. Either way, don't
+    # silently charge on a date other than what the coach saw.
+    promised = request.POST.get("first_charge")
+    if promised:
+        if trial_end is None:
+            messages.info(
+                request,
+                "Your trial has less than 2 days left, so subscribing now "
+                "starts billing today. Click Subscribe again to continue.",
+            )
+            return redirect("meso:roster")
+        if promised != str(int(trial_end.timestamp())):
+            messages.info(
+                request,
+                "Your trial end date changed since this page loaded. Check "
+                "when you'll be charged and click Subscribe again.",
+            )
+            return redirect("meso:roster")
     roster_url = request.build_absolute_uri(reverse("meso:roster"))
     try:
         session = billing_gateway.create_subscription_checkout_session(

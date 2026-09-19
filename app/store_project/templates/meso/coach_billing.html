@@ -71,7 +71,7 @@
               {% if not state.is_active or state.on_trial or state.over_limit %}
                 <form method="post" action="{% url 'meso:billing_subscribe' %}" style="margin:0;">
                   {% csrf_token %}
-                  {% if state.deferred_first_charge %}<input type="hidden" name="first_charge" value="deferred">{% endif %}
+                  {% if state.deferred_first_charge %}<input type="hidden" name="first_charge" value="{{ state.deferred_first_charge|date:'U' }}">{% endif %}
                   <button type="submit" class="meso-btn {% if state.can_start_trial %}meso-btn--ghost{% else %}meso-btn--primary{% endif %}">Subscribe</button>
                 </form>
               {% endif %}
