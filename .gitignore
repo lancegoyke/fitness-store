@@ -33,3 +33,8 @@ app/store_project/static/js/dist/
 # (scripts/record_demo.py), never the generated binary; `just record-demo`
 # regenerates it on demand. See docs/demo/README.md.
 docs/demo/out/
+
+# Local E2E suite output (issue #506) — commit the tests (e2e/), never the
+# screenshots/traces `just e2e` produces on each run.
+e2e/screenshots/
+e2e/test-results/

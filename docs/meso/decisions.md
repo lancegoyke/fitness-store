@@ -190,6 +190,55 @@ plain CRUD — it carries the tenancy/roles/relationship spine (N1–N3).
 
 ---
 
+## E2E browser tests (#506)
+
+`e2e/` at the repo root holds a local, opt-in browser suite for the Meso UI.
+Playwright's Python sync API drives headless Chromium through pytest, against
+a real Django server that pytest-django's `live_server` runs inside the test
+process, on the test database. Run it while you change Meso templates or JS,
+then look at the screenshots it leaves.
+
+It is not a CI gate. No workflow runs it, and moving it into CI is a separate
+decision. Chromium emulating a phone is also not iOS Safari. It can't show
+Safari zooming the page when you tap an input under 16px, so a test can only
+assert the computed font size.
+
+**Setup, once.** `uv run playwright install chromium` and `npm install`.
+
+**Running it.** `just e2e` builds the designer bundle first
+(`static/js/dist/` is gitignored, and a missing bundle mounts an empty div
+without an error). Then it runs every journey twice, at desktop (1280×720) and
+phone (390×844, touch, iPhone 13 user agent). Arguments pass through to
+pytest: `just e2e -k phone`, `just e2e -k athlete`, `just e2e --headed` for a
+visible browser, `PWDEBUG=1 just e2e -k athlete` to step through in the
+Playwright Inspector. Plain `uv run pytest` never collects `e2e/`
+(`testpaths = ["app"]`, plus `-m "not e2e"` in `addopts`). If you call pytest
+directly, pass `e2e -m e2e`.
+
+**Output.** Screenshots go to
+`e2e/screenshots/<journey>/<NN-step>--<viewport>.png`, overwritten on each
+run. A failing test keeps a trace under `e2e/test-results/`. Open it with
+`uv run playwright show-trace e2e/test-results/<test>/trace.zip`.
+pytest-playwright empties `e2e/test-results/` at the start of every run, which
+is why screenshots live in their own folder. Both are gitignored.
+
+**Fixtures** in `e2e/conftest.py`. `login(user)` logs a browser context in by
+copying the session cookie from a `force_login`. `test_login.py` is the one
+test that drives the real allauth form. `press(locator)` taps on phone and
+clicks on desktop. `shot(step)` saves a full-page screenshot.
+`delivered_plan` builds a coach, an athlete and one delivered session from the
+app's factories. Every test gets a fresh browser context with service workers
+blocked, so the athlete PWA's cache can't hide a server change. Wait with
+`expect()` and `page.expect_response()`, never a sleep.
+
+**`data-testid` convention.** Kebab-case `<surface>-<thing>[-<action>]`, the
+same as the React designer island: `session-log`, `sub-line-input`,
+`results-logged`. Add one when a journey needs an element that has no stable
+role or text. When a test checks text the user reads, find it by role or text
+instead. Never style or script against a `data-testid`.
+
+---
+
 ## Decision log
 
 _(Append dated entries here as decisions land.)_
@@ -1622,3 +1671,11 @@ _(Append dated entries here as decisions land.)_
   endpoints/URLs, no migration (stays `0042`). 11 tests (`test_pr_records_panel.py`);
   full meso suite 2009; Codex CLEAN. **The PR-surface slice is complete — the plan's
   runway is now parse-at-commit → agent.**
+- 2026-09-18 — **Built (#506, first slice): local, opt-in browser E2E suite.**
+  `e2e/` runs only through `just e2e` (see "E2E browser tests" above). Three
+  journeys, each at desktop and phone: the real allauth login, an athlete
+  typing `100 x 5` into a sub-line and logging the session, and the coach
+  reading that set on the results page. Each journey was checked by breaking
+  the behavior it covers (no blur save, no badge update, no parsed set, the
+  logged cell blanked) and watching it fail. `data-testid`s added only where a
+  journey needed one. No app behavior changed, no migration.

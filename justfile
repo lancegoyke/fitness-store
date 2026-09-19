@@ -54,6 +54,21 @@ frontend-watch:
 frontend-build:
     npm run build
 
+# Local, opt-in headless-browser E2E suite for the Meso UI (issue #506):
+# phone + desktop journeys driven by Playwright against a real in-process
+# Django server (pytest-django's `live_server`). NOT part of `just test`/CI
+# — it's slower and meant to be run (and watched) while you're actually
+# changing the Meso UI. Builds the designer bundle first since
+# `static/js/dist/` is gitignored and a missing bundle mounts an empty div
+# with no error. One-time setup: `uv run playwright install chromium`.
+# Examples: `just e2e --headed` opens a real browser window; `just e2e -k
+# phone` runs only the phone-viewport half; `PWDEBUG=1 just e2e -k login`
+# opens the Playwright Inspector.
+e2e *args:
+    if [ ! -d node_modules ]; then npm install; fi
+    npm run build
+    uv run pytest e2e -m e2e --tracing=retain-on-failure --output=e2e/test-results {{ args }}
+
 lint:
     uv run ruff check
 

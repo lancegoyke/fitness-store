@@ -70,10 +70,10 @@
         <div>Exercise</div><div>Target</div><div>Logged</div><div style="text-align:center;">RPE</div><div>Note</div>
       </div>
       {% for r in rows %}
-        <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,1.1fr) 56px minmax(0,1.3fr);gap:10px;padding:11px 18px;border-bottom:1px solid var(--line-2);align-items:center;">
+        <div data-testid="results-row" style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.3fr) minmax(0,1.1fr) 56px minmax(0,1.3fr);gap:10px;padding:11px 18px;border-bottom:1px solid var(--line-2);align-items:center;">
           <div style="font-size:13.5px;font-weight:600;letter-spacing:-0.01em;">{{ r.name }}{% if r.pr %} <span class="meso-badge meso-badge--accent" style="padding:1px 6px;font-size:9.5px;vertical-align:middle;">PR</span>{% endif %}</div>
           <div class="meso-mono" style="font-size:11.5px;color:var(--dim);">{{ r.target }}</div>
-          <div class="meso-mono" style="font-size:12px;{% if r.rpe_state == 'over' %}color:var(--warn);font-weight:600;{% endif %}">{{ r.logged }}</div>
+          <div class="meso-mono" data-testid="results-logged" style="font-size:12px;{% if r.rpe_state == 'over' %}color:var(--warn);font-weight:600;{% endif %}">{{ r.logged }}</div>
           <div style="text-align:center;">
             {% if r.rpe == '—' %}
               <span class="meso-row-meta">—</span>
