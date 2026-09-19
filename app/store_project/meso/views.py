@@ -2786,13 +2786,18 @@ def athlete_request_coach(request):
         # second ``coach_request_sent`` event and email, or a reopened link's
         # token rotating twice (#540). Lock in ``billing.webhooks._lock_mirror``'s
         # order: the link if it exists, else the athlete's user row, then re-read.
+        # ``no_key``: a plain FOR UPDATE would block the commit-time FK KEY SHARE
+        # lock of a concurrent insert that references this user — e.g. an invite
+        # claim — and deadlock.
         existing = (
             CoachAthlete.objects.select_for_update()
             .filter(coach=coach, athlete=request.user)
             .first()
         )
         if existing is None:
-            User.objects.select_for_update().filter(pk=request.user.pk).first()
+            User.objects.select_for_update(no_key=True).filter(
+                pk=request.user.pk
+            ).first()
             existing = (
                 CoachAthlete.objects.select_for_update()
                 .filter(coach=coach, athlete=request.user)
@@ -5137,8 +5142,25 @@ def change_set_status(request, pk):
     allowed = {ProposedChange.Status.APPROVED, ProposedChange.Status.REJECTED}
     if status not in allowed:
         return HttpResponseBadRequest("status must be 'approved' or 'rejected'.")
-    change.status = status
-    change.save(update_fields=["status"])
+    # The pre-check above is unlocked, so this can land after a concurrent
+    # ``batch_apply`` commits (#540) — lock the batch (same order as
+    # ``batch_apply``) and re-check before writing, so a reject can't mark a
+    # change REJECTED after the batch that applied it.
+    with transaction.atomic():
+        batch = (
+            AgentProposalBatch.objects.select_for_update()
+            .filter(pk=change.batch_id)
+            .first()
+        )
+        if batch is None:
+            raise Http404("Unknown proposal batch")
+        if batch.status != AgentProposalBatch.Status.PENDING:
+            return JsonResponse(
+                {"ok": False, "error": "This batch has already been resolved."},
+                status=409,
+            )
+        change.status = status
+        change.save(update_fields=["status"])
     return JsonResponse({"ok": True, "id": change.pk, "status": change.status})
 
 

@@ -24,6 +24,21 @@ already uses (#546): the row itself if it exists, else the relevant User row,
 then re-read — so the loser sees what the winner just committed and backs off
 cleanly instead of repeating it.
 
+Two more cases from the same change:
+
+- the two user-row mutex locks above (``athlete_request_coach`` and
+  ``CoachSubscription.start_trial_for``) used a plain ``select_for_update()``.
+  Postgres FKs are ``DEFERRABLE INITIALLY DEFERRED``, so a concurrent
+  insert/update referencing that user row takes ``FOR KEY SHARE`` on it at
+  **commit**, and a plain ``FOR UPDATE`` blocks that — deadlocking against,
+  e.g., an invite claim materializing a link for the same athlete, or two
+  coaches requesting each other at once. ``select_for_update(no_key=True)``
+  (``FOR NO KEY UPDATE``) still serializes same-user double submits but
+  doesn't block a commit-time ``FOR KEY SHARE``.
+- ``change_set_status`` (the approve/reject endpoint) checked the batch's
+  status without a lock, so a reject racing an Apply could land its write
+  after the Apply committed, leaving an *applied* change marked REJECTED.
+
 **Why this file exists separately.** ``select_for_update`` is a documented
 no-op on SQLite, and the default in-memory SQLite test database doesn't even
 share rows across threads/connections — each thread gets its own private
@@ -39,6 +54,7 @@ Run locally against the dev Postgres (``just services``)::
 """
 
 import contextlib
+import json
 import threading
 from unittest import mock
 
@@ -50,12 +66,14 @@ from django.urls import reverse
 from store_project.analytics.events import EventName
 from store_project.analytics.models import Event
 from store_project.meso import views
+from store_project.meso.agent import apply as agent_apply
 from store_project.meso.billing import access as billing_access
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachSubscriptionFactory
 from store_project.meso.factories import ProposedChangeFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachInvite
 from store_project.meso.models import CoachSubscription
 from store_project.meso.models import InvalidTransition
 from store_project.meso.models import PlanAction
@@ -83,8 +101,8 @@ def _events(name):
     return list(Event.objects.filter(name=name).order_by("id"))
 
 
-def _http_race(requests, hooks, timeout=5):
-    """POST each ``(client, url, data)`` at once, the threads meeting at ``hooks``.
+def _http_race(requests, hooks, timeout=5, errors=None):
+    """POST each ``(client, url, data[, content_type])`` at once, meeting at ``hooks``.
 
     Mirrors ``test_billing_webhook_postgres._race``: thread A starts first and
     pauses at a hook; thread B starts once A has reached it. For a hook before
@@ -92,14 +110,33 @@ def _http_race(requests, hooks, timeout=5):
     A commits. For a hook after it, B blocks before reaching the hook, A's wait
     times out and A commits. Either way B then acts on what A committed.
     Without the fix, nothing blocks B, and both act on the same stale reads.
+
+    Each request is a 3-tuple, or a 4-tuple whose last element is a
+    ``content_type`` (e.g. ``"application/json"``, with ``data`` already a JSON
+    string) instead of the default form-encoding.
+
+    A deadlock surfaces as an exception raised inside the view, and Django's
+    test ``Client`` re-raises it — which, inside a worker thread, would
+    otherwise just print a traceback and vanish. Pass a same-length list as
+    ``errors`` to capture each thread's exception (or ``None``) into it instead;
+    left as ``None`` (the default), an exception propagates out of the thread
+    as before and this function's own assertions below are what catch it (via
+    ``responses[i]`` staying unset).
+
     Returns the responses, in the same order as ``requests``.
     """
     a_reached = threading.Event()
     responses = [None] * len(requests)
 
-    def run(i, client, url, data):
+    def run(i, req):
+        client, url, data, *rest = req
+        kwargs = {"content_type": rest[0]} if rest else {}
         try:
-            responses[i] = client.post(url, data or {})
+            responses[i] = client.post(url, data or {}, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - captured for the assertions
+            if errors is None:
+                raise
+            errors[i] = exc
         finally:
             connection.close()
 
@@ -108,7 +145,7 @@ def _http_race(requests, hooks, timeout=5):
             wrapper = _paused(getattr(owner, name), when, a_reached)
             stack.enter_context(mock.patch.object(owner, name, wrapper))
         threads = [
-            threading.Thread(target=run, args=(i, *req))
+            threading.Thread(target=run, args=(i, req))
             for i, req in enumerate(requests)
         ]
         threads[0].start()
@@ -341,3 +378,168 @@ class TestAthleteRequestCoachDoubleSubmit:
         assert CoachAthlete.objects.filter(coach=coach, athlete=athlete).count() == 1
         assert len(_events(EventName.COACH_REQUEST_SENT)) == 1
         assert send_mock.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# The two user-row mutexes deadlock on a plain FOR UPDATE (round-1 review)
+# ---------------------------------------------------------------------------
+#
+# Postgres FKs are DEFERRABLE INITIALLY DEFERRED, so a transaction that
+# inserts/updates a row referencing a user takes FOR KEY SHARE on that user
+# row at COMMIT, not at the INSERT/UPDATE. FOR UPDATE blocks FOR KEY SHARE;
+# FOR NO KEY UPDATE (``select_for_update(no_key=True)``) doesn't, while still
+# conflicting with another FOR NO KEY UPDATE/FOR UPDATE — same-user double
+# submits still serialize.
+
+#: T1 (the invite claim) pauses right after ``CoachInvite.accept`` has
+#: inserted the CoachAthlete row and updated the invite — both uncommitted —
+#: so the claim's commit (and its FK checks) is still pending when T2 starts.
+INVITE_ACCEPT_AFTER = (CoachInvite, "accept", "after")
+
+
+class TestAthleteRequestRacesInviteClaim:
+    """Counterexample 1 (#540 round-1 review).
+
+    Athlete U holds a pending ``CoachInvite`` from coach C, no ``CoachAthlete``
+    row yet. T1 = U's claim (``action=accept``) inserts the link and updates
+    the invite, uncommitted. T2 = U's own ``athlete_request_coach`` for C's
+    email locks U's row (the "no existing link yet" branch) and, seeing no
+    committed link, attempts its own insert of the same ``(coach, athlete)``
+    pair — which blocks behind T1's uncommitted insert. T1's commit then needs
+    FOR KEY SHARE on U (``CoachAthlete.athlete`` / ``CoachInvite.accepted_by``
+    both reference U) — a plain FOR UPDATE on U from T2 blocks that, and T2 is
+    itself blocked on T1: deadlock. ``no_key=True`` breaks the cycle.
+    """
+
+    def test_claim_and_request_do_not_deadlock(self):
+        coach = make_coach()
+        athlete = UserFactory()
+        invite, _created = CoachInvite.open_for(coach=coach, email=athlete.email)
+        claim_url = reverse("meso:invite_claim", kwargs={"token": invite.token})
+        request_url = reverse("meso:athlete_request_coach")
+        client_a, client_b = Client(), Client()
+        client_a.force_login(athlete)
+        client_b.force_login(athlete)
+        errors = [None, None]
+
+        with mock.patch(
+            "store_project.meso.views.send_coach_request_email", return_value=True
+        ):
+            responses = _http_race(
+                [
+                    (client_a, claim_url, {"action": "accept"}),
+                    (client_b, request_url, {"email": coach.email}),
+                ],
+                [INVITE_ACCEPT_AFTER, COACH_ATHLETE_REQUEST_BEFORE],
+                errors=errors,
+            )
+
+        assert errors == [None, None], errors
+        assert responses[0].status_code == 302
+        assert responses[1].status_code == 302
+        # The claim wins the race (it reaches its hook first and so commits
+        # first): the link is ACTIVE via the invite's own ``invited_by=coach``,
+        # and the athlete's redundant request just observes it, unchanged.
+        link = CoachAthlete.objects.get(coach=coach, athlete=athlete)
+        assert link.status == CoachAthlete.Status.ACTIVE
+        invite.refresh_from_db()
+        assert invite.status == CoachInvite.Status.ACCEPTED
+        assert invite.accepted_by == athlete
+
+
+class TestMutualCoachRequests:
+    """Counterexample 2 (#540 round-1 review).
+
+    Coaches X and Y (both have a ``CoachProfile``) request each other at the
+    same moment. Each locks its OWN user row and inserts a link whose
+    ``coach_id`` is the OTHER coach — two distinct rows, no unique-constraint
+    contention between them. At commit, each needs FOR KEY SHARE on the
+    other's (locked) row: a plain FOR UPDATE deadlocks; FOR NO KEY UPDATE
+    doesn't.
+    """
+
+    def test_no_deadlock_two_links_two_events(self):
+        coach_x = make_coach(email="coachx@example.com", name="Coach X")
+        coach_y = make_coach(email="coachy@example.com", name="Coach Y")
+        url = reverse("meso:athlete_request_coach")
+        client_x, client_y = Client(), Client()
+        client_x.force_login(coach_x)
+        client_y.force_login(coach_y)
+        errors = [None, None]
+
+        with mock.patch(
+            "store_project.meso.views.send_coach_request_email", return_value=True
+        ):
+            responses = _http_race(
+                [
+                    (client_x, url, {"email": coach_y.email}),
+                    (client_y, url, {"email": coach_x.email}),
+                ],
+                [COACH_ATHLETE_REQUEST_BEFORE],
+                errors=errors,
+            )
+
+        assert errors == [None, None], errors
+        assert responses[0].status_code == 302
+        assert responses[1].status_code == 302
+        y_coaches_x = CoachAthlete.objects.get(coach=coach_y, athlete=coach_x)
+        x_coaches_y = CoachAthlete.objects.get(coach=coach_x, athlete=coach_y)
+        assert y_coaches_x.status == CoachAthlete.Status.PENDING_ATHLETE_REQUEST
+        assert x_coaches_y.status == CoachAthlete.Status.PENDING_ATHLETE_REQUEST
+        assert CoachAthlete.objects.count() == 2
+        assert len(_events(EventName.COACH_REQUEST_SENT)) == 2
+
+
+# ---------------------------------------------------------------------------
+# change_set_status races batch_apply (round-1 review)
+# ---------------------------------------------------------------------------
+
+#: Fires after ``apply_batch`` has saved its changes APPROVED and the batch
+#: APPLIED — still inside ``batch_apply``'s own transaction, so both writes
+#: are uncommitted and the batch row lock is still held.
+APPLY_BATCH_AFTER = (agent_apply, "apply_batch", "after")
+
+
+class TestChangeSetStatusRacesApply:
+    """A reject racing an Apply on the same batch (round-1 review, cheap nit).
+
+    ``change_set_status`` checked ``batch.status != PENDING`` without a lock,
+    so a reject that read PENDING just before an Apply committed would write
+    REJECTED over a change the Apply had just approved and applied — on a
+    batch that was, by the time the reject's write landed, already APPLIED.
+    """
+
+    def test_reject_after_apply_commits_gets_409_not_a_lost_update(self):
+        plan, _session, _cell, batch = _make_batch_with_add()
+        coach = plan.coach
+        change = batch.changes.get()
+        apply_url = reverse("meso:api_batch_apply", kwargs={"batch_id": batch.pk})
+        status_url = reverse("meso:api_change_status", kwargs={"pk": change.pk})
+        client_a, client_b = Client(), Client()
+        client_a.force_login(coach)
+        client_b.force_login(coach)
+
+        responses = _http_race(
+            [
+                (client_a, apply_url, None),
+                (
+                    client_b,
+                    status_url,
+                    json.dumps({"status": "rejected"}),
+                    "application/json",
+                ),
+            ],
+            [APPLY_BATCH_AFTER],
+        )
+
+        resp_apply, resp_reject = responses
+        assert resp_apply.status_code == 200, resp_apply.content
+        assert resp_reject.status_code == 409, resp_reject.content
+        assert resp_reject.json() == {
+            "ok": False,
+            "error": "This batch has already been resolved.",
+        }
+        batch.refresh_from_db()
+        assert batch.status == AgentProposalBatch.Status.APPLIED
+        change.refresh_from_db()
+        assert change.status == ProposedChange.Status.APPROVED
