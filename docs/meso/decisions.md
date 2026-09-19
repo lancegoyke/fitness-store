@@ -228,6 +228,12 @@ is why screenshots live in their own folder. Both are gitignored.
 copying the session cookie from a `force_login`. `test_login.py` is the one
 test that drives the real allauth form. `press(locator)` taps on phone and
 clicks on desktop. `shot(step)` saves a full-page screenshot.
+`new_page(desktop=False)` opens a page in a second browser context with its
+own cookies, for a journey with two people in it; `desktop=True` opens it at
+1280×720 whatever the test's viewport, because the designer is desktop-only
+(phones get a fallback message). `login(user, on=that_page)` and
+`shot(step, on=that_page, viewport_id="desktop")` work on that page. Use
+`click()`, not `press()`, on a desktop page in a phone run: it has no touch.
 `delivered_plan` builds a coach, an athlete and one delivered session from the
 app's factories. Every test gets a fresh browser context with service workers
 blocked, so the athlete PWA's cache can't hide a server change. Wait with
@@ -1728,3 +1734,22 @@ _(Append dated entries here as decisions land.)_
   fallback's links for a client plan and a template, and long names. Each
   check was shown to fail with the rule it covers broken, and the page
   checks also fail against main's files. No migration.
+- 2026-09-19 — **Built (#506, second slice): the coach's core paths in the
+  E2E suite.** Three journeys, each at all three sizes. The coach edits a
+  sub-line in the designer, reloads, delivers the block, and the athlete
+  opens the heads-up email's link and sees the edit on training home and the
+  session page. The designer half always runs at desktop in its own browser
+  context (`new_page(desktop=True)`), because phones get the fallback. A
+  coach invites a brand-new person, who signs up through the real allauth
+  form and accepts. A free coach at the one-athlete cap tries to invite and
+  gets the seat-limit message and no invite. Delivery hasn't been a
+  visibility gate since 2d, and nothing on screen reads `Week.delivered_at`
+  with one plan, so the deliver journey checks that stamp on the model. The
+  invite journey found two bugs: Accept on the claim page 403s, because its
+  `no-referrer` meta makes the browser send `Origin: null` (#522), and the
+  login page's "Sign up" link drops `?next` (#523). The full invite journey
+  is a strict xfail on both. A passing test covers the invite, the email,
+  the signup and reopening the link, and the full journey was run green with
+  both fixes applied locally. #524 asks whether a coach's sub-line belongs
+  under the athlete's "what you did". Each journey was checked by breaking
+  what it covers. No app behavior changed, no migration.

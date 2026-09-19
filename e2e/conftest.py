@@ -101,7 +101,7 @@ def viewport(request, playwright):
             "user_agent": android_user_agent,
         }
     else:
-        context_args = {"viewport": {"width": 1280, "height": 720}}
+        context_args = DESKTOP_CONTEXT_ARGS
     return {
         "id": request.param,
         "is_phone": request.param != "desktop",
@@ -109,8 +109,11 @@ def viewport(request, playwright):
     }
 
 
+DESKTOP_CONTEXT_ARGS = {"viewport": {"width": 1280, "height": 720}}
+
+
 @pytest.fixture
-def browser_context_args(browser_context_args, live_server, viewport):
+def browser_context_args(browser_context_args, live_server):
     """Extend pytest-playwright's own fixture, not replace it.
 
     `base_url` lets tests `page.goto("/meso/me/")` against the in-process
@@ -118,13 +121,42 @@ def browser_context_args(browser_context_args, live_server, viewport):
     worker from ever caching a response — a caching bug could otherwise hide
     a real server change behind a stale cache, which is exactly what this
     suite exists to catch.
+
+    The viewport isn't in here: `context` below adds it, so `new_page()` can
+    open a context at a different size (pytest-playwright's `new_context`
+    raises on a key that's already in these args).
     """
     return {
         **browser_context_args,
         "base_url": live_server.url,
         "service_workers": "block",
-        **viewport["context_args"],
     }
+
+
+@pytest.fixture
+def context(new_context, viewport):
+    """The test's own browser context, at the parametrized viewport."""
+    return new_context(**viewport["context_args"])
+
+
+@pytest.fixture
+def new_page(new_context, viewport):
+    """`new_page(desktop=False)` — a page in a second, fresh browser context.
+
+    For a journey with two people in it: each gets their own cookies, so one
+    can be logged in while the other signs up. It opens at the test's
+    viewport, or at desktop size with `desktop=True` — the designer is a
+    desktop surface (#508 shows phones a fallback message instead), so a
+    coach editing a program always gets a desktop context whatever size the
+    athlete's half runs at. Built on pytest-playwright's `new_context`, so a
+    failing test keeps this context's trace too, and it's closed afterwards.
+    """
+
+    def _new_page(desktop=False):
+        context_args = DESKTOP_CONTEXT_ARGS if desktop else viewport["context_args"]
+        return new_context(**context_args).new_page()
+
+    return _new_page
 
 
 # ---------------------------------------------------------------------------
@@ -144,13 +176,16 @@ def login(context, live_server):
     make authenticated requests outside the browser (the coach-results
     journey does, to produce the athlete's log via the same endpoints the
     athlete UI calls).
+
+    `login(user, on=other_page)` logs in the context behind a page from
+    `new_page()` instead of the test's own.
     """
 
-    def _login(user):
+    def _login(user, on=None):
         client = Client()
         client.force_login(user)
         session_cookie = client.cookies[settings.SESSION_COOKIE_NAME]
-        context.add_cookies(
+        (on.context if on else context).add_cookies(
             [
                 {
                     "name": settings.SESSION_COOKIE_NAME,
@@ -193,17 +228,22 @@ def shot(page, viewport, request):
 
     It scrolls to the top first. A full-page capture of a scrolled page paints
     the sticky Meso topnav wherever the viewport was, halfway down the image.
+
+    `shot(step, on=other_page)` captures a page from `new_page()` instead;
+    pass `viewport_id="desktop"` too when that page is a desktop one, so the
+    file is named for the size it was actually taken at.
     """
     name = getattr(request.node, "originalname", None) or request.node.name
     if name.startswith("test_"):
         name = name[len("test_") :]
     folder = SCREENSHOT_DIR / name
 
-    def _shot(step):
+    def _shot(step, on=None, viewport_id=None):
+        target = on or page
         folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"{step}--{viewport['id']}.png"
-        page.evaluate("window.scrollTo(0, 0)")
-        page.screenshot(path=str(path), full_page=True)
+        path = folder / f"{step}--{viewport_id or viewport['id']}.png"
+        target.evaluate("window.scrollTo(0, 0)")
+        target.screenshot(path=str(path), full_page=True)
         return path
 
     return _shot
@@ -270,6 +310,55 @@ def delivered_plan(db):
         session, name="Box Squat", order=0, sets="3", reps="6", load="70", rpe="7"
     )
     rdl = presc(session, name="RDL", order=1, sets="3", reps="8", load="80", rpe="8")
+    return SimpleNamespace(
+        coach=coach,
+        athlete=athlete,
+        rel=rel,
+        plan=plan,
+        mesocycle=mesocycle,
+        week=week,
+        session=session,
+        squat=squat,
+        rdl=rdl,
+    )
+
+
+@pytest.fixture
+def undelivered_plan(db):
+    """Coach + athlete + one week that has never been delivered (issue #506, second slice).
+
+    Same shape as `delivered_plan` (one coach/athlete pair, one mesocycle, a
+    "Lower" day with two lifts), except the week is left at `WeekFactory`'s
+    own default — `delivered_at=None` — so it's the "coach edits, then
+    delivers for the first time" journey rather than the "athlete logs
+    against an already-delivered week" one. The squat's cell carries a
+    sub-line from the start (a real coach's program already has one before
+    any edit), which the coach journey then overwrites.
+    """
+    coach = UserFactory(name="Casey Coach", email="casey.coach@example.com")
+    athlete = UserFactory(name="Alex Athlete", email="alex.athlete@example.com")
+    rel = CoachAthleteFactory(
+        coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+    )
+    plan = PlanFactory(
+        relationship=rel, title="Strength Block", status=Plan.Status.ACTIVE
+    )
+    mesocycle = MesocycleFactory(plan=plan, name="Accumulation", order=0)
+    week = WeekFactory(mesocycle=mesocycle, index=1)
+    session = day(week, day_number=1, name="Lower", bias="Squat")
+    squat = presc(
+        session, name="Back Squat", order=0, sets="4", reps="6", load="70", rpe="7"
+    )
+    sub_line(squat, "Keep your chest tall")
+    rdl = presc(
+        session,
+        name="Romanian Deadlift",
+        order=1,
+        sets="3",
+        reps="8",
+        load="80",
+        rpe="8",
+    )
     return SimpleNamespace(
         coach=coach,
         athlete=athlete,
