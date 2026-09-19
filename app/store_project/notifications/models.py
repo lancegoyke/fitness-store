@@ -40,7 +40,27 @@ class EmailKind(models.TextChoices):
     CONTACT_OWNER = "contact_owner", _("Contact form (owner copy)")
     CONTACT_ACK = "contact_ack", _("Contact form (sender ack)")
     MARGIN_ALERT = "margin_alert", _("Margin alert")
+    ORDER_CONFIRMATION = "order_confirmation", _("Order confirmation")
+    ACCOUNT_CONFIRMATION = "account_confirmation", _("Account confirmation")
+    PASSWORD_RESET = "password_reset", _("Password reset")
+    ACCOUNT_NOTICE = "account_notice", _("Account notice")
+    HONEYPOT_ALERT = "honeypot_alert", _("Honeypot alert")
     OTHER = "other", _("Other")
+
+
+# EmailKind values that are always plain text (no HTML alternative). SES only
+# tracks opens via an invisible tracking pixel in an HTML part, so these can
+# never register an open — the dashboard (presenters._by_kind) reports their
+# open_rate as None (rendered "—", not a misleading 0%) rather than counting
+# them against a metric they structurally cannot produce.
+TEXT_ONLY_KINDS = frozenset(
+    {
+        EmailKind.ACCOUNT_CONFIRMATION,
+        EmailKind.PASSWORD_RESET,
+        EmailKind.ACCOUNT_NOTICE,
+        EmailKind.HONEYPOT_ALERT,
+    }
+)
 
 
 class SentEmail(models.Model):
