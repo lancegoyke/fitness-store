@@ -75,12 +75,71 @@ function notifyTourRefresh() {
 // unbounded stack.
 const MAX_CELL_LINE = 20;
 
+// The offline outbox (`meso-log-queue`) holds two kinds of write. A session
+// log is `{url, body}`, the shape it has always had, so a queue written before
+// #527 still replays. A typed line is `{kind: "cell", url, body: {exercise_id,
+// line, text}}`: one entry per cell, since the cell url names the session and
+// the exercise id names the row and week.
+function isCellEntry(item) {
+  return !!item && item.kind === "cell" && !!item.body;
+}
+
+function isSameCell(item, url, exerciseId, line) {
+  return (
+    isCellEntry(item) &&
+    item.url === url &&
+    item.body.exercise_id === exerciseId &&
+    item.body.line === line
+  );
+}
+
+// A line write that never reached the endpoint as its own account: bounced to
+// login (an expired session), a failed CSRF check (a stale token, e.g. on a
+// page the service worker cached), or a 409 because another account is signed
+// in now. The write itself is fine; it waits for its owner.
+function isWrongAccount(res) {
+  return res.redirected || res.status === 403 || res.status === 409;
+}
+
+// A line write the server couldn't take right now, as opposed to one it read
+// and refused: it failed (5xx), timed out (408) or asked us to slow down (429).
+// Worth sending again as it is.
+function isRetryableStatus(status) {
+  return status >= 500 || status === 408 || status === 429;
+}
+
+// How long a logging write may take before it counts as offline (#527). fetch
+// has no timeout of its own, and gym wifi that connects but never answers would
+// hold a write open forever — and "Log session" with it, since it waits for the
+// lines — with nothing queued. The writes are idempotent, so one that landed
+// after all and is sent again does no harm. The timer isn't cleared: firing
+// after the exchange finished does nothing, and it also bounds the body read.
+const WRITE_TIMEOUT_MS = 15000;
+
+function postJson(url, body, csrf) {
+  const options = {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRFToken": csrf,
+    },
+    body: JSON.stringify(body),
+  };
+  if (typeof AbortController === "function") {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), WRITE_TIMEOUT_MS);
+    options.signal = controller.signal;
+  }
+  return fetch(url, options);
+}
+
 function createLogger() {
   return {
     logUrl: "",
     oneRmUrl: "", // where a manually-entered 1RM is persisted server-side (Phase 2)
     cellUrl: "", // where the athlete's freeform sub-line cells are upserted (Phase 4a)
     csrf: "",
+    owner: "", // the signed-in athlete; only their queued writes are flushed here
     status: "pending",
     unit: "", // the plan's load unit (kg/lb), for the %1RM helper
     exercises: [],
@@ -88,9 +147,15 @@ function createLogger() {
     saved: false,
     error: false,
     queued: false, // a save is stashed locally, waiting for the network
+    lineError: false, // the log landed, but a line the server refused didn't
     newRecords: [], // PRs the last save beat (Phase 4c) — the celebration toast
     _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
     _cellSaves: {}, // per-cell promise chain, so blurs reach the server in order
+    _blurSaves: 0, // line saves started by a blur, for `settleLines`
+    _lineSavesRunning: {}, // per cell: saves chained and not yet finished
+    _ownEntries: {}, // ids of the outbox entries this page wrote or restored
+    _flushing: null, // the flush pass in progress, if any
+    _flushAgain: false, // a flush was asked for mid-pass; run one more
 
     init() {
       const el = document.getElementById("meso-log-data");
@@ -105,6 +170,7 @@ function createLogger() {
       this.logUrl = data.log_url;
       this.oneRmUrl = data.one_rm_url || "";
       this.cellUrl = data.cell_url || "";
+      this.owner = data.owner || "";
       this.status = data.status;
       this.unit = data.unit || "";
       this.exercises = data.exercises || [];
@@ -135,6 +201,14 @@ function createLogger() {
           if (!present.has(n)) ex.sub_lines.push({ line: n, text: "" });
         }
         ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));
+        // What the server holds for each line, so a blur that changes nothing
+        // posts nothing (#527). A padded line holds "" — the server has no
+        // text there, or only blank text, which it doesn't render.
+        for (const l of ex.sub_lines) {
+          l.savedText = l.text || "";
+          l.queued = false;
+          l.saveError = false;
+        }
       }
       // Each exercise carries the athlete's persisted 1RM (`one_rm`) and its
       // `one_rm_source`. A `manual` value is the athlete's own number — it seeds
@@ -157,7 +231,10 @@ function createLogger() {
       // `meso-e1rm` localStorage) to the server, so the upgrade doesn't silently
       // drop it.
       this.migrateLocalOverrides();
-      // Flush anything logged while offline (S7), now and whenever wifi returns.
+      // Show lines typed offline on an earlier visit as the athlete left them,
+      // then flush everything logged while offline (S7, #527), now and
+      // whenever wifi returns.
+      this.restoreQueuedLines();
       this.flushQueue();
       window.addEventListener("online", () => this.flushQueue());
     },
@@ -187,6 +264,34 @@ function createLogger() {
         localStorage.removeItem("meso-e1rm");
       } catch (e) {
         /* the store is best-effort; the values are already seeded in-session */
+      }
+    },
+
+    // Fold lines still queued from an earlier visit into this page (#527). The
+    // server renders the text it last saved, which is older than what the
+    // athlete typed offline: showing that would tell them their set is gone,
+    // and a blur of the line would post the old text back over the queued one.
+    restoreQueuedLines() {
+      if (!this.cellUrl) return;
+      for (const item of this.readQueue()) {
+        if (!isCellEntry(item) || item.url !== this.cellUrl) continue;
+        if (!this.isMine(item)) continue;
+        const ex = this.exercises.find((e) => e.id === item.body.exercise_id);
+        // Gone from the session: the flush sends it and the server says so.
+        if (!ex) continue;
+        const line = item.body.line;
+        if (!ex.sub_lines.some((l) => l.line === line)) {
+          ex.sub_lines.push({ line, text: "", savedText: "" });
+          ex.sub_lines.sort((a, b) => (a.line || 0) - (b.line || 0));
+        }
+        // Read back through the array, so on the live page this is Alpine's
+        // reactive copy rather than the plain object just pushed.
+        const entry = ex.sub_lines.find((l) => l.line === line);
+        entry.text = item.body.text;
+        entry.queued = true;
+        entry.saveError = false;
+        // Its text is on the line now, as this page's own.
+        if (item.id) this._ownEntries[item.id] = true;
       }
     },
 
@@ -254,26 +359,41 @@ function createLogger() {
       this.saved = false;
       this.error = false;
       this.queued = false;
+      this.lineError = false;
       this.newRecords = []; // clear any prior toast; this save recomputes it
-      const payload = this.buildPayload(markDone);
       // Reflect the intended status locally right away so the UI is responsive
       // whether the request lands now or after a sync.
       if (markDone) this.status = "done";
+      // Written ahead, like a line (#527): the wait below can take a while on
+      // bad wifi, and leaving the page meanwhile must not lose the Set rows.
+      // The flush leaves this entry to save(), which replaces it with what it
+      // finally sends, and takes that out once it lands.
+      const ahead = this.enqueue(this.buildPayload(markDone));
+      // Lines first (#527). Pressing the button blurs the line being typed, so
+      // its save is already on its way: let it land, then send any line still
+      // queued from earlier. The log then reaches the server after the sets its
+      // lines carry, one request at a time, and what this save reports below
+      // covers the lines too.
+      try {
+        await this.settleLines();
+      } catch (err) {
+        // Never let the outbox keep the log itself from being saved.
+        console.error("Could not settle the lines before saving", err);
+      }
+      // Built after the wait, which can take a while on bad wifi: the Set rows
+      // stay editable meanwhile, and a change made then belongs in this save.
+      const payload = this.buildPayload(markDone);
+      // And queued in place of the click-time copy before it goes out: if the
+      // page dies mid-request, this newer log is the one to replay. (Storage
+      // refusing it leaves the click-time copy, the best there is.)
+      const sending = this.enqueue(payload) || ahead;
       let res;
       try {
-        res = await fetch(this.logUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": this.csrf,
-          },
-          body: JSON.stringify(payload),
-        });
+        res = await postJson(this.logUrl, payload, this.csrf);
       } catch (netErr) {
         // Network unreachable → queue it; the upsert endpoint is idempotent, so
         // replaying on reconnect is safe (latest save for a session wins).
-        this.enqueue(payload);
-        this.queued = true;
+        this.keepForLater(payload);
         this.saving = false;
         return;
       }
@@ -283,11 +403,11 @@ function createLogger() {
         // HTML). Don't lose it: queue for retry, where the next online flush
         // (after re-login) carries a fresh CSRF.
         if (res.redirected) {
-          this.enqueue(payload);
-          this.queued = true;
+          this.keepForLater(payload);
           return;
         }
         if (!res.ok) throw new Error("Request failed: " + res.status);
+        if (sending) this.dropEntry(sending);
         const data = await res.json();
         this.status = data.log.status;
         this.syncFromLog(data.log);
@@ -295,7 +415,7 @@ function createLogger() {
         // pending sets too — so a "Save progress" no longer comes back empty and
         // can legitimately surface a toast before the session is ever done.
         this.newRecords = data.new_records || [];
-        this.saved = true;
+        this.reportSaved();
         // Key the tour nudge off the log status the *server* persisted, not the
         // button pressed (#451): the self-variant "results" step advances on a
         // `done` log (`advance_self_step_if_complete("results")`), and a "Save
@@ -305,96 +425,296 @@ function createLogger() {
         // screen-reader re-announcement (the offline `flushQueue` path stays
         // silent regardless — it never calls this).
         if (data.log.status === "done") notifyTourRefresh();
-        setTimeout(() => {
-          this.saved = false;
-        }, 2400);
       } catch (err) {
         console.error("Log save failed", err);
         this.error = true;
+        // An HTTP error is the athlete's to retry, not the outbox's.
+        if (sending) this.dropEntry(sending);
       } finally {
         this.saving = false;
       }
     },
 
-    // ---- offline queue (S7) ----
-    // A tiny localStorage-backed outbox keyed by the session's log URL: one
-    // pending save per session (the latest supersedes an earlier queued one), so
+    // Say what's true (#527). "Saved ✓" only once every write this page made
+    // has landed: a line still queued keeps the "will sync" message up, and a
+    // line the server refused gets its own warning instead of a tick.
+    reportSaved() {
+      this.saved = false;
+      this.queued = false;
+      this.lineError = false;
+      if (this.hasQueuedWrites()) {
+        this.queued = true;
+        return;
+      }
+      if (this.hasRefusedLines()) {
+        this.lineError = true;
+        return;
+      }
+      this.saved = true;
+      setTimeout(() => {
+        this.saved = false;
+      }, 2400);
+    },
+
+    // True while this page has a write waiting in the outbox: a line, or the
+    // session's own log.
+    hasQueuedWrites() {
+      const lineQueued = this.exercises.some((e) =>
+        (e.sub_lines || []).some((l) => l.queued),
+      );
+      return (
+        lineQueued ||
+        this.readQueue().some(
+          (i) => !isCellEntry(i) && i.url === this.logUrl && this.isMine(i),
+        )
+      );
+    },
+
+    hasRefusedLines() {
+      return this.exercises.some((e) =>
+        (e.sub_lines || []).some((l) => l.saveError),
+      );
+    },
+
+    // Let every line save in flight land, then flush the outbox, so whatever
+    // follows is sent after the lines (#527). The lines stay editable while
+    // this waits, so a blur can start a save meanwhile: go round again until
+    // one passes without. Only blurs count — the flush's own replays start
+    // saves too, and counting those would loop for as long as it's offline.
+    async settleLines() {
+      let blurs;
+      do {
+        blurs = this._blurSaves;
+        await Promise.all(
+          Object.values(this._cellSaves).map((p) => p.catch(() => {})),
+        );
+        await this.flushQueue();
+      } while (this._blurSaves !== blurs);
+    },
+
+    // ---- offline queue (S7, #527) ----
+    // A tiny localStorage-backed outbox. One pending save per session log, and
+    // one per typed line (the latest supersedes an earlier queued one), so
     // replaying after reconnect can't pile up duplicate writes.
     queueKey: "meso-log-queue",
 
+    // An entry this page may send: queued by the athlete signed in now, or
+    // queued before entries carried an owner. localStorage outlasts a logout,
+    // so another athlete's writes can be sitting here; sent under this login
+    // they'd be refused, and a refused line is dropped. They wait for their
+    // owner instead.
+    isMine(item) {
+      return !item.owner || !this.owner || item.owner === this.owner;
+    },
+
+    // What every entry this page queues carries: its athlete, so only they
+    // flush it (`isMine`), and an id of its own. Entries are told apart by
+    // that id, not their text — another tab can queue the very text an older
+    // entry held, and it's still the newer write.
+    stamp(item) {
+      const id =
+        Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      const stamped = { ...item, id };
+      if (this.owner) stamped.owner = this.owner;
+      return stamped;
+    },
+
+    // Only well-formed entries: anything else in the key (another script's
+    // value, a hand edit) would otherwise throw deep inside a flush and leave
+    // "Log session" stuck.
     readQueue() {
+      let items;
       try {
-        return JSON.parse(localStorage.getItem(this.queueKey) || "[]");
+        items = JSON.parse(localStorage.getItem(this.queueKey) || "[]");
       } catch (e) {
         return [];
       }
+      if (!Array.isArray(items)) return [];
+      return items.filter((i) => i && typeof i === "object" && i.body);
     },
 
+    // True when the queue was written. Storage can be full or blocked, and
+    // then nothing is kept: a caller must not tell the athlete it was.
     writeQueue(items) {
       try {
         localStorage.setItem(this.queueKey, JSON.stringify(items));
+        return true;
       } catch (e) {
         console.error("Could not persist offline log queue", e);
+        return false;
       }
     },
 
+    // Queue this session's log and say so — or, when storage refused it, say
+    // it didn't save.
+    keepForLater(payload) {
+      if (this.enqueue(payload)) this.queued = true;
+      else this.error = true;
+    },
+
+    // Returns the entry as stored, or null when storage refused it.
     enqueue(payload) {
       const queue = this.readQueue().filter((item) => item.url !== this.logUrl);
-      queue.push({ url: this.logUrl, body: payload });
+      const item = this.stamp({ url: this.logUrl, body: payload });
+      queue.push(item);
+      return this.writeQueue(queue) ? item : null;
+    },
+
+    // Queue one line's write, replacing any earlier one for the same cell:
+    // retyping a line offline overwrites it rather than stacking a second set.
+    // Returns the entry as stored, or null when storage refused it.
+    enqueueCell(body) {
+      const queue = this.readQueue().filter(
+        (item) => !isSameCell(item, this.cellUrl, body.exercise_id, body.line),
+      );
+      const item = this.stamp({ kind: "cell", url: this.cellUrl, body });
+      queue.push(item);
+      if (!this.writeQueue(queue)) return null;
+      this._ownEntries[item.id] = true;
+      return item;
+    },
+
+    queuedCell(exerciseId, line) {
+      return this.readQueue().find((item) =>
+        isSameCell(item, this.cellUrl, exerciseId, line),
+      );
+    },
+
+    isQueued(item) {
+      const key = JSON.stringify(item);
+      return this.readQueue().some((queued) => JSON.stringify(queued) === key);
+    },
+
+    // Remove one replayed entry, but only as it was sent: a newer write queued
+    // for the same log or cell while this one was in flight must survive.
+    dropEntry(sent) {
+      const key = JSON.stringify(sent);
+      const queue = this.readQueue();
+      const index = queue.findIndex((item) => JSON.stringify(item) === key);
+      if (index === -1) return;
+      queue.splice(index, 1);
       this.writeQueue(queue);
     },
 
-    // Replay queued saves. Items that still fail (offline, or the server errored)
-    // stay queued for the next attempt. Uses the live CSRF token, never a stale
-    // stored one.
-    async flushQueue() {
-      const queue = this.readQueue();
-      if (!queue.length) return;
-      const remaining = [];
-      let flushedMine = false;
-      for (const item of queue) {
-        let res;
+    // Replay the outbox. `init()`, `online` and `save()` can all ask at once,
+    // but only one pass runs at a time: two would send the same entries twice,
+    // and concurrently. A request that arrives mid-pass gets one more pass
+    // after it, so a write queued in between isn't left behind.
+    flushQueue() {
+      if (this._flushing) {
+        this._flushAgain = true;
+        return this._flushing;
+      }
+      this._flushing = (async () => {
         try {
-          res = await fetch(item.url, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-CSRFToken": this.csrf,
-            },
-            body: JSON.stringify(item.body),
-          });
-        } catch (netErr) {
-          remaining.push(item); // still offline — keep it for next time
-          continue;
+          do {
+            this._flushAgain = false;
+            await this.flushPass();
+          } while (this._flushAgain);
+        } finally {
+          this._flushing = null;
         }
-        // A redirect means we were bounced to login (expired session); res.ok is
-        // true for the login HTML but the log was never saved — keep it queued
-        // so a real re-login + flush delivers it instead of dropping the workout.
-        if (res.redirected || !res.ok) {
-          remaining.push(item);
-          continue;
-        }
-        if (item.url === this.logUrl) {
-          try {
-            const data = await res.json();
-            this.status = data.log.status;
-            this.syncFromLog(data.log);
-            this.newRecords = data.new_records || []; // a PR beaten offline still lands
-            flushedMine = true;
-          } catch (e) {
-            /* synced server-side regardless; UI reconciles on next load */
-          }
-        }
+      })();
+      return this._flushing;
+    },
+
+    // One pass over the outbox, ONE REQUEST AT A TIME, lines before logs
+    // (#527). A session log that lands before its lines' sets exist would come
+    // back without them, and two requests at once is exactly the collision the
+    // e2e suite's shared SQLite connection can't take. The first network
+    // failure or login redirect ends the pass: everything after it would fail
+    // the same way, and stopping keeps a log from overtaking its lines. Items
+    // that fail stay queued. Uses the live CSRF token, never a stale stored
+    // one.
+    async flushPass() {
+      const queue = this.readQueue().filter((item) => this.isMine(item));
+      if (!queue.length) return;
+      for (const item of queue.filter(isCellEntry)) {
+        if ((await this.flushCell(item)) === "offline") return;
       }
-      this.writeQueue(remaining);
-      // If this session's queued save went through, clear the "will sync" hint.
-      if (flushedMine && !remaining.some((i) => i.url === this.logUrl)) {
-        this.queued = false;
-        this.saved = true;
-        setTimeout(() => {
-          this.saved = false;
-        }, 2400);
+      let flushedMine = false;
+      for (const item of queue.filter((i) => !isCellEntry(i))) {
+        // Mid-save, this session's log is save()'s to send, right after.
+        if (this.saving && item.url === this.logUrl) continue;
+        // The lines before it can take a while: a log sent or replaced since
+        // this pass read the outbox (save() landing meanwhile) is not resent,
+        // or its older copy would replace the newer log on the server.
+        if (!this.isQueued(item)) continue;
+        const outcome = await this.flushLog(item);
+        if (outcome === "offline") break;
+        if (outcome === "mine") flushedMine = true;
       }
+      // A pass that lands this session's log, or the last line a "will sync"
+      // message was waiting on, updates the message. Not mid-`save()`, though:
+      // save reports once its own log is in.
+      if (!this.saving && (flushedMine || this.queued)) this.reportSaved();
+    },
+
+    // A queued line on this page goes through that line's own save chain, so
+    // it can't race a blur of the same line. One from another page has no line
+    // to update; it's sent as it was queued.
+    async flushCell(item) {
+      const ex =
+        item.url === this.cellUrl
+          ? this.exercises.find((e) => e.id === item.body.exercise_id)
+          : null;
+      if (ex) return this.saveCell(ex, item.body.line, { fromQueue: true });
+      let res;
+      try {
+        res = await postJson(
+          item.url,
+          item.owner ? { ...item.body, owner: item.owner } : item.body,
+          this.csrf,
+        );
+      } catch (netErr) {
+        return "offline";
+      }
+      if (isWrongAccount(res)) return "offline";
+      if (isRetryableStatus(res.status)) return "kept";
+      // Refused for good (a 4xx won't change on retry), but a line from
+      // another session is dropped only on its own page, where the athlete
+      // sees it didn't save; here nothing would say so. On its own page with
+      // its row gone, there's no line left to show it on.
+      if (!res.ok && item.url !== this.cellUrl) return "kept";
+      this.dropEntry(item);
+      return res.ok ? "saved" : "rejected";
+    },
+
+    async flushLog(item) {
+      let res;
+      try {
+        res = await postJson(item.url, item.body, this.csrf);
+      } catch (netErr) {
+        return "offline"; // still offline — keep it for next time
+      }
+      // A redirect means we were bounced to login (expired session); res.ok is
+      // true for the login HTML but the log was never saved — keep it queued
+      // so a real re-login + flush delivers it instead of dropping the workout.
+      if (res.redirected) return "offline";
+      if (!res.ok) return "kept";
+      this.dropEntry(item);
+      if (item.url !== this.logUrl) return "saved";
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        return "mine"; // synced server-side regardless; UI reconciles on next load
+      }
+      // A pass can already be sending this session's older log when save()
+      // starts, so its reply can land mid-save — checked after the body is
+      // read, which can itself outlast the tap. Leave the rows alone then:
+      // reconciling them to the older log would un-tick rows ticked since,
+      // just before save() builds its payload from them. save's own reply
+      // reconciles.
+      if (this.saving) return "mine";
+      try {
+        this.status = data.log.status;
+        this.syncFromLog(data.log);
+        this.newRecords = data.new_records || []; // a PR beaten offline still lands
+      } catch (e) {
+        /* a reply of an unexpected shape: synced server-side regardless */
+      }
+      return "mine";
     },
 
     // Reconcile the rows with what the server actually persisted so the check
@@ -532,7 +852,8 @@ function createLogger() {
       // targeting. The cap is against that max too.
       const maxLine = ex.sub_lines.reduce((m, l) => Math.max(m, l.line || 0), 0);
       if (maxLine >= MAX_CELL_LINE) return;
-      ex.sub_lines.push({ line: maxLine + 1, text: "" });
+      // Nothing is saved on a new line, so blurring it empty posts nothing.
+      ex.sub_lines.push({ line: maxLine + 1, text: "", savedText: "" });
     },
 
     // Serialize saves PER CELL. Two blurs for one sub-line can otherwise be in
@@ -542,53 +863,191 @@ function createLogger() {
     // would show the correction while the database and the records kept the
     // stale parse, and a reload would surface it. Chaining means the newer text
     // is always written second, and since the body is read at send time an
-    // intermediate blur simply coalesces into the latest value.
-    // POST one exercise's sub-line cell. Modeled on `_postOneRm`: best-effort,
-    // an unreachable network or an error leaves the typed value in-session and
-    // retries on the next blur. Blank text clears the cell in place (the server
-    // never deletes a sub-line).
-    saveCell(ex, line) {
-      if (!this.cellUrl || !ex) return Promise.resolve();
+    // intermediate blur simply coalesces into the latest value. A queued write
+    // being replayed (`fromQueue`) joins the same chain. Resolves to how the
+    // save went (see `_postCell`).
+    saveCell(ex, line, { fromQueue = false } = {}) {
+      if (!this.cellUrl || !ex) return Promise.resolve("skipped");
       const key = ex.id + ":" + line;
+      if (!fromQueue) {
+        this._blurSaves += 1;
+        this._writeAheadOnBlur(ex, line, key);
+      }
+      this._lineSavesRunning[key] = (this._lineSavesRunning[key] || 0) + 1;
       const previous = this._cellSaves[key] || Promise.resolve();
       const run = previous
         .catch(() => {}) // a failed save must not stall the cell's queue
-        .then(() => this._postCell(ex, line));
+        .then(() => this._postCell(ex, line, fromQueue))
+        .finally(() => {
+          this._lineSavesRunning[key] -= 1;
+        })
+        .then((outcome) => {
+          // A line landing can change what the footer last said: once no
+          // line is queued or refused, "will sync" or "a line couldn't save"
+          // gives way — no second "Log session" needed — and a line that
+          // failed after "Saved ✓" went up takes it down. `save()` reports
+          // for itself, after its own log.
+          if (!this.saving && (this.queued || this.lineError || this.saved)) {
+            this.reportSaved();
+          }
+          return outcome;
+        });
       this._cellSaves[key] = run;
       return run;
     },
 
-    // POST one exercise's sub-line cell. Modeled on `_postOneRm`: best-effort,
-    // an unreachable network or an error leaves the typed value in-session and
-    // retries on the next blur. Blank text clears the cell in place (the server
-    // never deletes a sub-line).
-    async _postCell(ex, line) {
+    // Queue the line at the blur itself, not only when its save's turn comes:
+    // a save for the same line can be in flight for up to 15s on bad wifi,
+    // and closing the page meanwhile must not lose what was just typed. When
+    // this save runs it queues the text again (replacing this entry) and sends
+    // it. Only a line that has something to send — or one whose earlier save
+    // is still running, since the server may yet end up with that one.
+    _writeAheadOnBlur(ex, line, key) {
       const entry = (ex.sub_lines || []).find((l) => l.line === line);
-      const text = entry ? entry.text || "" : "";
+      if (!entry) return;
+      const text = entry.text || "";
+      const busy = (this._lineSavesRunning[key] || 0) > 0;
+      if (!busy && !this._lineNeedsSending(entry, text, ex.id, line)) return;
+      this.enqueueCell({ exercise_id: ex.id, line, text });
+    },
+
+    // The dirty check (#527): a line whose text the server already has needs
+    // no POST — tabbing through a blank line or leaving a coach's line as it
+    // was changes nothing, and offline it painted a spurious "couldn't save".
+    // A queued line always posts — its text may match, but the queue must
+    // drain. So does a warned one: set-shaped text saved while its row was
+    // skipped has no set, and re-sending the same text once the coach
+    // un-skips the row is how it gets one. `savedText` is undefined when
+    // unknown (a response that couldn't be read or had gone stale), and then
+    // the line always posts.
+    //
+    // And a line this page has an entry queued for always posts: a blur made
+    // while an earlier save of it ran queued text that hasn't been sent. The
+    // line as it is now replaces it — or that older text would replay later,
+    // over this.
+    _lineNeedsSending(entry, text, exerciseId, line) {
+      if (
+        entry.savedText === undefined ||
+        text !== entry.savedText ||
+        entry.queued ||
+        entry.warn
+      ) {
+        return true;
+      }
+      const queued = this.queuedCell(exerciseId, line);
+      return !!queued && !!this._ownEntries[queued.id];
+    },
+
+    // POST one exercise's sub-line cell. Blank text clears the cell in place
+    // (the server never deletes a sub-line). Resolves to the outcome the flush
+    // acts on:
+    //
+    //   "saved"    the server has this text.
+    //   "offline"  the network is down, or the write never reached the
+    //              endpoint as its own account (`isWrongAccount`). It stays
+    //              queued (#527) and the line says it will sync.
+    //   "kept"     a 5xx (or 408/429): the server failed, not the write.
+    //              Queued the same way.
+    //   "rejected" any other 4xx: the server read the write and refused it, so
+    //              the same text can't succeed later. Not queued; the line says
+    //              "couldn't save" and the athlete's next edit re-attempts.
+    //   "skipped"  nothing to send.
+    async _postCell(ex, line, fromQueue = false) {
+      const entry = (ex.sub_lines || []).find((l) => l.line === line);
+      let text;
+      // The outbox entry this write stands for.
+      let sent = null;
+      if (fromQueue) {
+        // Send what the queue holds for this cell NOW. A blur that ran first
+        // may already have saved newer text and dropped the entry; replaying
+        // the older text would overwrite it.
+        sent = this.queuedCell(ex.id, line);
+        if (!sent) return "skipped";
+        text = sent.body.text;
+      } else {
+        text = entry ? entry.text || "" : "";
+        if (entry && !this._lineNeedsSending(entry, text, ex.id, line)) {
+          entry.saveError = false;
+          // The blur may have queued this very text while an earlier save
+          // ran; that save has since put it on the server.
+          const moot = this.queuedCell(ex.id, line);
+          if (moot && moot.body.text === text) this.dropEntry(moot);
+          return "skipped";
+        }
+      }
+      const body = { exercise_id: ex.id, line, text };
+      // Write ahead: the line is in the outbox BEFORE the request goes out,
+      // so closing the page mid-request — a POST stalled on gym wifi — can't
+      // lose it. It replaces any older entry for the cell (latest text wins);
+      // success or a refusal takes it back out. Only this entry, by its id:
+      // another tab on the session may queue newer text for the line
+      // meanwhile, and that one stays.
+      if (!fromQueue) {
+        const older = this.queuedCell(ex.id, line);
+        sent = this.enqueueCell(body);
+        // Storage full or blocked: this text can't be queued, and an older
+        // entry left in its place would replay over it later. Latest wins,
+        // so it goes (removing shrinks the queue, which a full store allows).
+        if (!sent && older) this.dropEntry(older);
+      }
       if (entry) entry.saveError = false;
       let res;
       try {
-        res = await fetch(this.cellUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": this.csrf,
-          },
-          body: JSON.stringify({ exercise_id: ex.id, line, text }),
-        });
+        res = await postJson(
+          this.cellUrl,
+          this.owner ? { ...body, owner: this.owner } : body,
+          this.csrf,
+        );
       } catch (netErr) {
-        if (entry) entry.saveError = true;
-        return; // offline — keep the in-session value; next blur re-attempts
+        // It may have landed or not: what the server holds is unknown now.
+        if (entry) entry.savedText = undefined;
+        this._holdCell(entry, ex.id, line, !!sent);
+        return "offline";
       }
-      if (res.redirected || !res.ok) {
-        if (entry) entry.saveError = true;
-        return;
+      if (isWrongAccount(res)) {
+        this._holdCell(entry, ex.id, line, !!sent);
+        return "offline";
       }
+      if (isRetryableStatus(res.status)) {
+        if (entry) entry.savedText = undefined; // a 502/504 may have committed
+        this._holdCell(entry, ex.id, line, !!sent);
+        return "kept";
+      }
+      if (!res.ok) {
+        if (sent) this.dropEntry(sent);
+        if (entry) {
+          entry.queued = false;
+          entry.saveError = true;
+        }
+        return "rejected";
+      }
+      if (sent) this.dropEntry(sent);
+      if (entry) entry.queued = false;
       let data;
       try {
         data = await res.json();
       } catch (e) {
-        return; // saved server-side regardless; warn/PR state reconciles next blur/reload
+        // Saved server-side regardless, but its warn/PR state is unknown, so
+        // the line's saved text is too: the next blur sends it again
+        // (harmlessly) and reconciles.
+        if (entry) entry.savedText = undefined;
+        return "saved";
+      }
+      // A replay of text another tab queued: if this tab never touched the
+      // line, show what the server now holds, or a later blur here would post
+      // the old text back over it. Never for this page's own entry — the line
+      // may have been edited back to its saved text while the replay ran, and
+      // that edit is the newer one.
+      if (
+        entry &&
+        fromQueue &&
+        sent &&
+        sent.id &&
+        !this._ownEntries[sent.id] &&
+        entry.savedText !== undefined &&
+        entry.text === entry.savedText
+      ) {
+        entry.text = text;
       }
       // Drop a stale response. Two saves for the same sub-line can be in
       // flight at once, and the older one can land last — so fixing `225 x`
@@ -598,7 +1057,14 @@ function createLogger() {
       // Derive-on-read warn (5a §8): re-classified server-side from the
       // just-committed text, so fixing a fat-fingered attempt (or typing one)
       // updates the cell's color right away, without a page reload.
-      if (!entry || (entry.text || "") !== text) return;
+      if (!entry) return "saved";
+      if ((entry.text || "") !== text) {
+        // The line changed while this was in flight, so what the server has
+        // is no longer what it shows; the next blur sends it either way.
+        entry.savedText = undefined;
+        return "saved";
+      }
+      entry.savedText = text;
       entry.warn = !!(data.cell && data.cell.warn);
       // Optimistic PR (5a §7), marked ON THE LINE THAT EARNED IT rather than in
       // `newRecords`. That card renders at the top of the page, which is right
@@ -615,6 +1081,19 @@ function createLogger() {
           ? data.new_records[0]
           : null;
       entry.pr = earned ? `${earned.value} ${earned.unit}` : "";
+      return "saved";
+    },
+
+    // A line's write didn't land; say what the outbox holds for it. Written
+    // ahead, it's there for the next flush — unless storage refused it, and
+    // then nothing will sync, so the line says it couldn't save. (If another
+    // tab flushed it meanwhile, it's neither: the line stays dirty and the
+    // next blur sends it again.)
+    _holdCell(entry, exerciseId, line, persisted) {
+      if (!entry) return;
+      const held = !!this.queuedCell(exerciseId, line);
+      entry.queued = held;
+      entry.saveError = !held && !persisted;
     },
   };
 }

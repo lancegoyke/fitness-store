@@ -570,6 +570,17 @@ class TestLogPage:
         assert "70" in body
         assert "RPE 7" in body
 
+    def test_names_the_athlete_whose_offline_queue_it_may_flush(self, client):
+        """#527: the offline queue outlasts a logout, so the page says whose it is.
+
+        Without it, the next athlete on the device would replay the last one's
+        queued writes under their own login.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        resp = client.get(session_url(s.session))
+        assert resp.context["log_data"]["owner"] == str(s.athlete.pk)
+
 
 # -- closes the loop: logged rows survive reload + reach the agent ---------
 

@@ -2565,3 +2565,118 @@ class TestOneLoadManySuffixes:
 
         row.refresh_from_db()
         assert parsed_set_is_hidden(row), "the line still displays this performance"
+
+
+# -- offline replay (issue #527) ----------------------------------------------
+#
+# meso_athlete.js's offline queue carries a line typed under "what you did"
+# (`saveCell` → `_postCell` → `athlete_cell_write`) as well as the
+# whole-session `save()` payload. Replaying it safely leans on server behavior
+# these pin: a queued write can be sent more than once (the client can't
+# always tell whether an earlier attempt landed before it dropped offline
+# again), and a line can reach the server after its session is already DONE.
+# The flush sends lines before the log; the last test is that order.
+
+
+class TestOfflineReplay:
+    def test_resending_the_same_cell_text_twice_does_not_duplicate_the_set(
+        self, client
+    ):
+        # A retried offline write: the same (exercise, line, text) POSTed
+        # twice, exactly as a client unsure whether the first attempt landed
+        # would replay it.
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "100 x 5")
+        write_cell(client, s.session, s.squat, 1, "100 x 5")
+
+        cell = sub_cell(s.squat, 1)
+        rows = list(LoggedSet.objects.filter(source_line=cell))
+        assert len(rows) == 1
+        assert rows[0].load == "100"
+        assert rows[0].reps == "5"
+
+    def test_a_line_synced_after_the_log_is_already_done_still_attaches(self, client):
+        # The queue drains cells before the log (issue #527's `flushQueue`
+        # ordering) — but a stale/replayed queue could still land a cell
+        # AFTER an earlier "Log session" already marked the log DONE. That
+        # must not fork a second log or lose the set.
+        s = seed()
+        client.force_login(s.athlete)
+        log_post(client, s.session, {"status": "done", "sets": []})
+        log = the_log(s.session, s.athlete)
+        assert log.status == SessionLog.Status.DONE
+
+        write_cell(client, s.session, s.squat, 1, "100 x 5")
+
+        log.refresh_from_db()
+        assert log.status == SessionLog.Status.DONE
+        assert (
+            SessionLog.objects.filter(session=s.session, athlete=s.athlete).count() == 1
+        )
+        cell = sub_cell(s.squat, 1)
+        row = LoggedSet.objects.get(source_line=cell)
+        assert row.session_log_id == log.pk
+        assert row.load == "100"
+        assert row.reps == "5"
+
+    def test_lines_first_then_the_queued_log_keeps_the_parsed_set(self, client):
+        # The normal order: the cell syncs first (flushQueue drains cells
+        # before the log), then a queued "Log session" follows and upserts
+        # the same log rather than replacing what the cell already wrote.
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "100 x 5")
+        log_post(client, s.session, {"status": "done", "sets": []})
+
+        log = the_log(s.session, s.athlete)
+        assert log.status == SessionLog.Status.DONE
+        assert (
+            SessionLog.objects.filter(session=s.session, athlete=s.athlete).count() == 1
+        )
+        cell = sub_cell(s.squat, 1)
+        row = LoggedSet.objects.get(source_line=cell)
+        assert row.session_log_id == log.pk
+        assert row.load == "100"
+        assert row.reps == "5"
+
+    def test_a_write_queued_by_another_account_is_a_conflict_not_a_404(self, client):
+        # Athlete A's page, left open, flushes A's queued line after athlete B
+        # signed in on another tab. A 404 would read as "refused" and the
+        # client would drop A's only copy; a 409 keeps it queued for A.
+        s = seed()
+        other = UserFactory()
+        client.force_login(other)
+        resp = cell_post(
+            client,
+            s.session,
+            {
+                "exercise_id": s.squat.pk,
+                "line": 1,
+                "text": "100 x 5",
+                "owner": str(s.athlete.pk),
+            },
+        )
+        assert resp.status_code == 409
+        assert not LoggedSet.objects.exists()
+
+    def test_the_owners_own_stamped_write_goes_through(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = cell_post(
+            client,
+            s.session,
+            {
+                "exercise_id": s.squat.pk,
+                "line": 1,
+                "text": "100 x 5",
+                "owner": str(s.athlete.pk),
+            },
+        )
+        assert resp.status_code == 200
+        assert LoggedSet.objects.filter(source_line=sub_cell(s.squat, 1)).exists()
+
+    def test_an_unstamped_write_to_a_foreign_session_is_still_a_404(self, client):
+        s = seed()
+        client.force_login(UserFactory())
+        assert write_cell(client, s.session, s.squat, 1, "100 x 5").status_code == 404

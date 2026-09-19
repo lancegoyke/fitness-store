@@ -1327,6 +1327,11 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
         ctx["active"] = "training"
         ctx["session"] = sess
         ctx["log_data"] = presenters.athlete_log_payload(sess)
+        # Whose offline queue this page may flush (#527). The queue lives in
+        # localStorage, which outlasts a logout: without this, the next athlete
+        # to sign in on the device would replay the last one's writes under
+        # their own login, and a line refused as "not your session" is dropped.
+        ctx["log_data"]["owner"] = str(self.request.user.pk)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
         # First-log coachmark (Phase 4): teach the logger only to a first-ever
@@ -1686,6 +1691,17 @@ def athlete_cell_write(request, pk):
     prescription line), as is ``line`` > ``MAX_CELL_LINE``; blank text clears
     the sub-line in place.
     """
+    # A write queued offline by another account (#527). localStorage outlasts
+    # a logout, so a page left open for athlete A can flush A's queued lines
+    # after athlete B signs in on another tab — under B's session cookie. The
+    # scoping below would 404 them, and the client drops a refused line. Say
+    # "wrong account" instead, which the client keeps queued for its owner.
+    # Decided from the body alone, so it says nothing about the session.
+    if _sent_by_another_account(request):
+        return JsonResponse(
+            {"ok": False, "error": "This write belongs to another account."},
+            status=409,
+        )
     session = _athlete_session_or_404(request.user, pk)
     plan = session.week.mesocycle.plan
     try:
@@ -1851,6 +1867,20 @@ def athlete_cell_write(request, pk):
             "new_records": [serialize_new_record(r) for r in new_records],
         }
     )
+
+
+def _sent_by_another_account(request):
+    """Whether a cell write names an ``owner`` other than the signed-in user.
+
+    The athlete logger stamps its queued writes with the account that typed
+    them (``log_data.owner``). A write without one (an older page) is never
+    treated as foreign.
+    """
+    try:
+        owner = json.loads(request.body or "{}").get("owner")
+    except (ValueError, AttributeError):
+        return False
+    return isinstance(owner, str) and owner != "" and owner != str(request.user.pk)
 
 
 def _line_sets(session, athlete, cell):
@@ -2345,7 +2375,9 @@ def manifest_webmanifest(request):
 # activate. Keep in sync with the cache name baked into the worker template.
 # v2: added meso_onboarding.js to the precached shell (first-time UX Phase 4).
 # v3: re-skinned meso.css to the shared steel-blue accent (design-system PR 3).
-PWA_CACHE_VERSION = "meso-pwa-v3"
+# v4: meso_athlete.js queues lines typed offline (#527). Cached session pages
+#     still point at the old logger, which loses them; activation drops them.
+PWA_CACHE_VERSION = "meso-pwa-v4"
 
 
 @require_GET

@@ -943,7 +943,7 @@ describe("addLine", () => {
     });
     for (let i = 0; i < 25; i++) c.addLine(c.exercises[0]);
     const lines = c.exercises[0].sub_lines;
-    expect(lines[0]).toEqual({ line: 1, text: "" });
+    expect(lines[0]).toMatchObject({ line: 1, text: "" });
     expect(lines.length).toBe(20); // capped at MAX_CELL_LINE
     expect(lines[lines.length - 1].line).toBe(20);
   });
@@ -1005,13 +1005,13 @@ describe("sub-line hydration", () => {
     const c = createLogger();
     c.init();
     expect(c.cellUrl).toBe(CELL_URL);
-    expect(c.exercises[0].sub_lines).toEqual([{ line: 1, text: "RPE 8" }]);
+    expect(c.exercises[0].sub_lines).toMatchObject([{ line: 1, text: "RPE 8" }]);
     // An exercise with nothing typed yet OPENS with a line per prescribed set
     // rather than an empty stack. Blank cells aren't persisted, so "no
     // sub-lines" is the normal state — and it rendered as a bare "+ add a line"
     // button beneath three labelled set inputs, which made the freeform path
     // invisible. (No set_rows here, so the floor of one applies.)
-    expect(c.exercises[1].sub_lines).toEqual([{ line: 1, text: "" }]);
+    expect(c.exercises[1].sub_lines).toMatchObject([{ line: 1, text: "" }]);
   });
 
   it("opens with one empty line per prescribed set", () => {
@@ -1034,7 +1034,7 @@ describe("sub-line hydration", () => {
       "</script>";
     const c = createLogger();
     c.init();
-    expect(c.exercises[0].sub_lines).toEqual([
+    expect(c.exercises[0].sub_lines).toMatchObject([
       { line: 1, text: "" },
       { line: 2, text: "" },
       { line: 3, text: "" },
@@ -1065,7 +1065,7 @@ describe("sub-line hydration", () => {
     c.init();
     // Rebuilt by NUMBER, so `line` (and the parsed set_number it becomes) is
     // identical on every reload.
-    expect(c.exercises[0].sub_lines).toEqual([
+    expect(c.exercises[0].sub_lines).toMatchObject([
       { line: 1, text: "" },
       { line: 2, text: "" },
       { line: 3, text: "100 x 5" },
@@ -1120,6 +1120,1490 @@ describe("sub-line hydration", () => {
       "</script>";
     const c = createLogger();
     c.init();
-    expect(c.exercises[0].sub_lines).toEqual([{ line: 1, text: "" }]);
+    expect(c.exercises[0].sub_lines).toMatchObject([{ line: 1, text: "" }]);
+  });
+});
+
+// ---- offline queue — sub-line cells (issue #527) ---------------------------
+//
+// A line typed under "what you did" saves on blur (saveCell → _postCell), but
+// only `save()`'s whole-session payload was ever queued when the network was
+// down — a failed cell write showed "couldn't save" and nothing retried it,
+// so a set typed offline was lost while the page still said "Saved ✓". These
+// pin the contract the fix implements: a failed cell write gets its own
+// `kind: "cell"` entry in the SAME `meso-log-queue` (latest text per line
+// wins), `flushQueue` drains every cell before the log — one request at a
+// time, stopping at the first failure — `init()` folds an already-queued
+// cell back onto its line before flushing, and `save()` waits on the cell
+// queue before it POSTs its own log.
+
+const OTHER_SESSION_CELL_URL = "/meso/api/me/session/99/cell/";
+
+describe("saveCell — latest-wins queue keying (#527)", () => {
+  it("keeps exactly one cell entry per line, holding the latest text", async () => {
+    const c = cellLogger({
+      exercises: [
+        { id: 1, sub_lines: [{ line: 1, text: "100 x 5" }], set_rows: [] },
+      ],
+    });
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1);
+    c.exercises[0].sub_lines[0].text = "110 x 5"; // corrected before it ever synced
+    await c.saveCell(c.exercises[0], 1);
+
+    const cellEntries = c.readQueue().filter((i) => i.kind === "cell");
+    expect(cellEntries).toHaveLength(1);
+    expect(cellEntries[0]).toMatchObject({
+      kind: "cell",
+      url: CELL_URL,
+      body: { exercise_id: 1, line: 1, text: "110 x 5" },
+    });
+  });
+
+  it("queues two different lines as two separate entries", async () => {
+    const c = cellLogger({
+      exercises: [
+        {
+          id: 1,
+          sub_lines: [
+            { line: 1, text: "100 x 5" },
+            { line: 2, text: "RPE 8" },
+          ],
+          set_rows: [],
+        },
+      ],
+    });
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1);
+    await c.saveCell(c.exercises[0], 2);
+
+    const cellEntries = c.readQueue().filter((i) => i.kind === "cell");
+    expect(cellEntries).toHaveLength(2);
+    expect(cellEntries.map((i) => i.body.line).sort()).toEqual([1, 2]);
+  });
+
+  it("leaves another session's cell entry untouched", async () => {
+    const c = cellLogger();
+    c.writeQueue([
+      {
+        kind: "cell",
+        url: OTHER_SESSION_CELL_URL,
+        body: { exercise_id: 1, line: 1, text: "someone else's line" },
+      },
+    ]);
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1);
+
+    const queue = c.readQueue();
+    expect(queue).toHaveLength(2);
+    const other = queue.find((i) => i.url === OTHER_SESSION_CELL_URL);
+    expect(other.body.text).toBe("someone else's line");
+  });
+
+  it("leaves an already-queued log entry untouched", async () => {
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.writeQueue([{ url: LOG_URL, body: { status: "done", sets: [] } }]);
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1);
+
+    const queue = c.readQueue();
+    expect(queue).toHaveLength(2);
+    expect(queue.find((i) => i.url === LOG_URL).body).toEqual({
+      status: "done",
+      sets: [],
+    });
+  });
+});
+
+describe("saveCell — outcomes that decide whether the write gets queued (#527)", () => {
+  it.each([400, 404])(
+    "a %i response is a real rejection — not queued, saveError set",
+    async (status) => {
+      const c = cellLogger();
+      global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status }));
+      await c.saveCell(c.exercises[0], 1);
+      expect(c.readQueue()).toHaveLength(0);
+      expect(c.exercises[0].sub_lines[0].saveError).toBe(true);
+      expect(c.exercises[0].sub_lines[0].queued).toBeFalsy();
+    },
+  );
+
+  it("a 4xx drops an older queued entry for the same cell", async () => {
+    const c = cellLogger();
+    c.writeQueue([
+      { kind: "cell", url: CELL_URL, body: { exercise_id: 1, line: 1, text: "stale" } },
+    ]);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400 }));
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("a 5xx is queued, like a network failure — not a saveError", async () => {
+    const c = cellLogger();
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 500 }));
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.exercises[0].sub_lines[0].queued).toBe(true);
+    expect(c.exercises[0].sub_lines[0].saveError).toBeFalsy();
+  });
+
+  it("a 403 is queued, like a network failure — not a saveError", async () => {
+    const c = cellLogger();
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 403 }));
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.exercises[0].sub_lines[0].queued).toBe(true);
+    expect(c.exercises[0].sub_lines[0].saveError).toBeFalsy();
+  });
+
+  it("contrast: a rejected fetch is queued, not a saveError", async () => {
+    const c = cellLogger();
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.exercises[0].sub_lines[0].queued).toBe(true);
+    expect(c.exercises[0].sub_lines[0].saveError).toBeFalsy();
+  });
+
+  it("contrast: a redirect (expired session) is queued, not a saveError", async () => {
+    const c = cellLogger();
+    global.fetch = vi.fn().mockResolvedValue(res({ redirected: true }));
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.exercises[0].sub_lines[0].queued).toBe(true);
+  });
+});
+
+describe("flushQueue — cells drain before the log, one request at a time (#527)", () => {
+  it("sends every kind:'cell' entry before the log, whatever order they were stored in", async () => {
+    const c = cellLogger({ logUrl: LOG_URL });
+    // The log was queued FIRST (an earlier failed "Log session"); a cell
+    // failed later — cells still go first once a flush actually runs.
+    c.writeQueue([
+      { url: LOG_URL, body: { status: "done", sets: [] } },
+      {
+        kind: "cell",
+        url: CELL_URL,
+        body: { exercise_id: 1, line: 1, text: "100 x 5" },
+      },
+    ]);
+    const calls = [];
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      calls.push(url);
+      return res({
+        body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } },
+      });
+    });
+    await c.flushQueue();
+    expect(calls).toEqual([CELL_URL, LOG_URL]);
+  });
+
+  it("sends one request at a time — the next fetch waits for the previous to resolve", async () => {
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.writeQueue([
+      {
+        kind: "cell",
+        url: CELL_URL,
+        body: { exercise_id: 1, line: 1, text: "100 x 5" },
+      },
+      {
+        kind: "cell",
+        url: CELL_URL,
+        body: { exercise_id: 1, line: 2, text: "RPE 8" },
+      },
+    ]);
+    let releaseFirst;
+    const held = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    global.fetch = vi.fn().mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) await held; // hold the first request open
+      return res({
+        body: { ok: true, cell: { line: 1, text: "x", warn: false } },
+      });
+    });
+
+    const flushed = c.flushQueue();
+    await vi.waitFor(() => expect(calls).toBe(1));
+    // Give a concurrent second request every chance to start.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toBe(1);
+    releaseFirst();
+    await flushed;
+    expect(calls).toBe(2);
+  });
+
+  it("stops at the first failure — a cell that fails offline blocks the log behind it", async () => {
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.writeQueue([
+      {
+        kind: "cell",
+        url: CELL_URL,
+        body: { exercise_id: 1, line: 1, text: "100 x 5" },
+      },
+      { url: LOG_URL, body: { status: "done", sets: [] } },
+    ]);
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.flushQueue();
+    expect(global.fetch).toHaveBeenCalledTimes(1); // the log was never attempted
+    expect(c.readQueue()).toHaveLength(2); // both remain queued, in order
+  });
+
+  it("a 4xx on a queued cell drops it and flags the page's line — the pass continues", async () => {
+    const c = cellLogger({
+      logUrl: LOG_URL,
+      exercises: [
+        { id: 1, sub_lines: [{ line: 1, text: "bad", queued: true }], set_rows: [] },
+      ],
+    });
+    c.writeQueue([
+      { kind: "cell", url: CELL_URL, body: { exercise_id: 1, line: 1, text: "bad" } },
+      { url: LOG_URL, body: { status: "done", sets: [] } },
+    ]);
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url === CELL_URL) return res({ ok: false, status: 400 });
+      return res({ body: { log: { status: "done", sets: [] } } });
+    });
+    await c.flushQueue();
+    const line = c.exercises[0].sub_lines[0];
+    expect(line.saveError).toBe(true);
+    expect(line.queued).toBe(false);
+    expect(c.readQueue()).toHaveLength(0); // the bad cell is gone; the log still ran
+  });
+
+  it("a synced cell reconciles the page's line: queued clears, savedText and warn apply", async () => {
+    const c = cellLogger({
+      exercises: [
+        { id: 1, sub_lines: [{ line: 1, text: "225 x", queued: true }], set_rows: [] },
+      ],
+    });
+    c.writeQueue([
+      { kind: "cell", url: CELL_URL, body: { exercise_id: 1, line: 1, text: "225 x" } },
+    ]);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "225 x", warn: true } } }),
+    );
+    await c.flushQueue();
+    const line = c.exercises[0].sub_lines[0];
+    expect(line.queued).toBe(false);
+    expect(line.savedText).toBe("225 x");
+    expect(line.warn).toBe(true);
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("does nothing when the queue is empty (no cells either)", async () => {
+    const c = cellLogger();
+    global.fetch = vi.fn();
+    await c.flushQueue();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("init — folds a queued cell onto its line, then flushes it (#527)", () => {
+  it("hydrates the queued text onto the matching line and marks it queued", async () => {
+    localStorage.setItem(
+      "meso-log-queue",
+      JSON.stringify([
+        {
+          kind: "cell",
+          url: CELL_URL,
+          body: { exercise_id: 7, line: 1, text: "100 x 5" },
+        },
+      ]),
+    );
+    document.body.innerHTML =
+      '<span id="meso-csrf" data-token="tok"></span>' +
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "3 x 5",
+            one_rm: "",
+            one_rm_source: "",
+            sub_lines: [{ line: 1, text: "" }], // what the server last rendered
+            set_rows: [],
+          },
+        ],
+      }) +
+      "</script>";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
+    );
+    const c = createLogger();
+    c.init();
+
+    const line = c.exercises[0].sub_lines.find((l) => l.line === 1);
+    expect(line.text).toBe("100 x 5");
+    expect(line.queued).toBe(true);
+
+    await c.flushQueue(); // let the fold-in's own flush pass land
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("creates the line when the queued cell isn't in sub_lines yet", () => {
+    localStorage.setItem(
+      "meso-log-queue",
+      JSON.stringify([
+        {
+          kind: "cell",
+          url: CELL_URL,
+          body: { exercise_id: 7, line: 4, text: "extra note" },
+        },
+      ]),
+    );
+    document.body.innerHTML =
+      '<span id="meso-csrf" data-token="tok"></span>' +
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "3 x 5",
+            one_rm: "",
+            one_rm_source: "",
+            sub_lines: [{ line: 1, text: "" }],
+            set_rows: [],
+          },
+        ],
+      }) +
+      "</script>";
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch")); // stays offline
+    const c = createLogger();
+    c.init();
+
+    const line = c.exercises[0].sub_lines.find((l) => l.line === 4);
+    expect(line).toBeTruthy();
+    expect(line.text).toBe("extra note");
+    expect(line.queued).toBe(true);
+  });
+});
+
+describe("dirty check — a blur that changed nothing posts nothing (#527)", () => {
+  function initLoggerWithHydratedLines(subLines, setRows) {
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          {
+            id: 7,
+            text: "3 x 5",
+            one_rm: "",
+            one_rm_source: "",
+            sub_lines: subLines,
+            set_rows: setRows,
+          },
+        ],
+      }) +
+      "</script>";
+    const c = createLogger();
+    c.init();
+    return c;
+  }
+
+  it("makes no fetch tabbing through an untouched coach line or a padded blank line", async () => {
+    // "RPE 8" is the coach's server-rendered cue; line 2 is the blank pad
+    // init() adds for the second prescribed set. Neither was typed into.
+    const c = initLoggerWithHydratedLines(
+      [{ line: 1, text: "RPE 8" }],
+      [{ set_number: 1 }, { set_number: 2 }],
+    );
+    // Configured with a real response (not a bare `vi.fn()`) so that if the
+    // dirty check is missing and a fetch fires anyway, the assertion below
+    // fails cleanly instead of throwing on an unmocked `res.redirected`.
+    global.fetch = vi.fn().mockResolvedValue(res({ body: { ok: true, cell: {} } }));
+    await c.saveCell(c.exercises[0], 1);
+    await c.saveCell(c.exercises[0], 2);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("makes no fetch re-saving the same text after a successful save", async () => {
+    const c = initLoggerWithHydratedLines([{ line: 1, text: "" }], []);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
+    );
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    global.fetch.mockClear();
+    await c.saveCell(c.exercises[0], 1); // tabbed through again, unchanged
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("fetches when the text actually changed", async () => {
+    const c = initLoggerWithHydratedLines([{ line: 1, text: "RPE 8" }], []);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "RPE 9", warn: false } } }),
+    );
+    c.exercises[0].sub_lines[0].text = "RPE 9";
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("still fetches a queued line even though its text still equals savedText", async () => {
+    // An earlier save is stuck offline (queued=true); the dirty check must
+    // not skip it just because the text matches what the server last
+    // confirmed — that confirmation is stale.
+    const c = initLoggerWithHydratedLines([{ line: 1, text: "100 x 5" }], []);
+    c.exercises[0].sub_lines[0].queued = true;
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("still posts a line with no savedText (this file's plain cellLogger fixtures)", async () => {
+    // savedText is only set by init()/a successful save; a line built by
+    // hand (as cellLogger() does) has none, so it must post as today.
+    const c = cellLogger();
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "RPE 8", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("queue ownership — one athlete never flushes another's writes (#527)", () => {
+  // localStorage outlasts a logout. Sent under the next athlete's login, the
+  // last one's queued line comes back 404 ("not your session") and a refused
+  // line is dropped: their only copy of the set, gone.
+  const OTHER = "athlete-b";
+
+  it("stamps each queued write with the signed-in athlete", async () => {
+    const c = cellLogger({ owner: "athlete-a", logUrl: LOG_URL });
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1);
+    c.enqueue({ status: "done", sets: [] });
+    expect(c.readQueue().map((i) => i.owner)).toEqual(["athlete-a", "athlete-a"]);
+  });
+
+  it("leaves another athlete's entries queued and unsent", async () => {
+    const c = cellLogger({ owner: "athlete-a", logUrl: LOG_URL });
+    const theirs = [
+      {
+        kind: "cell",
+        url: OTHER_SESSION_CELL_URL,
+        body: { exercise_id: 3, line: 1, text: "90 x 8" },
+        owner: OTHER,
+      },
+      { url: "/meso/api/me/session/99/log/", body: { sets: [] }, owner: OTHER },
+    ];
+    const mine = {
+      kind: "cell",
+      url: CELL_URL,
+      body: { exercise_id: 1, line: 1, text: "RPE 8" },
+      owner: "athlete-a",
+    };
+    c.writeQueue([...theirs, mine]);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 404 }));
+    await c.flushQueue();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toBe(CELL_URL);
+    expect(c.readQueue()).toEqual(theirs);
+  });
+
+  it("doesn't fold another athlete's line onto this page", () => {
+    localStorage.setItem(
+      "meso-log-queue",
+      JSON.stringify([
+        {
+          kind: "cell",
+          url: CELL_URL,
+          body: { exercise_id: 7, line: 1, text: "90 x 8" },
+          owner: OTHER,
+        },
+      ]),
+    );
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        owner: "athlete-a",
+        status: "pending",
+        exercises: [{ id: 7, sub_lines: [], set_rows: [] }],
+      }) +
+      "</script>";
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const c = createLogger();
+    c.init();
+    expect(c.exercises[0].sub_lines[0].text).toBe("");
+    expect(c.exercises[0].sub_lines[0].queued).toBe(false);
+  });
+
+  it("sends the owner with a line write", async () => {
+    const c = cellLogger({ owner: "athlete-a" });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "RPE 8" } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).owner).toBe("athlete-a");
+  });
+
+  it("keeps a line queued when the server says another account is signed in", async () => {
+    // Athlete A's page, left open, flushes after B signed in on another tab.
+    const c = cellLogger({ owner: "athlete-a", logUrl: LOG_URL });
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "100 x 5" });
+    c.enqueue({ status: "done", sets: [] });
+    c.exercises[0].sub_lines[0].queued = true;
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 409 }));
+    await c.flushQueue();
+    expect(global.fetch).toHaveBeenCalledTimes(1); // the pass stops there
+    expect(c.readQueue()).toHaveLength(2);
+    expect(c.exercises[0].sub_lines[0].queued).toBe(true);
+    expect(c.exercises[0].sub_lines[0].saveError).toBeFalsy();
+  });
+
+  it("still flushes an entry queued before entries had an owner", async () => {
+    const c = cellLogger({ owner: "athlete-a", logUrl: LOG_URL });
+    c.writeQueue([{ url: LOG_URL, body: { status: "done", sets: [] } }]);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { log: { status: "done", sets: [] } } }),
+    );
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
+describe("edges: a warned line, a second tab, full storage (#527)", () => {
+  it("still posts an unchanged line that carries a warning", async () => {
+    // Set-shaped text saved while its row was skipped has no set; once the
+    // coach un-skips the row, re-sending the same text is what creates it.
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.text = "100 x 5";
+    line.savedText = "100 x 5";
+    line.warn = true;
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(line.warn).toBe(false);
+  });
+
+  it("keeps a newer entry another tab queued while this write was in flight", async () => {
+    const c = cellLogger();
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    const newer = {
+      kind: "cell",
+      url: CELL_URL,
+      body: { exercise_id: 1, line: 1, text: "110 x 5" },
+    };
+    global.fetch = vi.fn().mockImplementation(async () => {
+      c.writeQueue([newer]); // the other tab, offline, retyped the line
+      return res({
+        body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } },
+      });
+    });
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toEqual([newer]);
+  });
+
+  it("doesn't overwrite a newer entry another tab queued while this write failed", async () => {
+    const c = cellLogger();
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    const newer = {
+      kind: "cell",
+      url: CELL_URL,
+      body: { exercise_id: 1, line: 1, text: "110 x 5" },
+    };
+    global.fetch = vi.fn().mockImplementation(async () => {
+      c.writeQueue([newer]);
+      throw new TypeError("Failed to fetch");
+    });
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toEqual([newer]);
+    expect(c.exercises[0].sub_lines[0].queued).toBe(true);
+  });
+
+  it("still queues a failed write when another tab flushed the old entry away", async () => {
+    const c = cellLogger();
+    c.exercises[0].sub_lines[0].text = "110 x 5";
+    const old = c.enqueueCell({ exercise_id: 1, line: 1, text: "100 x 5" });
+    global.fetch = vi.fn().mockImplementation(async () => {
+      c.dropEntry(old); // the other tab synced "100 x 5" and drops that entry
+      throw new TypeError("Failed to fetch");
+    });
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue().map((i) => i.body.text)).toEqual(["110 x 5"]);
+  });
+
+  it("puts a line in the outbox before its request goes out", async () => {
+    // Closing the page mid-request (a POST stalled on gym wifi) must not
+    // lose the line: it's already queued, and only a landed save takes it out.
+    const c = cellLogger();
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    let land;
+    global.fetch = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          land = () =>
+            resolve(
+              res({ body: { ok: true, cell: { line: 1, text: "100 x 5" } } }),
+            );
+        }),
+    );
+    const saving = c.saveCell(c.exercises[0], 1);
+    await vi.waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    expect(c.readQueue().map((i) => i.body.text)).toEqual(["100 x 5"]);
+    expect(c.exercises[0].sub_lines[0].queued).toBeFalsy(); // sending, not waiting
+    land();
+    await saving;
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("clears the footer's 'will sync' once a queued line saves on a later blur", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    // The line's blur got a 500 and waits in the queue; "Log session" landed
+    // (its flush retried the line, which failed again).
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url === CELL_URL) return res({ ok: false, status: 500 });
+      return res({ body: { log: { status: "done", sets: [] } } });
+    });
+    await c.saveCell(c.exercises[0], 1);
+    await c.save(true);
+    expect(c.queued).toBe(true);
+
+    // The server recovers; the athlete blurs the line again.
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.queued).toBe(false);
+    expect(c.saved).toBe(true);
+  });
+
+  it("tells a later entry with the same text from the one it replaced", async () => {
+    // "90 x 5" was queued; this tab sends "100 x 5"; meanwhile the other tab
+    // goes back to "90 x 5". Same text as the old entry, but a newer write.
+    const c = cellLogger();
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "90 x 5" });
+    global.fetch = vi.fn().mockImplementation(async () => {
+      const other = createLogger();
+      other.cellUrl = CELL_URL;
+      other.enqueueCell({ exercise_id: 1, line: 1, text: "90 x 5" });
+      throw new TypeError("Failed to fetch");
+    });
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue().map((i) => i.body.text)).toEqual(["90 x 5"]);
+  });
+
+  it("keeps a line dirty when a saved response can't be read", async () => {
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.savedText = "RPE 8";
+    line.text = "225 x";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      redirected: false,
+      json: async () => {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      },
+    });
+    await c.saveCell(c.exercises[0], 1);
+    expect(line.queued).toBe(false);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "225 x", warn: true } } }),
+    );
+    await c.saveCell(c.exercises[0], 1); // tabbed through, unchanged
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(line.warn).toBe(true);
+  });
+
+  it("waits for a line blurred while Log session is settling", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].sub_lines.push({ line: 2, text: "110 x 5" });
+    const calls = [];
+    const release = {};
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      if (url !== CELL_URL) {
+        calls.push("log");
+        return res({ body: { log: { status: "done", sets: [] } } });
+      }
+      const { line } = JSON.parse(opts.body);
+      calls.push(line);
+      await new Promise((r) => {
+        release[line] = r;
+      });
+      return res({ body: { ok: true, cell: { warn: false } } });
+    });
+    c.saveCell(c.exercises[0], 1); // in flight when Log session is pressed
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(calls).toEqual([1]));
+    c.saveCell(c.exercises[0], 2); // blurred while save() waits
+    await vi.waitFor(() => expect(calls).toEqual([1, 2]));
+    release[1]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual([1, 2]); // the log waits for line 2 to land
+    release[2]();
+    await saving;
+    expect(calls).toEqual([1, 2, "log"]);
+  });
+
+  it("waits for a line blurred while Log session flushes the queue", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].sub_lines.push({ line: 2, text: "110 x 5" });
+    c.exercises[0].sub_lines[0].queued = true;
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "RPE 8" });
+    const calls = [];
+    const release = {};
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      if (url !== CELL_URL) {
+        calls.push("log");
+        return res({ body: { log: { status: "done", sets: [] } } });
+      }
+      const { line } = JSON.parse(opts.body);
+      calls.push(line);
+      await new Promise((r) => {
+        release[line] = r;
+      });
+      return res({ body: { ok: true, cell: { warn: false } } });
+    });
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(calls).toEqual([1])); // the queued line
+    c.saveCell(c.exercises[0], 2); // blurred mid-flush
+    await vi.waitFor(() => expect(calls).toEqual([1, 2]));
+    release[1]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual([1, 2]); // the log waits for line 2 to land
+    release[2]();
+    await saving;
+    expect(calls).toEqual([1, 2, "log"]);
+  });
+
+  it("sends Set rows edited while it waited for the lines", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].set_rows = [
+      { set_number: 1, reps: "", load: "", rpe: "", done: false },
+    ];
+    let logBody;
+    let land;
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      if (url !== CELL_URL) {
+        logBody = JSON.parse(opts.body);
+        return res({ body: { log: { status: "done", sets: [] } } });
+      }
+      await new Promise((r) => {
+        land = r;
+      });
+      return res({ body: { ok: true, cell: { warn: false } } });
+    });
+    c.saveCell(c.exercises[0], 1); // a line save that takes a while
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(land).toBeTypeOf("function"));
+    c.exercises[0].set_rows[0].load = "100"; // typed during "Saving…"
+    c.exercises[0].set_rows[0].reps = "5";
+    land();
+    await saving;
+    expect(logBody.sets).toEqual([
+      { prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
+    ]);
+  });
+
+  it("takes 'Saved ✓' down when a line fails after it went up", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { log: { status: "done", sets: [] } } }),
+    );
+    await c.save(true);
+    expect(c.saved).toBe(true);
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1); // a blur that lands after the log
+    expect(c.saved).toBe(false);
+    expect(c.queued).toBe(true);
+  });
+
+  describe("storage too full to replace a line's older entry", () => {
+    // A full store refuses any write that doesn't shrink the queue.
+    function fillUp(c) {
+      c.enqueueCell({ exercise_id: 1, line: 1, text: "100 x 5" });
+      c.exercises[0].sub_lines[0].text = "110 x 5";
+      const setItem = Storage.prototype.setItem;
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (k, v) {
+        if (v.length >= (this.getItem(k) || "").length) {
+          throw new DOMException("full", "QuotaExceededError");
+        }
+        return setItem.call(this, k, v);
+      });
+    }
+
+    it("drops the older text so it can't replay over a save that landed", async () => {
+      const c = cellLogger();
+      fillUp(c);
+      global.fetch = vi.fn().mockResolvedValue(
+        res({ body: { ok: true, cell: { line: 1, text: "110 x 5" } } }),
+      );
+      await c.saveCell(c.exercises[0], 1);
+      expect(c.readQueue()).toHaveLength(0);
+    });
+
+    it("says the new text couldn't save rather than passing off the old", async () => {
+      const c = cellLogger();
+      fillUp(c);
+      global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+      await c.saveCell(c.exercises[0], 1);
+      expect(c.readQueue()).toHaveLength(0);
+      expect(c.exercises[0].sub_lines[0].queued).toBe(false);
+      expect(c.exercises[0].sub_lines[0].saveError).toBe(true);
+    });
+  });
+
+  it("shows another tab's replayed text on a line this tab never touched", async () => {
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.text = "100 x 5";
+    line.savedText = "100 x 5";
+    c.writeQueue([
+      {
+        kind: "cell",
+        url: CELL_URL,
+        body: { exercise_id: 1, line: 1, text: "110 x 5" },
+        id: "queued-by-the-other-tab",
+      },
+    ]);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "110 x 5", warn: false } } }),
+    );
+    await c.flushQueue();
+    expect(line.text).toBe("110 x 5");
+    global.fetch.mockClear();
+    await c.saveCell(c.exercises[0], 1); // tabbed through: nothing to send
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("leaves a line this tab is editing alone when a replay lands", async () => {
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.text = "120 x 5"; // typed here, not yet blurred
+    line.savedText = "100 x 5";
+    c.writeQueue([
+      { kind: "cell", url: CELL_URL, body: { exercise_id: 1, line: 1, text: "110 x 5" } },
+    ]);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "110 x 5", warn: false } } }),
+    );
+    await c.flushQueue();
+    expect(line.text).toBe("120 x 5");
+  });
+
+  it("says a line couldn't save when storage refuses the queue", async () => {
+    const c = cellLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1);
+    const line = c.exercises[0].sub_lines[0];
+    expect(line.queued).toBe(false);
+    expect(line.saveError).toBe(true);
+  });
+
+  it("says the session couldn't save when storage refuses the queue", async () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[0].done = true;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.save(true);
+    expect(c.queued).toBe(false);
+    expect(c.error).toBe(true);
+  });
+});
+
+describe("a write that never answers counts as offline (#527)", () => {
+  // Gym wifi can connect and then never answer, and fetch has no timeout.
+  // "Log session" waits for the lines, so an unbounded one would hold it on
+  // "Saving…" forever with nothing queued.
+  // A request that never answers; only aborting it ends it.
+  function hangs(url, opts) {
+    return new Promise((_, reject) => {
+      if (!opts.signal) return; // nothing can ever end it
+      opts.signal.addEventListener("abort", () =>
+        reject(new DOMException("The operation was aborted.", "AbortError")),
+      );
+    });
+  }
+
+  it("queues a stalled line and lets Log session finish", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url === CELL_URL) return hangs(url, opts);
+      return Promise.resolve(res({ body: { log: { status: "done", sets: [] } } }));
+    });
+    c.saveCell(c.exercises[0], 1); // the blur, still waiting on an answer
+    const saving = c.save(true);
+    await vi.advanceTimersByTimeAsync(15000); // the blur gives up
+    await vi.advanceTimersByTimeAsync(15000); // the flush's retry does too
+    await saving;
+    expect(c.saving).toBe(false);
+    expect(c.exercises[0].sub_lines[0].queued).toBe(true);
+    expect(c.readQueue().filter((i) => i.kind === "cell")).toHaveLength(1);
+    expect(c.queued).toBe(true); // the line still waits, so no "Saved ✓"
+    expect(c.saved).toBe(false);
+  });
+
+  it("ends a flush pass that stalls, so the next one can run", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.writeQueue([{ url: LOG_URL, body: { status: "done", sets: [] } }]);
+    global.fetch = vi.fn().mockImplementation(hangs);
+    const first = c.flushQueue();
+    await vi.advanceTimersByTimeAsync(15000);
+    await first;
+    expect(c.readQueue()).toHaveLength(1);
+
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { log: { status: "done", sets: [] } } }),
+    );
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
+describe("a refused line is dropped where the athlete can see it (#527)", () => {
+  const theirs = {
+    kind: "cell",
+    url: OTHER_SESSION_CELL_URL,
+    body: { exercise_id: 3, line: 1, text: "90 x 8" },
+  };
+
+  it("keeps another session's refused line for that session's page", async () => {
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.writeQueue([theirs]);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400 }));
+    await c.flushQueue();
+    expect(c.readQueue()).toEqual([theirs]);
+  });
+
+  it("drops it on its own page once its row is gone", async () => {
+    const c = cellLogger({ logUrl: LOG_URL, cellUrl: OTHER_SESSION_CELL_URL });
+    c.writeQueue([theirs]);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400 }));
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
+describe("a replay, a stalled save, an unread response, a junk outbox (#527)", () => {
+  function held() {
+    const calls = [];
+    const pending = [];
+    const fetchMock = vi.fn().mockImplementation(
+      (url, opts) =>
+        new Promise((resolve) => {
+          calls.push(JSON.parse(opts.body));
+          pending.push(resolve);
+        }),
+    );
+    const land = (body) => pending.shift()(res({ body }));
+    return { calls, fetchMock, land };
+  }
+
+  it("keeps an edit back to the saved text made while its own replay runs", async () => {
+    // The server has "225 x 5"; "225 x 6" was queued offline and is being
+    // replayed on this page's load when the athlete changes it back.
+    localStorage.setItem(
+      "meso-log-queue",
+      JSON.stringify([
+        {
+          kind: "cell",
+          url: CELL_URL,
+          body: { exercise_id: 7, line: 1, text: "225 x 6" },
+          id: "queued-here-earlier",
+        },
+      ]),
+    );
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          { id: 7, sub_lines: [{ line: 1, text: "225 x 5" }], set_rows: [] },
+        ],
+      }) +
+      "</script>";
+    const { calls, fetchMock, land } = held();
+    global.fetch = fetchMock;
+    const c = createLogger();
+    c.init();
+    const line = c.exercises[0].sub_lines[0];
+    await vi.waitFor(() => expect(calls).toHaveLength(1)); // the replay
+    line.text = "225 x 5";
+    c.saveCell(c.exercises[0], 1);
+    land({ ok: true, cell: { line: 1, text: "225 x 6", warn: false } });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1].text).toBe("225 x 5");
+    expect(line.text).toBe("225 x 5");
+  });
+
+  it("queues a line at the blur while an earlier save of it is in flight", async () => {
+    // Closing the page before the earlier save times out must not lose it.
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    const { calls, fetchMock } = held();
+    global.fetch = fetchMock;
+    line.text = "225 x 5";
+    c.saveCell(c.exercises[0], 1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    line.text = "225 x 6";
+    c.saveCell(c.exercises[0], 1); // waits behind the stalled one
+    expect(c.readQueue().map((i) => i.body.text)).toEqual(["225 x 6"]);
+  });
+
+  it("sends a revert after a save whose response couldn't be read", async () => {
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.savedText = "225 x 5";
+    line.text = "235 x 5";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      redirected: false,
+      json: async () => {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      },
+    });
+    await c.saveCell(c.exercises[0], 1); // the server now has "235 x 5"
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "225 x 5", warn: false } } }),
+    );
+    line.text = "225 x 5";
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a revert after a response that went stale in flight", async () => {
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    const { calls, fetchMock, land } = held();
+    global.fetch = fetchMock;
+    line.text = "225 x";
+    const first = c.saveCell(c.exercises[0], 1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    line.text = "225 x 50"; // typing on while it's in flight
+    land({ ok: true, cell: { line: 1, text: "225 x", warn: true } });
+    await first;
+    line.text = "225 x"; // …and back
+    c.saveCell(c.exercises[0], 1);
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    land({ ok: true, cell: { line: 1, text: "225 x", warn: true } });
+    await vi.waitFor(() => expect(line.warn).toBe(true));
+  });
+
+  it("saves the session even when the outbox holds junk", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    c.exercises[0].set_rows[0].done = true;
+    localStorage.setItem(c.queueKey, JSON.stringify([null, 7, { url: "/x" }]));
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { log: { status: "done", sets: [] } } }),
+    );
+    await c.save(true);
+    expect(c.saving).toBe(false);
+    expect(global.fetch).toHaveBeenCalledWith(LOG_URL, expect.anything());
+  });
+
+  it("keeps rows ticked since an older queued log of the session", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    // An earlier save of this session is still queued (sets: set 1 only).
+    c.enqueue({
+      status: "pending",
+      sets: [{ prescription: 1, set_number: 1, reps: "", load: "", rpe: "" }],
+    });
+    c.exercises[0].set_rows[0].done = true;
+    c.exercises[0].set_rows[1].done = true; // ticked since
+    const bodies = [];
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      bodies.push(JSON.parse(opts.body));
+      return res({
+        body: {
+          log: {
+            status: "pending",
+            sets: bodies.at(-1).sets.map((s) => ({
+              prescription: s.prescription,
+              set_number: s.set_number,
+            })),
+          },
+        },
+      });
+    });
+    await c.save(false);
+    // The older log is superseded, not replayed first (which un-ticked rows
+    // before save built its payload); what goes out carries both sets.
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].sets.map((s) => s.set_number)).toEqual([1, 2]);
+    expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
+describe("a newer blur, an unknown outcome, a slow Log session (#527)", () => {
+  function held() {
+    const calls = [];
+    const pending = [];
+    const fetchMock = vi.fn().mockImplementation(
+      (url, opts) =>
+        new Promise((resolve) => {
+          calls.push({ url, body: JSON.parse(opts.body) });
+          pending.push(resolve);
+        }),
+    );
+    const land = (body) => pending.shift()(res({ body }));
+    return { calls, fetchMock, land };
+  }
+
+  it("sends the line as it is when a blur queued newer text mid-save", async () => {
+    // "100 x 5" is in flight; a typo "100 x 55" is blurred (queued behind
+    // it); the athlete deletes the extra 5 before the first save lands.
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.savedText = "";
+    const { calls, fetchMock, land } = held();
+    global.fetch = fetchMock;
+    line.text = "100 x 5";
+    c.saveCell(c.exercises[0], 1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    line.text = "100 x 55";
+    c.saveCell(c.exercises[0], 1);
+    line.text = "100 x 5";
+    land({ ok: true, cell: { line: 1, text: "100 x 5", warn: false } });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1].body.text).toBe("100 x 5");
+    land({ ok: true, cell: { line: 1, text: "100 x 5", warn: false } });
+    await vi.waitFor(() => expect(c.readQueue()).toHaveLength(0));
+  });
+
+  it("sends a revert after a write whose outcome was never known", async () => {
+    // "225 x 6" may have landed (no answer); a later write was refused; the
+    // athlete goes back to "225 x 5", which the server may no longer hold.
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.savedText = "225 x 5";
+    line.text = "225 x 6";
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1);
+    line.text = "x".repeat(3000);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400 }));
+    await c.saveCell(c.exercises[0], 1);
+    expect(line.saveError).toBe(true);
+    line.text = "225 x 5";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "225 x 5", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the session's log in the outbox while Log session waits", async () => {
+    // Leaving the page during a slow "Saving…" must not lose the Set rows.
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].set_rows = [
+      { set_number: 1, reps: "5", load: "100", rpe: "", done: true },
+    ];
+    c.exercises[0].sub_lines[0].text = "RPE 8";
+    const { calls, fetchMock, land } = held();
+    global.fetch = fetchMock;
+    c.saveCell(c.exercises[0], 1); // a line save that's slow to answer
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const log = c.readQueue().find((i) => i.url === LOG_URL);
+    expect(log.body.status).toBe("done");
+    expect(log.body.sets).toHaveLength(1);
+    land({ ok: true, cell: { line: 1, text: "RPE 8", warn: false } });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    land({ log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] } });
+    await saving;
+    expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
+describe("Log session and an older log of the session (#527)", () => {
+  // Each fetch waits until the test answers it by index.
+  function controlled() {
+    const calls = [];
+    const fetchMock = vi.fn().mockImplementation(
+      (url, opts) =>
+        new Promise((resolve) => {
+          calls.push({ url, body: JSON.parse(opts.body), resolve });
+        }),
+    );
+    const answer = (i, reply) => calls[i].resolve(reply);
+    const logReply = (body) =>
+      res({
+        body: {
+          log: {
+            status: body.status,
+            sets: body.sets.map((s) => ({
+              prescription: s.prescription,
+              set_number: s.set_number,
+            })),
+          },
+        },
+      });
+    return { calls, fetchMock, answer, logReply };
+  }
+
+  it("keeps rows ticked since, when an older log is already out as Log session starts", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    // An offline "Save progress" left set 1 queued; set 2 was ticked since.
+    c.enqueue({
+      status: "pending",
+      sets: [{ prescription: 1, set_number: 1, reps: "", load: "", rpe: "" }],
+    });
+    c.exercises[0].set_rows[0].done = true;
+    c.exercises[0].set_rows[1].done = true;
+    const { calls, fetchMock, answer, logReply } = controlled();
+    global.fetch = fetchMock;
+    const flushing = c.flushQueue(); // signal's back: the older log goes out
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const saving = c.save(true); // tapped while it's in flight
+    answer(0, logReply(calls[0].body));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    answer(1, logReply(calls[1].body));
+    await saving;
+    await flushing;
+    expect(calls[1].body.sets.map((s) => s.set_number)).toEqual([1, 2]);
+    expect(c.exercises[0].set_rows[1].done).toBe(true);
+  });
+
+  it("keeps rows ticked since, when an older log's reply body lands after the tap", async () => {
+    // Its headers arrived before Log session was tapped; its body after.
+    vi.useFakeTimers();
+    const c = makeLogger({ status: "done" });
+    c.enqueue({
+      status: "pending",
+      sets: [{ prescription: 1, set_number: 1, reps: "", load: "", rpe: "" }],
+    });
+    c.exercises[0].set_rows[0].done = true;
+    c.exercises[0].set_rows[1].done = true;
+    let bodyLands;
+    const bodies = [];
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      bodies.push(body);
+      const log = {
+        status: body.status,
+        sets: body.sets.map((s) => ({
+          prescription: s.prescription,
+          set_number: s.set_number,
+        })),
+      };
+      if (bodies.length > 1) return res({ body: { log } });
+      return {
+        ok: true,
+        status: 200,
+        redirected: false,
+        json: () =>
+          new Promise((resolve) => {
+            bodyLands = () => resolve({ log });
+          }),
+      };
+    });
+    const flushing = c.flushQueue();
+    await vi.waitFor(() => expect(bodyLands).toBeTypeOf("function"));
+    const saving = c.save(true);
+    bodyLands();
+    await saving;
+    await flushing;
+    expect(bodies[1].sets.map((s) => s.set_number)).toEqual([1, 2]);
+    expect(c.status).toBe("done");
+  });
+
+  it("keeps what it's sending in the outbox, not the log as it was at the tap", async () => {
+    // The app closing mid-send must replay the newer log, not the older one.
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].set_rows = [
+      { set_number: 1, reps: "", load: "", rpe: "", done: false },
+    ];
+    c.exercises[0].sub_lines[0].text = "RPE 8";
+    const { calls, fetchMock, answer, logReply } = controlled();
+    global.fetch = fetchMock;
+    c.saveCell(c.exercises[0], 1); // a line save that's slow to answer
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    c.exercises[0].set_rows[0].load = "100"; // typed during "Saving…"
+    c.exercises[0].set_rows[0].reps = "5";
+    answer(0, res({ body: { ok: true, cell: { line: 1, text: "RPE 8" } } }));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    const log = c.readQueue().find((i) => i.url === LOG_URL);
+    expect(log.body.sets).toEqual([
+      { prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
+    ]);
+    answer(1, logReply(calls[1].body));
+    await saving;
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("doesn't replay a log that save() sent while a flush pass was busy", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].set_rows = [
+      { set_number: 1, reps: "5", load: "100", rpe: "", done: true },
+    ];
+    // A line whose earlier write got a 5xx waits in the outbox.
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "RPE 8" });
+    c.exercises[0].sub_lines[0].queued = true;
+    const { calls, fetchMock, answer, logReply } = controlled();
+    global.fetch = fetchMock;
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(1)); // the line, again
+    answer(0, res({ ok: false, status: 500 })); // still failing: kept
+    await vi.waitFor(() => expect(calls).toHaveLength(2)); // save's log
+    const flushing = c.flushQueue(); // an `online` event mid-POST
+    await vi.waitFor(() => expect(calls).toHaveLength(3)); // the line
+    answer(1, logReply(calls[1].body)); // save's log lands
+    await saving;
+    answer(2, res({ ok: false, status: 500 }));
+    // Either the pass ends, or it replays the log save() already sent.
+    await vi.waitFor(() =>
+      expect(c._flushing === null || calls.length === 4).toBe(true),
+    );
+    const logPosts = calls.filter((call) => call.url === LOG_URL);
+    if (calls[3]) answer(3, logReply(calls[3].body)); // let a replay finish
+    await flushing;
+    expect(logPosts).toHaveLength(1);
+  });
+});
+
+describe("footer line error clears once the line saves (#527)", () => {
+  it("drops 'a line above couldn't save' when the refused line is fixed", async () => {
+    const c = cellLogger({ logUrl: LOG_URL });
+    const line = c.exercises[0].sub_lines[0];
+    line.saveError = true;
+    c.lineError = true;
+    line.text = "100 x 5";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(line.saveError).toBe(false);
+    expect(c.lineError).toBe(false);
+  });
+
+  it("keeps it while another line is still refused", async () => {
+    const c = cellLogger({
+      logUrl: LOG_URL,
+      exercises: [
+        {
+          id: 1,
+          sub_lines: [
+            { line: 1, text: "100 x 5", saveError: true },
+            { line: 2, text: "bad", saveError: true },
+          ],
+          set_rows: [],
+        },
+      ],
+    });
+    c.lineError = true;
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.lineError).toBe(true);
+  });
+});
+
+describe("save() — waits on the cell queue before its own log POST (#527)", () => {
+  function loggerWithAQueuedLine() {
+    const c = makeLogger();
+    c.cellUrl = CELL_URL;
+    c.exercises[0].sub_lines = [{ line: 1, text: "100 x 5", queued: true }];
+    c.writeQueue([
+      {
+        kind: "cell",
+        url: CELL_URL,
+        body: { exercise_id: c.exercises[0].id, line: 1, text: "100 x 5" },
+      },
+    ]);
+    return c;
+  }
+
+  it("fetches the cell before the log, and reports Saved once both land", async () => {
+    vi.useFakeTimers();
+    const c = loggerWithAQueuedLine();
+    const calls = [];
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      calls.push(url);
+      if (url === CELL_URL) {
+        return res({
+          body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } },
+        });
+      }
+      return res({ body: { log: { status: "pending", sets: [] } } });
+    });
+    await c.save(false);
+    expect(calls).toEqual([CELL_URL, LOG_URL]);
+    expect(c.saved).toBe(true);
+    expect(c.queued).toBe(false);
+  });
+
+  it("offline: the flush's cell attempt and save's own log POST both fail, so it stays queued", async () => {
+    const c = loggerWithAQueuedLine();
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.save(false);
+    expect(c.queued).toBe(true);
+    expect(c.saved).toBe(false);
+  });
+
+  it("a stuck cell (500) beats a successful log — save() must not claim Saved", async () => {
+    // This is the heart of #527: the log endpoint alone succeeding used to
+    // be enough for save() to say "Saved ✓" even though a line's own write
+    // was still failing behind it.
+    const c = loggerWithAQueuedLine();
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url === CELL_URL) return res({ ok: false, status: 500 });
+      return res({ body: { log: { status: "pending", sets: [] } } });
+    });
+    await c.save(false);
+    expect(c.saved).toBe(false);
+    expect(c.queued).toBe(true);
+  });
+
+  it("a line the server refused keeps the tick off and says so", async () => {
+    // The log landed, but the refused line didn't: "Saved ✓" would claim both.
+    const c = loggerWithAQueuedLine();
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url === CELL_URL) return res({ ok: false, status: 400 });
+      return res({ body: { log: { status: "done", sets: [] } } });
+    });
+    await c.save(true);
+    expect(c.exercises[0].sub_lines[0].saveError).toBe(true);
+    expect(c.saved).toBe(false);
+    expect(c.queued).toBe(false);
+    expect(c.lineError).toBe(true);
   });
 });
