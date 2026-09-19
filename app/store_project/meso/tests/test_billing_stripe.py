@@ -65,6 +65,13 @@ GATEWAY_CHECKOUT = (
 GATEWAY_PORTAL = (
     "store_project.meso.billing.stripe_gateway.stripe.billing_portal.Session.create"
 )
+GATEWAY_SUB_LIST = "store_project.meso.billing.stripe_gateway.stripe.Subscription.list"
+GATEWAY_SESSION_LIST = (
+    "store_project.meso.billing.stripe_gateway.stripe.checkout.Session.list"
+)
+GATEWAY_SESSION_EXPIRE = (
+    "store_project.meso.billing.stripe_gateway.stripe.checkout.Session.expire"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +244,138 @@ class TestPortalSession:
 
 
 # ---------------------------------------------------------------------------
+# stripe_gateway — never open a second subscription (#556, item 2)
+# ---------------------------------------------------------------------------
+
+
+class TestCustomerHasOpenSubscription:
+    @pytest.mark.parametrize(
+        "status",
+        ["trialing", "active", "past_due", "incomplete", "unpaid", "paused"],
+    )
+    def test_an_open_status_blocks(self, status):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        with mock.patch(GATEWAY_SUB_LIST, return_value=_subscription_list([status])):
+            assert stripe_gateway.customer_has_open_subscription(coach) is True
+
+    @pytest.mark.parametrize("statuses", [["canceled"], ["incomplete_expired"], []])
+    def test_only_ended_or_no_subscriptions_do_not_block(self, statuses):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        with mock.patch(GATEWAY_SUB_LIST, return_value=_subscription_list(statuses)):
+            assert stripe_gateway.customer_has_open_subscription(coach) is False
+
+    def test_no_customer_id_returns_false_without_a_stripe_call(self):
+        coach = UserFactory()  # blank stripe_customer_id
+        with mock.patch(GATEWAY_SUB_LIST) as list_mock:
+            assert stripe_gateway.customer_has_open_subscription(coach) is False
+        list_mock.assert_not_called()
+
+    def test_calls_list_with_the_expected_kwargs_and_enforces_the_real_signature(self):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        mock_list = mock.create_autospec(
+            _real_subscription_list(), return_value=_subscription_list([])
+        )
+        with mock.patch(GATEWAY_SUB_LIST, mock_list):
+            stripe_gateway.customer_has_open_subscription(coach)
+        mock_list.assert_called_once_with(customer="cus_x", status="all", limit=100)
+        # stripe 15's ``Subscription.list`` is keyword-only — a positional call
+        # (the #548-style bug this autospec pattern guards against) is rejected.
+        with pytest.raises(TypeError):
+            mock_list("cus_x")
+
+    def test_list_raising_propagates(self):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        with mock.patch(
+            GATEWAY_SUB_LIST, side_effect=stripe.error.APIConnectionError("boom")
+        ):
+            with pytest.raises(stripe.error.APIConnectionError):
+                stripe_gateway.customer_has_open_subscription(coach)
+
+    def test_resource_missing_customer_reads_as_no_subscription(self):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_gone"
+        coach.save(update_fields=["stripe_customer_id"])
+        err = stripe.error.InvalidRequestError(
+            "No such customer", "customer", code="resource_missing"
+        )
+        with mock.patch(GATEWAY_SUB_LIST, side_effect=err):
+            assert stripe_gateway.customer_has_open_subscription(coach) is False
+
+    def test_other_invalid_request_error_propagates(self):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        err = stripe.error.InvalidRequestError(
+            "bad", "limit", code="parameter_invalid_integer"
+        )
+        with mock.patch(GATEWAY_SUB_LIST, side_effect=err):
+            with pytest.raises(stripe.error.InvalidRequestError):
+                stripe_gateway.customer_has_open_subscription(coach)
+
+    def test_resource_missing_with_a_different_param_propagates(self):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        err = stripe.error.InvalidRequestError("x", "id", code="resource_missing")
+        with mock.patch(GATEWAY_SUB_LIST, side_effect=err):
+            with pytest.raises(stripe.error.InvalidRequestError):
+                stripe_gateway.customer_has_open_subscription(coach)
+
+
+class TestExpireOpenSubscriptionCheckouts:
+    def test_expires_open_subscription_sessions_leaves_payment_sessions_alone(self):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        sessions = _session_list([("cs_sub", "subscription"), ("cs_pay", "payment")])
+        with (
+            mock.patch(GATEWAY_SESSION_LIST, return_value=sessions),
+            mock.patch(GATEWAY_SESSION_EXPIRE) as expire,
+        ):
+            stripe_gateway.expire_open_subscription_checkouts(coach)
+        expire.assert_called_once_with("cs_sub")
+
+    def test_no_customer_id_is_a_noop(self):
+        coach = UserFactory()
+        with mock.patch(GATEWAY_SESSION_LIST) as list_mock:
+            stripe_gateway.expire_open_subscription_checkouts(coach)
+        list_mock.assert_not_called()
+
+    def test_calls_list_with_the_expected_kwargs(self):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        with mock.patch(
+            GATEWAY_SESSION_LIST, return_value=_session_list([])
+        ) as list_mock:
+            stripe_gateway.expire_open_subscription_checkouts(coach)
+        list_mock.assert_called_once_with(customer="cus_x", status="open", limit=100)
+
+    def test_expire_raising_propagates(self):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        sessions = _session_list([("cs_sub", "subscription")])
+        with (
+            mock.patch(GATEWAY_SESSION_LIST, return_value=sessions),
+            mock.patch(
+                GATEWAY_SESSION_EXPIRE,
+                side_effect=stripe.error.InvalidRequestError("gone", "id"),
+            ),
+        ):
+            with pytest.raises(stripe.error.InvalidRequestError):
+                stripe_gateway.expire_open_subscription_checkouts(coach)
+
+
+# ---------------------------------------------------------------------------
 # webhooks — the idempotent handler
 # ---------------------------------------------------------------------------
 
@@ -322,6 +461,8 @@ def _real_sub_event(
     period_end=1900000000,
     cancellation_details=None,
     trial_end=None,
+    cancel_at=None,
+    cancel_at_period_end=None,
 ):
     obj = {
         "id": sub_id,
@@ -338,6 +479,10 @@ def _real_sub_event(
         obj["cancellation_details"] = cancellation_details
     if trial_end is not None:
         obj["trial_end"] = trial_end
+    if cancel_at is not None:
+        obj["cancel_at"] = cancel_at
+    if cancel_at_period_end is not None:
+        obj["cancel_at_period_end"] = cancel_at_period_end
     event = stripe.Event.construct_from(
         {"id": "evt_test", "object": "event", "type": type_, "data": {"object": obj}},
         "sk_test",
@@ -354,6 +499,58 @@ def _real_invoice_event(type_, *, customer="cus_hook", sub_id="sub_1"):
     )
     assert type(event["data"]["object"]) is stripe.Invoice
     return event
+
+
+# ---------------------------------------------------------------------------
+# Real ``stripe.ListObject`` builders + pristine (un-mocked) real methods (#556)
+#
+# ``config/settings/test.py`` replaces ``stripe.Subscription.list`` /
+# ``stripe.checkout.Session.list`` / ``.expire`` with autospec'd Mocks at
+# import time (a class-attribute assignment, mutated for the whole process —
+# same situation ``_real_construct_event`` documents above). A test that wants
+# to prove stripe-15's real, keyword-only signature is what's enforced needs
+# the pristine method, not the already-mocked one, as the autospec's target.
+# ---------------------------------------------------------------------------
+
+
+def _subscription_list(statuses):
+    """A real ``stripe.ListObject`` of subscriptions, one per status given."""
+    return stripe.ListObject.construct_from(
+        {
+            "object": "list",
+            "url": "/v1/subscriptions",
+            "has_more": False,
+            "data": [
+                {"id": f"sub_{i}", "object": "subscription", "status": status}
+                for i, status in enumerate(statuses)
+            ],
+        },
+        "sk_test",
+    )
+
+
+def _session_list(sessions):
+    """A real ``stripe.ListObject`` of Checkout Sessions from ``(id, mode)`` pairs."""
+    return stripe.ListObject.construct_from(
+        {
+            "object": "list",
+            "url": "/v1/checkout/sessions",
+            "has_more": False,
+            "data": [
+                {"id": sid, "object": "checkout.session", "mode": mode}
+                for sid, mode in sessions
+            ],
+        },
+        "sk_test",
+    )
+
+
+def _real_subscription_list():
+    """A pristine ``stripe.Subscription.list``, bypassing the test autospec mock."""
+    spec = importlib.util.find_spec("stripe._subscription")
+    real_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(real_module)
+    return real_module.Subscription.list
 
 
 class TestWebhookHandler:
@@ -740,6 +937,73 @@ class TestWebhookTrialEndGuard:
         )
         sub = CoachSubscription.objects.get(coach=coach)
         assert sub.trial_end == local_trial_end
+
+
+# ---------------------------------------------------------------------------
+# webhooks — mirroring a scheduled cancel (#556, item 3)
+#
+# Verified in Stripe test mode (2026-09-19): a Customer Portal cancel of an
+# active subscription sets ``cancel_at`` (equal to ``current_period_end``) and
+# leaves ``cancel_at_period_end`` **false** — a boolean copied from
+# ``cancel_at_period_end`` alone would miss every Portal cancel. The API's own
+# ``cancel_at_period_end=True`` shape carries no ``cancel_at`` and falls back
+# to ``current_period_end``.
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookCancelAtMirror:
+    def test_portal_shape_sets_cancel_at_from_the_field_itself(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_1",
+        )
+        cancel_ts = 1900000000
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.updated",
+                status="active",
+                period_end=cancel_ts,
+                cancel_at=cancel_ts,
+                cancel_at_period_end=False,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.cancel_at == datetime.fromtimestamp(cancel_ts, tz=dt_timezone.utc)
+
+    def test_api_shape_falls_back_to_current_period_end(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_1",
+        )
+        period_end = 1900000000
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.updated",
+                status="active",
+                period_end=period_end,
+                cancel_at_period_end=True,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.cancel_at == datetime.fromtimestamp(period_end, tz=dt_timezone.utc)
+
+    def test_a_later_event_with_neither_field_clears_it(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_1",
+            cancel_at=timezone.now(),
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.updated", status="active")
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.cancel_at is None
 
 
 class TestWebhookStaleEventProtectsAStripeTrial:
@@ -1242,8 +1506,13 @@ class TestSubscribeView:
         ) as create:
             resp = c.post(self.URL)
         assert resp.status_code == 302
-        assert resp.url == "/meso/"
+        assert resp.url == "/meso/billing/"
         create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any(
+            "You already have a subscription. Manage it in Manage billing." in t
+            for t in texts
+        )
 
     def test_stripe_trial_coach_is_not_double_charged(self, settings):
         """A Stripe-backed trialing row is already a live subscription (#555)."""
@@ -1260,7 +1529,7 @@ class TestSubscribeView:
         ) as create:
             resp = c.post(self.URL)
         assert resp.status_code == 302
-        assert resp.url == "/meso/"
+        assert resp.url == "/meso/billing/"
         create.assert_not_called()
         texts = [m.message for m in get_messages(resp.wsgi_request)]
         assert any("already have a subscription" in t for t in texts)
@@ -1280,6 +1549,266 @@ class TestSubscribeView:
             resp = c.post(self.URL)
         assert resp.url == "https://stripe/checkout"
         create.assert_called_once()
+
+
+class TestSubscribeViewNeverOpensASecondSubscription:
+    """Item 2 (#556): never open a second subscription.
+
+    The local mirror can lag the webhook, so ``billing_subscribe`` also asks
+    Stripe directly before opening a Checkout — a coach who just subscribed
+    (or is mid-Checkout in another tab) must not double-subscribe even while
+    the mirror still reads free/local-trial.
+    """
+
+    URL = "/meso/billing/subscribe/"
+
+    def _coach_client(self, mirror_status=None, **sub_kwargs):
+        coach = UserFactory()
+        CoachProfileFactory(user=coach)
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        if mirror_status is not None:
+            CoachSubscriptionFactory(coach=coach, status=mirror_status, **sub_kwargs)
+        c = Client()
+        c.force_login(coach)
+        return coach, c
+
+    @pytest.mark.parametrize("mirror", ["none", "free", "local_trial"])
+    @pytest.mark.parametrize(
+        "status",
+        ["trialing", "active", "past_due", "incomplete", "unpaid", "paused"],
+    )
+    def test_an_open_stripe_subscription_blocks_a_new_checkout(
+        self, settings, mirror, status
+    ):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        sub_kwargs = {}
+        mirror_status = None
+        if mirror == "free":
+            mirror_status = CoachSubscription.Status.FREE
+        elif mirror == "local_trial":
+            mirror_status = CoachSubscription.Status.TRIALING
+            sub_kwargs["trial_end"] = timezone.now() + timedelta(days=10)
+        coach, c = self._coach_client(mirror_status, **sub_kwargs)
+        with (
+            mock.patch(GATEWAY_SUB_LIST, return_value=_subscription_list([status])),
+            mock.patch(GATEWAY_CHECKOUT) as create,
+        ):
+            resp = c.post(self.URL)
+        assert resp.status_code == 302
+        assert resp.url == "/meso/billing/?billing=success"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any(
+            "You already have a subscription. Manage it in Manage billing." in t
+            for t in texts
+        )
+
+    @pytest.mark.parametrize("statuses", [["canceled"], ["incomplete_expired"], []])
+    def test_only_ended_or_no_subscriptions_let_checkout_proceed(
+        self, settings, statuses
+    ):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        with (
+            mock.patch(GATEWAY_SUB_LIST, return_value=_subscription_list(statuses)),
+            mock.patch(
+                GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            ) as create,
+        ):
+            resp = c.post(self.URL)
+        assert resp.url == "https://stripe/cs"
+        create.assert_called_once()
+
+    def test_subscription_list_called_with_the_expected_kwargs(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        with (
+            mock.patch(
+                GATEWAY_SUB_LIST, return_value=_subscription_list([])
+            ) as list_mock,
+            mock.patch(
+                GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            ),
+        ):
+            c.post(self.URL)
+        list_mock.assert_called_once_with(customer="cus_x", status="all", limit=100)
+
+    def test_no_customer_id_skips_the_stripe_check(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = UserFactory()
+        CoachProfileFactory(user=coach)
+        c = Client()
+        c.force_login(coach)
+        with (
+            mock.patch(GATEWAY_SUB_LIST) as list_mock,
+            mock.patch(
+                GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            ),
+        ):
+            resp = c.post(self.URL)
+        list_mock.assert_not_called()
+        assert resp.url == "https://stripe/cs"
+
+    def test_subscription_list_raising_fails_closed(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        with (
+            mock.patch(
+                GATEWAY_SUB_LIST, side_effect=stripe.error.APIConnectionError("boom")
+            ),
+            mock.patch(GATEWAY_CHECKOUT) as create,
+        ):
+            resp = c.post(self.URL)
+        assert resp.status_code == 302
+        assert resp.url == "/meso/billing/"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Try again in a minute" in t for t in texts)
+
+    def test_resource_missing_customer_lets_checkout_proceed(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        err = stripe.error.InvalidRequestError(
+            "No such customer", "customer", code="resource_missing"
+        )
+        with (
+            mock.patch(GATEWAY_SUB_LIST, side_effect=err),
+            mock.patch(
+                GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            ) as create,
+        ):
+            resp = c.post(self.URL)
+        assert resp.url == "https://stripe/cs"
+        create.assert_called_once()
+
+    def test_other_invalid_request_error_fails_closed(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        err = stripe.error.InvalidRequestError("bad", "limit", code="other_code")
+        with (
+            mock.patch(GATEWAY_SUB_LIST, side_effect=err),
+            mock.patch(GATEWAY_CHECKOUT) as create,
+        ):
+            resp = c.post(self.URL)
+        assert resp.status_code == 302
+        assert resp.url == "/meso/billing/"
+        create.assert_not_called()
+
+
+class TestSubscribeViewExpiresOpenCheckoutsBeforeCreatingANewOne:
+    """Item 2 (#556): expire other open Checkouts before creating a new one.
+
+    Right before opening a new Checkout, expire the customer's other open
+    subscription Checkout Sessions — the list check alone can't stop an
+    *older* Checkout tab that was open before the first subscription existed.
+    """
+
+    URL = "/meso/billing/subscribe/"
+
+    def _coach_client(self):
+        coach = UserFactory()
+        CoachProfileFactory(user=coach)
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        c = Client()
+        c.force_login(coach)
+        return coach, c
+
+    def test_open_subscription_session_is_expired_payment_session_is_not(
+        self, settings
+    ):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        sessions = _session_list([("cs_sub", "subscription"), ("cs_pay", "payment")])
+        with (
+            mock.patch(GATEWAY_SUB_LIST, return_value=_subscription_list([])),
+            mock.patch(GATEWAY_SESSION_LIST, return_value=sessions),
+            mock.patch(GATEWAY_SESSION_EXPIRE) as expire,
+            mock.patch(
+                GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            ) as create,
+        ):
+            resp = c.post(self.URL)
+        expire.assert_called_once_with("cs_sub")
+        create.assert_called_once()
+        assert resp.url == "https://stripe/cs"
+
+    def test_expiry_runs_before_checkout_is_created(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        call_order = []
+        with (
+            mock.patch(GATEWAY_SUB_LIST, return_value=_subscription_list([])),
+            mock.patch(
+                GATEWAY_SESSION_LIST,
+                side_effect=lambda **kw: (
+                    call_order.append("list_sessions"),
+                    _session_list([]),
+                )[1],
+            ),
+            mock.patch(
+                "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
+                side_effect=lambda *a, **kw: (
+                    call_order.append("checkout"),
+                    mock.Mock(url="https://stripe/cs"),
+                )[1],
+            ),
+        ):
+            c.post(self.URL)
+        assert call_order == ["list_sessions", "checkout"]
+
+    def test_expire_raising_fails_closed(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        sessions = _session_list([("cs_sub", "subscription")])
+        with (
+            mock.patch(GATEWAY_SUB_LIST, return_value=_subscription_list([])),
+            mock.patch(GATEWAY_SESSION_LIST, return_value=sessions),
+            mock.patch(
+                GATEWAY_SESSION_EXPIRE,
+                side_effect=stripe.error.InvalidRequestError("gone", "id"),
+            ),
+            mock.patch(GATEWAY_CHECKOUT) as create,
+        ):
+            resp = c.post(self.URL)
+        assert resp.status_code == 302
+        assert resp.url == "/meso/billing/"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Try again in a minute" in t for t in texts)
+
+
+class TestSubscribeViewCompedCoachBounces:
+    """Item 6 (#556): a stale Subscribe POST from a comped coach is refused.
+
+    A comped coach has no Subscribe button, so any Subscribe POST — with or
+    without a stale ``first_charge`` marker — must be refused before it ever
+    reaches Stripe.
+    """
+
+    URL = "/meso/billing/subscribe/"
+
+    def _coach_client(self):
+        coach = UserFactory()
+        CoachProfileFactory(user=coach)
+        CoachSubscriptionFactory(coach=coach, status=CoachSubscription.Status.COMPED)
+        c = Client()
+        c.force_login(coach)
+        return coach, c
+
+    @pytest.mark.parametrize("post_data", [{}, {"first_charge": "1234567890"}])
+    def test_comped_coach_bounces_without_opening_checkout(self, settings, post_data):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        with mock.patch(GATEWAY_CHECKOUT) as create:
+            resp = c.post(self.URL, data=post_data)
+        assert resp.status_code == 302
+        assert resp.url == "/meso/billing/"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Your plan changed. Nothing was charged." in t for t in texts)
+        assert not any("starts billing today" in t for t in texts)
 
 
 class TestSubscribeViewDeferredCharge:

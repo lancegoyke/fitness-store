@@ -27,8 +27,14 @@
             <span class="meso-badge {% if state.is_active %}meso-badge--ok{% else %}meso-badge--muted{% endif %}"><i></i>{{ state.status_label }}</span>
           </div>
 
-          {% if state.over_limit %}
+          {% if state.checkout_pending %}
+            <p class="meso-sub" style="margin:0;">Finishing your subscription&#8230; This takes a few seconds. Refresh to see your plan.</p>
+          {% elif state.past_due %}
+            <p class="meso-sub" style="margin:0;color:var(--warn);">Your last payment failed. Update your card in Manage billing.{% if state.over_limit %} Until then, your longest-standing athletes stay editable; the other {{ state.suspended_count }} {{ state.suspended_count|pluralize:"is,are" }} suspended.{% endif %}</p>
+          {% elif state.over_limit %}
             <p class="meso-sub" style="margin:0;color:var(--warn);">Over your plan limit &#8212; {{ state.seat_count }} of {{ state.seat_limit }} athlete{{ state.seat_limit|pluralize }}. Your longest-standing athletes stay editable; the other {{ state.suspended_count }} {{ state.suspended_count|pluralize:"is,are" }} suspended until you re-subscribe or end a relationship.</p>
+          {% elif state.cancelling %}
+            <p class="meso-sub" style="margin:0;">{% if state.is_stripe_trial %}Pro until <time datetime="{{ state.pro_until|date:'c' }}" data-local-date>{{ state.pro_until|date:"M j" }}</time> &#8212; cancelled, so you won't be charged.{% else %}Pro until <time datetime="{{ state.pro_until|date:'c' }}" data-local-date>{{ state.pro_until|date:"M j" }}</time> &#8212; cancelled, so it won't renew.{% endif %}</p>
           {% elif state.first_charge_at %}
             <p class="meso-sub" style="margin:0;">Pro &#8212; first charge on <time datetime="{{ state.first_charge_at|date:'c' }}" data-local-date>{{ state.first_charge_at|date:"M j" }}</time>.</p>
           {% elif state.on_trial %}
@@ -68,17 +74,17 @@
                   <button type="submit" class="meso-btn meso-btn--primary">Start free trial</button>
                 </form>
               {% endif %}
-              {% if not state.is_active or state.on_trial or state.over_limit %}
+              {% if state.show_subscribe %}
                 <form method="post" action="{% url 'meso:billing_subscribe' %}" style="margin:0;">
                   {% csrf_token %}
                   {% if state.deferred_first_charge %}<input type="hidden" name="first_charge" value="{{ state.deferred_first_charge|date:'U' }}">{% endif %}
                   <button type="submit" class="meso-btn {% if state.can_start_trial %}meso-btn--ghost{% else %}meso-btn--primary{% endif %}">Subscribe</button>
                 </form>
               {% endif %}
-              {% if state.has_stripe_subscription %}
+              {% if state.show_manage_billing %}
                 <form method="post" action="{% url 'meso:billing_portal' %}" style="margin:0;">
                   {% csrf_token %}
-                  <button type="submit" class="meso-btn meso-btn--ghost">Manage billing</button>
+                  <button type="submit" class="meso-btn {% if state.past_due %}meso-btn--primary{% else %}meso-btn--ghost{% endif %}">Manage billing</button>
                 </form>
               {% endif %}
             </div>

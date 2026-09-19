@@ -433,7 +433,10 @@ class RosterView(TemplateView):
         ]
         # Billing/paywall state (S6 Phase 3): tier, seat usage, and the upgrade
         # CTAs (start trial / subscribe / manage billing).
-        ctx["billing"] = presenters.billing_state(self.request.user)
+        ctx["billing"] = presenters.billing_state(
+            self.request.user,
+            checkout_pending=self.request.GET.get("billing") == "success",
+        )
         # Recent-activity feed: the coach's athletes' latest completed sessions.
         ctx["activity"] = presenters.roster_activity(self.request.user)
         # Needs-review (agent batch state) is a separate slice — still neutral.
@@ -756,7 +759,12 @@ class CoachBillingView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "billing"
-        ctx.update(presenters.coach_billing(self.request.user))
+        ctx.update(
+            presenters.coach_billing(
+                self.request.user,
+                checkout_pending=self.request.GET.get("billing") == "success",
+            )
+        )
         return ctx
 
 
@@ -5388,18 +5396,49 @@ def billing_subscribe(request):
     if not settings.MESO_PRO_PRICE_ID:
         messages.error(request, "Subscriptions aren't configured yet.")
         return redirect("meso:roster")
+    # A comped coach has no Subscribe button — any Subscribe POST from one is
+    # stale (an admin comped them between page load and this POST, with or
+    # without a stray `first_charge` marker) and must not open a real
+    # Checkout (#556, item 6).
+    sub = getattr(request.user, "coach_subscription", None)
+    if sub and sub.status == CoachSubscription.Status.COMPED:
+        messages.info(request, "Your plan changed. Nothing was charged.")
+        return redirect("meso:billing")
     # Don't open a second Checkout for a coach who already has a live Stripe
     # subscription — completing it would create a duplicate (double-billing).
     # They manage the existing one in the Portal; a canceled mirror re-subscribes
     # freely. A Stripe trial (#555) counts as live here too: it already has a
     # real subscription, just not yet a charge.
-    sub = getattr(request.user, "coach_subscription", None)
     if sub and sub.has_live_stripe_subscription:
         messages.info(
             request,
-            "You already have a subscription — manage it in the billing portal.",
+            "You already have a subscription. Manage it in Manage billing.",
         )
-        return redirect("meso:roster")
+        return redirect("meso:billing")
+    # The local mirror can lag the webhook by a few seconds — long enough for
+    # a double-click, or an older Checkout tab, to slip a second subscription
+    # past the mirror-only guard above (#556, item 2). Ask Stripe directly.
+    try:
+        open_sub = billing_gateway.customer_has_open_subscription(request.user)
+    except Exception:  # noqa: BLE001 — fail closed, never silently charge
+        logger.exception(
+            "Stripe subscription check failed for coach %s", request.user.pk
+        )
+        messages.error(
+            request,
+            "We couldn't check your subscription with Stripe, so nothing was "
+            "charged. Try again in a minute.",
+        )
+        return redirect("meso:billing")
+    if open_sub:
+        # The mirror hasn't seen this subscription yet (its webhook is most
+        # likely still in flight) — land on the billing page's pending state
+        # instead of a bare bounce.
+        messages.info(
+            request,
+            "You already have a subscription. Manage it in Manage billing.",
+        )
+        return redirect(reverse("meso:billing") + "?billing=success")
     # A coach subscribing during their local trial keeps the rest of it (#555):
     # ``deferred_first_charge`` is the local trial_end when there's enough of it
     # left for Stripe to accept as ``subscription_data.trial_end``, else None.
@@ -5447,6 +5486,21 @@ def billing_subscribe(request):
                 "when you'll be charged and click Subscribe again.",
             )
             return redirect("meso:roster")
+    # Right before opening the new Checkout, expire the customer's other open
+    # subscription Checkout Sessions (#556, item 2) — the open-subscription
+    # check above can't stop an *older* tab that was already open before the
+    # first subscription existed, so this is what keeps only the newest one
+    # completable.
+    try:
+        billing_gateway.expire_open_subscription_checkouts(request.user)
+    except Exception:  # noqa: BLE001 — fail closed, never silently charge
+        logger.exception("Stripe checkout expiry failed for coach %s", request.user.pk)
+        messages.error(
+            request,
+            "We couldn't check your subscription with Stripe, so nothing was "
+            "charged. Try again in a minute.",
+        )
+        return redirect("meso:billing")
     roster_url = request.build_absolute_uri(reverse("meso:roster"))
     try:
         session = billing_gateway.create_subscription_checkout_session(

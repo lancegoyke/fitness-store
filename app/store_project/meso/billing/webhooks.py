@@ -14,9 +14,9 @@ row. Concurrent deliveries for one coach are serialized on the mirror row
 before either has written. Events handled:
 
 - ``customer.subscription.created|updated`` — upsert from the subscription object
-  (status, the subscription item id, period end, and — when Stripe sends one —
-  ``trial_end``). The flat Pro plan (D14) reports a single line item, recorded as
-  ``stripe_item_id``.
+  (status, the subscription item id, period end, a scheduled-cancel date
+  (``cancel_at``, #556), and — when Stripe sends one — ``trial_end``). The flat
+  Pro plan (D14) reports a single line item, recorded as ``stripe_item_id``.
 - ``customer.subscription.deleted`` — the subscription is gone → ``canceled``
   (which gates identically to ``free``; the coach keeps read access, D6).
 - ``invoice.payment_failed`` / ``invoice.paid`` — a belt-and-suspenders status
@@ -135,6 +135,30 @@ def _ts_to_dt(ts):
     if not ts:
         return None
     return datetime.fromtimestamp(ts, tz=dt_timezone.utc)
+
+
+def _incoming_cancel_at(sub_obj):
+    """Stripe's scheduled-cancel date for the mirror's ``cancel_at`` (#556, item 3).
+
+    Verified in Stripe test mode (2026-09-19): the Customer Portal cancels a
+    subscription by setting ``cancel_at`` (equal to ``current_period_end``)
+    and leaves ``cancel_at_period_end`` **false** — a boolean copied from
+    ``cancel_at_period_end`` alone would miss every Portal cancel. The API's
+    own ``cancel_at_period_end=True`` shape carries no ``cancel_at`` at all,
+    so that case falls back to ``current_period_end``. Neither present means
+    the subscription isn't scheduled to end.
+
+    Always used in the upsert ``defaults`` (unlike ``trial_end``, which is
+    left alone when Stripe sends none) — a renewed subscription clears both
+    fields on Stripe's side, and the mirror must clear ``cancel_at`` the same
+    way rather than keep a stale scheduled-end date.
+    """
+    cancel_at = _ts_to_dt(sub_obj.get("cancel_at"))
+    if cancel_at is not None:
+        return cancel_at
+    if sub_obj.get("cancel_at_period_end"):
+        return _ts_to_dt(sub_obj.get("current_period_end"))
+    return None
 
 
 def _coach_for_customer(customer_id):
@@ -301,6 +325,9 @@ def _sync_from_subscription(sub_obj, *, deleted):
         "stripe_subscription_id": sub_obj.get("id", ""),
         "stripe_item_id": item.get("id", ""),
         "current_period_end": _ts_to_dt(sub_obj.get("current_period_end")),
+        # Always rewritten (#556, item 3) — a renewed subscription clears the
+        # scheduled cancel on Stripe's side, and the mirror must clear it too.
+        "cancel_at": _incoming_cancel_at(sub_obj),
     }
     # Copy Stripe's trial_end onto the row when it sends one (a Stripe trial,
     # #555) — it may differ from the local value Checkout was given (clock

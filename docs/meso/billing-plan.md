@@ -240,6 +240,82 @@ completing a hosted Checkout end to end — a test-mode endpoint forwards
 `checkout.session.completed` to production's store webhook, so we didn't
 complete one.
 
+### Billing states after #556
+
+An adversarial review of #555 (items 1, 2, 3, 6 above) found a past_due coach
+with no state of its own, a way to open a second subscription, a cancel the
+mirror never saw, and one wording gap. All four are closed.
+
+**past_due has its own state.** A past_due coach doesn't count as active, so
+both billing surfaces used to fall through to the free-plan line and a
+Subscribe button that opened no Checkout. `billing_state` now exposes
+`has_live_stripe_subscription` and `past_due`; both surfaces show a "your
+last payment failed" line (with the over-limit suspension note appended when
+both apply) ahead of the free/trial/active copy, and Manage billing renders
+primary-styled instead of ghost. `show_subscribe` / `show_manage_billing` are
+the two keys the templates now branch the Subscribe / Manage billing forms
+on, instead of re-deriving the same conditions inline in three places.
+
+**Never open a second subscription.** The local mirror only updates once the
+webhook lands, which can lag a Checkout completion by a few seconds — long
+enough for a double-click, or an older Checkout tab, to complete a second
+subscription before the mirror would have caught it. `billing_subscribe` now
+also asks Stripe directly:
+`stripe_gateway.customer_has_open_subscription(coach)` lists the customer's
+subscriptions (`status="all"`) and blocks whenever any of them is outside
+`ENDED_SUBSCRIPTION_STATUSES` (`canceled`, `incomplete_expired`) — trialing,
+active, past_due, incomplete, unpaid, paused, and any status this code
+doesn't recognize yet all block. Fail closed: an unrecognized status is
+treated as open. A customer id Stripe doesn't recognize
+(`InvalidRequestError`, `code="resource_missing"`, `param="customer"`) reads
+as "no subscription" — a missing customer can't hold one, and
+`stripe_customer_get_or_create` recreates it at checkout anyway. Any other
+Stripe error propagates, and the view turns that into a "try again in a
+minute" bounce instead of silently opening a Checkout.
+
+Right before creating the new Checkout, `expire_open_subscription_checkouts`
+expires the customer's other open `mode="subscription"` Checkout Sessions
+(leaving `mode="payment"` store purchases alone). The list check above runs
+at Checkout-creation time, so it can't stop an *older* Checkout tab that was
+already open before the first subscription existed; expiring the rest means
+only the newest Checkout can ever complete.
+
+**The `?billing=success` pending state.** Checkout's `success_url` always
+carries `?billing=success`, so a coach can land back on the roster or the
+billing page before the webhook has necessarily arrived. `checkout_pending`
+(the query param, true only while the mirror doesn't already show a live
+subscription) drives a "Finishing your subscription… refresh to see your
+plan" line and hides Subscribe/Manage billing accordingly — a coach who
+double-clicks or refreshes mid-webhook never opens a second Checkout. Once
+the mirror catches up, the flag clears itself and the page shows the real
+state.
+
+**Mirroring a scheduled cancel.** `CoachSubscription.cancel_at` mirrors when
+a live subscription is scheduled to end. Verified in Stripe test mode
+(2026-09-19): a Customer Portal cancel of an active subscription sets
+`cancel_at` (equal to `current_period_end`) and leaves `cancel_at_period_end`
+**false** — a boolean copied from `cancel_at_period_end` alone would miss
+every Portal cancel. The webhook reads `cancel_at` directly and falls back to
+`current_period_end` only for the API's own `cancel_at_period_end=True`
+shape (which carries no `cancel_at`). The field is always rewritten, unlike
+`trial_end` which is left alone when Stripe sends none — a renewed
+subscription clears both fields on Stripe's side, and the mirror must clear
+`cancel_at` the same way.
+
+The surfaces read "Pro until {date} — cancelled, so you won't be charged" for
+a Stripe trial, or "…so it won't renew" for an active subscription.
+`past_due` wins over `cancelling` (a past_due coach has no Pro access to
+promise), and `first_charge_at` is suppressed while cancelling so the page
+never promises a charge that won't happen. Access itself (`is_active`, the
+seat/agent gates) is unaffected — cancelling is a copy-only concern until
+Stripe actually ends the subscription.
+
+**A comped coach's stale Subscribe.** A comped coach has no Subscribe
+button, so any Subscribe POST — with or without a `first_charge` marker — is
+stale (most likely an admin comped them between page load and the POST).
+`billing_subscribe` now bounces it straight to the billing page with "Your
+plan changed. Nothing was charged." before touching Stripe at all.
+
 ### Subscribing + managing (Stripe)
 
 - One Stripe **Product** ("Meso Coaching") with one recurring **Price**

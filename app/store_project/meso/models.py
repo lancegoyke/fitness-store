@@ -1033,6 +1033,16 @@ class CoachSubscription(models.Model):
         blank=True,
         help_text=_("Mirrored from Stripe for paid coaches."),
     )
+    cancel_at = models.DateTimeField(
+        _("Scheduled to end at"),
+        null=True,
+        blank=True,
+        help_text=_(
+            "Mirrored from Stripe: when a cancelled subscription ends (Stripe's "
+            "cancel_at, or the period end when cancel_at_period_end is set). Null "
+            "= not scheduled to end."
+        ),
+    )
     quantity = models.PositiveIntegerField(
         _("Synced seat quantity"),
         default=0,
