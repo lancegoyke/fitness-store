@@ -100,6 +100,31 @@ function isRetryableStatus(status) {
   return status >= 500 || status === 408 || status === 429;
 }
 
+// How long a logging write may take before it counts as offline (#527). fetch
+// has no timeout of its own, and gym wifi that connects but never answers would
+// hold a write open forever — and "Log session" with it, since it waits for the
+// lines — with nothing queued. The writes are idempotent, so one that landed
+// after all and is sent again does no harm. The timer isn't cleared: firing
+// after the exchange finished does nothing, and it also bounds the body read.
+const WRITE_TIMEOUT_MS = 15000;
+
+function postJson(url, body, csrf) {
+  const options = {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRFToken": csrf,
+    },
+    body: JSON.stringify(body),
+  };
+  if (typeof AbortController === "function") {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), WRITE_TIMEOUT_MS);
+    options.signal = controller.signal;
+  }
+  return fetch(url, options);
+}
+
 function createLogger() {
   return {
     logUrl: "",
@@ -335,14 +360,7 @@ function createLogger() {
       await this.settleLines();
       let res;
       try {
-        res = await fetch(this.logUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": this.csrf,
-          },
-          body: JSON.stringify(payload),
-        });
+        res = await postJson(this.logUrl, payload, this.csrf);
       } catch (netErr) {
         // Network unreachable → queue it; the upsert endpoint is idempotent, so
         // replaying on reconnect is safe (latest save for a session wins).
@@ -575,21 +593,17 @@ function createLogger() {
       if (ex) return this.saveCell(ex, item.body.line, { fromQueue: true });
       let res;
       try {
-        res = await fetch(item.url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": this.csrf,
-          },
-          body: JSON.stringify(item.body),
-        });
+        res = await postJson(item.url, item.body, this.csrf);
       } catch (netErr) {
         return "offline";
       }
       if (res.redirected || res.status === 403) return "offline";
       if (isRetryableStatus(res.status)) return "kept";
-      // Saved, or refused for good (a 4xx won't change on retry): done
-      // either way.
+      // Refused for good (a 4xx won't change on retry), but a line from
+      // another session is dropped only on its own page, where the athlete
+      // sees it didn't save; here nothing would say so. On its own page with
+      // its row gone, there's no line left to show it on.
+      if (!res.ok && item.url !== this.cellUrl) return "kept";
       this.dropEntry(item);
       return res.ok ? "saved" : "rejected";
     },
@@ -597,14 +611,7 @@ function createLogger() {
     async flushLog(item) {
       let res;
       try {
-        res = await fetch(item.url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": this.csrf,
-          },
-          body: JSON.stringify(item.body),
-        });
+        res = await postJson(item.url, item.body, this.csrf);
       } catch (netErr) {
         return "offline"; // still offline — keep it for next time
       }
@@ -849,14 +856,7 @@ function createLogger() {
       if (entry) entry.saveError = false;
       let res;
       try {
-        res = await fetch(this.cellUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": this.csrf,
-          },
-          body: JSON.stringify(body),
-        });
+        res = await postJson(this.cellUrl, body, this.csrf);
       } catch (netErr) {
         this._holdCell(entry, body, fromQueue, pending);
         return "offline";

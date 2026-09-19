@@ -1773,6 +1773,82 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
   });
 });
 
+describe("a write that never answers counts as offline (#527)", () => {
+  // Gym wifi can connect and then never answer, and fetch has no timeout.
+  // "Log session" waits for the lines, so an unbounded one would hold it on
+  // "Saving…" forever with nothing queued.
+  // A request that never answers; only aborting it ends it.
+  function hangs(url, opts) {
+    return new Promise((_, reject) => {
+      if (!opts.signal) return; // nothing can ever end it
+      opts.signal.addEventListener("abort", () =>
+        reject(new DOMException("The operation was aborted.", "AbortError")),
+      );
+    });
+  }
+
+  it("queues a stalled line and lets Log session finish", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    global.fetch = vi.fn().mockImplementation((url, opts) => {
+      if (url === CELL_URL) return hangs(url, opts);
+      return Promise.resolve(res({ body: { log: { status: "done", sets: [] } } }));
+    });
+    c.saveCell(c.exercises[0], 1); // the blur, still waiting on an answer
+    const saving = c.save(true);
+    await vi.advanceTimersByTimeAsync(15000); // the blur gives up
+    await vi.advanceTimersByTimeAsync(15000); // the flush's retry does too
+    await saving;
+    expect(c.saving).toBe(false);
+    expect(c.exercises[0].sub_lines[0].queued).toBe(true);
+    expect(c.readQueue().filter((i) => i.kind === "cell")).toHaveLength(1);
+    expect(c.queued).toBe(true); // the line still waits, so no "Saved ✓"
+    expect(c.saved).toBe(false);
+  });
+
+  it("ends a flush pass that stalls, so the next one can run", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.writeQueue([{ url: LOG_URL, body: { status: "done", sets: [] } }]);
+    global.fetch = vi.fn().mockImplementation(hangs);
+    const first = c.flushQueue();
+    await vi.advanceTimersByTimeAsync(15000);
+    await first;
+    expect(c.readQueue()).toHaveLength(1);
+
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { log: { status: "done", sets: [] } } }),
+    );
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
+describe("a refused line is dropped where the athlete can see it (#527)", () => {
+  const theirs = {
+    kind: "cell",
+    url: OTHER_SESSION_CELL_URL,
+    body: { exercise_id: 3, line: 1, text: "90 x 8" },
+  };
+
+  it("keeps another session's refused line for that session's page", async () => {
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.writeQueue([theirs]);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400 }));
+    await c.flushQueue();
+    expect(c.readQueue()).toEqual([theirs]);
+  });
+
+  it("drops it on its own page once its row is gone", async () => {
+    const c = cellLogger({ logUrl: LOG_URL, cellUrl: OTHER_SESSION_CELL_URL });
+    c.writeQueue([theirs]);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400 }));
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
 describe("footer line error clears once the line saves (#527)", () => {
   it("drops 'a line above couldn't save' when the refused line is fixed", async () => {
     const c = cellLogger({ logUrl: LOG_URL });
