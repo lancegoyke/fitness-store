@@ -1691,6 +1691,61 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     expect(c.readQueue()).toEqual([newer]);
   });
 
+  it("doesn't overwrite a newer entry another tab queued while this write failed", async () => {
+    const c = cellLogger();
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    const newer = {
+      kind: "cell",
+      url: CELL_URL,
+      body: { exercise_id: 1, line: 1, text: "110 x 5" },
+    };
+    global.fetch = vi.fn().mockImplementation(async () => {
+      c.writeQueue([newer]);
+      throw new TypeError("Failed to fetch");
+    });
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toEqual([newer]);
+    expect(c.exercises[0].sub_lines[0].queued).toBe(true);
+  });
+
+  it("still queues a failed write when another tab flushed the old entry away", async () => {
+    const c = cellLogger();
+    c.exercises[0].sub_lines[0].text = "110 x 5";
+    c.writeQueue([
+      { kind: "cell", url: CELL_URL, body: { exercise_id: 1, line: 1, text: "100 x 5" } },
+    ]);
+    global.fetch = vi.fn().mockImplementation(async () => {
+      c.writeQueue([]); // the other tab synced "100 x 5"
+      throw new TypeError("Failed to fetch");
+    });
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue().map((i) => i.body.text)).toEqual(["110 x 5"]);
+  });
+
+  it("clears the footer's 'will sync' once a queued line saves on a later blur", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    // The line's blur got a 500 and waits in the queue; "Log session" landed
+    // (its flush retried the line, which failed again).
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url === CELL_URL) return res({ ok: false, status: 500 });
+      return res({ body: { log: { status: "done", sets: [] } } });
+    });
+    await c.saveCell(c.exercises[0], 1);
+    await c.save(true);
+    expect(c.queued).toBe(true);
+
+    // The server recovers; the athlete blurs the line again.
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.queued).toBe(false);
+    expect(c.saved).toBe(true);
+  });
+
   it("says a line couldn't save when storage refuses the queue", async () => {
     const c = cellLogger();
     vi.spyOn(console, "error").mockImplementation(() => {});

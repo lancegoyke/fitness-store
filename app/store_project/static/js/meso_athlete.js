@@ -783,9 +783,13 @@ function createLogger() {
         .catch(() => {}) // a failed save must not stall the cell's queue
         .then(() => this._postCell(ex, line, fromQueue))
         .then((outcome) => {
-          // The footer's "a line couldn't save" goes once no line is refused
-          // any more — fixing the line is enough, no second "Log session".
-          if (this.lineError) this.lineError = this.hasRefusedLines();
+          // A line landing can settle what the footer last said: once no
+          // line is queued or refused, "will sync" or "a line couldn't save"
+          // gives way — no second "Log session" needed. `save()` reports for
+          // itself, after its own log.
+          if (!this.saving && (this.queued || this.lineError)) {
+            this.reportSaved();
+          }
           return outcome;
         });
       this._cellSaves[key] = run;
@@ -854,15 +858,15 @@ function createLogger() {
           body: JSON.stringify(body),
         });
       } catch (netErr) {
-        this._holdCell(entry, body, fromQueue);
+        this._holdCell(entry, body, fromQueue, pending);
         return "offline";
       }
       if (res.redirected || res.status === 403) {
-        this._holdCell(entry, body, fromQueue);
+        this._holdCell(entry, body, fromQueue, pending);
         return "offline";
       }
       if (isRetryableStatus(res.status)) {
-        this._holdCell(entry, body, fromQueue);
+        this._holdCell(entry, body, fromQueue, pending);
         return "kept";
       }
       if (!res.ok) {
@@ -922,8 +926,15 @@ function createLogger() {
     // Keep a line's write for the next flush, and say so on the line. A write
     // replayed from the queue is still there, so only a fresh one is added. If
     // storage refused it, nothing will sync: the line says it couldn't save.
-    _holdCell(entry, body, fromQueue) {
-      const kept = fromQueue || this.enqueueCell(body);
+    //
+    // Nor is one added over a different entry queued while this write was in
+    // flight: that came from another tab on the same session, later than this
+    // text, so it wins.
+    _holdCell(entry, body, fromQueue, pending) {
+      const current = this.queuedCell(body.exercise_id, body.line);
+      const newer =
+        !!current && JSON.stringify(current) !== JSON.stringify(pending);
+      const kept = fromQueue || newer || this.enqueueCell(body);
       if (entry) {
         entry.queued = kept;
         entry.saveError = !kept;
