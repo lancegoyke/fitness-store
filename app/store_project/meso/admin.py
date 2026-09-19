@@ -254,7 +254,7 @@ class PrescriptionAdmin(admin.ModelAdmin):
 class LoggedSetInline(admin.TabularInline):
     model = LoggedSet
     extra = 0
-    raw_id_fields = ("prescription",)
+    raw_id_fields = ("prescription", "source_line", "reclaimed_line")
 
 
 @admin.register(SessionLog)

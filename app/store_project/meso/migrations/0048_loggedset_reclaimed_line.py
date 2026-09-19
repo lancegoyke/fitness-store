@@ -15,9 +15,10 @@ class Migration(migrations.Migration):
             name="reclaimed_line",
             field=models.ForeignKey(
                 blank=True,
+                db_constraint=False,
                 null=True,
                 on_delete=django.db.models.deletion.SET_NULL,
-                related_name="+",
+                related_name="reclaimed_sets",
                 to="meso.prescription",
                 verbose_name="Reclaimed line",
             ),

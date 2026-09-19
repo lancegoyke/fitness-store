@@ -2424,28 +2424,25 @@ class LoggedSet(models.Model):
         verbose_name=_("Source line"),
     )
     # #541. Set only on a structured-logger row (``source_line`` NULL) that
-    # just replaced a reclaimed, visible parsed row — points at the sub-line
-    # that parsed row's own ``source_line`` was. A reclaim (``cell_line_write``)
-    # leaves the old parsed row exactly where it was, only VISIBLE again
-    # (``parsed_set_is_hidden``); the next "Log session"/"Save progress" then
-    # replaces that visible row with a source-less structured copy the same way
-    # it replaces any other posted row, and this field is the only thing left
-    # remembering which sub-line the copy stands in for (``athlete_log_session``
-    # carries it forward across any number of further saves, the same way it
-    # already carries the value comparison ``_client_held`` uses). Retyping the
-    # sub-line's original text (``_upsert_parsed_set``) looks here once the
-    # ordinary ``source_line=cell`` search comes up empty, so the restore
-    # re-links this row (clearing the field and setting ``source_line``
-    # instead) rather than minting a second row for one performance. Cleared
-    # the moment it's consumed that way, or dropped for a row that no longer
-    # restates the same values (an edited repost carries nothing forward — see
-    # ``athlete_log_session``).
+    # just replaced a reclaimed, visible parsed row — remembers which sub-line
+    # that row's own ``source_line`` was, so ``_upsert_parsed_set`` can find and
+    # re-link this row (rather than minting a twin) once the ordinary
+    # ``source_line=cell`` search comes up empty. ``athlete_log_session``
+    # carries it forward across further saves; cleared the moment a restore
+    # consumes it, or dropped for a repost that no longer restates the same
+    # values.
+    #
+    # No DB-level FK (mirrors ``analytics.Event.actor``, #509): it's a hint for
+    # that restore lookup only, and a real constraint would make a caller's
+    # COMMIT take a lock on the referenced row for the RI check. SET_NULL is
+    # still applied in Python by Django's collector on a Prescription delete.
     reclaimed_line = models.ForeignKey(
         Prescription,
         on_delete=models.SET_NULL,
+        db_constraint=False,
         null=True,
         blank=True,
-        related_name="+",
+        related_name="reclaimed_sets",
         verbose_name=_("Reclaimed line"),
     )
 

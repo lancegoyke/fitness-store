@@ -2212,45 +2212,28 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                     # ordinary re-blur finds its own number free and keeps it
                     # (idempotent).
                     # Restoring a reclaimed line to what it originally said is
-                    # not a new performance. `mine` is empty in that case — the
-                    # old row survived a reclaim, so `previous_text` (the coach's
-                    # cue) no longer describes it — and creating would leave two
-                    # identical rows on one source line, BOTH hidden by the
-                    # restored text and both counted, overstating the workout
-                    # with nothing on screen to show for it. Reuse the row.
-                    existing = next(
-                        (
-                            row
-                            for row in log.sets.filter(source_line=cell)
-                            if parsing.same_logged_set(
-                                (row.reps, row.load, row.rpe),
-                                (values["reps"], values["load"], values["rpe"]),
-                            )
-                        ),
-                        None,
-                    )
-                    if existing is None:
-                        # #541: the lookup above only sees a row still linked to
-                        # THIS cell by `source_line` — but a "Log session"/"Save
-                        # progress" landing between the reclaim and the restore
-                        # replaces that row with a source-less structured copy
-                        # (see `athlete_log_session`), which carries the link
-                        # forward as `reclaimed_line` instead. Falling back to
-                        # that copy — same cell, same values — finds the SAME
-                        # performance under its new shape instead of creating a
-                        # second row for one restore. `prescription=
-                        # line_zero_cell` mirrors the primary lookup's implicit
-                        # scope (a `source_line` cell belongs to exactly one
-                        # line-0 prescription); `reclaimed_line=cell` is what
-                        # actually pins it to this sub-line.
+                    # not a new performance — but both lookups below are only
+                    # entitled to say so when `previous is None`, i.e. this
+                    # line was NOT already showing a set of its own. `mine` is
+                    # empty in that case — the old row survived a reclaim, so
+                    # `previous_text` (the coach's cue) no longer describes it
+                    # — and creating would leave two identical rows on one
+                    # source line, BOTH hidden by the restored text and both
+                    # counted, overstating the workout with nothing on screen
+                    # to show for it. Reuse the row instead.
+                    #
+                    # When `previous` is NOT None, this write is an EDIT of the
+                    # set the line just displayed, not a restore of some older,
+                    # unrelated performance the value match happens to equal —
+                    # a value edit that lands back on an earlier value is still
+                    # an edit. Skip both lookups and fall through to the create
+                    # branch below, same as an ordinary edit.
+                    existing = None
+                    if previous is None:
                         existing = next(
                             (
                                 row
-                                for row in log.sets.filter(
-                                    source_line__isnull=True,
-                                    reclaimed_line=cell,
-                                    prescription=line_zero_cell,
-                                )
+                                for row in log.sets.filter(source_line=cell)
                                 if parsing.same_logged_set(
                                     (row.reps, row.load, row.rpe),
                                     (values["reps"], values["load"], values["rpe"]),
@@ -2258,18 +2241,47 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                             ),
                             None,
                         )
-                        if existing is not None:
-                            # Re-link it to this cell instead of leaving it a
-                            # dangling structured copy — keeps its `pk` (and
-                            # therefore its history/analytics identity) AND its
-                            # `set_number`, and clears `reclaimed_line` so it
-                            # doesn't keep matching this fallback after it's
-                            # already been claimed.
-                            existing.source_line = cell
-                            existing.reclaimed_line = None
-                            existing.save(
-                                update_fields=["source_line", "reclaimed_line"]
+                        if existing is None:
+                            # #541: the lookup above only sees a row still linked to
+                            # THIS cell by `source_line` — but a "Log session"/"Save
+                            # progress" landing between the reclaim and the restore
+                            # replaces that row with a source-less structured copy
+                            # (see `athlete_log_session`), which carries the link
+                            # forward as `reclaimed_line` instead. Falling back to
+                            # that copy — same cell, same values — finds the SAME
+                            # performance under its new shape instead of creating a
+                            # second row for one restore. `prescription=
+                            # line_zero_cell` mirrors the primary lookup's implicit
+                            # scope (a `source_line` cell belongs to exactly one
+                            # line-0 prescription); `reclaimed_line=cell` is what
+                            # actually pins it to this sub-line.
+                            existing = next(
+                                (
+                                    row
+                                    for row in log.sets.filter(
+                                        source_line__isnull=True,
+                                        reclaimed_line=cell,
+                                        prescription=line_zero_cell,
+                                    )
+                                    if parsing.same_logged_set(
+                                        (row.reps, row.load, row.rpe),
+                                        (values["reps"], values["load"], values["rpe"]),
+                                    )
+                                ),
+                                None,
                             )
+                            if existing is not None:
+                                # Re-link it to this cell instead of leaving it a
+                                # dangling structured copy — keeps its `pk` (and
+                                # therefore its history/analytics identity) AND its
+                                # `set_number`, and clears `reclaimed_line` so it
+                                # doesn't keep matching this fallback after it's
+                                # already been claimed.
+                                existing.source_line = cell
+                                existing.reclaimed_line = None
+                                existing.save(
+                                    update_fields=["source_line", "reclaimed_line"]
+                                )
                     if existing is not None:
                         created = existing
                         # It was already logged, so there is nothing to
