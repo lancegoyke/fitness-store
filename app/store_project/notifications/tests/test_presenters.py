@@ -169,8 +169,8 @@ class TestByKind:
 class TestTextOnlyOpenRate:
     """SES can only track an open via a tracking pixel in an HTML part.
 
-    ``account_confirmation``, ``password_reset``, ``account_notice``, and
-    ``honeypot_alert`` are sent as plain text (issue #514) — their
+    ``account_confirmation``, ``password_reset``, and ``account_notice``
+    are sent as plain text (issue #514) — their
     ``open_rate`` must be ``None`` regardless of sent/open counts, not a
     number that implies the metric is meaningful for them.
     """

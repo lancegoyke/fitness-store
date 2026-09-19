@@ -44,7 +44,6 @@ class EmailKind(models.TextChoices):
     ACCOUNT_CONFIRMATION = "account_confirmation", _("Account confirmation")
     PASSWORD_RESET = "password_reset", _("Password reset")
     ACCOUNT_NOTICE = "account_notice", _("Account notice")
-    HONEYPOT_ALERT = "honeypot_alert", _("Honeypot alert")
     OTHER = "other", _("Other")
 
 
@@ -58,7 +57,6 @@ TEXT_ONLY_KINDS = frozenset(
         EmailKind.ACCOUNT_CONFIRMATION,
         EmailKind.PASSWORD_RESET,
         EmailKind.ACCOUNT_NOTICE,
-        EmailKind.HONEYPOT_ALERT,
     }
 )
 
