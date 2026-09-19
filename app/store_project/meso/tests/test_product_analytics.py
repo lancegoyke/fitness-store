@@ -1462,6 +1462,141 @@ class TestShortDurationFilter:
 # ---------------------------------------------------------------------------
 
 
+class TestExclusionsSurviveDeletedSubjects:
+    """Exclusions that outlive the subject row (adversarial review, round 1).
+
+    The subject-based exclusions only match rows that still exist. "Remove demo
+    data" deletes demo plans, and clearing a typed line reaps an empty log, but
+    the events stay.
+    """
+
+    def test_demo_flagged_event_counts_nowhere_after_the_demo_is_removed(self, now):
+        coach = UserFactory()
+        event = _event(
+            EventName.PLAN_CREATED,
+            actor=coach,
+            created=now - datetime.timedelta(days=1),
+            demo=True,
+        )
+        # The demo plan it pointed at is gone (clear_demo cascades).
+        Event.objects.filter(pk=event.pk).update(
+            subject_type="meso.plan", subject_id="999999"
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+
+        assert result["active_users"]["coaches"]["window"] == 0
+        assert _feature(result, "plan_created")["times"] == 0
+
+    def test_non_demo_event_still_counts(self, now):
+        coach = UserFactory()
+        _event(
+            EventName.PLAN_CREATED,
+            actor=coach,
+            created=now - datetime.timedelta(days=1),
+            demo=False,
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+
+        assert result["active_users"]["coaches"]["window"] == 1
+        assert _feature(result, "plan_created")["times"] == 1
+
+    def test_self_only_coach_set_logged_on_a_deleted_log_is_not_an_athlete(self, now):
+        coach = UserFactory()
+        _self_link(coach)
+        event = _event(
+            EventName.SET_LOGGED, actor=coach, created=now - datetime.timedelta(days=1)
+        )
+        Event.objects.filter(pk=event.pk).update(
+            subject_type="meso.sessionlog", subject_id="999999"
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+
+        assert result["active_users"]["athletes"]["window"] == 0
+
+    def test_client_athlete_set_logged_on_a_deleted_log_still_counts(self, now):
+        athlete = UserFactory()
+        _relationship(athlete=athlete)
+        event = _event(
+            EventName.SET_LOGGED,
+            actor=athlete,
+            created=now - datetime.timedelta(days=1),
+        )
+        Event.objects.filter(pk=event.pk).update(
+            subject_type="meso.sessionlog", subject_id="999999"
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+
+        assert result["active_users"]["athletes"]["window"] == 1
+
+    def test_session_completed_on_a_self_plan_is_not_an_athlete_row(self, now):
+        coach = UserFactory()
+        link = _self_link(coach)
+        log = _logged_set(coach, _plan(link), now - datetime.timedelta(days=1))
+        _event(
+            EventName.SESSION_COMPLETED,
+            actor=coach,
+            subject=log,
+            created=now - datetime.timedelta(days=1),
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+
+        assert _feature(result, "session_completed")["users"] == 0
+        assert _feature(result, "session_completed")["times"] == 0
+
+    def test_push_enabled_by_a_self_only_coach_is_not_an_athlete_row(self, now):
+        coach = UserFactory()
+        _self_link(coach)
+        sub = PushSubscription.objects.create(
+            athlete=coach, endpoint="https://push.example/self", p256dh="k", auth="a"
+        )
+        PushSubscription.objects.filter(pk=sub.pk).update(
+            created_at=now - datetime.timedelta(days=1)
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+
+        assert _feature(result, "push_enabled")["users"] == 0
+
+
+class TestRequestClaimedByAnOlderInvite:
+    def test_request_claimed_by_an_invite_sent_before_the_window_is_a_request(
+        self, now
+    ):
+        coach = UserFactory()
+        athlete = UserFactory()
+        link = CoachAthleteFactory(
+            coach=coach,
+            athlete=athlete,
+            invited_by=CoachAthlete.InvitedBy.ATHLETE,
+            status=CoachAthlete.Status.ACTIVE,
+        )
+        CoachAthlete.objects.filter(pk=link.pk).update(
+            created_at=now - datetime.timedelta(days=5),
+            responded_at=now - datetime.timedelta(days=4),
+        )
+        invite = CoachInviteFactory(
+            coach=coach,
+            accepted_by=athlete,
+            accepted_link=link,
+            status=CoachInvite.Status.ACCEPTED,
+        )
+        CoachInvite.objects.filter(pk=invite.pk).update(
+            created_at=now - datetime.timedelta(days=60),
+            responded_at=now - datetime.timedelta(days=4),
+        )
+
+        paths = _paths(presenters.product_analytics(days=30, now=now))
+
+        assert paths["email_invite"]["sent"] == 0
+        assert paths["athlete_request"]["sent"] == 1
+        assert paths["all"]["sent"] == 1
+
+
 class TestProductAnalyticsView:
     def test_anonymous_is_redirected_to_login(self, client):
         resp = client.get(reverse("meso:product_analytics"))
@@ -1574,6 +1709,28 @@ class TestProductAnalyticsQueryCount:
                 EmailKind.BLOCK_DELIVERED, sent_at=now - datetime.timedelta(days=1)
             )
             _email_event(sent, EmailEvent.EventType.OPEN)
+            # An accepted athlete request through to a logged set, so the
+            # athlete-request cohort scales with n too.
+            requester = UserFactory()
+            request = CoachAthleteFactory(
+                coach=coach,
+                athlete=requester,
+                invited_by=CoachAthlete.InvitedBy.ATHLETE,
+                status=CoachAthlete.Status.ACTIVE,
+            )
+            CoachAthlete.objects.filter(pk=request.pk).update(
+                created_at=now - datetime.timedelta(days=3),
+                responded_at=now - datetime.timedelta(days=3),
+            )
+            request_plan = _plan(request)
+            request_week = _week_for(request_plan)
+            _deliver_week(request_week, now - datetime.timedelta(days=2))
+            _logged_set(
+                requester,
+                request_plan,
+                now - datetime.timedelta(days=1),
+                week=request_week,
+            )
 
     def test_query_count_is_fixed_regardless_of_data_size(self, client, now):
         client.force_login(UserFactory(is_staff=True))
