@@ -1974,6 +1974,39 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     });
   });
 
+  it("shows another tab's replayed text on a line this tab never touched", async () => {
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.text = "100 x 5";
+    line.savedText = "100 x 5";
+    c.writeQueue([
+      { kind: "cell", url: CELL_URL, body: { exercise_id: 1, line: 1, text: "110 x 5" } },
+    ]);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "110 x 5", warn: false } } }),
+    );
+    await c.flushQueue();
+    expect(line.text).toBe("110 x 5");
+    global.fetch.mockClear();
+    await c.saveCell(c.exercises[0], 1); // tabbed through: nothing to send
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("leaves a line this tab is editing alone when a replay lands", async () => {
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.text = "120 x 5"; // typed here, not yet blurred
+    line.savedText = "100 x 5";
+    c.writeQueue([
+      { kind: "cell", url: CELL_URL, body: { exercise_id: 1, line: 1, text: "110 x 5" } },
+    ]);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "110 x 5", warn: false } } }),
+    );
+    await c.flushQueue();
+    expect(line.text).toBe("120 x 5");
+  });
+
   it("says a line couldn't save when storage refuses the queue", async () => {
     const c = cellLogger();
     vi.spyOn(console, "error").mockImplementation(() => {});

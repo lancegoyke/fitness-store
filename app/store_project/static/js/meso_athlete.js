@@ -935,7 +935,19 @@ function createLogger() {
         // and reconciles.
         return "saved";
       }
-      if (entry) entry.savedText = text;
+      if (entry) {
+        // A replay of text another tab queued: if this tab never touched the
+        // line, show what the server now holds, or a later blur here would
+        // post the old text back over it.
+        if (
+          fromQueue &&
+          entry.savedText !== undefined &&
+          entry.text === entry.savedText
+        ) {
+          entry.text = text;
+        }
+        entry.savedText = text;
+      }
       // Drop a stale response. Two saves for the same sub-line can be in
       // flight at once, and the older one can land last — so fixing `225 x`
       // to `225 x 5` could re-apply the first reply's warn and leave the cell
