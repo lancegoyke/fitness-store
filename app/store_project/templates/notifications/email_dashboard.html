@@ -1,279 +1,281 @@
-{% extends "meso/_meso_base.html" %}
+{% extends "admin/base_site.html" %}
 
-{% block title %}Email deliverability · Meso{% endblock %}
+{% block extrastyle %}
+  {{ block.super }}
+  <style>
+    .email-dashboard .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .email-dashboard .toolbar form {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .email-dashboard .totals-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px 28px;
+      padding: 10px;
+    }
+    .email-dashboard .totals-grid .label {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: var(--body-quiet-color);
+      margin: 0;
+    }
+    .email-dashboard .totals-grid .value {
+      font-size: 20px;
+      font-weight: 700;
+      margin: 0;
+    }
+    .email-dashboard .warn { color: var(--error-fg); }
+    .email-dashboard .muted { padding: 0 10px 10px; font-size: 11.5px; color: var(--body-quiet-color); }
+    .email-dashboard table td.num, .email-dashboard table th.num { text-align: right; }
+    .email-dashboard .cols-2 { display: flex; gap: 20px; flex-wrap: wrap; }
+    .email-dashboard .cols-2 > div { flex: 1 1 320px; }
+    .email-dashboard .recipient-list { padding: 0 10px 10px; font-size: 12.5px; }
+    .email-dashboard .recipient-list p { margin: 4px 0; }
+  </style>
+{% endblock %}
 
 {% block content %}
-  <div class="meso-page">
-    <div class="meso-crumbs">
-      <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span> <span>Email</span>
-    </div>
+  <div class="email-dashboard">
+    <p>
+      Last {{ days }} day{{ days|pluralize }} · SES send/delivery/open/click/bounce/complaint events.
+    </p>
 
-    <div class="meso-pagehead">
-      <div>
-        <p class="meso-eyebrow">Owner · email deliverability</p>
-        <h1 class="meso-h1">Email</h1>
-        <p class="meso-sub">Last {{ days }} day{{ days|pluralize }} · SES send/delivery/open/click/bounce/complaint events</p>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <a class="meso-btn meso-btn--ghost" href="?days=7{% if q %}&q={{ q|urlencode }}{% endif %}">7 days</a>
-        <a class="meso-btn meso-btn--ghost" href="?days=30{% if q %}&q={{ q|urlencode }}{% endif %}">30 days</a>
-        <a class="meso-btn meso-btn--ghost" href="?days=90{% if q %}&q={{ q|urlencode }}{% endif %}">90 days</a>
-        <form method="get" style="display:flex;align-items:center;gap:6px;">
-          <input type="hidden" name="days" value="{{ days }}" />
-          <input
-            type="email"
-            name="q"
-            value="{{ q }}"
-            placeholder="recipient email"
-            style="padding:6px 10px;border:1px solid var(--line-2);border-radius:7px;font-size:13px;"
-          />
-          <button class="meso-btn meso-btn--ghost" type="submit">Search</button>
-        </form>
-      </div>
+    <div class="toolbar">
+      <a class="button" href="?days=7{% if q %}&q={{ q|urlencode }}{% endif %}">7 days</a>
+      <a class="button" href="?days=30{% if q %}&q={{ q|urlencode }}{% endif %}">30 days</a>
+      <a class="button" href="?days=90{% if q %}&q={{ q|urlencode }}{% endif %}">90 days</a>
+      <form method="get">
+        <input type="hidden" name="days" value="{{ days }}" />
+        <input type="email" name="q" value="{{ q }}" placeholder="recipient email" />
+        <button class="button" type="submit">Search</button>
+      </form>
     </div>
 
     <!-- Totals -->
-    <div class="meso-card meso-card--pad" data-testid="email-totals" style="margin-bottom:14px;">
-      <p class="meso-eyebrow">Totals</p>
-      <div style="display:flex;flex-wrap:wrap;gap:16px 28px;margin-top:8px;">
+    <div class="module" data-testid="email-totals">
+      <h2>Totals</h2>
+      <div class="totals-grid">
         <div>
-          <div class="meso-row-meta">Sent</div>
-          <div style="font-size:20px;font-weight:700;" data-testid="email-totals-sent">{{ totals.sent }}</div>
+          <p class="label">Sent</p>
+          <p class="value" data-testid="email-totals-sent">{{ totals.sent }}</p>
         </div>
         <div>
-          <div class="meso-row-meta">Delivered</div>
-          <div style="font-size:20px;font-weight:700;" data-testid="email-totals-delivery">{{ totals.delivery }}</div>
+          <p class="label">Delivered</p>
+          <p class="value" data-testid="email-totals-delivery">{{ totals.delivery }}</p>
         </div>
         <div>
-          <div class="meso-row-meta">Opened</div>
-          <div style="font-size:20px;font-weight:700;" data-testid="email-totals-open">{{ totals.open }}</div>
+          <p class="label">Opened</p>
+          <p class="value" data-testid="email-totals-open">{{ totals.open }}</p>
         </div>
         <div>
-          <div class="meso-row-meta">Clicked</div>
-          <div style="font-size:20px;font-weight:700;" data-testid="email-totals-click">{{ totals.click }}</div>
+          <p class="label">Clicked</p>
+          <p class="value" data-testid="email-totals-click">{{ totals.click }}</p>
         </div>
         <div>
-          <div class="meso-row-meta">Bounced</div>
-          <div style="font-size:20px;font-weight:700;color:var(--warn);" data-testid="email-totals-bounce">{{ totals.bounce }}</div>
+          <p class="label">Bounced</p>
+          <p class="value warn" data-testid="email-totals-bounce">{{ totals.bounce }}</p>
         </div>
         <div>
-          <div class="meso-row-meta">Complained</div>
-          <div style="font-size:20px;font-weight:700;color:var(--warn);" data-testid="email-totals-complaint">{{ totals.complaint }}</div>
+          <p class="label">Complained</p>
+          <p class="value warn" data-testid="email-totals-complaint">{{ totals.complaint }}</p>
         </div>
       </div>
-      <p class="meso-muted" style="margin:12px 0 0;font-size:11.5px;">
+      <p class="muted">
         "Sent" counts messages we handed to SES locally (<code>SentEmail</code>) — SES's own Send event
         ({{ totals.send }} in this window) only arrives once the "Tracking" configuration set publishes it, so it
         can lag or never arrive; the local count above is the trustworthy number.
       </p>
-      <p class="meso-muted" style="margin:6px 0 0;font-size:11.5px;">
+      <p class="muted">
         Opens are directional: Gmail's image proxy and Apple Mail Privacy Protection prefetch tracking pixels, so
         opens are over-counted; <code>isBotEvent</code> is shown below as SES reports it.
       </p>
     </div>
 
     <!-- Per-kind breakdown -->
-    <div class="meso-card" style="margin-bottom:14px;">
-      <div style="padding:13px 16px;border-bottom:1px solid var(--line-2);">
-        <p class="meso-eyebrow" style="margin:0;">By kind</p>
-      </div>
-      <div style="overflow-x:auto;">
-        <table data-testid="email-by-kind" style="width:100%;border-collapse:collapse;font-size:13px;">
-          <thead>
-            <tr style="text-align:left;color:var(--dim);">
-              <th style="padding:9px 16px;font-weight:650;">Kind</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Sent</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Delivered</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Opened</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Open rate</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Clicked</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Bounced</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Bounce rate</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Complained</th>
+    <div class="module">
+      <table data-testid="email-by-kind">
+        <caption>By kind</caption>
+        <thead>
+          <tr>
+            <th scope="col">Kind</th>
+            <th scope="col" class="num">Sent</th>
+            <th scope="col" class="num">Delivered</th>
+            <th scope="col" class="num">Opened</th>
+            <th scope="col" class="num">Open rate</th>
+            <th scope="col" class="num">Clicked</th>
+            <th scope="col" class="num">Bounced</th>
+            <th scope="col" class="num">Bounce rate</th>
+            <th scope="col" class="num">Complained</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in by_kind %}
+            <tr>
+              <th scope="row">{{ row.label }}</th>
+              <td class="num"><b>{{ row.sent }}</b></td>
+              <td class="num">{{ row.delivery }}</td>
+              <td class="num">{{ row.open }}</td>
+              <td class="num">{% if row.open_rate is None %}—{% else %}{{ row.open_rate }}%{% endif %}</td>
+              <td class="num">{{ row.click }}</td>
+              <td class="num{% if row.bounce %} warn{% endif %}">{{ row.bounce }}</td>
+              <td class="num">{{ row.bounce_rate }}%</td>
+              <td class="num{% if row.complaint %} warn{% endif %}">{{ row.complaint }}</td>
             </tr>
-          </thead>
-          <tbody>
-            {% for row in by_kind %}
-              <tr style="border-top:1px solid var(--line-2);">
-                <td style="padding:9px 16px;">{{ row.label }}</td>
-                <td style="padding:9px 16px;text-align:right;"><b>{{ row.sent }}</b></td>
-                <td style="padding:9px 16px;text-align:right;">{{ row.delivery }}</td>
-                <td style="padding:9px 16px;text-align:right;">{{ row.open }}</td>
-                <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ row.open_rate }}%</td>
-                <td style="padding:9px 16px;text-align:right;">{{ row.click }}</td>
-                <td style="padding:9px 16px;text-align:right;{% if row.bounce %}color:var(--warn);{% endif %}">{{ row.bounce }}</td>
-                <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ row.bounce_rate }}%</td>
-                <td style="padding:9px 16px;text-align:right;{% if row.complaint %}color:var(--warn);{% endif %}">{{ row.complaint }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
 
     <!-- Per-day trend -->
-    <div class="meso-card" style="margin-bottom:14px;">
-      <div style="padding:13px 16px;border-bottom:1px solid var(--line-2);">
-        <p class="meso-eyebrow" style="margin:0;">By day</p>
-      </div>
-      <div style="overflow-x:auto;">
-        <table data-testid="email-by-day" style="width:100%;border-collapse:collapse;font-size:13px;">
-          <thead>
-            <tr style="text-align:left;color:var(--dim);">
-              <th style="padding:9px 16px;font-weight:650;">Date</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Sent</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Delivered</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Opened</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Clicked</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Bounced</th>
-              <th style="padding:9px 16px;font-weight:650;text-align:right;">Complained</th>
+    <div class="module">
+      <table data-testid="email-by-day">
+        <caption>By day</caption>
+        <thead>
+          <tr>
+            <th scope="col">Date</th>
+            <th scope="col" class="num">Sent</th>
+            <th scope="col" class="num">Delivered</th>
+            <th scope="col" class="num">Opened</th>
+            <th scope="col" class="num">Clicked</th>
+            <th scope="col" class="num">Bounced</th>
+            <th scope="col" class="num">Complained</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for day in by_day %}
+            <tr>
+              <th scope="row">{{ day.date }}</th>
+              <td class="num">{{ day.sent }}</td>
+              <td class="num">{{ day.delivery }}</td>
+              <td class="num">{{ day.open }}</td>
+              <td class="num">{{ day.click }}</td>
+              <td class="num{% if day.bounce %} warn{% endif %}">{{ day.bounce }}</td>
+              <td class="num{% if day.complaint %} warn{% endif %}">{{ day.complaint }}</td>
             </tr>
-          </thead>
-          <tbody>
-            {% for day in by_day %}
-              <tr style="border-top:1px solid var(--line-2);">
-                <td style="padding:9px 16px;">{{ day.date }}</td>
-                <td style="padding:9px 16px;text-align:right;">{{ day.sent }}</td>
-                <td style="padding:9px 16px;text-align:right;">{{ day.delivery }}</td>
-                <td style="padding:9px 16px;text-align:right;">{{ day.open }}</td>
-                <td style="padding:9px 16px;text-align:right;">{{ day.click }}</td>
-                <td style="padding:9px 16px;text-align:right;{% if day.bounce %}color:var(--warn);{% endif %}">{{ day.bounce }}</td>
-                <td style="padding:9px 16px;text-align:right;{% if day.complaint %}color:var(--warn);{% endif %}">{{ day.complaint }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
 
     {% if recipient %}
       <!-- Recipient lookup -->
-      <div class="meso-card" data-testid="email-recipient" style="margin-bottom:14px;border-left:3px solid var(--accent);">
-        <div style="padding:13px 16px;border-bottom:1px solid var(--line-2);">
-          <p class="meso-eyebrow" style="margin:0;">Recipient · {{ recipient.query }}</p>
-        </div>
-        <div style="padding:13px 16px;">
-          <p class="meso-row-meta" style="margin:0 0 8px;">Sent</p>
+      <div class="module" data-testid="email-recipient">
+        <h2>Recipient · {{ recipient.query }}</h2>
+        <div class="recipient-list">
+          <p><strong>Sent</strong></p>
           {% for s in recipient.sent %}
-            <div class="meso-row-meta" style="padding:4px 0;">
-              {{ s.sent_at }} · {{ s.get_kind_display }} · {{ s.subject|default:"(no subject)" }}
-            </div>
+            <p>{{ s.sent_at }} · {{ s.get_kind_display }} · {{ s.subject|default:"(no subject)" }}</p>
           {% empty %}
-            <div class="meso-row-meta" style="color:var(--dim);">No sent messages for this recipient.</div>
+            <p class="muted">No sent messages for this recipient.</p>
           {% endfor %}
-        </div>
-        <div style="padding:0 16px 13px;">
-          <p class="meso-row-meta" style="margin:8px 0;">Events</p>
+          <p><strong>Events</strong></p>
           {% for e in recipient.events %}
-            <div class="meso-row-meta" style="padding:4px 0;">
-              {{ e.occurred_at }} · {{ e.get_event_type_display }} · {{ e.get_kind_display }}
-            </div>
+            <p>{{ e.occurred_at }} · {{ e.get_event_type_display }} · {{ e.get_kind_display }}</p>
           {% empty %}
-            <div class="meso-row-meta" style="color:var(--dim);">No events for this recipient.</div>
+            <p class="muted">No events for this recipient.</p>
           {% endfor %}
         </div>
       </div>
     {% endif %}
 
-    <div class="meso-grid meso-grid--profile">
-      <!-- left rail: blacklist -->
-      <div style="display:flex;flex-direction:column;gap:14px;">
-        <div class="meso-card">
-          <div style="padding:13px 16px;border-bottom:1px solid var(--line-2);">
-            <p class="meso-eyebrow" style="margin:0;">SES blacklist</p>
-          </div>
-          <div data-testid="email-blacklist">
-            {% for entry in blacklist %}
-              <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line-2);">
-                <span class="meso-row-name" style="font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;">{{ entry.email }}</span>
-                <div class="meso-spacer"></div>
-                <form method="post" action="{% url 'notifications:email_blacklist_clear' entry.pk %}">
-                  {% csrf_token %}
-                  <button class="meso-btn meso-btn--ghost" type="submit" style="padding:4px 10px;font-size:12px;">Clear</button>
-                </form>
-              </div>
-            {% empty %}
-              <div class="meso-row" style="color:var(--dim);padding:16px;">Nothing blacklisted.</div>
-            {% endfor %}
-          </div>
+    <div class="cols-2">
+      <!-- left column: blacklist + problems -->
+      <div>
+        <div class="module" data-testid="email-blacklist">
+          <h2>SES blacklist</h2>
+          <table>
+            <tbody>
+              {% for entry in blacklist %}
+                <tr>
+                  <td>{{ entry.email }}</td>
+                  <td class="num">
+                    <form method="post" action="{% url 'notifications:email_blacklist_clear' entry.pk %}">
+                      {% csrf_token %}
+                      <button class="button" type="submit">Clear</button>
+                    </form>
+                  </td>
+                </tr>
+              {% empty %}
+                <tr><td class="muted">Nothing blacklisted.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
 
         <!-- Problems: bounces + complaints in window -->
-        <div class="meso-card">
-          <div style="padding:13px 16px;border-bottom:1px solid var(--line-2);">
-            <p class="meso-eyebrow" style="margin:0;">Problems</p>
-          </div>
-          <div style="overflow-x:auto;" data-testid="email-problems">
-            <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
-              <thead>
-                <tr style="text-align:left;color:var(--dim);">
-                  <th style="padding:8px 16px;font-weight:650;">When</th>
-                  <th style="padding:8px 16px;font-weight:650;">Type</th>
-                  <th style="padding:8px 16px;font-weight:650;">Recipient</th>
-                  <th style="padding:8px 16px;font-weight:650;">Detail</th>
+        <div class="module">
+          <table data-testid="email-problems">
+            <caption>Problems</caption>
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">Type</th>
+                <th scope="col">Recipient</th>
+                <th scope="col">Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in problems %}
+                <tr>
+                  <td style="white-space:nowrap;">{{ p.occurred_at }}</td>
+                  <td class="warn">{{ p.get_event_type_display }}</td>
+                  <td>{{ p.recipient }}</td>
+                  <td>{{ p.bounce_type }}{% if p.bounce_subtype %} / {{ p.bounce_subtype }}{% endif %}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {% for p in problems %}
-                  <tr style="border-top:1px solid var(--line-2);">
-                    <td style="padding:8px 16px;white-space:nowrap;">{{ p.occurred_at }}</td>
-                    <td style="padding:8px 16px;color:var(--warn);">{{ p.get_event_type_display }}</td>
-                    <td style="padding:8px 16px;">{{ p.recipient }}</td>
-                    <td style="padding:8px 16px;">{{ p.bounce_type }}{% if p.bounce_subtype %} / {{ p.bounce_subtype }}{% endif %}</td>
-                  </tr>
-                {% empty %}
-                  <tr>
-                    <td style="padding:16px;color:var(--dim);" colspan="4">No bounces or complaints in this window.</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+              {% empty %}
+                <tr>
+                  <td class="muted" colspan="4">No bounces or complaints in this window.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
       </div>
 
-      <!-- main: recent events -->
-      <div style="display:flex;flex-direction:column;gap:14px;">
-        <div class="meso-card">
-          <div style="padding:13px 16px;border-bottom:1px solid var(--line-2);">
-            <p class="meso-eyebrow" style="margin:0;">Recent events</p>
-          </div>
-          <div style="overflow-x:auto;">
-            <table data-testid="email-recent" style="width:100%;border-collapse:collapse;font-size:12.5px;">
-              <thead>
-                <tr style="text-align:left;color:var(--dim);">
-                  <th style="padding:8px 16px;font-weight:650;">When</th>
-                  <th style="padding:8px 16px;font-weight:650;">Event</th>
-                  <th style="padding:8px 16px;font-weight:650;">Kind</th>
-                  <th style="padding:8px 16px;font-weight:650;">Recipient</th>
-                  <th style="padding:8px 16px;font-weight:650;">Subject</th>
-                  <th style="padding:8px 16px;font-weight:650;">User agent</th>
-                  <th style="padding:8px 16px;font-weight:650;">Bot?</th>
-                  <th style="padding:8px 16px;font-weight:650;">Link</th>
+      <!-- right column: recent events -->
+      <div>
+        <div class="module">
+          <table data-testid="email-recent">
+            <caption>Recent events</caption>
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">Event</th>
+                <th scope="col">Kind</th>
+                <th scope="col">Recipient</th>
+                <th scope="col">Subject</th>
+                <th scope="col">User agent</th>
+                <th scope="col">Bot?</th>
+                <th scope="col">Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for e in recent %}
+                <tr>
+                  <td style="white-space:nowrap;">{{ e.occurred_at }}</td>
+                  <td>{{ e.get_event_type_display }}</td>
+                  <td>{{ e.get_kind_display }}</td>
+                  <td>{{ e.recipient }}</td>
+                  <td>{% if e.sent_email %}{{ e.sent_email.subject|default:"—" }}{% else %}—{% endif %}</td>
+                  <td class="muted">{{ e.user_agent|truncatechars:40 }}</td>
+                  <td>{{ e.is_bot }}</td>
+                  <td>{% if e.link %}<a href="{{ e.link }}" rel="noopener">{{ e.link|truncatechars:30 }}</a>{% endif %}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {% for e in recent %}
-                  <tr style="border-top:1px solid var(--line-2);">
-                    <td style="padding:8px 16px;white-space:nowrap;">{{ e.occurred_at }}</td>
-                    <td style="padding:8px 16px;">{{ e.get_event_type_display }}</td>
-                    <td style="padding:8px 16px;">{{ e.get_kind_display }}</td>
-                    <td style="padding:8px 16px;">{{ e.recipient }}</td>
-                    <td style="padding:8px 16px;">{% if e.sent_email %}{{ e.sent_email.subject|default:"—" }}{% else %}—{% endif %}</td>
-                    <td style="padding:8px 16px;color:var(--dim);">{{ e.user_agent|truncatechars:40 }}</td>
-                    <td style="padding:8px 16px;">{{ e.is_bot }}</td>
-                    <td style="padding:8px 16px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                      {% if e.link %}<a href="{{ e.link }}" rel="noopener">{{ e.link|truncatechars:30 }}</a>{% endif %}
-                    </td>
-                  </tr>
-                {% empty %}
-                  <tr>
-                    <td style="padding:16px;color:var(--dim);" colspan="8">No events yet.</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+              {% empty %}
+                <tr>
+                  <td class="muted" colspan="8">No events yet.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

@@ -5,11 +5,13 @@ import stripe
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.sites.models import Site
-from django.core.mail import send_mail
+from django.core.mail import EmailMultiAlternatives
 from django.http.response import HttpResponse
 from django.template.loader import render_to_string
 from django.urls import reverse
 
+from store_project.notifications.emails import tag_kind
+from store_project.notifications.models import EmailKind
 from store_project.products.models import Product
 
 User = get_user_model()
@@ -39,15 +41,16 @@ def order_confirmation_email(
         "payments/email/order_confirmation.html",
         context,
     )
+    message = EmailMultiAlternatives(
+        subject="Your order was successful!",
+        body=msg_plain,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[user.email],
+    )
+    message.attach_alternative(msg_html, "text/html")
+    tag_kind(message, EmailKind.ORDER_CONFIRMATION)
     try:
-        send_mail(
-            subject="Your order was successful!",
-            message=msg_plain,
-            html_message=msg_html,
-            from_email=None,  # will default to settings.DEFAULT_FROM_EMAIL
-            recipient_list=[user.email],
-            fail_silently=False,  # raises smtplib.SMTPException
-        )
+        message.send(fail_silently=False)  # raises smtplib.SMTPException
     except botocore.exceptions.ClientError as e:
         print(f"Send email error: {e}")
         return HttpResponse(status=500)

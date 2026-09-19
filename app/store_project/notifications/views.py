@@ -10,6 +10,11 @@ Gate + window handling mirror ``meso.views.TourFunnelView`` /
 ``UsageDashboardView`` exactly: anonymous → login redirect (the
 ``UserPassesTestMixin`` default), authenticated non-staff → a flat 403 (so a
 logged-in coach or athlete can't probe org-wide delivery data), staff → 200.
+
+Issue #514 moved the dashboard's template off the Meso shell onto
+``admin/base_site.html``, so its context now also carries
+``admin.site.each_context`` (site header, user tools, the app-list nav
+sidebar, ...) -- the same context every real admin page gets.
 """
 
 import datetime
@@ -17,6 +22,7 @@ import json
 import logging
 
 from django.conf import settings
+from django.contrib import admin
 from django.contrib import messages
 from django.contrib.auth.mixins import UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
@@ -64,10 +70,13 @@ class EmailDashboardView(UserPassesTestMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        ctx.update(admin.site.each_context(self.request))
         days = self._days()
         since = timezone.now() - datetime.timedelta(days=days)
         q = (self.request.GET.get("q") or "").strip()
-        ctx["active"] = "email"
+        # Drives admin/base_site.html's own <title>, breadcrumbs, and <h1> --
+        # all three read this one context key, no block overrides needed.
+        ctx["title"] = "Email deliverability"
         ctx["days"] = days
         ctx["q"] = q
         ctx.update(presenters.email_dashboard(since=since, recipient_query=q))

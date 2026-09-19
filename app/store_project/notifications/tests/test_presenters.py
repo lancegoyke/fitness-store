@@ -19,6 +19,7 @@ from django.utils import timezone
 from django_ses.models import BlacklistedEmail
 
 from store_project.notifications import presenters
+from store_project.notifications.models import TEXT_ONLY_KINDS
 from store_project.notifications.models import EmailEvent
 from store_project.notifications.models import EmailKind
 from store_project.notifications.models import SentEmail
@@ -110,10 +111,13 @@ class TestByKind:
         assert [row["kind"] for row in result["by_kind"]] == [
             value for value, _ in EmailKind.choices
         ]
-        assert all(
-            row["sent"] == 0 and row["open_rate"] == 0 and row["bounce_rate"] == 0
-            for row in result["by_kind"]
-        )
+        for row in result["by_kind"]:
+            assert row["sent"] == 0
+            assert row["bounce_rate"] == 0
+            if row["kind"] in TEXT_ONLY_KINDS:
+                assert row["open_rate"] is None
+            else:
+                assert row["open_rate"] == 0
 
     def test_counts_and_rates_per_kind(self):
         since = timezone.now() - datetime.timedelta(days=1)
@@ -147,14 +151,53 @@ class TestByKind:
 
     def test_zero_sent_gives_zero_rate(self):
         since = timezone.now() - datetime.timedelta(days=1)
-        _event(EmailEvent.EventType.OPEN, kind=EmailKind.CONTACT_ACK)
+        _event(EmailEvent.EventType.OPEN, kind=EmailKind.COACH_INVITE)
 
         result = presenters.email_dashboard(since=since)
 
-        row = next(r for r in result["by_kind"] if r["kind"] == EmailKind.CONTACT_ACK)
+        row = next(r for r in result["by_kind"] if r["kind"] == EmailKind.COACH_INVITE)
         assert row["open"] == 1
         assert row["sent"] == 0
         assert row["open_rate"] == 0
+
+
+# ---------------------------------------------------------------------------
+# text-only kinds: open_rate is None, never a misleading 0%
+# ---------------------------------------------------------------------------
+
+
+class TestTextOnlyOpenRate:
+    """SES can only track an open via a tracking pixel in an HTML part.
+
+    ``account_confirmation``, ``password_reset``, ``account_notice``,
+    ``contact_owner``, and ``contact_ack`` are sent as plain text (issue
+    #514) — their ``open_rate`` must be ``None`` regardless of sent/open
+    counts, not a number that implies the metric is meaningful for them.
+    """
+
+    @pytest.mark.parametrize("kind", sorted(TEXT_ONLY_KINDS))
+    def test_open_rate_is_none_even_with_opens_recorded(self, kind):
+        since = timezone.now() - datetime.timedelta(days=1)
+        _sent(kind=kind)
+        _event(EmailEvent.EventType.OPEN, kind=kind)
+
+        result = presenters.email_dashboard(since=since)
+
+        row = next(r for r in result["by_kind"] if r["kind"] == kind)
+        assert row["open"] == 1
+        assert row["open_rate"] is None
+
+    def test_html_kinds_still_get_a_numeric_rate(self):
+        since = timezone.now() - datetime.timedelta(days=1)
+        _sent(kind=EmailKind.ORDER_CONFIRMATION)
+        _event(EmailEvent.EventType.OPEN, kind=EmailKind.ORDER_CONFIRMATION)
+
+        result = presenters.email_dashboard(since=since)
+
+        row = next(
+            r for r in result["by_kind"] if r["kind"] == EmailKind.ORDER_CONFIRMATION
+        )
+        assert row["open_rate"] == 100
 
 
 # ---------------------------------------------------------------------------

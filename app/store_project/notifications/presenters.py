@@ -27,6 +27,7 @@ from django.db.models.functions import TruncDate
 from django.utils import timezone
 from django_ses.models import BlacklistedEmail
 
+from .models import TEXT_ONLY_KINDS
 from .models import EmailEvent
 from .models import EmailKind
 from .models import SentEmail
@@ -63,9 +64,15 @@ def email_dashboard(*, since, recipient_query=""):
       docstring on why that, not the ``send`` event count, is authoritative).
     - ``by_kind`` — one row per ``EmailKind`` value, in choices order
       (0-filled): ``{"kind", "label", "sent", "delivery", "open", "click",
-      "bounce", "complaint", "open_rate", "bounce_rate"}``. The two rates are
-      percentages of ``sent``, rounded, 0 when ``sent`` is 0, and capped at
-      100 (an open can be counted more than once by a mail-client proxy).
+      "bounce", "complaint", "open_rate", "bounce_rate"}``. Both rates are
+      percentages of ``sent``, rounded and capped at 100 (an open can be
+      counted more than once by a mail-client proxy). ``open_rate`` is
+      ``None`` — not ``0`` — for a kind in ``TEXT_ONLY_KINDS``: those are
+      sent without an HTML part, so SES has no tracking pixel to report an
+      open against and the rate would otherwise misleadingly read as "0%
+      opened" rather than "not measured". ``bounce_rate`` is unaffected (a
+      bounce is independent of the message having an HTML part) and, like
+      ``open_rate`` for every other kind, is 0 when ``sent`` is 0.
     - ``by_day`` — one row per calendar day from ``since`` to today
       (inclusive, ascending, 0-filled): ``{"date", "sent", "delivery",
       "open", "click", "bounce", "complaint"}``.
@@ -160,7 +167,9 @@ def _by_kind(events_qs, sent_qs):
                 "click": kind_counts.get("click", 0),
                 "bounce": bounce_count,
                 "complaint": kind_counts.get("complaint", 0),
-                "open_rate": _rate(open_count, sent),
+                "open_rate": None
+                if value in TEXT_ONLY_KINDS
+                else _rate(open_count, sent),
                 "bounce_rate": _rate(bounce_count, sent),
             }
         )

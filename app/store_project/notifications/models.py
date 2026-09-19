@@ -40,7 +40,31 @@ class EmailKind(models.TextChoices):
     CONTACT_OWNER = "contact_owner", _("Contact form (owner copy)")
     CONTACT_ACK = "contact_ack", _("Contact form (sender ack)")
     MARGIN_ALERT = "margin_alert", _("Margin alert")
+    ORDER_CONFIRMATION = "order_confirmation", _("Order confirmation")
+    ACCOUNT_CONFIRMATION = "account_confirmation", _("Account confirmation")
+    PASSWORD_RESET = "password_reset", _("Password reset")
+    ACCOUNT_NOTICE = "account_notice", _("Account notice")
     OTHER = "other", _("Other")
+
+
+# EmailKind values whose *every* send path is plain text (no HTML
+# alternative, ever). SES only tracks opens via an invisible tracking pixel
+# in an HTML part, so these can never register an open — the dashboard
+# (presenters._by_kind) reports their open_rate as None (rendered "—", not a
+# misleading 0%) rather than counting them against a metric they structurally
+# cannot produce. Kept honest by
+# notifications.tests.test_text_only_kinds, which sends through every real
+# tagged sender and asserts this set matches which messages actually carry an
+# HTML part.
+TEXT_ONLY_KINDS = frozenset(
+    {
+        EmailKind.ACCOUNT_CONFIRMATION,
+        EmailKind.PASSWORD_RESET,
+        EmailKind.ACCOUNT_NOTICE,
+        EmailKind.CONTACT_OWNER,
+        EmailKind.CONTACT_ACK,
+    }
+)
 
 
 class SentEmail(models.Model):
