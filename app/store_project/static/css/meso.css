@@ -98,6 +98,14 @@ body.meso {
   background: transparent;
 }
 
+/* The `hidden` attribute always wins inside Meso (#517). The UA's
+   `[hidden] { display: none }` loses to any author `display`, whether an
+   inline style or a class like .meso-btn's inline-flex, so an element the
+   JS hid stayed on screen. */
+.meso [hidden] {
+  display: none !important;
+}
+
 @keyframes msgIn {
   from {
     opacity: 0;
