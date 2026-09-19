@@ -801,14 +801,18 @@ def coach_style(coach):
 RPE_FLAG_THRESHOLD = 1.0
 
 
+def _text_lines(text):
+    """A freeform cell's text as its non-blank lines, stripped, in order."""
+    return [line.strip() for line in (text or "").splitlines() if line.strip()]
+
+
 def _text_label(text):
     """A one-line display label for a freeform cell's text (Phase 2a).
 
     The coach's own notation IS the target label now — verbatim, with a
     multi-line cell folded to `` · `` separators; "—" for a blank cell.
     """
-    parts = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    return " · ".join(parts) or "—"
+    return " · ".join(_text_lines(text)) or "—"
 
 
 def _results_target_label(prescription, recovered_rpe=None):
@@ -1132,17 +1136,27 @@ def _athlete_session_row(session, *, done):
     }
 
 
-def _cell_summary(cell):
-    """A read-only prescription summary for one athlete-table cell.
+def _cell_lines(cell):
+    """One athlete-table cell's prescription stack, one entry per line.
 
     Reads a ``serialize_mesocycle_grid`` cell dict (the athlete table is
     transformed from that coach grid, not from ``Prescription`` rows): the
-    freeform ``text`` verbatim (Phase 2a), with any non-blank sub-lines folded
-    in after it so the athlete sees the whole stack.
+    freeform ``text`` verbatim (Phase 2a), then any non-blank sub-lines, so
+    the athlete sees the whole stack. The phone's stacked view (issue #508)
+    renders these as separate lines; ``_cell_summary`` folds them into one.
     """
     parts = [cell["text"]]
     parts.extend(line["text"] for line in cell.get("lines", ()))
-    return _text_label("\n".join(p for p in parts if p and p.strip()))
+    return _text_lines("\n".join(p for p in parts if p and p.strip()))
+
+
+def _cell_summary(cell):
+    """A read-only prescription summary for one athlete-table cell.
+
+    ``_cell_lines`` folded to one `` · ``-separated string ("—" when blank),
+    for the wide table's single-line cells.
+    """
+    return " · ".join(_cell_lines(cell)) or "—"
 
 
 def _athlete_block_grid(block, focus_week_id):
@@ -1159,6 +1173,11 @@ def _athlete_block_grid(block, focus_week_id):
     see ``athlete_home``) is flagged (``focused``) so the template can give it
     a light highlight — never a "you are here" claim, since the app doesn't
     make one (docs/meso/remove-current-week-plan.md).
+
+    The phone's stacked view (issue #508) shows that focused column alone:
+    ``focus_week`` names it, and each row's ``focus`` is its cell there —
+    ``lines`` one entry per line, ``off`` when the row isn't trained that
+    week (skipped, or no cell).
     """
     grid = serialize_mesocycle_grid(block)
     columns = grid["weeks"]
@@ -1183,6 +1202,7 @@ def _athlete_block_grid(block, focus_week_id):
             # render as a name beside a strip of em-dashes, so gate on a
             # non-skipped cell somewhere.
             has_trainable = False
+            focus = {"lines": [], "off": True}
             for w, key in zip(columns, col_keys):
                 cell = row["cells"].get(key)
                 focused = w["id"] == focus_week_id
@@ -1191,6 +1211,8 @@ def _athlete_block_grid(block, focus_week_id):
                     continue
                 if not cell["skipped"]:
                     has_trainable = True
+                if focused:
+                    focus = {"lines": _cell_lines(cell), "off": cell["skipped"]}
                 cells.append(
                     {
                         "present": True,
@@ -1200,7 +1222,7 @@ def _athlete_block_grid(block, focus_week_id):
                     }
                 )
             if has_trainable:
-                rows.append({"name": row["name"], "cells": cells})
+                rows.append({"name": row["name"], "cells": cells, "focus": focus})
         if rows:
             days.append(
                 {
@@ -1210,7 +1232,8 @@ def _athlete_block_grid(block, focus_week_id):
                     "rows": rows,
                 }
             )
-    return {"weeks": weeks, "days": days}
+    focus_week = next((w for w in weeks if w["focused"]), None)
+    return {"weeks": weeks, "days": days, "focus_week": focus_week}
 
 
 def _scroll_hint(plan_weeks, user):

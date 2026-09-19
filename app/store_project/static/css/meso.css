@@ -717,3 +717,303 @@ button.meso-row:hover {
 .meso-mono {
   font-family: "IBM Plex Mono", monospace;
 }
+
+/* ==========================================================================
+   Athlete pages on a phone (issue #508): the training home's block table and
+   the session logger. Scoped by `.meso-athlete` on those two pages'
+   `.meso-page`, so nothing here reaches the coach surfaces or the designer.
+   Two breakpoints, both media-query-only (no JS branch), like the tour's
+   bottom sheet in _tour.html:
+   - 760px (nav.css's burger breakpoint) or any touch-first pointer: tap
+     targets grow to 44px. A phone held sideways is wider than 760px but
+     still a thumb, hence `pointer: coarse`.
+   - 640px: the block table becomes stacked cards and the logger tightens.
+   ========================================================================== */
+
+/* Every input on an athlete page is 16px at every width: iOS Safari zooms the
+   page when it focuses an input set smaller than that, landscape included.
+   Zooming stays enabled (the viewport meta has no maximum-scale). */
+.meso-athlete input,
+.meso-athlete select,
+.meso-athlete textarea {
+  font-size: 16px;
+}
+
+/* --- block table (wide screens) --- */
+/* Scrolls both ways inside its own box: a sticky header only pins inside its
+   nearest scroll container, and overflow-x:auto makes this box one on both
+   axes, so the cap on its height is what lets a long day keep its week
+   labels in view. */
+.meso-block-scroll {
+  overflow: auto;
+  max-height: 70vh;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+/* `separate` rather than `collapse`: a collapsed border stays behind when its
+   sticky cell moves. */
+.meso-block-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.meso-block-table th,
+.meso-block-table td {
+  text-align: left;
+  padding: 7px 10px;
+}
+.meso-block-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  font-weight: 700;
+  color: var(--dim);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.meso-block-table th.is-focused {
+  color: var(--accent-deep);
+  background: var(--soft);
+}
+.meso-block-table td {
+  color: var(--ink);
+  border-top: 1px solid var(--line);
+}
+.meso-block-table tbody tr:first-child td {
+  border-top: 0;
+}
+.meso-block-table td.is-focused {
+  background: var(--soft);
+}
+/* The exercise column pins left; its header cell pins both ways, above both
+   the header row and the body. */
+.meso-block-table th:first-child,
+.meso-block-table td:first-child {
+  position: sticky;
+  left: 0;
+  background: var(--surface);
+}
+.meso-block-table td:first-child {
+  z-index: 1;
+  font-weight: 700;
+}
+.meso-block-table th:first-child {
+  z-index: 3;
+  color: var(--dim);
+}
+
+/* --- block, stacked (phones): the focused week only --- */
+.meso-block-stack,
+.meso-block-stack-only {
+  display: none;
+}
+.meso-block-stack {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+.meso-block-stack-row {
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+.meso-block-stack-row:first-child {
+  border-top: 0;
+}
+.meso-block-stack-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-bottom: 3px;
+  overflow-wrap: anywhere;
+}
+.meso-block-stack-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.meso-block-stack-off {
+  font-size: 12.5px;
+  color: var(--dim);
+}
+
+/* --- week chips (training home) --- */
+.meso-week-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 13px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+.meso-week-chip.is-focused {
+  box-shadow: inset 0 0 0 1.5px var(--accent-deep);
+  color: var(--accent-deep);
+}
+
+/* --- session logger --- */
+/* The logger's inputs share one look. Border and background stay inline on
+   each input: the sub-line's warn tint and the (existing) focus rules above
+   depend on exactly that arrangement. No `font` shorthand here — it would
+   reset the 16px above. */
+.meso .meso-log-input {
+  appearance: none;
+  min-width: 0;
+  font-family: "IBM Plex Mono", monospace;
+  padding: 6px 8px;
+  border-radius: 7px;
+  outline: none;
+  color: var(--ink);
+}
+/* One set: label, load × reps, rpe, the %1RM hint when there is one, and the
+   check-off circle. A grid, so the inputs share whatever width the phone has
+   instead of overflowing it. */
+.meso-set-row {
+  display: grid;
+  /* label | load | × | reps | rpe | %1RM hint | check-off circle */
+  grid-template-columns:
+    auto minmax(0, 72px) auto minmax(0, 60px) minmax(0, 60px)
+    minmax(0, 1fr) 44px;
+  align-items: center;
+  column-gap: 9px;
+  padding: 4px 6px 4px 16px;
+  border-bottom: 1px solid var(--line-2);
+}
+.meso-set-row .meso-log-input {
+  text-align: center;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.meso-set-row-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.meso-set-row-hint {
+  grid-column: 6;
+  white-space: nowrap;
+}
+.meso-set-toggle {
+  grid-column: 7;
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* A typed sub-line; its status note wraps under the input when both don't fit. */
+.meso-sub-line-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  margin-bottom: 6px;
+}
+.meso-sub-line-row .meso-log-input {
+  flex: 1 1 12em;
+}
+.meso-log-actions,
+.meso-log-actions-buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.meso-log-actions {
+  margin-top: 16px;
+}
+
+/* --- tap targets: 44px on anything a thumb would press --- */
+@media (max-width: 760px), (pointer: coarse) {
+  /* Shared chrome: the Meso topnav sits on every page, coach pages too, and
+     is 55px tall, so this grows the hit area without moving anything. */
+  .meso-brand,
+  .meso-navlink {
+    min-height: 44px;
+  }
+  .meso-navlink {
+    display: inline-flex;
+    align-items: center;
+  }
+  .meso-athlete .meso-btn,
+  .meso-athlete .meso-week-chip,
+  .meso-athlete .meso-log-input,
+  .meso-athlete input {
+    min-height: 44px;
+  }
+  .meso-athlete .meso-btn {
+    min-width: 44px;
+    justify-content: center;
+  }
+  /* Inline text controls: grow the box to 44px, then take the growth back
+     out of the layout with a negative margin, so the line doesn't get taller. */
+  .meso-athlete .meso-crumbs a,
+  .meso-athlete summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    margin-top: -13px;
+    margin-bottom: -13px;
+  }
+}
+
+/* --- phone layout --- */
+@media (max-width: 640px) {
+  .meso-athlete.meso-page {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .meso-athlete .meso-card--pad {
+    padding: 16px;
+  }
+  .meso-athlete .meso-block-scroll {
+    display: none;
+  }
+  .meso-athlete .meso-block-stack {
+    display: block;
+  }
+  .meso-athlete .meso-block-stack-only {
+    display: inline;
+  }
+  .meso-set-row {
+    column-gap: 6px;
+    padding-right: 2px;
+  }
+  /* No spare column on a phone: the %1RM hint takes its own line. */
+  .meso-set-row-hint {
+    grid-column: 2 / 6;
+    grid-row: 2;
+    padding-bottom: 4px;
+  }
+  /* Save progress and Log session split the full width, last on the page,
+     where the thumb already is. */
+  .meso-log-actions-buttons {
+    flex: 1 1 100%;
+    gap: 10px;
+  }
+  .meso-log-actions-buttons .meso-btn {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+}

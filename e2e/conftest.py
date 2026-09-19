@@ -24,6 +24,7 @@ from store_project.meso.models import CoachAthlete
 from store_project.meso.models import Plan
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
+from store_project.meso.tests._helpers import sub_line
 from store_project.users.factories import UserFactory
 
 # pytest-playwright's sync API keeps an asyncio event loop running on the test
@@ -54,17 +55,23 @@ def pytest_collection_modifyitems(config, items):
 
 
 # ---------------------------------------------------------------------------
-# Viewports — every journey runs at both (issue #506's "two viewports").
+# Viewports — every journey runs at all three (issue #506's desktop + phone,
+# plus #508's narrower 360px phone).
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(params=["desktop", "phone"])
+@pytest.fixture(params=["desktop", "phone", "phone-360"])
 def viewport(request, playwright):
-    """One of the two sizes every journey runs at, as context-args + a flag.
+    """One of the sizes every journey runs at, as context-args + a flag.
 
     `is_phone` drives the `press()` helper (tap vs click) and lets a test
     branch on how a real user would move focus (e.g. Tab on desktop, tapping
-    the next field on phone).
+    the next field on phone). Both phone sizes set it; `just e2e -k phone`
+    runs the two of them.
+
+    `phone-360` (issue #508) is the narrow Android class (Galaxy S8 width,
+    taller than that preset to match a current handset): a layout that only
+    fits at 390 overflows here first.
     """
     if request.param == "phone":
         # Only the user agent comes from the iPhone 13 device preset — the
@@ -78,11 +85,20 @@ def viewport(request, playwright):
             "device_scale_factor": 3,
             "user_agent": iphone_user_agent,
         }
+    elif request.param == "phone-360":
+        android_user_agent = playwright.devices["Galaxy S8"]["user_agent"]
+        context_args = {
+            "viewport": {"width": 360, "height": 780},
+            "is_mobile": True,
+            "has_touch": True,
+            "device_scale_factor": 3,
+            "user_agent": android_user_agent,
+        }
     else:
         context_args = {"viewport": {"width": 1280, "height": 720}}
     return {
         "id": request.param,
-        "is_phone": request.param == "phone",
+        "is_phone": request.param != "desktop",
         "context_args": context_args,
     }
 
@@ -258,4 +274,97 @@ def delivered_plan(db):
         session=session,
         squat=squat,
         rdl=rdl,
+    )
+
+
+@pytest.fixture
+def block_plan(db):
+    """A three-week block with a four-line prescription (issue #508).
+
+    What the athlete's phone layout needs that `delivered_plan` lacks: several
+    weeks (so the week chips have somewhere to go) and a cell whose sub-lines
+    stack four deep (so the stacked view has lines to keep apart). Two days,
+    so the stacked view shows more than one day card.
+
+    Back Squat is a %1RM lift (its text carries "NN%"), so the session page
+    also renders the 1RM input. Each week's squat prescription is different,
+    so switching weeks visibly changes what the stacked view says.
+    """
+    coach = UserFactory(name="Casey Coach", email="casey.coach@example.com")
+    athlete = UserFactory(name="Alex Athlete", email="alex.athlete@example.com")
+    rel = CoachAthleteFactory(
+        coach=coach, athlete=athlete, status=CoachAthlete.Status.ACTIVE
+    )
+    plan = PlanFactory(
+        relationship=rel, title="Strength Block", status=Plan.Status.ACTIVE
+    )
+    mesocycle = MesocycleFactory(plan=plan, name="Accumulation", order=0)
+    weeks = [
+        WeekFactory(mesocycle=mesocycle, index=1, delivered_at=timezone.now()),
+        WeekFactory(mesocycle=mesocycle, index=2),
+        WeekFactory(mesocycle=mesocycle, index=3, is_deload=True),
+    ]
+    squat_lines = {
+        1: ["4 x 6 @ 70%", "RPE 7", "Rest 2-3 min", "Brace before every rep"],
+        2: ["4 x 5 @ 75%", "RPE 8", "Rest 3 min", "Pause the first rep"],
+        3: ["3 x 5 @ 60%", "RPE 6", "Rest 2 min", "Move fast, stay crisp"],
+    }
+    lower = upper = None
+    squat_slot = rdl_slot = bench_slot = row_slot = None
+    lower_sessions = {}
+    for week in weeks:
+        n = week.index
+        lower = day(
+            week,
+            day_number=1,
+            name="Lower",
+            bias="Squat",
+            session_slot=lower.session_slot if lower else None,
+        )
+        upper = day(
+            week,
+            day_number=2,
+            name="Upper",
+            bias="Press",
+            session_slot=upper.session_slot if upper else None,
+        )
+        lower_sessions[n] = lower
+        first, *rest = squat_lines[n]
+        squat = presc(
+            lower, name="Back Squat", order=0, exercise_slot=squat_slot, text=first
+        )
+        squat_slot = squat.exercise_slot
+        for text in rest:
+            sub_line(squat, text)
+        rdl = presc(
+            lower,
+            name="Romanian Deadlift",
+            order=1,
+            exercise_slot=rdl_slot,
+            text=f"3 x {10 - n}, RPE 8",
+        )
+        rdl_slot = rdl.exercise_slot
+        bench = presc(
+            upper,
+            name="Bench Press",
+            order=0,
+            exercise_slot=bench_slot,
+            text=f"4 x {7 - n}, RPE 8",
+        )
+        bench_slot = bench.exercise_slot
+        row = presc(
+            upper,
+            name="Chest-Supported Row",
+            order=1,
+            exercise_slot=row_slot,
+            text="3 x 10-12",
+        )
+        row_slot = row.exercise_slot
+    return SimpleNamespace(
+        coach=coach,
+        athlete=athlete,
+        plan=plan,
+        weeks=weeks,
+        squat_lines=squat_lines,
+        lower_sessions=lower_sessions,
     )
