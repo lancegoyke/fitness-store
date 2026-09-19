@@ -468,10 +468,16 @@ function createLogger() {
       return !item.owner || !this.owner || item.owner === this.owner;
     },
 
-    // What every entry this page queues carries, so it's flushed only by its
-    // own athlete (`isMine`).
+    // What every entry this page queues carries: its athlete, so only they
+    // flush it (`isMine`), and an id of its own. Entries are told apart by
+    // that id, not their text — another tab can queue the very text an older
+    // entry held, and it's still the newer write.
     stamp(item) {
-      return this.owner ? { ...item, owner: this.owner } : item;
+      const id =
+        Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      const stamped = { ...item, id };
+      if (this.owner) stamped.owner = this.owner;
+      return stamped;
     },
 
     readQueue() {
@@ -883,18 +889,17 @@ function createLogger() {
       // Saved. The entry queued before this write is older — this line's
       // saves run in order — so the server now has the newest.
       if (pending) this.dropEntry(pending);
-      if (entry) {
-        entry.savedText = text;
-        entry.queued = false;
-      }
+      if (entry) entry.queued = false;
       let data;
       try {
         data = await res.json();
       } catch (e) {
-        // Saved server-side regardless; warn/PR state reconciles on the next
-        // blur or reload.
+        // Saved server-side regardless, but its warn/PR state is unknown, so
+        // the line stays dirty: the next blur sends it again (harmlessly)
+        // and reconciles.
         return "saved";
       }
+      if (entry) entry.savedText = text;
       // Drop a stale response. Two saves for the same sub-line can be in
       // flight at once, and the older one can land last — so fixing `225 x`
       // to `225 x 5` could re-apply the first reply's warn and leave the cell

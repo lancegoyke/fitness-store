@@ -1153,7 +1153,7 @@ describe("saveCell — latest-wins queue keying (#527)", () => {
 
     const cellEntries = c.readQueue().filter((i) => i.kind === "cell");
     expect(cellEntries).toHaveLength(1);
-    expect(cellEntries[0]).toEqual({
+    expect(cellEntries[0]).toMatchObject({
       kind: "cell",
       url: CELL_URL,
       body: { exercise_id: 1, line: 1, text: "110 x 5" },
@@ -1744,6 +1744,45 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     expect(c.readQueue()).toHaveLength(0);
     expect(c.queued).toBe(false);
     expect(c.saved).toBe(true);
+  });
+
+  it("tells a later entry with the same text from the one it replaced", async () => {
+    // "90 x 5" was queued; this tab sends "100 x 5"; meanwhile the other tab
+    // goes back to "90 x 5". Same text as the old entry, but a newer write.
+    const c = cellLogger();
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "90 x 5" });
+    global.fetch = vi.fn().mockImplementation(async () => {
+      const other = createLogger();
+      other.cellUrl = CELL_URL;
+      other.enqueueCell({ exercise_id: 1, line: 1, text: "90 x 5" });
+      throw new TypeError("Failed to fetch");
+    });
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue().map((i) => i.body.text)).toEqual(["90 x 5"]);
+  });
+
+  it("keeps a line dirty when a saved response can't be read", async () => {
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.savedText = "RPE 8";
+    line.text = "225 x";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      redirected: false,
+      json: async () => {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      },
+    });
+    await c.saveCell(c.exercises[0], 1);
+    expect(line.queued).toBe(false);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "225 x", warn: true } } }),
+    );
+    await c.saveCell(c.exercises[0], 1); // tabbed through, unchanged
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(line.warn).toBe(true);
   });
 
   it("says a line couldn't save when storage refuses the queue", async () => {
