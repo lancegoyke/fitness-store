@@ -875,7 +875,14 @@ function createLogger() {
       // success or a refusal takes it back out. Only this entry, by its id:
       // another tab on the session may queue newer text for the line
       // meanwhile, and that one stays.
-      if (!fromQueue) sent = this.enqueueCell(body);
+      if (!fromQueue) {
+        const older = this.queuedCell(ex.id, line);
+        sent = this.enqueueCell(body);
+        // Storage full or blocked: this text can't be queued, and an older
+        // entry left in its place would replay over it later. Latest wins,
+        // so it goes (removing shrinks the queue, which a full store allows).
+        if (!sent && older) this.dropEntry(older);
+      }
       if (entry) entry.saveError = false;
       let res;
       try {

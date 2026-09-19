@@ -1885,6 +1885,42 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     expect(c.queued).toBe(true);
   });
 
+  describe("storage too full to replace a line's older entry", () => {
+    // A full store refuses any write that doesn't shrink the queue.
+    function fillUp(c) {
+      c.enqueueCell({ exercise_id: 1, line: 1, text: "100 x 5" });
+      c.exercises[0].sub_lines[0].text = "110 x 5";
+      const setItem = Storage.prototype.setItem;
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (k, v) {
+        if (v.length >= (this.getItem(k) || "").length) {
+          throw new DOMException("full", "QuotaExceededError");
+        }
+        return setItem.call(this, k, v);
+      });
+    }
+
+    it("drops the older text so it can't replay over a save that landed", async () => {
+      const c = cellLogger();
+      fillUp(c);
+      global.fetch = vi.fn().mockResolvedValue(
+        res({ body: { ok: true, cell: { line: 1, text: "110 x 5" } } }),
+      );
+      await c.saveCell(c.exercises[0], 1);
+      expect(c.readQueue()).toHaveLength(0);
+    });
+
+    it("says the new text couldn't save rather than passing off the old", async () => {
+      const c = cellLogger();
+      fillUp(c);
+      global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+      await c.saveCell(c.exercises[0], 1);
+      expect(c.readQueue()).toHaveLength(0);
+      expect(c.exercises[0].sub_lines[0].queued).toBe(false);
+      expect(c.exercises[0].sub_lines[0].saveError).toBe(true);
+    });
+  });
+
   it("says a line couldn't save when storage refuses the queue", async () => {
     const c = cellLogger();
     vi.spyOn(console, "error").mockImplementation(() => {});
