@@ -258,6 +258,59 @@ instead. Never style or script against a `data-testid`.
 
 ---
 
+## First-party usage events (#509)
+
+`analytics.Event` is one row per product moment, written only by
+`analytics.track.track(name, actor=None, subject=None, **props)`. The helper
+does one insert inside its own savepoint and never raises. Callers run inside
+open transactions, and on PostgreSQL a failed statement would otherwise abort
+the caller's transaction and roll back the write it just made
+(`analytics/tests/test_track_postgres.py` pins this, and runs in the CI
+Postgres job). No IP address, user agent or request path is stored.
+
+**Excluded at the helper.** Sandbox coaches (`meso.sandbox.is_sandbox`) and
+staff (`is_staff`) are dropped silently, so demo traffic and our own clicking
+don't count. `TourEvent` doesn't do this: its funnel is mostly sandbox traffic
+by design. A real coach's actions on demo-athlete plans (`is_demo` links) do
+count; they're real coach actions.
+
+**Closed set of names.** `analytics.events.EventName`. An unknown name raises
+`ValueError` when `ANALYTICS_STRICT_EVENT_NAMES` is on (test settings, and
+local dev with `DEBUG`) and is logged and dropped in production. Every call
+site has a test that drives it, so a typo fails in the test run; in
+production it costs one event, never the user's action. The model field has
+no `choices`, so adding a name needs no migration.
+
+**What counts once.**
+
+- `set_logged` is one event per new set. Typed path: a line that wasn't
+  already showing a set of its own gets one (a re-blur or an edit of that set
+  doesn't count). Structured "Log session"/"Save progress": that save replaces
+  rows, so it counts the log's net growth in sets. Re-posting sets, editing
+  values, or re-posting sets the typed path already counted adds nothing.
+  Removing one set and adding another in the same save nets zero.
+- `session_completed` is the transition into DONE: "Log session" from a log
+  that wasn't DONE (`via=log`), or the settle sweep (`via=settle`).
+- `push_subscribed` fires for a new endpoint or a device changing hands, not
+  the re-POST `meso_push.js` makes on every page load.
+- `subscription_started` fires on the no-card trial (`via=trial`, at
+  `CoachSubscription.start_trial_for`, which covers both entry points) and
+  when a Stripe subscription first becomes live in the mirror (`via=stripe`,
+  including trial to paid). A `past_due` to `active` update on the same
+  subscription also reads as a start, because Stripe's `incomplete` maps to
+  `past_due` in the mirror; the `previous` prop tells them apart.
+  `subscription_cancelled` is the transition into `canceled`.
+- `agent_proposal_run` fires for both coach-started runs: the composer
+  (`trigger=manual`) and "Draft with AI" on a new program (`trigger=draft`).
+- `block_delivered` fires at `_notify_athlete_block_delivered`, once per
+  delivered block (`via=deliver`, or `via=batch` per client copy).
+
+**Not tracked yet.** `pwa_installed` and the other browser-only moments wait
+for the client beacon. A coach accepting an athlete's request, a relationship
+re-invite and its acceptance, and the invite "Resend" button aren't events.
+
+---
+
 ## Decision log
 
 _(Append dated entries here as decisions land.)_
@@ -1799,3 +1852,13 @@ _(Append dated entries here as decisions land.)_
   makes it XPASS. One testid, `review-change` on each review card. Each
   journey was checked by breaking what it covers. No app behavior changed, no
   migration.
+- 2026-09-19 — **First-party usage events, first slice (#509).** New `analytics.Event`
+  table and `analytics.track.track()` helper (see "First-party usage events" above),
+  called at 14 server-side moments: plan_created, template_imported,
+  agent_proposal_run, batch_applied, block_delivered, session_opened, set_logged,
+  session_completed, invite_sent, invite_accepted, coach_request_sent,
+  subscription_started, subscription_cancelled, push_subscribed. Sandbox and staff
+  actors are dropped at the helper, which `TourEvent` never did. Unknown names raise
+  under `ANALYTICS_STRICT_EVENT_NAMES` (tests, DEBUG) and are logged and dropped in
+  production. Migration `analytics.0001_initial`. No dashboard, beacon or
+  notification ledger yet; GA untouched.
