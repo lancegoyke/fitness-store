@@ -5221,17 +5221,28 @@ def billing_subscribe(request):
     # Don't open a second Checkout for a coach who already has a live Stripe
     # subscription — completing it would create a duplicate (double-billing).
     # They manage the existing one in the Portal; a canceled mirror re-subscribes
-    # freely.
+    # freely. A Stripe trial (#555) counts as live here too: it already has a
+    # real subscription, just not yet a charge.
     sub = getattr(request.user, "coach_subscription", None)
-    if (
-        sub
-        and sub.stripe_subscription_id
-        and sub.status
-        in (CoachSubscription.Status.ACTIVE, CoachSubscription.Status.PAST_DUE)
-    ):
+    if sub and sub.has_live_stripe_subscription:
         messages.info(
             request,
             "You already have a subscription — manage it in the billing portal.",
+        )
+        return redirect("meso:roster")
+    # A coach subscribing during their local trial keeps the rest of it (#555):
+    # ``deferred_first_charge`` is the local trial_end when there's enough of it
+    # left for Stripe to accept as ``subscription_data.trial_end``, else None.
+    trial_end = billing_access.deferred_first_charge(request.user)
+    # Stale-page guard: the billing page promised a deferred charge (rendered a
+    # hidden ``first_charge=deferred`` on the Subscribe form) but the trial has
+    # since dropped under the 48h+margin threshold between page load and this
+    # POST — don't silently charge today instead of what the coach saw.
+    if request.POST.get("first_charge") == "deferred" and trial_end is None:
+        messages.info(
+            request,
+            "Your trial has less than 2 days left, so subscribing now starts "
+            "billing today. Click Subscribe again to continue.",
         )
         return redirect("meso:roster")
     roster_url = request.build_absolute_uri(reverse("meso:roster"))
@@ -5240,6 +5251,7 @@ def billing_subscribe(request):
             request.user,
             success_url=f"{roster_url}?billing=success",
             cancel_url=f"{roster_url}?billing=cancel",
+            trial_end=trial_end,
         )
     except Exception:  # noqa: BLE001 — surface a friendly error, never a 500
         logger.exception("Stripe checkout session failed for coach %s", request.user.pk)
