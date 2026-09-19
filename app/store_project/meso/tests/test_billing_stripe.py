@@ -878,7 +878,17 @@ class TestWebhookCanceledSubscriptionIdIsTerminal:
         assert sub.status == CoachSubscription.Status.ACTIVE
         assert sub.stripe_subscription_id == "sub_2"
 
-    def test_ignored_events_write_no_extra_analytics(self):
+    def test_ignored_events_backfill_exactly_one_started_and_cancelled(self):
+        """Round 2 (#555 review): a CANCELED row with no prior recorded events.
+
+        The mirror's own history can't tell "this subscription never really
+        started" apart from "it started, but the ``deleted`` was delivered
+        before the ``created``/``updated`` — so we never got the chance to
+        record it". #509's ledger rule is "started once, cancelled at most
+        once, whatever the delivery order", so the ignored events below must
+        now backfill the missing pair instead of staying silent (round 1's
+        pinned 0/0 outcome).
+        """
         coach = _coach_with_customer()
         CoachSubscriptionFactory(
             coach=coach,
@@ -896,8 +906,97 @@ class TestWebhookCanceledSubscriptionIdIsTerminal:
         billing_webhooks.handle_event(
             _real_sub_event("customer.subscription.updated", status="active")
         )
-        assert _events(EventName.SUBSCRIPTION_STARTED) == []
-        assert _events(EventName.SUBSCRIPTION_CANCELLED) == []
+        assert len(_events(EventName.SUBSCRIPTION_STARTED)) == 1
+        assert len(_events(EventName.SUBSCRIPTION_CANCELLED)) == 1
+
+
+# ---------------------------------------------------------------------------
+# webhooks — the canceled-id guard backfills a missed live pair (round 2)
+#
+# Stripe doesn't guarantee delivery order: a `deleted` can arrive BEFORE the
+# `created`/`updated` it logically follows. When that happens the row goes
+# CANCELED without ever recording `subscription_started` (nothing was
+# `already_live` or previously recorded), and the P1-A guard would then
+# silently swallow the late `created`/`updated` that proves the subscription
+# really was live — losing both events forever. The guard must backfill them.
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookCanceledIdGuardBackfillsAMissedLivePair:
+    def test_deleted_before_created_backfills_the_missing_pair(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() + timedelta(days=10),
+        )
+        future_trial_end = int((timezone.now() + timedelta(days=10)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.deleted",
+                status="canceled",
+                trial_end=future_trial_end,
+            )
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created",
+                status="trialing",
+                trial_end=future_trial_end,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.CANCELED
+        assert billing_access.is_active(_refetch(coach)) is False
+        assert len(_events(EventName.SUBSCRIPTION_STARTED)) == 1
+        assert len(_events(EventName.SUBSCRIPTION_CANCELLED)) == 1
+
+    def test_a_duplicate_late_created_does_not_duplicate_the_backfill(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() + timedelta(days=10),
+        )
+        future_trial_end = int((timezone.now() + timedelta(days=10)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.deleted",
+                status="canceled",
+                trial_end=future_trial_end,
+            )
+        )
+        for _ in range(2):
+            billing_webhooks.handle_event(
+                _real_sub_event(
+                    "customer.subscription.created",
+                    status="trialing",
+                    trial_end=future_trial_end,
+                )
+            )
+        assert len(_events(EventName.SUBSCRIPTION_STARTED)) == 1
+        assert len(_events(EventName.SUBSCRIPTION_CANCELLED)) == 1
+
+    def test_a_real_prior_start_is_not_double_recorded(self):
+        """created(active) already recorded the real pair the normal way.
+
+        A late retried updated for the same, now-canceled id must not add a
+        second started/cancelled.
+        """
+        coach = _coach_with_customer()
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.created", status="active")
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.deleted", status="canceled")
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.updated", status="active")
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.CANCELED
+        assert len(_events(EventName.SUBSCRIPTION_STARTED)) == 1
+        assert len(_events(EventName.SUBSCRIPTION_CANCELLED)) == 1
 
 
 # ---------------------------------------------------------------------------

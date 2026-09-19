@@ -230,6 +230,24 @@ def _sync_from_subscription(sub_obj, *, deleted):
             "Billing webhook: ignoring stale event for canceled subscription %s",
             incoming_id,
         )
+        # Delivery order isn't guaranteed (#555 round 2): a ``deleted`` can
+        # arrive BEFORE the ``created``/``updated`` it logically follows, so
+        # the row above can go CANCELED without ever recording that the
+        # subscription started (nothing was ``already_live`` or previously
+        # recorded). This ignored event's own status can show it was live —
+        # backfill the missing pair rather than losing it forever. Same
+        # savepoint pattern as the ordinary analytics call: it must never
+        # fail the webhook, and the mirror stays CANCELED either way.
+        try:
+            with transaction.atomic():
+                _backfill_missed_live_pair(
+                    coach, existing, sub_obj, incoming_id, status
+                )
+        except Exception:
+            logger.exception(
+                "Billing webhook: backfill analytics failed for subscription %s",
+                incoming_id,
+            )
         return
     # A stale ``trialing`` event past its own trial_end (adversarial review,
     # #555): Stripe moves a subscription out of ``trialing`` at ``trial_end``, so
@@ -310,6 +328,43 @@ def _sync_from_subscription(sub_obj, *, deleted):
     except Exception:
         logger.exception(
             "Billing webhook: analytics failed for subscription %s", incoming_id
+        )
+
+
+def _backfill_missed_live_pair(coach, existing, sub_obj, sub_id, mapped_status):
+    """Reconstruct a missed ``subscription_started``/``cancelled`` pair (#555 round 2).
+
+    Called from the canceled-id guard, for an event it's about to ignore.
+    ``existing`` is the row's current (CANCELED) state; ``mapped_status`` is
+    the ignored event's own mapped status. A no-op unless that status shows
+    the subscription really was live and no ``subscription_started`` was
+    ever recorded for this id — #509's ledger rule ("started once, cancelled
+    at most once, whatever the delivery order") still has to hold even when
+    a ``deleted`` beats its own ``created``/``updated`` to the handler.
+    """
+    if mapped_status not in CoachSubscription.ACTIVE_STATUSES:
+        return
+    if _recorded(EventName.SUBSCRIPTION_STARTED, sub_id):
+        return
+    track(
+        EventName.SUBSCRIPTION_STARTED,
+        actor=coach,
+        subject=existing,
+        via="stripe",
+        subscription=sub_id,
+        status=mapped_status,
+        previous=existing.status,
+    )
+    if not _recorded(EventName.SUBSCRIPTION_CANCELLED, sub_id):
+        track(
+            EventName.SUBSCRIPTION_CANCELLED,
+            actor=coach,
+            subject=existing,
+            via="stripe",
+            subscription=sub_id,
+            status=CoachSubscription.Status.CANCELED,
+            previous=mapped_status,
+            reason=(sub_obj.get("cancellation_details") or {}).get("reason") or "",
         )
 
 
