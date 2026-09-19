@@ -21,7 +21,7 @@ export default defineConfig({
     setupFiles: ["frontend/designer/vitest-setup.ts"],
     coverage: {
       provider: "v8",
-      include: ["app/store_project/static/js/meso_athlete.js", "app/store_project/static/js/meso_onboarding.js", "app/store_project/static/js/meso_deliver.js", "app/store_project/static/js/meso_tour.js", "app/store_project/static/js/timer.js"],
+      include: ["app/store_project/static/js/meso_athlete.js", "app/store_project/static/js/meso_onboarding.js", "app/store_project/static/js/meso_deliver.js", "app/store_project/static/js/meso_tour.js", "app/store_project/static/js/timer.js", "app/store_project/static/js/meso_track.js", "app/store_project/static/js/meso_push.js"],
       reporter: ["text", "html"],
     },
   },

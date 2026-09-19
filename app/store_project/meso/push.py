@@ -11,6 +11,18 @@ app boots and CI runs without creds, exactly like the delivery email skips an
 athlete with no address. Sending is best-effort: a dead subscription (the push
 service answers 404/410 Gone) is pruned; any other failure is swallowed and
 logged so a delivery never fails on a bounced push.
+
+**The ledger (#509 slice 3):** this module owns the transport; the
+notifications app owns the ledger (``notifications.push``, backed by
+``notifications.models.PushNotification`` — see that model's docstring for
+why it's a dedicated table). ``_fan_out`` opens one ledger row per
+subscription *before* sending, via ``notifications.push.log_push_sent``, and
+stamps it with ``notifications.push.log_push_error`` if the send fails; each
+device's payload URL carries its own row's id
+(``notifications.push.url_with_notification``) so a later click on that
+device can be attributed to it. Ledger writes are best-effort in their own
+savepoint (see that module's docstring) — a ledger failure never costs the
+athlete their push.
 """
 
 import json
@@ -19,6 +31,9 @@ import logging
 from django.conf import settings
 from pywebpush import WebPushException
 from pywebpush import webpush
+
+from store_project.notifications import push as notifications_push
+from store_project.notifications.models import PushKind
 
 logger = logging.getLogger(__name__)
 
@@ -105,30 +120,57 @@ def notify_block_delivered(*, athlete, coach, plan, mesocycle, week_count, home_
         "url": home_url,
         "tag": f"meso-block-{mesocycle.pk}",
     }
-    return _fan_out(subscriptions, payload)
+    return _fan_out(subscriptions, payload, kind=PushKind.BLOCK_DELIVERED, user=athlete)
 
 
-def _fan_out(subscriptions, payload):
+def _fan_out(subscriptions, payload, *, kind, user):
     """Send one ``payload`` to each subscription; return the count actually sent.
 
     The per-device loop behind the delivery notifier: dead endpoints
     (404/410 Gone) are pruned, any other per-device failure is logged and
     skipped, and nothing here ever raises — one bad endpoint never blocks the
     others or fails the deliver.
+
+    Bails out before touching the ledger at all when push is disabled: a
+    disabled ``send_web_push`` already no-ops below, but the ledger must never
+    record a push that was never actually attempted, so the short-circuit
+    happens here rather than relying on that no-op.
+
+    Per subscription: a ledger row is opened *before* the send
+    (``notifications.push.log_push_sent``), and that device's own copy of
+    ``payload`` gets its own ``?n=<row id>`` URL
+    (``notifications.push.url_with_notification``) — the shared ``payload``
+    dict itself is never mutated, since every device must carry a different
+    id. A ``WebPushException``/other failure is stamped onto that row
+    (``notifications.push.log_push_error``) before the existing prune-or-log
+    handling runs, unchanged.
     """
+    if not push_enabled():
+        return 0
+
     sent = 0
     for subscription in subscriptions:
+        record = notifications_push.log_push_sent(kind=kind, user=user)
+        device_payload = dict(payload)
+        device_payload["url"] = notifications_push.url_with_notification(
+            payload["url"], record
+        )
         try:
-            if send_web_push(subscription.as_subscription_info(), payload):
+            if send_web_push(subscription.as_subscription_info(), device_payload):
                 sent += 1
         except WebPushException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            notifications_push.log_push_error(
+                record, f"{status} {exc}" if status is not None else str(exc)
+            )
             if _is_gone(exc):
                 subscription.delete()
             else:
                 logger.warning(
                     "Web push failed for subscription %s: %s", subscription.pk, exc
                 )
-        except Exception:  # never let a bad push fail a delivery
+        except Exception as exc:  # never let a bad push fail a delivery
+            notifications_push.log_push_error(record, str(exc))
             logger.exception(
                 "Unexpected error pushing to subscription %s", subscription.pk
             )

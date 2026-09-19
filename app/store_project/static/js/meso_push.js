@@ -7,6 +7,11 @@
  * whether push is enabled) is read from the #meso-pwa-config span; the VAPID key
  * from the meso-vapid-key meta. When push is disabled or unsupported, every
  * entry point is an inert no-op so the page still installs + logs offline.
+ *
+ * Also reports the permission prompt's answer through the client beacon
+ * (window.mesoTrack, #509 slice 3, meso_track.js — loaded before this file)
+ * so the product-analytics dashboard can see grant/deny rates, without this
+ * file knowing anything about the beacon beyond calling the global.
  */
 (function () {
   const cfg = document.getElementById("meso-pwa-config");
@@ -65,12 +70,26 @@
   // The gesture-driven entry point (wired to the "Enable notifications" button).
   async function enable() {
     if (!supported()) return;
+    // Captured before the prompt: requestPermission() resolves immediately
+    // with no prompt shown when the athlete already decided (granted/denied)
+    // on an earlier visit, so "before" is how we tell an actual answer just
+    // now from a no-op re-check.
+    const before = Notification.permission;
     let permission;
     try {
       permission = await Notification.requestPermission();
     } catch (e) {
       console.error("Meso push permission failed", e);
       return;
+    }
+    // Report only when the athlete actually answered a prompt that just
+    // appeared (before === "default"); a page load, or a second call after
+    // they already decided, reports nothing (#509 slice 3). "default" is
+    // itself a legitimate result value — Chrome leaves the permission at
+    // "default" when the prompt is dismissed without a choice — which is why
+    // it's in the beacon's accepted value set (analytics/beacon.py).
+    if (before === "default" && window.mesoTrack) {
+      window.mesoTrack("push_permission", { result: permission });
     }
     if (permission === "granted") {
       try {

@@ -1,5 +1,7 @@
 from django.urls import path
 
+from store_project.analytics import views as analytics_views
+
 from . import views
 from .views import AthleteHomeView
 from .views import AthleteProfileView
@@ -99,6 +101,12 @@ urlpatterns = [
         views.push_unsubscribe,
         name="push_unsubscribe",
     ),
+    # Client beacon (#509 slice 3): browser-only product events (PWA install,
+    # push-permission answer). Lives under the Meso API because the Meso PWA
+    # is its only client, but the view itself lives in `analytics` — the
+    # closed name/prop set and the exclusion rules are analytics policy, not
+    # Meso's.
+    path("api/track/", analytics_views.track_beacon, name="track_beacon"),
     # Login-free, tokened opt-out from training-delivery emails (the email's
     # List-Unsubscribe link). The signed token authorizes; no login required.
     path(

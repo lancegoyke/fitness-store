@@ -30,6 +30,8 @@ from store_project.analytics.events import EventName
 from store_project.analytics.models import Event
 from store_project.notifications.models import EmailEvent
 from store_project.notifications.models import EmailKind
+from store_project.notifications.models import PushKind
+from store_project.notifications.models import PushNotification
 from store_project.notifications.models import SentEmail
 from store_project.users.models import User
 
@@ -1983,6 +1985,14 @@ MESO_EMAIL_KINDS = (
     EmailKind.COACH_REQUEST,
 )
 
+#: ``PushNotification`` kinds the Push table reports on, in display order
+#: (#509 slice 3). Only ``BLOCK_DELIVERED`` is ever sent today —
+#: ``PushKind.OTHER`` exists purely as a model-level safety default for a
+#: sender that forgets to name itself — but the table stays keyed off this
+#: tuple, the same shape as ``MESO_EMAIL_KINDS``, so a second push kind only
+#: needs a new entry here.
+MESO_PUSH_KINDS = (PushKind.BLOCK_DELIVERED,)
+
 
 def _ineligible_users():
     """Users excluded everywhere below: staff, or a throwaway sandbox account.
@@ -2103,10 +2113,12 @@ def product_analytics(*, days, now=None):
       ``{"wau", "mau", "window"}`` distinct-user counts.
     - ``funnel`` — the three activation-funnel rows (``email_invite``,
       ``athlete_request``, ``all``), in that order.
-    - ``features`` — the twelve feature-adoption rows, in the fixed order the
-      dashboard displays them.
+    - ``features`` — the fourteen feature-adoption rows, in the fixed order
+      the dashboard displays them.
     - ``email`` — ``{"rows": [...], "totals": {...}}`` for the Meso-authored
       ``SentEmail`` kinds.
+    - ``push`` — ``{"rows": [...], "totals": {...}}`` for ``PushNotification``,
+      shown as a second table inside the Email card (#509 slice 3).
     """
     now = now or timezone.now()
     since = now - datetime.timedelta(days=days)
@@ -2139,6 +2151,7 @@ def product_analytics(*, days, now=None):
         "funnel": _activation_funnel(since=since, until=now),
         "features": _feature_adoption(since=since, until=now),
         "email": _email_section(since=since, until=now),
+        "push": _push_section(since=since, until=now),
     }
 
 
@@ -2439,6 +2452,33 @@ def _athlete_event_stats(name, *, since, until):
     return qs.aggregate(users=Count("actor", distinct=True), times=Count("pk"))
 
 
+def _client_event_stats(name, *, since, until, props=None):
+    """``{"users", "times"}`` for a browser-beacon feature row (#509 slice 3).
+
+    ``pwa_installed`` and ``push_permission`` arrive through the client
+    beacon (``Event.source == "client"``) with no subject at all — there's no
+    plan or session to trace back to, so unlike ``_athlete_event_stats`` this
+    applies neither the client-athlete filter nor the self-coaching subject
+    exclusion. The beacon fires from the athlete-facing PWA surface (the
+    install banner, the push-permission prompt), which a self-coaching coach
+    training themselves also sees — there's no principled way to say that
+    visit "isn't a client," and nothing on the row to check it against even
+    if there were. That's why these rows are labelled "anyone" rather than
+    "athletes" in ``_feature_adoption``. ``props`` optionally narrows to a
+    JSON prop (e.g. ``{"props__result": "granted"}``) — a plain equality
+    match, not ``has_key``: an event with no such prop reads that key as SQL
+    NULL, and ``NULL = 'granted'`` is never true, so it's correctly left out
+    without an explicit existence check (memory note ``meso-509-dashboard``'s
+    "JSON has_key NULL trap" is about ``NOT (...)`` compositions, which this
+    isn't).
+    """
+    qs = Event.objects.filter(name=name, created__gte=since, created__lte=until)
+    qs = qs.exclude(actor__in=_ineligible_users())
+    if props:
+        qs = qs.filter(**props)
+    return qs.aggregate(users=Count("actor", distinct=True), times=Count("pk"))
+
+
 def _agent_batch_stats(trigger, *, since, until):
     """``{"users", "times"}`` for the ``agent_draft``/``agent_run`` rows."""
     qs = (
@@ -2502,7 +2542,7 @@ def _feature_row(key, label, who, source, stats):
 
 
 def _feature_adoption(*, since, until):
-    """The twelve feature-adoption rows (#509 §3), in display order.
+    """The fourteen feature-adoption rows (#509 §3), in display order.
 
     Each row is its own independent ``.aggregate()``/``.count()`` call — a
     fixed number of queries, never one per row of underlying data.
@@ -2597,6 +2637,25 @@ def _feature_adoption(*, since, until):
             _push_enabled_stats(since=since, until=until),
         ),
         _feature_row(
+            "pwa_installed",
+            "App installed (PWA)",
+            "anyone",
+            "Event pwa_installed",
+            _client_event_stats(EventName.PWA_INSTALLED, since=since, until=until),
+        ),
+        _feature_row(
+            "push_permission_granted",
+            "Push permission granted",
+            "anyone",
+            "Event push_permission",
+            _client_event_stats(
+                EventName.PUSH_PERMISSION,
+                since=since,
+                until=until,
+                props={"props__result": "granted"},
+            ),
+        ),
+        _feature_row(
             "session_completed",
             "Session completed",
             "athletes",
@@ -2674,5 +2733,70 @@ def _email_section(*, since, until):
             key: sum(row[key] for row in rows)
             for key in ("sent", "delivered", "opened", "clicked")
         },
+    )
+    return {"rows": rows, "totals": totals}
+
+
+# -- 5. push (Email card, second table) ---------------------------------------
+
+
+def _push_row(kind, label, counts):
+    """One push row's rate math, shared between a per-kind row and ``totals``.
+
+    Mirrors ``_email_row``'s shape (#509 slice 3): a push has no "delivered"
+    signal the way SES gives email one — the send call to the push service
+    either raised or didn't — so this reports ``failed`` in that slot instead.
+    """
+    sent = counts["sent"]
+    row = {
+        "sent": sent,
+        "failed": counts["failed"],
+        "clicked": counts["clicked"],
+        "click_rate": _rate(counts["clicked"], sent),
+    }
+    if kind is not None:
+        row = {"kind": kind, "label": label, **row}
+    return row
+
+
+def _push_section(*, since, until):
+    """The Push table inside the Email card: per-kind + totals (#509 slice 3).
+
+    Cohort = ``PushNotification`` rows *sent* (``sent_at``) in the window,
+    ineligible recipients excluded — the same window and exclusion shape
+    ``_email_section`` uses, so the two tables read as one story about the
+    same block-delivery nudge. ``error`` partitions the cohort in two with no
+    third state: blank means the push left for the service (``sent``), a
+    non-empty string means the service rejected it (``failed``) — unlike
+    ``_email_section``'s ``events__event_type`` filters, these are plain
+    columns on the row itself, not a join to a related event table, so there's
+    nothing here that can fan out and no ``distinct=True`` needed. ``clicked``
+    is ``clicked_at`` set — recorded once, on the athlete's own landing GET
+    (``notifications.push.record_push_click``), never from the service
+    worker. One ``.values("kind").annotate(...)`` query over the fixed
+    ``MESO_PUSH_KINDS`` tuple, zero-filled for a kind with no rows in the
+    window, the same as the email rows.
+    """
+    kind_labels = dict(PushKind.choices)
+    qs = PushNotification.objects.filter(
+        sent_at__gte=since, sent_at__lte=until
+    ).exclude(user__in=_ineligible_users())
+    counts_by_kind = {
+        row["kind"]: row
+        for row in qs.values("kind").annotate(
+            sent=Count("pk", filter=Q(error="")),
+            failed=Count("pk", filter=~Q(error="")),
+            clicked=Count("pk", filter=Q(clicked_at__isnull=False)),
+        )
+    }
+    empty = {"sent": 0, "failed": 0, "clicked": 0}
+    rows = [
+        _push_row(kind, kind_labels[kind], counts_by_kind.get(kind, empty))
+        for kind in MESO_PUSH_KINDS
+    ]
+    totals = _push_row(
+        None,
+        None,
+        {key: sum(row[key] for row in rows) for key in ("sent", "failed", "clicked")},
     )
     return {"rows": rows, "totals": totals}

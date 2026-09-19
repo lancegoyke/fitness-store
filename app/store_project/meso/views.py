@@ -44,6 +44,7 @@ from store_project.analytics.track import track
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
+from store_project.notifications.push import record_push_click
 
 from . import adherence as meso_adherence
 from . import demo as meso_demo
@@ -1370,6 +1371,11 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "training"
+        # push_clicked (#509 slice 3): the block-delivered push deep-links
+        # here carrying its ledger id. GET only — Django routes HEAD through
+        # get() too, and a prefetch must not count as a tap.
+        if self.request.method == "GET":
+            record_push_click(self.request)
         try:
             focus_week_id = int(self.request.GET.get("week", ""))
         except (TypeError, ValueError):

@@ -50,6 +50,8 @@ from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
 from store_project.notifications.models import EmailEvent
 from store_project.notifications.models import EmailKind
+from store_project.notifications.models import PushKind
+from store_project.notifications.models import PushNotification
 from store_project.notifications.models import SentEmail
 from store_project.users.factories import UserFactory
 
@@ -181,6 +183,14 @@ def _email_event(
     )
 
 
+def _push_notification(
+    kind=PushKind.BLOCK_DELIVERED, *, sent_at, user=None, error="", clicked_at=None
+):
+    return PushNotification.objects.create(
+        kind=kind, user=user, sent_at=sent_at, error=error, clicked_at=clicked_at
+    )
+
+
 # ---------------------------------------------------------------------------
 # presenter shape
 # ---------------------------------------------------------------------------
@@ -199,6 +209,7 @@ class TestPresenterShape:
             "funnel",
             "features",
             "email",
+            "push",
         }
         assert result["days"] == 30
         assert result["since"] == now - datetime.timedelta(days=30)
@@ -991,6 +1002,8 @@ class TestFeatureAdoption:
             "subscription_started",
             "subscription_cancelled",
             "push_enabled",
+            "pwa_installed",
+            "push_permission_granted",
             "session_completed",
         ]
 
@@ -1245,6 +1258,168 @@ class TestFeatureAdoption:
         assert row["users"] == 1
         assert row["times"] == 1
 
+    def test_pwa_installed_users_and_times(self, now):
+        actor1, actor2 = UserFactory(), UserFactory()
+        _event(
+            EventName.PWA_INSTALLED,
+            actor=actor1,
+            created=now - datetime.timedelta(days=1),
+            via="standalone",
+        )
+        _event(
+            EventName.PWA_INSTALLED,
+            actor=actor1,
+            created=now - datetime.timedelta(days=2),
+            via="appinstalled",
+        )
+        _event(
+            EventName.PWA_INSTALLED,
+            actor=actor2,
+            created=now - datetime.timedelta(days=3),
+            via="standalone",
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _feature(result, "pwa_installed")
+
+        assert row["label"] == "App installed (PWA)"
+        assert row["who"] == "anyone"
+        assert row["users"] == 2
+        assert row["times"] == 3
+
+    def test_pwa_installed_no_client_athlete_or_self_coaching_filter(self, now):
+        """A self-only coach's own install still counts ("anyone")."""
+        coach = UserFactory()
+        _self_link(coach)
+        _event(
+            EventName.PWA_INSTALLED,
+            actor=coach,
+            created=now - datetime.timedelta(days=1),
+            via="standalone",
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _feature(result, "pwa_installed")
+
+        assert row["users"] == 1
+        assert row["times"] == 1
+
+    def test_pwa_installed_staff_and_sandbox_actors_excluded(self, now):
+        staff = UserFactory(is_staff=True)
+        sandbox_user = _sandbox()
+        _event(
+            EventName.PWA_INSTALLED,
+            actor=staff,
+            created=now - datetime.timedelta(days=1),
+            via="standalone",
+        )
+        _event(
+            EventName.PWA_INSTALLED,
+            actor=sandbox_user,
+            created=now - datetime.timedelta(days=1),
+            via="standalone",
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _feature(result, "pwa_installed")
+
+        assert row["times"] == 0
+
+    def test_pwa_installed_outside_window_excluded(self, now):
+        _event(
+            EventName.PWA_INSTALLED,
+            actor=UserFactory(),
+            created=now - datetime.timedelta(days=31),
+            via="standalone",
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _feature(result, "pwa_installed")
+
+        assert row["times"] == 0
+
+    def test_push_permission_granted_counted(self, now):
+        actor = UserFactory()
+        _event(
+            EventName.PUSH_PERMISSION,
+            actor=actor,
+            created=now - datetime.timedelta(days=1),
+            result="granted",
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _feature(result, "push_permission_granted")
+
+        assert row["label"] == "Push permission granted"
+        assert row["who"] == "anyone"
+        assert row["users"] == 1
+        assert row["times"] == 1
+
+    def test_push_permission_denied_is_not_counted_as_granted(self, now):
+        _event(
+            EventName.PUSH_PERMISSION,
+            actor=UserFactory(),
+            created=now - datetime.timedelta(days=1),
+            result="denied",
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _feature(result, "push_permission_granted")
+
+        assert row["times"] == 0
+
+    def test_push_permission_with_no_result_prop_is_not_counted_as_granted(self, now):
+        """The JSON ``has_key`` NULL trap (memory ``meso-509-dashboard``).
+
+        An event with no ``result`` prop at all reads ``props__result`` as SQL
+        NULL — ``NULL = 'granted'`` is never true, so a plain equality filter
+        excludes it without an explicit existence check.
+        """
+        _event(
+            EventName.PUSH_PERMISSION,
+            actor=UserFactory(),
+            created=now - datetime.timedelta(days=1),
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _feature(result, "push_permission_granted")
+
+        assert row["times"] == 0
+
+    def test_push_permission_granted_staff_and_sandbox_excluded(self, now):
+        staff = UserFactory(is_staff=True)
+        sandbox_user = _sandbox()
+        _event(
+            EventName.PUSH_PERMISSION,
+            actor=staff,
+            created=now - datetime.timedelta(days=1),
+            result="granted",
+        )
+        _event(
+            EventName.PUSH_PERMISSION,
+            actor=sandbox_user,
+            created=now - datetime.timedelta(days=1),
+            result="granted",
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _feature(result, "push_permission_granted")
+
+        assert row["times"] == 0
+
+    def test_push_permission_granted_outside_window_excluded(self, now):
+        _event(
+            EventName.PUSH_PERMISSION,
+            actor=UserFactory(),
+            created=now - datetime.timedelta(days=31),
+            result="granted",
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _feature(result, "push_permission_granted")
+
+        assert row["times"] == 0
+
     def test_session_completed(self, now):
         athlete = UserFactory()
         _relationship(athlete=athlete)  # a coach's client
@@ -1441,6 +1616,105 @@ class TestEmailSection:
         assert "kind" not in totals
         assert "label" not in totals
         assert totals["open_rate"] == 33  # round(100 * 1/3)
+
+
+# ---------------------------------------------------------------------------
+# 5. push (Email card, second table)
+# ---------------------------------------------------------------------------
+
+
+def _push_kind_row(result, kind):
+    return next(r for r in result["push"]["rows"] if r["kind"] == kind)
+
+
+class TestPushSection:
+    def test_per_kind_sent_failed_clicked(self, now):
+        sent_at = now - datetime.timedelta(days=1)
+        _push_notification(sent_at=sent_at)
+        _push_notification(sent_at=sent_at, error="410 gone")
+        clicked = _push_notification(sent_at=sent_at, clicked_at=sent_at)
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _push_kind_row(result, PushKind.BLOCK_DELIVERED)
+
+        assert row["label"] == PushKind.BLOCK_DELIVERED.label
+        assert row["sent"] == 2  # blank error: the two non-rejected sends
+        assert row["failed"] == 1
+        assert row["clicked"] == 1
+        assert row["click_rate"] == 50  # round(100 * 1/2)
+        assert clicked.error == ""
+
+    def test_every_meso_kind_present_and_zero_filled(self, now):
+        result = presenters.product_analytics(days=30, now=now)
+        kinds = [r["kind"] for r in result["push"]["rows"]]
+
+        assert kinds == [PushKind.BLOCK_DELIVERED]
+        for row in result["push"]["rows"]:
+            assert row["sent"] == 0
+            assert row["failed"] == 0
+            assert row["clicked"] == 0
+            assert row["click_rate"] is None
+
+    def test_staff_recipient_excluded(self, now):
+        staff = UserFactory(is_staff=True)
+        _push_notification(sent_at=now - datetime.timedelta(days=1), user=staff)
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _push_kind_row(result, PushKind.BLOCK_DELIVERED)
+
+        assert row["sent"] == 0
+
+    def test_sandbox_recipient_excluded(self, now):
+        sandbox_user = _sandbox()
+        _push_notification(sent_at=now - datetime.timedelta(days=1), user=sandbox_user)
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _push_kind_row(result, PushKind.BLOCK_DELIVERED)
+
+        assert row["sent"] == 0
+
+    def test_null_user_send_is_kept(self, now):
+        _push_notification(sent_at=now - datetime.timedelta(days=1), user=None)
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _push_kind_row(result, PushKind.BLOCK_DELIVERED)
+
+        assert row["sent"] == 1
+
+    def test_row_31_days_ago_is_excluded(self, now):
+        _push_notification(sent_at=now - datetime.timedelta(days=31))
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _push_kind_row(result, PushKind.BLOCK_DELIVERED)
+
+        assert row["sent"] == 0
+
+    def test_click_rate_is_none_at_zero_sends(self, now):
+        # error non-blank means this row isn't a "sent" (only a "failed") —
+        # click_rate divides by sent, which is 0 here.
+        _push_notification(sent_at=now - datetime.timedelta(days=1), error="500")
+
+        result = presenters.product_analytics(days=30, now=now)
+        row = _push_kind_row(result, PushKind.BLOCK_DELIVERED)
+
+        assert row["sent"] == 0
+        assert row["click_rate"] is None
+
+    def test_totals_sum_across_kinds_and_recompute_rate(self, now):
+        sent_at = now - datetime.timedelta(days=1)
+        _push_notification(sent_at=sent_at)
+        _push_notification(sent_at=sent_at, clicked_at=sent_at)
+        _push_notification(sent_at=sent_at, error="410 gone")
+
+        result = presenters.product_analytics(days=30, now=now)
+        totals = result["push"]["totals"]
+
+        assert totals["sent"] == 2
+        assert totals["failed"] == 1
+        assert totals["clicked"] == 1
+        assert "kind" not in totals
+        assert "label" not in totals
+        assert totals["click_rate"] == 50  # round(100 * 1/2)
 
 
 # ---------------------------------------------------------------------------
@@ -1693,6 +1967,24 @@ class TestProductAnalyticsView:
         body = resp.content.decode()
 
         assert resp.status_code == 200
+        headings = re.findall(r"<h2[^>]*>\s*([^<]+?)\s*</h2>", body)
+        assert headings == [
+            "Active users",
+            "Activation funnel",
+            "Feature adoption",
+            "Email",
+        ]
+
+    def test_push_table_renders_inside_the_email_card_not_a_fifth_h2(self, client):
+        client.force_login(UserFactory(is_staff=True))
+        sent_at = timezone.now() - datetime.timedelta(days=1)
+        _push_notification(sent_at=sent_at)
+
+        resp = client.get(reverse("meso:product_analytics"))
+        body = resp.content.decode()
+
+        assert resp.status_code == 200
+        assert "<h3" in body and "Push" in body
         headings = re.findall(r"<h2[^>]*>\s*([^<]+?)\s*</h2>", body)
         assert headings == [
             "Active users",

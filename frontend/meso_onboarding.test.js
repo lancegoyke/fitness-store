@@ -12,6 +12,7 @@ import {
   installPromptState,
   isDismissed,
   detectIOS,
+  shouldTrackInstall,
 } from "../app/store_project/static/js/meso_onboarding.js";
 
 const IPHONE_UA =
@@ -101,5 +102,80 @@ describe("isDismissed", () => {
       },
     };
     expect(isDismissed("seen", store)).toBe(false);
+  });
+});
+
+// ---- install tracking (#509 slice 3) ----
+//
+// A fresh install is reported through the client beacon (window.mesoTrack)
+// exactly once per device, off whichever of two signals fires first:
+// `appinstalled` (Chromium/Android) or the standalone check evaluated on
+// load (iOS's only signal, and true on every load once installed). The
+// decision is `shouldTrackInstall` — a pure predicate, unit-tested directly
+// like `installPromptState`. The `appinstalled` half of the DOM wiring is
+// exercised as a real event: `initInstallTracking` registers its listener on
+// `window` once, at module import (see meso_onboarding.js's own
+// `document.readyState` bootstrap), and that listener re-reads localStorage
+// and `window.mesoTrack` fresh on every fire — so dispatching a real
+// `appinstalled` event here drives the actual production wiring, no
+// re-import needed (unlike meso_push.js's import-time config capture).
+
+describe("shouldTrackInstall", () => {
+  it("is true for a fresh standalone load (not yet tracked)", () => {
+    expect(shouldTrackInstall({ standalone: true, tracked: false })).toBe(
+      true,
+    );
+  });
+
+  it("is false once the flag is already set", () => {
+    expect(shouldTrackInstall({ standalone: true, tracked: true })).toBe(
+      false,
+    );
+  });
+
+  it("is false when the app isn't running standalone", () => {
+    expect(shouldTrackInstall({ standalone: false, tracked: false })).toBe(
+      false,
+    );
+  });
+
+  it("treats a missing env as nothing to track", () => {
+    expect(shouldTrackInstall()).toBe(false);
+  });
+});
+
+describe("appinstalled listener: reports once per device", () => {
+  const INSTALL_TRACKED_KEY = "meso-install-tracked";
+
+  beforeEach(() => {
+    localStorage.clear();
+    delete window.mesoTrack;
+  });
+
+  it("reports pwa_installed via 'appinstalled'", () => {
+    window.mesoTrack = vi.fn();
+    window.dispatchEvent(new Event("appinstalled"));
+    expect(window.mesoTrack).toHaveBeenCalledTimes(1);
+    expect(window.mesoTrack).toHaveBeenCalledWith("pwa_installed", {
+      via: "appinstalled",
+    });
+  });
+
+  it("reports nothing on a second appinstalled — the flag is already set", () => {
+    window.mesoTrack = vi.fn();
+    window.dispatchEvent(new Event("appinstalled"));
+    window.dispatchEvent(new Event("appinstalled"));
+    expect(window.mesoTrack).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets the tracked flag so a later reload's on-init check is a no-op too", () => {
+    window.mesoTrack = vi.fn();
+    expect(isDismissed(INSTALL_TRACKED_KEY)).toBe(false);
+    window.dispatchEvent(new Event("appinstalled"));
+    expect(isDismissed(INSTALL_TRACKED_KEY)).toBe(true);
+  });
+
+  it("does not throw when window.mesoTrack isn't defined", () => {
+    expect(() => window.dispatchEvent(new Event("appinstalled"))).not.toThrow();
   });
 });

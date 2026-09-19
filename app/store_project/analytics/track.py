@@ -16,8 +16,8 @@ from .models import Event
 logger = logging.getLogger(__name__)
 
 
-def track(name, actor=None, subject=None, **props):
-    """Record one server-side event. One insert; never raises; returns nothing.
+def track(name, actor=None, subject=None, *, source=Event.Source.SERVER, **props):
+    """Record one usage event. One insert; never raises; returns nothing.
 
     ``name`` must be an ``EventName``. An unknown name raises ``ValueError``
     when ``settings.ANALYTICS_STRICT_EVENT_NAMES`` is on (tests, and local dev
@@ -34,6 +34,16 @@ def track(name, actor=None, subject=None, **props):
     ``subject`` is any saved model instance, stored as its ``app_label.model``
     and ``str(pk)``. ``props`` must be JSON-serializable (UUIDs, dates and
     Decimals are, via ``DjangoJSONEncoder``).
+
+    ``source`` is provenance. ``server`` (the default) means our own code
+    observed the fact in a request it served. ``client`` means the browser
+    self-reported it through the beacon (``analytics.views.track_beacon``),
+    which is the only caller that passes it. Everything else here — the closed
+    set of names, the sandbox and staff exclusion, the savepoint — applies the
+    same either way. It is keyword-only so it can't be reached positionally;
+    note that a ``source`` key spread into ``**props`` binds to it rather than
+    becoming a prop, which is why the beacon validates props against a closed
+    set before they ever get here.
 
     The insert runs in its own savepoint, inside a try/except. Callers run
     inside open transactions, and on PostgreSQL a failed statement aborts the
@@ -58,7 +68,7 @@ def track(name, actor=None, subject=None, **props):
                 subject_type=subject._meta.label_lower if subject is not None else "",
                 subject_id=str(subject.pk) if subject is not None else "",
                 props=props,
-                source=Event.Source.SERVER,
+                source=str(source),
             )
     except Exception:
         logger.exception("analytics: failed to record a %s event", name)

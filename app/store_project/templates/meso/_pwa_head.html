@@ -3,8 +3,11 @@
 PWA install chrome for the athlete surface (Phase 4b — S7). Pulled into the
 `pwa` block by the athlete templates only, so the coach screens stay plain web
 (mirroring Phase 1's athlete-only nav blocks). Carries the manifest link, the
-theme/apple meta, the service-worker registration, and the push config the
-`meso_push.js` subscribe flow reads.
+theme/apple meta, the service-worker registration, and the push + beacon
+config `meso_push.js` and `meso_track.js` read. Also strips a `?n=<ledger id>`
+query param a block-delivered push deep-links in with (#509 slice 3) — the
+server already counted the click, so this keeps a reload/bookmark/share from
+counting a second one.
 {% endcomment %}
 <link rel="manifest" href="{% url 'meso:manifest' %}" />
 <meta name="theme-color" content="#31759d" />
@@ -18,6 +21,7 @@ theme/apple meta, the service-worker registration, and the push config the
       hidden
       data-subscribe-url="{% url 'meso:push_subscribe' %}"
       data-unsubscribe-url="{% url 'meso:push_unsubscribe' %}"
+      data-track-url="{% url 'meso:track_beacon' %}"
       data-csrf="{{ csrf_token }}"
       data-push-enabled="{% if push_enabled %}1{% else %}0{% endif %}"></span>
 <script>
@@ -41,6 +45,20 @@ theme/apple meta, the service-worker registration, and the push config the
     window.__mesoInstallEvent = e;
     window.dispatchEvent(new Event("meso:installable"));
   });
+  // The block-delivered push deep-links here with `?n=<ledger id>`; the server
+  // has already counted the tap by the time this runs. Drop it from the address
+  // bar so a reload, a bookmark or a shared link isn't a second click.
+  try {
+    var mesoUrl = new URL(window.location.href);
+    if (mesoUrl.searchParams.has("n")) {
+      mesoUrl.searchParams.delete("n");
+      window.history.replaceState(
+        {}, "", mesoUrl.pathname + mesoUrl.search + mesoUrl.hash);
+    }
+  } catch (e) {
+    /* best-effort — the parameter is harmless if it stays */
+  }
 </script>
+<script defer src="{% static 'js/meso_track.js' %}"></script>
 <script defer src="{% static 'js/meso_push.js' %}"></script>
 <script defer src="{% static 'js/meso_onboarding.js' %}"></script>
