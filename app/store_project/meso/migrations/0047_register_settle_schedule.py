@@ -7,9 +7,11 @@ deploys with the code rather than living as a hand-rolled box cron. Hourly,
 because the quiet window is measured in hours (``MESO_SETTLE_QUIET_HOURS``)
 and a stale PENDING log is invisible to every DONE-only read until it
 settles. Idempotent (keyed on ``name``) and reversible. Depends on
-``django_q``'s own migrations (``__latest__``) so the ``Schedule`` table
-exists, and on 0046 so the ``last_activity_at`` column the sweep reads exists
-too.
+``django_q``'s own migrations, pinned to its 0019 leaf rather than
+``__latest__`` (which re-resolves every graph build and would break
+``migrate`` once django-q2 ships a new migration, #552), so the
+``Schedule`` table exists, and on 0046 so the ``last_activity_at`` column the
+sweep reads exists too.
 """
 
 from datetime import timedelta
@@ -46,7 +48,7 @@ def remove_schedule(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [
         ("meso", "0046_sessionlog_last_activity_at"),
-        ("django_q", "__latest__"),
+        ("django_q", "0019_alter_task_options_alter_ormq_key_alter_ormq_lock_and_more"),
     ]
 
     operations = [

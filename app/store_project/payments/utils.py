@@ -64,7 +64,7 @@ def stripe_customer_get_or_create(user: User) -> stripe.Customer:
 
     if user.stripe_customer_id:
         try:
-            stripe_customer = stripe.Customer.retrieve(id=user.stripe_customer_id)
+            stripe_customer = stripe.Customer.retrieve(user.stripe_customer_id)
         except stripe.error.InvalidRequestError:
             logger.info(
                 f"Could not find Stripe Customer with ID={user.stripe_customer_id}. Creating now."  # noqa: E501

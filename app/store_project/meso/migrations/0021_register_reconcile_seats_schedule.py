@@ -30,7 +30,7 @@ def remove_schedule(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [
         ("meso", "0020_coachsubscription"),
-        ("django_q", "__latest__"),
+        ("django_q", "0019_alter_task_options_alter_ormq_key_alter_ormq_lock_and_more"),
     ]
 
     operations = [

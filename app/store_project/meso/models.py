@@ -16,7 +16,9 @@ from collections import defaultdict
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import models
+from django.db import transaction
 from django.db.models.functions import Now
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -1171,10 +1173,26 @@ class CoachSubscription(models.Model):
         from store_project.analytics.events import EventName
         from store_project.analytics.track import track
 
-        sub, _ = cls.objects.get_or_create(coach=coach)
-        sub.start_trial()
+        # Two concurrent callers could both read a ``free`` row and both start
+        # the trial, recording ``subscription_started`` twice (#540). Lock in
+        # ``billing.webhooks._lock_mirror``'s order (the row if it exists, else
+        # the coach's user row, then re-read) so this can't deadlock against a
+        # webhook delivery. ``start_trial``'s own status check is the re-check:
+        # the loser raises ``InvalidTransition``, which both callers handle.
+        # ``no_key``: a plain FOR UPDATE would also block the commit-time FK KEY
+        # SHARE lock of a concurrent insert that references this user (e.g.
+        # ``comp``'s row) and could deadlock with it.
+        with transaction.atomic():
+            sub = cls.objects.select_for_update().filter(coach=coach).first()
+            if sub is None:
+                get_user_model().objects.select_for_update(no_key=True).filter(
+                    pk=coach.pk
+                ).first()
+                sub, _ = cls.objects.select_for_update().get_or_create(coach=coach)
+            sub.start_trial()
         # subscription_started analytics: one choke point for both
-        # ``billing_start_trial`` and ``start_coaching``'s ``plan=trial``.
+        # ``billing_start_trial`` and ``start_coaching``'s ``plan=trial``. Only
+        # the winner of a concurrent start gets here (#540).
         track(
             EventName.SUBSCRIPTION_STARTED,
             actor=coach,

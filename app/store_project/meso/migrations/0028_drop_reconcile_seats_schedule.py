@@ -30,7 +30,7 @@ def recreate_schedule(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [
         ("meso", "0027_proposedchange_membership_alter_proposedchange_kind"),
-        ("django_q", "__latest__"),
+        ("django_q", "0019_alter_task_options_alter_ormq_key_alter_ormq_lock_and_more"),
     ]
 
     operations = [

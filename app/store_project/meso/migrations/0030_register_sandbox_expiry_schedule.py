@@ -5,8 +5,10 @@ sandboxes (throwaway coach + demo-athlete users + seeded data) so scheduling is
 *versioned and deploys with the code* — mirroring
 ``0018_register_invite_schedules``. Hourly, because the TTL is measured in hours
 (``MESO_SANDBOX_TTL_HOURS``) and stale sandboxes are pure DB weight. Idempotent
-(keyed on ``name``) and reversible. Depends on ``django_q``'s own migrations
-(``__latest__``) so the ``Schedule`` table exists.
+(keyed on ``name``) and reversible. Depends on ``django_q``'s own migrations,
+pinned to its 0019 leaf rather than ``__latest__`` (which re-resolves every
+graph build and would break ``migrate`` once django-q2 ships a new
+migration, #552), so the ``Schedule`` table exists.
 """
 
 from django.db import migrations
@@ -31,7 +33,7 @@ def remove_schedule(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [
         ("meso", "0029_sandboxsession"),
-        ("django_q", "__latest__"),
+        ("django_q", "0019_alter_task_options_alter_ormq_key_alter_ormq_lock_and_more"),
     ]
 
     operations = [
