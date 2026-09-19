@@ -24,7 +24,7 @@ just docker-dev
 ```bash
 just migrate
 just makemigrations
-just setup-test-data
+just seed-database
 just createsuperuser
 ```
 
@@ -83,7 +83,7 @@ uv run python app/manage.py runserver
 
 # Database operations
 uv run python app/manage.py migrate
-uv run python app/manage.py setup_test_data
+uv run python app/manage.py seed_database
 
 # Testing
 uv run pytest
