@@ -357,7 +357,6 @@ function createLogger() {
       this.queued = false;
       this.lineError = false;
       this.newRecords = []; // clear any prior toast; this save recomputes it
-      const payload = this.buildPayload(markDone);
       // Reflect the intended status locally right away so the UI is responsive
       // whether the request lands now or after a sync.
       if (markDone) this.status = "done";
@@ -367,6 +366,9 @@ function createLogger() {
       // lines carry, one request at a time, and what this save reports below
       // covers the lines too.
       await this.settleLines();
+      // Built after the wait, which can take a while on bad wifi: the Set rows
+      // stay editable meanwhile, and a change made then belongs in this save.
+      const payload = this.buildPayload(markDone);
       let res;
       try {
         res = await postJson(this.logUrl, payload, this.csrf);

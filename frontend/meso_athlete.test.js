@@ -1893,6 +1893,36 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     expect(calls).toEqual([1, 2, "log"]);
   });
 
+  it("sends Set rows edited while it waited for the lines", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].set_rows = [
+      { set_number: 1, reps: "", load: "", rpe: "", done: false },
+    ];
+    let logBody;
+    let land;
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      if (url !== CELL_URL) {
+        logBody = JSON.parse(opts.body);
+        return res({ body: { log: { status: "done", sets: [] } } });
+      }
+      await new Promise((r) => {
+        land = r;
+      });
+      return res({ body: { ok: true, cell: { warn: false } } });
+    });
+    c.saveCell(c.exercises[0], 1); // a line save that takes a while
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(land).toBeTypeOf("function"));
+    c.exercises[0].set_rows[0].load = "100"; // typed during "Saving…"
+    c.exercises[0].set_rows[0].reps = "5";
+    land();
+    await saving;
+    expect(logBody.sets).toEqual([
+      { prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
+    ]);
+  });
+
   it("takes 'Saved ✓' down when a line fails after it went up", async () => {
     vi.useFakeTimers();
     const c = cellLogger({ logUrl: LOG_URL });
