@@ -27,6 +27,13 @@ class Event(models.Model):
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
+        # No DB-level FK (#509 review): Postgres FKs are DEFERRABLE INITIALLY
+        # DEFERRED, so a real constraint here would make the caller's COMMIT
+        # take a lock on the actor's row for the RI check — after track()'s
+        # own savepoint/try-except have exited, risking a deadlock against
+        # other paths that lock that same user row. SET_NULL is still applied
+        # in Python by Django's collector, so a deleted actor is still nulled.
+        db_constraint=False,
         null=True,
         blank=True,
         related_name="analytics_events",

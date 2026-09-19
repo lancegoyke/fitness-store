@@ -55,6 +55,12 @@ sentry_sdk.init(
     send_default_pii=True,
 )
 
+# Analytics (#509)
+
+# track() must never raise in production, even if DEBUG gets flipped on by
+# mistake on the box (base.py derives the default from DEBUG).
+ANALYTICS_STRICT_EVENT_NAMES = False
+
 # Security
 
 SECURE_HSTS_SECONDS = 31536000  # one year — HTTPS is stable on Hetzner/Caddy

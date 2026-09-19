@@ -43,6 +43,7 @@ from store_project.meso.tests.test_batch_deliver import comp
 from store_project.meso.tests.test_batch_deliver import seed_source
 from store_project.meso.tests.test_billing_enforcement import _plan_with_prescription
 from store_project.meso.tests.test_billing_stripe import _coach_with_customer
+from store_project.meso.tests.test_billing_stripe import _invoice_event
 from store_project.meso.tests.test_billing_stripe import _sub_event
 from store_project.meso.tests.test_deliver import deliver_url
 from store_project.meso.tests.test_deliver import seed_plan as deliver_seed_plan
@@ -882,6 +883,7 @@ class TestSubscriptionStripeEvents:
         assert row.subject_id == str(sub.pk)
         assert row.props == {
             "via": "stripe",
+            "subscription": "sub_1",
             "status": CoachSubscription.Status.ACTIVE,
             "previous": "",
         }
@@ -926,8 +928,10 @@ class TestSubscriptionStripeEvents:
         assert row.subject_id == str(sub.pk)
         assert row.props == {
             "via": "stripe",
+            "subscription": "sub_1",
             "status": CoachSubscription.Status.CANCELED,
             "previous": CoachSubscription.Status.ACTIVE,
+            "reason": "",
         }
 
     def test_repeated_deleted_gives_no_more_cancelled(self):
@@ -972,6 +976,146 @@ class TestSubscriptionStripeEvents:
 
         assert events(EventName.SUBSCRIPTION_STARTED) == []
         assert events(EventName.SUBSCRIPTION_CANCELLED) == []
+
+    def test_incomplete_then_invoice_paid_then_updated_active_gives_one_started_at_paid(
+        self,
+    ):
+        """Incomplete never counts as live.
+
+        So the ledger — not the mirror's ``already_live`` — must catch the
+        later ``updated(active)`` as a dup (a).
+        """
+        _coach_with_customer()
+
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.created", status="incomplete")
+        )
+        assert events(EventName.SUBSCRIPTION_STARTED) == []
+
+        billing_webhooks.handle_event(_invoice_event("invoice.paid"))
+        rows = events(EventName.SUBSCRIPTION_STARTED)
+        assert len(rows) == 1
+        assert rows[0].props["previous"] == CoachSubscription.Status.PAST_DUE
+
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.updated", status="active")
+        )
+        assert len(events(EventName.SUBSCRIPTION_STARTED)) == 1
+
+    def test_incomplete_then_updated_active_then_invoice_paid_gives_one_started(self):
+        _coach_with_customer()
+
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.created", status="incomplete")
+        )
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.updated", status="active")
+        )
+        billing_webhooks.handle_event(_invoice_event("invoice.paid"))
+
+        assert len(events(EventName.SUBSCRIPTION_STARTED)) == 1
+
+    def test_incomplete_then_deleted_gives_no_started_or_cancelled(self):
+        """(b): a subscription that never went live must not get a cancelled row."""
+        _coach_with_customer()
+
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.created", status="incomplete")
+        )
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.deleted", status="canceled")
+        )
+
+        assert events(EventName.SUBSCRIPTION_STARTED) == []
+        assert events(EventName.SUBSCRIPTION_CANCELLED) == []
+
+    def test_incomplete_then_incomplete_expired_gives_no_cancelled(self):
+        _coach_with_customer()
+
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.created", status="incomplete")
+        )
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.updated", status="incomplete_expired")
+        )
+
+        assert events(EventName.SUBSCRIPTION_CANCELLED) == []
+
+    def test_active_then_payment_failed_then_paid_recovery_gives_one_started(self):
+        _coach_with_customer()
+
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.created", status="active")
+        )
+        billing_webhooks.handle_event(_invoice_event("invoice.payment_failed"))
+        billing_webhooks.handle_event(_invoice_event("invoice.paid"))
+
+        assert len(events(EventName.SUBSCRIPTION_STARTED)) == 1
+
+    def test_active_then_deleted_then_late_retried_active_does_not_double_start(self):
+        """A late retried ``updated(active)`` resurrects the mirror.
+
+        But it must not write a second ``subscription_started`` — the ledger
+        already has one.
+        """
+        coach = _coach_with_customer()
+
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.created", status="active")
+        )
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.deleted", status="canceled")
+        )
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.updated", status="active")
+        )
+
+        assert len(events(EventName.SUBSCRIPTION_STARTED)) == 1
+        assert len(events(EventName.SUBSCRIPTION_CANCELLED)) == 1
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.ACTIVE  # the mirror resurrects
+
+    def test_pre_existing_live_subscription_renewal_gives_no_started(self):
+        """A mirror row already live before the ledger existed (pre-deploy).
+
+        It must stay quiet on a renewal update — ``already_live`` alone
+        decides this.
+        """
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_1",
+        )
+
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.updated", status="active")
+        )
+        assert events(EventName.SUBSCRIPTION_STARTED) == []
+
+        billing_webhooks.handle_event(
+            _sub_event("customer.subscription.deleted", status="canceled")
+        )
+        assert len(events(EventName.SUBSCRIPTION_CANCELLED)) == 1
+
+    def test_cancelled_carries_the_reason_from_cancellation_details(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_1",
+        )
+
+        billing_webhooks.handle_event(
+            _sub_event(
+                "customer.subscription.deleted",
+                status="canceled",
+                cancellation_details={"reason": "cancellation_requested"},
+            )
+        )
+
+        row = events(EventName.SUBSCRIPTION_CANCELLED)[0]
+        assert row.props["reason"] == "cancellation_requested"
 
 
 # ---------------------------------------------------------------------------

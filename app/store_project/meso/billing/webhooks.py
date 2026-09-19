@@ -32,6 +32,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 
 from store_project.analytics.events import EventName
+from store_project.analytics.models import Event
 from store_project.analytics.track import track
 from store_project.meso.models import CoachSubscription
 
@@ -114,6 +115,19 @@ def _coach_for_customer(customer_id):
     return coach
 
 
+def _recorded(name, sub_id):
+    """Whether a ``name`` event was already written for this Stripe subscription.
+
+    The ``Event`` table doubles as the ledger of which Stripe subscriptions
+    have started/cancelled (#509 review) — the mirror's status alone can't
+    tell "started" from "recovered from incomplete" apart (an ``incomplete``
+    subscription reads ``past_due`` locally, never ``already_live``), and it
+    can't tell a subscription that was never live from one that was without
+    remembering whether a ``subscription_started`` was ever written.
+    """
+    return Event.objects.filter(name=name, props__subscription=sub_id).exists()
+
+
 def _sync_from_subscription(sub_obj, *, deleted):
     """Upsert the coach's ``CoachSubscription`` from a Stripe subscription object."""
     coach = _coach_for_customer(sub_obj.get("customer"))
@@ -176,12 +190,25 @@ def _sync_from_subscription(sub_obj, *, deleted):
             "current_period_end": _ts_to_dt(sub_obj.get("current_period_end")),
         },
     )
-    if status in CoachSubscription.ACTIVE_STATUSES and not already_live:
+    # The ledger reads run AFTER the mirror write above, so a failed read can
+    # never block the mirror update. ``already_live`` alone isn't enough to
+    # tell "started" from "recovered": Stripe can deliver
+    # created(incomplete) → invoice.paid → updated(active), where
+    # ``_nudge_status`` flips past_due→active with a bare ``.update()`` (no
+    # event) before this ``updated(active)`` ever arrives — so ``already_live``
+    # would see a live mirror and silently skip the real first "started". The
+    # ledger (``_recorded``) is what actually remembers a started was written.
+    if (
+        status in CoachSubscription.ACTIVE_STATUSES
+        and not already_live
+        and not _recorded(EventName.SUBSCRIPTION_STARTED, incoming_id)
+    ):
         track(
             EventName.SUBSCRIPTION_STARTED,
             actor=coach,
             subject=sub,
             via="stripe",
+            subscription=incoming_id,
             status=status,
             previous=previous_status,
         )
@@ -189,14 +216,18 @@ def _sync_from_subscription(sub_obj, *, deleted):
         status == CoachSubscription.Status.CANCELED
         and existing is not None
         and existing.status != CoachSubscription.Status.CANCELED
+        and (already_live or _recorded(EventName.SUBSCRIPTION_STARTED, incoming_id))
+        and not _recorded(EventName.SUBSCRIPTION_CANCELLED, incoming_id)
     ):
         track(
             EventName.SUBSCRIPTION_CANCELLED,
             actor=coach,
             subject=sub,
             via="stripe",
+            subscription=incoming_id,
             status=status,
             previous=previous_status,
+            reason=(sub_obj.get("cancellation_details") or {}).get("reason") or "",
         )
 
 
@@ -222,3 +253,27 @@ def _nudge_status(invoice_obj, *, from_status, to_status):
             from_status,
             sub_id,
         )
+        return
+    if to_status == CoachSubscription.Status.ACTIVE and not _recorded(
+        EventName.SUBSCRIPTION_STARTED, sub_id
+    ):
+        # A past_due→active recovery (e.g. created(incomplete) → invoice.paid)
+        # is a real first "started" the subscription-object events never see
+        # (an ``incomplete`` subscription never reads ``already_live``, and the
+        # bare ``.update()`` above writes no event of its own). No symmetric
+        # event on the active→past_due nudge — that's not a cancellation.
+        row = (
+            CoachSubscription.objects.filter(stripe_subscription_id=sub_id)
+            .select_related("coach")
+            .first()
+        )
+        if row is not None:
+            track(
+                EventName.SUBSCRIPTION_STARTED,
+                actor=row.coach,
+                subject=row,
+                via="stripe",
+                subscription=sub_id,
+                status=CoachSubscription.Status.ACTIVE,
+                previous=from_status,
+            )

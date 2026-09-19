@@ -140,3 +140,23 @@ def test_every_event_name_is_snake_case_and_fits_the_column():
         assert value == value.lower()
         assert " " not in value
         assert len(value) <= max_length
+
+
+def test_the_actor_fk_has_no_db_constraint():
+    """No RI constraint on ``actor`` (#509 review).
+
+    See ``test_track_postgres.py`` for why — a deferred FK would take a
+    commit-time lock on the actor's row.
+    """
+    assert Event._meta.get_field("actor").db_constraint is False
+
+
+def test_deleting_the_actor_nulls_it_and_keeps_the_row():
+    actor = UserFactory()
+    track(EventName.PLAN_CREATED, actor=actor)
+    event = Event.objects.get()
+
+    actor.delete()
+
+    event.refresh_from_db()
+    assert event.actor is None
