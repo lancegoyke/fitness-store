@@ -16,7 +16,7 @@
 {% endblock %}
 
 {% block content %}
-  <div class="meso-page">
+  <div class="meso-page meso-athlete">
     <div class="meso-pagehead">
       <div>
         <p class="meso-eyebrow">Your training</p>
@@ -101,7 +101,7 @@
         <summary style="list-style:none;cursor:pointer;font-size:12.5px;font-weight:650;color:var(--accent);">+ Request a coach</summary>
         <form method="post" action="{% url 'meso:athlete_request_coach' %}" style="display:flex;gap:9px;margin-top:10px;">
           {% csrf_token %}
-          <input name="email" type="email" required maxlength="254" placeholder="coach@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font:inherit;font-size:13px;color:var(--ink);padding:8px 10px;outline:none;" />
+          <input name="email" type="email" required maxlength="254" placeholder="coach@email.com" style="flex:1;appearance:none;border:1px solid var(--line);border-radius:8px;background:var(--rail);font-family:inherit;color:var(--ink);padding:8px 10px;outline:none;" />
           <button type="submit" class="meso-btn meso-btn--primary">Send request</button>
         </form>
         <p class="meso-row-meta" style="margin-top:8px;">Enter your coach's email to ask to train with them.</p>
@@ -156,7 +156,7 @@
                   {% if group.label %}<p class="meso-eyebrow" style="margin-bottom:5px;">{{ group.label }}</p>{% endif %}
                   <div style="display:flex;flex-wrap:wrap;gap:7px;">
                     {% for w in group.chips %}
-                      <a href="{% url 'meso:athlete_home' %}?week={{ w.id }}" class="meso-mono" style="display:inline-flex;align-items:center;padding:7px 13px;border-radius:999px;font-size:12px;font-weight:700;text-decoration:none;background:var(--surface);color:var(--ink);border:1px solid var(--line);{% if w.focused %}box-shadow:inset 0 0 0 1.5px var(--accent-deep);color:var(--accent-deep);{% endif %}">{{ w.label }}</a>
+                      <a href="{% url 'meso:athlete_home' %}?week={{ w.id }}" class="meso-mono meso-week-chip{% if w.focused %} is-focused{% endif %}">{{ w.label }}</a>
                     {% endfor %}
                   </div>
                 </div>
@@ -203,35 +203,40 @@
             {% comment %}
               Read-only multi-week block table (P3). One compact table per
               training day; rows = exercises, columns = the block's weeks. Each
-              table scrolls horizontally inside its own container so a narrow
-              phone screen never scrolls the whole page sideways. Pure
-              server-rendered — no JS. (A multi-line {# #} comment is NOT
+              table scrolls inside its own container (both ways, so its header
+              row can stay pinned) so the page itself never scrolls sideways.
+              Pure server-rendered — no JS. (A multi-line {# #} comment is NOT
               stripped by Django — its tokenizer is single-line — so it would
               leak onto the athlete's screen; use {% comment %} here.) Rendered
               independent of plan.sessions (nit #456 P2) — see the chips
               comment above.
+
+              Under 640px (issue #508) the table gives way to a stacked view
+              of the focused week alone: one card per day, one row per
+              exercise, each line of the prescription on its own line. The
+              week chips above pick the week; CSS alone picks which view shows.
             {% endcomment %}
             <div style="margin-top:14px;">
-              <p class="meso-eyebrow" style="margin-bottom:8px;">Your block</p>
+              <p class="meso-eyebrow" style="margin-bottom:8px;">Your block{% if plan.grid.focus_week %}<span class="meso-block-stack-only"> · {{ plan.grid.focus_week.label }}{% if plan.grid.focus_week.deload %} · Deload{% endif %}</span>{% endif %}</p>
               {% for day in plan.grid.days %}
                 <div style="margin-bottom:12px;">
                   <div class="meso-row-meta" style="font-weight:700;margin-bottom:6px;">D{{ day.day_number }} · {{ day.name }}{% if day.bias %} · {{ day.bias }}{% endif %}</div>
-                  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:11px;">
-                    <table class="meso-mono" style="border-collapse:collapse;width:100%;font-size:12px;white-space:nowrap;">
+                  <div class="meso-block-scroll">
+                    <table class="meso-mono meso-block-table" data-testid="block-table">
                       <thead>
                         <tr>
-                          <th style="position:sticky;left:0;z-index:1;text-align:left;padding:7px 10px;font-weight:700;color:var(--dim);background:var(--surface);border-bottom:1px solid var(--line);">Exercise</th>
+                          <th>Exercise</th>
                           {% for w in plan.grid.weeks %}
-                            <th style="text-align:left;padding:7px 10px;font-weight:700;border-bottom:1px solid var(--line);{% if w.focused %}color:var(--accent-deep);background:var(--soft);{% else %}color:var(--dim);{% endif %}">{{ w.label }}{% if w.deload %} · DL{% endif %}</th>
+                            <th{% if w.focused %} class="is-focused"{% endif %}>{{ w.label }}{% if w.deload %} · DL{% endif %}</th>
                           {% endfor %}
                         </tr>
                       </thead>
                       <tbody>
                         {% for row in day.rows %}
                           <tr>
-                            <td style="position:sticky;left:0;z-index:1;padding:7px 10px;font-weight:700;color:var(--ink);background:var(--surface);border-top:1px solid var(--line);">{{ row.name }}</td>
+                            <td>{{ row.name }}</td>
                             {% for c in row.cells %}
-                              <td style="padding:7px 10px;color:var(--ink);border-top:1px solid var(--line);{% if c.focused %}background:var(--soft);{% endif %}">
+                              <td{% if c.focused %} class="is-focused"{% endif %}>
                                 {% if not c.present %}<span style="color:var(--dim);">·</span>{% elif c.skipped %}<span style="color:var(--dim);">—</span>{% else %}{{ c.summary }}{% endif %}
                               </td>
                             {% endfor %}
@@ -240,6 +245,22 @@
                       </tbody>
                     </table>
                   </div>
+                  <ul class="meso-block-stack">
+                    {% for row in day.rows %}
+                      <li class="meso-block-stack-row" data-testid="block-stack-row">
+                        <div class="meso-block-stack-name">{{ row.name }}</div>
+                        {% if row.focus.off %}
+                          <div class="meso-block-stack-off">Not in {{ plan.grid.focus_week.label }}</div>
+                        {% elif row.focus.lines %}
+                          <ul class="meso-block-stack-lines meso-mono">
+                            {% for line in row.focus.lines %}<li data-testid="block-stack-line">{{ line }}</li>{% endfor %}
+                          </ul>
+                        {% else %}
+                          <div class="meso-block-stack-off">—</div>
+                        {% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
                 </div>
               {% endfor %}
             </div>

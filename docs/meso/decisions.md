@@ -207,11 +207,14 @@ assert the computed font size.
 
 **Running it.** `just e2e` builds the designer bundle first
 (`static/js/dist/` is gitignored, and a missing bundle mounts an empty div
-without an error). Then it runs every journey twice, at desktop (1280×720) and
-phone (390×844, touch, iPhone 13 user agent). Arguments pass through to
-pytest: `just e2e -k phone`, `just e2e -k athlete`, `just e2e --headed` for a
-visible browser, `PWDEBUG=1 just e2e -k athlete` to step through in the
-Playwright Inspector. Plain `uv run pytest` never collects `e2e/`
+without an error). Then it runs every journey at three sizes: desktop
+(1280×720), phone (390×844, touch, iPhone 13 user agent) and phone-360
+(360×780, touch, Galaxy S8 user agent; added by #508, where layouts that only
+just fit at 390 break first). The coach results journey skips phone-360 until
+#508's coach slice fixes the athlete profile, which renders ~650px wide on a
+phone. Arguments pass through to pytest: `just e2e -k phone` (both phone
+sizes), `just e2e -k athlete`, `just e2e --headed` for a visible browser,
+`PWDEBUG=1 just e2e -k athlete` to step through in the Playwright Inspector. Plain `uv run pytest` never collects `e2e/`
 (`testpaths = ["app"]`, plus `-m "not e2e"` in `addopts`). If you call pytest
 directly, pass `e2e -m e2e`.
 
@@ -1679,3 +1682,20 @@ _(Append dated entries here as decisions land.)_
   the behavior it covers (no blur save, no badge update, no parsed set, the
   logged cell blanked) and watching it fail. `data-testid`s added only where a
   journey needed one. No app behavior changed, no migration.
+- 2026-09-19 — **Built (#508, first slice): the athlete pages on a phone.**
+  Training home and session logger only; coach pages and the designer
+  fallback are the next slice. Under 640px the block table becomes stacked
+  day cards showing the week the chips select, each prescription line on its
+  own line (`_cell_lines` in `presenters.py`; `_text_label` still returns one
+  string for the logger target and coach results). The wide table keeps a
+  sticky header row. It pins inside the table's own scroller, which is capped
+  at 70vh, because an `overflow-x:auto` box is a scroll container on both axes
+  and a sticky cell can't pin to the page from inside one. **Decision: every
+  input on an athlete page is 16px at every width, not just under a
+  breakpoint.** iOS zooms on focus at any width, and a phone held sideways is
+  wider than 760px. Zoom stays enabled. Tap targets grow to 44px under 760px
+  or on any `pointer: coarse` device, scoped to `.meso-athlete` except the
+  topnav's brand and links (shared chrome, already 55px tall, so nothing
+  moves). The logger's set row is a grid, so it fits at 320px. Neither logging
+  path changed behavior. E2E gained a 360×780 viewport and a layout journey
+  per page, each checked by breaking the rule it covers. No migration.

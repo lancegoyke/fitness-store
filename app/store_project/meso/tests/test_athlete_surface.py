@@ -25,6 +25,7 @@ import pytest
 from django.urls import reverse
 from django.utils import timezone
 
+from store_project.meso import presenters
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.factories import MesocycleFactory
@@ -556,6 +557,62 @@ def post_log(client, session, payload):
         data=json.dumps(payload),
         content_type="application/json",
     )
+
+
+class TestStackedBlockView:
+    """The phone's stacked block view (issue #508): the focused week, line by line.
+
+    Under 640px the multi-week table gives way to one card per day showing the
+    focused week alone, each line of a prescription on its own line. CSS picks
+    which of the two renders; both are always in the page.
+    """
+
+    def _grid(self, athlete, **kwargs):
+        (card,) = presenters.athlete_home(athlete, **kwargs)
+        return card["grid"]
+
+    def test_focus_lines_split_the_stack_the_summary_folds(self):
+        b = seed_block(sub_second="Front Squat")  # w2 is the anchor
+        sub_line(b.c2, "Rest 3 min")
+        grid = self._grid(b.athlete)
+        (row,) = grid["days"][0]["rows"]
+        assert row["focus"] == {
+            "lines": ["4 x 8, RPE 8, 101", "Front Squat", "Rest 3 min"],
+            "off": False,
+        }
+        # The wide table's string is unchanged: the same stack, one line.
+        focused = [c for c in row["cells"] if c["focused"]]
+        assert [c["summary"] for c in focused] == [
+            "4 x 8, RPE 8, 101 · Front Squat · Rest 3 min"
+        ]
+        assert grid["focus_week"]["label"] == "Wk 2"
+
+    def test_focus_follows_the_week_override(self):
+        b = seed_block()
+        grid = self._grid(b.athlete, focus_week_id=b.w3.pk)
+        (row,) = grid["days"][0]["rows"]
+        assert row["focus"]["lines"] == ["4 x 8, RPE 8, 131"]
+        assert grid["focus_week"]["label"] == "Wk 3"
+
+    def test_skipped_in_the_focused_week_is_off(self, client):
+        b = seed_block(skip_first=True, logged=False)  # anchor = w1, skipped
+        (row,) = self._grid(b.athlete)["days"][0]["rows"]
+        assert row["focus"]["off"] is True
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert "Not in Wk 1" in body
+
+    def test_each_line_renders_as_its_own_item(self, client):
+        b = seed_block(sub_second="Front Squat")
+        client.force_login(b.athlete)
+        body = client.get(HOME).content.decode()
+        assert '<li data-testid="block-stack-line">4 x 8, RPE 8, 101</li>' in body
+        assert '<li data-testid="block-stack-line">Front Squat</li>' in body
+
+    def test_text_label_still_folds_to_one_string(self):
+        """The logger and coach results still read one string (not the list)."""
+        assert presenters._text_label("4 x 8\n\n RPE 8 ") == "4 x 8 · RPE 8"
+        assert presenters._text_label("") == "—"
 
 
 class TestWeekFocusOverride:
