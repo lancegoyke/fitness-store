@@ -246,6 +246,38 @@ class TestRefreshOneRms:
         assert row.value == Decimal("143.00")
         assert AthleteOneRm.objects.filter(athlete=athlete).count() == 1
 
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_touches_rows_in_key_order_whatever_the_prescription_order(
+        self, monkeypatch, reverse
+    ):
+        # One lock order for every caller: `update_or_create` holds each row
+        # until the transaction ends, so the settle sweep and an athlete save
+        # refreshing the same two lifts in opposite session order would
+        # deadlock on Postgres if the order followed the caller's list.
+        from django.db.models.query import QuerySet
+
+        athlete = UserFactory()
+        plan, session, (squat, bench) = make_session(
+            athlete,
+            prescriptions=[{"name": "Squat"}, {"name": "Bench"}],
+        )
+        log_session(
+            athlete,
+            session,
+            [(squat, 1, "5", "100", "8"), (bench, 1, "5", "80", "8")],
+        )
+        touched = []
+        real = QuerySet.update_or_create
+
+        def spy(self, *args, **kwargs):
+            touched.append(kwargs.get("key"))
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(QuerySet, "update_or_create", spy)
+        cells = [bench, squat] if reverse else [squat, bench]
+        meso_one_rm.refresh_one_rms(athlete, cells, plan.unit)
+        assert touched == ["name:bench", "name:squat"]
+
     def test_lift_with_no_usable_set_creates_nothing(self):
         athlete = UserFactory()
         plan, session, (squat,) = make_session(
@@ -427,9 +459,14 @@ class TestLogEndpointRefreshesOneRm:
         assert resp.status_code == 200
         assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
 
-    def test_downgrade_to_pending_clears_the_estimate(self, client):
-        # A done log creates the row; downgrading the same session back to pending
-        # (no completed performance remains) must clear it, not leave it stale.
+    def test_pending_save_on_a_done_log_keeps_done_and_the_estimate(self, client):
+        # 5b (settle.py): status is STICKY once DONE — a posted "pending" on an
+        # already-DONE log no longer downgrades it (the sweep can now flip a log
+        # to DONE server-side, and a tab left open across that settle, or a
+        # replayed offline-queued save, must not silently undo it; see
+        # ``athlete_log_session``'s docstring). This test used to pin the OLD
+        # behaviour (a downgrade cleared the estimate) — it now pins the
+        # opposite: the log stays DONE and the estimate survives.
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}]
@@ -447,7 +484,9 @@ class TestLogEndpointRefreshesOneRm:
         post_log(client, session, {"status": "done", "sets": sets})
         assert AthleteOneRm.objects.filter(athlete=athlete).exists()
         post_log(client, session, {"status": "pending", "sets": sets})
-        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+        log = SessionLog.objects.get(session=session, athlete=athlete)
+        assert log.status == SessionLog.Status.DONE
+        assert AthleteOneRm.objects.filter(athlete=athlete).exists()
 
     def test_relogging_lower_recomputes_downward(self, client):
         athlete = UserFactory()

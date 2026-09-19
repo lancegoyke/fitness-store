@@ -1325,7 +1325,8 @@ def athlete_log_session(request, pk):
 
     Replaces the athlete's own ``SessionLog`` + ``LoggedSet`` rows for this
     session with the posted state, flips the session done (unless an explicit
-    ``status`` says otherwise), and stamps the date (today when none is given).
+    ``status`` says otherwise; a DONE log is never downgraded, see below), and
+    stamps the date (today when none is given).
     Scoped by ``_athlete_session_or_404`` — a foreign, archived, or
     unknown session is a flat 404, never a silent write. The body is fully
     validated *before* any write, so a bad request is a 400 that persists
@@ -1383,7 +1384,23 @@ def athlete_log_session(request, pk):
         )
         if log is None:
             log = SessionLog(session=session, athlete=request.user)
-        log.status = status
+        # Status is STICKY once DONE (5b, settle.py): a posted "pending" never
+        # downgrades a DONE log. The client already intends this — "Save
+        # progress" posts `markDone ? "done" : this.status`, the status the page
+        # last saw — but once the settle sweep can finish a log server-side, a
+        # tab left open across the settle (or an offline-queued save replayed
+        # later) would post its stale "pending" and silently undo the settle.
+        # Mirrors 5a's rule that a blur never downgrades a DONE log
+        # (`_upsert_parsed_set`).
+        if not (
+            status == SessionLog.Status.PENDING and log.status == SessionLog.Status.DONE
+        ):
+            log.status = status
+        # Bump on every save, regardless of status — this endpoint is always a
+        # real athlete action (unlike a cell blur, which fires on every focus
+        # change whether or not anything changed), so there is no "untouched"
+        # case to filter out here.
+        log.last_activity_at = timezone.now()
         if explicit_date is not None:
             log.date = explicit_date
         elif log.date is None:  # first save (or a log never dated) → stamp today
@@ -1521,11 +1538,16 @@ def athlete_log_session(request, pk):
             ]
         )
         # Refresh the athlete's persisted 1RM for this session's lifts from their
-        # *completed* logs. Run on every save, not only a done one: derivation
-        # counts done logs only, so refreshing after a done→pending downgrade (this
-        # session is no longer a finished performance) clears an estimate that's
-        # now unsupported. Recomputes from scratch — a heavier set raises it, an
-        # edit that drops the PR lowers it, a removed basis clears it.
+        # *completed* logs. Run on every save, not only a done one: a save that
+        # edits an already-DONE log's sets (a heavier set, a correction, a
+        # removed basis) changes exactly the history derivation reads from, so
+        # skipping the refresh on a "pending" save would leave a stale estimate
+        # until some later done save happened to fix it. (Status can no longer
+        # move DONE->PENDING here at all — see the sticky-status comment above —
+        # so this is never clearing an estimate a downgrade just orphaned; it is
+        # only ever keeping a DONE log's own estimate current.) Recomputes from
+        # scratch — a heavier set raises it, an edit that drops the PR lowers
+        # it, a removed basis clears it.
         meso_one_rm.refresh_one_rms(
             request.user,
             list(session.trainable_cells()),
@@ -1735,6 +1757,11 @@ def athlete_cell_write(request, pk):
         # parse/upsert problem is logged and swallowed, never surfaced here.
         # The return is the optimistic-PR-toast payload (§7) — empty on any
         # failure, never raises.
+        # The sets this line derives BEFORE the upsert, for the activity bump
+        # below (5b) — a set can change while the text doesn't.
+        sets_before = (
+            None if untouched_coach_line else _line_sets(session, request.user, cell)
+        )
         new_records = (
             []
             if untouched_coach_line
@@ -1746,6 +1773,27 @@ def athlete_cell_write(request, pk):
                 previous_text=previous_text,
             )
         )
+        # Bump `last_activity_at` (5b, settle.py) — but ONLY on a real edit.
+        # The template posts on EVERY blur, so most requests change nothing,
+        # and bumping on those would keep an abandoned session from ever going
+        # quiet long enough to settle. A real edit is either new text, or the
+        # same text now deriving different sets: a line typed while its row was
+        # skipped saves no set, and once the coach un-skips the row, re-blurring
+        # that unchanged text creates one. Values are compared, not pks — the
+        # upsert recreates the row even on an unchanged re-blur.
+        #
+        # A queryset UPDATE, not `log.save()`: there may be no log at all (a
+        # note blur that never wanted a set). It runs outside
+        # `_upsert_parsed_set`'s savepoint, so a swallowed upsert failure can't
+        # roll it back. Status doesn't matter — the sweep only reads the field
+        # on PENDING logs.
+        if not untouched_coach_line and (
+            text != previous_text
+            or _line_sets(session, request.user, cell) != sets_before
+        ):
+            SessionLog.objects.filter(session=session, athlete=request.user).update(
+                last_activity_at=timezone.now()
+            )
     return JsonResponse(
         {
             "ok": True,
@@ -1776,6 +1824,23 @@ def athlete_cell_write(request, pk):
             # the accepted trade for in-the-moment feedback (5b settles it).
             "new_records": [serialize_new_record(r) for r in new_records],
         }
+    )
+
+
+def _line_sets(session, athlete, cell):
+    """Every ``LoggedSet`` ``cell`` derives for this athlete, as comparable values.
+
+    ``athlete_cell_write`` snapshots this around the upsert to tell a blur that
+    changed the athlete's logged data from one that didn't (5b's activity bump).
+    """
+    return sorted(
+        LoggedSet.objects.filter(
+            session_log__session=session,
+            session_log__athlete=athlete,
+            source_line=cell,
+        ).values_list(
+            "session_log_id", "prescription_id", "set_number", "reps", "load", "rpe"
+        )
     )
 
 

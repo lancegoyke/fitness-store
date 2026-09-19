@@ -193,12 +193,16 @@ jobs:
       #
       # The list below is deliberately narrow: a test earns a place here only
       # if SQLite CANNOT express the behaviour it pins, so the SQLite job
-      # would pass regardless. Two classes qualify so far — deferred
-      # constraints (0040) and transaction-abort semantics
+      # would pass regardless. Three classes qualify so far — deferred
+      # constraints (0040), transaction-abort semantics
       # (test_parse_at_commit_postgres: SQLite keeps a connection usable after
-      # a failed statement, so a missing savepoint is invisible there).
+      # a failed statement, so a missing savepoint is invisible there), and
+      # row-lock serialization (test_settle_postgres: select_for_update is a
+      # no-op on SQLite, and in-memory SQLite doesn't even share rows across
+      # threads/connections, so a missing lock is invisible there too).
       - name: Run the PostgreSQL-only tests
         run: |
           uv run pytest \
             app/store_project/meso/tests/test_migration_0040_pending_triggers.py \
-            app/store_project/meso/tests/test_parse_at_commit_postgres.py
+            app/store_project/meso/tests/test_parse_at_commit_postgres.py \
+            app/store_project/meso/tests/test_settle_postgres.py

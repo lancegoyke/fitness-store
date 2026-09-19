@@ -1,8 +1,11 @@
 # Meso — parse-at-commit (typed performed data → structured `LoggedSet`)
 
 **Status:** planned 2026-07-18 · **5a BUILT 2026-07-20** (branch
-`meso/5a-parse-at-commit`, migration `0045_loggedset_source_line`) · **5b not
-started** · prerequisite (the current-week removal,
+`meso/5a-parse-at-commit`, migration `0045_loggedset_source_line`) · **5b
+settle BUILT 2026-09-18** (branch `meso/5b-settle`, migrations
+`0046_sessionlog_last_activity_at` + `0047_register_settle_schedule`; the
+confirmed notification and the logger retirement are still open) ·
+prerequisite (the current-week removal,
 [`remove-current-week-plan.md`](../archive/meso/remove-current-week-plan.md))
 landed in #484
 
@@ -27,6 +30,38 @@ landed in #484
 >   and not-destroying-earned-work are separate questions; this codebase's
 >   settled position (`athlete_log_session`'s delete) is that a set logged
 >   against a since-skipped cell is history.
+
+## 5b settle — decisions (Lance, 2026-09-18)
+
+5b was split in two. The first half is the settle (`store_project/meso/settle.py`,
+hourly `meso-settle-logs` schedule). The second half, retiring the structured
+logger, waits until Lance has trained on both entry paths. Where the text below
+disagrees, these win:
+
+- **What settles:** a PENDING log with at least one `LoggedSet` of any kind
+  (typed line or "Save progress"), no athlete edit for
+  `MESO_SETTLE_QUIET_HOURS` (24), and the newest log for its
+  `(session, athlete)`. A notes-only log never settles. Both entry paths are
+  treated the same, so neither is assumed to win.
+- **No reopen.** §7 left "does an edit re-open the settle timer?" open. It
+  doesn't: a DONE log stays DONE when edited, and the edit refreshes the
+  persisted 1RM straight away (the blur path already did this). Flipping it
+  back would drop the session out of adherence and the coach's results for a
+  day over a typo fix.
+- **"Save progress" no longer downgrades a DONE log on the server.** The client
+  already meant it not to (`buildPayload` posts the status the page last saw).
+  Once the sweep can finish a log behind an open tab, that stale "pending" would
+  silently undo the settle.
+- **Activity** is `SessionLog.last_activity_at`, bumped by "Save progress" and
+  "Log session", and by a blur only when the line's text or the sets it
+  derives changed (an idle focus-and-leave doesn't restart the clock).
+- **Settle side effects** match "Log session": `refresh_one_rms` for the settled
+  sets' lifts, then the self-variant tour's results-step advance. The settle
+  takes the same `Session` row lock as both write paths and re-checks everything
+  under it; `refresh_one_rms` now walks lifts in key order so the sweep and a
+  concurrent save can't deadlock on the `AthleteOneRm` rows.
+- **Deferred to a follow-up PR:** the confirmed PR notification (channel still
+  to decide) and any persisted `PersonalRecord` snapshot.
 
 ## Adversarial review (pre-PR, 2026-09-17)
 

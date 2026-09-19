@@ -17,6 +17,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Now
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
@@ -1953,6 +1954,19 @@ class SessionLog(models.Model):
     )
     notes = models.TextField(_("Notes"), blank=True)
     created_at = models.DateTimeField(_("Time created"), auto_now_add=True)
+    # 24h settle sweep (5b, settle.py). Bumped by both athlete write paths
+    # (a typed sub-line blur, "Save progress"/"Log session") on a REAL edit —
+    # never on an untouched re-blur — so the sweep can tell "still being
+    # worked on" from "quietly abandoned". BOTH defaults matter: `db_default`
+    # keeps an INSERT from OLD code (a rolling deploy's outgoing web
+    # container, or a dev DB someone switches back to `main` on) from
+    # failing on a NOT-NULL column it doesn't know to set; `default` gives a
+    # freshly-built ORM instance a Python-side value without a round trip.
+    # Existing rows get the migration's own NOW(), so a pre-5b pending log
+    # settles one quiet period after deploy — by design, no backfill.
+    last_activity_at = models.DateTimeField(
+        _("Last activity"), default=timezone.now, db_default=Now()
+    )
 
     class Meta:
         ordering = ["-date", "-created_at"]
