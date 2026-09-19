@@ -19,9 +19,9 @@
         </p>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
-        <a class="meso-btn meso-btn--ghost" href="?days=7" {% if days == 7 %}aria-current="page"{% endif %}>7 days</a>
-        <a class="meso-btn meso-btn--ghost" href="?days=30" {% if days == 30 %}aria-current="page"{% endif %}>30 days</a>
-        <a class="meso-btn meso-btn--ghost" href="?days=90" {% if days == 90 %}aria-current="page"{% endif %}>90 days</a>
+        {% for option in window_options %}
+          <a class="meso-btn{% if option == days %} meso-btn--primary{% endif %}" href="?days={{ option }}"{% if option == days %} aria-current="page"{% endif %}>{{ option }} days</a>
+        {% endfor %}
       </div>
     </div>
 

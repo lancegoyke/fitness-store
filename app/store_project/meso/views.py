@@ -694,6 +694,7 @@ class ProductAnalyticsView(UserPassesTestMixin, TemplateView):
     """
 
     template_name = "meso/product_analytics.html"
+    WINDOW_DAYS = (7, 30, 90)
 
     def test_func(self):
         return self.request.user.is_staff
@@ -708,6 +709,7 @@ class ProductAnalyticsView(UserPassesTestMixin, TemplateView):
         days = self._days()
         ctx.update(presenters.product_analytics(days=days))
         ctx["active"] = "analytics"
+        ctx["window_options"] = self.WINDOW_DAYS
         ctx["email_dashboard_url"] = (
             reverse("notifications:email_dashboard") + f"?days={days}"
         )
@@ -721,7 +723,7 @@ class ProductAnalyticsView(UserPassesTestMixin, TemplateView):
                 parsed = int(raw)
             except (TypeError, ValueError):
                 parsed = None
-            if parsed in (7, 30, 90):
+            if parsed in self.WINDOW_DAYS:
                 return parsed
             messages.error(
                 self.request,
