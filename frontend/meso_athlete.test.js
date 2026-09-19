@@ -1980,7 +1980,12 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     line.text = "100 x 5";
     line.savedText = "100 x 5";
     c.writeQueue([
-      { kind: "cell", url: CELL_URL, body: { exercise_id: 1, line: 1, text: "110 x 5" } },
+      {
+        kind: "cell",
+        url: CELL_URL,
+        body: { exercise_id: 1, line: 1, text: "110 x 5" },
+        id: "queued-by-the-other-tab",
+      },
     ]);
     global.fetch = vi.fn().mockResolvedValue(
       res({ body: { ok: true, cell: { line: 1, text: "110 x 5", warn: false } } }),
@@ -2107,6 +2112,158 @@ describe("a refused line is dropped where the athlete can see it (#527)", () => 
     global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400 }));
     await c.flushQueue();
     expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
+describe("a replay, a stalled save, an unread response, a junk outbox (#527)", () => {
+  function held() {
+    const calls = [];
+    const pending = [];
+    const fetchMock = vi.fn().mockImplementation(
+      (url, opts) =>
+        new Promise((resolve) => {
+          calls.push(JSON.parse(opts.body));
+          pending.push(resolve);
+        }),
+    );
+    const land = (body) => pending.shift()(res({ body }));
+    return { calls, fetchMock, land };
+  }
+
+  it("keeps an edit back to the saved text made while its own replay runs", async () => {
+    // The server has "225 x 5"; "225 x 6" was queued offline and is being
+    // replayed on this page's load when the athlete changes it back.
+    localStorage.setItem(
+      "meso-log-queue",
+      JSON.stringify([
+        {
+          kind: "cell",
+          url: CELL_URL,
+          body: { exercise_id: 7, line: 1, text: "225 x 6" },
+          id: "queued-here-earlier",
+        },
+      ]),
+    );
+    document.body.innerHTML =
+      '<script id="meso-log-data" type="application/json">' +
+      JSON.stringify({
+        log_url: LOG_URL,
+        cell_url: CELL_URL,
+        status: "pending",
+        exercises: [
+          { id: 7, sub_lines: [{ line: 1, text: "225 x 5" }], set_rows: [] },
+        ],
+      }) +
+      "</script>";
+    const { calls, fetchMock, land } = held();
+    global.fetch = fetchMock;
+    const c = createLogger();
+    c.init();
+    const line = c.exercises[0].sub_lines[0];
+    await vi.waitFor(() => expect(calls).toHaveLength(1)); // the replay
+    line.text = "225 x 5";
+    c.saveCell(c.exercises[0], 1);
+    land({ ok: true, cell: { line: 1, text: "225 x 6", warn: false } });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1].text).toBe("225 x 5");
+    expect(line.text).toBe("225 x 5");
+  });
+
+  it("queues a line at the blur while an earlier save of it is in flight", async () => {
+    // Closing the page before the earlier save times out must not lose it.
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    const { calls, fetchMock } = held();
+    global.fetch = fetchMock;
+    line.text = "225 x 5";
+    c.saveCell(c.exercises[0], 1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    line.text = "225 x 6";
+    c.saveCell(c.exercises[0], 1); // waits behind the stalled one
+    expect(c.readQueue().map((i) => i.body.text)).toEqual(["225 x 6"]);
+  });
+
+  it("sends a revert after a save whose response couldn't be read", async () => {
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.savedText = "225 x 5";
+    line.text = "235 x 5";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      redirected: false,
+      json: async () => {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      },
+    });
+    await c.saveCell(c.exercises[0], 1); // the server now has "235 x 5"
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "225 x 5", warn: false } } }),
+    );
+    line.text = "225 x 5";
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a revert after a response that went stale in flight", async () => {
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    const { calls, fetchMock, land } = held();
+    global.fetch = fetchMock;
+    line.text = "225 x";
+    const first = c.saveCell(c.exercises[0], 1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    line.text = "225 x 50"; // typing on while it's in flight
+    land({ ok: true, cell: { line: 1, text: "225 x", warn: true } });
+    await first;
+    line.text = "225 x"; // …and back
+    c.saveCell(c.exercises[0], 1);
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    land({ ok: true, cell: { line: 1, text: "225 x", warn: true } });
+    await vi.waitFor(() => expect(line.warn).toBe(true));
+  });
+
+  it("saves the session even when the outbox holds junk", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    c.exercises[0].set_rows[0].done = true;
+    localStorage.setItem(c.queueKey, JSON.stringify([null, 7, { url: "/x" }]));
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { log: { status: "done", sets: [] } } }),
+    );
+    await c.save(true);
+    expect(c.saving).toBe(false);
+    expect(global.fetch).toHaveBeenCalledWith(LOG_URL, expect.anything());
+  });
+
+  it("doesn't un-tick rows when an older queued log flushes mid-save", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    // An earlier save of this session is still queued (sets: set 1 only).
+    c.enqueue({
+      status: "pending",
+      sets: [{ prescription: 1, set_number: 1, reps: "", load: "", rpe: "" }],
+    });
+    c.exercises[0].set_rows[0].done = true;
+    c.exercises[0].set_rows[1].done = true; // ticked since
+    const bodies = [];
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      bodies.push(JSON.parse(opts.body));
+      return res({
+        body: {
+          log: {
+            status: "pending",
+            sets: bodies.at(-1).sets.map((s) => ({
+              prescription: s.prescription,
+              set_number: s.set_number,
+            })),
+          },
+        },
+      });
+    });
+    await c.save(false);
+    expect(bodies).toHaveLength(2); // the old log, then this save
+    expect(bodies[1].sets.map((s) => s.set_number)).toEqual([1, 2]);
   });
 });
 

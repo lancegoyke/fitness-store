@@ -152,6 +152,8 @@ function createLogger() {
     _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
     _cellSaves: {}, // per-cell promise chain, so blurs reach the server in order
     _blurSaves: 0, // line saves started by a blur, for `settleLines`
+    _lineSavesRunning: {}, // per cell: saves chained and not yet finished
+    _ownEntries: {}, // ids of the outbox entries this page wrote or restored
     _flushing: null, // the flush pass in progress, if any
     _flushAgain: false, // a flush was asked for mid-pass; run one more
 
@@ -288,6 +290,8 @@ function createLogger() {
         entry.text = item.body.text;
         entry.queued = true;
         entry.saveError = false;
+        // Its text is on the line now, as this page's own.
+        if (item.id) this._ownEntries[item.id] = true;
       }
     },
 
@@ -365,7 +369,12 @@ function createLogger() {
       // queued from earlier. The log then reaches the server after the sets its
       // lines carry, one request at a time, and what this save reports below
       // covers the lines too.
-      await this.settleLines();
+      try {
+        await this.settleLines();
+      } catch (err) {
+        // Never let the outbox keep the log itself from being saved.
+        console.error("Could not settle the lines before saving", err);
+      }
       // Built after the wait, which can take a while on bad wifi: the Set rows
       // stay editable meanwhile, and a change made then belongs in this save.
       const payload = this.buildPayload(markDone);
@@ -498,12 +507,18 @@ function createLogger() {
       return stamped;
     },
 
+    // Only well-formed entries: anything else in the key (another script's
+    // value, a hand edit) would otherwise throw deep inside a flush and leave
+    // "Log session" stuck.
     readQueue() {
+      let items;
       try {
-        return JSON.parse(localStorage.getItem(this.queueKey) || "[]");
+        items = JSON.parse(localStorage.getItem(this.queueKey) || "[]");
       } catch (e) {
         return [];
       }
+      if (!Array.isArray(items)) return [];
+      return items.filter((i) => i && typeof i === "object" && i.body);
     },
 
     // True when the queue was written. Storage can be full or blocked, and
@@ -540,7 +555,9 @@ function createLogger() {
       );
       const item = this.stamp({ kind: "cell", url: this.cellUrl, body });
       queue.push(item);
-      return this.writeQueue(queue) ? item : null;
+      if (!this.writeQueue(queue)) return null;
+      this._ownEntries[item.id] = true;
+      return item;
     },
 
     queuedCell(exerciseId, line) {
@@ -652,6 +669,10 @@ function createLogger() {
       if (!res.ok) return "kept";
       this.dropEntry(item);
       if (item.url !== this.logUrl) return "saved";
+      // Mid-save, leave the rows alone: save's own, newer log follows and
+      // reconciles them. Applying this older one first would un-tick rows
+      // ticked since, just before save builds its payload from them.
+      if (this.saving) return "mine";
       try {
         const data = await res.json();
         this.status = data.log.status;
@@ -814,12 +835,19 @@ function createLogger() {
     // save went (see `_postCell`).
     saveCell(ex, line, { fromQueue = false } = {}) {
       if (!this.cellUrl || !ex) return Promise.resolve("skipped");
-      if (!fromQueue) this._blurSaves += 1;
       const key = ex.id + ":" + line;
+      if (!fromQueue) {
+        this._blurSaves += 1;
+        this._writeAheadOnBlur(ex, line, key);
+      }
+      this._lineSavesRunning[key] = (this._lineSavesRunning[key] || 0) + 1;
       const previous = this._cellSaves[key] || Promise.resolve();
       const run = previous
         .catch(() => {}) // a failed save must not stall the cell's queue
         .then(() => this._postCell(ex, line, fromQueue))
+        .finally(() => {
+          this._lineSavesRunning[key] -= 1;
+        })
         .then((outcome) => {
           // A line landing can change what the footer last said: once no
           // line is queued or refused, "will sync" or "a line couldn't save"
@@ -833,6 +861,39 @@ function createLogger() {
         });
       this._cellSaves[key] = run;
       return run;
+    },
+
+    // Queue the line at the blur itself, not only when its save's turn comes:
+    // a save for the same line can be in flight for up to 15s on bad wifi,
+    // and closing the page meanwhile must not lose what was just typed. When
+    // this save runs it queues the text again (replacing this entry) and sends
+    // it. Only a line that has something to send — or one whose earlier save
+    // is still running, since the server may yet end up with that one.
+    _writeAheadOnBlur(ex, line, key) {
+      const entry = (ex.sub_lines || []).find((l) => l.line === line);
+      if (!entry) return;
+      const text = entry.text || "";
+      const busy = (this._lineSavesRunning[key] || 0) > 0;
+      if (!busy && !this._lineNeedsSending(entry, text)) return;
+      this.enqueueCell({ exercise_id: ex.id, line, text });
+    },
+
+    // The dirty check (#527): a line whose text the server already has needs
+    // no POST — tabbing through a blank line or leaving a coach's line as it
+    // was changes nothing, and offline it painted a spurious "couldn't save".
+    // A queued line always posts — its text may match, but the queue must
+    // drain. So does a warned one: set-shaped text saved while its row was
+    // skipped has no set, and re-sending the same text once the coach
+    // un-skips the row is how it gets one. `savedText` is undefined when
+    // unknown (a response that couldn't be read or had gone stale), and then
+    // the line always posts.
+    _lineNeedsSending(entry, text) {
+      return (
+        entry.savedText === undefined ||
+        text !== entry.savedText ||
+        !!entry.queued ||
+        !!entry.warn
+      );
     },
 
     // POST one exercise's sub-line cell. Blank text clears the cell in place
@@ -863,21 +924,12 @@ function createLogger() {
         text = sent.body.text;
       } else {
         text = entry ? entry.text || "" : "";
-        // Don't POST a line whose text the server already has (#527): tabbing
-        // through a blank line or leaving a coach's line as it was changes
-        // nothing, and offline it painted a spurious "couldn't save". A queued
-        // line always posts — its text may match, but the queue must drain.
-        // So does a warned one: set-shaped text saved while its row was
-        // skipped has no set, and re-sending the same text once the coach
-        // un-skips the row is how it gets one.
-        if (
-          entry &&
-          entry.savedText !== undefined &&
-          text === entry.savedText &&
-          !entry.queued &&
-          !entry.warn
-        ) {
+        if (entry && !this._lineNeedsSending(entry, text)) {
           entry.saveError = false;
+          // The blur may have queued this very text while an earlier save
+          // ran; that save has since put it on the server.
+          const moot = this.queuedCell(ex.id, line);
+          if (moot && moot.body.text === text) this.dropEntry(moot);
           return "skipped";
         }
       }
@@ -931,22 +983,26 @@ function createLogger() {
         data = await res.json();
       } catch (e) {
         // Saved server-side regardless, but its warn/PR state is unknown, so
-        // the line stays dirty: the next blur sends it again (harmlessly)
-        // and reconciles.
+        // the line's saved text is too: the next blur sends it again
+        // (harmlessly) and reconciles.
+        if (entry) entry.savedText = undefined;
         return "saved";
       }
-      if (entry) {
-        // A replay of text another tab queued: if this tab never touched the
-        // line, show what the server now holds, or a later blur here would
-        // post the old text back over it.
-        if (
-          fromQueue &&
-          entry.savedText !== undefined &&
-          entry.text === entry.savedText
-        ) {
-          entry.text = text;
-        }
-        entry.savedText = text;
+      // A replay of text another tab queued: if this tab never touched the
+      // line, show what the server now holds, or a later blur here would post
+      // the old text back over it. Never for this page's own entry — the line
+      // may have been edited back to its saved text while the replay ran, and
+      // that edit is the newer one.
+      if (
+        entry &&
+        fromQueue &&
+        sent &&
+        sent.id &&
+        !this._ownEntries[sent.id] &&
+        entry.savedText !== undefined &&
+        entry.text === entry.savedText
+      ) {
+        entry.text = text;
       }
       // Drop a stale response. Two saves for the same sub-line can be in
       // flight at once, and the older one can land last — so fixing `225 x`
@@ -956,7 +1012,14 @@ function createLogger() {
       // Derive-on-read warn (5a §8): re-classified server-side from the
       // just-committed text, so fixing a fat-fingered attempt (or typing one)
       // updates the cell's color right away, without a page reload.
-      if (!entry || (entry.text || "") !== text) return "saved";
+      if (!entry) return "saved";
+      if ((entry.text || "") !== text) {
+        // The line changed while this was in flight, so what the server has
+        // is no longer what it shows; the next blur sends it either way.
+        entry.savedText = undefined;
+        return "saved";
+      }
+      entry.savedText = text;
       entry.warn = !!(data.cell && data.cell.warn);
       // Optimistic PR (5a §7), marked ON THE LINE THAT EARNED IT rather than in
       // `newRecords`. That card renders at the top of the page, which is right
