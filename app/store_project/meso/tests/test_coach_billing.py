@@ -18,6 +18,8 @@ from decimal import Decimal
 
 import pytest
 from django.urls import reverse
+from django.utils import dateformat
+from django.utils import timezone
 
 from store_project.meso.billing import agent_usage_report as report_mod
 from store_project.meso.factories import AgentProposalBatchFactory
@@ -33,6 +35,7 @@ from store_project.users.factories import UserFactory
 pytestmark = pytest.mark.django_db
 
 URL = reverse("meso:billing")
+ROSTER_URL = reverse("meso:roster")
 
 
 def _coach():
@@ -205,3 +208,52 @@ class TestBillingView:
         body = client.get(URL).content.decode()
 
         assert "8.12" not in body  # the COGS estimate is owner-only
+
+
+# -- Stripe-trial billing surfaces (#555) -----------------------------------
+#
+# A coach who subscribed mid-trial has a `trialing` row WITH a Stripe
+# subscription id — a live Stripe subscription, not a locally-clocked one
+# (`is_stripe_trial`). The billing page and the roster card both read the
+# first-charge date off it and hide the Subscribe button (a second Checkout
+# would double-charge).
+
+
+class TestStripeTrialBillingSurfaces:
+    def test_billing_page_shows_first_charge_and_hides_subscribe(self, client):
+        coach = _coach()
+        trial_end = timezone.now() + timedelta(days=9)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            stripe_subscription_id="sub_1",
+            trial_end=trial_end,
+        )
+        client.force_login(coach)
+        resp = client.get(URL)
+        body = resp.content.decode()
+
+        assert resp.status_code == 200
+        expected_date = dateformat.format(trial_end, "M j")
+        assert f"first charge on {expected_date}" in body
+        assert 'action="/meso/billing/subscribe/"' not in body
+        assert "Manage billing" in body
+
+    def test_roster_card_shows_first_charge_and_hides_subscribe(self, client):
+        coach = _coach()
+        trial_end = timezone.now() + timedelta(days=9)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            stripe_subscription_id="sub_1",
+            trial_end=trial_end,
+        )
+        client.force_login(coach)
+        resp = client.get(ROSTER_URL)
+        body = resp.content.decode()
+
+        assert resp.status_code == 200
+        expected_date = dateformat.format(trial_end, "M j")
+        assert f"first charge on {expected_date}" in body
+        assert 'action="/meso/billing/subscribe/"' not in body
+        assert "Manage billing" in body
