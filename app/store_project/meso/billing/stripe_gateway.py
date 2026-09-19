@@ -10,6 +10,9 @@ coach's active-athlete count).
 
 - ``create_subscription_checkout_session`` — a ``mode="subscription"`` Checkout
   Session the coach is redirected to in order to enter a card and subscribe.
+  Passing ``trial_end`` defers Stripe's first charge to that date (#555) — a
+  coach subscribing mid-trial keeps the rest of it instead of being charged
+  immediately.
 - ``create_billing_portal_session`` — Stripe's hosted Customer Portal, where the
   coach updates their card / cancels / sees invoices (D7 — we hand-roll none of
   that UX).
@@ -25,10 +28,22 @@ from django.conf import settings
 from store_project.payments.utils import stripe_customer_get_or_create
 
 
-def create_subscription_checkout_session(coach, *, success_url, cancel_url):
-    """A subscription Checkout Session for the flat Pro plan (the coach subscribes)."""
+def create_subscription_checkout_session(
+    coach, *, success_url, cancel_url, trial_end=None
+):
+    """A subscription Checkout Session for the flat Pro plan (the coach subscribes).
+
+    ``trial_end`` (a datetime), when given, defers Stripe's first charge to it
+    (#555) — a coach subscribing during their local trial keeps the rest of it
+    instead of paying immediately. Omitted entirely (not even an empty dict)
+    when there's nothing to defer, so a plain subscribe behaves exactly as
+    before.
+    """
     stripe.api_key = settings.STRIPE_SECRET_KEY
     customer = stripe_customer_get_or_create(coach)
+    kwargs = {}
+    if trial_end is not None:
+        kwargs["subscription_data"] = {"trial_end": int(trial_end.timestamp())}
     return stripe.checkout.Session.create(
         mode="subscription",
         customer=customer.id,
@@ -37,6 +52,7 @@ def create_subscription_checkout_session(coach, *, success_url, cancel_url):
         success_url=success_url,
         cancel_url=cancel_url,
         allow_promotion_codes=True,
+        **kwargs,
     )
 
 
