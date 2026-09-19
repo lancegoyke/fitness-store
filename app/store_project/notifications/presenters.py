@@ -22,6 +22,7 @@ but every other total (``by_kind``, ``by_day``) uses ``SentEmail`` for "sent".
 import datetime
 
 from django.db.models import Count
+from django.db.models import Q
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from django_ses.models import BlacklistedEmail
@@ -75,9 +76,15 @@ def email_dashboard(*, since, recipient_query=""):
     - ``blacklist`` — every ``django_ses.models.BlacklistedEmail`` row,
       ordered by email.
     - ``recipient`` — ``None`` when ``recipient_query`` is blank, otherwise
-      ``{"query", "sent": [...], "events": [...]}``: every ``SentEmail`` /
-      ``EmailEvent`` whose ``recipient`` matches case-insensitively, newest
-      first, capped at 100 each.
+      ``{"query", "sent": [...], "events": [...]}``: ``events`` is every
+      ``EmailEvent`` whose ``recipient`` matches case-insensitively.
+      ``sent`` is every ``SentEmail`` whose own ``recipient`` matches, plus
+      any ``SentEmail`` reached only through a linked ``EmailEvent``'s
+      matching ``recipient`` — a multi-recipient send (e.g.
+      ``send_margin_alert_email`` to every ``settings.ADMINS`` address)
+      records only ``message.to[0]`` on the ``SentEmail`` row, so a later
+      recipient's own events are the only place their address appears. Both
+      lists are newest first, capped at 100 each.
     """
     until = timezone.make_aware(
         datetime.datetime.combine(
@@ -210,10 +217,22 @@ def _by_day(events_qs, sent_qs, since):
 
 
 def _recipient_lookup(query):
+    """See ``email_dashboard``'s docstring for the ``recipient`` contract.
+
+    ``sent`` matches on the ``SentEmail`` row's own ``recipient`` *or* on
+    any linked ``EmailEvent``'s ``recipient`` — ``record_sent_email`` only
+    ever stores ``message.to[0]``, so a multi-recipient send's second (and
+    later) recipients would otherwise never turn up a ``SentEmail`` here even
+    though their own events do.
+    """
     return {
         "query": query,
         "sent": list(
-            SentEmail.objects.filter(recipient__iexact=query).order_by("-sent_at")[:100]
+            SentEmail.objects.filter(
+                Q(recipient__iexact=query) | Q(events__recipient__iexact=query)
+            )
+            .distinct()
+            .order_by("-sent_at")[:100]
         ),
         "events": list(
             EmailEvent.objects.select_related("sent_email")

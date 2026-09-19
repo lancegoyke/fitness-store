@@ -355,6 +355,45 @@ class TestRecipientLookup:
         assert result["recipient"]["sent"] == [matched_sent]
         assert result["recipient"]["events"] == [matched_event]
 
+    def test_matches_sent_via_a_linked_event_recipient(self):
+        """A multi-recipient send only stores ``message.to[0]`` on ``SentEmail``.
+
+        ``record_sent_email`` writes only the first recipient onto the
+        ``SentEmail`` row it creates (e.g. every ``settings.ADMINS`` address
+        for ``send_margin_alert_email``), so a later recipient's own
+        ``EmailEvent`` rows (linked back via ``sent_email``) are the only
+        place their address appears. The lookup must still surface the
+        ``SentEmail`` for that recipient's search.
+        """
+        since = timezone.now() - datetime.timedelta(days=1)
+        sent = _sent(recipient="first@example.com")
+        _event(
+            EmailEvent.EventType.DELIVERY,
+            recipient="second@example.com",
+            sent_email=sent,
+        )
+
+        result = presenters.email_dashboard(
+            since=since, recipient_query="SECOND@example.com"
+        )
+
+        assert result["recipient"]["sent"] == [sent]
+
+    def test_unrelated_query_matches_no_sent_rows(self):
+        since = timezone.now() - datetime.timedelta(days=1)
+        sent = _sent(recipient="first@example.com")
+        _event(
+            EmailEvent.EventType.DELIVERY,
+            recipient="second@example.com",
+            sent_email=sent,
+        )
+
+        result = presenters.email_dashboard(
+            since=since, recipient_query="nobody@example.com"
+        )
+
+        assert result["recipient"]["sent"] == []
+
     def test_ignores_the_window(self):
         since = timezone.now() - datetime.timedelta(days=1)
         old = timezone.now() - datetime.timedelta(days=400)
