@@ -353,7 +353,10 @@ starts there; the page prints the date of the oldest event it holds. Every
 feature row names its source.
 
 **Who is excluded, everywhere.** Staff and sandbox users, in the query itself
-(a NULL user, from a deleted account, stays in "times" counts). For email
+(a NULL user, from a deleted account, stays in "times" counts). The rule is on
+the person being counted, as in `track()`: a staff coach's clients still count
+as athletes, because the owner coaches real people. A funnel row is a pair,
+so it's left out when either side is staff or sandbox. For email
 that means recipients: `SentEmail` doesn't record the sender, so a staff
 coach's invite to a real person counts. Activity on a demo relationship's
 plan (`is_demo`) is excluded through the join for source tables. For events,
@@ -363,7 +366,7 @@ this slice on, because "Remove demo data" deletes the demo plans and a match
 on the event's subject (`meso.plan`, `meso.mesocycle`,
 `meso.agentproposalbatch`) finds nothing afterwards; the subject match stays
 for events written before the prop. An athlete is someone another coach
-coaches (a link that is neither self-coaching nor demo), so a coach training
+coaches (an active or ended link that is neither self-coaching nor demo), so a coach training
 only on their own program is never an athlete, even after the log an event
 pointed at is deleted (clearing a typed line reaps an empty log). Their edits
 and deliveries still count as coach activity.
@@ -421,6 +424,8 @@ invite_reminder, coach_request), as a cohort: messages sent in the window
 time since (distinct messages with at least one such `EmailEvent`). That's
 unlike `/backside/email/`, which counts events by when they happened; the page
 links there for detail. An open can be a mail client's privacy prefetch.
+Block delivered includes the email a self-coaching coach gets for their own
+block.
 
 **Retention.** Raw `Event` rows older than 13 months are deleted daily by the
 `analytics-purge-expired-events` schedule (`analytics.tasks`

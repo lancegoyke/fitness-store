@@ -1951,7 +1951,13 @@ def _client_athletes():
     own program is never an athlete here, whatever was deleted since.
     """
     return (
-        CoachAthlete.objects.filter(is_self=False, is_demo=False)
+        CoachAthlete.objects.filter(
+            is_self=False,
+            is_demo=False,
+            # Coached at some point: an active link, or one that was active
+            # and ended. A pending or declined request isn't coaching.
+            status__in=(CoachAthlete.Status.ACTIVE, CoachAthlete.Status.ENDED),
+        )
         .order_by()
         .values("athlete_id")
     )
