@@ -32,6 +32,7 @@ import uuid
 from unittest import mock
 
 import pytest
+from django.contrib.messages import get_messages
 from django.core import mail
 from django.urls import reverse
 
@@ -263,6 +264,62 @@ class TestCoachInviteView:
                 resp = client.post(self.url, {"email": "ath@example.com"})
         assert resp.status_code == 302
         assert CoachInvite.objects.filter(coach=coach).exists()  # still created
+
+    def test_suppressed_send_flashes_warning_not_sent(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        """A blacklisted address (helper returns False) must not claim "sent".
+
+        The messaging is flashed inside the ``transaction.on_commit`` callback
+        (see ``coach_invite``), which — under ``ATOMIC_REQUESTS`` being inert —
+        runs synchronously before the response is built in production. In the
+        test suite, ``django_capture_on_commit_callbacks`` instead runs it
+        right after ``client.post()`` returns, on the *same* request object,
+        so ``get_messages(resp.wsgi_request)`` sees it even though it never
+        made it into the (already-saved) session — following the redirect
+        would not.
+        """
+        coach = UserFactory()
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.send_coach_invite_email", return_value=False
+        ):
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(self.url, {"email": "ath@example.com"})
+        assert CoachInvite.objects.filter(
+            coach=coach, status=CoachInvite.Status.PENDING
+        ).exists()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Couldn't email" in m for m in texts)
+        assert not any("Invite sent" in m for m in texts)
+
+    def test_successful_send_flashes_invite_sent(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = UserFactory()
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.send_coach_invite_email", return_value=True
+        ):
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(self.url, {"email": "ath@example.com"})
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Invite sent" in m for m in texts)
+
+    def test_mail_exception_flashes_could_not_be_sent(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = UserFactory()
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.send_coach_invite_email",
+            side_effect=RuntimeError("smtp down"),
+        ):
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(self.url, {"email": "ath@example.com"})
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("could not be sent right now" in m for m in texts)
+        assert not any("Invite sent" in m for m in texts)
 
 
 # -- coach revoke view -----------------------------------------------------

@@ -2032,6 +2032,35 @@ def request_withdraw(request, token):
 # act on an existing CoachAthlete between two Users. See docs/archive/meso/invites-plan.md.
 
 
+def _flash_invite_send_result(request, *, email, sent, verb, saved_note):
+    """Flash the outcome of a best-effort ``send_coach_invite_email`` call.
+
+    ``sent`` is the helper's return value (``True``/``False``), or ``None``
+    when the caller caught an exception from it. ``AWS_SES_USE_BLACKLIST``
+    makes the helper return ``False`` — without branching on it, a coach was
+    told "Invite sent" even when a hard-bounced/complained address meant
+    nothing went out. ``verb`` is "sent" or "resent" for the success copy;
+    ``saved_note`` describes what already happened to the invite row (so the
+    exception copy never claims the email went out when it didn't).
+    """
+    if sent is True:
+        messages.success(request, f"Invite {verb} to {email}.")
+    elif sent is False:
+        messages.warning(
+            request,
+            f"Couldn't email {email}: that address previously bounced or "
+            "reported our mail as spam, so sending to it is paused. Ask "
+            "them for a different address, or clear it from the email "
+            "dashboard if it was a mistake.",
+        )
+    else:
+        messages.warning(
+            request,
+            f"Invite {saved_note}, but the email to {email} could not be "
+            "sent right now.",
+        )
+
+
 @login_required
 @require_POST
 def coach_invite(request):
@@ -2074,12 +2103,17 @@ def coach_invite(request):
 
     def _send():
         try:
-            send_coach_invite_email(coach=coach, email=email, accept_url=accept_url)
+            sent = send_coach_invite_email(
+                coach=coach, email=email, accept_url=accept_url
+            )
         except Exception:  # mail is best-effort; never fail the invite on it
             logger.exception("Failed to send coach invite email to %s", email)
+            sent = None
+        _flash_invite_send_result(
+            request, email=email, sent=sent, verb="sent", saved_note="saved"
+        )
 
     transaction.on_commit(_send)
-    messages.success(request, f"Invite sent to {email}.")
     return redirect("meso:roster")
 
 
@@ -2145,12 +2179,17 @@ def coach_invite_resend(request, token):
 
     def _send():
         try:
-            send_coach_invite_email(coach=coach, email=email, accept_url=accept_url)
+            sent = send_coach_invite_email(
+                coach=coach, email=email, accept_url=accept_url
+            )
         except Exception:  # mail is best-effort; never fail the resend on it
             logger.exception("Failed to resend coach invite email to %s", email)
+            sent = None
+        _flash_invite_send_result(
+            request, email=email, sent=sent, verb="resent", saved_note="refreshed"
+        )
 
     transaction.on_commit(_send)
-    messages.success(request, f"Invite resent to {email}.")
     return redirect("meso:roster")
 
 

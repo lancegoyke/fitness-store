@@ -25,6 +25,7 @@ from datetime import timedelta
 from unittest import mock
 
 import pytest
+from django.contrib.messages import get_messages
 from django.core import mail
 from django.core.management import call_command
 from django.urls import reverse
@@ -433,6 +434,60 @@ class TestCoachInviteResendView:
         assert resp.status_code == 302
         invite.refresh_from_db()
         assert invite.status == CoachInvite.Status.PENDING  # resend still applied
+
+    def test_suppressed_send_flashes_warning_not_resent(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        """A blacklisted address (helper returns False) must not claim "resent".
+
+        See the sibling test in ``test_invites.py`` (``TestCoachInviteView.
+        test_suppressed_send_flashes_warning_not_sent``) for why this reads
+        ``get_messages(resp.wsgi_request)`` on the un-followed response rather
+        than following the redirect.
+        """
+        coach = UserFactory()
+        invite, _ = CoachInvite.open_for(coach=coach, email="ath@example.com")
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.send_coach_invite_email", return_value=False
+        ):
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(self._url(invite.token))
+        invite.refresh_from_db()
+        assert invite.status == CoachInvite.Status.PENDING  # resend still applied
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Couldn't email" in m for m in texts)
+        assert not any("Invite resent" in m for m in texts)
+
+    def test_successful_send_flashes_invite_resent(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = UserFactory()
+        invite, _ = CoachInvite.open_for(coach=coach, email="ath@example.com")
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.send_coach_invite_email", return_value=True
+        ):
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(self._url(invite.token))
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Invite resent" in m for m in texts)
+
+    def test_mail_exception_flashes_could_not_be_sent(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = UserFactory()
+        invite, _ = CoachInvite.open_for(coach=coach, email="ath@example.com")
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.send_coach_invite_email",
+            side_effect=RuntimeError("smtp down"),
+        ):
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(self._url(invite.token))
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("could not be sent right now" in m for m in texts)
+        assert not any("Invite resent" in m for m in texts)
 
 
 # -- roster surface --------------------------------------------------------
