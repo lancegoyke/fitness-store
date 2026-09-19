@@ -2400,6 +2400,49 @@ describe("Log session and an older log of the session (#527)", () => {
     expect(c.exercises[0].set_rows[1].done).toBe(true);
   });
 
+  it("keeps rows ticked since, when an older log's reply body lands after the tap", async () => {
+    // Its headers arrived before Log session was tapped; its body after.
+    vi.useFakeTimers();
+    const c = makeLogger({ status: "done" });
+    c.enqueue({
+      status: "pending",
+      sets: [{ prescription: 1, set_number: 1, reps: "", load: "", rpe: "" }],
+    });
+    c.exercises[0].set_rows[0].done = true;
+    c.exercises[0].set_rows[1].done = true;
+    let bodyLands;
+    const bodies = [];
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      bodies.push(body);
+      const log = {
+        status: body.status,
+        sets: body.sets.map((s) => ({
+          prescription: s.prescription,
+          set_number: s.set_number,
+        })),
+      };
+      if (bodies.length > 1) return res({ body: { log } });
+      return {
+        ok: true,
+        status: 200,
+        redirected: false,
+        json: () =>
+          new Promise((resolve) => {
+            bodyLands = () => resolve({ log });
+          }),
+      };
+    });
+    const flushing = c.flushQueue();
+    await vi.waitFor(() => expect(bodyLands).toBeTypeOf("function"));
+    const saving = c.save(true);
+    bodyLands();
+    await saving;
+    await flushing;
+    expect(bodies[1].sets.map((s) => s.set_number)).toEqual([1, 2]);
+    expect(c.status).toBe("done");
+  });
+
   it("keeps what it's sending in the outbox, not the log as it was at the tap", async () => {
     // The app closing mid-send must replay the newer log, not the older one.
     const c = cellLogger({ logUrl: LOG_URL });

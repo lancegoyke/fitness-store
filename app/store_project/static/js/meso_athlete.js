@@ -694,18 +694,25 @@ function createLogger() {
       if (!res.ok) return "kept";
       this.dropEntry(item);
       if (item.url !== this.logUrl) return "saved";
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        return "mine"; // synced server-side regardless; UI reconciles on next load
+      }
       // A pass can already be sending this session's older log when save()
-      // starts: its reply lands mid-save. Leave the rows alone — reconciling
-      // them to the older log would un-tick rows ticked since, just before
-      // save() builds its payload from them. save's own reply reconciles.
+      // starts, so its reply can land mid-save — checked after the body is
+      // read, which can itself outlast the tap. Leave the rows alone then:
+      // reconciling them to the older log would un-tick rows ticked since,
+      // just before save() builds its payload from them. save's own reply
+      // reconciles.
       if (this.saving) return "mine";
       try {
-        const data = await res.json();
         this.status = data.log.status;
         this.syncFromLog(data.log);
         this.newRecords = data.new_records || []; // a PR beaten offline still lands
       } catch (e) {
-        /* synced server-side regardless; UI reconciles on next load */
+        /* a reply of an unexpected shape: synced server-side regardless */
       }
       return "mine";
     },
