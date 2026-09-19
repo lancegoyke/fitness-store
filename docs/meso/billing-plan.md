@@ -92,7 +92,8 @@ quantity                 (last seat count synced to Stripe; cache, not truth)
 created / modified
 ```
 
-Derived: `is_active = status in {trialing, active, comped}`;
+Derived: `is_active = status in {trialing, active, comped}` (a **Stripe trial**
+never lapses on the local clock — see #555 below);
 `effective_seat_limit = ∞ if is_active else FREE_SEAT_LIMIT`;
 `can_add_athlete(coach) = active_seat_count < effective_seat_limit`.
 
@@ -105,6 +106,83 @@ exceed the free seat limit. During the trial the seat limit is ∞. At trial end
 qcluster sweep flips an un-subscribed coach back to `free` (→ the D6 downgrade).
 **Stripe objects exist only for coaches who have actually subscribed** (entered a
 card), which keeps free/trial coaches entirely off Stripe.
+
+### Subscribing during the trial (#555)
+
+**Production, 2026-09-17:** the first real Pro checkout. A coach on the local
+trial clicked Subscribe and was charged $19 immediately — Checkout opened with
+no trial, so Stripe billed on completion — losing 13+ days still left on their
+trial. Lance refunded the charge and kept the coach on Pro.
+
+**Expected behavior:** subscribing during the trial saves the card now and
+defers the first charge to when the local trial would have ended. The coach
+keeps full access throughout, and the billing page says when the first charge
+happens before they click.
+
+**The Checkout rule:** pass `subscription_data.trial_end` = the local
+`trial_end` (a unix timestamp) to `stripe.checkout.Session.create`. Stripe
+requires this to be **at least 48 hours in the future** (verified in the
+Checkout API docs, 2026-09-19) — under that, plus a 5-minute margin for the
+request round trip / clock skew, subscribing charges today instead, and the
+page says so *before* the click rather than surprising the coach after it.
+This never extends a trial — the deferred date is always the existing local
+`trial_end`, never pushed out. Because the page is rendered before the POST,
+a trial can cross the 48h05m line in between; the Subscribe form then carries
+a hidden `first_charge=deferred` marker, and a stale POST (the promise no
+longer holds) bounces back to the roster with a message instead of silently
+charging today when the coach was told otherwise.
+
+**Which way out, and why.** Once Checkout defers the charge, the subscription
+arrives at the webhook with Stripe status `trialing` — same as before, but now
+carrying a `stripe_subscription_id`. Two ways to represent that locally:
+
+- **Way B** — map Stripe `trialing` to local `active`. Rejected: an unpaid
+  coach would then read as `active` everywhere, including
+  `agent_usage_report`'s `monthly_revenue` / `cost_bucket` / `is_paid` and the
+  margin alert — counting money that hasn't been charged yet as revenue. It
+  also can't distinguish "first charge on X" (the deferred case) from
+  "charged today, but the local clock is still counting down" (the under-48h
+  case) without a new field and a migration.
+- **Way A (chosen)** — a `trialing` row that has a `stripe_subscription_id` is
+  a live Stripe subscription, not the local no-card trial. `status` keeps
+  mirroring Stripe honestly (still `trialing`, not `active`) and
+  `LIVE_STRIPE_STATUSES` stays `(active, past_due)` unchanged, so reporting
+  stays correct with no schema change. Everything else follows from two
+  predicates on `CoachSubscription`: `is_stripe_trial` (`status == trialing`
+  and a `stripe_subscription_id` is set) and `has_live_stripe_subscription`
+  (`LIVE_STRIPE_STATUSES` or `is_stripe_trial`) — no migration needed.
+
+That predicate closes four traps a Stripe trial would otherwise fall into:
+
+1. **Lazy expiry locks the coach out.** `is_active` expires a `trialing` row
+   once its local `trial_end` passes, so a coach who paid could be locked out
+   between the local clock running out and the `updated(active)` webhook
+   landing. Fix: `is_trial_expired` adds `and not self.stripe_subscription_id`
+   — once Stripe is tracking the trial, only Stripe ends it.
+2. **Stale-event takeover.** The webhook's guard against a late/retried event
+   for a *different* subscription id used `LIVE_STRIPE_STATUSES`, which never
+   included `trialing` — so a stale event could clobber a coach who just
+   subscribed mid-trial. Fix: the guard reads `has_live_stripe_subscription`
+   instead.
+3. **Double Checkout.** The billing page's `on_trial` (Subscribe button, "keep
+   full access when it ends") and the view's double-subscribe guard both
+   missed a Stripe trial, so a coach could open a second Checkout. Fix:
+   `on_trial` now means only the *local* trial (`not sub.stripe_subscription_id`);
+   the view's guard checks `has_live_stripe_subscription`.
+4. **Trial_end never copied.** The webhook didn't write Stripe's `trial_end`
+   onto the row, so the mirror couldn't answer "when does the first charge
+   happen." Fix: `_sync_from_subscription` copies `sub_obj["trial_end"]` onto
+   the row whenever Stripe sends one; when it doesn't (a plain, non-trial
+   subscription), the local value is left alone — it's the single-use trial
+   marker `start_trial` sets once, and the product-analytics dashboard (#509)
+   reads it for "trial started."
+
+**Analytics (#509):** `subscription_started` fires exactly once — on
+`created(trialing)` — not again when the subscription flips to `active` at
+trial end. The existing `already_live` / ledger check already gives that: the
+`created(trialing)` event isn't `already_live` (no matching `stripe_subscription_id`
+yet) so it tracks; the later `updated(active)` *is* already live (same
+subscription id, a status already in `ACTIVE_STATUSES`) so it doesn't.
 
 ### Subscribing + managing (Stripe)
 
