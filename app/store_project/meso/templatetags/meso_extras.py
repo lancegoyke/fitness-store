@@ -25,6 +25,24 @@ def absolute_uri(path, request):
     return request.build_absolute_uri(path)
 
 
+@register.filter
+def short_duration(delta):
+    """Compact ``timedelta`` for the product-analytics dashboard (#509).
+
+    ``None`` (no median yet — nothing has reached that step) renders as an em
+    dash. Minutes under an hour, whole hours under 48h, tenths of a day at 48h
+    and beyond — so a fast funnel step reads as "45 min" rather than "0.0 d".
+    """
+    if delta is None:
+        return "—"
+    total_seconds = delta.total_seconds()
+    if total_seconds < 3600:
+        return f"{round(total_seconds / 60)} min"
+    if total_seconds < 48 * 3600:
+        return f"{round(total_seconds / 3600)} h"
+    return f"{total_seconds / 86400:.1f} d"
+
+
 @register.simple_tag(takes_context=True)
 def meso_tour_config(context):
     """The guided-tour front-end config (issue #430) as a plain ``dict``.

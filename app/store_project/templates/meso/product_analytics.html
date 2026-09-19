@@ -1,0 +1,206 @@
+{% extends "meso/_meso_base.html" %}
+{% load meso_extras %}
+
+{% block title %}Product analytics · Meso{% endblock %}
+
+{% block content %}
+  <div class="meso-page">
+    <div class="meso-crumbs">
+      <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span> <span>Product analytics</span>
+    </div>
+
+    <div class="meso-pagehead">
+      <div>
+        <p class="meso-eyebrow">Owner · product analytics</p>
+        <h1 class="meso-h1">Product analytics</h1>
+        <p class="meso-sub">
+          Last {{ days }} day{{ days|pluralize }}
+          · {% if events_since %}events recorded since {{ events_since|date:"M j, Y" }}{% else %}no events recorded yet{% endif %}
+        </p>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        {% for option in window_options %}
+          <a class="meso-btn{% if option == days %} meso-btn--primary{% endif %}" href="?days={{ option }}"{% if option == days %} aria-current="page"{% endif %}>{{ option }} days</a>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- 1. Active users -->
+    <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
+      <h2 style="margin:0 0 4px;font-size:15px;font-weight:700;">Active users</h2>
+      <div style="overflow-x:auto;margin-top:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="text-align:left;color:var(--dim);">
+              <th style="padding:9px 16px;font-weight:650;">Role</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">WAU (7d)</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">MAU (30d)</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Window ({{ days }}d)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-top:1px solid var(--line-2);">
+              <td style="padding:9px 16px;">Coaches</td>
+              <td style="padding:9px 16px;text-align:right;">{{ active_users.coaches.wau }}</td>
+              <td style="padding:9px 16px;text-align:right;">{{ active_users.coaches.mau }}</td>
+              <td style="padding:9px 16px;text-align:right;"><b>{{ active_users.coaches.window }}</b></td>
+            </tr>
+            <tr style="border-top:1px solid var(--line-2);">
+              <td style="padding:9px 16px;">Athletes</td>
+              <td style="padding:9px 16px;text-align:right;">{{ active_users.athletes.wau }}</td>
+              <td style="padding:9px 16px;text-align:right;">{{ active_users.athletes.mau }}</td>
+              <td style="padding:9px 16px;text-align:right;"><b>{{ active_users.athletes.window }}</b></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
+        A coach is active if they edited a plan (<code>PlanAction</code>, <code>Plan</code> created),
+        delivered a block (<code>WeekDelivery</code>), ran the agent (<code>AgentProposalBatch</code>),
+        sent an invite (<code>CoachInvite</code>), or have a coach-side event. An athlete is someone
+        another coach coaches, and is active if they started a session log that holds a set
+        (<code>SessionLog</code>), or have a <code>set_logged</code> or <code>session_opened</code> event. Events exist since {% if events_since %}{{ events_since|date:"M j, Y" }}{% else %}the first one{% endif %}.
+        Demo-athlete plans don't count for either role, and a coach training on their own
+        self-coaching plan isn't counted as an athlete for it. Staff and sandbox accounts are left
+        out of every number on this page (for email, as recipients).
+      </p>
+    </div>
+
+    <!-- 2. Activation funnel -->
+    <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
+      <h2 style="margin:0 0 4px;font-size:15px;font-weight:700;">Activation funnel</h2>
+      <div style="overflow-x:auto;margin-top:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="text-align:left;color:var(--dim);">
+              <th style="padding:9px 16px;font-weight:650;">Path</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Sent</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Accepted</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Delivered</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Logged</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">To accept</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">To deliver</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">To log</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for path in funnel %}
+              <tr style="border-top:1px solid var(--line-2);{% if path.key == 'all' %}font-weight:650;{% endif %}">
+                <td style="padding:9px 16px;">{{ path.label }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ path.sent }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ path.accepted }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ path.delivered }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ path.logged }}</td>
+                <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ path.median_to_accept|short_duration }}</td>
+                <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ path.median_to_deliver|short_duration }}</td>
+                <td style="padding:9px 16px;text-align:right;color:var(--dim);">{{ path.median_to_log|short_duration }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
+        Invites sent in the window. Email invite: <code>CoachInvite</code>, sent then accepted; a
+        resent invite keeps its first send date, and an invitee is known only once they accept.
+        Athlete request: an athlete's request to a coach (<code>CoachAthlete</code>), sent then
+        accepted, minus any that an email invite in the window claimed.
+        Delivered: the first <code>WeekDelivery</code> on that pair's plans after acceptance. Logged: the
+        first session log holding a set, by when the log was started, after that delivery; a set
+        logged before any delivery doesn't count. Medians are between consecutive steps.
+        <code>CoachAthlete</code> keeps one row per coach and athlete, and a repeat request or a
+        re-invite reopens it with its first send date and the new answer: a pair that reconnects
+        is measured from its first request, and leaves this path if the coach re-invites.
+      </p>
+    </div>
+
+    <!-- 3. Feature adoption -->
+    <div class="meso-card meso-card--pad" style="margin-bottom:14px;">
+      <h2 style="margin:0 0 4px;font-size:15px;font-weight:700;">Feature adoption</h2>
+      <div style="overflow-x:auto;margin-top:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="text-align:left;color:var(--dim);">
+              <th style="padding:9px 16px;font-weight:650;">Feature</th>
+              <th style="padding:9px 16px;font-weight:650;">Who</th>
+              <th style="padding:9px 16px;font-weight:650;">Source</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Users</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Times</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for feature in features %}
+              <tr style="border-top:1px solid var(--line-2);">
+                <td style="padding:9px 16px;">{{ feature.label }}</td>
+                <td style="padding:9px 16px;color:var(--dim);">{{ feature.who }}</td>
+                <td style="padding:9px 16px;color:var(--dim);">{{ feature.source }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ feature.users }}</td>
+                <td style="padding:9px 16px;text-align:right;"><b>{{ feature.times }}</b></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
+        Distinct users and times in the window. Rows sourced from an <code>Event</code> only have
+        data since {% if events_since %}{{ events_since|date:"M j, Y" }}{% else %}the first one{% endif %}. Block delivered counts blocks, not weeks. Trial started is
+        <code>trial_end</code> minus the 14-day trial. Work on demo-athlete plans isn't counted.
+        Push counts subscriptions still on record, by when the device was first registered: an
+        unsubscribed or expired device is gone, and one that changes hands keeps its first date.
+        A deleted account's events stay in times, whatever plan they were about.
+      </p>
+    </div>
+
+    <!-- 4. Email -->
+    <div class="meso-card meso-card--pad">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;">
+        <h2 style="margin:0;font-size:15px;font-weight:700;">Email</h2>
+        <a class="meso-navlink" href="{{ email_dashboard_url }}">Email deliverability</a>
+      </div>
+      <div style="overflow-x:auto;margin-top:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="text-align:left;color:var(--dim);">
+              <th style="padding:9px 16px;font-weight:650;">Kind</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Sent</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Delivered</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Opened</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Clicked</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Open rate</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Click rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in email.rows %}
+              <tr style="border-top:1px solid var(--line-2);">
+                <td style="padding:9px 16px;">{{ row.label }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ row.sent }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ row.delivered }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ row.opened }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ row.clicked }}</td>
+                <td style="padding:9px 16px;text-align:right;">{% if row.open_rate is not None %}{{ row.open_rate }}%{% else %}—{% endif %}</td>
+                <td style="padding:9px 16px;text-align:right;">{% if row.click_rate is not None %}{{ row.click_rate }}%{% else %}—{% endif %}</td>
+              </tr>
+            {% endfor %}
+            <tr style="border-top:1px solid var(--line-2);font-weight:650;">
+              <td style="padding:9px 16px;">Totals</td>
+              <td style="padding:9px 16px;text-align:right;">{{ email.totals.sent }}</td>
+              <td style="padding:9px 16px;text-align:right;">{{ email.totals.delivered }}</td>
+              <td style="padding:9px 16px;text-align:right;">{{ email.totals.opened }}</td>
+              <td style="padding:9px 16px;text-align:right;">{{ email.totals.clicked }}</td>
+              <td style="padding:9px 16px;text-align:right;">{% if email.totals.open_rate is not None %}{{ email.totals.open_rate }}%{% else %}—{% endif %}</td>
+              <td style="padding:9px 16px;text-align:right;">{% if email.totals.click_rate is not None %}{{ email.totals.click_rate }}%{% else %}—{% endif %}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
+        Meso emails sent in the window (<code>SentEmail</code>), and how many of those were
+        delivered, opened or clicked since (distinct messages, from SES events). Staff and
+        sandbox recipients are left out; the sender isn't recorded, so a staff coach's email to
+        a client still counts, and so does a self-coaching coach's email about their own block. Some mail clients fetch images and links on their own, so an
+        open or a click isn't always a person. Every kind and the raw events:
+        <a href="{{ email_dashboard_url }}">Email deliverability</a>.
+      </p>
+    </div>
+  </div>
+{% endblock %}

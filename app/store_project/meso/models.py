@@ -1275,6 +1275,16 @@ class Plan(models.Model):
             return None
         return self.relationship.athlete
 
+    @property
+    def is_demo(self):
+        """Whether this plan belongs to a demo relationship (``CoachAthlete.is_demo``).
+
+        Analytics events about a plan record this at write time (#509): "Remove
+        demo data" deletes the plan, and the dashboard still has to leave the
+        coach's demo work out. A template plan has no relationship, so never.
+        """
+        return self.relationship_id is not None and self.relationship.is_demo
+
     def is_editable_by(self, user):
         """Whether ``user`` (a coach) may open + edit this plan in the designer.
 

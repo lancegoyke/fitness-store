@@ -31,6 +31,12 @@ urlpatterns = [
     path("usage/", UsageDashboardView.as_view(), name="usage_dashboard"),
     # Owner-facing guided-tour funnel dashboard (#441 P3-6) — staff-gated, all-coach.
     path("tour/funnel/", views.TourFunnelView.as_view(), name="tour_funnel"),
+    # Owner-facing product-analytics dashboard (#509 slice 2) — staff-gated, all-coach.
+    path(
+        "analytics/",
+        views.ProductAnalyticsView.as_view(),
+        name="product_analytics",
+    ),
     path("designer/<int:plan_id>/", MesoDesignerView.as_view(), name="designer_plan"),
     path("review/", ChangeReviewView.as_view(), name="review"),
     path(

@@ -114,7 +114,11 @@ class TestPlanCreatedEvent:
         assert row.actor == link.coach
         assert row.subject_type == plan._meta.label_lower
         assert row.subject_id == str(plan.pk)
-        assert row.props == {"athlete": str(link.athlete_id), "draft": False}
+        assert row.props == {
+            "athlete": str(link.athlete_id),
+            "draft": False,
+            "demo": False,
+        }
 
     def test_reposting_for_an_existing_plan_gives_no_second_event(self, client):
         link = CoachAthleteFactory()
@@ -156,7 +160,11 @@ class TestAgentProposalRunEventOnDraft:
 
         plan_rows = events(EventName.PLAN_CREATED)
         assert len(plan_rows) == 1
-        assert plan_rows[0].props == {"athlete": str(link.athlete_id), "draft": True}
+        assert plan_rows[0].props == {
+            "athlete": str(link.athlete_id),
+            "draft": True,
+            "demo": False,
+        }
 
         agent_rows = events(EventName.AGENT_PROPOSAL_RUN)
         assert len(agent_rows) == 1
@@ -164,7 +172,7 @@ class TestAgentProposalRunEventOnDraft:
         assert row.actor == link.coach
         assert row.subject_type == batch._meta.label_lower
         assert row.subject_id == str(batch.pk)
-        assert row.props == {"trigger": AgentProposalBatch.Trigger.DRAFT}
+        assert row.props == {"trigger": AgentProposalBatch.Trigger.DRAFT, "demo": False}
 
     def test_exhausted_allowance_gives_no_agent_event(self, client, monkeypatch):
         link = CoachAthleteFactory()
@@ -203,7 +211,10 @@ class TestAgentProposalRunEventOnManualPropose:
         assert row.actor == plan.coach
         assert row.subject_type == batch._meta.label_lower
         assert row.subject_id == str(batch.pk)
-        assert row.props == {"trigger": AgentProposalBatch.Trigger.MANUAL}
+        assert row.props == {
+            "trigger": AgentProposalBatch.Trigger.MANUAL,
+            "demo": False,
+        }
 
     def test_over_allowance_402_gives_no_event(self, client):
         coach = UserFactory()
@@ -260,7 +271,11 @@ class TestTemplateImportedEvent:
         assert row.actor == coach
         assert row.subject_type == copy._meta.label_lower
         assert row.subject_id == str(copy.pk)
-        assert row.props == {"template": tpl.pk, "athlete": str(rel.athlete_id)}
+        assert row.props == {
+            "template": tpl.pk,
+            "athlete": str(rel.athlete_id),
+            "demo": False,
+        }
 
     def test_invalid_relationship_gives_no_event(self, client):
         coach, _ = coach_with_client()
@@ -291,7 +306,11 @@ class TestBatchAppliedEvent:
         assert row.actor == plan.coach
         assert row.subject_type == batch._meta.label_lower
         assert row.subject_id == str(batch.pk)
-        assert row.props == {"applied": data["applied"], "skipped": data["skipped"]}
+        assert row.props == {
+            "applied": data["applied"],
+            "skipped": data["skipped"],
+            "demo": False,
+        }
 
     def test_second_apply_409_gives_no_second_event(self, client):
         plan, _, batch, _ = make_batch_with_swap()
@@ -329,6 +348,7 @@ class TestBlockDeliveredEvent:
             "athlete": str(plan.athlete.pk),
             "weeks": 1,
             "via": "deliver",
+            "demo": False,
         }
 
     def test_batch_deliver_to_two_clients_gives_two_events(self, client):
@@ -363,6 +383,67 @@ class TestBlockDeliveredEvent:
 
         assert resp.status_code == 400
         assert events(EventName.BLOCK_DELIVERED) == []
+
+
+# ---------------------------------------------------------------------------
+# demo prop: coach events on a demo relationship's plan say so (#509 slice 2)
+#
+# The dashboard excludes demo-plan work by the event's subject, but "Remove
+# demo data" deletes those plans. The flag written at the time survives that.
+# ---------------------------------------------------------------------------
+
+
+def _make_demo(relationship):
+    CoachAthlete.objects.filter(pk=relationship.pk).update(is_demo=True)
+    relationship.refresh_from_db()
+
+
+class TestDemoPropOnCoachEvents:
+    def test_plan_created_for_a_demo_athlete(self, client):
+        link = CoachAthleteFactory(is_demo=True)
+        client.force_login(link.coach)
+
+        client.post(_plan_new_url(link.athlete))
+
+        assert events(EventName.PLAN_CREATED)[0].props["demo"] is True
+
+    def test_manual_agent_run_on_a_demo_plan(self, client, monkeypatch):
+        plan, _, presc = make_plan()
+        _make_demo(plan.relationship)
+        install_fake(monkeypatch, one_swap_result(presc))
+        client.force_login(plan.coach)
+
+        assert propose(client, plan).status_code == 202
+
+        assert events(EventName.AGENT_PROPOSAL_RUN)[0].props["demo"] is True
+
+    def test_template_imported_for_a_demo_athlete(self, client):
+        coach, rel = coach_with_client()
+        _make_demo(rel)
+        tpl, _ = template_plan(coach, title="Base Block")
+        client.force_login(coach)
+
+        client.post(template_use_url(tpl), {"relationship": rel.pk})
+
+        assert events(EventName.TEMPLATE_IMPORTED)[0].props["demo"] is True
+
+    def test_batch_applied_on_a_demo_plan(self, client):
+        plan, _, batch, _ = make_batch_with_swap()
+        _make_demo(plan.relationship)
+        client.force_login(plan.coach)
+
+        client.post(apply_url(batch))
+
+        assert events(EventName.BATCH_APPLIED)[0].props["demo"] is True
+
+    def test_block_delivered_on_a_demo_plan(self, client):
+        plan, _, _, _ = deliver_seed_plan()
+        _make_demo(plan.relationship)
+        client.force_login(plan.relationship.coach)
+
+        assert client.post(deliver_url(plan)).status_code == 201
+
+        assert events(EventName.BLOCK_DELIVERED)[0].props["demo"] is True
 
 
 # ---------------------------------------------------------------------------

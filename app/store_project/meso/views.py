@@ -675,6 +675,63 @@ class TourFunnelView(UserPassesTestMixin, TemplateView):
         return ctx
 
 
+class ProductAnalyticsView(UserPassesTestMixin, TemplateView):
+    """Owner-facing product-analytics dashboard (#509 slice 2).
+
+    The staff read-out of first-party ``Event`` usage plus Meso's existing
+    tables: active users, the invite→delivery→log activation funnel, feature
+    adoption, and Meso's own transactional email — the web complement to
+    querying ``Event`` directly in the admin. Aggregation lives in
+    ``presenters.product_analytics``.
+
+    Gate mirrors ``TourFunnelView``/``UsageDashboardView`` exactly: anonymous
+    bounces to login (``UserPassesTestMixin`` default); an authenticated
+    non-staff user gets a flat 403.
+
+    ``?days=7|30|90`` picks the report window (default 30; anything else
+    degrades to 30 with a flashed warning), parsed exactly like
+    ``notifications.EmailDashboardView._days``.
+    """
+
+    template_name = "meso/product_analytics.html"
+    WINDOW_DAYS = (7, 30, 90)
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
+        if self.request.user.is_authenticated:
+            raise PermissionDenied
+        return super().handle_no_permission()
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        days = self._days()
+        ctx.update(presenters.product_analytics(days=days))
+        ctx["active"] = "analytics"
+        ctx["window_options"] = self.WINDOW_DAYS
+        ctx["email_dashboard_url"] = (
+            reverse("notifications:email_dashboard") + f"?days={days}"
+        )
+        return ctx
+
+    def _days(self):
+        """The report window (in days) from ``?days=``; 30 on bad/missing input."""
+        raw = self.request.GET.get("days")
+        if raw:
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError):
+                parsed = None
+            if parsed in self.WINDOW_DAYS:
+                return parsed
+            messages.error(
+                self.request,
+                f"Ignoring invalid days {raw!r}; showing the last 30 days.",
+            )
+        return 30
+
+
 class CoachBillingView(LoginRequiredMixin, TemplateView):
     """Coach-facing billing & plan page (agent-usage — coach surface).
 
@@ -802,6 +859,7 @@ def plan_create(request, pk):
             subject=plan,
             athlete=str(relationship.athlete_id),
             draft=draft,
+            demo=relationship.is_demo,
         )
     # Dispatch (and bump the plan) outside the lock, mirroring ``agent_propose``.
     if draft_batch is not None:
@@ -812,6 +870,7 @@ def plan_create(request, pk):
             actor=request.user,
             subject=draft_batch,
             trigger=draft_batch.trigger,
+            demo=relationship.is_demo,
         )
     # The tour marker (``tour=1``) picks the step from ``draft`` ("agent" vs
     # "designer"). #441 P3-2 also counts the organic twin while touring — but
@@ -4707,6 +4766,7 @@ def template_use(request, plan_id):
         subject=copy,
         template=plan.pk,
         athlete=str(relationship.athlete_id),
+        demo=relationship.is_demo,
     )
     messages.success(
         request,
@@ -4747,6 +4807,7 @@ def _notify_athlete_block_delivered(
         athlete=str(plan.athlete.pk),
         weeks=week_count,
         via=via,
+        demo=plan.is_demo,
     )
     home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
     unsubscribe_url = request.build_absolute_uri(
@@ -4965,6 +5026,7 @@ def agent_propose(request, plan_id):
         actor=request.user,
         subject=batch,
         trigger=batch.trigger,
+        demo=plan.is_demo,
     )
     return JsonResponse(
         {
@@ -5088,6 +5150,7 @@ def batch_apply(request, batch_id):
         subject=batch,
         applied=result["applied"],
         skipped=result["skipped"],
+        demo=batch.plan.is_demo,
     )
     # Where the review screen sends the coach next: the deliver screen, pinned to
     # the block the batch actually edited. A bare deliver URL resolves its own
