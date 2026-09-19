@@ -9,7 +9,9 @@ write the event, and a stale event can clobber a mirror a concurrent delivery
 just updated. ``_lock_mirror`` (``select_for_update()`` on the mirror row, or on
 the coach's user row before the mirror exists) serializes concurrent deliveries
 for the same coach — see ``webhooks.py``'s module docstring for the full
-contract.
+contract. Because the mirror write and the analytics now share that
+transaction, the last test checks that a failed analytics query still can't
+cost the mirror write.
 
 **Why this file exists separately.** ``select_for_update`` is a documented
 no-op on SQLite, and the default in-memory SQLite test database doesn't even
@@ -39,6 +41,7 @@ from store_project.meso.factories import CoachSubscriptionFactory
 from store_project.meso.models import CoachSubscription
 from store_project.meso.tests.test_billing_stripe import _coach_with_customer
 from store_project.meso.tests.test_billing_stripe import _events
+from store_project.meso.tests.test_billing_stripe import _real_invoice_event
 from store_project.meso.tests.test_billing_stripe import _real_sub_event
 
 pytestmark = [
@@ -217,3 +220,58 @@ class TestNoRowFallbackLoadBearing:
         assert started[0].props["subscription"] == "sub_1"
         assert len(cancelled) == 1
         assert cancelled[0].props["subscription"] == "sub_1"
+
+
+class TestInvoiceNudgeRacesSync:
+    """``_nudge_status`` locks by subscription id, ``_sync_from_subscription`` by coach."""
+
+    def test_invoice_paid_racing_updated_active_records_one_start(self):
+        # The mirror after created(incomplete): past_due, tracking sub_1.
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.PAST_DUE,
+            stripe_subscription_id="sub_1",
+        )
+        event_a = _real_sub_event(
+            "customer.subscription.updated", sub_id="sub_1", status="active"
+        )
+        event_b = _real_invoice_event("invoice.paid", sub_id="sub_1")
+
+        errors = _race(event_a, event_b, BEFORE_MIRROR_WRITE, AFTER_LEDGER_CHECK)
+
+        assert errors == [], f"worker thread(s) raised: {errors}"
+        assert len(_events(EventName.SUBSCRIPTION_STARTED)) == 1
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.ACTIVE
+
+
+def test_a_failed_ledger_query_does_not_cost_the_mirror_write(monkeypatch):
+    """Analytics still can't fail the mirror write inside the locked transaction.
+
+    On PostgreSQL a failed statement aborts the whole transaction, even once
+    the exception is caught, so the analytics call runs in its own savepoint.
+    A real failing query, not a raised exception: raising from Python leaves
+    the connection healthy and reproduces nothing.
+    """
+    coach = _coach_with_customer()
+    CoachSubscriptionFactory(
+        coach=coach,
+        status=CoachSubscription.Status.TRIALING,
+        stripe_subscription_id="",
+        stripe_item_id="",
+    )
+
+    def failing_recorded(name, sub_id):
+        with connection.cursor() as cur:
+            cur.execute("SELECT * FROM a_table_that_does_not_exist")
+
+    monkeypatch.setattr(webhooks, "_recorded", failing_recorded)
+
+    webhooks.handle_event(
+        _real_sub_event("customer.subscription.created", sub_id="sub_1")
+    )
+
+    sub = CoachSubscription.objects.get(coach=coach)
+    assert sub.status == CoachSubscription.Status.ACTIVE
+    assert sub.stripe_subscription_id == "sub_1"
