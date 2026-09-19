@@ -101,8 +101,9 @@
       </div>
       <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
         Invites sent in the window. Email invite: <code>CoachInvite</code>, sent then accepted; a
-        resent invite keeps its first send date. Athlete request: an athlete's request the coach
-        accepted (<code>CoachAthlete</code>), minus any that an email invite in the window claimed.
+        resent invite keeps its first send date, and an invitee is known only once they accept.
+        Athlete request: an athlete's request to a coach (<code>CoachAthlete</code>), sent then
+        accepted, minus any that an email invite in the window claimed.
         Delivered: the first <code>WeekDelivery</code> on that pair's plans after acceptance. Logged: the
         first session log holding a set, by when the log was started, after that delivery; a set
         logged before any delivery doesn't count. Medians are between consecutive steps.
@@ -143,7 +144,9 @@
         Distinct users and times in the window. Rows sourced from an <code>Event</code> only have
         data since {% if events_since %}{{ events_since|date:"M j, Y" }}{% else %}the first one{% endif %}. Block delivered counts blocks, not weeks. Trial started is
         <code>trial_end</code> minus the 14-day trial. Work on demo-athlete plans isn't counted.
-        Push counts subscriptions still on record: an unsubscribed or expired device is gone.
+        Push counts subscriptions still on record, by when the device was first registered: an
+        unsubscribed or expired device is gone, and one that changes hands keeps its first date.
+        A deleted account's events stay in times, whatever plan they were about.
       </p>
     </div>
 

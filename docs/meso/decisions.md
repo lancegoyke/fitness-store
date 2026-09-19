@@ -356,7 +356,8 @@ feature row names its source.
 (a NULL user, from a deleted account, stays in "times" counts). The rule is on
 the person being counted, as in `track()`: a staff coach's clients still count
 as athletes, because the owner coaches real people. A funnel row is a pair,
-so it's left out when either side is staff or sandbox. For email
+so it's left out when either side is staff or sandbox; for an email invite
+nobody has accepted, only the coach is known. For email
 that means recipients: `SentEmail` doesn't record the sender, so a staff
 coach's invite to a real person counts. Activity on a demo relationship's
 plan (`is_demo`) is excluded through the join for source tables. For events,
@@ -415,8 +416,11 @@ counted again), Trial started (`CoachSubscription.trial_end` minus the 14-day
 trial), Paid subscription started (`subscription_started` event with
 `via=stripe`), Subscription cancelled (event), Push notifications enabled
 (`PushSubscription`, athletes; an unsubscribed or rejected device's row is
-deleted, so this counts subscriptions still on record) and Session completed
-(event, athletes).
+deleted, so this counts subscriptions still on record, dated by the device's
+first registration even if it later changed hands) and Session completed
+(event, athletes). A deleted account's events stay in "times" whatever plan
+they were about: the account's links, plans and logs go with it, so a
+self-coach's completions can't be told apart any more.
 
 **Email.** The four Meso kinds (block_delivered, coach_invite,
 invite_reminder, coach_request), as a cohort: messages sent in the window
