@@ -1,15 +1,17 @@
 """A clean, idempotent Stripe billing webhook handler (S6 billing, Phase 2, D9).
 
-The store already has a products webhook (``payments.views.stripe_webhook``) —
-one-time payments, debug prints, inline test-user creation. We leave it untouched
-and handle *subscription* lifecycle here, on a separate endpoint with its own
-signing secret (``MESO_STRIPE_WEBHOOK_SECRET``).
+The store already has a products webhook (``payments.views.stripe_webhook``) for
+one-time payments; it ignores subscription checkouts (#545). We handle the
+*subscription* lifecycle here, on a separate endpoint with its own signing
+secret (``MESO_STRIPE_WEBHOOK_SECRET``).
 
 Stripe is the source of truth; this handler mirrors a coach's subscription state
 into the local ``CoachSubscription`` so a request can gate without calling Stripe
 (D8). It is **idempotent** — keyed by the coach (1:1), driven off the full
 subscription object — so a replayed or out-of-order event converges to the same
-row. Events handled:
+row. Concurrent deliveries for one coach are serialized on the mirror row
+(``_lock_mirror``, #546), so two of them can't both read it, and the ledger,
+before either has written. Events handled:
 
 - ``customer.subscription.created|updated`` — upsert from the subscription object
   (status, the subscription item id, period end). The flat Pro plan (D14) reports a
@@ -30,6 +32,7 @@ from datetime import timezone as dt_timezone
 import stripe
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import transaction
 
 from store_project.analytics.events import EventName
 from store_project.analytics.models import Event
@@ -133,10 +136,35 @@ def _recorded(name, sub_id):
     The ledger is only as complete as ``track()``, which drops a failed insert
     after logging it: a start that failed to record also suppresses that
     subscription's later cancel from ``past_due``.
+
+    The check and the ``track()`` insert after it are only atomic because
+    every caller holds the mirror row lock (``_lock_mirror``, #546).
     """
     return Event.objects.filter(name=name, props__subscription=sub_id).exists()
 
 
+def _lock_mirror(coach):
+    """Lock and return the coach's ``CoachSubscription`` (None if there's none yet).
+
+    Serializes concurrent deliveries for one coach (#546): a second delivery
+    waits here until the first commits, then reads the mirror and the ledger it
+    left. Without it, both read the old mirror, both pass the ledger check and
+    both write ``subscription_started``, or a stale event passes the takeover
+    guard in ``_sync_from_subscription`` and overwrites the subscription a concurrent delivery just took
+    over. With no mirror row yet there's nothing to lock, so lock the coach's
+    user row instead and re-read: a concurrent first delivery holds that lock
+    until its new row has committed.
+    """
+    existing = CoachSubscription.objects.select_for_update().filter(coach=coach).first()
+    if existing is None:
+        User.objects.select_for_update().filter(pk=coach.pk).first()
+        existing = (
+            CoachSubscription.objects.select_for_update().filter(coach=coach).first()
+        )
+    return existing
+
+
+@transaction.atomic
 def _sync_from_subscription(sub_obj, *, deleted):
     """Upsert the coach's ``CoachSubscription`` from a Stripe subscription object."""
     coach = _coach_for_customer(sub_obj.get("customer"))
@@ -157,7 +185,7 @@ def _sync_from_subscription(sub_obj, *, deleted):
     # event for an old id (any status, including a retried ``active``) nor a dead
     # incoming event can replace the current subscription. ``past_due`` counts as
     # current here: it's the real subscription with a failed payment, not replaced.
-    existing = getattr(coach, "coach_subscription", None)
+    existing = _lock_mirror(coach)
     incoming_live = status in CoachSubscription.ACTIVE_STATUSES
     existing_current = (
         existing and existing.status in CoachSubscription.LIVE_STRIPE_STATUSES
@@ -200,11 +228,13 @@ def _sync_from_subscription(sub_obj, *, deleted):
         },
     )
     # Analytics run AFTER the mirror write above and can't fail it: the mirror
-    # is what this webhook exists for.
+    # is what this webhook exists for. The savepoint matters on PostgreSQL,
+    # where a failed query aborts the whole transaction even once caught.
     try:
-        _track_subscription_change(
-            coach, sub, sub_obj, status, previous_status, already_live, existing
-        )
+        with transaction.atomic():
+            _track_subscription_change(
+                coach, sub, sub_obj, status, previous_status, already_live, existing
+            )
     except Exception:
         logger.exception(
             "Billing webhook: analytics failed for subscription %s", incoming_id
@@ -255,6 +285,7 @@ def _track_subscription_change(
         )
 
 
+@transaction.atomic
 def _nudge_status(invoice_obj, *, from_status, to_status):
     """A constrained status nudge from an invoice event, keyed by the subscription id.
 
@@ -268,6 +299,11 @@ def _nudge_status(invoice_obj, *, from_status, to_status):
     sub_id = invoice_obj.get("subscription")
     if not sub_id:
         return
+    # The same mirror row lock as ``_lock_mirror``, taken before the ledger
+    # check in ``_track_invoice_start`` (#546).
+    CoachSubscription.objects.select_for_update().filter(
+        stripe_subscription_id=sub_id
+    ).first()
     updated = CoachSubscription.objects.filter(
         stripe_subscription_id=sub_id, status=from_status
     ).update(status=to_status)
@@ -280,7 +316,8 @@ def _nudge_status(invoice_obj, *, from_status, to_status):
         return
     if to_status == CoachSubscription.Status.ACTIVE:
         try:
-            _track_invoice_start(sub_id, from_status)
+            with transaction.atomic():
+                _track_invoice_start(sub_id, from_status)
         except Exception:
             logger.exception(
                 "Billing webhook: analytics failed for subscription %s", sub_id
