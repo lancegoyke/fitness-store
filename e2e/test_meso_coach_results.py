@@ -10,40 +10,17 @@ journey's own assertions independent of whatever the athlete's browser
 session does.
 """
 
-import json
 import re
 
 import pytest
-from django.test import Client
 from django.urls import reverse
 from playwright.sync_api import expect
 
 pytestmark = pytest.mark.django_db
 
 
-def _log_a_box_squat_set(delivered_plan):
-    client = Client()
-    client.force_login(delivered_plan.athlete)
-    cell_response = client.post(
-        reverse("meso:athlete_cell_write", kwargs={"pk": delivered_plan.session.pk}),
-        data=json.dumps(
-            {"exercise_id": delivered_plan.squat.pk, "line": 1, "text": "100 x 5"}
-        ),
-        content_type="application/json",
-    )
-    assert cell_response.status_code == 200
-    log_response = client.post(
-        reverse("meso:athlete_log_session", kwargs={"pk": delivered_plan.session.pk}),
-        data=json.dumps({"status": "done", "sets": []}),
-        content_type="application/json",
-    )
-    assert log_response.status_code == 200
-
-
-def test_coach_sees_the_logged_set(page, viewport, shot, press, login, delivered_plan):
-    _log_a_box_squat_set(delivered_plan)
-
-    login(delivered_plan.coach)
+def test_coach_sees_the_logged_set(page, viewport, shot, press, login, logged_plan):
+    login(logged_plan.coach)
     page.goto(reverse("meso:roster"))
 
     # Scoped to the roster row itself (`a.meso-row`) — the athlete's name also

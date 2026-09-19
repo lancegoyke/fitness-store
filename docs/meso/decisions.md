@@ -210,11 +210,10 @@ assert the computed font size.
 without an error). Then it runs every journey at three sizes: desktop
 (1280×720), phone (390×844, touch, iPhone 13 user agent) and phone-360
 (360×780, touch, Galaxy S8 user agent; added by #508, where layouts that only
-just fit at 390 break first). The coach results journey skips phone-360 until
-#508's coach slice fixes the athlete profile, which renders ~650px wide on a
-phone. Arguments pass through to pytest: `just e2e -k phone` (both phone
-sizes), `just e2e -k athlete`, `just e2e --headed` for a visible browser,
-`PWDEBUG=1 just e2e -k athlete` to step through in the Playwright Inspector. Plain `uv run pytest` never collects `e2e/`
+just fit at 390 break first). Arguments pass through to pytest:
+`just e2e -k phone` (both phone sizes), `just e2e -k athlete`,
+`just e2e --headed` for a visible browser, `PWDEBUG=1 just e2e -k athlete` to
+step through in the Playwright Inspector. Plain `uv run pytest` never collects `e2e/`
 (`testpaths = ["app"]`, plus `-m "not e2e"` in `addopts`). If you call pytest
 directly, pass `e2e -m e2e`.
 
@@ -1699,3 +1698,25 @@ _(Append dated entries here as decisions land.)_
   moves). The logger's set row is a grid, so it fits at 320px. Neither logging
   path changed behavior. E2E gained a 360×780 viewport and a layout journey
   per page, each checked by breaking the rule it covers. No migration.
+- 2026-09-19 — **Built (#508, second slice): the coach pages on a phone, and
+  a phone fallback for the designer.** Roster, results, the athlete profile,
+  deliver, review and the template library share one breakpoint at 760px
+  (nav.css's burger breakpoint), scoped by `.meso-coach` in its own section at
+  the end of `meso.css`. Grids go to one column, inline flex rows marked
+  `.meso-phone-wrap` wrap, and each results row stacks under its exercise name
+  with a label per cell (CSS `::before` from `data-label`, so the cells' text
+  is unchanged). The topnav is shared chrome: on a phone its page buttons
+  (`{% block topnav_actions %}`, now inside a `display: contents` wrapper)
+  take a second row and the links wrap inside their own box, so no page
+  scrolls sideways at 360px. Desktop screenshots are pixel-identical to main.
+  **Decision: the designer is not made editable on a phone.** Under 900px
+  `designer.html` hides the island's mount and shows a server-rendered message
+  with links to deliver the block (the island's own `?week=` target), the
+  athlete's profile, and the roster; a template gets Templates and the roster
+  instead. Plain HTML and a media query rather than a React branch: it's there
+  before the bundle loads, and the island still mounts underneath, so a window
+  that grows past 900px switches straight to the editor. The mount now scrolls
+  (`overflow: auto`, the 1240px floor moved to the island's own root) instead
+  of clipping, so nothing is unreachable between 900 and 1240px. There is no
+  separate "athlete preview" page (the preview is a panel inside the
+  designer), so the fallback links the athlete's profile. No migration.
