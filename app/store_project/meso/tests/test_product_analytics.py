@@ -1599,6 +1599,20 @@ class TestClientAthletesNeedAnAnsweredLink:
         assert _feature(result, "push_enabled")["users"] == 0
         assert result["active_users"]["athletes"]["window"] == 0
 
+    def test_a_deleted_athletes_completion_stays_in_times(self, now):
+        """A NULL actor (deleted account) keeps its row in "times" counts."""
+        _event(
+            EventName.SESSION_COMPLETED,
+            actor=None,
+            created=now - datetime.timedelta(days=1),
+        )
+
+        row = _feature(
+            presenters.product_analytics(days=30, now=now), "session_completed"
+        )
+
+        assert (row["users"], row["times"]) == (0, 1)
+
     def test_an_ended_client_link_still_counts(self, now):
         athlete = UserFactory()
         _relationship(athlete=athlete, status=CoachAthlete.Status.ENDED)
