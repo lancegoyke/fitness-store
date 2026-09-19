@@ -555,6 +555,68 @@ class TestOtherReceiverExceptions:
         ).exists()
 
 
+class TestMissingSNSMessageId:
+    """A missing SNS envelope ``MessageId`` must not collapse distinct events.
+
+    Real SNS always sets ``MessageId``, so this only matters when signature
+    verification is off (a supported configuration, e.g. local testing).
+    Without it, every such event for the same recipient shared the
+    idempotency key ``("", recipient)``, and ``get_or_create`` silently
+    returned the first row, dropping every later distinct event. A
+    deterministic key derived from ``ses_message_id``/``event_type``/the raw
+    timestamp fixes that: redelivery of the *same* event still dedupes,
+    while distinct events (even for the same recipient) get distinct rows.
+    """
+
+    def _post_without_message_id(self, client, message, **kwargs):
+        envelope = sns_envelope(message, **kwargs)
+        del envelope["MessageId"]
+        return client.post(
+            reverse("ses_events"),
+            data=json.dumps(envelope),
+            content_type="application/json",
+        )
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_distinct_events_without_message_id_get_distinct_rows(
+        self, _verify, client
+    ):
+        self._post_without_message_id(
+            client,
+            open_message(message_id="ses-msg-derived-a", recipient="same@example.com"),
+        )
+        self._post_without_message_id(
+            client,
+            click_message(message_id="ses-msg-derived-b", recipient="same@example.com"),
+        )
+
+        events = EmailEvent.objects.filter(recipient="same@example.com")
+        assert events.count() == 2
+        keys = set(events.values_list("sns_message_id", flat=True))
+        assert len(keys) == 2
+        assert all(key.startswith("derived:") for key in keys)
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_same_envelope_without_message_id_posted_twice_dedupes(
+        self, _verify, client
+    ):
+        message = open_message(
+            message_id="ses-msg-derived-dup", recipient="dup@example.com"
+        )
+        envelope = sns_envelope(message)
+        del envelope["MessageId"]
+        payload = json.dumps(envelope)
+
+        client.post(
+            reverse("ses_events"), data=payload, content_type="application/json"
+        )
+        client.post(
+            reverse("ses_events"), data=payload, content_type="application/json"
+        )
+
+        assert EmailEvent.objects.filter(recipient="dup@example.com").count() == 1
+
+
 class TestTransientDatabaseErrors:
     """A transient ``DatabaseError`` must propagate, not get swallowed.
 

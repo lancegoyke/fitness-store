@@ -43,6 +43,7 @@ redeliver the same uninsertable event for hours. Every other exception in
 ``_record_event`` is still swallowed and logged, same as everywhere else.
 """
 
+import hashlib
 import json
 import logging
 from email.utils import parseaddr
@@ -181,6 +182,14 @@ def _record_event(
     payload, or SNS would redeliver an uninsertable event for hours.
     Everything else (malformed payloads, etc.) is likewise swallowed and
     logged, since a bad event must not take the webhook down with it.
+
+    When the envelope has no ``MessageId`` (real SNS always sets it, so this
+    only happens with signature verification off), every such event for a
+    given recipient would otherwise share the same empty half of the
+    idempotency key and collapse into one row via ``get_or_create``. Instead
+    a deterministic key is derived from ``ses_message_id``/``event_type``/
+    the raw (unparsed) ``timestamp``, so redelivery of the *same* event still
+    dedupes while distinct events get distinct rows.
     """
     try:
         mail_obj = mail_obj or {}
@@ -190,6 +199,12 @@ def _record_event(
             logger.warning(
                 "%s event with no SNS MessageId; recording with an empty key.",
                 event_type,
+            )
+            sns_message_id = (
+                "derived:"
+                + hashlib.sha256(
+                    f"{ses_message_id}|{event_type}|{timestamp}".encode()
+                ).hexdigest()[:40]
             )
 
         sent_email = (
