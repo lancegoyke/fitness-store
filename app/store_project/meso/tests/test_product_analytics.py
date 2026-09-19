@@ -1565,6 +1565,54 @@ class TestExclusionsSurviveDeletedSubjects:
         assert _feature(result, "push_enabled")["users"] == 0
 
 
+class TestClientAthletesNeedAnAnsweredLink:
+    """Adversarial review round 2: a request nobody accepted isn't coaching."""
+
+    @pytest.mark.parametrize(
+        "status",
+        [CoachAthlete.Status.PENDING_ATHLETE_REQUEST, CoachAthlete.Status.DECLINED],
+    )
+    def test_self_coach_with_an_unaccepted_request_is_not_an_athlete(self, now, status):
+        user = UserFactory()
+        _self_link(user)
+        CoachAthleteFactory(
+            coach=UserFactory(),
+            athlete=user,
+            invited_by=CoachAthlete.InvitedBy.ATHLETE,
+            status=status,
+        )
+        sub = PushSubscription.objects.create(
+            athlete=user, endpoint="https://push.example/u", p256dh="k", auth="a"
+        )
+        PushSubscription.objects.filter(pk=sub.pk).update(
+            created_at=now - datetime.timedelta(days=1)
+        )
+        event = _event(
+            EventName.SET_LOGGED, actor=user, created=now - datetime.timedelta(days=1)
+        )
+        Event.objects.filter(pk=event.pk).update(
+            subject_type="meso.sessionlog", subject_id="999999"
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+
+        assert _feature(result, "push_enabled")["users"] == 0
+        assert result["active_users"]["athletes"]["window"] == 0
+
+    def test_an_ended_client_link_still_counts(self, now):
+        athlete = UserFactory()
+        _relationship(athlete=athlete, status=CoachAthlete.Status.ENDED)
+        _event(
+            EventName.SESSION_OPENED,
+            actor=athlete,
+            created=now - datetime.timedelta(days=1),
+        )
+
+        result = presenters.product_analytics(days=30, now=now)
+
+        assert result["active_users"]["athletes"]["window"] == 1
+
+
 class TestRequestClaimedByAnOlderInvite:
     def test_request_claimed_by_an_invite_sent_before_the_window_is_a_request(
         self, now
@@ -1738,6 +1786,9 @@ class TestProductAnalyticsQueryCount:
         client.force_login(UserFactory(is_staff=True))
         url = reverse("meso:product_analytics")
 
+        with CaptureQueriesContext(connection) as empty:
+            client.get(url)
+
         self._seed(now, 1)
         with CaptureQueriesContext(connection) as small:
             client.get(url)
@@ -1746,4 +1797,5 @@ class TestProductAnalyticsQueryCount:
         with CaptureQueriesContext(connection) as large:
             client.get(url)
 
+        assert len(empty.captured_queries) == len(small.captured_queries)
         assert len(small.captured_queries) == len(large.captured_queries)
