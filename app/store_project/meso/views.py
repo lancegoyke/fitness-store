@@ -1559,6 +1559,17 @@ def athlete_log_session(request, pk):
         # athlete's own sub-line is unaffected either way.
         posted = {(cs["prescription_id"], cs["set_number"]) for cs in cleaned_sets}
         replaceable = []
+        # #541: a row about to be replaced can be the near end of a reclaim
+        # link that is still open — either a held VISIBLE parsed row (its own
+        # `source_line` names the sub-line it stands for) or a structured row
+        # that already carries one forward from an earlier save
+        # (`reclaimed_line`, set by the bulk_create below). Remembered here,
+        # before the delete destroys the row, so whichever cleaned set replaces
+        # it can carry the SAME link on to the next save instead of losing it —
+        # otherwise a second "Log session" before the athlete gets around to
+        # retyping the sub-line would sever the link `_upsert_parsed_set` needs
+        # to reuse the row instead of minting a twin.
+        carried_links = []
         for row in log.sets.filter(
             prescription_id__in=[p.pk for p in session.trainable_cells()],
         ).select_related("source_line"):
@@ -1567,6 +1578,19 @@ def athlete_log_session(request, pk):
             if row.source_line_id is not None and not _client_held(row, cleaned_sets):
                 continue
             replaceable.append(row.pk)
+            if row.source_line_id is not None:
+                link_id = row.source_line_id
+            else:
+                link_id = row.reclaimed_line_id
+            if link_id is not None:
+                carried_links.append(
+                    {
+                        "prescription_id": row.prescription_id,
+                        "set_number": row.set_number,
+                        "values": (row.reps, row.load, row.rpe),
+                        "link_id": link_id,
+                    }
+                )
         log.sets.filter(pk__in=replaceable).delete()
 
         # Drop any posted row that merely re-states a surviving parsed set. The
@@ -1641,6 +1665,15 @@ def athlete_log_session(request, pk):
                 row.set_number = number
                 row.save(update_fields=["set_number"])
 
+        # #541: a cleaned set inherits the link `carried_links` remembered for
+        # the row it's replacing ONLY when it restates that row verbatim — same
+        # slot AND the same values `_client_held` uses to decide a payload
+        # actually reposts a given row. An edit (a different value on the same
+        # slot) is a different performance and gets no link, which is exactly
+        # how the carry is meant to end: the moment the athlete or coach
+        # changes the numbers instead of retyping them back, there is no
+        # "restore" left to reuse the row for. Each carried link is consumed at
+        # most once so two cleaned sets can never both claim it.
         LoggedSet.objects.bulk_create(
             [
                 LoggedSet(
@@ -1650,6 +1683,7 @@ def athlete_log_session(request, pk):
                     reps=cs["reps"],
                     load=cs["load"],
                     rpe=cs["rpe"],
+                    reclaimed_line_id=_consume_carried_link(carried_links, cs),
                 )
                 for cs in cleaned_sets
             ]
@@ -2195,6 +2229,47 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                         ),
                         None,
                     )
+                    if existing is None:
+                        # #541: the lookup above only sees a row still linked to
+                        # THIS cell by `source_line` — but a "Log session"/"Save
+                        # progress" landing between the reclaim and the restore
+                        # replaces that row with a source-less structured copy
+                        # (see `athlete_log_session`), which carries the link
+                        # forward as `reclaimed_line` instead. Falling back to
+                        # that copy — same cell, same values — finds the SAME
+                        # performance under its new shape instead of creating a
+                        # second row for one restore. `prescription=
+                        # line_zero_cell` mirrors the primary lookup's implicit
+                        # scope (a `source_line` cell belongs to exactly one
+                        # line-0 prescription); `reclaimed_line=cell` is what
+                        # actually pins it to this sub-line.
+                        existing = next(
+                            (
+                                row
+                                for row in log.sets.filter(
+                                    source_line__isnull=True,
+                                    reclaimed_line=cell,
+                                    prescription=line_zero_cell,
+                                )
+                                if parsing.same_logged_set(
+                                    (row.reps, row.load, row.rpe),
+                                    (values["reps"], values["load"], values["rpe"]),
+                                )
+                            ),
+                            None,
+                        )
+                        if existing is not None:
+                            # Re-link it to this cell instead of leaving it a
+                            # dangling structured copy — keeps its `pk` (and
+                            # therefore its history/analytics identity) AND its
+                            # `set_number`, and clears `reclaimed_line` so it
+                            # doesn't keep matching this fallback after it's
+                            # already been claimed.
+                            existing.source_line = cell
+                            existing.reclaimed_line = None
+                            existing.save(
+                                update_fields=["source_line", "reclaimed_line"]
+                            )
                     if existing is not None:
                         created = existing
                         # It was already logged, so there is nothing to
@@ -2332,6 +2407,36 @@ def _client_held(row, cleaned_sets):
         )
         for cs in cleaned_sets
     )
+
+
+def _consume_carried_link(carried_links, cleaned_set):
+    """Claim the reclaim link a just-deleted row carried forward (#541), if any.
+
+    ``carried_links`` (built in ``athlete_log_session``, right before the
+    delete it survives) holds one entry per replaced row that still points at
+    an open reclaim — either the row's own ``source_line`` (a held VISIBLE
+    parsed row) or a ``reclaimed_line`` it already carried in from an earlier
+    save. A cleaned set only inherits that link when it exactly restates the
+    row it replaced: same slot (``prescription``, ``set_number``) AND the same
+    values — the same test ``_client_held`` uses to decide a payload actually
+    reposts a given row, so a value edit on the same slot correctly gets no
+    link at all.
+
+    Mutates ``carried_links``, removing the entry it matches, so the same
+    reclaim can never be handed to two different cleaned sets.
+    """
+    for index, candidate in enumerate(carried_links):
+        if candidate["prescription_id"] != cleaned_set["prescription_id"]:
+            continue
+        if candidate["set_number"] != cleaned_set["set_number"]:
+            continue
+        if not parsing.same_logged_set(
+            candidate["values"],
+            (cleaned_set["reps"], cleaned_set["load"], cleaned_set["rpe"]),
+        ):
+            continue
+        return carried_links.pop(index)["link_id"]
+    return None
 
 
 def _cell_warn_or_false(cell, line_zero_cell):
