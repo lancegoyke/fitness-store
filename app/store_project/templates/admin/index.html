@@ -8,16 +8,27 @@ loader resolves {% extends "admin/index.html" %} inside a template that IS
 bundled with django.contrib.admin), same pattern as
 templates/admin/challenges/challenge/change_form.html's
 {% extends "admin/change_form.html" %}.
+
+This overrides `content`, not `sidebar`: admin/base.html's `sidebar` block
+closes its own `<div id="content-related">`, so appending after
+`{{ block.super }}` there makes the module a stray sibling that sinks below
+`#content-related`, i.e. below the whole main column for a superuser with a
+long app list. `content` is Django's own stock block (reproduced below from
+django/contrib/admin/templates/admin/index.html) with the Dashboards module
+inserted first inside `#content-main`, ahead of the app list, so it's always
+visible regardless of app-list length.
 {% endcomment %}
 
-{% block sidebar %}
-  {{ block.super }}
-  <div class="module" id="dashboards-module">
-    <h2>Dashboards</h2>
-    <ul class="actionlist">
-      <li><a href="{% url 'notifications:email_dashboard' %}">Email deliverability</a></li>
-      <li><a href="{% url 'meso:usage_dashboard' %}">Meso usage</a></li>
-      <li><a href="{% url 'meso:tour_funnel' %}">Meso tour funnel</a></li>
-    </ul>
+{% block content %}
+  <div id="content-main" class="app-list">
+    <div class="module" id="dashboards-module">
+      <table>
+        <caption>Dashboards</caption>
+        <tr><th scope="row"><a href="{% url 'notifications:email_dashboard' %}">Email deliverability</a></th></tr>
+        <tr><th scope="row"><a href="{% url 'meso:usage_dashboard' %}">Meso usage</a></th></tr>
+        <tr><th scope="row"><a href="{% url 'meso:tour_funnel' %}">Meso tour funnel</a></th></tr>
+      </table>
+    </div>
+    {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
   </div>
 {% endblock %}
