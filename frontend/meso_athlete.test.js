@@ -1816,6 +1816,38 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     expect(calls).toEqual([1, 2, "log"]);
   });
 
+  it("waits for a line blurred while Log session flushes the queue", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].sub_lines.push({ line: 2, text: "110 x 5" });
+    c.exercises[0].sub_lines[0].queued = true;
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "RPE 8" });
+    const calls = [];
+    const release = {};
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      if (url !== CELL_URL) {
+        calls.push("log");
+        return res({ body: { log: { status: "done", sets: [] } } });
+      }
+      const { line } = JSON.parse(opts.body);
+      calls.push(line);
+      await new Promise((r) => {
+        release[line] = r;
+      });
+      return res({ body: { ok: true, cell: { warn: false } } });
+    });
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(calls).toEqual([1])); // the queued line
+    c.saveCell(c.exercises[0], 2); // blurred mid-flush
+    await vi.waitFor(() => expect(calls).toEqual([1, 2]));
+    release[1]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual([1, 2]); // the log waits for line 2 to land
+    release[2]();
+    await saving;
+    expect(calls).toEqual([1, 2, "log"]);
+  });
+
   it("takes 'Saved ✓' down when a line fails after it went up", async () => {
     vi.useFakeTimers();
     const c = cellLogger({ logUrl: LOG_URL });

@@ -143,6 +143,7 @@ function createLogger() {
     newRecords: [], // PRs the last save beat (Phase 4c) — the celebration toast
     _oneRmTimers: {}, // per-exercise debounce handles for the manual-1RM POST
     _cellSaves: {}, // per-cell promise chain, so blurs reach the server in order
+    _blurSaves: 0, // line saves started by a blur, for `settleLines`
     _flushing: null, // the flush pass in progress, if any
     _flushAgain: false, // a flush was asked for mid-pass; run one more
 
@@ -446,16 +447,18 @@ function createLogger() {
 
     // Let every line save in flight land, then flush the outbox, so whatever
     // follows is sent after the lines (#527). The lines stay editable while
-    // this waits, so a blur can start a save meanwhile: wait for those too.
+    // this waits, so a blur can start a save meanwhile: go round again until
+    // one passes without. Only blurs count — the flush's own replays start
+    // saves too, and counting those would loop for as long as it's offline.
     async settleLines() {
-      let waited = [];
-      for (;;) {
-        const inFlight = Object.values(this._cellSaves);
-        if (inFlight.every((p) => waited.includes(p))) break;
-        waited = inFlight;
-        await Promise.all(inFlight.map((p) => p.catch(() => {})));
-      }
-      await this.flushQueue();
+      let blurs;
+      do {
+        blurs = this._blurSaves;
+        await Promise.all(
+          Object.values(this._cellSaves).map((p) => p.catch(() => {})),
+        );
+        await this.flushQueue();
+      } while (this._blurSaves !== blurs);
     },
 
     // ---- offline queue (S7, #527) ----
@@ -795,6 +798,7 @@ function createLogger() {
     // save went (see `_postCell`).
     saveCell(ex, line, { fromQueue = false } = {}) {
       if (!this.cellUrl || !ex) return Promise.resolve("skipped");
+      if (!fromQueue) this._blurSaves += 1;
       const key = ex.id + ":" + line;
       const previous = this._cellSaves[key] || Promise.resolve();
       const run = previous
