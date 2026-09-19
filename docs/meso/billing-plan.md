@@ -211,7 +211,12 @@ already clears it for the one in-app path that starts a trial.
 trial end. The existing `already_live` / ledger check already gives that: the
 `created(trialing)` event isn't `already_live` (no matching `stripe_subscription_id`
 yet) so it tracks; the later `updated(active)` *is* already live (same
-subscription id, a status already in `ACTIVE_STATUSES`) so it doesn't.
+subscription id, a status already in `ACTIVE_STATUSES`) so it doesn't. One
+ordering needs help: when `deleted` arrives before its own `created`, trap 5
+ignores the late `created`, so nothing would record that the subscription ever
+started. The handler then writes the missing `subscription_started` +
+`subscription_cancelled` pair, marked `backfilled=True`, with `previous` and
+`reason` left blank because they were on events already handled.
 
 **Local timezone display.** Dates are shown in the coach's local timezone (a
 small script rewrites the server's UTC date), matching Stripe's own Checkout
