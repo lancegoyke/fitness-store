@@ -448,6 +448,31 @@ class TestUnderLockRecheck:
         log.refresh_from_db()
         assert log.status == SessionLog.Status.PENDING
 
+    def test_a_log_moved_to_another_session_before_the_lock_stays_pending(
+        self, client, monkeypatch
+    ):
+        # `settle_log` reads the log's session before locking it. If the log
+        # is reassigned in between (admin), the lock guards the wrong session,
+        # so the sweep must back off rather than settle under it.
+        from store_project.meso.models import Session
+
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "100 x 5")
+        log = set_activity(the_log(s.session, s.athlete), quiet_since())
+        other = day(s.week, day_number=2, name="Upper")
+        real = Session.objects.select_for_update
+
+        def reassign_then_lock(*args, **kwargs):
+            SessionLog.objects.filter(pk=log.pk).update(session=other)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(Session.objects, "select_for_update", reassign_then_lock)
+
+        assert settle.settle_log(log.pk, cutoff=timezone.now() - QUIET) is False
+        log.refresh_from_db()
+        assert log.status == SessionLog.Status.PENDING
+
     def test_sets_deleted_after_selection_stops_the_settle(self, client):
         s = seed()
         client.force_login(s.athlete)

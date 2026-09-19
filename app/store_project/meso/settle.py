@@ -140,12 +140,19 @@ def settle_log(pk, *, cutoff):
         # were cleared. Any of those means "not settleable, right now" — leave
         # the row exactly as it is and let the next hourly pass re-judge it on
         # its own, then-current merits.
+        #
+        # The log row itself is locked too (Session first, then the log — the
+        # order the write paths take them in), and it must still belong to the
+        # session we locked: `session_id` was read before that lock, and an
+        # admin reassigning the log in between would leave us guarding the
+        # wrong session while a blur on the new one edits it.
         log = (
             SessionLog.objects.filter(pk=pk)
             .select_related("session__week__mesocycle__plan", "athlete")
+            .select_for_update(of=("self",))
             .first()
         )
-        if log is None:
+        if log is None or log.session_id != session_id:
             return False
         newest = (
             SessionLog.objects.filter(

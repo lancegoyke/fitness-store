@@ -53,11 +53,13 @@ disagrees, these win:
   Once the sweep can finish a log behind an open tab, that stale "pending" would
   silently undo the settle.
 - **Activity** is `SessionLog.last_activity_at`, bumped by "Save progress" and
-  "Log session", and by a blur only when the line's text actually changed.
+  "Log session", and by a blur only when the line's text or the sets it
+  derives changed (an idle focus-and-leave doesn't restart the clock).
 - **Settle side effects** match "Log session": `refresh_one_rms` for the settled
   sets' lifts, then the self-variant tour's results-step advance. The settle
   takes the same `Session` row lock as both write paths and re-checks everything
-  under it.
+  under it; `refresh_one_rms` now walks lifts in key order so the sweep and a
+  concurrent save can't deadlock on the `AthleteOneRm` rows.
 - **Deferred to a follow-up PR:** the confirmed PR notification (channel still
   to decide) and any persisted `PersonalRecord` snapshot.
 
