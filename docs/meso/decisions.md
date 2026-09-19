@@ -239,6 +239,17 @@ app's factories. Every test gets a fresh browser context with service workers
 blocked, so the athlete PWA's cache can't hide a server change. Wait with
 `expect()` and `page.expect_response()`, never a sleep.
 
+A journey that only makes sense at desktop (the designer, the agent) runs once
+with `@pytest.mark.parametrize("viewport", ["desktop"], indirect=True)`. The
+agent journey turns on the fake agent with pytest-django's `settings` fixture
+(`settings.MESO_AGENT_FAKE = True`). That changes settings for the whole
+process, so the `live_server` thread sees it too, and the test settings
+already run the agent inline. The test database is in-memory SQLite, and
+`live_server` shares its one connection across its request threads. Two
+requests at the same moment can collide there ("no such savepoint", a 500)
+even though Postgres handles them fine. A journey where the page sends two
+writes at once can fail for that reason alone.
+
 **`data-testid` convention.** Kebab-case `<surface>-<thing>[-<action>]`, the
 same as the React designer island: `session-log`, `sub-line-input`,
 `results-logged`. Add one when a journey needs an element that has no stable
@@ -1767,3 +1778,24 @@ _(Append dated entries here as decisions land.)_
   test that stood in for it. New fast tests: the claim page's policy, a claim
   POST under enforced CSRF with the Origin a browser sends under that policy,
   and both signup links. No migration.
+- 2026-09-19 — **Built (#506, third slice): the agent, offline logging and
+  the settle sweep in the E2E suite.** This finishes the issue's "Later
+  journeys" list. A subscribed coach sends the agent a request from the
+  designer, gets the fake agent's three changes and a review link, approves
+  the swap and the load bump, rejects the set trim, and applies. Back in the
+  designer, and after a reload, the grid shows the new exercise name and load,
+  and the rejected trim didn't land. That journey runs at desktop only. At
+  every viewport, an athlete with the network cut fills a Set row and presses
+  "Log session": "Saved offline" shows and the queue holds the save. Back
+  online, the queue drains, and after a reload the session is Logged with the
+  set, on the page and in the database. A PENDING log with a typed set,
+  settled by `settle.settle_log` as the sweep would, reads "Logged" on the
+  athlete's session page, and the coach's results show the set. A settled log
+  looks exactly like a tapped one on both pages, since neither reads anything
+  but the status. The offline journey found #527: a line typed offline under
+  "what you did" isn't queued and nothing retries it on reconnect, so after
+  "Log session" the athlete gets "Saved ✓" and a Logged session with no set.
+  That test is a strict xfail on #527 and asserts only the outcome, so a fix
+  makes it XPASS. One testid, `review-change` on each review card. Each
+  journey was checked by breaking what it covers. No app behavior changed, no
+  migration.

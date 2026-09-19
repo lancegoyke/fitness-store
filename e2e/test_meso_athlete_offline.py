@@ -1,19 +1,18 @@
 """Athlete journey: log a set with no signal, then reconnect (issue #506, third slice).
 
-Athletes log sets in gyms with bad signal. `meso_athlete.js` (`save()`, ~:251)
-already has an offline queue for the **structured** Set-row path: a fetch
-network failure stashes the payload in `localStorage["meso-log-queue"]` and
-flushes it on the window `online` event. Test A drives that queue for real, in
-a real browser, with real offline network conditions (`context.set_offline`) —
-nothing else in this suite exercises it.
+Athletes log in gyms with bad signal, and a set lost offline is the worst
+failure the athlete app can have. `meso_athlete.js` queues a "Log session" /
+"Save progress" that can't reach the server: `save()` stashes its payload in
+`localStorage["meso-log-queue"]` and `flushQueue()` replays it on the window
+`online` event. The first test drives that queue in a real browser with the
+network really cut (`context.set_offline`).
 
-Test B checks the *other*, newer way to log a set — a typed sub-line
-(`sub-line-input` -> `saveCell` -> `_postCell` -> `athlete_cell_write`), which
-does NOT enqueue on a network failure (it only sets `entry.saveError`, and
-nothing retries it). Since 5a, typing a line is the main way athletes log, so
-this is the offline gap that actually matters day to day. See the module-level
-docstring in `meso_athlete.js` and the class docstring below for what it does
-today.
+That queue only carries the structured Set rows (load × reps). A line typed
+under "what you did" (`sub-line-input` → `saveCell` → `_postCell` →
+`athlete_cell_write`), the main way athletes log since 5a, isn't queued: a
+failed write shows "couldn't save" and nothing retries it on reconnect. The
+second test asserts what the athlete needs from that path and is a strict
+xfail on #527.
 """
 
 import pytest
@@ -24,12 +23,10 @@ from store_project.meso.models import SessionLog
 
 pytestmark = pytest.mark.django_db
 
-# The queued/synced hints carry a curly apostrophe and a checkmark glyph in
-# the template (`&#8217;`, `&#10003;`) — matched here byte for byte, not
-# approximated with a straight quote.
+# The template writes these with `&#8217;` and `&#10003;`, so they're matched
+# with the curly apostrophe and the check mark, not a straight quote.
 SAVED_OFFLINE_TEXT = "Saved offline — will sync when you’re back."
 SAVED_TEXT = "Saved ✓"
-COULD_NOT_SAVE_TEXT = "couldn’t save"
 
 
 def _box_squat_card(page):
@@ -132,24 +129,42 @@ def test_athlete_logs_a_set_offline_and_it_syncs(
     assert any(s.load == "100" and s.reps == "5" for s in logged_sets), logged_sets
 
 
+# Counts the page's fetches still in flight. Added before the page loads, so
+# it wraps every request `meso_athlete.js` makes. The xfail test waits for it
+# to reach 0 before reloading, so whatever a fix sends on reconnect has landed
+# before the page is read back.
+INFLIGHT_JS = """(() => {
+  const fetch = window.fetch;
+  window.__e2eInflight = 0;
+  window.fetch = (...args) => {
+    window.__e2eInflight += 1;
+    return fetch(...args).finally(() => { window.__e2eInflight -= 1; });
+  };
+})();"""
+
+
 @pytest.mark.xfail(
     strict=True,
-    reason="typed sub-line is not queued offline — issue TBD",
+    reason="#527: a line typed offline isn't queued or retried on reconnect",
 )
 def test_typed_line_offline_survives_reconnect(
     page, context, viewport, shot, press, login, delivered_plan
 ):
-    """What the brief predicts: a typed-then-offline set is silently lost.
+    """A line typed offline is saved once the athlete is back online.
 
-    `saveCell`/`_postCell` (meso_athlete.js ~:550) has no offline queue of its
-    own — a network failure just sets `entry.saveError = true` and nothing
-    retries it, ever (not on `online`, not on the next blur). `save()`'s
-    payload is built from the structured Set rows only, so queuing a "Log
-    session" press afterwards doesn't carry the typed text either. An athlete
-    who types "100 x 5" offline and presses "Log session" ends up, after
-    reconnecting, with a session marked Logged that has no logged set and an
-    empty sub-line once reloaded.
+    Only the outcome is asserted, never today's broken intermediate states
+    ("couldn't save" beside the line, "Saved ✓" beside that). A fix may show
+    something else on the way, and a strict xfail that pinned today's
+    behavior would keep failing after the fix instead of XPASSing.
+
+    For whoever fixes #527: a fix that retries the line on `online` after
+    `flushQueue()` finishes makes this pass at every viewport. One that sends
+    both at once doesn't, here. `live_server` on the in-memory SQLite test
+    database shares one connection across its request threads, so two
+    requests at the same moment collide ("no such savepoint", a 500) and the
+    queued log never drains. Postgres in production has no such problem.
     """
+    page.add_init_script(INFLIGHT_JS)
     login(delivered_plan.athlete)
     page.goto(reverse("meso:athlete_session", kwargs={"pk": delivered_plan.session.pk}))
     expect(page.get_by_test_id("session-status")).to_have_text("To do")
@@ -162,50 +177,37 @@ def test_typed_line_offline_survives_reconnect(
     first_line = sub_lines.first
     press(first_line)
     first_line.fill("100 x 5")
-
-    # Blur it the way a real user would — Tab on desktop, tapping the next
-    # line on phone — same as `test_meso_athlete_logging.py`.
+    # Blur it the way a real user would, as `test_meso_athlete_logging.py`
+    # does: Tab on desktop, tap the next line on phone.
     if viewport["is_phone"]:
         sub_lines.nth(1).tap()
     else:
         first_line.press("Tab")
 
-    save_error = card.get_by_test_id("sub-line-save-error").first
-    expect(save_error).to_be_visible()
-    expect(save_error).to_have_text(COULD_NOT_SAVE_TEXT)
-    shot("01-offline-blur")
-
     press(page.get_by_test_id("session-log"))
-    offline_msg = page.get_by_text(SAVED_OFFLINE_TEXT)
-    expect(offline_msg).to_be_visible()
-    expect(page.get_by_test_id("session-status")).to_have_text("Logged")
-    shot("02-offline-log")
+    expect(page.get_by_text(SAVED_OFFLINE_TEXT)).to_be_visible()
+    shot("01-offline")
 
     context.set_offline(False)
     page.wait_for_function("() => window.__e2eOnlineFired === true", timeout=5000)
     page.wait_for_function(
         "() => JSON.parse(localStorage.getItem('meso-log-queue') || '[]').length === 0"
     )
-    # The stale "couldn't save" from the sub-line write never gets retried —
-    # only the structured `save()` queue flushes on `online` — so it's still
-    # showing right beside the fresh "Saved (check)" from that flush.
-    expect(page.get_by_text(SAVED_TEXT)).to_be_visible()
-    expect(save_error).to_be_visible()
-    shot("03-online")
+    shot("02-back-online")
+
+    # Back online, nothing may still say the line didn't save. Today this is
+    # where it fails: "couldn't save" stays beside the line (#527). 3s, not
+    # the 5s default, keeps the expected failure cheap at three viewports.
+    expect(card.get_by_test_id("sub-line-save-error").first).to_be_hidden(timeout=3000)
+    page.wait_for_function("() => window.__e2eInflight === 0")
 
     page.reload()
     card = _box_squat_card(page)
-    first_line = card.get_by_test_id("sub-line-input").first
-    shot("04-reloaded")
-
-    # The claim under test: the typed line and its parsed set survived.
-    expect(first_line).to_have_value("100 x 5")
-    logged_sets = list(
-        LoggedSet.objects.filter(
-            session_log__session=delivered_plan.session,
-            session_log__athlete=delivered_plan.athlete,
-            load="100",
-            reps="5",
-        )
-    )
-    assert logged_sets
+    expect(card.get_by_test_id("sub-line-input").first).to_have_value("100 x 5")
+    shot("03-reloaded")
+    assert LoggedSet.objects.filter(
+        session_log__session=delivered_plan.session,
+        session_log__athlete=delivered_plan.athlete,
+        load="100",
+        reps="5",
+    ).exists()
