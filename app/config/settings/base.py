@@ -370,6 +370,13 @@ MESO_SANDBOX_MAX_CONCURRENT = int(os.environ.get("MESO_SANDBOX_MAX_CONCURRENT", 
 MESO_DEMO_VIDEO_URL = os.environ.get("MESO_DEMO_VIDEO_URL", "")
 MESO_DEMO_VIDEO_POSTER_URL = os.environ.get("MESO_DEMO_VIDEO_POSTER_URL", "")
 
+# First-party usage events (#509, `store_project.analytics.track`). With this
+# on, `track()` raises on a name outside `analytics.events.EventName`; off, it
+# logs and drops the event. On in local dev (DEBUG) and under test so a typo
+# fails at the line that made it; off in production so analytics can never
+# fail a user's request.
+ANALYTICS_STRICT_EVENT_NAMES = bool(DEBUG)
+
 # Cloudflare Turnstile (contact form bot protection)
 # ------------------------------------------------------------------------------
 # Replaces Google reCAPTCHA v2, whose checkbox is now solved in bulk for a

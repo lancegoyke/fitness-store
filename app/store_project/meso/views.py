@@ -39,6 +39,8 @@ from django.views.decorators.http import require_GET
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView
 
+from store_project.analytics.events import EventName
+from store_project.analytics.track import track
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
@@ -791,10 +793,26 @@ def plan_create(request, pk):
         plan = existing or relationship.create_plan()
         if draft and existing is None:
             draft_batch = _reserve_plan_draft(request, plan)
+    # analytics (#509): only a freshly-created plan counts — reopening an
+    # existing one on a second POST is not a new "plan created" action.
+    if existing is None:
+        track(
+            EventName.PLAN_CREATED,
+            actor=request.user,
+            subject=plan,
+            athlete=str(relationship.athlete_id),
+            draft=draft,
+        )
     # Dispatch (and bump the plan) outside the lock, mirroring ``agent_propose``.
     if draft_batch is not None:
         agent_jobs.dispatch_proposal(draft_batch.pk)
         _touch_plan(plan)
+        track(
+            EventName.AGENT_PROPOSAL_RUN,
+            actor=request.user,
+            subject=draft_batch,
+            trigger=draft_batch.trigger,
+        )
     # The tour marker (``tour=1``) picks the step from ``draft`` ("agent" vs
     # "designer"). #441 P3-2 also counts the organic twin while touring — but
     # only when this POST's action shape (``draft`` → agent, plain → designer)
@@ -1323,6 +1341,10 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         session = _athlete_session_or_404(self.request.user, kwargs["pk"])
+        # session_opened analytics (#509): GET only — Django routes HEAD
+        # through ``get()`` (and so this same context build) too.
+        if self.request.method == "GET":
+            track(EventName.SESSION_OPENED, actor=self.request.user, subject=session)
         sess = presenters.athlete_session(session, self.request.user)
         ctx["active"] = "training"
         ctx["session"] = sess
@@ -1415,6 +1437,11 @@ def athlete_log_session(request, pk):
         )
         if log is None:
             log = SessionLog(session=session, athlete=request.user)
+        # set_logged / session_completed analytics (#509): captured right here,
+        # before this save changes anything, so they describe the log's state
+        # walking in.
+        sets_before = log.sets.count() if log.pk else 0
+        was_done = log.status == SessionLog.Status.DONE
         # Status is STICKY once DONE (5b, settle.py): a posted "pending" never
         # downgrades a DONE log. The client already intends this — "Save
         # progress" posts `markDone ? "done" : this.status`, the status the page
@@ -1568,6 +1595,13 @@ def athlete_log_session(request, pk):
                 for cs in cleaned_sets
             ]
         )
+        # Net growth, not "a row was written" (#509 set_logged): this save
+        # REPLACES rows (delete + bulk_create), so row identity doesn't survive
+        # it — a resave, an edit, or reposting sets the typed path already
+        # counted all replace-then-recreate their own rows and must add zero.
+        # Known undercount: removing one set and adding another in the same
+        # save nets zero.
+        new_sets = max(0, log.sets.count() - sets_before)
         # Refresh the athlete's persisted 1RM for this session's lifts from their
         # *completed* logs. Run on every save, not only a done one: a save that
         # edits an already-DONE log's sets (a heavier set, a correction, a
@@ -1584,6 +1618,10 @@ def athlete_log_session(request, pk):
             list(session.trainable_cells()),
             session.week.mesocycle.plan.unit,
         )
+    for _ in range(new_sets):
+        track(EventName.SET_LOGGED, actor=request.user, subject=log, via="log")
+    if not was_done and log.status == SessionLog.Status.DONE:
+        track(EventName.SESSION_COMPLETED, actor=request.user, subject=log, via="log")
     # #441 P3-5: the results step auto-advances once the coach *completes* one of
     # their own self-link sessions. Gated on the step's own predicate so a
     # ``pending`` "save progress" — or a done log the coach makes as an athlete
@@ -2038,6 +2076,11 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
 
             created = None
             unchanged = False
+            # set_logged analytics (#509): only the CREATE branch below mints a
+            # genuinely new set, and only when this line wasn't already
+            # showing one of its own — an unchanged re-blur or a value edit
+            # both delete-then-recreate an EXISTING performance, not a new one.
+            is_new_set = False
             if wants_set:
                 values = {
                     # NOT `parsed["reps"]` — a set's right-hand side lands in
@@ -2118,6 +2161,7 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                             set_number=number,
                             **values,
                         )
+                        is_new_set = previous is None
                     # Reps and load ONLY. The record is derived from those two
                     # (`personal_records._performed_sets` never reads RPE), so
                     # including RPE here made a pure RPE correction —
@@ -2163,6 +2207,9 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                     cells,
                     session.week.mesocycle.plan.unit,
                 )
+
+        if is_new_set:
+            track(EventName.SET_LOGGED, actor=athlete, subject=log, via="typed")
 
         # The toast read gets its OWN savepoint, deliberately. Inside the one
         # above, a failure here would roll back the upsert with it — throwing
@@ -2486,10 +2533,20 @@ def push_subscribe(request):
     if not _is_safe_push_endpoint(endpoint):
         return HttpResponseBadRequest("endpoint must be an https URL to a public host.")
 
-    PushSubscription.objects.update_or_create(
+    # push_subscribed analytics (#509): ``meso_push.js`` re-POSTs the same
+    # subscription on every page load while permission stays granted, so only
+    # a NEW endpoint, or one changing hands to a different athlete, counts.
+    prior_owner = (
+        PushSubscription.objects.filter(endpoint=endpoint)
+        .values_list("athlete_id", flat=True)
+        .first()
+    )
+    subscription, _created = PushSubscription.objects.update_or_create(
         endpoint=endpoint,
         defaults={"athlete": request.user, "p256dh": p256dh, "auth": auth},
     )
+    if prior_owner != request.user.pk:
+        track(EventName.PUSH_SUBSCRIBED, actor=request.user, subject=subscription)
     return JsonResponse({"ok": True}, status=201)
 
 
@@ -2681,7 +2738,8 @@ def athlete_request_coach(request):
         )
         return redirect("meso:athlete_home")
 
-    CoachAthlete.request(athlete=request.user, coach=coach)
+    link = CoachAthlete.request(athlete=request.user, coach=coach)
+    track(EventName.COACH_REQUEST_SENT, actor=request.user, subject=link)
     athlete = request.user
     roster_url = request.build_absolute_uri(reverse("meso:roster"))
 
@@ -2805,7 +2863,8 @@ def coach_invite(request):
     if not billing_access.can_add_athlete(request.user):
         messages.error(request, SEAT_LIMIT_MESSAGE)
         return redirect("meso:roster")
-    invite, _ = CoachInvite.open_for(coach=request.user, email=email)
+    invite, created = CoachInvite.open_for(coach=request.user, email=email)
+    track(EventName.INVITE_SENT, actor=request.user, subject=invite, new=created)
     accept_url = request.build_absolute_uri(
         reverse("meso:invite_claim", kwargs={"token": invite.token})
     )
@@ -2988,6 +3047,7 @@ def invite_claim(request, token):
                 except InvalidTransition as exc:
                     messages.error(request, str(exc))
                     return redirect("meso:roster")
+                track(EventName.INVITE_ACCEPTED, actor=request.user, subject=invite)
                 messages.success(
                     request,
                     f"You're now training with {invite.coach.display_name()}.",
@@ -4584,7 +4644,9 @@ def plan_batch_deliver(request, plan_id):
                     delivered_at=now,
                     payload=serialize_week_snapshot(week),
                 )
-            _notify_athlete_block_delivered(request, copy, block, len(live_weeks))
+            _notify_athlete_block_delivered(
+                request, copy, block, len(live_weeks), via="batch"
+            )
             delivered_names.append(relationship.athlete.display_name())
     messages.success(
         request,
@@ -4639,6 +4701,13 @@ def template_use(request, plan_id):
         return redirect("meso:template_library")
     with transaction.atomic():
         copy = plan.duplicate_for(relationship, status=Plan.Status.ACTIVE)
+    track(
+        EventName.TEMPLATE_IMPORTED,
+        actor=request.user,
+        subject=copy,
+        template=plan.pk,
+        athlete=str(relationship.athlete_id),
+    )
     messages.success(
         request,
         f"Started {copy.title} for {relationship.athlete.display_name()}.",
@@ -4646,7 +4715,9 @@ def template_use(request, plan_id):
     return redirect("meso:designer_plan", plan_id=copy.pk)
 
 
-def _notify_athlete_block_delivered(request, plan, mesocycle, week_count):
+def _notify_athlete_block_delivered(
+    request, plan, mesocycle, week_count, *, via="deliver"
+):
     """Best-effort: ONE email + ONE push that a whole **block** was delivered.
 
     The deliver nudge (P3; per-week notification retired with the 2d live+notify
@@ -4658,11 +4729,25 @@ def _notify_athlete_block_delivered(request, plan, mesocycle, week_count):
     independently best-effort — a failure in one is swallowed and logged, never a
     500 or a rolled-back deliver, and never blocks the other.
 
+    Also the ``block_delivered`` analytics choke point (#509) for both callers
+    (``plan_deliver`` via ``via="deliver"``, ``plan_batch_deliver`` via
+    ``via="batch"``) — tracked synchronously here, not inside ``_send``, which
+    only runs once the transaction actually commits.
+
     Sandbox gate (S4): a sandbox coach's deliveries never notify — there is no
     real person behind a seeded demo athlete.
     """
     if meso_sandbox.is_sandbox(plan.coach):
         return
+    track(
+        EventName.BLOCK_DELIVERED,
+        actor=request.user,
+        subject=mesocycle,
+        plan=plan.pk,
+        athlete=str(plan.athlete.pk),
+        weeks=week_count,
+        via=via,
+    )
     home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
     unsubscribe_url = request.build_absolute_uri(
         reverse(
@@ -4875,6 +4960,12 @@ def agent_propose(request, plan_id):
     # lock so neither holds the coach row.
     agent_jobs.dispatch_proposal(batch.pk)
     _touch_plan(plan)
+    track(
+        EventName.AGENT_PROPOSAL_RUN,
+        actor=request.user,
+        subject=batch,
+        trigger=batch.trigger,
+    )
     return JsonResponse(
         {
             "ok": True,
@@ -4991,6 +5082,13 @@ def batch_apply(request, batch_id):
     with transaction.atomic():
         record_plan_action(batch.plan, "Applied agent changes")
         result = agent_apply.apply_batch(batch)
+    track(
+        EventName.BATCH_APPLIED,
+        actor=request.user,
+        subject=batch,
+        applied=result["applied"],
+        skipped=result["skipped"],
+    )
     # Where the review screen sends the coach next: the deliver screen, pinned to
     # the block the batch actually edited. A bare deliver URL resolves its own
     # week via ``current_week(plan)`` — the plan's earliest live week — so a coach

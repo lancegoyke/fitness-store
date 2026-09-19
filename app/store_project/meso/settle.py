@@ -68,6 +68,9 @@ from django.db.models import OuterRef
 from django.db.models import Subquery
 from django.utils import timezone
 
+from store_project.analytics.events import EventName
+from store_project.analytics.track import track
+
 from . import one_rm as meso_one_rm
 from . import tour as meso_tour
 from .models import LoggedSet
@@ -200,6 +203,7 @@ def settle_log(pk, *, cutoff):
         meso_tour.advance_self_step_if_complete(log.athlete, "results")
     except Exception:
         logger.exception("meso settle: tour advance failed for SessionLog %s", pk)
+    track(EventName.SESSION_COMPLETED, actor=log.athlete, subject=log, via="settle")
     return True
 
 

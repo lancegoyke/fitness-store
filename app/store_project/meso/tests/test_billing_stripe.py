@@ -103,19 +103,18 @@ def _sub_event(
     item_id="si_1",
     status="active",
     period_end=1900000000,
+    cancellation_details=None,
 ):
-    return {
-        "type": type_,
-        "data": {
-            "object": {
-                "id": sub_id,
-                "customer": customer,
-                "status": status,
-                "current_period_end": period_end,
-                "items": {"data": [{"id": item_id}]},
-            }
-        },
+    obj = {
+        "id": sub_id,
+        "customer": customer,
+        "status": status,
+        "current_period_end": period_end,
+        "items": {"data": [{"id": item_id}]},
     }
+    if cancellation_details is not None:
+        obj["cancellation_details"] = cancellation_details
+    return {"type": type_, "data": {"object": obj}}
 
 
 def _invoice_event(type_, *, customer="cus_hook", sub_id="sub_1"):

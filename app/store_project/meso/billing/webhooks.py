@@ -31,6 +31,9 @@ import stripe
 from django.conf import settings
 from django.contrib.auth import get_user_model
 
+from store_project.analytics.events import EventName
+from store_project.analytics.models import Event
+from store_project.analytics.track import track
 from store_project.meso.models import CoachSubscription
 
 logger = logging.getLogger(__name__)
@@ -112,6 +115,23 @@ def _coach_for_customer(customer_id):
     return coach
 
 
+def _recorded(name, sub_id):
+    """Whether a ``name`` event was already written for this Stripe subscription.
+
+    The ``Event`` table doubles as the ledger of which Stripe subscriptions
+    have started/cancelled (#509 review) — the mirror's status alone can't
+    tell "started" from "recovered from incomplete" apart (an ``incomplete``
+    subscription reads ``past_due`` locally, never ``already_live``), and it
+    can't tell a subscription that was never live from one that was without
+    remembering whether a ``subscription_started`` was ever written.
+
+    The ledger is only as complete as ``track()``, which drops a failed insert
+    after logging it: a start that failed to record also suppresses that
+    subscription's later cancel from ``past_due``.
+    """
+    return Event.objects.filter(name=name, props__subscription=sub_id).exists()
+
+
 def _sync_from_subscription(sub_obj, *, deleted):
     """Upsert the coach's ``CoachSubscription`` from a Stripe subscription object."""
     coach = _coach_for_customer(sub_obj.get("customer"))
@@ -157,7 +177,15 @@ def _sync_from_subscription(sub_obj, *, deleted):
     # stale event for a *different* subscription, never to resize a quantity).
     items = (sub_obj.get("items") or {}).get("data") or [{}]
     item = items[0]
-    CoachSubscription.objects.update_or_create(
+    # subscription_started/cancelled analytics (#509): read off ``existing``
+    # BEFORE the upsert below overwrites the mirror.
+    previous_status = existing.status if existing else ""
+    already_live = (
+        existing is not None
+        and existing.stripe_subscription_id == incoming_id
+        and existing.status in CoachSubscription.ACTIVE_STATUSES
+    )
+    sub, _created = CoachSubscription.objects.update_or_create(
         coach=coach,
         defaults={
             "status": status,
@@ -166,6 +194,60 @@ def _sync_from_subscription(sub_obj, *, deleted):
             "current_period_end": _ts_to_dt(sub_obj.get("current_period_end")),
         },
     )
+    # Analytics run AFTER the mirror write above and can't fail it: the mirror
+    # is what this webhook exists for.
+    try:
+        _track_subscription_change(
+            coach, sub, sub_obj, status, previous_status, already_live, existing
+        )
+    except Exception:
+        logger.exception(
+            "Billing webhook: analytics failed for subscription %s", incoming_id
+        )
+
+
+def _track_subscription_change(
+    coach, sub, sub_obj, status, previous_status, already_live, existing
+):
+    """Record ``subscription_started``/``cancelled`` for one mirrored Stripe event."""
+    sub_id = sub_obj.get("id", "")
+    # ``already_live`` alone isn't enough to tell "started" from "recovered":
+    # Stripe can deliver created(incomplete) → invoice.paid → updated(active),
+    # where ``_nudge_status`` flips past_due→active before this
+    # ``updated(active)`` arrives — so ``already_live`` would see a live mirror
+    # and skip the real first "started". The ledger (``_recorded``) is what
+    # remembers a started was written.
+    if (
+        status in CoachSubscription.ACTIVE_STATUSES
+        and not already_live
+        and not _recorded(EventName.SUBSCRIPTION_STARTED, sub_id)
+    ):
+        track(
+            EventName.SUBSCRIPTION_STARTED,
+            actor=coach,
+            subject=sub,
+            via="stripe",
+            subscription=sub_id,
+            status=status,
+            previous=previous_status,
+        )
+    elif (
+        status == CoachSubscription.Status.CANCELED
+        and existing is not None
+        and existing.status != CoachSubscription.Status.CANCELED
+        and (already_live or _recorded(EventName.SUBSCRIPTION_STARTED, sub_id))
+        and not _recorded(EventName.SUBSCRIPTION_CANCELLED, sub_id)
+    ):
+        track(
+            EventName.SUBSCRIPTION_CANCELLED,
+            actor=coach,
+            subject=sub,
+            via="stripe",
+            subscription=sub_id,
+            status=status,
+            previous=previous_status,
+            reason=(sub_obj.get("cancellation_details") or {}).get("reason") or "",
+        )
 
 
 def _nudge_status(invoice_obj, *, from_status, to_status):
@@ -190,3 +272,36 @@ def _nudge_status(invoice_obj, *, from_status, to_status):
             from_status,
             sub_id,
         )
+        return
+    if to_status == CoachSubscription.Status.ACTIVE:
+        try:
+            _track_invoice_start(sub_id, from_status)
+        except Exception:
+            logger.exception(
+                "Billing webhook: analytics failed for subscription %s", sub_id
+            )
+
+
+def _track_invoice_start(sub_id, from_status):
+    """Record ``subscription_started`` when an invoice nudge made it live."""
+    if not _recorded(EventName.SUBSCRIPTION_STARTED, sub_id):
+        # A past_due→active recovery (e.g. created(incomplete) → invoice.paid)
+        # is a real first "started" the subscription-object events never see
+        # (an ``incomplete`` subscription never reads ``already_live``, and
+        # ``_nudge_status``'s bare ``.update()`` writes no event). No symmetric
+        # event on the active→past_due nudge — that's not a cancellation.
+        row = (
+            CoachSubscription.objects.filter(stripe_subscription_id=sub_id)
+            .select_related("coach")
+            .first()
+        )
+        if row is not None:
+            track(
+                EventName.SUBSCRIPTION_STARTED,
+                actor=row.coach,
+                subject=row,
+                via="stripe",
+                subscription=sub_id,
+                status=CoachSubscription.Status.ACTIVE,
+                previous=from_status,
+            )
