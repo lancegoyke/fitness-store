@@ -255,7 +255,10 @@ The web container's healthcheck performs an internal HTTPS-style GET, so a
   `SubscriptionConfirmation` automatically — check `just prod-logs web` for
   "Received subscription confirmation" to verify it went through. A
   subscription from any other topic is rejected outright (see
-  `AWS_SES_EVENT_TOPIC_ARNS` above) and never gets confirmed.
+  `AWS_SES_EVENT_TOPIC_ARNS` above) and never gets confirmed. Leave **Raw
+  message delivery** disabled on the subscription — the webhook needs the
+  standard SNS JSON envelope for signature verification and the `TopicArn`
+  allow-list check, and raw bodies are rejected with 400.
 - **SES configuration set:** SES → Configuration sets → `Tracking` → Event
   destinations → make sure **Send, Delivery, Open, Click, Bounce, Complaint**
   are selected (Reject, DeliveryDelay, and RenderingFailure are logged by the

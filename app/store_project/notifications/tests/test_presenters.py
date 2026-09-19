@@ -197,6 +197,52 @@ class TestByDay:
 
 
 # ---------------------------------------------------------------------------
+# window upper bound
+# ---------------------------------------------------------------------------
+
+
+class TestWindowUpperBound:
+    """A future-dated event (clock skew) must not inflate the window.
+
+    ``since`` only bounded the window from below — a future ``occurred_at``/
+    ``sent_at`` slipped into every other windowed queryset (``totals``,
+    ``by_kind``, ``problems``) while ``by_day`` (which only buckets
+    ``since``..today) silently dropped it, so totals/by_kind/problems could
+    report an event that never showed up in the trend. ``until`` (start of
+    tomorrow, local time) closes the window on both ends.
+    """
+
+    def test_future_dated_event_excluded_from_every_windowed_total(self):
+        since = timezone.now() - datetime.timedelta(days=7)
+        future = timezone.now() + datetime.timedelta(days=2)
+        _sent(sent_at=future)
+        _event(EmailEvent.EventType.BOUNCE, occurred_at=future)
+
+        result = presenters.email_dashboard(since=since)
+
+        assert result["totals"]["sent"] == 0
+        assert result["totals"]["bounce"] == 0
+        row = next(r for r in result["by_kind"] if r["kind"] == EmailKind.OTHER)
+        assert row["sent"] == 0
+        assert row["bounce"] == 0
+        assert result["problems"] == []
+
+    def test_event_dated_today_still_counts_once(self):
+        since = timezone.now() - datetime.timedelta(days=7)
+        _sent(sent_at=timezone.now())
+        _event(EmailEvent.EventType.DELIVERY, occurred_at=timezone.now())
+
+        result = presenters.email_dashboard(since=since)
+
+        assert result["totals"]["sent"] == 1
+        assert result["totals"]["delivery"] == 1
+        today = timezone.localdate()
+        by_date = {row["date"]: row for row in result["by_day"]}
+        assert by_date[today]["sent"] == 1
+        assert by_date[today]["delivery"] == 1
+
+
+# ---------------------------------------------------------------------------
 # recent
 # ---------------------------------------------------------------------------
 

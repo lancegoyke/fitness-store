@@ -46,11 +46,14 @@ _BUCKET_EVENT_TYPES = {
 def email_dashboard(*, since, recipient_query=""):
     """Aggregate the SES event ledger into the dashboard's template context.
 
-    ``since`` bounds the window (``occurred_at`` / ``sent_at`` >= ``since``)
-    for ``totals``, ``by_kind``, ``by_day``, and ``problems``. ``recent`` and
-    the optional ``recipient`` lookup intentionally ignore the window — a
-    recipient search or the tail of raw events is a "show me everything about
-    this" tool, not a windowed report.
+    ``since`` bounds the window from below and the start of tomorrow (local
+    time) bounds it from above — ``since <= occurred_at / sent_at < until`` —
+    for ``totals``, ``by_kind``, ``by_day``, and ``problems``. The upper
+    bound keeps a future-dated event (clock skew) from inflating those totals
+    while ``by_day`` (which only buckets ``since``..today) has no bucket for
+    it. ``recent`` and the optional ``recipient`` lookup intentionally ignore
+    the window — a recipient search or the tail of raw events is a "show me
+    everything about this" tool, not a windowed report.
 
     Contract (the view + template read these exact keys):
 
@@ -76,8 +79,15 @@ def email_dashboard(*, since, recipient_query=""):
       ``EmailEvent`` whose ``recipient`` matches case-insensitively, newest
       first, capped at 100 each.
     """
-    events_in_window = EmailEvent.objects.filter(occurred_at__gte=since)
-    sent_in_window = SentEmail.objects.filter(sent_at__gte=since)
+    until = timezone.make_aware(
+        datetime.datetime.combine(
+            timezone.localdate() + datetime.timedelta(days=1), datetime.time.min
+        )
+    )
+    events_in_window = EmailEvent.objects.filter(
+        occurred_at__gte=since, occurred_at__lt=until
+    )
+    sent_in_window = SentEmail.objects.filter(sent_at__gte=since, sent_at__lt=until)
 
     return {
         "totals": _totals(events_in_window, sent_in_window),
