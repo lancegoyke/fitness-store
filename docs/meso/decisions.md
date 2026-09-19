@@ -2004,3 +2004,29 @@ _(Append dated entries here as decisions land.)_
   answers #542's question without a new event. Raw events older than 13 months are
   deleted daily in 1,000-row batches (`analytics.0002` registers the schedule). No
   rollup table.
+- 2026-09-19 — **Fixed (#541): restoring a reclaimed line after "Log session"
+  logs the set once.** Reproduced before fixing, in a Django test and in a real
+  browser. The athlete types `225 x 5` on sub-line 1 and the coach rewrites that
+  line. The athlete's page now shows the coach's text on the line and the set as
+  a filled, checked Set row, both at once. "Log session" posts that row, which
+  replaces the parsed row with a source-less structured copy. When the athlete
+  types `225 x 5` back on the line, the restore lookup in `_upsert_parsed_set`
+  searched only rows whose `source_line` is that line, so it created a second
+  row. One set then counted twice in results, 1RM, the agent's grounding and
+  `set_logged`. No stale tab is needed, unlike the "repost-then-restore" case the
+  5a review deferred.
+  **Rule (the 5a plan doesn't cover this case):** the structured copy survives,
+  and the restore re-links it to the line. That is the state a restore reaches
+  when no "Log session" happened in between: one row with `source_line` set, shown
+  by the line and not by the logger, with no new `set_logged` and no PR toast.
+  The link is recorded when the copy replaces the parsed row, in a new nullable
+  `LoggedSet.reclaimed_line` FK (migration `0048`). It is never guessed by value,
+  because a value match would merge a real second set that has the same numbers.
+  A later save carries the link to the new copy only when the posted row
+  restates it unchanged (same slot and values, the test `_client_held` uses), and
+  an edit drops it. The logger can still clear or edit the copy like any
+  structured row. Not covered: copies made before this shipped have no link. A
+  coach undo that puts the text back (rather than the athlete retyping it) still
+  shows the set twice and tints the line "not logged as a set", because the coach
+  path never touches `LoggedSet`. The data holds one row in that case. The
+  display half is a follow-up.
