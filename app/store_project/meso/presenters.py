@@ -630,6 +630,12 @@ def billing_state(coach, *, checkout_pending=False):
     {date}" instead of promising a first charge or a renewal that won't
     happen — ``past_due`` wins over ``cancelling`` (no Pro access to
     promise), and ``first_charge_at`` is suppressed while cancelling.
+    ``cancelling`` also requires ``cancel_at`` to still be in the future
+    (adversarial review of #556): a delayed or dropped
+    ``customer.subscription.deleted`` webhook would otherwise leave "Pro
+    until {a past date}" on the page forever even though the coach still
+    reads as active — once that date has passed, this falls through to the
+    ordinary active/first-charge branch instead.
 
     ``show_subscribe``/``show_manage_billing`` fold the scattered per-template
     conditions (comped, live, pending, over_limit, on_trial, …) into two keys
@@ -653,6 +659,7 @@ def billing_state(coach, *, checkout_pending=False):
         sub
         and live
         and sub.cancel_at is not None
+        and sub.cancel_at > timezone.now()
         and status
         in (CoachSubscription.Status.TRIALING, CoachSubscription.Status.ACTIVE)
     )

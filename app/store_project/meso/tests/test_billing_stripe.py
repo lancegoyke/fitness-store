@@ -43,6 +43,9 @@ from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.factories import CoachSubscriptionFactory
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachSubscription
+from store_project.meso.views import CHECKOUT_PENDING_SESSION_KEY
+from store_project.meso.views import CHECKOUT_STARTED_SESSION_KEY
+from store_project.meso.views import STRIPE_UNAVAILABLE_MESSAGE
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -71,6 +74,9 @@ GATEWAY_SESSION_LIST = (
 )
 GATEWAY_SESSION_EXPIRE = (
     "store_project.meso.billing.stripe_gateway.stripe.checkout.Session.expire"
+)
+GATEWAY_SESSION_RETRIEVE = (
+    "store_project.meso.billing.stripe_gateway.stripe.checkout.Session.retrieve"
 )
 
 
@@ -359,7 +365,14 @@ class TestExpireOpenSubscriptionCheckouts:
             stripe_gateway.expire_open_subscription_checkouts(coach)
         list_mock.assert_called_once_with(customer="cus_x", status="open", limit=100)
 
-    def test_expire_raising_propagates(self):
+    def test_expire_raising_propagates_when_the_session_is_still_open(self):
+        """A genuinely unexpected expire failure still fails closed.
+
+        The re-``retrieve`` fallback (below) only swallows the race where the
+        session stopped being open out from under us — if it's still
+        ``"open"``, whatever ``expire`` complained about is a real problem
+        and must propagate.
+        """
         coach = UserFactory()
         coach.stripe_customer_id = "cus_x"
         coach.save(update_fields=["stripe_customer_id"])
@@ -370,9 +383,79 @@ class TestExpireOpenSubscriptionCheckouts:
                 GATEWAY_SESSION_EXPIRE,
                 side_effect=stripe.error.InvalidRequestError("gone", "id"),
             ),
+            mock.patch(
+                GATEWAY_SESSION_RETRIEVE,
+                return_value=mock.Mock(status="open"),
+            ),
         ):
             with pytest.raises(stripe.error.InvalidRequestError):
                 stripe_gateway.expire_open_subscription_checkouts(coach)
+
+    def test_no_customer_id_resource_missing_is_tolerated(self):
+        """A coach whose Stripe customer was deleted isn't bounced forever.
+
+        Mirrors the tolerance ``customer_has_open_subscription`` already
+        gives a missing customer — before this fix the two disagreed.
+        """
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_gone"
+        coach.save(update_fields=["stripe_customer_id"])
+        err = stripe.error.InvalidRequestError(
+            "No such customer", "customer", code="resource_missing"
+        )
+        with (
+            mock.patch(GATEWAY_SESSION_LIST, side_effect=err),
+            mock.patch(GATEWAY_SESSION_EXPIRE) as expire,
+        ):
+            stripe_gateway.expire_open_subscription_checkouts(coach)
+        expire.assert_not_called()
+
+    def test_other_invalid_request_error_from_list_propagates(self):
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        err = stripe.error.InvalidRequestError(
+            "bad", "limit", code="parameter_invalid_integer"
+        )
+        with mock.patch(GATEWAY_SESSION_LIST, side_effect=err):
+            with pytest.raises(stripe.error.InvalidRequestError):
+                stripe_gateway.expire_open_subscription_checkouts(coach)
+
+    def test_session_no_longer_open_when_expired_is_tolerated(self):
+        """The session raced closed between ``list`` and ``expire`` (#556 review).
+
+        Its own 24h TTL, or another tab completing it, can flip a session out
+        of ``"open"`` in that gap — Stripe's ``expire`` then raises instead of
+        no-op'ing (``code`` is ``None``). The goal (no other completable
+        session survives) already holds once it's not open any more, so this
+        is tolerated rather than failing the whole subscribe.
+        """
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        sessions = _session_list(
+            [("cs_raced", "subscription"), ("cs_still_open", "subscription")]
+        )
+        expire_err = stripe.error.InvalidRequestError(
+            "Only Checkout Sessions with a status in [open] can be expired", None
+        )
+
+        def fake_expire(session_id):
+            if session_id == "cs_raced":
+                raise expire_err
+
+        with (
+            mock.patch(GATEWAY_SESSION_LIST, return_value=sessions),
+            mock.patch(GATEWAY_SESSION_EXPIRE, side_effect=fake_expire) as expire,
+            mock.patch(
+                GATEWAY_SESSION_RETRIEVE,
+                return_value=mock.Mock(status="complete"),
+            ) as retrieve,
+        ):
+            stripe_gateway.expire_open_subscription_checkouts(coach)
+        retrieve.assert_called_once_with("cs_raced")
+        # The other, genuinely-still-open session was still expired.
+        assert expire.call_args_list[-1].args == ("cs_still_open",)
 
 
 # ---------------------------------------------------------------------------
@@ -1476,6 +1559,9 @@ class TestSubscribeView:
             resp = c.post(self.URL)
         assert resp.status_code == 302
         assert resp.url == "https://stripe/checkout"
+        # The "started" marker (adversarial review of #556) — what lets a
+        # later ``?billing=success`` turn into the pending state.
+        assert CHECKOUT_STARTED_SESSION_KEY in c.session
 
     def test_unconfigured_price_redirects_gracefully(self, settings):
         settings.MESO_PRO_PRICE_ID = ""
@@ -1596,13 +1682,17 @@ class TestSubscribeViewNeverOpensASecondSubscription:
         ):
             resp = c.post(self.URL)
         assert resp.status_code == 302
-        assert resp.url == "/meso/billing/?billing=success"
+        # Plain ``meso:billing`` — no ``?billing=success`` round trip (adversarial
+        # review of #556): Stripe already told us a subscription exists, so the
+        # pending marker is set directly in the coach's session instead.
+        assert resp.url == "/meso/billing/"
         create.assert_not_called()
         texts = [m.message for m in get_messages(resp.wsgi_request)]
         assert any(
             "You already have a subscription. Manage it in Manage billing." in t
             for t in texts
         )
+        assert CHECKOUT_PENDING_SESSION_KEY in c.session
 
     @pytest.mark.parametrize("statuses", [["canceled"], ["incomplete_expired"], []])
     def test_only_ended_or_no_subscriptions_let_checkout_proceed(
@@ -1664,7 +1754,9 @@ class TestSubscribeViewNeverOpensASecondSubscription:
         assert resp.url == "/meso/billing/"
         create.assert_not_called()
         texts = [m.message for m in get_messages(resp.wsgi_request)]
-        assert any("Try again in a minute" in t for t in texts)
+        # One accurate message (adversarial review of #556) — not the old
+        # "nothing was charged", which this code can't actually promise.
+        assert any(t == STRIPE_UNAVAILABLE_MESSAGE for t in texts)
 
     def test_resource_missing_customer_lets_checkout_proceed(self, settings):
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
@@ -1759,6 +1851,11 @@ class TestSubscribeViewExpiresOpenCheckoutsBeforeCreatingANewOne:
         assert call_order == ["list_sessions", "checkout"]
 
     def test_expire_raising_fails_closed(self, settings):
+        """A session still genuinely open when ``expire`` fails still bounces.
+
+        (The gateway's own retrieve-and-tolerate fallback for a session that
+        merely raced closed is covered directly in ``TestExpireOpenSubscriptionCheckouts``.)
+        """
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
         coach, c = self._coach_client()
         sessions = _session_list([("cs_sub", "subscription")])
@@ -1769,6 +1866,7 @@ class TestSubscribeViewExpiresOpenCheckoutsBeforeCreatingANewOne:
                 GATEWAY_SESSION_EXPIRE,
                 side_effect=stripe.error.InvalidRequestError("gone", "id"),
             ),
+            mock.patch(GATEWAY_SESSION_RETRIEVE, return_value=mock.Mock(status="open")),
             mock.patch(GATEWAY_CHECKOUT) as create,
         ):
             resp = c.post(self.URL)
@@ -1776,7 +1874,7 @@ class TestSubscribeViewExpiresOpenCheckoutsBeforeCreatingANewOne:
         assert resp.url == "/meso/billing/"
         create.assert_not_called()
         texts = [m.message for m in get_messages(resp.wsgi_request)]
-        assert any("Try again in a minute" in t for t in texts)
+        assert any(t == STRIPE_UNAVAILABLE_MESSAGE for t in texts)
 
 
 class TestSubscribeViewCompedCoachBounces:

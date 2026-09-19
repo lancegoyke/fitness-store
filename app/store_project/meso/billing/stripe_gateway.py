@@ -98,10 +98,13 @@ def customer_has_open_subscription(coach):
     Verified in Stripe test mode (2026-09-19): listing subscriptions for a
     customer id Stripe doesn't recognize raises ``stripe.error.InvalidRequestError``
     with ``code == "resource_missing"`` and ``param == "customer"`` — treated
-    here as "no subscription" (a missing customer can't hold one, and
-    ``stripe_customer_get_or_create`` recreates the customer at checkout
-    anyway). Any other exception propagates, so the caller can fail closed
-    instead of silently opening a Checkout.
+    here as "no subscription": a customer id Stripe doesn't know can't hold a
+    subscription, full stop. (This is NOT because the id is about to be
+    replaced — ``stripe_customer_get_or_create`` does not re-save a fresh id
+    for a coach who already has one; see ``payments/utils.py``. It's simply
+    that a missing customer has nothing to check.) Any other exception
+    propagates, so the caller can fail closed instead of silently opening a
+    Checkout.
     """
     if not coach.stripe_customer_id:
         return False
@@ -133,15 +136,40 @@ def expire_open_subscription_checkouts(coach):
     purchase open in another tab) is left alone — it isn't a subscription.
 
     A coach with no ``stripe_customer_id`` has no Checkout Sessions to expire.
-    Any exception propagates — the caller fails closed rather than opening a
-    new Checkout it can't be sure is the only one that can complete.
+    A customer id Stripe doesn't recognize (``InvalidRequestError``,
+    ``code == "resource_missing"``, ``param == "customer"``) has none either
+    — the same tolerance ``customer_has_open_subscription`` gives it, so a
+    coach whose Stripe customer was deleted isn't bounced forever by the two
+    checks disagreeing. A session can also stop being "open" in the gap
+    between the ``list`` above and its own ``expire`` call below — its own
+    24h TTL, or another tab completing it — and Stripe then raises
+    ``InvalidRequestError`` ("Only Checkout Sessions with a status in [open]
+    can be expired", ``code`` is ``None``) rather than silently no-op'ing;
+    that's caught per-session and re-checked, since the goal (no other
+    completable session survives) already holds once a session is no longer
+    open. Any other exception propagates — the caller fails closed rather
+    than opening a new Checkout it can't be sure is the only one that can
+    complete.
     """
     if not coach.stripe_customer_id:
         return
     stripe.api_key = settings.STRIPE_SECRET_KEY
-    sessions = stripe.checkout.Session.list(
-        customer=coach.stripe_customer_id, status="open", limit=100
-    )
+    try:
+        sessions = stripe.checkout.Session.list(
+            customer=coach.stripe_customer_id, status="open", limit=100
+        )
+    except stripe.error.InvalidRequestError as e:
+        if e.code == "resource_missing" and e.param == "customer":
+            return
+        raise
     for session in sessions.auto_paging_iter():
-        if session.mode == "subscription":
+        if session.mode != "subscription":
+            continue
+        try:
             stripe.checkout.Session.expire(session.id)
+        except stripe.error.InvalidRequestError:
+            refreshed = stripe.checkout.Session.retrieve(session.id)
+            if refreshed.status == "open":
+                raise
+            # Already completed/expired by something else — nothing left to do.
+            continue

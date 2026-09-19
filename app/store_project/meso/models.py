@@ -1126,10 +1126,12 @@ class CoachSubscription(models.Model):
         touched — the trial is pure local state until a card is collected.
 
         Blanks any leftover ``stripe_subscription_id``/``stripe_item_id``
-        (#555 P2-2): a FREE row can carry a dead Stripe id through an admin
-        edit (e.g. a canceled subscriber reset to free by hand) — without this
-        a fresh trial would read as ``is_stripe_trial`` and never lazily
-        expire on the local clock.
+        (#555 P2-2) and ``cancel_at`` (adversarial review of #556): a FREE row
+        can carry a dead Stripe id — and a stale scheduled-end date — through
+        an admin edit (e.g. a canceled subscriber reset to free by hand)
+        without this a fresh trial would read as ``is_stripe_trial`` and
+        never lazily expire on the local clock, or would show "Pro until" a
+        date that has nothing to do with this trial.
         """
         if self.status != self.Status.FREE:
             raise InvalidTransition(f"Cannot start a trial from {self.status}.")
@@ -1139,12 +1141,14 @@ class CoachSubscription(models.Model):
         self.trial_end = timezone.now() + timedelta(days=self.TRIAL_DAYS)
         self.stripe_subscription_id = ""
         self.stripe_item_id = ""
+        self.cancel_at = None
         self.save(
             update_fields=[
                 "status",
                 "trial_end",
                 "stripe_subscription_id",
                 "stripe_item_id",
+                "cancel_at",
                 "modified",
             ]
         )
@@ -1155,13 +1159,17 @@ class CoachSubscription(models.Model):
 
         Only a trialing row that is actually past due can expire; ``trial_end`` is
         preserved so the trial stays single-use (a lapsed coach can't re-trial).
+        ``cancel_at`` is cleared (adversarial review of #556) so a lapsed
+        trial can't carry forward a stale scheduled-end date into whatever
+        this row becomes next.
         """
         if self.status != self.Status.TRIALING:
             raise InvalidTransition(f"Cannot expire a trial that is {self.status}.")
         if not self.is_trial_expired:
             raise InvalidTransition("Cannot expire a trial that is not past due.")
         self.status = self.Status.FREE
-        self.save(update_fields=["status", "modified"])
+        self.cancel_at = None
+        self.save(update_fields=["status", "cancel_at", "modified"])
         return self
 
     @classmethod
@@ -1169,9 +1177,12 @@ class CoachSubscription(models.Model):
         """Mark a coach ``comped`` — unlimited, no Stripe (D12). Idempotent upsert.
 
         For the owner and seeded demo coaches, who are never paywalled.
+        ``cancel_at`` is reset to ``None`` (adversarial review of #556): a row
+        comped over a subscription that was scheduled to end must not keep
+        showing "Pro until" that date once it's comped and unlimited.
         """
         sub, _ = cls.objects.update_or_create(
-            coach=coach, defaults={"status": cls.Status.COMPED}
+            coach=coach, defaults={"status": cls.Status.COMPED, "cancel_at": None}
         )
         return sub
 

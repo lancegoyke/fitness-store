@@ -16,6 +16,7 @@ See ``docs/meso/agent-usage-plan.md``.
 import math
 from datetime import timedelta
 from decimal import Decimal
+from unittest import mock
 
 import pytest
 from django.urls import reverse
@@ -32,12 +33,15 @@ from store_project.meso.factories import PlanFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachSubscription
 from store_project.meso.presenters import coach_billing
+from store_project.meso.views import CHECKOUT_PENDING_MAX_AGE
+from store_project.meso.views import CHECKOUT_PENDING_SESSION_KEY
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
 
 URL = reverse("meso:billing")
 ROSTER_URL = reverse("meso:roster")
+SUBSCRIBE_URL = reverse("meso:billing_subscribe")
 
 
 def _coach():
@@ -506,6 +510,30 @@ class TestCancellingBillingSurfaces:
         assert "Pro until" not in body
         assert "Your last payment failed" in body
 
+    def test_a_cancel_at_already_in_the_past_does_not_render_pro_until(self, client):
+        """A delayed/dropped ``customer.subscription.deleted`` must not stick forever.
+
+        Without also requiring ``cancel_at`` to be in the future, a webhook
+        that never (or late) arrives leaves "Pro until {a past date}" on the
+        page even though the coach still mirrors as active — this instead
+        falls through to the ordinary active copy (adversarial review of
+        #556).
+        """
+        coach = _coach()
+        past = timezone.now() - timedelta(days=1)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_1",
+            current_period_end=past,
+            cancel_at=past,
+        )
+        client.force_login(coach)
+        for url in (URL, ROSTER_URL):
+            body = client.get(url).content.decode()
+            assert "Pro until" not in body
+            assert "cancelled, so it won't renew." not in body
+
 
 # -- the `?billing=success` pending state (#556, item 2) ---------------------
 #
@@ -514,13 +542,28 @@ class TestCancellingBillingSurfaces:
 # "finishing" placeholder instead of a stale free/local-trial Subscribe form
 # until the mirror catches up (`has_live_stripe_subscription` goes true), at
 # which point the flag turns itself off and the page shows the real state.
+#
+# The placeholder is driven by the coach's own SESSION, not the bare query
+# param alone (adversarial review of #556): a stale bookmark, browser
+# history, or a typed `?billing=success` URL must not show "Finishing…"
+# forever with no webhook ever coming, and the nav's plain "Billing" link
+# (no query string) must agree with whatever the Checkout redirect just
+# showed instead of silently reverting to the Subscribe form.
 
 
 class TestCheckoutPendingBillingSurfaces:
     @pytest.mark.parametrize("mirror", ["free", "local_trial"])
-    def test_pending_param_shows_finishing_copy_and_hides_subscribe(
+    def test_pending_param_alone_never_started_a_checkout_shows_subscribe(
         self, client, mirror
     ):
+        """``?billing=success`` alone, with no Checkout ever started, does nothing.
+
+        Before the session-backed fix this bare query param alone drove the
+        placeholder — a stale bookmark, browser history, or a typed URL would
+        show "Finishing…" forever. See
+        ``test_after_a_real_checkout_both_surfaces_agree_its_finishing`` for
+        the case where a Checkout genuinely was started.
+        """
         coach = _coach()
         if mirror == "local_trial":
             CoachSubscriptionFactory(
@@ -531,8 +574,8 @@ class TestCheckoutPendingBillingSurfaces:
         client.force_login(coach)
         for base in (URL, ROSTER_URL):
             body = client.get(f"{base}?billing=success").content.decode()
-            assert "Finishing your subscription" in body
-            assert 'action="/meso/billing/subscribe/"' not in body
+            assert "Finishing your subscription" not in body
+            assert 'action="/meso/billing/subscribe/"' in body
 
     @pytest.mark.parametrize("mirror", ["free", "local_trial"])
     def test_without_the_param_the_same_coach_sees_the_subscribe_form(
@@ -551,9 +594,99 @@ class TestCheckoutPendingBillingSurfaces:
             assert "Finishing your subscription" not in body
             assert 'action="/meso/billing/subscribe/"' in body
 
+    def test_after_a_real_checkout_both_surfaces_agree_its_finishing(
+        self, client, settings
+    ):
+        """A Subscribe POST that opened a real Checkout backs the placeholder.
+
+        The success redirect's ``?billing=success`` converts the session's
+        *started* marker (set by ``billing_subscribe`` right before it sent
+        the coach to Stripe) into *pending*. A later plain GET of the OTHER
+        surface — no query string at all, the nav's plain "Billing" link —
+        still shows it, so the roster and the billing page never contradict
+        each other.
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = _coach()
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
+            return_value=mock.Mock(url="https://stripe/cs"),
+        ):
+            resp = client.post(SUBSCRIBE_URL)
+        assert resp.url == "https://stripe/cs"
+
+        body = client.get(f"{ROSTER_URL}?billing=success").content.decode()
+        assert "Finishing your subscription" in body
+        assert 'action="/meso/billing/subscribe/"' not in body
+
+        # The other surface, no query string at all.
+        body = client.get(URL).content.decode()
+        assert "Finishing your subscription" in body
+        assert 'action="/meso/billing/subscribe/"' not in body
+
+    def test_cancel_param_clears_the_pending_state(self, client, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = _coach()
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
+            return_value=mock.Mock(url="https://stripe/cs"),
+        ):
+            client.post(SUBSCRIBE_URL)
+        # Land back from Checkout, converting "started" into "pending".
+        client.get(f"{ROSTER_URL}?billing=success")
+
+        body = client.get(f"{ROSTER_URL}?billing=cancel").content.decode()
+        assert "Finishing your subscription" not in body
+
+        # And it stays cleared on a later plain GET of the other surface.
+        body = client.get(URL).content.decode()
+        assert "Finishing your subscription" not in body
+        assert 'action="/meso/billing/subscribe/"' in body
+
+    def test_an_expired_pending_marker_shows_subscribe_again(self, client):
+        coach = _coach()
+        client.force_login(coach)
+        session = client.session
+        stale_age = CHECKOUT_PENDING_MAX_AGE.total_seconds() + 60
+        session[CHECKOUT_PENDING_SESSION_KEY] = timezone.now().timestamp() - stale_age
+        session.save()
+
+        body = client.get(URL).content.decode()
+        assert "Finishing your subscription" not in body
+        assert 'action="/meso/billing/subscribe/"' in body
+
+    def test_stripe_side_refusal_redirects_to_billing_and_shows_finishing(
+        self, client, settings
+    ):
+        """Stripe itself reporting an existing subscription sets pending directly.
+
+        No ``?billing=success`` round trip here — ``billing_subscribe``
+        writes the pending marker straight into the session, since Stripe
+        just told us a subscription exists.
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = _coach()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.customer_has_open_subscription",
+            return_value=True,
+        ):
+            resp = client.post(SUBSCRIBE_URL)
+        assert resp.status_code == 302
+        assert resp.url == "/meso/billing/"
+
+        body = client.get(resp.url).content.decode()
+        assert "Finishing your subscription" in body
+        assert 'action="/meso/billing/portal/"' in body
+
     def test_pending_param_with_an_active_mirror_shows_the_normal_pro_line(
         self, client
     ):
+        """Once the mirror shows a live subscription, a pending flag is moot."""
         coach = _coach()
         CoachSubscriptionFactory(
             coach=coach,
@@ -561,7 +694,10 @@ class TestCheckoutPendingBillingSurfaces:
             stripe_subscription_id="sub_1",
         )
         client.force_login(coach)
+        session = client.session
+        session[CHECKOUT_PENDING_SESSION_KEY] = timezone.now().timestamp()
+        session.save()
         for base in (URL, ROSTER_URL):
-            body = client.get(f"{base}?billing=success").content.decode()
+            body = client.get(base).content.decode()
             assert "Finishing your subscription" not in body
             assert "active athlete" in body

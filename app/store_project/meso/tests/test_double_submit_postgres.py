@@ -59,12 +59,14 @@ import threading
 from unittest import mock
 
 import pytest
+import stripe
 from django.db import connection
 from django.test import Client
 from django.urls import reverse
 
 from store_project.analytics.events import EventName
 from store_project.analytics.models import Event
+from store_project.meso import sandbox as meso_sandbox
 from store_project.meso import views
 from store_project.meso.agent import apply as agent_apply
 from store_project.meso.billing import access as billing_access
@@ -79,6 +81,12 @@ from store_project.meso.models import InvalidTransition
 from store_project.meso.models import PlanAction
 from store_project.meso.models import ProposedChange
 from store_project.meso.tests.test_agent_validation import make_plan
+from store_project.meso.tests.test_billing_stripe import GATEWAY_CHECKOUT
+from store_project.meso.tests.test_billing_stripe import GATEWAY_SESSION_EXPIRE
+from store_project.meso.tests.test_billing_stripe import GATEWAY_SESSION_LIST
+from store_project.meso.tests.test_billing_stripe import GATEWAY_SUB_LIST
+from store_project.meso.tests.test_billing_stripe import _session_list
+from store_project.meso.tests.test_billing_stripe import _subscription_list
 from store_project.meso.tests.test_billing_webhook_postgres import _paused
 from store_project.meso.tests.test_requests import make_coach
 from store_project.users.factories import UserFactory
@@ -544,3 +552,138 @@ class TestChangeSetStatusRacesApply:
         assert batch.status == AgentProposalBatch.Status.APPLIED
         change.refresh_from_db()
         assert change.status == ProposedChange.Status.APPROVED
+
+
+# ---------------------------------------------------------------------------
+# billing_subscribe (adversarial review of #556)
+# ---------------------------------------------------------------------------
+#
+# Two concurrent Subscribe POSTs for one coach (two tabs, or a double submit)
+# both pass the new Stripe pre-checks and both create a Checkout Session, so
+# the coach can complete two and be billed twice. Worse, for a coach with no
+# ``stripe_customer_id`` yet, both ``customer_has_open_subscription`` and
+# ``expire_open_subscription_checkouts`` early-return with no Stripe call at
+# all, so each request's own ``stripe_customer_get_or_create`` creates a
+# DIFFERENT Stripe customer and overwrites ``User.stripe_customer_id`` — the
+# loser's customer becomes invisible to the mirror, the guard, and the Portal
+# forever.
+
+#: Fires right after the sandbox gate, before the checks this fixes touch —
+#: common to both the locked and unlocked implementations, so it's a stable
+#: rendezvous point regardless of which one is running.
+IS_SANDBOX_AFTER = (meso_sandbox, "is_sandbox", "after")
+
+
+class _FakeStripeCustomersAndSessions:
+    """A tiny in-memory Stripe double the two racing requests both see.
+
+    The canned ``stripe.ListObject`` builders elsewhere
+    (``_session_list``/``_subscription_list``) return a fixed snapshot; this
+    fake instead tracks real mutable state — customers created and Checkout
+    Sessions' open/expired status — so the SECOND request's
+    ``Session.list(status="open")`` genuinely sees what the FIRST request
+    just committed, the way real Stripe would. A lock guards it since both
+    threads call into it concurrently.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.customers = []
+        self._next_customer = 0
+        self._sessions = {}
+        self._next_session = 0
+
+    def create_customer(self, *, email=None, id=None, **kwargs):
+        with self._lock:
+            cus_id = id or f"cus_{self._next_customer}"
+            self._next_customer += 1
+            self.customers.append(cus_id)
+        return mock.Mock(id=cus_id)
+
+    def retrieve_customer(self, customer_id, **kwargs):
+        with self._lock:
+            known = customer_id in self.customers
+        if not known:
+            raise stripe.error.InvalidRequestError(
+                "No such customer", "id", code="resource_missing"
+            )
+        return mock.Mock(id=customer_id)
+
+    def list_subscriptions(self, *, customer, status, limit):
+        # No real Subscription is ever created in this race — only Checkout
+        # Sessions — so there's never a live subscription to report.
+        return _subscription_list([])
+
+    def list_sessions(self, *, customer, status, limit):
+        with self._lock:
+            matches = [
+                (s["id"], s["mode"])
+                for s in self._sessions.values()
+                if s["customer"] == customer and s["status"] == status
+            ]
+        return _session_list(matches)
+
+    def expire_session(self, session_id):
+        with self._lock:
+            if session_id in self._sessions:
+                self._sessions[session_id]["status"] = "expired"
+
+    def create_session(self, *, customer, mode, **kwargs):
+        with self._lock:
+            sid = f"cs_{self._next_session}"
+            self._next_session += 1
+            self._sessions[sid] = {
+                "id": sid,
+                "customer": customer,
+                "mode": mode,
+                "status": "open",
+            }
+        return mock.Mock(url=f"https://stripe.test/{sid}", id=sid)
+
+    def open_subscription_session_count(self):
+        with self._lock:
+            return sum(
+                1
+                for s in self._sessions.values()
+                if s["status"] == "open" and s["mode"] == "subscription"
+            )
+
+
+class TestBillingSubscribeDoubleSubmit:
+    def test_one_customer_and_at_most_one_open_session_survive(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = make_coach()
+        assert coach.stripe_customer_id == ""
+        url = reverse("meso:billing_subscribe")
+        client_a, client_b = Client(), Client()
+        client_a.force_login(coach)
+        client_b.force_login(coach)
+        fake = _FakeStripeCustomersAndSessions()
+
+        with (
+            mock.patch(
+                "store_project.payments.utils.stripe.Customer.create",
+                side_effect=fake.create_customer,
+            ),
+            mock.patch(
+                "store_project.payments.utils.stripe.Customer.retrieve",
+                side_effect=fake.retrieve_customer,
+            ),
+            mock.patch(GATEWAY_SUB_LIST, side_effect=fake.list_subscriptions),
+            mock.patch(GATEWAY_SESSION_LIST, side_effect=fake.list_sessions),
+            mock.patch(GATEWAY_SESSION_EXPIRE, side_effect=fake.expire_session),
+            mock.patch(GATEWAY_CHECKOUT, side_effect=fake.create_session),
+        ):
+            resp_a, resp_b = _http_race(
+                [(client_a, url, None), (client_b, url, None)],
+                [IS_SANDBOX_AFTER],
+            )
+
+        assert resp_a.status_code == 302
+        assert resp_b.status_code == 302
+        # Only one Stripe customer for a coach who started with none — the
+        # loser must reuse the winner's, not create its own.
+        assert len(fake.customers) == 1, fake.customers
+        # The loser's earlier session was expired; at most the winner's
+        # newer one is still completable.
+        assert fake.open_subscription_session_count() <= 1
