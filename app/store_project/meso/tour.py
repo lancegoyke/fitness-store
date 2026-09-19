@@ -174,8 +174,9 @@ STEPS = [
         },
         "self": {
             "title": "What actually happened",
-            "body": "Log your own sets from your phone at /meso/me/ — logged "
-            "sets, adherence, and estimated 1RM flow back here the moment you do.",
+            "body": "Log your own sets from your phone at /meso/me/, then tap "
+            "Log session. Sets, adherence, and estimated 1RM flow back here "
+            "the moment you do.",
             "body_done": "Your session is logged — here are the sets, adherence, "
             "and estimated 1RM flowing back.",
         },

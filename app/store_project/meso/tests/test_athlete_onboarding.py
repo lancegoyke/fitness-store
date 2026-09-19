@@ -76,6 +76,12 @@ def session_url(session):
     return reverse("meso:athlete_session", kwargs={"pk": session.pk})
 
 
+def coachmark(body, key):
+    """One coachmark card's markup: from its key to its dismiss button."""
+    start = body.index(f'data-coachmark-key="{key}"')
+    return body[start : body.index("data-coachmark-dismiss", start)]
+
+
 class TestFirstLogHintHome:
     """The home coachmark shows only to an athlete who can — but never has — logged."""
 
@@ -166,6 +172,52 @@ class TestFirstLogHintSession:
         client.force_login(athlete)
         body = client.get(session_url(session)).content.decode()
         assert SESSION_HINT in body
+
+
+class TestLoggingCopyMatchesThePage:
+    """The how-to-log copy describes the page as 5a laid it out.
+
+    5a moved the freeform "what you did" lines ABOVE the Set rows, so copy that
+    only described the Set rows taught the second thing on screen. Which entry
+    path stays is 5b's call (it retires one); until then the copy names both
+    and picks neither. Pinned by the controls it names, not its exact wording.
+    """
+
+    def test_session_coachmark_names_both_paths_in_page_order(self, client):
+        athlete, _c, session, _p = seed()
+        client.force_login(athlete)
+        body = client.get(session_url(session)).content.decode()
+        hint = coachmark(body, "firstlog-session")
+        assert "what you did" in hint  # the freeform lines, by their label
+        assert "circle" in hint  # the Set rows' check-off
+        assert hint.index("what you did") < hint.index("circle")
+        assert "Log session" in hint  # finishes the session either way
+
+    def test_header_counter_says_what_it_counts(self, client):
+        # It tallies checked-off Set rows only; a typed line never ticks it. As
+        # "sets logged" it contradicted an athlete who logged by typing.
+        athlete, _c, session, _p = seed()
+        client.force_login(athlete)
+        body = client.get(session_url(session)).content.decode()
+        assert "sets checked off" in body
+        assert "sets logged" not in body
+
+    def test_home_coachmark_does_not_ask_for_every_set_twice(self, client):
+        # "fill in what you did, and check off each set" now names both entry
+        # paths as two chores, which records each set twice.
+        athlete, *_ = seed()
+        client.force_login(athlete)
+        hint = coachmark(client.get(HOME).content.decode(), "firstlog-home")
+        assert "check off" not in hint
+        assert "Log session" in hint
+
+    def test_session_page_leaks_no_template_comment(self, client):
+        # A multi-line {# #} renders as visible text (5a UAT found two here).
+        athlete, _c, session, _p = seed()
+        client.force_login(athlete)
+        body = client.get(session_url(session)).content.decode()
+        assert "{#" not in body
+        assert "#}" not in body
 
 
 class TestOnboardingWiring:
