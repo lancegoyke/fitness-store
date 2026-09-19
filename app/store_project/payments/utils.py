@@ -59,7 +59,29 @@ def order_confirmation_email(
 
 
 def stripe_customer_get_or_create(user: User) -> stripe.Customer:
-    """A customer might be in our Django database, but not in Stripe."""
+    """A customer might be in our Django database, but not in Stripe.
+
+    INVARIANT: a user's ``stripe_customer_id`` is written once and never
+    replaced. Every Stripe object looked up later — a subscription, the
+    Portal, the Meso billing webhook's customer→coach mapping
+    (``billing/webhooks.py:_coach_for_customer``) — is keyed by it, so
+    silently overwriting it would make an existing Stripe object invisible
+    to this app forever.
+
+    This function is shared by the store's one-time-purchase Checkout
+    (``payments/views.py:create_checkout_session``) and Meso's subscription
+    Checkout (``meso/billing/stripe_gateway.py``), so two unrelated call
+    sites can race for the SAME user with no lock between them — e.g. a
+    store purchase in one tab and a Meso Subscribe in another, or two
+    concurrent Meso Subscribe tabs. When both see an empty
+    ``stripe_customer_id`` in memory, both create a Stripe customer; the DB
+    write below is a conditional (write-once) ``UPDATE ... WHERE
+    stripe_customer_id = ''``, so only the writer that commits FIRST keeps
+    its customer attached to the user. The loser's own newly-created
+    customer becomes an unused orphan in Stripe — harmless, since nothing
+    is ever attached to it — and the loser re-reads and returns the
+    winner's customer instead.
+    """
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
     if user.stripe_customer_id:
@@ -72,12 +94,29 @@ def stripe_customer_get_or_create(user: User) -> stripe.Customer:
             stripe_customer = stripe.Customer.create(
                 id=user.stripe_customer_id, email=user.email
             )
-    else:
-        stripe_customer = stripe.Customer.create(email=user.email)
-        user.stripe_customer_id = stripe_customer.id
-        user.save(update_fields=["stripe_customer_id"])
-        logger.info(f"New Stripe Customer with ID={user.stripe_customer_id}.")
+        return stripe_customer
 
+    stripe_customer = stripe.Customer.create(email=user.email)
+    updated = User.objects.filter(pk=user.pk, stripe_customer_id="").update(
+        stripe_customer_id=stripe_customer.id
+    )
+    if not updated:
+        # Someone else won the race and already wrote a (different) customer
+        # id for this user between our read and our write above. Discard the
+        # orphan we just created in Stripe (nothing will ever reference it)
+        # and use the winner's customer instead.
+        user.refresh_from_db(fields=["stripe_customer_id"])
+        logger.info(
+            "Stripe customer race for user %s: another writer already set "
+            "%s; discarding the orphaned customer %s this call created.",
+            user.pk,
+            user.stripe_customer_id,
+            stripe_customer.id,
+        )
+        return stripe.Customer.retrieve(user.stripe_customer_id)
+
+    user.stripe_customer_id = stripe_customer.id
+    logger.info(f"New Stripe Customer with ID={user.stripe_customer_id}.")
     return stripe_customer
 
 

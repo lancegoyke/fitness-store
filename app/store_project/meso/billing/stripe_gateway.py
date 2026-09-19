@@ -28,6 +28,19 @@ from django.conf import settings
 from store_project.payments.utils import stripe_customer_get_or_create
 
 
+def ensure_customer(coach):
+    """Make sure ``coach`` has a durable Stripe customer id — thin, but load-bearing.
+
+    Delegates to the shared ``stripe_customer_get_or_create`` (write-once,
+    see its docstring). Exists as its own gateway call so ``billing_subscribe``
+    can create the customer BEFORE it takes the coach's row lock (adversarial
+    review of #556, round 2, Fix A): the write commits in autocommit, so it's
+    durable even if the request dies before the locked section below it (that
+    holds the lock across several slower Stripe calls) ever commits.
+    """
+    stripe_customer_get_or_create(coach)
+
+
 def create_subscription_checkout_session(
     coach, *, success_url, cancel_url, trial_end=None
 ):
@@ -121,6 +134,22 @@ def customer_has_open_subscription(coach):
         sub.status not in ENDED_SUBSCRIPTION_STATUSES
         for sub in subscriptions.auto_paging_iter()
     )
+
+
+def checkout_session_is_complete(session_id):
+    """Did this Checkout Session actually complete (adversarial review of #556)?
+
+    A Checkout Session's ``status`` is one of ``open`` (still in progress),
+    ``complete`` (the coach finished paying), or ``expired`` (abandoned past
+    its TTL, or explicitly expired — see ``expire_open_subscription_checkouts``).
+    ``_checkout_pending`` calls this to verify a session it *started* really
+    finished before trusting a ``?billing=success`` redirect — that query
+    param alone can't tell a completed Checkout apart from a stale bookmark
+    or an abandoned tab that happens to still carry it.
+    """
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    session = stripe.checkout.Session.retrieve(session_id)
+    return session.status == "complete"
 
 
 def expire_open_subscription_checkouts(coach):

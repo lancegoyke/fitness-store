@@ -648,7 +648,13 @@ def billing_state(coach, *, checkout_pending=False):
     live = bool(sub and sub.has_live_stripe_subscription)
     # Once the mirror shows a live subscription, the page shows the real
     # state — the pending placeholder is only for the gap before the webhook
-    # lands.
+    # lands. ``pending`` deliberately outranks ``over_limit`` below (via
+    # ``show_subscribe``'s ``not pending`` gate) — a coach who just paid
+    # shouldn't be told to re-subscribe while the webhook is still in
+    # flight. It can never coexist with ``past_due``: ``past_due`` requires
+    # ``live`` (a real, if unpaid, Stripe subscription), and ``pending`` is
+    # ANDed with ``not live`` — so the two are mutually exclusive by
+    # construction, not by template ordering.
     pending = checkout_pending and not live
     over_limit = billing_access.is_over_limit(coach)
     past_due = live and status == CoachSubscription.Status.PAST_DUE

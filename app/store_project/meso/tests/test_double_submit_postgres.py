@@ -89,6 +89,7 @@ from store_project.meso.tests.test_billing_stripe import _session_list
 from store_project.meso.tests.test_billing_stripe import _subscription_list
 from store_project.meso.tests.test_billing_webhook_postgres import _paused
 from store_project.meso.tests.test_requests import make_coach
+from store_project.payments.utils import stripe_customer_get_or_create
 from store_project.users.factories import UserFactory
 
 pytestmark = [
@@ -567,6 +568,18 @@ class TestChangeSetStatusRacesApply:
 # DIFFERENT Stripe customer and overwrites ``User.stripe_customer_id`` — the
 # loser's customer becomes invisible to the mirror, the guard, and the Portal
 # forever.
+#
+# Round 2 of the adversarial review (Fix A) moved the customer creation OUT
+# of the per-coach lock (so the id write is durable even if the worker dies
+# before the locked Checkout section commits) and made
+# ``stripe_customer_get_or_create`` write-once instead of lock-protected: two
+# racers with a stale (empty) in-memory id can now BOTH create a Stripe
+# customer — a genuinely concurrent race is no longer serialized away by the
+# lock the way it was before. The safety property is narrower but still
+# real: only ONE of those customers ever gets attached to the coach (a
+# conditional ``UPDATE ... WHERE stripe_customer_id = ''``), so the loser's
+# is an unused, harmless orphan in Stripe — every Checkout Session either
+# racer actually creates still uses the SAME (winning) customer.
 
 #: Fires right after the sandbox gate, before the checks this fixes touch —
 #: common to both the locked and unlocked implementations, so it's a stable
@@ -648,9 +661,27 @@ class _FakeStripeCustomersAndSessions:
                 if s["status"] == "open" and s["mode"] == "subscription"
             )
 
+    def session_customers(self):
+        """The distinct customer id every Checkout Session was created under."""
+        with self._lock:
+            return {s["customer"] for s in self._sessions.values()}
+
 
 class TestBillingSubscribeDoubleSubmit:
-    def test_one_customer_and_at_most_one_open_session_survive(self, settings):
+    def test_one_customer_wins_and_every_checkout_session_uses_it(self, settings):
+        """Two racers may each mint a Stripe customer; only one is ever used.
+
+        Fix A (round 2 of the adversarial review) creates the customer BEFORE
+        the per-coach lock, so this race is no longer serialized away — both
+        racers can genuinely call ``stripe.Customer.create`` when they both
+        read a stale, empty ``stripe_customer_id``. What the write-once
+        conditional update still guarantees is narrower: only ONE customer
+        ever gets attached to the coach, and every Checkout Session either
+        racer actually creates (there and any later, idempotent
+        ``stripe_customer_get_or_create`` calls in the same request) uses
+        that SAME customer — the other is an unused, harmless orphan in
+        Stripe.
+        """
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
         coach = make_coach()
         assert coach.stripe_customer_id == ""
@@ -681,9 +712,91 @@ class TestBillingSubscribeDoubleSubmit:
 
         assert resp_a.status_code == 302
         assert resp_b.status_code == 302
-        # Only one Stripe customer for a coach who started with none — the
-        # loser must reuse the winner's, not create its own.
-        assert len(fake.customers) == 1, fake.customers
+        # At most one customer per racer — never more, and never a THIRD one
+        # from some later re-read.
+        assert len(fake.customers) <= 2, fake.customers
+        coach.refresh_from_db()
+        # The coach ends up pointed at exactly one of the customers created.
+        assert coach.stripe_customer_id in fake.customers
+        # Every Checkout Session either racer created — including any from a
+        # later, idempotent ``stripe_customer_get_or_create`` re-read in the
+        # same request — used that SAME customer. An orphan is never
+        # attached to a real Checkout.
+        assert fake.session_customers() == {coach.stripe_customer_id}
         # The loser's earlier session was expired; at most the winner's
         # newer one is still completable.
         assert fake.open_subscription_session_count() <= 1
+
+
+# ---------------------------------------------------------------------------
+# stripe_customer_get_or_create (adversarial review of #556, round 2, Fix A)
+# ---------------------------------------------------------------------------
+#
+# The deterministic version of this race lives in
+# ``payments/tests/test_utils.py`` (a caller whose in-memory ``user`` still
+# reads "" because another writer already committed). This is the real,
+# concurrent-threads version: two genuinely separate Python processes'-worth
+# of state (two separately fetched ``User`` instances for the same row, two
+# real threads/connections) racing the SAME write-once conditional update.
+
+#: Fires right before either thread calls ``stripe.Customer.create`` — both
+#: still hold their own stale (empty) in-memory ``stripe_customer_id`` at
+#: this point, which is exactly the race this fix has to survive.
+CUSTOMER_CREATE_BEFORE = "before"
+
+
+class TestStripeCustomerGetOrCreatePostgresRace:
+    def test_two_real_threads_racing_converge_on_one_customer(self):
+        coach = UserFactory()
+        assert coach.stripe_customer_id == ""
+        # Two independent reads of the same row — mirrors two separate
+        # requests, each with its own request-scoped ``user`` instance.
+        user_a = type(coach).objects.get(pk=coach.pk)
+        user_b = type(coach).objects.get(pk=coach.pk)
+        a_reached = threading.Event()
+        results = []
+        errors = []
+        created_ids = iter(["cus_thread_a", "cus_thread_b"])
+
+        def fake_create(**kwargs):
+            return mock.Mock(id=next(created_ids))
+
+        wrapped_create = _paused(fake_create, CUSTOMER_CREATE_BEFORE, a_reached)
+
+        def run(user):
+            try:
+                results.append(stripe_customer_get_or_create(user))
+            except Exception as exc:  # noqa: BLE001 - captured for the assertions
+                errors.append(exc)
+            finally:
+                connection.close()
+
+        with (
+            mock.patch(
+                "store_project.payments.utils.stripe.Customer.create",
+                side_effect=wrapped_create,
+            ),
+            mock.patch(
+                "store_project.payments.utils.stripe.Customer.retrieve",
+                side_effect=lambda cid, **kw: mock.Mock(id=cid),
+            ),
+        ):
+            thread_a = threading.Thread(target=run, args=(user_a,))
+            thread_a.start()
+            assert a_reached.wait(timeout=5), "thread A never reached the hook"
+            thread_b = threading.Thread(target=run, args=(user_b,))
+            thread_b.start()
+            thread_a.join(timeout=10)
+            thread_b.join(timeout=10)
+
+        assert not thread_a.is_alive(), "thread A did not finish"
+        assert not thread_b.is_alive(), "thread B did not finish"
+        assert errors == [], errors
+        assert len(results) == 2
+        # Both calls return the SAME customer — the loser discarded the one
+        # it minted and re-read the winner's instead.
+        assert results[0].id == results[1].id
+        winner_id = results[0].id
+        assert winner_id in ("cus_thread_a", "cus_thread_b")
+        coach.refresh_from_db()
+        assert coach.stripe_customer_id == winner_id

@@ -201,11 +201,18 @@ def _lock_mirror(coach):
     guard in ``_sync_from_subscription`` and overwrites the subscription a concurrent delivery just took
     over. With no mirror row yet there's nothing to lock, so lock the coach's
     user row instead and re-read: a concurrent first delivery holds that lock
-    until its new row has committed.
+    until its new row has committed. That user-row lock is ``no_key=True``
+    (``FOR NO KEY UPDATE``, same reasoning as #540/#560): Postgres FKs are
+    ``DEFERRABLE INITIALLY DEFERRED``, so the ``CoachSubscription`` insert this
+    same delivery is about to make takes ``FOR KEY SHARE`` on this user row at
+    **commit** — a plain ``FOR UPDATE`` here would deadlock against that (or
+    against any other concurrent insert referencing this user, e.g. a
+    ``CoachAthlete`` row), while ``FOR NO KEY UPDATE`` still serializes against
+    another concurrent writer of this same row.
     """
     existing = CoachSubscription.objects.select_for_update().filter(coach=coach).first()
     if existing is None:
-        User.objects.select_for_update().filter(pk=coach.pk).first()
+        User.objects.select_for_update(no_key=True).filter(pk=coach.pk).first()
         existing = (
             CoachSubscription.objects.select_for_update().filter(coach=coach).first()
         )

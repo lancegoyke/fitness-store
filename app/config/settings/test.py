@@ -96,6 +96,14 @@ stripe.checkout.Session.list = _autospec_stripe_mock(
     auto_paging_iter=unittest.mock.Mock(side_effect=lambda: iter([])),
 )
 stripe.checkout.Session.expire = _autospec_stripe_mock(stripe.checkout.Session.expire)
+# Default: the ordinary post-Checkout path (a real completed session) works
+# even in a test that never mocks this itself — the ``?billing=success``
+# pending-state check (#556 round 2) retrieves the Checkout Session it
+# started to confirm it actually completed. A test asserting the abandoned/
+# failure paths patches this locally to something else.
+stripe.checkout.Session.retrieve = _autospec_stripe_mock(
+    stripe.checkout.Session.retrieve, status="complete"
+)
 stripe.Webhook.construct_event = unittest.mock.Mock(
     return_value={
         "type": "checkout.session.completed",

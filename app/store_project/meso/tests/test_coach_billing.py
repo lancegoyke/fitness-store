@@ -19,6 +19,7 @@ from decimal import Decimal
 from unittest import mock
 
 import pytest
+import stripe
 from django.urls import reverse
 from django.utils import dateformat
 from django.utils import timezone
@@ -35,6 +36,7 @@ from store_project.meso.models import CoachSubscription
 from store_project.meso.presenters import coach_billing
 from store_project.meso.views import CHECKOUT_PENDING_MAX_AGE
 from store_project.meso.views import CHECKOUT_PENDING_SESSION_KEY
+from store_project.meso.views import CHECKOUT_STARTED_SESSION_KEY
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
@@ -597,33 +599,135 @@ class TestCheckoutPendingBillingSurfaces:
     def test_after_a_real_checkout_both_surfaces_agree_its_finishing(
         self, client, settings
     ):
-        """A Subscribe POST that opened a real Checkout backs the placeholder.
+        """A Subscribe POST that opened a real, COMPLETED Checkout backs the placeholder.
 
         The success redirect's ``?billing=success`` converts the session's
         *started* marker (set by ``billing_subscribe`` right before it sent
-        the coach to Stripe) into *pending*. A later plain GET of the OTHER
-        surface — no query string at all, the nav's plain "Billing" link —
-        still shows it, so the roster and the billing page never contradict
-        each other.
+        the coach to Stripe, carrying the Checkout Session's own id) into
+        *pending* — but only once Stripe itself confirms that session is
+        ``complete`` (adversarial review, round 2 of #556, Fix B). A later
+        plain GET of the OTHER surface — no query string at all, the nav's
+        plain "Billing" link — still shows it, so the roster and the billing
+        page never contradict each other.
         """
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
         coach = _coach()
         client.force_login(coach)
         with mock.patch(
             "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
-            return_value=mock.Mock(url="https://stripe/cs"),
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_finished"),
         ):
             resp = client.post(SUBSCRIBE_URL)
         assert resp.url == "https://stripe/cs"
 
-        body = client.get(f"{ROSTER_URL}?billing=success").content.decode()
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.checkout_session_is_complete",
+            return_value=True,
+        ) as is_complete:
+            body = client.get(f"{ROSTER_URL}?billing=success").content.decode()
+        is_complete.assert_called_once_with("cs_finished")
         assert "Finishing your subscription" in body
         assert 'action="/meso/billing/subscribe/"' not in body
 
-        # The other surface, no query string at all.
+        # The other surface, no query string at all — the pending marker
+        # already converted, so no further Stripe lookup is needed.
         body = client.get(URL).content.decode()
         assert "Finishing your subscription" in body
         assert 'action="/meso/billing/subscribe/"' not in body
+
+    def test_abandoned_started_checkout_shows_the_real_state_not_finishing(
+        self, client, settings
+    ):
+        """A started-but-abandoned Checkout must not show the placeholder.
+
+        Before Fix B (adversarial review, round 2 of #556), ANY fresh
+        *started* marker converted a ``?billing=success`` into pending — even
+        one for a Checkout Session the coach never finished. A stale
+        bookmark, browser history, or a retyped URL carrying that param could
+        then show "Finishing…" (Subscribe hidden, a Manage-billing button for
+        a subscription that doesn't exist) for up to 15 minutes, with no
+        webhook ever coming to clear it.
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = _coach()
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_abandoned"),
+        ):
+            client.post(SUBSCRIBE_URL)
+
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.checkout_session_is_complete",
+            return_value=False,
+        ) as is_complete:
+            body = client.get(f"{ROSTER_URL}?billing=success").content.decode()
+        is_complete.assert_called_once_with("cs_abandoned")
+        assert "Finishing your subscription" not in body
+        assert 'action="/meso/billing/subscribe/"' in body
+        # The started marker is spent either way — an abandoned Checkout
+        # doesn't get to keep re-triggering the lookup.
+        assert CHECKOUT_STARTED_SESSION_KEY not in client.session
+
+    def test_stripe_lookup_failure_shows_real_state_and_keeps_the_marker(
+        self, client, settings
+    ):
+        """A transient Stripe failure never shows a placeholder it can't back.
+
+        The started marker is left alone so a reload can try the lookup
+        again — this is "couldn't check right now", not "abandoned".
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = _coach()
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_transient"),
+        ):
+            client.post(SUBSCRIBE_URL)
+        assert CHECKOUT_STARTED_SESSION_KEY in client.session
+
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.checkout_session_is_complete",
+            side_effect=stripe.error.APIConnectionError("boom"),
+        ):
+            body = client.get(f"{ROSTER_URL}?billing=success").content.decode()
+
+        assert "Finishing your subscription" not in body
+        assert 'action="/meso/billing/subscribe/"' in body
+        assert CHECKOUT_STARTED_SESSION_KEY in client.session
+        assert CHECKOUT_PENDING_SESSION_KEY not in client.session
+
+    def test_free_trial_started_between_abandon_and_return_shows_trial_not_placeholder(
+        self, client, settings
+    ):
+        """The review's exact counterexample (round 2 of #556, Fix B).
+
+        Subscribe → abandon Checkout → start the free local trial (a
+        completely unrelated, legitimate action) → land back on
+        ``?billing=success``. The coach must see their real trial state, not
+        a lingering "Finishing…" for a Checkout that never completed.
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = _coach()
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_abandoned_2"),
+        ):
+            client.post(SUBSCRIBE_URL)
+
+        client.post(reverse("meso:billing_start_trial"))
+
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.checkout_session_is_complete",
+            return_value=False,
+        ):
+            body = client.get(f"{ROSTER_URL}?billing=success").content.decode()
+
+        assert "Finishing your subscription" not in body
+        assert "Free trial" in body
+        assert 'action="/meso/billing/subscribe/"' in body
 
     def test_cancel_param_clears_the_pending_state(self, client, settings):
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
@@ -631,11 +735,15 @@ class TestCheckoutPendingBillingSurfaces:
         client.force_login(coach)
         with mock.patch(
             "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
-            return_value=mock.Mock(url="https://stripe/cs"),
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_finished"),
         ):
             client.post(SUBSCRIBE_URL)
         # Land back from Checkout, converting "started" into "pending".
-        client.get(f"{ROSTER_URL}?billing=success")
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.checkout_session_is_complete",
+            return_value=True,
+        ):
+            client.get(f"{ROSTER_URL}?billing=success")
 
         body = client.get(f"{ROSTER_URL}?billing=cancel").content.decode()
         assert "Finishing your subscription" not in body

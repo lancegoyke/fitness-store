@@ -93,7 +93,8 @@ class TestCheckoutSession:
         CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)
         CoachAthleteFactory(coach=coach, status=CoachAthlete.Status.ACTIVE)
         with mock.patch(
-            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            GATEWAY_CHECKOUT,
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
         ) as create:
             session = stripe_gateway.create_subscription_checkout_session(
                 coach, success_url="https://x/ok", cancel_url="https://x/no"
@@ -116,7 +117,8 @@ class TestCheckoutSessionTrial:
         coach = UserFactory()
         trial_end = timezone.now() + timedelta(days=5)
         with mock.patch(
-            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            GATEWAY_CHECKOUT,
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
         ) as create:
             stripe_gateway.create_subscription_checkout_session(
                 coach,
@@ -131,7 +133,8 @@ class TestCheckoutSessionTrial:
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
         coach = UserFactory()
         with mock.patch(
-            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            GATEWAY_CHECKOUT,
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
         ) as create:
             stripe_gateway.create_subscription_checkout_session(
                 coach, success_url="https://x/ok", cancel_url="https://x/no"
@@ -225,6 +228,45 @@ class TestDeferredFirstCharge:
             stripe_subscription_id="sub_1",
         )
         assert billing_access.deferred_first_charge(coach) is None
+
+
+class TestDeferredFirstChargeExplicitSub:
+    """An explicit ``sub=`` bypasses a stale cached reverse accessor (Fix C).
+
+    ``refresh_from_db(fields=["stripe_customer_id"])`` in ``billing_subscribe``
+    (adversarial review, round 2 of #556) doesn't clear a cached
+    ``coach_subscription`` reverse one-to-one — so a caller that already
+    accessed it once keeps reading the stale row unless it explicitly passes
+    the freshly re-read one.
+    """
+
+    def test_stale_cached_accessor_without_sub_reads_the_old_row(self):
+        coach = UserFactory()
+        sub = CoachSubscriptionFactory(
+            coach=coach, status=CoachSubscription.Status.FREE
+        )
+        # Cache the (soon-to-be-stale) reverse accessor on this instance.
+        assert coach.coach_subscription.status == CoachSubscription.Status.FREE
+        trial_end = timezone.now() + timedelta(days=10)
+        CoachSubscription.objects.filter(pk=sub.pk).update(
+            status=CoachSubscription.Status.TRIALING, trial_end=trial_end
+        )
+
+        assert billing_access.deferred_first_charge(coach) is None
+
+    def test_explicit_sub_overrides_the_stale_cached_accessor(self):
+        coach = UserFactory()
+        sub = CoachSubscriptionFactory(
+            coach=coach, status=CoachSubscription.Status.FREE
+        )
+        assert coach.coach_subscription.status == CoachSubscription.Status.FREE
+        trial_end = timezone.now() + timedelta(days=10)
+        CoachSubscription.objects.filter(pk=sub.pk).update(
+            status=CoachSubscription.Status.TRIALING, trial_end=trial_end
+        )
+        fresh = CoachSubscription.objects.get(pk=sub.pk)
+
+        assert billing_access.deferred_first_charge(coach, sub=fresh) == trial_end
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +376,32 @@ class TestCustomerHasOpenSubscription:
         with mock.patch(GATEWAY_SUB_LIST, side_effect=err):
             with pytest.raises(stripe.error.InvalidRequestError):
                 stripe_gateway.customer_has_open_subscription(coach)
+
+
+class TestCheckoutSessionIsComplete:
+    """The gateway function backing the Fix B pending-state check (#556, round 2)."""
+
+    def test_complete_status_is_true(self):
+        with mock.patch(
+            GATEWAY_SESSION_RETRIEVE, return_value=mock.Mock(status="complete")
+        ) as retrieve:
+            assert stripe_gateway.checkout_session_is_complete("cs_1") is True
+        retrieve.assert_called_once_with("cs_1")
+
+    @pytest.mark.parametrize("status", ["open", "expired"])
+    def test_not_complete_status_is_false(self, status):
+        with mock.patch(
+            GATEWAY_SESSION_RETRIEVE, return_value=mock.Mock(status=status)
+        ):
+            assert stripe_gateway.checkout_session_is_complete("cs_1") is False
+
+    def test_retrieve_raising_propagates(self):
+        with mock.patch(
+            GATEWAY_SESSION_RETRIEVE,
+            side_effect=stripe.error.APIConnectionError("boom"),
+        ):
+            with pytest.raises(stripe.error.APIConnectionError):
+                stripe_gateway.checkout_session_is_complete("cs_1")
 
 
 class TestExpireOpenSubscriptionCheckouts:
@@ -1554,7 +1622,7 @@ class TestSubscribeView:
         coach, c = self._coach_client()
         with mock.patch(
             "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
-            return_value=mock.Mock(url="https://stripe/checkout"),
+            return_value=mock.Mock(url="https://stripe/checkout", id="cs_test"),
         ):
             resp = c.post(self.URL)
         assert resp.status_code == 302
@@ -1630,11 +1698,60 @@ class TestSubscribeView:
         )
         with mock.patch(
             "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
-            return_value=mock.Mock(url="https://stripe/checkout"),
+            return_value=mock.Mock(url="https://stripe/checkout", id="cs_test"),
         ) as create:
             resp = c.post(self.URL)
         assert resp.url == "https://stripe/checkout"
         create.assert_called_once()
+
+
+class TestSubscribeViewCustomerIdIsDurable:
+    """Fix A (adversarial review, round 2 of #556): the customer id survives.
+
+    ``billing_subscribe`` used to create the Stripe customer INSIDE the same
+    ``transaction.atomic()`` block that holds the coach's row lock across the
+    (slower) Checkout calls. If anything after the customer-id write forces
+    that whole transaction to roll back — a dead worker in production; here,
+    a genuine ``django.db.Error`` raised by a later, unguarded query inside
+    the same block — Postgres rolls the id write back with it, orphaning the
+    Stripe customer that was already created. Creating the customer BEFORE
+    the lock (its own, separately-committed write) makes it durable
+    regardless of what happens later in the request.
+    """
+
+    URL = "/meso/billing/subscribe/"
+
+    def _coach_client(self):
+        coach = UserFactory()
+        CoachProfileFactory(user=coach)
+        c = Client()
+        c.force_login(coach)
+        return coach, c
+
+    def test_customer_id_is_not_rolled_back_by_a_later_failure_in_the_lock(
+        self, settings
+    ):
+        from django.db.utils import OperationalError
+
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        assert coach.stripe_customer_id == ""
+
+        with (
+            mock.patch(
+                "store_project.payments.utils.stripe.Customer.create",
+                return_value=mock.Mock(id="cus_durable"),
+            ),
+            mock.patch(
+                "store_project.meso.views.billing_access.deferred_first_charge",
+                side_effect=OperationalError("synthetic failure inside the lock"),
+            ),
+        ):
+            with pytest.raises(OperationalError):
+                c.post(self.URL)
+
+        coach.refresh_from_db()
+        assert coach.stripe_customer_id == "cus_durable"
 
 
 class TestSubscribeViewNeverOpensASecondSubscription:
@@ -1703,7 +1820,8 @@ class TestSubscribeViewNeverOpensASecondSubscription:
         with (
             mock.patch(GATEWAY_SUB_LIST, return_value=_subscription_list(statuses)),
             mock.patch(
-                GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+                GATEWAY_CHECKOUT,
+                return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
             ) as create,
         ):
             resp = c.post(self.URL)
@@ -1718,27 +1836,45 @@ class TestSubscribeViewNeverOpensASecondSubscription:
                 GATEWAY_SUB_LIST, return_value=_subscription_list([])
             ) as list_mock,
             mock.patch(
-                GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+                GATEWAY_CHECKOUT,
+                return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
             ),
         ):
             c.post(self.URL)
         list_mock.assert_called_once_with(customer="cus_x", status="all", limit=100)
 
-    def test_no_customer_id_skips_the_stripe_check(self, settings):
+    def test_first_time_coach_gets_a_customer_before_the_open_subscription_check(
+        self, settings
+    ):
+        """A coach with no ``stripe_customer_id`` yet gets one durably up front.
+
+        Before Fix A (adversarial review, round 2 of #556) the customer was
+        created lazily inside Checkout creation, so this check saw no
+        customer id yet and skipped calling Stripe outright. Now
+        ``billing_subscribe`` calls ``ensure_customer`` before this check, so
+        a first-time coach already has a (freshly minted) customer id by the
+        time it runs, and the check runs against it — finding nothing, since
+        it's brand new — rather than skipping.
+        """
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
         coach = UserFactory()
         CoachProfileFactory(user=coach)
         c = Client()
         c.force_login(coach)
         with (
-            mock.patch(GATEWAY_SUB_LIST) as list_mock,
             mock.patch(
-                GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+                GATEWAY_SUB_LIST, return_value=_subscription_list([])
+            ) as list_mock,
+            mock.patch(
+                GATEWAY_CHECKOUT,
+                return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
             ),
         ):
             resp = c.post(self.URL)
-        list_mock.assert_not_called()
+        list_mock.assert_called_once()
         assert resp.url == "https://stripe/cs"
+        coach.refresh_from_db()
+        assert coach.stripe_customer_id != ""
 
     def test_subscription_list_raising_fails_closed(self, settings):
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
@@ -1767,7 +1903,8 @@ class TestSubscribeViewNeverOpensASecondSubscription:
         with (
             mock.patch(GATEWAY_SUB_LIST, side_effect=err),
             mock.patch(
-                GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+                GATEWAY_CHECKOUT,
+                return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
             ) as create,
         ):
             resp = c.post(self.URL)
@@ -1818,7 +1955,8 @@ class TestSubscribeViewExpiresOpenCheckoutsBeforeCreatingANewOne:
             mock.patch(GATEWAY_SESSION_LIST, return_value=sessions),
             mock.patch(GATEWAY_SESSION_EXPIRE) as expire,
             mock.patch(
-                GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+                GATEWAY_CHECKOUT,
+                return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
             ) as create,
         ):
             resp = c.post(self.URL)
@@ -1843,7 +1981,7 @@ class TestSubscribeViewExpiresOpenCheckoutsBeforeCreatingANewOne:
                 "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
                 side_effect=lambda *a, **kw: (
                     call_order.append("checkout"),
-                    mock.Mock(url="https://stripe/cs"),
+                    mock.Mock(url="https://stripe/cs", id="cs_test"),
                 )[1],
             ),
         ):
@@ -1932,7 +2070,8 @@ class TestSubscribeViewDeferredCharge:
             trial_end=trial_end,
         )
         with mock.patch(
-            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            GATEWAY_CHECKOUT,
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
         ) as create:
             resp = c.post(self.URL)
         assert resp.status_code == 302
@@ -1962,7 +2101,8 @@ class TestSubscribeViewDeferredCharge:
             trial_end=timezone.now() + timedelta(hours=47),
         )
         with mock.patch(
-            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            GATEWAY_CHECKOUT,
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
         ) as create:
             resp = c.post(self.URL)
         assert resp.status_code == 302
@@ -1986,7 +2126,7 @@ class TestSubscribeViewDeferredCharge:
             )
         with mock.patch(
             "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
-            return_value=mock.Mock(url="https://stripe/checkout"),
+            return_value=mock.Mock(url="https://stripe/checkout", id="cs_test"),
         ) as create:
             c.post(self.URL)
         assert create.call_args.kwargs["trial_end"] is None
@@ -1995,7 +2135,8 @@ class TestSubscribeViewDeferredCharge:
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
         coach, c = self._coach_client()
         with mock.patch(
-            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+            GATEWAY_CHECKOUT,
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_test"),
         ) as create:
             c.post(self.URL)
         assert "subscription_data" not in create.call_args.kwargs
