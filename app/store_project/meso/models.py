@@ -1112,6 +1112,12 @@ class CoachSubscription(models.Model):
         Single-use: a row that has ever trialed (``trial_end`` set, even after it
         lapsed back to ``free``) can't re-arm a second free trial. No Stripe is
         touched — the trial is pure local state until a card is collected.
+
+        Blanks any leftover ``stripe_subscription_id``/``stripe_item_id``
+        (#555 P2-2): a FREE row can carry a dead Stripe id through an admin
+        edit (e.g. a canceled subscriber reset to free by hand) — without this
+        a fresh trial would read as ``is_stripe_trial`` and never lazily
+        expire on the local clock.
         """
         if self.status != self.Status.FREE:
             raise InvalidTransition(f"Cannot start a trial from {self.status}.")
@@ -1119,7 +1125,17 @@ class CoachSubscription(models.Model):
             raise InvalidTransition("This coach has already used their free trial.")
         self.status = self.Status.TRIALING
         self.trial_end = timezone.now() + timedelta(days=self.TRIAL_DAYS)
-        self.save(update_fields=["status", "trial_end", "modified"])
+        self.stripe_subscription_id = ""
+        self.stripe_item_id = ""
+        self.save(
+            update_fields=[
+                "status",
+                "trial_end",
+                "stripe_subscription_id",
+                "stripe_item_id",
+                "modified",
+            ]
+        )
         return self
 
     def expire_trial(self):

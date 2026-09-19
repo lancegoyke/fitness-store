@@ -113,6 +113,31 @@ class TestCoachSubscriptionModel:
         expected = before + timedelta(days=CoachSubscription.TRIAL_DAYS)
         assert abs((sub.trial_end - expected).total_seconds()) < 30
 
+    def test_start_trial_clears_leftover_stripe_ids(self):
+        """A FREE row can carry a dead Stripe id through an admin edit (#555 P2-2).
+
+        E.g. an admin resets a canceled subscriber back to free by hand —
+        ``start_trial`` must not produce a TRIALING row that still carries that
+        dead id, which would read as a (never-lapsing) Stripe trial.
+        """
+        sub = CoachSubscriptionFactory(
+            status=CoachSubscription.Status.FREE,
+            stripe_subscription_id="sub_old",
+            stripe_item_id="si_old",
+            trial_end=None,
+        )
+        sub.start_trial()
+        sub.refresh_from_db()
+        assert sub.is_stripe_trial is False
+        assert sub.stripe_subscription_id == ""
+        assert sub.stripe_item_id == ""
+        # And the local clock still governs it — lapses like an ordinary trial.
+        CoachSubscription.objects.filter(pk=sub.pk).update(
+            trial_end=timezone.now() - timedelta(minutes=1)
+        )
+        sub.refresh_from_db()
+        assert sub.is_active is False
+
     def test_start_trial_rejects_non_free(self):
         sub = CoachSubscriptionFactory(status=CoachSubscription.Status.ACTIVE)
         with pytest.raises(InvalidTransition):
