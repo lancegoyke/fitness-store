@@ -2,7 +2,8 @@
 
 The athlete opens their training home, reads the block, switches weeks with
 the chips, and taps into a session to log it. At every viewport the page must
-not scroll sideways; on a phone the block reads as stacked cards (one line
+not scroll sideways or cut off a control; on a phone the block reads as
+stacked cards (one line
 per sub-line) instead of a wide table, every input is big enough that iOS
 Safari won't zoom on focus, and every control is a comfortable tap target.
 
@@ -47,6 +48,38 @@ SMALL_TAP_TARGETS_JS = """(minTap) => {
   return small;
 }"""
 
+# Every rendered control that sticks out of the screen, or out of a box that
+# clips it (a card with overflow:hidden cuts it off rather than letting the
+# page scroll — which is how the old set row failed at 320px). A box that
+# scrolls on purpose (overflow auto/scroll) ends the search.
+CUT_OFF_CONTROLS_JS = """() => {
+  const selector = 'a[href], button, input:not([type=hidden]), select, textarea, summary';
+  const screenWidth = document.documentElement.clientWidth;
+  const cutOff = [];
+  for (const el of document.querySelectorAll(selector)) {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    const label = (el.innerText || el.placeholder || el.getAttribute('aria-label') || '')
+      .trim().replace(/\\s+/g, ' ').slice(0, 30);
+    const name = `${el.tagName.toLowerCase()} "${label}"`;
+    if (r.left < -0.5 || r.right > screenWidth + 0.5) {
+      cutOff.push(`${name} runs off the screen`);
+      continue;
+    }
+    for (let box = el.parentElement; box; box = box.parentElement) {
+      const overflow = getComputedStyle(box).overflowX;
+      if (overflow === 'auto' || overflow === 'scroll') break;
+      if (overflow === 'visible') continue;
+      const b = box.getBoundingClientRect();
+      if (r.left < b.left - 0.5 || r.right > b.right + 0.5) {
+        cutOff.push(`${name} is cut off by its ${box.tagName.toLowerCase()}`);
+        break;
+      }
+    }
+  }
+  return cutOff;
+}"""
+
 INPUT_FONT_SIZES_JS = """() => [...document.querySelectorAll('input, textarea, select')]
   .filter((el) => el.type !== 'hidden')
   .map((el) => ({
@@ -55,22 +88,24 @@ INPUT_FONT_SIZES_JS = """() => [...document.querySelectorAll('input, textarea, s
   }))"""
 
 
-def _assert_no_sideways_scroll(page):
+def _assert_fits(page):
     width = page.evaluate(PAGE_WIDTH_JS)
     assert width["scrollWidth"] <= width["clientWidth"], (
         f"page scrolls sideways: {width['scrollWidth']}px of content in a "
         f"{width['clientWidth']}px viewport"
     )
+    cut_off = page.evaluate(CUT_OFF_CONTROLS_JS)
+    assert cut_off == [], f"controls the athlete can't fully see: {cut_off}"
 
 
-def _assert_no_sideways_scroll_down_to_320(page, viewport):
-    """At this viewport, and on a phone also at 320px wide."""
-    _assert_no_sideways_scroll(page)
+def _assert_fits_down_to_320(page, viewport):
+    """No sideways scroll and no cut-off control, here and (phone) at 320px."""
+    _assert_fits(page)
     if viewport["is_phone"]:
         size = page.viewport_size
         page.set_viewport_size(NARROWEST_PHONE)
         try:
-            _assert_no_sideways_scroll(page)
+            _assert_fits(page)
         finally:
             page.set_viewport_size(size)
 
@@ -95,7 +130,7 @@ def test_athlete_reads_their_block_week_by_week(
     expect(page.get_by_role("heading", name="Your programs")).to_be_visible()
     shot("01-home")
 
-    _assert_no_sideways_scroll_down_to_320(page, viewport)
+    _assert_fits_down_to_320(page, viewport)
     _assert_tap_targets(page, viewport)
 
     if not viewport["is_phone"]:
@@ -124,7 +159,7 @@ def test_athlete_reads_their_block_week_by_week(
     expect(page).to_have_url(re.compile(r"\?week=\d+$"))
     expect(_stacked_lines(page, "Back Squat")).to_have_text(block_plan.squat_lines[2])
     shot("02-week-2")
-    _assert_no_sideways_scroll_down_to_320(page, viewport)
+    _assert_fits_down_to_320(page, viewport)
 
 
 def test_athlete_opens_a_session_from_home(
@@ -142,7 +177,7 @@ def test_athlete_opens_a_session_from_home(
     expect(squat.get_by_test_id("sub-line-input").first).to_have_value("RPE 7")
     shot("01-session")
 
-    _assert_no_sideways_scroll_down_to_320(page, viewport)
+    _assert_fits_down_to_320(page, viewport)
     _assert_tap_targets(page, viewport)
 
     # iOS Safari zooms the page when an input under 16px takes focus. Every
