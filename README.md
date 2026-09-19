@@ -180,13 +180,15 @@ python manage.py seed_challenges
 python manage.py seed_products
 ```
 
-### Legacy Test Data
+### Sample Data
 
-To setup test data (legacy command):
+To seed the database with sample data:
 
 ```
-python manage.py setup_test_data
+python manage.py seed_database
 ```
+
+There is also `python manage.py seed_meso_demo` for the Meso coach-side demo data.
 
 ### Running Tests
 

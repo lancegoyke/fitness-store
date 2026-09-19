@@ -23,8 +23,8 @@ migrate:
 makemigrations:
     uv run python app/manage.py makemigrations
 
-setup-test-data:
-    uv run python app/manage.py setup_test_data
+seed-database:
+    uv run python app/manage.py seed_database
 
 createsuperuser:
     uv run python app/manage.py createsuperuser
