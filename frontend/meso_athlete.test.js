@@ -2236,7 +2236,7 @@ describe("a replay, a stalled save, an unread response, a junk outbox (#527)", (
     expect(global.fetch).toHaveBeenCalledWith(LOG_URL, expect.anything());
   });
 
-  it("doesn't un-tick rows when an older queued log flushes mid-save", async () => {
+  it("keeps rows ticked since an older queued log of the session", async () => {
     vi.useFakeTimers();
     const c = makeLogger();
     // An earlier save of this session is still queued (sets: set 1 only).
@@ -2262,8 +2262,91 @@ describe("a replay, a stalled save, an unread response, a junk outbox (#527)", (
       });
     });
     await c.save(false);
-    expect(bodies).toHaveLength(2); // the old log, then this save
-    expect(bodies[1].sets.map((s) => s.set_number)).toEqual([1, 2]);
+    // The older log is superseded, not replayed first (which un-ticked rows
+    // before save built its payload); what goes out carries both sets.
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].sets.map((s) => s.set_number)).toEqual([1, 2]);
+    expect(c.readQueue()).toHaveLength(0);
+  });
+});
+
+describe("a newer blur, an unknown outcome, a slow Log session (#527)", () => {
+  function held() {
+    const calls = [];
+    const pending = [];
+    const fetchMock = vi.fn().mockImplementation(
+      (url, opts) =>
+        new Promise((resolve) => {
+          calls.push({ url, body: JSON.parse(opts.body) });
+          pending.push(resolve);
+        }),
+    );
+    const land = (body) => pending.shift()(res({ body }));
+    return { calls, fetchMock, land };
+  }
+
+  it("sends the line as it is when a blur queued newer text mid-save", async () => {
+    // "100 x 5" is in flight; a typo "100 x 55" is blurred (queued behind
+    // it); the athlete deletes the extra 5 before the first save lands.
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.savedText = "";
+    const { calls, fetchMock, land } = held();
+    global.fetch = fetchMock;
+    line.text = "100 x 5";
+    c.saveCell(c.exercises[0], 1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    line.text = "100 x 55";
+    c.saveCell(c.exercises[0], 1);
+    line.text = "100 x 5";
+    land({ ok: true, cell: { line: 1, text: "100 x 5", warn: false } });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1].body.text).toBe("100 x 5");
+    land({ ok: true, cell: { line: 1, text: "100 x 5", warn: false } });
+    await vi.waitFor(() => expect(c.readQueue()).toHaveLength(0));
+  });
+
+  it("sends a revert after a write whose outcome was never known", async () => {
+    // "225 x 6" may have landed (no answer); a later write was refused; the
+    // athlete goes back to "225 x 5", which the server may no longer hold.
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.savedText = "225 x 5";
+    line.text = "225 x 6";
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1);
+    line.text = "x".repeat(3000);
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 400 }));
+    await c.saveCell(c.exercises[0], 1);
+    expect(line.saveError).toBe(true);
+    line.text = "225 x 5";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "225 x 5", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the session's log in the outbox while Log session waits", async () => {
+    // Leaving the page during a slow "Saving…" must not lose the Set rows.
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].set_rows = [
+      { set_number: 1, reps: "5", load: "100", rpe: "", done: true },
+    ];
+    c.exercises[0].sub_lines[0].text = "RPE 8";
+    const { calls, fetchMock, land } = held();
+    global.fetch = fetchMock;
+    c.saveCell(c.exercises[0], 1); // a line save that's slow to answer
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const log = c.readQueue().find((i) => i.url === LOG_URL);
+    expect(log.body.status).toBe("done");
+    expect(log.body.sets).toHaveLength(1);
+    land({ ok: true, cell: { line: 1, text: "RPE 8", warn: false } });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    land({ log: { status: "done", sets: [{ prescription: 1, set_number: 1 }] } });
+    await saving;
+    expect(c.readQueue()).toHaveLength(0);
   });
 });
 

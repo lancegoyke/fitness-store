@@ -364,6 +364,11 @@ function createLogger() {
       // Reflect the intended status locally right away so the UI is responsive
       // whether the request lands now or after a sync.
       if (markDone) this.status = "done";
+      // Written ahead, like a line (#527): the wait below can take a while on
+      // bad wifi, and leaving the page meanwhile must not lose the Set rows.
+      // The flush leaves this entry to save(), which replaces it with what it
+      // finally sends, or takes it out once that lands.
+      const ahead = this.enqueue(this.buildPayload(markDone));
       // Lines first (#527). Pressing the button blurs the line being typed, so
       // its save is already on its way: let it land, then send any line still
       // queued from earlier. The log then reaches the server after the sets its
@@ -398,6 +403,7 @@ function createLogger() {
           return;
         }
         if (!res.ok) throw new Error("Request failed: " + res.status);
+        if (ahead) this.dropEntry(ahead);
         const data = await res.json();
         this.status = data.log.status;
         this.syncFromLog(data.log);
@@ -418,6 +424,8 @@ function createLogger() {
       } catch (err) {
         console.error("Log save failed", err);
         this.error = true;
+        // An HTTP error is the athlete's to retry, not the outbox's.
+        if (ahead) this.dropEntry(ahead);
       } finally {
         this.saving = false;
       }
@@ -540,10 +548,12 @@ function createLogger() {
       else this.error = true;
     },
 
+    // Returns the entry as stored, or null when storage refused it.
     enqueue(payload) {
       const queue = this.readQueue().filter((item) => item.url !== this.logUrl);
-      queue.push(this.stamp({ url: this.logUrl, body: payload }));
-      return this.writeQueue(queue);
+      const item = this.stamp({ url: this.logUrl, body: payload });
+      queue.push(item);
+      return this.writeQueue(queue) ? item : null;
     },
 
     // Queue one line's write, replacing any earlier one for the same cell:
@@ -615,6 +625,8 @@ function createLogger() {
       }
       let flushedMine = false;
       for (const item of queue.filter((i) => !isCellEntry(i))) {
+        // Mid-save, this session's log is save()'s to send, right after.
+        if (this.saving && item.url === this.logUrl) continue;
         const outcome = await this.flushLog(item);
         if (outcome === "offline") break;
         if (outcome === "mine") flushedMine = true;
@@ -669,10 +681,6 @@ function createLogger() {
       if (!res.ok) return "kept";
       this.dropEntry(item);
       if (item.url !== this.logUrl) return "saved";
-      // Mid-save, leave the rows alone: save's own, newer log follows and
-      // reconciles them. Applying this older one first would un-tick rows
-      // ticked since, just before save builds its payload from them.
-      if (this.saving) return "mine";
       try {
         const data = await res.json();
         this.status = data.log.status;
@@ -874,7 +882,7 @@ function createLogger() {
       if (!entry) return;
       const text = entry.text || "";
       const busy = (this._lineSavesRunning[key] || 0) > 0;
-      if (!busy && !this._lineNeedsSending(entry, text)) return;
+      if (!busy && !this._lineNeedsSending(entry, text, ex.id, line)) return;
       this.enqueueCell({ exercise_id: ex.id, line, text });
     },
 
@@ -887,13 +895,22 @@ function createLogger() {
     // un-skips the row is how it gets one. `savedText` is undefined when
     // unknown (a response that couldn't be read or had gone stale), and then
     // the line always posts.
-    _lineNeedsSending(entry, text) {
-      return (
+    //
+    // And a line this page has an entry queued for always posts: a blur made
+    // while an earlier save of it ran queued text that hasn't been sent. The
+    // line as it is now replaces it — or that older text would replay later,
+    // over this.
+    _lineNeedsSending(entry, text, exerciseId, line) {
+      if (
         entry.savedText === undefined ||
         text !== entry.savedText ||
-        !!entry.queued ||
-        !!entry.warn
-      );
+        entry.queued ||
+        entry.warn
+      ) {
+        return true;
+      }
+      const queued = this.queuedCell(exerciseId, line);
+      return !!queued && !!this._ownEntries[queued.id];
     },
 
     // POST one exercise's sub-line cell. Blank text clears the cell in place
@@ -924,7 +941,7 @@ function createLogger() {
         text = sent.body.text;
       } else {
         text = entry ? entry.text || "" : "";
-        if (entry && !this._lineNeedsSending(entry, text)) {
+        if (entry && !this._lineNeedsSending(entry, text, ex.id, line)) {
           entry.saveError = false;
           // The blur may have queued this very text while an earlier save
           // ran; that save has since put it on the server.
@@ -957,6 +974,8 @@ function createLogger() {
           this.csrf,
         );
       } catch (netErr) {
+        // It may have landed or not: what the server holds is unknown now.
+        if (entry) entry.savedText = undefined;
         this._holdCell(entry, ex.id, line, !!sent);
         return "offline";
       }
@@ -965,6 +984,7 @@ function createLogger() {
         return "offline";
       }
       if (isRetryableStatus(res.status)) {
+        if (entry) entry.savedText = undefined; // a 502/504 may have committed
         this._holdCell(entry, ex.id, line, !!sent);
         return "kept";
       }
