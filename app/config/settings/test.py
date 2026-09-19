@@ -31,6 +31,10 @@ import stripe  # noqa
 # deterministic — the batch is resolved by the time dispatch returns.
 MESO_AGENT_RUN_SYNC = True
 
+# pytest-django forces DEBUG off, so the strict default in base.py would be
+# off here too. Tests are where an unknown event name has to fail (#509).
+ANALYTICS_STRICT_EVENT_NAMES = True
+
 # Meso web push: a real (ephemeral, test-only) VAPID keypair so the signing path
 # in ``meso.push`` actually runs under test. The network send itself is mocked —
 # these keys never reach a real push service. The public value is a base64url

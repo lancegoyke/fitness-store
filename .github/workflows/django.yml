@@ -200,9 +200,12 @@ jobs:
       # row-lock serialization (test_settle_postgres: select_for_update is a
       # no-op on SQLite, and in-memory SQLite doesn't even share rows across
       # threads/connections, so a missing lock is invisible there too).
+      # test_track_postgres is the transaction-abort class again: a failed
+      # analytics insert must not roll back the write that called track().
       - name: Run the PostgreSQL-only tests
         run: |
           uv run pytest \
             app/store_project/meso/tests/test_migration_0040_pending_triggers.py \
             app/store_project/meso/tests/test_parse_at_commit_postgres.py \
-            app/store_project/meso/tests/test_settle_postgres.py
+            app/store_project/meso/tests/test_settle_postgres.py \
+            app/store_project/analytics/tests/test_track_postgres.py
