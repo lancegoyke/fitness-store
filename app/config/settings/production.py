@@ -7,11 +7,10 @@ from .base import *  # noqa
 
 # ALLOWED_HOSTS in .env.prod
 
-INSTALLED_APPS += [  # noqa
-    "django_ses",
-]
-
 # Email [django-ses]
+# `django_ses` itself now lives in INSTALLED_APPS in base.py (#507) so its
+# models/migrations/signal handlers exist in every environment, including
+# tests — only the real AWS creds below stay production-only.
 
 EMAIL_BACKEND = "django_ses.SESBackend"
 AWS_SES_ACCESS_KEY_ID = os.environ.get("AWS_SES_ACCESS_KEY_ID", "fake598234752934")

@@ -63,7 +63,9 @@ class Command(BaseCommand):
         overlap: a concurrent run (or an operator rerun while a slow backend is
         still sending) skips a row another worker has claimed, so no athlete gets
         a duplicate. Send and ``mark_reminded`` share the transaction, so a mail
-        failure rolls the stamp back and the next sweep retries the invite.
+        failure — including a fully-blacklisted send, which reports ``False``
+        rather than raising — rolls the stamp back and the next sweep retries
+        the invite.
         """
         try:
             with transaction.atomic():
@@ -80,9 +82,11 @@ class Command(BaseCommand):
                     domain=site.domain,
                     path=reverse("meso:invite_claim", kwargs={"token": locked.token}),
                 )
-                send_coach_invite_reminder_email(
+                sent = send_coach_invite_reminder_email(
                     coach=locked.coach, email=locked.email, accept_url=accept_url
                 )
+                if not sent:
+                    return False  # e.g. blacklisted; leave un-stamped to retry
                 locked.mark_reminded()
                 return True
         except Exception:  # best-effort; rollback leaves it un-stamped to retry

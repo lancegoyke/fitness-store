@@ -6,6 +6,7 @@ from django.urls import include
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 from store_project.exercises.sitemaps import ExerciseSitemap
+from store_project.notifications.views import ScopedSESEventWebhookView
 from store_project.pages.sitemaps import PageSitemap
 from store_project.products.sitemaps import BookSitemap
 from store_project.products.sitemaps import ProgramSitemap
@@ -33,6 +34,13 @@ urlpatterns = [
     ),
     path("markdownx/", include("markdownx.urls")),
     path("backside/clearcache/", include("clearcache.urls")),
+    # Staff email deliverability dashboard (#507 part 2). Must precede the
+    # bare "backside/" admin mount below — that one catches everything else
+    # under backside/.
+    path(
+        "backside/email/",
+        include("store_project.notifications.urls", namespace="notifications"),
+    ),
     path("backside/", admin.site.urls),
     path("cardio/", include("store_project.cardio.urls")),
     path("meso/", include("store_project.meso.urls", namespace="meso")),
@@ -44,6 +52,27 @@ urlpatterns = [
     path("users/", include("store_project.users.urls")),
     path("feed/", include("store_project.feed.urls")),
     path("accounts/", include("allauth.urls")),
+    # SES → SNS event webhook (#507): send/delivery/open/click/bounce/complaint
+    # notifications for the "Tracking" configuration set, restricted to the
+    # topic(s) in `AWS_SES_EVENT_TOPIC_ARNS` by `ScopedSESEventWebhookView`
+    # (an empty allow-list rejects every notification). Mounted in every
+    # environment (not just PRODUCTION) — SNS signature verification stays on
+    # by default (`AWS_SES_VERIFY_EVENT_SIGNATURES`), so the endpoint is safe
+    # to expose everywhere, and tests need it reachable too. `ses/bounce/` is
+    # the same guarded view under the legacy path SNS was originally
+    # subscribed to (its dispatcher understands the old `notificationType`
+    # payload shape too); remove once the SNS subscription is repointed at
+    # `ses/events/` and confirmed (see docs/deploy-hetzner.md).
+    path(
+        "ses/events/",
+        csrf_exempt(ScopedSESEventWebhookView.as_view()),
+        name="ses_events",
+    ),
+    path(
+        "ses/bounce/",
+        csrf_exempt(ScopedSESEventWebhookView.as_view()),
+        name="ses_bounce",
+    ),
     path("", include("store_project.products.urls")),
     path("", include("store_project.pages.urls")),
 ]
@@ -57,9 +86,8 @@ if settings.ENVIRONMENT == "DEVELOPMENT":
     ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
 if settings.ENVIRONMENT == "PRODUCTION":
-    from django_ses.views import handle_bounce
-
+    # Legacy: the django-ses admin dashboard (SES send-statistics page).
+    # Unrelated to the webhook endpoints above.
     urlpatterns += [
-        path("ses/bounce/", csrf_exempt(handle_bounce)),
         path("backside/django-ses/", include("django_ses.urls")),
     ]

@@ -95,6 +95,7 @@ INSTALLED_APPS = [
     "allauth.socialaccount.providers.google",
     "corsheaders",
     "django_q",
+    "django_ses",
     "embed_video",
     "markdownx",
     # Local
@@ -417,6 +418,36 @@ if REDIS_URL.startswith("rediss://"):
 
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 SESSION_CACHE_ALIAS = "default"
+
+
+# django-ses event handling (#507).
+#
+# The "Tracking" configuration set publishes bounce/complaint/delivery/open/
+# click events to SNS, which POSTs them to `django_ses.views.
+# SESEventWebhookView` (mounted at `ses/events/` in `config.urls`). django-ses
+# ships its own bounce/complaint handlers (connected by `DjangoSESConfig.
+# ready()`) that blacklist a recipient after a permanent bounce or a
+# complaint; `AWS_SES_USE_BLACKLIST` then makes `SESBackend` skip blacklisted
+# recipients on send, so one hard bounce doesn't keep costing us sender
+# reputation on repeat.
+AWS_SES_ADD_BOUNCE_TO_BLACKLIST = True
+AWS_SES_ADD_COMPLAINT_TO_BLACKLIST = True
+AWS_SES_USE_BLACKLIST = True
+
+# The SNS topic(s) the webhook accepts notifications from. django-ses's
+# `SESEventWebhookView` verifies the SNS signature is genuinely Amazon's, but
+# never checks *which* topic a message came from — without this, anyone with
+# an AWS account could subscribe our webhook URL to their own topic and
+# publish forged Bounce/Complaint events (each one blacklists a real
+# recipient via `AWS_SES_USE_BLACKLIST` above) or flood the event table.
+# `store_project.notifications.views.ScopedSESEventWebhookView` rejects any
+# notification whose `TopicArn` isn't in this list. Comma-separated in the
+# env var; fail-closed — an empty list rejects every notification.
+AWS_SES_EVENT_TOPIC_ARNS = [
+    arn.strip()
+    for arn in os.environ.get("AWS_SES_EVENT_TOPIC_ARNS", "").split(",")
+    if arn.strip()
+]
 
 
 # django-q2 — the app-managed scheduler / task queue.

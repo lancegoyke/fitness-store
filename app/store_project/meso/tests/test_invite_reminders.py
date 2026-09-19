@@ -260,3 +260,20 @@ class TestRemindCommand:
             call_command("meso_remind_expiring_invites")  # no traceback escapes
         due.refresh_from_db()
         assert due.reminder_sent_at is None
+
+    def test_helper_returning_false_does_not_stamp(self):
+        """A fully-blacklisted send reports ``False`` without raising.
+
+        It must not be recorded as sent — the next sweep should still retry it.
+        """
+        coach = UserFactory()
+        due, _ = CoachInvite.open_for(coach=coach, email="due@example.com")
+        _expires_in(due, days=1)
+        with mock.patch(
+            "store_project.meso.management.commands."
+            "meso_remind_expiring_invites.send_coach_invite_reminder_email",
+            return_value=False,
+        ):
+            call_command("meso_remind_expiring_invites")
+        due.refresh_from_db()
+        assert due.reminder_sent_at is None

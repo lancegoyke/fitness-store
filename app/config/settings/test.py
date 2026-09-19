@@ -154,6 +154,14 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 # https://docs.djangoproject.com/en/dev/ref/settings/#email-backend
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 
+# SES → SNS event webhook (#507)
+# ------------------------------------------------------------------------------
+# The topic guard (`ScopedSESEventWebhookView.verify_event_message`) rejects
+# any notification whose `TopicArn` isn't allow-listed here. This must match
+# the constant `test_ses_webhook.SNS_TOPIC_ARN` the webhook tests' SNS
+# envelope helper uses, or every "allow-listed" test starts failing 400.
+AWS_SES_EVENT_TOPIC_ARNS = ["arn:aws:sns:us-east-2:497780720908:EmailOpens"]
+
 # DJANGO-Q
 # ------------------------------------------------------------------------------
 # Run any enqueued task inline and never spin up a cluster during tests.

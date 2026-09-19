@@ -231,6 +231,53 @@ The web container's healthcheck performs an internal HTTPS-style GET, so a
   Quick un-monitored dump: `just prod-backup` (`deploy backup run -a fitness-store`).
   Restore: `deploy backup restore -a fitness-store <dump>`.
 
+### SES email events (#507)
+
+- **Webhook:** `https://mastering.fitness/ses/events/` (plus the legacy
+  `https://mastering.fitness/ses/bounce/` path, same guarded view) —
+  signature-verified (`AWS_SES_VERIFY_EVENT_SIGNATURES` defaults on) and
+  topic-restricted (`AWS_SES_EVENT_TOPIC_ARNS`, see below), mounted in every
+  environment via `config.urls`. It parses each SNS notification and fans it
+  out to `store_project.notifications.ses_events`, which writes `SentEmail`
+  and `EmailEvent` rows (see `app/store_project/notifications/models.py`).
+- **`AWS_SES_EVENT_TOPIC_ARNS`:** comma-separated list of SNS topic ARNs the
+  webhook accepts notifications from — anything else gets a 400 before the
+  signature is even checked (`ScopedSESEventWebhookView` in
+  `store_project.notifications.views`; an empty list rejects everything).
+  Find the ARN in the AWS console → SNS (region **us-east-2**) → the topic
+  (`EmailOpens`) → **Details** panel, or from the URL: it's the
+  `arn:aws:sns:us-east-2:<account-id>:<topic-name>` string. Set it in the
+  server's `.env` (see `.env.example`); comma-separate if a second topic
+  (e.g. a second SES region/account) is ever added.
+- **SNS subscription:** in the AWS console → SNS (region **us-east-2**) →
+  topic `EmailOpens` → **Create subscription** → protocol HTTPS, endpoint the
+  webhook URL above. django-ses confirms the resulting
+  `SubscriptionConfirmation` automatically — check `just prod-logs web` for
+  "Received subscription confirmation" to verify it went through. A
+  subscription from any other topic is rejected outright (see
+  `AWS_SES_EVENT_TOPIC_ARNS` above) and never gets confirmed. Leave **Raw
+  message delivery** disabled on the subscription — the webhook needs the
+  standard SNS JSON envelope for signature verification and the `TopicArn`
+  allow-list check, and raw bodies are rejected with 400.
+- **SES configuration set:** SES → Configuration sets → `Tracking` → Event
+  destinations → make sure **Send, Delivery, Open, Click, Bounce, Complaint**
+  are selected (Reject, DeliveryDelay, and RenderingFailure are logged by the
+  webhook but not stored yet — see `ses_events.py`).
+- **Dashboard:** `/backside/email/` (staff only) — totals, a per-kind
+  breakdown, a per-day trend, recent events, bounce/complaint problems, and
+  the current SES blacklist, with a recipient lookup (`?q=`) and a
+  7/30/90-day window (`?days=`).
+- **Blacklist:** a permanent bounce or a complaint auto-blacklists the
+  recipient (django-ses's own signal handlers; `SESBackend` then skips
+  blacklisted recipients on send). Clear one from the dashboard once the
+  underlying problem is fixed (mailbox reactivated, complaint was a mistake)
+  to let SES try that recipient again.
+- **Migration tail:** keep the existing Gmail email subscription on the
+  `EmailOpens` topic until the dashboard has matched it for a week, then
+  remove it. Once the new HTTPS subscription is confirmed, the legacy
+  `ses/bounce/` mount (mounted in every environment, in `config.urls`) can be
+  removed.
+
 ## GitHub Actions auto-deploy
 
 `.github/workflows/deploy.yml` triggers after the **Django CI** workflow succeeds
