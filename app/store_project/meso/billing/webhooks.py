@@ -194,25 +194,40 @@ def _sync_from_subscription(sub_obj, *, deleted):
             "current_period_end": _ts_to_dt(sub_obj.get("current_period_end")),
         },
     )
-    # The ledger reads run AFTER the mirror write above, so a failed read can
-    # never block the mirror update. ``already_live`` alone isn't enough to
-    # tell "started" from "recovered": Stripe can deliver
-    # created(incomplete) → invoice.paid → updated(active), where
-    # ``_nudge_status`` flips past_due→active with a bare ``.update()`` (no
-    # event) before this ``updated(active)`` ever arrives — so ``already_live``
-    # would see a live mirror and silently skip the real first "started". The
-    # ledger (``_recorded``) is what actually remembers a started was written.
+    # Analytics run AFTER the mirror write above and can't fail it: the mirror
+    # is what this webhook exists for.
+    try:
+        _track_subscription_change(
+            coach, sub, sub_obj, status, previous_status, already_live, existing
+        )
+    except Exception:
+        logger.exception(
+            "Billing webhook: analytics failed for subscription %s", incoming_id
+        )
+
+
+def _track_subscription_change(
+    coach, sub, sub_obj, status, previous_status, already_live, existing
+):
+    """Record ``subscription_started``/``cancelled`` for one mirrored Stripe event."""
+    sub_id = sub_obj.get("id", "")
+    # ``already_live`` alone isn't enough to tell "started" from "recovered":
+    # Stripe can deliver created(incomplete) → invoice.paid → updated(active),
+    # where ``_nudge_status`` flips past_due→active before this
+    # ``updated(active)`` arrives — so ``already_live`` would see a live mirror
+    # and skip the real first "started". The ledger (``_recorded``) is what
+    # remembers a started was written.
     if (
         status in CoachSubscription.ACTIVE_STATUSES
         and not already_live
-        and not _recorded(EventName.SUBSCRIPTION_STARTED, incoming_id)
+        and not _recorded(EventName.SUBSCRIPTION_STARTED, sub_id)
     ):
         track(
             EventName.SUBSCRIPTION_STARTED,
             actor=coach,
             subject=sub,
             via="stripe",
-            subscription=incoming_id,
+            subscription=sub_id,
             status=status,
             previous=previous_status,
         )
@@ -220,15 +235,15 @@ def _sync_from_subscription(sub_obj, *, deleted):
         status == CoachSubscription.Status.CANCELED
         and existing is not None
         and existing.status != CoachSubscription.Status.CANCELED
-        and (already_live or _recorded(EventName.SUBSCRIPTION_STARTED, incoming_id))
-        and not _recorded(EventName.SUBSCRIPTION_CANCELLED, incoming_id)
+        and (already_live or _recorded(EventName.SUBSCRIPTION_STARTED, sub_id))
+        and not _recorded(EventName.SUBSCRIPTION_CANCELLED, sub_id)
     ):
         track(
             EventName.SUBSCRIPTION_CANCELLED,
             actor=coach,
             subject=sub,
             via="stripe",
-            subscription=incoming_id,
+            subscription=sub_id,
             status=status,
             previous=previous_status,
             reason=(sub_obj.get("cancellation_details") or {}).get("reason") or "",
@@ -258,13 +273,22 @@ def _nudge_status(invoice_obj, *, from_status, to_status):
             sub_id,
         )
         return
-    if to_status == CoachSubscription.Status.ACTIVE and not _recorded(
-        EventName.SUBSCRIPTION_STARTED, sub_id
-    ):
+    if to_status == CoachSubscription.Status.ACTIVE:
+        try:
+            _track_invoice_start(sub_id, from_status)
+        except Exception:
+            logger.exception(
+                "Billing webhook: analytics failed for subscription %s", sub_id
+            )
+
+
+def _track_invoice_start(sub_id, from_status):
+    """Record ``subscription_started`` when an invoice nudge made it live."""
+    if not _recorded(EventName.SUBSCRIPTION_STARTED, sub_id):
         # A past_due→active recovery (e.g. created(incomplete) → invoice.paid)
         # is a real first "started" the subscription-object events never see
-        # (an ``incomplete`` subscription never reads ``already_live``, and the
-        # bare ``.update()`` above writes no event of its own). No symmetric
+        # (an ``incomplete`` subscription never reads ``already_live``, and
+        # ``_nudge_status``'s bare ``.update()`` writes no event). No symmetric
         # event on the active→past_due nudge — that's not a cancellation.
         row = (
             CoachSubscription.objects.filter(stripe_subscription_id=sub_id)

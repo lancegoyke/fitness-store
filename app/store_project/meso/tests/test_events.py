@@ -10,6 +10,7 @@ call site's own tests already established rather than inventing new fixtures
 import json
 
 import pytest
+from django.db import DatabaseError
 from django.urls import reverse
 from django.utils import timezone
 
@@ -869,6 +870,53 @@ class TestSubscriptionStartedTrialEvent:
 
 
 class TestSubscriptionStripeEvents:
+    @pytest.mark.parametrize(
+        "sequence",
+        [
+            [("customer.subscription.created", "active")],
+            [
+                ("customer.subscription.created", "active"),
+                ("customer.subscription.deleted", "canceled"),
+            ],
+        ],
+    )
+    def test_a_failing_ledger_read_never_fails_the_webhook(self, monkeypatch, sequence):
+        """The mirror is what the webhook is for; analytics can't 500 it."""
+        coach = _coach_with_customer()
+
+        def boom(*_args):
+            raise DatabaseError("ledger read failed")
+
+        monkeypatch.setattr(billing_webhooks, "_recorded", boom)
+        for event_type, _status in sequence:
+            billing_webhooks.handle_event(_sub_event(event_type))
+
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert (
+            sub.status
+            == dict(
+                active=CoachSubscription.Status.ACTIVE,
+                canceled=CoachSubscription.Status.CANCELED,
+            )[sequence[-1][1]]
+        )
+
+    def test_a_failing_ledger_read_never_fails_an_invoice_nudge(self, monkeypatch):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.PAST_DUE,
+            stripe_subscription_id="sub_1",
+        )
+
+        def boom(*_args):
+            raise DatabaseError("ledger read failed")
+
+        monkeypatch.setattr(billing_webhooks, "_recorded", boom)
+        billing_webhooks.handle_event(_invoice_event("invoice.paid"))
+
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.ACTIVE
+
     def test_created_active_gives_one_started(self):
         coach = _coach_with_customer()
 
