@@ -167,13 +167,10 @@ def _real_construct_event():
 # ---------------------------------------------------------------------------
 # Real ``stripe.Event``/``stripe.Subscription``/``stripe.Invoice`` builders (#543)
 #
-# stripe 15's ``Webhook.construct_event`` doesn't hand ``handle_event`` a plain
-# dict — it hands back library objects (``StripeObject`` subclasses) that have
-# no ``.get()``. ``_sub_event``/``_invoice_event`` above build the plain dicts
-# the *old* (buggy) code path assumed; these build the *real* shape, from the
-# same fields, so the handler tests below exercise what production actually
-# sees. Each one asserts the constructed object's type so a regression back to
-# plain dicts fails loudly instead of silently passing.
+# stripe 15's ``Webhook.construct_event`` hands ``handle_event`` library objects
+# (``StripeObject`` subclasses) with no ``.get()``, not the plain dicts
+# ``_sub_event``/``_invoice_event`` build. These build the same fields as real
+# objects, and assert the type so a regression back to dicts fails loudly.
 # ---------------------------------------------------------------------------
 
 
@@ -484,10 +481,11 @@ class TestWebhookAnalyticsRealStripeObjects:
         coach = _coach_with_customer()
         CoachSubscriptionFactory(coach=coach, status=CoachSubscription.Status.TRIALING)
 
-        # The exact order production delivered on 2026-09-17: an invoice.paid
-        # before the mirror even knows about sub_1 (a no-op nudge — no local
+        # Production has a created + an invoice.paid for one subscription
+        # failing since 2026-09-17, and a replay can land in either order: an
+        # invoice.paid before the mirror knows sub_1 (a no-op nudge — no local
         # past_due row to flip yet), then the subscription goes live, then a
-        # replay of both.
+        # second delivery of both.
         billing_webhooks.handle_event(_real_invoice_event("invoice.paid"))
         billing_webhooks.handle_event(
             _real_sub_event("customer.subscription.created", status="active")
