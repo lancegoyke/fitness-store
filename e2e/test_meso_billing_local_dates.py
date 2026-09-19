@@ -5,9 +5,7 @@ real Chromium context pinned to America/Los_Angeles and reads the visible
 text after the rewrite runs.
 """
 
-from datetime import datetime
 from datetime import timedelta
-from datetime import timezone as dt_timezone
 
 import pytest
 from django.conf import settings
@@ -22,11 +20,16 @@ pytestmark = pytest.mark.django_db
 
 
 def test_billing_page_shows_the_la_local_date(new_context, live_server):
-    """trial_end 2026-10-04T01:00Z is Oct 3 in Los Angeles (UTC-7, PDT)."""
+    """A trial_end at 01:00 UTC is the previous day in Los Angeles (UTC-7/-8)."""
     coach = UserFactory(name="Tz Coach", email="tz.coach@example.com")
     CoachProfileFactory(user=coach)
-    trial_end = datetime(2026, 10, 4, 1, 0, tzinfo=dt_timezone.utc)
-    assert trial_end - django_timezone.now() >= timedelta(hours=48)
+    # 01:00 UTC at least three days out: past the 48h Checkout minimum, and
+    # always the previous calendar day in Los Angeles.
+    trial_end = (django_timezone.now() + timedelta(days=3)).replace(
+        hour=1, minute=0, second=0, microsecond=0
+    )
+    la_date = trial_end - timedelta(days=1)
+    expected = f"{la_date:%b} {la_date.day}"
     CoachSubscriptionFactory(
         coach=coach, status=CoachSubscription.Status.TRIALING, trial_end=trial_end
     )
@@ -54,4 +57,4 @@ def test_billing_page_shows_the_la_local_date(new_context, live_server):
     times = page.locator("time[data-local-date]")
     visible = [times.nth(i).inner_text() for i in range(times.count())]
     assert visible
-    assert all(text == "Oct 3" for text in visible)
+    assert all(text == expected for text in visible), (visible, expected)
