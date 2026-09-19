@@ -884,9 +884,12 @@ button.meso-row:hover {
    instead of overflowing it. */
 .meso-set-row {
   display: grid;
-  /* label | load | × | reps | rpe | %1RM hint | check-off circle */
+  /* label | load | × | reps | rpe | %1RM hint | check-off circle. The ×
+     track is a fixed width, not auto: on a phone the hint spans load..rpe on
+     a second line, and an auto track in that span would absorb the hint's
+     whole width and squeeze the load box. */
   grid-template-columns:
-    auto minmax(0, 72px) auto minmax(0, 60px) minmax(0, 60px)
+    auto minmax(0, 72px) 10px minmax(0, 60px) minmax(0, 60px)
     minmax(0, 1fr) 44px;
   align-items: center;
   column-gap: 9px;

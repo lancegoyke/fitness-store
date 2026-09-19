@@ -188,6 +188,22 @@ def test_athlete_opens_a_session_from_home(
     small_inputs = [s for s in sizes if s["size"] < 16]
     assert small_inputs == [], f"inputs that make iOS zoom on focus: {small_inputs}"
 
+    # A realistic set typed into the first row stays readable: every value is
+    # fully visible in its box, and the %1RM estimate it produces (Back Squat
+    # is prescribed at 70%) fits beside or below the row without pushing
+    # anything off screen.
+    first_set = squat.locator(".meso-set-row").first
+    for placeholder, value in (("load", "102.5"), ("reps", "10"), ("rpe", "8.5")):
+        first_set.get_by_placeholder(placeholder).fill(value)
+    expect(first_set.get_by_text("1RM ≈")).to_be_visible()
+    hidden_text = first_set.locator("input").evaluate_all(
+        "(inputs) => inputs.filter((el) => el.scrollWidth > el.clientWidth)"
+        ".map((el) => `${el.placeholder}: ${el.value}`)"
+    )
+    assert hidden_text == [], f"typed values cut off in their boxes: {hidden_text}"
+    shot("02-set-typed")
+    _assert_fits_down_to_320(page, viewport)
+
     # "Log session" is a full-size button the athlete can actually reach:
     # tall enough to hit, and nothing is laid over it once it's scrolled to.
     log_button = page.get_by_test_id("session-log")
