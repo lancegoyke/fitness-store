@@ -381,7 +381,7 @@ class TestAthleteRequestCoachDoubleSubmit:
 
 
 # ---------------------------------------------------------------------------
-# The two user-row mutexes deadlock on a plain FOR UPDATE (round-1 review)
+# The two user-row mutexes deadlock on a plain FOR UPDATE (#540)
 # ---------------------------------------------------------------------------
 #
 # Postgres FKs are DEFERRABLE INITIALLY DEFERRED, so a transaction that
@@ -398,7 +398,7 @@ INVITE_ACCEPT_AFTER = (CoachInvite, "accept", "after")
 
 
 class TestAthleteRequestRacesInviteClaim:
-    """Counterexample 1 (#540 round-1 review).
+    """An invite claim racing the athlete's own coach request (#540).
 
     Athlete U holds a pending ``CoachInvite`` from coach C, no ``CoachAthlete``
     row yet. T1 = U's claim (``action=accept``) inserts the link and updates
@@ -438,8 +438,9 @@ class TestAthleteRequestRacesInviteClaim:
         assert responses[0].status_code == 302
         assert responses[1].status_code == 302
         # The claim wins the race (it reaches its hook first and so commits
-        # first): the link is ACTIVE via the invite's own ``invited_by=coach``,
-        # and the athlete's redundant request just observes it, unchanged.
+        # first): the link is ACTIVE via the invite's own ``invited_by=coach``.
+        # The request's insert falls back to that row and leaves it unchanged
+        # (it still records its event and sends its email, as on main).
         link = CoachAthlete.objects.get(coach=coach, athlete=athlete)
         assert link.status == CoachAthlete.Status.ACTIVE
         invite.refresh_from_db()
@@ -448,7 +449,7 @@ class TestAthleteRequestRacesInviteClaim:
 
 
 class TestMutualCoachRequests:
-    """Counterexample 2 (#540 round-1 review).
+    """Two coaches requesting each other at the same moment (#540).
 
     Coaches X and Y (both have a ``CoachProfile``) request each other at the
     same moment. Each locks its OWN user row and inserts a link whose
@@ -491,7 +492,7 @@ class TestMutualCoachRequests:
 
 
 # ---------------------------------------------------------------------------
-# change_set_status races batch_apply (round-1 review)
+# change_set_status races batch_apply (#540)
 # ---------------------------------------------------------------------------
 
 #: Fires after ``apply_batch`` has saved its changes APPROVED and the batch
@@ -501,7 +502,7 @@ APPLY_BATCH_AFTER = (agent_apply, "apply_batch", "after")
 
 
 class TestChangeSetStatusRacesApply:
-    """A reject racing an Apply on the same batch (round-1 review, cheap nit).
+    """A reject racing an Apply on the same batch (#540).
 
     ``change_set_status`` checked ``batch.status != PENDING`` without a lock,
     so a reject that read PENDING just before an Apply committed would write
