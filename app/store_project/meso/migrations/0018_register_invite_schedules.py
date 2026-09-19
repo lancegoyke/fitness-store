@@ -3,7 +3,10 @@
 Creates the ``django_q.Schedule`` rows that drive the two N4 invite sweeps so
 scheduling is *versioned and deploys with the code* — no manual admin step, no
 box cron. Idempotent (keyed on ``name``) and reversible. Depends on
-``django_q``'s own migrations (``__latest__``) so the ``Schedule`` table exists.
+``django_q``'s own migrations, pinned to its 0019 leaf rather than
+``__latest__`` (which re-resolves every graph build and would break
+``migrate`` once django-q2 ships a new migration, #552), so the
+``Schedule`` table exists.
 
 Each schedule points at a stable wrapper in ``store_project.meso.tasks``; the
 ``qcluster`` worker runs them daily. A coach can still pause/retime them in the
@@ -37,7 +40,7 @@ def remove_schedules(apps, schema_editor):
 class Migration(migrations.Migration):
     dependencies = [
         ("meso", "0017_coachinvite_reminder_sent_at"),
-        ("django_q", "__latest__"),
+        ("django_q", "0019_alter_task_options_alter_ormq_key_alter_ormq_lock_and_more"),
     ]
 
     operations = [
