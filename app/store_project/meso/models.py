@@ -921,6 +921,14 @@ class CoachSubscription(models.Model):
     + a ``trial_end`` clock — Stripe is untouched until the coach actually
     subscribes. A lapsed trial reads inactive immediately (``is_active`` checks the
     clock); a Phase-2 qcluster sweep flips the persisted status back to ``free``.
+    A coach who subscribes *during* that local trial gets a **Stripe trial**
+    instead (#555): Checkout is given ``subscription_data.trial_end`` = the local
+    clock, so Stripe creates the subscription ``trialing`` rather than charging
+    immediately. That row still reads ``status=trialing`` locally, but now carries
+    a ``stripe_subscription_id`` — ``is_stripe_trial`` is the predicate that tells
+    the two apart, and ``has_live_stripe_subscription`` folds it into "this coach
+    already has a real Stripe subscription, don't open a second Checkout." See
+    ``docs/meso/billing-plan.md``.
 
     Phase 1 is this model + the ``billing/access.py`` accessor + the local trial +
     the comped seed/admin — **no Stripe and nothing enforced** (the Stripe
@@ -964,12 +972,18 @@ class CoachSubscription(models.Model):
     #: ``is_active``).
     ACTIVE_STATUSES = (Status.TRIALING, Status.ACTIVE, Status.COMPED)
 
-    #: Statuses where a *real, current* Stripe subscription exists — active or
-    #: temporarily past_due (a failed payment, not yet canceled). The local trial /
-    #: free / comped tiers have no Stripe subscription, and ``canceled`` is a dead
-    #: one (its ids are kept only for history). Used to decide whether to touch
-    #: Stripe (seat sync) and to protect the tracked subscription from stale events
-    #: for a different id.
+    #: Statuses where a *real, current, paying-or-about-to-pay* Stripe subscription
+    #: exists — active or temporarily past_due (a failed payment, not yet
+    #: canceled). Deliberately excludes ``trialing``: even when it carries a
+    #: ``stripe_subscription_id`` (a Stripe trial, #555) the coach hasn't paid
+    #: yet, and ``agent_usage_report`` uses this tuple for revenue/``is_paid`` —
+    #: counting a trial as paid would be false COGS/margin accounting. A Stripe
+    #: trial is instead its own predicate (``is_stripe_trial``); the stale-event
+    #: guard and the double-checkout guard use ``has_live_stripe_subscription``,
+    #: which folds both together. ``canceled`` is a dead subscription (its ids
+    #: are kept only for history). Used to decide whether to touch Stripe (seat
+    #: sync) and to protect the tracked subscription from stale events for a
+    #: different id.
     LIVE_STRIPE_STATUSES = (Status.ACTIVE, Status.PAST_DUE)
 
     coach = models.OneToOneField(
@@ -1035,25 +1049,58 @@ class CoachSubscription(models.Model):
     # -- derived gating predicate ----------------------------------------
 
     @property
+    def is_stripe_trial(self):
+        """True for a ``trialing`` row that already has a Stripe subscription (#555).
+
+        A coach who clicks Subscribe during their local no-card trial gets a real
+        Stripe subscription created ``trialing`` (Checkout is given
+        ``subscription_data.trial_end`` = the local clock) — Stripe, not the local
+        clock, ends this trial. Distinguishes that from the ordinary no-card local
+        trial, which never has a ``stripe_subscription_id``.
+        """
+        return self.status == self.Status.TRIALING and bool(self.stripe_subscription_id)
+
+    @property
+    def has_live_stripe_subscription(self):
+        """True when a *real* Stripe subscription exists for this coach (#555).
+
+        ``LIVE_STRIPE_STATUSES`` (active/past_due) plus a Stripe trial
+        (``is_stripe_trial``) — used wherever code must not open a second
+        Checkout session or let a stale webhook event for another subscription
+        id take over: a Stripe-trial coach already has one, even though they
+        haven't been charged yet.
+        """
+        return bool(self.stripe_subscription_id) and (
+            self.status in self.LIVE_STRIPE_STATUSES or self.is_stripe_trial
+        )
+
+    @property
     def is_trial_expired(self):
         """True once a local trial's clock has run out (never fires off-trial).
 
         A null clock never expires (defensive — ``start_trial`` always sets one),
-        mirroring the invite slice's "null clock never expires" semantics.
+        mirroring the invite slice's "null clock never expires" semantics. A
+        **Stripe trial** (#555) never expires here either — once Stripe is
+        tracking the trial (``stripe_subscription_id`` set), Stripe ends it and
+        the webhook mirrors that; the local clock must never lock out a coach
+        whose card is already on file.
         """
         return (
             self.status == self.Status.TRIALING
             and self.trial_end is not None
             and self.trial_end <= timezone.now()
+            and not self.stripe_subscription_id
         )
 
     @property
     def is_active(self):
         """The single access predicate — full (unlimited) access right now.
 
-        Trialing/active/comped grant access, **except** a trialing row whose clock
-        has lapsed (the status flip to ``free`` is the Phase-2 sweep's job, but the
-        gate is correct the instant the trial ends — lazy expiry).
+        Trialing/active/comped grant access, **except** a *local* trialing row
+        whose clock has lapsed (the status flip to ``free`` is the Phase-2
+        sweep's job, but the gate is correct the instant the trial ends — lazy
+        expiry). A Stripe trial (#555) is exempt from that lazy expiry —
+        ``is_trial_expired`` never fires once Stripe is tracking it.
         """
         return self.status in self.ACTIVE_STATUSES and not self.is_trial_expired
 
@@ -1065,6 +1112,12 @@ class CoachSubscription(models.Model):
         Single-use: a row that has ever trialed (``trial_end`` set, even after it
         lapsed back to ``free``) can't re-arm a second free trial. No Stripe is
         touched — the trial is pure local state until a card is collected.
+
+        Blanks any leftover ``stripe_subscription_id``/``stripe_item_id``
+        (#555 P2-2): a FREE row can carry a dead Stripe id through an admin
+        edit (e.g. a canceled subscriber reset to free by hand) — without this
+        a fresh trial would read as ``is_stripe_trial`` and never lazily
+        expire on the local clock.
         """
         if self.status != self.Status.FREE:
             raise InvalidTransition(f"Cannot start a trial from {self.status}.")
@@ -1072,7 +1125,17 @@ class CoachSubscription(models.Model):
             raise InvalidTransition("This coach has already used their free trial.")
         self.status = self.Status.TRIALING
         self.trial_end = timezone.now() + timedelta(days=self.TRIAL_DAYS)
-        self.save(update_fields=["status", "trial_end", "modified"])
+        self.stripe_subscription_id = ""
+        self.stripe_item_id = ""
+        self.save(
+            update_fields=[
+                "status",
+                "trial_end",
+                "stripe_subscription_id",
+                "stripe_item_id",
+                "modified",
+            ]
+        )
         return self
 
     def expire_trial(self):

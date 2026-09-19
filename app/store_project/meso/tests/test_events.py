@@ -1181,11 +1181,14 @@ class TestSubscriptionStripeEvents:
 
         assert len(events(EventName.SUBSCRIPTION_STARTED)) == 1
 
-    def test_active_then_deleted_then_late_retried_active_does_not_double_start(self):
-        """A late retried ``updated(active)`` resurrects the mirror.
+    def test_active_then_deleted_then_late_retried_active_does_not_resurrect(self):
+        """A late retried ``updated(active)`` for the same, now-canceled id is stale.
 
-        But it must not write a second ``subscription_started`` — the ledger
-        already has one.
+        A canceled subscription id is terminal (#555 adversarial review,
+        P1-A): Stripe never reactivates a canceled subscription, so this
+        no longer resurrects the mirror — the row stays CANCELED and no
+        extra ``subscription_started`` is written (the ledger already has
+        the one from ``created(active)``).
         """
         coach = _coach_with_customer()
 
@@ -1202,7 +1205,7 @@ class TestSubscriptionStripeEvents:
         assert len(events(EventName.SUBSCRIPTION_STARTED)) == 1
         assert len(events(EventName.SUBSCRIPTION_CANCELLED)) == 1
         sub = CoachSubscription.objects.get(coach=coach)
-        assert sub.status == CoachSubscription.Status.ACTIVE  # the mirror resurrects
+        assert sub.status == CoachSubscription.Status.CANCELED
 
     def test_pre_existing_live_subscription_renewal_gives_no_started(self):
         """A mirror row already live before the ledger existed (pre-deploy).

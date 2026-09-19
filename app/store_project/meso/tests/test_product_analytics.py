@@ -1186,6 +1186,17 @@ class TestFeatureAdoption:
         assert row["users"] == 1
         assert row["times"] == 1
 
+    def test_subscription_started_label_is_pro_not_paid(self, now):
+        """Renamed (#555 P2-4).
+
+        A Stripe trial (subscribed mid-trial) fires this event too, before
+        any charge — "Paid" overstated it.
+        """
+        result = presenters.product_analytics(days=30, now=now)
+        row = _feature(result, "subscription_started")
+
+        assert row["label"] == "Pro subscription started"
+
     def test_subscription_started_via_trial_not_counted(self, now):
         actor = UserFactory()
         _event(

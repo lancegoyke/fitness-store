@@ -1,4 +1,5 @@
 {% extends "meso/_meso_base.html" %}
+{% load static %}
 
 {% block title %}Billing · Meso{% endblock %}
 
@@ -28,8 +29,16 @@
 
           {% if state.over_limit %}
             <p class="meso-sub" style="margin:0;color:var(--warn);">Over your plan limit &#8212; {{ state.seat_count }} of {{ state.seat_limit }} athlete{{ state.seat_limit|pluralize }}. Your longest-standing athletes stay editable; the other {{ state.suspended_count }} {{ state.suspended_count|pluralize:"is,are" }} suspended until you re-subscribe or end a relationship.</p>
+          {% elif state.first_charge_at %}
+            <p class="meso-sub" style="margin:0;">Pro &#8212; first charge on <time datetime="{{ state.first_charge_at|date:'c' }}" data-local-date>{{ state.first_charge_at|date:"M j" }}</time>.</p>
           {% elif state.on_trial %}
-            <p class="meso-sub" style="margin:0;">Free trial &#8212; ends {{ state.trial_end|date:"M j" }}. Subscribe to keep full access when it ends.</p>
+            {% if state.deferred_first_charge %}
+              <p class="meso-sub" style="margin:0;">Free trial &#8212; ends <time datetime="{{ state.trial_end|date:'c' }}" data-local-date>{{ state.trial_end|date:"M j" }}</time>. Subscribe now &#8212; you won't be charged until <time datetime="{{ state.deferred_first_charge|date:'c' }}" data-local-date>{{ state.deferred_first_charge|date:"M j" }}</time>.</p>
+            {% elif state.trial_end %}
+              <p class="meso-sub" style="margin:0;">Free trial &#8212; ends <time datetime="{{ state.trial_end|date:'c' }}" data-local-date>{{ state.trial_end|date:"M j" }}</time>, in under 2 days. Subscribing starts billing today.</p>
+            {% else %}
+              <p class="meso-sub" style="margin:0;">Free trial. Subscribing starts billing today.</p>
+            {% endif %}
           {% elif state.is_active %}
             <p class="meso-sub" style="margin:0;">{{ state.seat_count }} active athlete{{ state.seat_count|pluralize }} &#183; unlimited athletes.</p>
           {% else %}
@@ -62,6 +71,7 @@
               {% if not state.is_active or state.on_trial or state.over_limit %}
                 <form method="post" action="{% url 'meso:billing_subscribe' %}" style="margin:0;">
                   {% csrf_token %}
+                  {% if state.deferred_first_charge %}<input type="hidden" name="first_charge" value="{{ state.deferred_first_charge|date:'U' }}">{% endif %}
                   <button type="submit" class="meso-btn {% if state.can_start_trial %}meso-btn--ghost{% else %}meso-btn--primary{% endif %}">Subscribe</button>
                 </form>
               {% endif %}
@@ -116,4 +126,8 @@
       </div>
     </div>
   </div>
+{% endblock %}
+
+{% block scripts %}
+  <script defer src="{% static 'js/meso_local_dates.js' %}"></script>
 {% endblock %}

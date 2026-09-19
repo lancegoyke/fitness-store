@@ -26,12 +26,23 @@ allowance) and refines the edit freeze **per athlete** (``can_edit_plan`` /
 """
 
 import math
+from datetime import timedelta
 
 from django.utils import timezone
 
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import CoachSubscription
+
+#: Stripe Checkout's documented minimum for ``subscription_data.trial_end`` —
+#: "Has to be at least 48 hours in the future" (verified in the API docs,
+#: 2026-09-19; #555).
+CHECKOUT_TRIAL_MIN_LEAD = timedelta(hours=48)
+
+#: Headroom on top of ``CHECKOUT_TRIAL_MIN_LEAD`` so a borderline trial_end
+#: doesn't get rejected by Stripe over the request round trip / clock skew
+#: between this check and the actual Checkout call (#555).
+CHECKOUT_TRIAL_MARGIN = timedelta(minutes=5)
 
 
 def _subscription(coach):
@@ -65,6 +76,34 @@ def is_active(coach):
     """
     sub = _subscription(coach)
     return bool(sub and sub.is_active)
+
+
+def deferred_first_charge(coach):
+    """The local ``trial_end`` when subscribing *right now* would defer to it (#555).
+
+    A coach on the local no-card trial who clicks Subscribe should keep the rest
+    of their trial: Checkout is given ``subscription_data.trial_end`` = the local
+    clock, so Stripe doesn't charge until then. But Stripe requires that value to
+    be **at least 48 hours out** (``CHECKOUT_TRIAL_MIN_LEAD``), and this is
+    checked slightly before the actual Checkout call, so a ``CHECKOUT_TRIAL_MARGIN``
+    of headroom keeps a borderline trial from being rejected by Stripe. Under that
+    combined threshold, subscribing charges today instead — the page should say so
+    before the coach clicks.
+
+    Returns the unchanged local ``trial_end`` (never extends the trial) when the
+    coach is on a **local** trial (``TRIALING``, no ``stripe_subscription_id`` yet)
+    with enough of it left; ``None`` otherwise (free, active, canceled, comped, a
+    lapsed trial, a trial with under 48h05m left, a coach already on a Stripe
+    trial, or no subscription row at all).
+    """
+    sub = _subscription(coach)
+    if sub is None or sub.status != CoachSubscription.Status.TRIALING:
+        return None
+    if sub.stripe_subscription_id or sub.trial_end is None:
+        return None
+    if sub.trial_end - timezone.now() < CHECKOUT_TRIAL_MIN_LEAD + CHECKOUT_TRIAL_MARGIN:
+        return None
+    return sub.trial_end
 
 
 def _current_period_start():

@@ -144,6 +144,8 @@
         Distinct users and times in the window. Rows sourced from an <code>Event</code> only have
         data since {% if events_since %}{{ events_since|date:"M j, Y" }}{% else %}the first one{% endif %}. Block delivered counts blocks, not weeks. Trial started is
         <code>trial_end</code> minus the 14-day trial. Work on demo-athlete plans isn't counted.
+        Pro subscription started counts a Stripe subscription when it's created, including a
+        coach who subscribes during the trial and isn't charged until it ends.
         Push counts subscriptions still on record, by when the device was first registered: an
         unsubscribed or expired device is gone, and one that changes hands keeps its first date.
         A deleted account's events stay in times, whatever plan they were about.

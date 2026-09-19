@@ -605,6 +605,14 @@ def billing_state(coach):
     coach (post-downgrade, D6) sees the freeze warning naming how many athletes are
     suspended (``suspended_count``, S6 Phase 5). ``seat_limit`` is ``None`` for an
     unlimited (active/trial/comped) coach so the template hides the cap.
+
+    ``on_trial`` (#555) now means only the **local** no-card trial — a coach who
+    subscribed mid-trial (a Stripe trial, ``is_stripe_trial``) has a real Stripe
+    subscription and shows "Pro — first charge on X" instead, via
+    ``first_charge_at``. ``deferred_first_charge`` is what Subscribing *right
+    now* would defer to (``billing/access.deferred_first_charge``) — present
+    only when there's enough of the local trial left for Stripe to accept it;
+    the template falls back to an "under 2 days" charge-today notice otherwise.
     """
     sub = getattr(coach, "coach_subscription", None)
     status = sub.status if sub else CoachSubscription.Status.FREE
@@ -621,8 +629,16 @@ def billing_state(coach):
         "status": status,
         "status_label": CoachSubscription.Status(status).label,
         "is_active": active,
-        "on_trial": active and status == CoachSubscription.Status.TRIALING,
+        "on_trial": active
+        and status == CoachSubscription.Status.TRIALING
+        and not (sub and sub.stripe_subscription_id),
         "trial_end": sub.trial_end if sub else None,
+        # The Stripe-trial first-charge date (#555) — None off a Stripe trial
+        # (a local trial, or any other status).
+        "first_charge_at": sub.trial_end if sub and sub.is_stripe_trial else None,
+        # What subscribing *right now* would defer the first charge to, or None
+        # when there isn't enough of the local trial left (#555).
+        "deferred_first_charge": billing_access.deferred_first_charge(coach),
         "seat_count": billing_access.active_seat_count(coach),
         "seat_limit": None if seat_limit == math.inf else int(seat_limit),
         "can_add_athlete": billing_access.can_add_athlete(coach),
@@ -2469,7 +2485,7 @@ def _feature_adoption(*, since, until):
         ),
         _feature_row(
             "subscription_started",
-            "Paid subscription started",
+            "Pro subscription started",
             "coaches",
             "Event subscription_started (stripe)",
             _coach_event_stats(

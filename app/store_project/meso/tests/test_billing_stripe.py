@@ -20,14 +20,22 @@ import hmac
 import importlib.util
 import json
 import time
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone as dt_timezone
 from unittest import mock
 
 import pytest
 import stripe
+from django.contrib.messages import get_messages
 from django.test import Client
+from django.utils import dateformat
+from django.utils import timezone
 
 from store_project.analytics.events import EventName
 from store_project.analytics.models import Event
+from store_project.meso import presenters
+from store_project.meso.billing import access as billing_access
 from store_project.meso.billing import stripe_gateway
 from store_project.meso.billing import webhooks as billing_webhooks
 from store_project.meso.factories import CoachAthleteFactory
@@ -38,6 +46,17 @@ from store_project.meso.models import CoachSubscription
 from store_project.users.factories import UserFactory
 
 pytestmark = pytest.mark.django_db
+
+
+def _refetch(user):
+    """A fresh copy of ``user``, bypassing Django's cached reverse-o2o accessor.
+
+    ``access.*`` reads ``user.coach_subscription``; once that descriptor has
+    been accessed on an instance it's cached, so a test that mutates the
+    ``CoachSubscription`` row via a bare ``.update()`` (no signal, no cache
+    invalidation) must re-fetch the coach to see the change.
+    """
+    return type(user).objects.get(pk=user.pk)
 
 
 GATEWAY_CHECKOUT = (
@@ -74,6 +93,125 @@ class TestCheckoutSession:
         assert kwargs["cancel_url"] == "https://x/no"
         # One flat line item, quantity 1 — never the seat count.
         assert kwargs["line_items"] == [{"price": "price_pro_test", "quantity": 1}]
+
+
+class TestCheckoutSessionTrial:
+    """Passing ``trial_end`` becomes Checkout's ``subscription_data`` (#555)."""
+
+    def test_trial_end_becomes_subscription_data(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = UserFactory()
+        trial_end = timezone.now() + timedelta(days=5)
+        with mock.patch(
+            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+        ) as create:
+            stripe_gateway.create_subscription_checkout_session(
+                coach,
+                success_url="https://x/ok",
+                cancel_url="https://x/no",
+                trial_end=trial_end,
+            )
+        kwargs = create.call_args.kwargs
+        assert kwargs["subscription_data"] == {"trial_end": int(trial_end.timestamp())}
+
+    def test_no_trial_end_omits_subscription_data(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = UserFactory()
+        with mock.patch(
+            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+        ) as create:
+            stripe_gateway.create_subscription_checkout_session(
+                coach, success_url="https://x/ok", cancel_url="https://x/no"
+            )
+        kwargs = create.call_args.kwargs
+        assert "subscription_data" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# billing/access.py — deferred_first_charge (#555)
+#
+# Whether subscribing *right now* would defer the first Stripe charge to the
+# local trial's end (rather than charging today) — Stripe Checkout requires
+# ``subscription_data.trial_end`` to be at least 48 hours out.
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredFirstCharge:
+    def test_local_trial_with_ten_days_left_defers_to_trial_end(self):
+        coach = UserFactory()
+        trial_end = timezone.now() + timedelta(days=10)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=trial_end,
+        )
+        assert billing_access.deferred_first_charge(coach) == trial_end
+
+    def test_just_past_the_minimum_plus_margin_defers(self):
+        coach = UserFactory()
+        trial_end = timezone.now() + timedelta(hours=48, minutes=6)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=trial_end,
+        )
+        assert billing_access.deferred_first_charge(coach) == trial_end
+
+    def test_forty_seven_hours_left_charges_today(self):
+        coach = UserFactory()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() + timedelta(hours=47),
+        )
+        assert billing_access.deferred_first_charge(coach) is None
+
+    def test_inside_the_margin_charges_today(self):
+        coach = UserFactory()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() + timedelta(hours=48, minutes=1),
+        )
+        assert billing_access.deferred_first_charge(coach) is None
+
+    def test_lapsed_trial_is_none(self):
+        coach = UserFactory()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() - timedelta(minutes=1),
+        )
+        assert billing_access.deferred_first_charge(coach) is None
+
+    def test_free_row_is_none(self):
+        coach = UserFactory()
+        CoachSubscriptionFactory(coach=coach, status=CoachSubscription.Status.FREE)
+        assert billing_access.deferred_first_charge(coach) is None
+
+    def test_no_row_is_none(self):
+        coach = UserFactory()
+        assert billing_access.deferred_first_charge(coach) is None
+
+    def test_stripe_trial_is_none(self):
+        """A trialing row that already has a Stripe subscription never re-defers."""
+        coach = UserFactory()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() + timedelta(days=10),
+            stripe_subscription_id="sub_1",
+        )
+        assert billing_access.deferred_first_charge(coach) is None
+
+    def test_active_is_none(self):
+        coach = UserFactory()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_1",
+        )
+        assert billing_access.deferred_first_charge(coach) is None
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +321,7 @@ def _real_sub_event(
     status="active",
     period_end=1900000000,
     cancellation_details=None,
+    trial_end=None,
 ):
     obj = {
         "id": sub_id,
@@ -197,6 +336,8 @@ def _real_sub_event(
     }
     if cancellation_details is not None:
         obj["cancellation_details"] = cancellation_details
+    if trial_end is not None:
+        obj["trial_end"] = trial_end
     event = stripe.Event.construct_from(
         {"id": "evt_test", "object": "event", "type": type_, "data": {"object": obj}},
         "sk_test",
@@ -516,6 +657,407 @@ class TestWebhookAnalyticsRealStripeObjects:
 
 
 # ---------------------------------------------------------------------------
+# webhooks — a coach who subscribes mid-trial (#555): a Stripe-backed
+# `trialing` row is a live subscription (`is_stripe_trial` /
+# `has_live_stripe_subscription`), not a locally-clocked one.
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookStripeTrialJourney:
+    def test_subscribing_during_a_local_trial_keeps_access_through_to_active(self):
+        coach = _coach_with_customer()
+        local_trial_end = (timezone.now() + timedelta(days=10)).replace(microsecond=0)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=local_trial_end,
+        )
+        # Stripe's own trial_end (whatever Checkout was given) is a DIFFERENT
+        # timestamp from the local one — the webhook must copy Stripe's value,
+        # not assume it matches (trap 4).
+        stripe_trial_end = local_trial_end + timedelta(hours=1)
+        stripe_trial_end_ts = int(stripe_trial_end.timestamp())
+
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created",
+                status="trialing",
+                trial_end=stripe_trial_end_ts,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.TRIALING
+        assert sub.stripe_subscription_id == "sub_1"
+        assert sub.trial_end == datetime.fromtimestamp(
+            stripe_trial_end_ts, tz=dt_timezone.utc
+        )
+        assert billing_access.is_active(_refetch(coach)) is True
+
+        # The local clock passes before `updated` lands — must NOT lock the
+        # coach out (trap 1): a Stripe trial never lapses on the local clock.
+        CoachSubscription.objects.filter(coach=coach).update(
+            trial_end=timezone.now() - timedelta(minutes=1)
+        )
+        fresh_coach = _refetch(coach)
+        assert billing_access.is_active(fresh_coach) is True
+        assert billing_access.is_over_limit(fresh_coach) is False
+        assert billing_access.can_add_athlete(fresh_coach) is True
+
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.updated", status="active")
+        )
+        sub.refresh_from_db()
+        assert sub.status == CoachSubscription.Status.ACTIVE
+
+        # subscription_started fired exactly once — at created(trialing), not
+        # again at updated(active) (#509).
+        stripe_started = [
+            e
+            for e in _events(EventName.SUBSCRIPTION_STARTED)
+            if e.props.get("subscription") == "sub_1"
+        ]
+        assert len(stripe_started) == 1
+
+
+class TestWebhookTrialEndGuard:
+    def test_created_trialing_without_a_trial_end_leaves_the_local_clock_unchanged(
+        self,
+    ):
+        """No ``trial_end`` in the Stripe payload → the local marker is untouched.
+
+        May already pass on main (``trial_end`` isn't written at all there) —
+        that's the one allowed exception; it's still asserted as a guard.
+        """
+        coach = _coach_with_customer()
+        local_trial_end = timezone.now() + timedelta(days=10)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=local_trial_end,
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.created", status="trialing")
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.trial_end == local_trial_end
+
+
+class TestWebhookStaleEventProtectsAStripeTrial:
+    """Trap 2: a stale event for another subscription id must not clobber a trial.
+
+    ``LIVE_STRIPE_STATUSES`` alone doesn't cover ``trialing``.
+    """
+
+    def test_stale_active_update_for_an_old_id_does_not_touch_a_stripe_trial(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            stripe_subscription_id="sub_new",
+            trial_end=timezone.now() + timedelta(days=10),
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.updated", sub_id="sub_old", status="active"
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.TRIALING
+        assert sub.stripe_subscription_id == "sub_new"
+
+    def test_stale_delete_for_an_old_id_does_not_touch_a_stripe_trial(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            stripe_subscription_id="sub_new",
+            trial_end=timezone.now() + timedelta(days=10),
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.deleted", sub_id="sub_old", status="canceled"
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.TRIALING
+        assert sub.stripe_subscription_id == "sub_new"
+
+
+class TestInvoicePaymentFailedDuringAStripeTrial:
+    def test_stripe_trial_moves_to_past_due(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            stripe_subscription_id="sub_1",
+            trial_end=timezone.now() + timedelta(hours=1),
+        )
+        billing_webhooks.handle_event(_real_invoice_event("invoice.payment_failed"))
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.PAST_DUE
+
+    def test_local_no_card_trial_is_untouched_by_invoice_events(self):
+        """A local trial has no ``stripe_subscription_id``.
+
+        No invoice event can reference it, so it's never nudged.
+        """
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() + timedelta(days=10),
+        )
+        billing_webhooks.handle_event(_real_invoice_event("invoice.payment_failed"))
+        billing_webhooks.handle_event(_real_invoice_event("invoice.paid"))
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.TRIALING
+
+
+# ---------------------------------------------------------------------------
+# webhooks — a canceled subscription id is terminal (P1-A, adversarial review)
+#
+# Stripe never reactivates a canceled subscription (`canceled` and
+# `incomplete_expired` are terminal), so a non-delete event for the SAME id
+# as an already-CANCELED row is stale by definition — a late/retried
+# `created`/`updated` must not reopen it.
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookCanceledSubscriptionIdIsTerminal:
+    def test_late_created_trialing_for_the_same_id_does_not_reopen(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_1",
+        )
+        future_trial_end = int((timezone.now() + timedelta(days=10)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created",
+                status="trialing",
+                trial_end=future_trial_end,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.CANCELED
+        assert billing_access.is_active(_refetch(coach)) is False
+
+    def test_late_updated_active_for_the_same_id_does_not_reopen(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_1",
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.updated", status="active")
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.CANCELED
+
+    def test_a_new_id_still_takes_over_a_canceled_row(self):
+        """Regression guard for the existing re-subscribe path.
+
+        A different subscription id must still take over. May already pass
+        before the fix (P1-A only ignores events for the SAME id as the
+        canceled row).
+        """
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_1",
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created", sub_id="sub_2", status="active"
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.ACTIVE
+        assert sub.stripe_subscription_id == "sub_2"
+
+    def test_ignored_events_backfill_exactly_one_started_and_cancelled(self):
+        """Round 2 (#555 review): a CANCELED row with no prior recorded events.
+
+        The mirror's own history can't tell "this subscription never really
+        started" apart from "it started, but the ``deleted`` was delivered
+        before the ``created``/``updated`` — so we never got the chance to
+        record it". #509's ledger rule is "started once, cancelled at most
+        once, whatever the delivery order", so the ignored events below must
+        now backfill the missing pair instead of staying silent (round 1's
+        pinned 0/0 outcome).
+        """
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_1",
+        )
+        future_trial_end = int((timezone.now() + timedelta(days=10)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created",
+                status="trialing",
+                trial_end=future_trial_end,
+            )
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.updated", status="active")
+        )
+        assert len(_events(EventName.SUBSCRIPTION_STARTED)) == 1
+        assert len(_events(EventName.SUBSCRIPTION_CANCELLED)) == 1
+
+
+# ---------------------------------------------------------------------------
+# webhooks — the canceled-id guard backfills a missed live pair (round 2)
+#
+# Stripe doesn't guarantee delivery order: a `deleted` can arrive BEFORE the
+# `created`/`updated` it logically follows. When that happens the row goes
+# CANCELED without ever recording `subscription_started` (nothing was
+# `already_live` or previously recorded), and the P1-A guard would then
+# silently swallow the late `created`/`updated` that proves the subscription
+# really was live — losing both events forever. The guard must backfill them.
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookCanceledIdGuardBackfillsAMissedLivePair:
+    def test_deleted_before_created_backfills_the_missing_pair(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() + timedelta(days=10),
+        )
+        future_trial_end = int((timezone.now() + timedelta(days=10)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.deleted",
+                status="canceled",
+                trial_end=future_trial_end,
+            )
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created",
+                status="trialing",
+                trial_end=future_trial_end,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.CANCELED
+        assert billing_access.is_active(_refetch(coach)) is False
+        started = _events(EventName.SUBSCRIPTION_STARTED)
+        cancelled = _events(EventName.SUBSCRIPTION_CANCELLED)
+        assert len(started) == 1
+        assert len(cancelled) == 1
+        # Reconstructed after the fact: the prior status and the cancel reason
+        # aren't known here, so the rows say so rather than guess ("canceled"
+        # would read as a returning subscriber).
+        assert started[0].props["previous"] == ""
+        assert started[0].props["backfilled"] is True
+        assert cancelled[0].props["backfilled"] is True
+
+    def test_a_duplicate_late_created_does_not_duplicate_the_backfill(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() + timedelta(days=10),
+        )
+        future_trial_end = int((timezone.now() + timedelta(days=10)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.deleted",
+                status="canceled",
+                trial_end=future_trial_end,
+            )
+        )
+        for _ in range(2):
+            billing_webhooks.handle_event(
+                _real_sub_event(
+                    "customer.subscription.created",
+                    status="trialing",
+                    trial_end=future_trial_end,
+                )
+            )
+        assert len(_events(EventName.SUBSCRIPTION_STARTED)) == 1
+        assert len(_events(EventName.SUBSCRIPTION_CANCELLED)) == 1
+
+    def test_a_real_prior_start_is_not_double_recorded(self):
+        """created(active) already recorded the real pair the normal way.
+
+        A late retried updated for the same, now-canceled id must not add a
+        second started/cancelled.
+        """
+        coach = _coach_with_customer()
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.created", status="active")
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.deleted", status="canceled")
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.updated", status="active")
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.CANCELED
+        assert len(_events(EventName.SUBSCRIPTION_STARTED)) == 1
+        assert len(_events(EventName.SUBSCRIPTION_CANCELLED)) == 1
+
+
+# ---------------------------------------------------------------------------
+# webhooks — a stale `trialing` event past its own trial_end (P1-B, review)
+#
+# Stripe moves a subscription out of `trialing` at `trial_end`; a late or
+# retried `created`/`updated(trialing)` reporting a `trial_end` already in
+# the past can't be describing the subscription's current state.
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookStaleTrialingPastItsTrialEndIsIgnored:
+    def test_late_trialing_for_an_active_row_does_not_revert_it(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_1",
+        )
+        past_trial_end = int((timezone.now() - timedelta(hours=1)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created",
+                status="trialing",
+                trial_end=past_trial_end,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.ACTIVE
+        state = presenters.billing_state(_refetch(coach))
+        assert state["first_charge_at"] is None
+
+    def test_late_trialing_for_a_past_due_row_does_not_revert_it(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.PAST_DUE,
+            stripe_subscription_id="sub_1",
+        )
+        past_trial_end = int((timezone.now() - timedelta(hours=1)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.updated",
+                status="trialing",
+                trial_end=past_trial_end,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.PAST_DUE
+        assert billing_access.is_active(_refetch(coach)) is False
+
+
+# ---------------------------------------------------------------------------
 # billing_webhook view — signature verification
 # ---------------------------------------------------------------------------
 
@@ -703,6 +1245,26 @@ class TestSubscribeView:
         assert resp.url == "/meso/"
         create.assert_not_called()
 
+    def test_stripe_trial_coach_is_not_double_charged(self, settings):
+        """A Stripe-backed trialing row is already a live subscription (#555)."""
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            stripe_subscription_id="sub_1",
+            trial_end=timezone.now() + timedelta(days=10),
+        )
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session"
+        ) as create:
+            resp = c.post(self.URL)
+        assert resp.status_code == 302
+        assert resp.url == "/meso/"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("already have a subscription" in t for t in texts)
+
     def test_canceled_coach_can_resubscribe(self, settings):
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
         coach, c = self._coach_client()
@@ -718,6 +1280,187 @@ class TestSubscribeView:
             resp = c.post(self.URL)
         assert resp.url == "https://stripe/checkout"
         create.assert_called_once()
+
+
+class TestSubscribeViewDeferredCharge:
+    """Checkout through the view carries the deferred-first-charge rule (#555)."""
+
+    URL = "/meso/billing/subscribe/"
+    BILLING_URL = "/meso/billing/"
+
+    def _coach_client(self):
+        coach = UserFactory()
+        CoachProfileFactory(user=coach)
+        c = Client()
+        c.force_login(coach)
+        return coach, c
+
+    def test_ten_days_left_defers_the_first_charge(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        trial_end = timezone.now() + timedelta(days=10)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=trial_end,
+        )
+        with mock.patch(
+            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+        ) as create:
+            resp = c.post(self.URL)
+        assert resp.status_code == 302
+        kwargs = create.call_args.kwargs
+        assert kwargs["subscription_data"] == {"trial_end": int(trial_end.timestamp())}
+
+        page = c.get(self.BILLING_URL)
+        body = page.content.decode()
+        expected_date = dateformat.format(trial_end, "M j")
+        # The date is wrapped in a `<time>` (#555 P1-C — local-timezone rewrite).
+        assert "you won't be charged until" in body
+        assert f">{expected_date}</time>" in body
+        # The hidden marker carries the promised unix timestamp, not a bare
+        # "deferred" flag (#555 P2-1).
+        expected_promise = str(int(trial_end.timestamp()))
+        assert (
+            f'<input type="hidden" name="first_charge" value="{expected_promise}">'
+            in body
+        )
+
+    def test_forty_seven_hours_left_charges_today(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() + timedelta(hours=47),
+        )
+        with mock.patch(
+            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+        ) as create:
+            resp = c.post(self.URL)
+        assert resp.status_code == 302
+        kwargs = create.call_args.kwargs
+        assert "subscription_data" not in kwargs
+
+        page = c.get(self.BILLING_URL)
+        body = page.content.decode()
+        assert "in under 2 days. Subscribing starts billing today." in body
+        assert 'name="first_charge"' not in body
+
+    @pytest.mark.parametrize("setup", ["free", "lapsed_trial"])
+    def test_gateway_receives_no_trial_end(self, settings, setup):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        if setup == "lapsed_trial":
+            CoachSubscriptionFactory(
+                coach=coach,
+                status=CoachSubscription.Status.TRIALING,
+                trial_end=timezone.now() - timedelta(days=1),
+            )
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
+            return_value=mock.Mock(url="https://stripe/checkout"),
+        ) as create:
+            c.post(self.URL)
+        assert create.call_args.kwargs["trial_end"] is None
+
+    def test_stripe_params_have_no_subscription_data_for_a_free_coach(self, settings):
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        with mock.patch(
+            GATEWAY_CHECKOUT, return_value=mock.Mock(url="https://stripe/cs")
+        ) as create:
+            c.post(self.URL)
+        assert "subscription_data" not in create.call_args.kwargs
+
+    def test_stale_promise_bounces_without_opening_checkout(self, settings):
+        """The page promised a deferred charge but the trial has since dropped.
+
+        Under 48h left, the stale POST must not open Checkout (#555).
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() + timedelta(hours=47),
+        )
+        with mock.patch(GATEWAY_CHECKOUT) as create:
+            resp = c.post(self.URL, data={"first_charge": "deferred"})
+        assert resp.status_code == 302
+        assert resp.url == "/meso/"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("subscribing now starts billing today" in t for t in texts)
+
+    def test_promised_date_mismatch_bounces_without_opening_checkout(self, settings):
+        """The trial_end moved since the page was rendered (#555 P2-1).
+
+        The stale-page marker now carries the *promised* unix timestamp, not a
+        bare "deferred" flag — so a trial_end that changed underneath the page
+        (an admin edit, a Stripe event) is caught even while still deferrable.
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        trial_end = timezone.now() + timedelta(days=10)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=trial_end,
+        )
+        stale_promised = str(int(trial_end.timestamp()) + 3600)
+        with mock.patch(GATEWAY_CHECKOUT) as create:
+            resp = c.post(self.URL, data={"first_charge": stale_promised})
+        assert resp.status_code == 302
+        assert resp.url == "/meso/"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("trial end date changed" in t for t in texts)
+
+    def test_canceled_coach_gets_a_neutral_stale_page_message(self, settings):
+        """The row is no longer a local trial at all (#555 round 2 nit).
+
+        E.g. the coach subscribed and canceled in another tab between page
+        load and this POST — `deferred_first_charge` is None here too, but
+        "your trial has less than 2 days left" would be wrong (there's no
+        trial to speak of any more).
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_old",
+        )
+        with mock.patch(GATEWAY_CHECKOUT) as create:
+            resp = c.post(self.URL, data={"first_charge": "1234567890"})
+        assert resp.status_code == 302
+        assert resp.url == "/meso/"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Your plan changed since this page loaded" in t for t in texts)
+        assert not any("trial has less than 2 days left" in t for t in texts)
+
+    def test_lapsed_trial_gets_the_neutral_stale_page_message(self, settings):
+        """The trial already ended: "less than 2 days left" would be wrong too.
+
+        Nothing sweeps a lapsed local trial back to free, so the row still
+        reads TRIALING with a past clock.
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() - timedelta(days=2),
+        )
+        with mock.patch(GATEWAY_CHECKOUT) as create:
+            resp = c.post(self.URL, data={"first_charge": "1234567890"})
+        assert resp.status_code == 302
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Your plan changed since this page loaded" in t for t in texts)
+        assert not any("trial has less than 2 days left" in t for t in texts)
 
 
 class TestPortalView:
