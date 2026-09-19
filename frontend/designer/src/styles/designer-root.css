@@ -3,8 +3,11 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* The designer's layout floor. Below it the mount in designer.html scrolls
+     instead of clipping; under 900px the mount is hidden and designer.html
+     shows its phone message (#508). */
   min-width: 1240px;
-  overflow: hidden;
+  overflow: auto;
   background: var(--bg);
   color: var(--ink);
   font-family: "Hanken Grotesk", system-ui, -apple-system, sans-serif;

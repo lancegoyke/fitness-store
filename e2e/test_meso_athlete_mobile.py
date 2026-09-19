@@ -17,6 +17,8 @@ import pytest
 from django.urls import reverse
 from playwright.sync_api import expect
 
+from e2e._layout import assert_fits
+
 pytestmark = pytest.mark.django_db
 
 # Apple's minimum comfortable tap target, in CSS px.
@@ -24,11 +26,6 @@ MIN_TAP = 44
 
 # The narrowest phone still in use; checked on top of each phone viewport.
 NARROWEST_PHONE = {"width": 320, "height": 640}
-
-PAGE_WIDTH_JS = """() => {
-  const el = document.scrollingElement;
-  return {scrollWidth: el.scrollWidth, clientWidth: el.clientWidth};
-}"""
 
 # Every rendered control narrower or shorter than MIN_TAP, as readable labels.
 # A control inside a display:none ancestor has an empty rect and is skipped.
@@ -48,38 +45,6 @@ SMALL_TAP_TARGETS_JS = """(minTap) => {
   return small;
 }"""
 
-# Every rendered control that sticks out of the screen, or out of a box that
-# clips it (a card with overflow:hidden cuts it off rather than letting the
-# page scroll — which is how the old set row failed at 320px). A box that
-# scrolls on purpose (overflow auto/scroll) ends the search.
-CUT_OFF_CONTROLS_JS = """() => {
-  const selector = 'a[href], button, input:not([type=hidden]), select, textarea, summary';
-  const screenWidth = document.documentElement.clientWidth;
-  const cutOff = [];
-  for (const el of document.querySelectorAll(selector)) {
-    const r = el.getBoundingClientRect();
-    if (!r.width || !r.height) continue;
-    const label = (el.innerText || el.placeholder || el.getAttribute('aria-label') || '')
-      .trim().replace(/\\s+/g, ' ').slice(0, 30);
-    const name = `${el.tagName.toLowerCase()} "${label}"`;
-    if (r.left < -0.5 || r.right > screenWidth + 0.5) {
-      cutOff.push(`${name} runs off the screen`);
-      continue;
-    }
-    for (let box = el.parentElement; box; box = box.parentElement) {
-      const overflow = getComputedStyle(box).overflowX;
-      if (overflow === 'auto' || overflow === 'scroll') break;
-      if (overflow === 'visible') continue;
-      const b = box.getBoundingClientRect();
-      if (r.left < b.left - 0.5 || r.right > b.right + 0.5) {
-        cutOff.push(`${name} is cut off by its ${box.tagName.toLowerCase()}`);
-        break;
-      }
-    }
-  }
-  return cutOff;
-}"""
-
 INPUT_FONT_SIZES_JS = """() => [...document.querySelectorAll('input, textarea, select')]
   .filter((el) => el.type !== 'hidden')
   .map((el) => ({
@@ -88,24 +53,14 @@ INPUT_FONT_SIZES_JS = """() => [...document.querySelectorAll('input, textarea, s
   }))"""
 
 
-def _assert_fits(page):
-    width = page.evaluate(PAGE_WIDTH_JS)
-    assert width["scrollWidth"] <= width["clientWidth"], (
-        f"page scrolls sideways: {width['scrollWidth']}px of content in a "
-        f"{width['clientWidth']}px viewport"
-    )
-    cut_off = page.evaluate(CUT_OFF_CONTROLS_JS)
-    assert cut_off == [], f"controls the athlete can't fully see: {cut_off}"
-
-
 def _assert_fits_down_to_320(page, viewport):
     """No sideways scroll and no cut-off control, here and (phone) at 320px."""
-    _assert_fits(page)
+    assert_fits(page)
     if viewport["is_phone"]:
         size = page.viewport_size
         page.set_viewport_size(NARROWEST_PHONE)
         try:
-            _assert_fits(page)
+            assert_fits(page)
         finally:
             page.set_viewport_size(size)
 

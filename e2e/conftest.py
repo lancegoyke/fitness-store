@@ -7,6 +7,7 @@ via `just e2e` (see the justfile), not directly, unless you know what you're
 doing.
 """
 
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,13 +16,18 @@ import pytest
 from django.conf import settings
 from django.core.cache import cache
 from django.test import Client
+from django.urls import reverse
 from django.utils import timezone
+from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import PlanFactory
+from store_project.meso.factories import ProposedChangeFactory
 from store_project.meso.factories import WeekFactory
+from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
 from store_project.meso.models import Plan
+from store_project.meso.models import ProposedChange
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
 from store_project.meso.tests._helpers import sub_line
@@ -367,4 +373,82 @@ def block_plan(db):
         weeks=weeks,
         squat_lines=squat_lines,
         lower_sessions=lower_sessions,
+    )
+
+
+@pytest.fixture
+def logged_plan(delivered_plan):
+    """`delivered_plan` with the athlete's Box Squat logged as "1×5 @ 100 kg".
+
+    Logged through the exact endpoints the athlete's own UI calls (the cell
+    write, then "Log session"), not by writing rows directly. Shared by the
+    coach-results journey (#506) and `coach_workspace` below (#508).
+    """
+    client = Client()
+    client.force_login(delivered_plan.athlete)
+    cell_response = client.post(
+        reverse("meso:athlete_cell_write", kwargs={"pk": delivered_plan.session.pk}),
+        data=json.dumps(
+            {"exercise_id": delivered_plan.squat.pk, "line": 1, "text": "100 x 5"}
+        ),
+        content_type="application/json",
+    )
+    assert cell_response.status_code == 200
+    log_response = client.post(
+        reverse("meso:athlete_log_session", kwargs={"pk": delivered_plan.session.pk}),
+        data=json.dumps({"status": "done", "sets": []}),
+        content_type="application/json",
+    )
+    assert log_response.status_code == 200
+    return delivered_plan
+
+
+@pytest.fixture
+def coach_workspace(logged_plan):
+    """`logged_plan` plus everything else the coach-mobile suite needs (#508).
+
+    Adds a PENDING agent review batch on the plan with two
+    proposed changes — one carrying `honors` — and a template plan owned by
+    the coach (so the template library has a row to lay out).
+    """
+    batch = AgentProposalBatchFactory(
+        plan=logged_plan.plan, status=AgentProposalBatch.Status.PENDING
+    )
+    ProposedChangeFactory(
+        batch=batch,
+        kind=ProposedChange.Kind.PROGRESS,
+        day_label="Day 1 · Lower",
+        title="Progress Box Squat",
+        before="3 x 6 @ 70 kg",
+        after="3 x 6 @ 72.5 kg",
+        rationale="RPE has come in under target the last two sessions.",
+        honors="",
+    )
+    change_with_honors = ProposedChangeFactory(
+        batch=batch,
+        kind=ProposedChange.Kind.DELOAD,
+        day_label="Day 1 · Lower",
+        title="Deload the RDL",
+        before="3 x 8 @ 80 kg",
+        after="3 x 8 @ 65 kg",
+        rationale="Honoring the athlete's note about lower-back fatigue.",
+        honors="lower-back fatigue note",
+    )
+
+    template = PlanFactory(
+        relationship=None,
+        is_template=True,
+        owner=logged_plan.coach,
+        title="Push/Pull/Legs Template",
+    )
+    template_mesocycle = MesocycleFactory(plan=template, name="Block 1", order=0)
+    template_week = WeekFactory(mesocycle=template_mesocycle, index=1)
+    template_session = day(template_week, day_number=1, name="Push")
+    presc(template_session, name="Bench Press", sets="4", reps="6", load="80", rpe="7")
+
+    return SimpleNamespace(
+        **vars(logged_plan),
+        batch=batch,
+        change_with_honors=change_with_honors,
+        template=template,
     )

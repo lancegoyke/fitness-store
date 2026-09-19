@@ -20,7 +20,7 @@
 {% endblock %}
 
 {% block content %}
-  <div class="meso-page">
+  <div class="meso-page meso-coach">
     <div class="meso-crumbs">
       <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span> <span>{{ athlete.name }}</span>
     </div>
@@ -86,7 +86,7 @@
       <div style="display:flex;flex-direction:column;gap:14px;" data-tour="athlete-profile-main">
         {% if athlete.has_program %}
           <div class="meso-card meso-card--pad">
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+            <div class="meso-phone-wrap" style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
               <div>
                 <p class="meso-eyebrow" style="margin:0 0 3px;">Cadence</p>
                 <div style="font-size:17px;font-weight:800;letter-spacing:-0.02em;">{{ athlete.recency }} · {{ athlete.session_count_14d }} session{{ athlete.session_count_14d|pluralize }} in 14d</div>
@@ -120,7 +120,7 @@
                 <div class="meso-spacer"></div>
                 <span class="meso-row-meta">{{ results_summary.session }}</span>
               </div>
-              <div style="display:flex;align-items:center;gap:22px;">
+              <div class="meso-phone-wrap" style="display:flex;align-items:center;gap:22px;">
                 <div>
                   <div style="font-size:22px;font-weight:800;letter-spacing:-0.02em;">{{ results_summary.completion }}%</div>
                   <div class="meso-row-meta">completed</div>

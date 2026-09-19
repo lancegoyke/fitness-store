@@ -1020,3 +1020,242 @@ button.meso-row:hover {
     justify-content: center;
   }
 }
+
+/* ==========================================================================
+   Coach pages on a phone (issue #508, second slice): roster, results, the
+   athlete profile, deliver, review and the template library. Scoped by
+   `.meso-coach` on those pages' `.meso-page`, apart from the topnav, which is
+   shared chrome like the tap-target rule above. One breakpoint, 760px
+   (nav.css's burger breakpoint): multi-column grids go to one column and
+   rows too wide for a phone wrap. Nothing here applies above 760px, so the
+   desktop layouts don't move.
+
+   The designer is the exception: it isn't editable on a phone, so under
+   900px designer.html shows a message with links instead of the island (the
+   last block below).
+   ========================================================================== */
+
+/* Layout that was inline on these pages, moved here so the breakpoint can
+   override it. Same values as before. */
+.meso-roster-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 312px;
+  gap: 18px;
+  align-items: start;
+}
+.meso-results-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1.5fr) minmax(0, 1.3fr) minmax(0, 1.1fr) 56px
+    minmax(0, 1.3fr);
+  gap: 10px;
+}
+/* A list row with no avatar (a template): the name takes the free width.
+   Here rather than inline so the phone rule below can take it back. */
+.meso-row > .meso-row-main:first-child {
+  flex: 1;
+}
+/* A page's topnav buttons: laid out as if they were the bar's own children
+   on a wide screen, their own row on a phone. */
+.meso-topnav-actions {
+  display: contents;
+}
+
+@media (max-width: 760px) {
+  /* --- topnav: brand, links and avatar on the first row; the page's buttons
+     (e.g. "Adjust next week →") wrap onto a second row instead of pushing
+     the page wider than the phone. Links that don't fit wrap inside their
+     own box. --- */
+  .meso-topnav {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 55px;
+    column-gap: 12px;
+    row-gap: 0;
+    padding: 0 16px;
+  }
+  /* Keeps the first row at the bar's usual 55px once the bar can grow. */
+  .meso-topnav > .meso-brand {
+    min-height: 55px;
+  }
+  .meso-topnav > .meso-spacer {
+    display: none;
+  }
+  .meso-navlinks {
+    flex: 1 1 0;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .meso-topnav-actions {
+    display: flex;
+    order: 1;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 10px;
+  }
+  .meso-topnav-actions:empty {
+    display: none;
+  }
+
+  /* --- page scaffold --- */
+  .meso-coach.meso-page {
+    padding-left: 16px;
+    padding-right: 16px;
+    /* A long unbroken name (an athlete with no name shows their email's
+       local part) breaks rather than widening the page. `anywhere`, not
+       `break-word`, so it also lowers the minimum width of the flex items it
+       sits in, which is what would otherwise push them past the screen. */
+    overflow-wrap: anywhere;
+  }
+  /* Badges and tags carry names too (a block's title, a goal), and are
+     nowrap everywhere else. */
+  .meso-coach .meso-badge,
+  .meso-coach .meso-tag {
+    white-space: normal;
+  }
+  /* A select is as wide as its longest option (an athlete's name); let it,
+     and the list-row column it sits in, shrink to the screen. */
+  .meso-coach select,
+  .meso-coach .meso-row form {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .meso-coach .meso-pagehead,
+  .meso-coach .meso-crumbs {
+    flex-wrap: wrap;
+  }
+  /* Inline-flex rows marked for it wrap instead of overflowing; a primary
+     button that wraps keeps to the right edge, where it sits on desktop. */
+  .meso-coach .meso-phone-wrap {
+    flex-wrap: wrap;
+  }
+  .meso-coach .meso-phone-wrap > .meso-btn--primary {
+    margin-left: auto;
+  }
+  /* A button label longer than the phone (a long athlete name or email)
+     wraps; `anywhere` so a flex row can shrink it past one unbroken word. */
+  .meso-coach .meso-btn {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .meso-coach .meso-card--pad {
+    padding: 16px;
+  }
+
+  /* --- one column --- */
+  .meso-coach .meso-roster-split,
+  .meso-coach .meso-grid--profile {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* --- list rows (roster, templates): the name keeps the line beside its
+     avatar; badges and buttons wrap to a second line, lined up under the
+     name by the row's spacer (the avatar's 38px plus the row's gap). --- */
+  .meso-coach .meso-row {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .meso-coach .meso-row > * {
+    min-width: 0;
+  }
+  .meso-coach .meso-row > .meso-row-main {
+    flex: 1 1 calc(100% - 51px);
+  }
+  .meso-coach .meso-row > .meso-spacer {
+    flex: 0 0 38px;
+  }
+  /* A row with no avatar (a template): the name takes the whole line. */
+  .meso-coach .meso-row > .meso-row-main:first-child {
+    flex-basis: 100%;
+  }
+  /* The roster list's header: "Individuals" on its own line, then the count
+     and the links together, instead of one link stranded on a line. */
+  .meso-coach .meso-roster-head > .meso-eyebrow {
+    flex-basis: 100%;
+  }
+  .meso-coach .meso-roster-head > .meso-spacer {
+    display: none;
+  }
+
+  /* --- results: the three stats stack as short lines; each exercise row
+     stacks its cells under the name, each labelled from its data-label. --- */
+  .meso-coach .meso-stats {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .meso-coach .meso-stats > .meso-card {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 12px 16px;
+  }
+  .meso-results-head {
+    display: none;
+  }
+  .meso-results-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 4px;
+  }
+  .meso-results-row > [data-label] {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .meso-results-row > [data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 52px;
+    /* The RPE cell centres its badge on desktop; its label mustn't follow. */
+    text-align: left;
+    font-family: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+}
+
+/* --- designer: a message instead of the island under 900px --- */
+/* The island's mount. It used to carry `min-width:1240px; overflow:hidden`
+   inline, which clipped everything past the first screen on a narrow
+   window; the island's own root keeps the 1240px floor and this box scrolls
+   it instead, so nothing is unreachable if the message below is bypassed
+   (e.g. a phone's "desktop site", which renders about 980px wide). */
+.meso-designer-mount {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: auto;
+}
+.meso-designer-fallback {
+  display: none;
+}
+@media (max-width: 900px) {
+  .meso-designer-mount {
+    display: none;
+  }
+  .meso-designer-fallback {
+    display: block;
+  }
+  /* Shown up to 900px, past the coach pages' 760px rules, so it carries
+     its own: a long unbroken plan title or athlete email wraps rather than
+     widening the page. */
+  .meso-designer-fallback .meso-page {
+    padding-left: 16px;
+    padding-right: 16px;
+    overflow-wrap: break-word;
+  }
+  .meso-designer-fallback .meso-btn {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+.meso-designer-fallback-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}

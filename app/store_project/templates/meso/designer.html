@@ -23,6 +23,41 @@
     {{ designer_flags|json_script:"meso-designer-flags" }}
     <span id="meso-csrf" data-token="{{ csrf_token }}" hidden></span>
 
+    {% comment %}
+      Phone fallback (#508). Editing isn't built for a phone, so under 900px
+      meso.css hides the island's mount and shows this instead: plain server
+      HTML, so it's there before the bundle loads and needs no JS branch. The
+      island still mounts underneath, hidden, so a window that grows past 900px
+      (a tablet turned sideways) switches straight to the editor.
+    {% endcomment %}
+    <div class="meso-designer-fallback" data-testid="designer-fallback">
+      <nav class="meso-topnav">
+        <a class="meso-brand" href="{% url 'meso:roster' %}">
+          <span class="meso-brand-mark"><i></i></span>
+          <b>Meso</b>
+        </a>
+      </nav>
+      <div class="meso-page meso-page--narrow">
+        <div class="meso-card meso-card--pad">
+          <p class="meso-eyebrow">Program designer</p>
+          <h1 class="meso-h1">{{ phone_fallback.title }}</h1>
+          <p class="meso-sub">Open this on a larger screen to edit the program.</p>
+          <div class="meso-designer-fallback-links">
+            {% if phone_fallback.deliver_url %}
+              <a class="meso-btn meso-btn--primary" href="{{ phone_fallback.deliver_url }}">Deliver this block</a>
+            {% endif %}
+            {% if phone_fallback.athlete_url %}
+              <a class="meso-btn" href="{{ phone_fallback.athlete_url }}">{{ phone_fallback.athlete_name }}'s profile</a>
+            {% endif %}
+            {% if phone_fallback.is_template %}
+              <a class="meso-btn" href="{% url 'meso:template_library' %}">Templates</a>
+            {% endif %}
+            <a class="meso-btn" href="{% url 'meso:roster' %}">Back to roster</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Phase 2 PR B (frontend/designer/CONTRACT.md): the whole Alpine UI
          this file used to render server-side is now the React island built
          to js/dist/designer.js. This div is the mount point AND the source
@@ -32,8 +67,9 @@
          Alpine root div's inline style. -->
     <div
       id="meso-designer-root"
+      class="meso-designer-mount"
       data-tour="designer-root"
-      style="--bg:#f4f4f5;--surface:#ffffff;--rail:#fbfbfc;--ink:#0a0a0a;--dim:#6b7280;--line:#e4e4e7;--line-2:#f1f3f5;--radius:8px;--pad:14px;--accent:#31759d;--accent-ink:#ffffff;--soft:#eaf2f7;--soft-line:#bcd6e4;--accent-deep:#1f516b;--warn:#b4541f;--warn-soft:#fbefe8;--ok:#2f8f56;display:flex;flex-direction:column;height:100vh;min-width:1240px;overflow:hidden;background:var(--bg);color:var(--ink);font-family:'Hanken Grotesk',system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;"
+      style="--bg:#f4f4f5;--surface:#ffffff;--rail:#fbfbfc;--ink:#0a0a0a;--dim:#6b7280;--line:#e4e4e7;--line-2:#f1f3f5;--radius:8px;--pad:14px;--accent:#31759d;--accent-ink:#ffffff;--soft:#eaf2f7;--soft-line:#bcd6e4;--accent-deep:#1f516b;--warn:#b4541f;--warn-soft:#fbefe8;--ok:#2f8f56;background:var(--bg);color:var(--ink);font-family:'Hanken Grotesk',system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;"
     ></div>
 
     <script type="module" src="{% static 'js/dist/designer.js' %}"></script>
