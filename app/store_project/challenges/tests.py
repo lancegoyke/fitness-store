@@ -287,6 +287,15 @@ class ChallengeTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "/accounts/login/")
 
+    def test_challenge_detail_view_login_box_signup_link_preserves_next(self):
+        """An anonymous visitor's "sign up" link carries them back to this challenge (#523 sibling)."""
+        self.client.logout()
+        response = self.client.get(self.challenge.get_absolute_url())
+        self.assertContains(
+            response,
+            f'href="/accounts/signup/?next={self.challenge.get_absolute_url()}"',
+        )
+
     def test_challenge_detail_view_record_create_form(self):
         # make sure logged in user can submit record
         self.client.login(email="recorduser@email.com", password="testpass123")

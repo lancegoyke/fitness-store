@@ -3,11 +3,16 @@
 {% block title %}Coach invite · Meso{% endblock %}
 
 {% comment %}
-  The claim URL carries the bearer token — don't leak it to font/CDN hosts.
-  head_top renders before the base template's font <link>s, so the policy is in
-  effect before those external requests fire.
+  The claim URL carries the bearer token. `same-origin` keeps it out of every
+  cross-origin request (fonts/CDN) while the page's own POST still carries its
+  real Origin — `no-referrer` made the browser send `Origin: null` instead,
+  and CSRF rejected Accept/Decline (#522). This is a meta tag rather than a
+  response header because Caddy replaces the Referrer-Policy header in
+  production, and the meta overrides whatever header arrives. head_top
+  renders before the base template's font <link>s, so the policy is in effect
+  before those external requests fire.
 {% endcomment %}
-{% block head_top %}<meta name="referrer" content="no-referrer" />{% endblock %}
+{% block head_top %}<meta name="referrer" content="same-origin" />{% endblock %}
 
 {# A brand-new athlete may have no coach/athlete role yet — strip the coach nav. #}
 {# Focused single-action onboarding screen — no marketing site nav either. #}

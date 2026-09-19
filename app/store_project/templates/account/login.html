@@ -15,7 +15,7 @@
 {% block auth_description %}
   <p class="auth-card__description text-center">
     {% trans "Enter your email below to login to your account." %}
-    <a href="{% url 'account_signup' %}">{% trans "Sign up" %}</a>
+    <a href="{{ signup_url }}">{% trans "Sign up" %}</a>
   </p>
 {% endblock auth_description %}
 
