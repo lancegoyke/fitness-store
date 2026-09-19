@@ -19,6 +19,12 @@ inserted first inside `#content-main`, ahead of the app list, so it's always
 visible regardless of app-list length.
 {% endcomment %}
 
+{% block extrastyle %}
+  {{ block.super }}
+  {# A one-column table doesn't stretch like the app list's three-column ones. #}
+  <style>#dashboards-module table { width: 100%; }</style>
+{% endblock %}
+
 {% block content %}
   <div id="content-main" class="app-list">
     <div class="module" id="dashboards-module">
