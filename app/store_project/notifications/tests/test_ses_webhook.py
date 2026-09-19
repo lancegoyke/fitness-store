@@ -40,6 +40,7 @@ from unittest import mock
 
 import pytest
 from django.db import DataError
+from django.db import IntegrityError
 from django.db import OperationalError
 from django.urls import reverse
 from django_ses.models import BlacklistedEmail
@@ -392,6 +393,44 @@ class TestEmailEventRecording:
         event = EmailEvent.objects.get(sns_message_id="sns-send-1")
         assert event.event_type == EmailEvent.EventType.SEND
 
+    def test_a_non_string_recipient_is_skipped_but_others_still_record(
+        self, _verify, client
+    ):
+        """A non-string ``delivery.recipients`` entry must not abort the loop.
+
+        Previously ``recipient.lower()`` raised ``AttributeError`` on the bad
+        entry, which the blanket ``except Exception`` swallowed *after*
+        earlier recipients in the same event had already been inserted — but
+        any recipient listed after the bad one was never recorded.
+        """
+        message = delivery_message(recipient="first@example.com")
+        message["delivery"]["recipients"] = ["first@example.com", 7, "last@example.com"]
+
+        response = post_notification(
+            client, message, sns_message_id="sns-delivery-mixed"
+        )
+
+        assert response.status_code == 200
+        recorded = set(
+            EmailEvent.objects.filter(sns_message_id="sns-delivery-mixed").values_list(
+                "recipient", flat=True
+            )
+        )
+        assert recorded == {"first@example.com", "last@example.com"}
+
+    def test_null_bounce_type_and_subtype_become_empty_strings(self, _verify, client):
+        """``bounceType: null`` must not hit the NOT NULL ``CharField`` as ``None``."""
+        message = bounce_message(recipient="null-bounce@example.com")
+        message["bounce"]["bounceType"] = None
+        message["bounce"]["bounceSubType"] = None
+
+        response = post_notification(client, message, sns_message_id="sns-bounce-null")
+
+        assert response.status_code == 200
+        event = EmailEvent.objects.get(sns_message_id="sns-bounce-null")
+        assert event.bounce_type == ""
+        assert event.bounce_subtype == ""
+
     def test_redelivering_the_same_notification_does_not_duplicate(
         self, _verify, client
     ):
@@ -552,6 +591,29 @@ class TestPermanentDataErrors:
         ):
             response = post_notification(
                 client, open_message(), sns_message_id="sns-data-error-1"
+            )
+
+        assert response.status_code == 200
+        assert EmailEvent.objects.count() == 0
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_integrity_error_is_logged_and_acked_not_retried(self, _verify, client):
+        """A real constraint violation that escapes ``get_or_create`` is permanent too.
+
+        ``get_or_create`` already absorbs the unique-race ``IntegrityError``
+        itself, so any ``IntegrityError`` that gets past it is a genuine
+        constraint violation — retrying (a 5xx) can't fix that, unlike the
+        transient ``OperationalError`` case above, which still propagates.
+        """
+        with mock.patch.object(
+            EmailEvent.objects,
+            "get_or_create",
+            side_effect=IntegrityError(
+                "null value in column violates not-null constraint"
+            ),
+        ):
+            response = post_notification(
+                client, open_message(), sns_message_id="sns-integrity-error-1"
             )
 
         assert response.status_code == 200

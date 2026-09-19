@@ -31,13 +31,16 @@ is deliberately **not** swallowed. Letting it propagate turns the response
 into a 500, so SNS retries, and the retry is safe: idempotency is handled by
 keying ``EmailEvent`` rows on ``(sns_message_id, recipient)`` via
 ``get_or_create`` — the same pair the model's ``UniqueConstraint`` enforces.
-A *permanent* ``django.db.DataError`` — an oversized value a ``varchar(n)``
-column refuses, which retrying can never fix — is not: bounded string
-fields are truncated to their column width before insert (``_fit``), and
-whatever that doesn't catch is logged and swallowed rather than propagated,
-or SNS would redeliver the same uninsertable event for hours. Every other
-exception in ``_record_event`` is still swallowed and logged, same as
-everywhere else.
+A *permanent* ``django.db.DataError`` or ``django.db.IntegrityError`` — an
+oversized value a ``varchar(n)`` column refuses, or a real constraint
+violation retrying can never fix (``get_or_create`` already absorbs the
+unique-race ``IntegrityError`` internally, so one that still escapes is a
+genuine violation, e.g. a NOT NULL column handed ``None``) — is not: bounded
+string fields are truncated to their column width and coerced away from
+``None``/non-string before insert (``_fit``), and whatever that doesn't
+catch is logged and swallowed rather than propagated, or SNS would
+redeliver the same uninsertable event for hours. Every other exception in
+``_record_event`` is still swallowed and logged, same as everywhere else.
 """
 
 import json
@@ -46,6 +49,7 @@ from email.utils import parseaddr
 
 from django.db import DatabaseError
 from django.db import DataError
+from django.db import IntegrityError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -121,7 +125,7 @@ def _occurred_at(timestamp):
     return timezone.now()
 
 
-def _fit(field_name: str, value: str) -> str:
+def _fit(field_name: str, value) -> str:
     """Truncate ``value`` to ``EmailEvent``'s ``field_name`` column width.
 
     SES/SNS payloads are not bounded to our column widths — a redirect-heavy
@@ -132,9 +136,17 @@ def _fit(field_name: str, value: str) -> str:
     production inserts from failing). Truncating first keeps a too-long
     payload insertable instead of relying solely on ``_record_event``'s
     ``DataError`` fallback below.
+
+    ``None`` (an explicit JSON null, e.g. ``"bounceType": null``) or any
+    other non-string value is coerced to ``""``: every field this is called
+    on is a NOT NULL ``CharField``, and passing ``None`` straight through
+    raises ``django.db.IntegrityError`` — a *permanent* failure (see
+    ``_record_event``) that would otherwise make SNS retry forever.
     """
+    if not isinstance(value, str):
+        value = ""
     max_length = EmailEvent._meta.get_field(field_name).max_length
-    if max_length is None or value is None:
+    if max_length is None:
         return value
     return value[:max_length]
 
@@ -152,19 +164,23 @@ def _record_event(
     """Shared body for every ``*_received`` receiver below.
 
     Resolves the ``SentEmail`` match (if any) and the event's ``kind``, then
-    writes one ``EmailEvent`` per recipient, idempotent on
-    ``(sns_message_id, recipient)`` via ``get_or_create`` (which already
-    absorbs the unique-race ``IntegrityError`` itself, so no special case is
-    needed here). Every bounded string field is truncated to its column
-    width first (``_fit``), since SES/SNS payloads aren't bounded to ours. A
-    ``django.db.DatabaseError`` propagates — a transient failure should turn
-    into a 500 so SNS retries the (idempotent) delivery rather than losing
-    the event forever — *except* ``django.db.DataError``, a permanent
-    failure (an oversized value truncation didn't catch): that's logged and
-    swallowed like any other bad payload, or SNS would redeliver an
-    uninsertable event for hours. Everything else (malformed payloads, etc.)
-    is likewise swallowed and logged, since a bad event must not take the
-    webhook down with it.
+    writes one ``EmailEvent`` per recipient (skipping any recipient that
+    isn't a non-empty string — SES/SNS payloads aren't guaranteed to be
+    well-shaped), idempotent on ``(sns_message_id, recipient)`` via
+    ``get_or_create`` (which already absorbs the unique-race
+    ``IntegrityError`` itself, so no special case is needed for *that*).
+    Every bounded string field is truncated to its column width and coerced
+    away from ``None``/non-string first (``_fit``), since SES/SNS payloads
+    aren't bounded to ours. A ``django.db.DatabaseError`` propagates — a
+    transient failure should turn into a 500 so SNS retries the (idempotent)
+    delivery rather than losing the event forever — *except*
+    ``django.db.DataError`` or ``django.db.IntegrityError``, both permanent
+    failures (an oversized value truncation didn't catch, or a real
+    constraint violation that isn't the unique-race case ``get_or_create``
+    already handles): those are logged and swallowed like any other bad
+    payload, or SNS would redeliver an uninsertable event for hours.
+    Everything else (malformed payloads, etc.) is likewise swallowed and
+    logged, since a bad event must not take the webhook down with it.
     """
     try:
         mail_obj = mail_obj or {}
@@ -188,7 +204,12 @@ def _record_event(
         raw = {"mail": mail_obj, "event": event_obj}
 
         for recipient in recipients or []:
-            if not recipient:
+            if not isinstance(recipient, str) or not recipient:
+                logger.warning(
+                    "%s event with a non-string or empty recipient (%r); skipping it.",
+                    event_type,
+                    recipient,
+                )
                 continue
             recipient = _fit("recipient", recipient.lower())
             defaults = {
@@ -207,7 +228,7 @@ def _record_event(
                 recipient=recipient,
                 defaults=defaults,
             )
-    except DataError:
+    except (DataError, IntegrityError):
         logger.exception(
             "Failed to record %s event: permanently uninsertable data", event_type
         )
