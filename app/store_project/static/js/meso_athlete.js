@@ -346,8 +346,7 @@ function createLogger() {
       } catch (netErr) {
         // Network unreachable → queue it; the upsert endpoint is idempotent, so
         // replaying on reconnect is safe (latest save for a session wins).
-        this.enqueue(payload);
-        this.queued = true;
+        this.keepForLater(payload);
         this.saving = false;
         return;
       }
@@ -357,8 +356,7 @@ function createLogger() {
         // HTML). Don't lose it: queue for retry, where the next online flush
         // (after re-login) carries a fresh CSRF.
         if (res.redirected) {
-          this.enqueue(payload);
-          this.queued = true;
+          this.keepForLater(payload);
           return;
         }
         if (!res.ok) throw new Error("Request failed: " + res.status);
@@ -466,18 +464,29 @@ function createLogger() {
       }
     },
 
+    // True when the queue was written. Storage can be full or blocked, and
+    // then nothing is kept: a caller must not tell the athlete it was.
     writeQueue(items) {
       try {
         localStorage.setItem(this.queueKey, JSON.stringify(items));
+        return true;
       } catch (e) {
         console.error("Could not persist offline log queue", e);
+        return false;
       }
+    },
+
+    // Queue this session's log and say so — or, when storage refused it, say
+    // it didn't save.
+    keepForLater(payload) {
+      if (this.enqueue(payload)) this.queued = true;
+      else this.error = true;
     },
 
     enqueue(payload) {
       const queue = this.readQueue().filter((item) => item.url !== this.logUrl);
       queue.push(this.stamp({ url: this.logUrl, body: payload }));
-      this.writeQueue(queue);
+      return this.writeQueue(queue);
     },
 
     // Queue one line's write, replacing any earlier one for the same cell:
@@ -487,21 +496,13 @@ function createLogger() {
         (item) => !isSameCell(item, this.cellUrl, body.exercise_id, body.line),
       );
       queue.push(this.stamp({ kind: "cell", url: this.cellUrl, body }));
-      this.writeQueue(queue);
+      return this.writeQueue(queue);
     },
 
     queuedCell(exerciseId, line) {
       return this.readQueue().find((item) =>
         isSameCell(item, this.cellUrl, exerciseId, line),
       );
-    },
-
-    dropCell(exerciseId, line) {
-      const queue = this.readQueue();
-      const kept = queue.filter(
-        (item) => !isSameCell(item, this.cellUrl, exerciseId, line),
-      );
-      if (kept.length !== queue.length) this.writeQueue(kept);
     },
 
     // Remove one replayed entry, but only as it was sent: a newer write queued
@@ -822,17 +823,25 @@ function createLogger() {
         // through a blank line or leaving a coach's line as it was changes
         // nothing, and offline it painted a spurious "couldn't save". A queued
         // line always posts — its text may match, but the queue must drain.
+        // So does a warned one: set-shaped text saved while its row was
+        // skipped has no set, and re-sending the same text once the coach
+        // un-skips the row is how it gets one.
         if (
           entry &&
           entry.savedText !== undefined &&
           text === entry.savedText &&
-          !entry.queued
+          !entry.queued &&
+          !entry.warn
         ) {
           entry.saveError = false;
           return "skipped";
         }
       }
       const body = { exercise_id: ex.id, line, text };
+      // What the queue held for this cell as the write went out. This write
+      // supersedes that entry, but not one queued meanwhile by another tab
+      // on the same session, which may be newer.
+      const pending = this.queuedCell(ex.id, line);
       if (entry) entry.saveError = false;
       let res;
       try {
@@ -860,16 +869,16 @@ function createLogger() {
         // The latest text for this cell was refused, so an older queued one
         // is stale: replaying it later would undo whatever the athlete types
         // next. Drop it with the rejection.
-        this.dropCell(ex.id, line);
+        if (pending) this.dropEntry(pending);
         if (entry) {
           entry.queued = false;
           entry.saveError = true;
         }
         return "rejected";
       }
-      // Saved. Any queued write for this cell is older than this one — this
-      // line's saves run in order — so the server now has the newest.
-      this.dropCell(ex.id, line);
+      // Saved. The entry queued before this write is older — this line's
+      // saves run in order — so the server now has the newest.
+      if (pending) this.dropEntry(pending);
       if (entry) {
         entry.savedText = text;
         entry.queued = false;
@@ -911,12 +920,13 @@ function createLogger() {
     },
 
     // Keep a line's write for the next flush, and say so on the line. A write
-    // replayed from the queue is still there, so only a fresh one is added.
+    // replayed from the queue is still there, so only a fresh one is added. If
+    // storage refused it, nothing will sync: the line says it couldn't save.
     _holdCell(entry, body, fromQueue) {
-      if (!fromQueue) this.enqueueCell(body);
+      const kept = fromQueue || this.enqueueCell(body);
       if (entry) {
-        entry.queued = true;
-        entry.saveError = false;
+        entry.queued = kept;
+        entry.saveError = !kept;
       }
     },
   };

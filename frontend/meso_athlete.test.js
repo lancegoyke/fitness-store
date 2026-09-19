@@ -1656,6 +1656,68 @@ describe("queue ownership — one athlete never flushes another's writes (#527)"
   });
 });
 
+describe("edges: a warned line, a second tab, full storage (#527)", () => {
+  it("still posts an unchanged line that carries a warning", async () => {
+    // Set-shaped text saved while its row was skipped has no set; once the
+    // coach un-skips the row, re-sending the same text is what creates it.
+    const c = cellLogger();
+    const line = c.exercises[0].sub_lines[0];
+    line.text = "100 x 5";
+    line.savedText = "100 x 5";
+    line.warn = true;
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(line.warn).toBe(false);
+  });
+
+  it("keeps a newer entry another tab queued while this write was in flight", async () => {
+    const c = cellLogger();
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    const newer = {
+      kind: "cell",
+      url: CELL_URL,
+      body: { exercise_id: 1, line: 1, text: "110 x 5" },
+    };
+    global.fetch = vi.fn().mockImplementation(async () => {
+      c.writeQueue([newer]); // the other tab, offline, retyped the line
+      return res({
+        body: { ok: true, cell: { line: 1, text: "100 x 5", warn: false } },
+      });
+    });
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue()).toEqual([newer]);
+  });
+
+  it("says a line couldn't save when storage refuses the queue", async () => {
+    const c = cellLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1);
+    const line = c.exercises[0].sub_lines[0];
+    expect(line.queued).toBe(false);
+    expect(line.saveError).toBe(true);
+  });
+
+  it("says the session couldn't save when storage refuses the queue", async () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[0].done = true;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.save(true);
+    expect(c.queued).toBe(false);
+    expect(c.error).toBe(true);
+  });
+});
+
 describe("footer line error clears once the line saves (#527)", () => {
   it("drops 'a line above couldn't save' when the refused line is fixed", async () => {
     const c = cellLogger({ logUrl: LOG_URL });
