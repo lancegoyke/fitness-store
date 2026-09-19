@@ -445,11 +445,16 @@ function createLogger() {
     },
 
     // Let every line save in flight land, then flush the outbox, so whatever
-    // follows is sent after the lines (#527).
+    // follows is sent after the lines (#527). The lines stay editable while
+    // this waits, so a blur can start a save meanwhile: wait for those too.
     async settleLines() {
-      await Promise.all(
-        Object.values(this._cellSaves).map((p) => p.catch(() => {})),
-      );
+      let waited = [];
+      for (;;) {
+        const inFlight = Object.values(this._cellSaves);
+        if (inFlight.every((p) => waited.includes(p))) break;
+        waited = inFlight;
+        await Promise.all(inFlight.map((p) => p.catch(() => {})));
+      }
       await this.flushQueue();
     },
 
@@ -796,11 +801,12 @@ function createLogger() {
         .catch(() => {}) // a failed save must not stall the cell's queue
         .then(() => this._postCell(ex, line, fromQueue))
         .then((outcome) => {
-          // A line landing can settle what the footer last said: once no
+          // A line landing can change what the footer last said: once no
           // line is queued or refused, "will sync" or "a line couldn't save"
-          // gives way — no second "Log session" needed. `save()` reports for
-          // itself, after its own log.
-          if (!this.saving && (this.queued || this.lineError)) {
+          // gives way — no second "Log session" needed — and a line that
+          // failed after "Saved ✓" went up takes it down. `save()` reports
+          // for itself, after its own log.
+          if (!this.saving && (this.queued || this.lineError || this.saved)) {
             this.reportSaved();
           }
           return outcome;

@@ -1785,6 +1785,52 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     expect(line.warn).toBe(true);
   });
 
+  it("waits for a line blurred while Log session is settling", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].sub_lines.push({ line: 2, text: "110 x 5" });
+    const calls = [];
+    const release = {};
+    global.fetch = vi.fn().mockImplementation(async (url, opts) => {
+      if (url !== CELL_URL) {
+        calls.push("log");
+        return res({ body: { log: { status: "done", sets: [] } } });
+      }
+      const { line } = JSON.parse(opts.body);
+      calls.push(line);
+      await new Promise((r) => {
+        release[line] = r;
+      });
+      return res({ body: { ok: true, cell: { warn: false } } });
+    });
+    c.saveCell(c.exercises[0], 1); // in flight when Log session is pressed
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(calls).toEqual([1]));
+    c.saveCell(c.exercises[0], 2); // blurred while save() waits
+    await vi.waitFor(() => expect(calls).toEqual([1, 2]));
+    release[1]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual([1, 2]); // the log waits for line 2 to land
+    release[2]();
+    await saving;
+    expect(calls).toEqual([1, 2, "log"]);
+  });
+
+  it("takes 'Saved ✓' down when a line fails after it went up", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].sub_lines[0].text = "100 x 5";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { log: { status: "done", sets: [] } } }),
+    );
+    await c.save(true);
+    expect(c.saved).toBe(true);
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.saveCell(c.exercises[0], 1); // a blur that lands after the log
+    expect(c.saved).toBe(false);
+    expect(c.queued).toBe(true);
+  });
+
   it("says a line couldn't save when storage refuses the queue", async () => {
     const c = cellLogger();
     vi.spyOn(console, "error").mockImplementation(() => {});
