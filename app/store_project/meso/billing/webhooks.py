@@ -31,6 +31,8 @@ import stripe
 from django.conf import settings
 from django.contrib.auth import get_user_model
 
+from store_project.analytics.events import EventName
+from store_project.analytics.track import track
 from store_project.meso.models import CoachSubscription
 
 logger = logging.getLogger(__name__)
@@ -157,7 +159,15 @@ def _sync_from_subscription(sub_obj, *, deleted):
     # stale event for a *different* subscription, never to resize a quantity).
     items = (sub_obj.get("items") or {}).get("data") or [{}]
     item = items[0]
-    CoachSubscription.objects.update_or_create(
+    # subscription_started/cancelled analytics (#509): read off ``existing``
+    # BEFORE the upsert below overwrites the mirror.
+    previous_status = existing.status if existing else ""
+    already_live = (
+        existing is not None
+        and existing.stripe_subscription_id == incoming_id
+        and existing.status in CoachSubscription.ACTIVE_STATUSES
+    )
+    sub, _created = CoachSubscription.objects.update_or_create(
         coach=coach,
         defaults={
             "status": status,
@@ -166,6 +176,28 @@ def _sync_from_subscription(sub_obj, *, deleted):
             "current_period_end": _ts_to_dt(sub_obj.get("current_period_end")),
         },
     )
+    if status in CoachSubscription.ACTIVE_STATUSES and not already_live:
+        track(
+            EventName.SUBSCRIPTION_STARTED,
+            actor=coach,
+            subject=sub,
+            via="stripe",
+            status=status,
+            previous=previous_status,
+        )
+    elif (
+        status == CoachSubscription.Status.CANCELED
+        and existing is not None
+        and existing.status != CoachSubscription.Status.CANCELED
+    ):
+        track(
+            EventName.SUBSCRIPTION_CANCELLED,
+            actor=coach,
+            subject=sub,
+            via="stripe",
+            status=status,
+            previous=previous_status,
+        )
 
 
 def _nudge_status(invoice_obj, *, from_status, to_status):

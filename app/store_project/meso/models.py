@@ -1103,8 +1103,22 @@ class CoachSubscription(models.Model):
     @classmethod
     def start_trial_for(cls, coach):
         """Get-or-create the coach's row and start their trial (the view entry point)."""
+        # Lazy import (#509): ``analytics.track`` imports ``meso.sandbox``, which
+        # imports ``meso.models`` — a module-level import here would be circular.
+        from store_project.analytics.events import EventName
+        from store_project.analytics.track import track
+
         sub, _ = cls.objects.get_or_create(coach=coach)
         sub.start_trial()
+        # subscription_started analytics: one choke point for both
+        # ``billing_start_trial`` and ``start_coaching``'s ``plan=trial``.
+        track(
+            EventName.SUBSCRIPTION_STARTED,
+            actor=coach,
+            subject=sub,
+            via="trial",
+            status=sub.status,
+        )
         return sub
 
 
