@@ -1753,3 +1753,17 @@ _(Append dated entries here as decisions land.)_
   both fixes applied locally. #524 asks whether a coach's sub-line belongs
   under the athlete's "what you did". Each journey was checked by breaking
   what it covers. No app behavior changed, no migration.
+- 2026-09-19 — **Fixed (#522, #523): a new athlete can get from an emailed
+  invite onto the coach's roster.** The claim page's referrer meta is now
+  `same-origin` instead of `no-referrer`. Under `no-referrer` the browser sends
+  `Origin: null` on the page's own POST and CSRF rejected Accept and Decline
+  with a 403. `same-origin` still keeps the token in the URL away from font and
+  CDN hosts. It stays a meta, not a response header, because Caddy replaces the
+  `Referrer-Policy` header in production and the meta overrides it. The login
+  page's "Sign up" link is allauth's `{{ signup_url }}`, so `?next` survives
+  signup and the invitee lands back on the claim page. The challenge page's
+  logged-out login box had the same bare signup link and now passes `next`
+  too. The invite journey's strict xfail is gone, along with the half-journey
+  test that stood in for it. New fast tests: the claim page's policy, a claim
+  POST under enforced CSRF with the Origin a browser sends under that policy,
+  and both signup links. No migration.

@@ -5,9 +5,7 @@ coach's roster form and, in a second browser context with its own cookies
 (``new_page``), a brand-new person with no account following the emailed
 link. The claim link is pulled out of ``django.core.mail.outbox`` (the
 in-process locmem backend), never read off the ``CoachInvite`` row directly —
-the point is to prove the email a real invitee gets actually works. Two bugs
-stop the full journey today (#522, #523), so it's a strict xfail, and a
-second test covers the half that works.
+the point is to prove the email a real invitee gets actually works.
 
 Journey 3 covers the free-tier seat cap: a coach already at their one free
 athlete can't open a second invite.
@@ -28,8 +26,7 @@ from store_project.meso.views import SEAT_LIMIT_MESSAGE
 
 pytestmark = pytest.mark.django_db
 
-# A brand-new person with no account. Both journey-2 tests use the same
-# address — each test gets its own fresh database, so there's no collision.
+# A brand-new person with no account.
 INVITEE_EMAIL = "jordan.new@example.com"
 # Random per run: clears every validator in AUTH_PASSWORD_VALIDATORS, and
 # keeps a credential-shaped literal out of the repo (secret scanners flag one).
@@ -51,7 +48,7 @@ def subscribed_coach(delivered_plan):
 
 
 # ---------------------------------------------------------------------------
-# Journey 2 helpers, shared by the full (xfail) journey and the half that works.
+# Journey 2 helpers.
 # ---------------------------------------------------------------------------
 
 
@@ -114,8 +111,7 @@ def _coach_sends_invite_and_gets_claim_url(page, press, shot, email):
 def _invitee_follows_link_and_signs_up(invitee_page, press, shot, claim_url, email):
     """Brand-new invitee opens the claim link, bounces to login, and signs up.
 
-    Doesn't assert where signup lands them afterward — that's exactly what the
-    two journey-2 tests diverge on.
+    Doesn't assert where signup lands them afterward — the caller does that.
     """
     invitee_page.goto(claim_url)
     expect(invitee_page).to_have_url(re.compile(r"/accounts/login/\?next="))
@@ -144,27 +140,10 @@ def _invitee_follows_link_and_signs_up(invitee_page, press, shot, claim_url, ema
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#523: the login page's Sign up link drops ?next, so a new invitee "
-        "never gets back to the invite; #522: Accept on the claim page 403s "
-        "(its no-referrer meta makes the browser send Origin: null)"
-    ),
-)
 def test_new_athlete_signs_up_from_an_invite(
     page, viewport, shot, press, login, new_page, subscribed_coach
 ):
-    """The whole journey: invite, sign up, accept, and show up on the roster.
-
-    Two bugs stop it today. The login page's "Sign up" link is a bare
-    `{% url 'account_signup' %}` that drops the bounce's `?next=`, so signup
-    lands the invitee on `LOGIN_REDIRECT_URL` (`/users/profile/`) instead of
-    back on the invite (#523). And pressing "Accept invite" 403s: the claim
-    page's `no-referrer` meta makes the browser send `Origin: null` on its
-    own form POST, which `CsrfViewMiddleware` rejects (#522). Strict, so the
-    run goes red once both are fixed and the marker has to come off.
-    """
+    """The whole journey: invite, sign up, accept, and show up on the roster."""
     login(subscribed_coach.coach)
     claim_url = _coach_sends_invite_and_gets_claim_url(page, press, shot, INVITEE_EMAIL)
 
@@ -200,34 +179,6 @@ def test_new_athlete_signs_up_from_an_invite(
     expect(page.locator("a.meso-row").filter(has_text="jordan.new")).to_be_visible()
     expect(page.locator(".meso-row").filter(has_text=INVITEE_EMAIL)).to_have_count(0)
     shot("05-roster-active")
-
-
-def test_new_person_signs_up_from_an_invite_link(
-    page, viewport, shot, press, login, new_page, subscribed_coach
-):
-    """The half of the journey above that works today.
-
-    The coach's invite form, the email and its link, the bounce to login and
-    a real signup all work. Where signup lands is #523, so this doesn't look;
-    it does what a real invitee does today and opens the emailed link again,
-    and the invite is there for them. It stops before "Accept invite" (#522).
-    Once both are fixed the xfail above covers all of this, and this test can
-    go.
-    """
-    login(subscribed_coach.coach)
-    claim_url = _coach_sends_invite_and_gets_claim_url(page, press, shot, INVITEE_EMAIL)
-
-    invitee_page = new_page()
-    _invitee_follows_link_and_signs_up(
-        invitee_page, press, shot, claim_url, INVITEE_EMAIL
-    )
-
-    invitee_page.goto(claim_url)
-    expect(
-        invitee_page.get_by_role("heading", name="Casey Coach invited you to train")
-    ).to_be_visible()
-    expect(invitee_page.get_by_role("button", name="Accept invite")).to_be_visible()
-    shot("04-invite-waiting", on=invitee_page)
 
 
 # ---------------------------------------------------------------------------

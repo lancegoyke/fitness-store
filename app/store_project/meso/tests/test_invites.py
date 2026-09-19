@@ -28,12 +28,14 @@ Mail is deferred to ``transaction.on_commit`` (the view runs under
 ``test_delivery_notifications``.
 """
 
+import re
 import uuid
 from unittest import mock
 
 import pytest
 from django.contrib.messages import get_messages
 from django.core import mail
+from django.test import Client
 from django.urls import reverse
 
 from store_project.meso.factories import CoachAthleteFactory
@@ -431,6 +433,67 @@ class TestInviteClaimView:
         client.force_login(UserFactory())
         resp = client.get(self._url(uuid.uuid4()))
         assert resp.status_code == 404
+
+
+class TestInviteClaimReferrerPolicy:
+    """#522: the claim page's referrer policy must not break its own POST.
+
+    The page sets a referrer policy to keep the bearer token in its URL out of
+    requests to font/CDN hosts. Under ``no-referrer`` the browser sends
+    ``Origin: null`` on the page's own form POST too, and
+    ``CsrfViewMiddleware`` 403s it. The default test client sends no
+    ``Origin`` header at all, which is why the view tests above missed this —
+    these read the policy the page actually sets and send the ``Origin`` a
+    browser would send under it.
+    """
+
+    def _url(self, token):
+        return reverse("meso:invite_claim", kwargs={"token": token})
+
+    def _referrer_policy(self, content):
+        match = re.search(r'<meta name="referrer" content="([^"]+)"', content)
+        assert match, f'no <meta name="referrer"> found on the claim page:\n{content}'
+        return match.group(1)
+
+    def _csrf_token(self, content):
+        match = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', content)
+        assert match, (
+            f"no csrfmiddlewaretoken input found on the claim page:\n{content}"
+        )
+        return match.group(1)
+
+    def test_policy_keeps_the_token_off_other_origins(self, client):
+        coach = UserFactory()
+        athlete = UserFactory()
+        invite, _ = CoachInvite.open_for(coach=coach, email=athlete.email)
+        client.force_login(athlete)
+        resp = client.get(self._url(invite.token))
+        assert self._referrer_policy(resp.content.decode()) == "same-origin"
+
+    def test_accept_passes_csrf_with_the_origin_a_browser_sends(self):
+        coach = UserFactory()
+        athlete = UserFactory()
+        invite, _ = CoachInvite.open_for(coach=coach, email=athlete.email)
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(athlete)
+        resp = client.get(self._url(invite.token))
+        content = resp.content.decode()
+        policy = self._referrer_policy(content)
+        csrf_token = self._csrf_token(content)
+        # Fetch spec, "append a request `Origin` header": on a same-origin
+        # POST, only `no-referrer` strips the Origin a browser sends.
+        origin = "null" if policy == "no-referrer" else "http://testserver"
+        resp = client.post(
+            self._url(invite.token),
+            {"action": "accept", "csrfmiddlewaretoken": csrf_token},
+            HTTP_ORIGIN=origin,
+        )
+        assert resp.status_code == 302
+        assert resp.url == reverse("meso:athlete_home")
+        invite.refresh_from_db()
+        assert invite.status == CoachInvite.Status.ACCEPTED
+        link = CoachAthlete.objects.get(coach=coach, athlete=athlete)
+        assert link.is_active
 
 
 # -- roster surface --------------------------------------------------------

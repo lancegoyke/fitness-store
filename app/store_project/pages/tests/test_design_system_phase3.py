@@ -117,6 +117,18 @@ class Phase3LoginTemplateTests(TestCase):
         self.assertContains(self.resp, 'name="password"')
         self.assertContains(self.resp, reverse("account_reset_password"))
 
+    def test_login_signup_link_preserves_next(self):
+        """The header "Sign up" link keeps allauth's ?next passthrough (#523).
+
+        A hard-coded ``{% url 'account_signup' %}`` would drop the ``next`` a
+        new invitee carried in from their claim link, bouncing them to
+        ``LOGIN_REDIRECT_URL`` on signup instead of back to the invite.
+        """
+        resp = self.client.get(reverse("account_login") + "?next=/meso/claim/abc/")
+        self.assertContains(
+            resp, 'href="/accounts/signup/?next=%2Fmeso%2Fclaim%2Fabc%2F"'
+        )
+
     def test_social_login_anchors_and_media_survive(self):
         """Both provider anchors + the providers media JS survive the migration."""
         self.assertContains(self.resp, 'id="google"')
