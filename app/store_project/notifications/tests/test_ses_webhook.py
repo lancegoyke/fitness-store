@@ -520,6 +520,41 @@ class TestWebhookRobustness:
         assert response.status_code == 200
 
 
+class TestOtherReceiverExceptions:
+    """A non-DB exception from *another* receiver on the same signal must not 500.
+
+    ``django_ses`` precedes ``notifications`` in ``INSTALLED_APPS``, so its
+    own ``bounce_handler``/``complaint_handler`` (connected in
+    ``DjangoSESConfig.ready()``) run before this app's ``record_bounce`` /
+    ``record_complaint``. Their ``_blacklist_recipients`` does
+    ``email.lower()`` on every recipient and raises ``AttributeError`` for a
+    non-string ``emailAddress`` — and ``Signal.send()`` stops at the first
+    exception, so without a safety net at the view this would 500 (and SNS
+    would redeliver the same permanently malformed event for hours) before
+    our own receiver even got a chance to run (and skip the bad recipient,
+    per
+    ``TestEmailEventRecording.test_a_non_string_recipient_is_skipped_but_others_still_record``
+    above).
+    """
+
+    @mock.patch("django_ses.views.utils.verify_event_message", return_value=True)
+    def test_non_string_bounce_recipient_from_django_ses_handler_returns_200(
+        self, _verify, client
+    ):
+        message = bounce_message(recipient="bounced3@example.com")
+        message["bounce"]["bouncedRecipients"][0]["emailAddress"] = 7
+
+        response = post_notification(
+            client, message, sns_message_id="sns-non-string-bounce"
+        )
+
+        assert response.status_code == 200
+        assert BlacklistedEmail.objects.count() == 0
+        assert not EmailEvent.objects.filter(
+            sns_message_id="sns-non-string-bounce"
+        ).exists()
+
+
 class TestTransientDatabaseErrors:
     """A transient ``DatabaseError`` must propagate, not get swallowed.
 

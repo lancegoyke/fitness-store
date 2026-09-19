@@ -20,6 +20,8 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import UserPassesTestMixin
 from django.core.exceptions import PermissionDenied
+from django.db import DatabaseError
+from django.http import HttpResponse
 from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
@@ -136,6 +138,20 @@ class ScopedSESEventWebhookView(SESEventWebhookView):
     instead means the guard runs unconditionally, before the base view's own
     signature check, so a rejected topic never costs a certificate fetch and
     an attacker's subscription is never confirmed.
+
+    It is also the outer safety net for exceptions raised by *other*
+    receivers on the same signals — namely django-ses's own
+    ``bounce_handler``/``complaint_handler`` (connected in
+    ``DjangoSESConfig.ready()``), which run before this app's receivers
+    because ``django_ses`` precedes ``notifications`` in ``INSTALLED_APPS``.
+    Their ``_blacklist_recipients`` does ``email.lower()`` on every
+    recipient and raises ``AttributeError`` for a non-string
+    ``emailAddress``; ``django.dispatch.Signal.send()`` stops at the first
+    receiver exception, so that would otherwise 500 before our own receivers
+    even ran, and SNS would redeliver the same permanently malformed event
+    for hours. Our own receivers (``ses_events``) never raise anything but a
+    ``DatabaseError`` (see its module docstring), so ``_dispatch_to_base``
+    below only ever needs to catch exceptions from *other* receivers.
     """
 
     def post(self, request, *args, **kwargs):
@@ -143,7 +159,7 @@ class ScopedSESEventWebhookView(SESEventWebhookView):
             notification = json.loads(request.body.decode("utf-8"))
         except ValueError:
             # Malformed JSON: let the base view produce its own 400.
-            return super().post(request, *args, **kwargs)
+            return self._dispatch_to_base(request, *args, **kwargs)
 
         if not isinstance(notification, dict):
             # Valid JSON that isn't an object (a list, null, a string, a
@@ -158,4 +174,27 @@ class ScopedSESEventWebhookView(SESEventWebhookView):
             )
             return HttpResponseBadRequest("Unexpected SNS topic.")
 
-        return super().post(request, *args, **kwargs)
+        return self._dispatch_to_base(request, *args, **kwargs)
+
+    def _dispatch_to_base(self, request, *args, **kwargs):
+        """Run the base view, turning a non-DB exception into an acked 200.
+
+        A ``django.db.DatabaseError`` (and subclasses) propagates unchanged —
+        that is the deliberate "let SNS retry" path (see ``ses_events``'s
+        module docstring); ``ses_events`` already downgrades the permanent
+        ``DataError``/``IntegrityError`` subclasses before they reach here,
+        so what arrives is transient. Any other exception — from django-ses's
+        own blacklist handlers, or anything else on the signal chain — is
+        logged and answered with a 200 so SNS stops redelivering an event we
+        can never successfully process.
+        """
+        try:
+            return super().post(request, *args, **kwargs)
+        except DatabaseError:
+            raise
+        except Exception:
+            logger.exception(
+                "Unhandled exception while processing an SES/SNS event; "
+                "acking with 200 so SNS does not redeliver it."
+            )
+            return HttpResponse()
