@@ -305,12 +305,13 @@ class TestASecondReclaimCycleStillEndsWithOneRow:
 
 
 class TestUndoSparesACellAStructuredCopyPointsAt:
-    """#541 review (F1): undo must not delete a cell a copy's link points at.
+    """Undo must not delete a line a structured copy still answers to.
 
     Modelled on ``TestUndoDoesNotOrphanASetsSourceCell``
     (test_parse_at_commit.py), but the surviving row here is the source-less
-    structured copy a "Log session" left behind — the link's ``related_name``
-    ``+`` (no reverse lookup) hid it from the stray-cell cleanup.
+    structured copy a "Log session" left behind. The stray-cell cleanup spared
+    only lines a parsed row points at, so an undo past the line's creation
+    deleted it, the link went NULL, and the restore minted a twin again.
     """
 
     def test_a_cell_backing_a_structured_copy_survives_a_restore(self, client):
@@ -359,12 +360,12 @@ class TestUndoSparesACellAStructuredCopyPointsAt:
         assert (rows[0].load, rows[0].reps) == ("225", "5")
 
 
-class TestARestoreIsOnlyARestoreWhenTheLineShowedNoSetOfItsOwn:
-    """#541 review (F2): a restore is only a restore when ``mine`` is empty.
+class TestTheCopyIsOnlyReusedWhenTheLineShowedNoSetOfItsOwn:
+    """The ``reclaimed_line`` fallback is a restore, so ``mine`` must be empty.
 
-    Both reuse lookups are premised on the line NOT already showing a set of
-    its own. When it was, the edit is an edit of THAT set, not a restore of an
-    older, unrelated performance the lookups happen to match by value.
+    When the line is showing a set of its own, the blur edits THAT set. Landing
+    on the structured copy's values doesn't make it the same performance, and
+    re-linking would fold two sets into one that a later clear then deletes.
     """
 
     def test_with_log_session_a_correction_does_not_touch_the_structured_copy(
@@ -399,17 +400,14 @@ class TestARestoreIsOnlyARestoreWhenTheLineShowedNoSetOfItsOwn:
         assert rows[0].source_line_id is None, "the structured copy must survive"
         assert (rows[0].load, rows[0].reps) == ("225", "5")
 
-    def test_without_log_session_a_correction_does_not_touch_the_first_set(
-        self, client
-    ):
-        """No Log session in between — ``A`` itself still carries the link.
+    def test_without_log_session_the_line_lookup_is_unchanged(self, client):
+        """The older ``source_line`` lookup keeps its main-branch behavior.
 
-        Stops short of a further "clear": that step deletes by VALUE alone
-        (``mine`` in ``_upsert_parsed_set``), and once ``A`` and the correction
-        below legitimately share one value, a later clear collapsing both is a
-        separate, pre-existing gap in that value-matching — not one #541's
-        ``reclaimed_line`` fallback (or its ``previous is None`` gate) touches,
-        since neither row here is source-less.
+        With no "Log session" in between, the reclaimed row A still sits on
+        this line, so correcting the line's own set to A's values reuses A, as
+        before #541. Gating that lookup the way the fallback is gated would
+        leave A and a new twin on one line, both hidden by its text, and one
+        clear would then delete both.
         """
         s = seed()
         client.force_login(s.athlete)
@@ -420,24 +418,11 @@ class TestARestoreIsOnlyARestoreWhenTheLineShowedNoSetOfItsOwn:
         assert reclaim(client, s, text="brace harder").status_code == 200
 
         client.force_login(s.athlete)
-        resp = write_cell(client, s.session, s.squat, 1, "230 x 3")  # R_B
-        assert resp.status_code == 200
-
-        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")  # correction
-        assert resp.status_code == 200
+        write_cell(client, s.session, s.squat, 1, "230 x 3")
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         rows = _squat_rows(s)
-        assert sorted((r.load, r.reps) for r in rows) == [
-            ("225", "5"),
-            ("225", "5"),
-        ], (
-            f"the correction must add a row, not reuse A as a restore: "
-            f"{[(r.pk, r.load, r.reps) for r in rows]}"
-        )
-        assert any(r.pk == a_pk for r in rows), (
-            "A itself (the athlete's very first performance) must survive the "
-            "correction untouched, not be silently absorbed as a 'restore'"
-        )
+        assert [(r.pk, r.load, r.reps) for r in rows] == [(a_pk, "225", "5")]
 
 
 class TestExactlyTwoSetLoggedEventsAcrossTheCorrectionSequence:

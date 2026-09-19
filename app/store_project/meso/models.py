@@ -2434,8 +2434,10 @@ class LoggedSet(models.Model):
     #
     # No DB-level FK (mirrors ``analytics.Event.actor``, #509): it's a hint for
     # that restore lookup only, and a real constraint would make a caller's
-    # COMMIT take a lock on the referenced row for the RI check. SET_NULL is
-    # still applied in Python by Django's collector on a Prescription delete.
+    # COMMIT take a lock on the referenced row for the RI check. It also keeps a
+    # code rollback safe: code that doesn't know this column can't SET_NULL it,
+    # so with a constraint its Prescription deletes would fail at COMMIT.
+    # SET_NULL is still applied in Python by Django's collector on a delete.
     reclaimed_line = models.ForeignKey(
         Prescription,
         on_delete=models.SET_NULL,

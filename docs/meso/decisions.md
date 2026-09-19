@@ -2019,14 +2019,29 @@ _(Append dated entries here as decisions land.)_
   and the restore re-links it to the line. That is the state a restore reaches
   when no "Log session" happened in between: one row with `source_line` set, shown
   by the line and not by the logger, with no new `set_logged` and no PR toast.
-  The link is recorded when the copy replaces the parsed row, in a new nullable
-  `LoggedSet.reclaimed_line` FK (migration `0048`). It is never guessed by value,
-  because a value match would merge a real second set that has the same numbers.
-  A later save carries the link to the new copy only when the posted row
-  restates it unchanged (same slot and values, the test `_client_held` uses), and
-  an edit drops it. The logger can still clear or edit the copy like any
-  structured row. Not covered: copies made before this shipped have no link. A
-  coach undo that puts the text back (rather than the athlete retyping it) still
-  shows the set twice and tints the line "not logged as a set", because the coach
-  path never touches `LoggedSet`. The data holds one row in that case. The
-  display half is a follow-up.
+  The link is `LoggedSet.reclaimed_line` (migration `0048`). It's only a hint
+  for this lookup, so it has no database constraint, the same call as the
+  `analytics.Event` FK. "Log session" records it when it replaces a visible
+  parsed row. A coach reclaim is the usual way a parsed row becomes visible. A
+  line the athlete edited while the coach had its row skipped is the other, and
+  it gets the same treatment. The restore never matches on values alone, since
+  that would merge a real second set with the same numbers into the copy. But
+  deciding that the page held the row uses `_client_held`'s test (same slot and
+  values), so the link shares that test's stale-tab limit from the 5a review. A
+  later save carries the link to its new copy only when the posted row restates
+  it unchanged, and an edit drops it. The logger can still clear or edit the
+  copy like any structured row.
+  **Only when the line isn't showing a set of its own.** If the athlete puts a
+  different set on the line and later corrects it to the copy's values, that's
+  an edit of the set on the line. It gets its own row and the copy stays, so a
+  later clear of the line can't take the copy with it. The older `source_line`
+  lookup keeps its behavior: its match already sits on the line, and declining
+  it would leave two identical rows there, both hidden and both deleted by one
+  clear.
+  **Undo keeps a line that a copy points at,** the same way it keeps one a
+  parsed row points at (`restore_plan_snapshot`'s stray-cell delete), so an undo
+  past the line's creation can't cut the link.
+  Not covered: copies made before this shipped have no link. A coach undo that
+  puts the text back, rather than the athlete retyping it, still shows the set
+  twice and tints the line "not logged as a set". The coach path never touches
+  `LoggedSet`, and the data holds one row (#561).
