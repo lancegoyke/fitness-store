@@ -235,7 +235,10 @@ class TestStripeTrialBillingSurfaces:
 
         assert resp.status_code == 200
         expected_date = dateformat.format(trial_end, "M j")
-        assert f"first charge on {expected_date}" in body
+        # The date is wrapped in a `<time>` (#555 P1-C — local-timezone rewrite),
+        # so it's no longer adjacent text to "first charge on".
+        assert "first charge on" in body
+        assert f">{expected_date}</time>" in body
         assert 'action="/meso/billing/subscribe/"' not in body
         assert "Manage billing" in body
 
@@ -254,6 +257,103 @@ class TestStripeTrialBillingSurfaces:
 
         assert resp.status_code == 200
         expected_date = dateformat.format(trial_end, "M j")
-        assert f"first charge on {expected_date}" in body
+        assert "first charge on" in body
+        assert f">{expected_date}</time>" in body
         assert 'action="/meso/billing/subscribe/"' not in body
         assert "Manage billing" in body
+
+
+# -- Billing dates render in the viewer's local timezone (P1-C, #555) -------
+#
+# The server renders UTC; ``meso_local_dates.js`` rewrites each wrapped date
+# to the browser's local timezone on load (progressive enhancement — the UTC
+# text is the no-JS fallback). These pin the server side: the `<time
+# datetime="…" data-local-date>` wrapper and the script tag are present.
+
+
+class TestBillingDatesAreTimezoneAware:
+    def test_billing_page_wraps_the_deferred_date_and_loads_the_script(self, client):
+        coach = _coach()
+        trial_end = timezone.now() + timedelta(days=10)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=trial_end,
+        )
+        client.force_login(coach)
+        body = client.get(URL).content.decode()
+
+        expected_iso = dateformat.format(trial_end, "c")
+        assert f'<time datetime="{expected_iso}" data-local-date>' in body
+        assert "js/meso_local_dates.js" in body
+
+    def test_roster_card_wraps_the_deferred_date_and_loads_the_script(self, client):
+        coach = _coach()
+        trial_end = timezone.now() + timedelta(days=10)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=trial_end,
+        )
+        client.force_login(coach)
+        body = client.get(ROSTER_URL).content.decode()
+
+        expected_iso = dateformat.format(trial_end, "c")
+        assert f'<time datetime="{expected_iso}" data-local-date>' in body
+        assert "js/meso_local_dates.js" in body
+
+    def test_stripe_trial_first_charge_date_is_wrapped(self, client):
+        coach = _coach()
+        trial_end = timezone.now() + timedelta(days=9)
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            stripe_subscription_id="sub_1",
+            trial_end=trial_end,
+        )
+        client.force_login(coach)
+        billing_body = client.get(URL).content.decode()
+        roster_body = client.get(ROSTER_URL).content.decode()
+
+        expected_iso = dateformat.format(trial_end, "c")
+        assert f'<time datetime="{expected_iso}" data-local-date>' in billing_body
+        assert f'<time datetime="{expected_iso}" data-local-date>' in roster_body
+
+
+# -- A local trial with no clock (P2-3, #555) --------------------------------
+#
+# `trial_end=None` is an admin-only state (a null clock never expires) — the
+# no-deferral branch must not render an empty "ends , in under 2 days."
+
+
+class TestTrialWithNoClock:
+    def test_billing_page_shows_no_clock_copy(self, client):
+        coach = _coach()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=None,
+        )
+        client.force_login(coach)
+        body = client.get(URL).content.decode()
+
+        assert "Free trial. Subscribing starts billing today." in body
+        assert "ends ," not in body
+        assert "ends," not in body
+
+    def test_roster_card_shows_no_clock_copy(self, client):
+        coach = _coach()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=None,
+        )
+        client.force_login(coach)
+        body = client.get(ROSTER_URL).content.decode()
+
+        assert (
+            "Free trial. Subscribing ($19/mo — unlimited athletes) starts billing"
+            " today." in body
+        )
+        assert "ends ," not in body
+        assert "ends," not in body
