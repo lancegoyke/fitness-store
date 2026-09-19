@@ -50,6 +50,7 @@ dev = [
   "pytest-django",
   "ruff",
   "playwright>=1.61.0",
+  "pytest-playwright>=0.9.0",
 ]
 
 [tool.ruff]
@@ -91,9 +92,20 @@ convention = "google"
 force-single-line = true
 
 [tool.pytest.ini_options]
-addopts = "--ds=config.settings.test --ignore=app/store_project/admin_honeypot/tests"
+# `-m "not e2e"` is belt-and-suspenders: `testpaths` already keeps a bare
+# `uv run pytest` from ever collecting `e2e/` at all. `just e2e` overrides it
+# with its own `-m e2e` (the later `-m` on the command line wins over this
+# one from addopts — argparse's "store" action, not an AND).
+addopts = "--ds=config.settings.test --ignore=app/store_project/admin_honeypot/tests -m \"not e2e\""
 python_files = ["tests.py", "test_*.py"]
 pythonpath = ["app"]
+# Only `app/` is collected by default — `e2e/` (issue #506) is local,
+# opt-in, browser-driven, and slow; it's reached only via `just e2e`, which
+# passes `e2e` as an explicit collection path.
+testpaths = ["app"]
+markers = [
+  "e2e: local headless-browser journeys (opt-in via just e2e)",
+]
 
 [tool.curlylint.rules]
 image_alt = true
