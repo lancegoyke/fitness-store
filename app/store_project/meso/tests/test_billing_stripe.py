@@ -1433,6 +1433,27 @@ class TestSubscribeViewDeferredCharge:
         assert any("Your plan changed since this page loaded" in t for t in texts)
         assert not any("trial has less than 2 days left" in t for t in texts)
 
+    def test_lapsed_trial_gets_the_neutral_stale_page_message(self, settings):
+        """The trial already ended: "less than 2 days left" would be wrong too.
+
+        Nothing sweeps a lapsed local trial back to free, so the row still
+        reads TRIALING with a past clock.
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() - timedelta(days=2),
+        )
+        with mock.patch(GATEWAY_CHECKOUT) as create:
+            resp = c.post(self.URL, data={"first_charge": "1234567890"})
+        assert resp.status_code == 302
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Your plan changed since this page loaded" in t for t in texts)
+        assert not any("trial has less than 2 days left" in t for t in texts)
+
 
 class TestPortalView:
     URL = "/meso/billing/portal/"

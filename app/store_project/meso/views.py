@@ -5246,12 +5246,15 @@ def billing_subscribe(request):
             # `deferred_first_charge` is also None once the row is no longer
             # a local trial at all (round 2 nit) — e.g. the coach subscribed
             # and canceled in another tab between page load and this POST.
-            # "your trial has less than 2 days left" would be wrong there;
-            # keep it only when the row is still genuinely a local trial.
+            # "your trial has less than 2 days left" would be wrong there, and
+            # for a trial that has already lapsed; keep it only for a live
+            # local trial with a clock.
             still_local_trial = (
                 sub is not None
                 and sub.status == CoachSubscription.Status.TRIALING
                 and not sub.stripe_subscription_id
+                and sub.trial_end is not None
+                and sub.is_active
             )
             if still_local_trial:
                 messages.info(
