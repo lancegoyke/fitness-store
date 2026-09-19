@@ -2781,23 +2781,41 @@ def athlete_request_coach(request):
         messages.error(request, "We couldn't find a coach with that email.")
         return redirect("meso:athlete_home")
 
-    existing = CoachAthlete.objects.filter(coach=coach, athlete=request.user).first()
-    if existing and existing.is_active:
-        messages.info(request, f"You're already training with {coach.display_name()}.")
-        return redirect("meso:athlete_home")
-    if existing and existing.status == CoachAthlete.Status.PENDING_ATHLETE_REQUEST:
-        messages.info(
-            request, f"You've already asked to train with {coach.display_name()}."
+    with transaction.atomic():
+        # ``unique_coach_athlete`` stops a second row, but not a double submit's
+        # second ``coach_request_sent`` event and email, or a reopened link's
+        # token rotating twice (#540). Lock in ``billing.webhooks._lock_mirror``'s
+        # order: the link if it exists, else the athlete's user row, then re-read.
+        existing = (
+            CoachAthlete.objects.select_for_update()
+            .filter(coach=coach, athlete=request.user)
+            .first()
         )
-        return redirect("meso:athlete_home")
-    if existing and existing.status == CoachAthlete.Status.PENDING_COACH_INVITE:
-        messages.info(
-            request,
-            f"{coach.display_name()} already invited you — accept it below.",
-        )
-        return redirect("meso:athlete_home")
+        if existing is None:
+            User.objects.select_for_update().filter(pk=request.user.pk).first()
+            existing = (
+                CoachAthlete.objects.select_for_update()
+                .filter(coach=coach, athlete=request.user)
+                .first()
+            )
+        if existing and existing.is_active:
+            messages.info(
+                request, f"You're already training with {coach.display_name()}."
+            )
+            return redirect("meso:athlete_home")
+        if existing and existing.status == CoachAthlete.Status.PENDING_ATHLETE_REQUEST:
+            messages.info(
+                request, f"You've already asked to train with {coach.display_name()}."
+            )
+            return redirect("meso:athlete_home")
+        if existing and existing.status == CoachAthlete.Status.PENDING_COACH_INVITE:
+            messages.info(
+                request,
+                f"{coach.display_name()} already invited you — accept it below.",
+            )
+            return redirect("meso:athlete_home")
 
-    link = CoachAthlete.request(athlete=request.user, coach=coach)
+        link = CoachAthlete.request(athlete=request.user, coach=coach)
     track(EventName.COACH_REQUEST_SENT, actor=request.user, subject=link)
     athlete = request.user
     roster_url = request.build_absolute_uri(reverse("meso:roster"))
@@ -5142,6 +5160,21 @@ def batch_apply(request, batch_id):
     # ONE undo action for the whole batch, snapshotted before any of its
     # changes land — undo reverts every change the batch applied in one step.
     with transaction.atomic():
+        # The pre-check above is unlocked, so two concurrent Applies can both
+        # pass it (#540). Lock the batch row and re-check, so only the winner
+        # records the undo action and applies. Lock order: the batch, then the
+        # Plan row ``record_plan_action`` locks; nothing locks them the other
+        # way round. (No ``select_related``: it would lock the joined rows too.)
+        batch = (
+            AgentProposalBatch.objects.select_for_update().filter(pk=batch.pk).first()
+        )
+        if batch is None:  # its plan was deleted since the lookup above
+            raise Http404("Unknown proposal batch")
+        if batch.status != AgentProposalBatch.Status.PENDING:
+            return JsonResponse(
+                {"ok": False, "error": "This batch has already been resolved."},
+                status=409,
+            )
         record_plan_action(batch.plan, "Applied agent changes")
         result = agent_apply.apply_batch(batch)
     track(
@@ -5182,7 +5215,20 @@ def batch_dismiss(request, batch_id):
         return JsonResponse(
             {"ok": False, "error": "This batch has already been resolved."}, status=409
         )
-    agent_apply.dismiss_batch(batch)
+    with transaction.atomic():
+        # The same lock and re-check as ``batch_apply`` (#540), so a Dismiss
+        # racing an Apply can't mark the applied batch DISMISSED.
+        batch = (
+            AgentProposalBatch.objects.select_for_update().filter(pk=batch.pk).first()
+        )
+        if batch is None:
+            raise Http404("Unknown proposal batch")
+        if batch.status != AgentProposalBatch.Status.PENDING:
+            return JsonResponse(
+                {"ok": False, "error": "This batch has already been resolved."},
+                status=409,
+            )
+        agent_apply.dismiss_batch(batch)
     return JsonResponse(
         {
             "ok": True,

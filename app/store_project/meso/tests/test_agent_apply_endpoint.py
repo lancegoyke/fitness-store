@@ -8,15 +8,19 @@ write.
 """
 
 import json
+from unittest import mock
 
 import pytest
 from django.urls import reverse
 
+from store_project.analytics.events import EventName
+from store_project.analytics.models import Event
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import MesocycleFactory
 from store_project.meso.factories import ProposedChangeFactory
 from store_project.meso.factories import WeekFactory
 from store_project.meso.models import AgentProposalBatch
+from store_project.meso.models import PlanAction
 from store_project.meso.models import ProposedChange
 from store_project.meso.tests.test_agent_validation import make_plan
 from store_project.users.factories import UserFactory
@@ -149,6 +153,42 @@ class TestBatchApply:
         plan, _, batch, _ = make_batch_with_swap()
         client.force_login(plan.coach)
         assert client.get(apply_url(batch)).status_code == 405
+
+    def test_status_flips_between_precheck_and_lock_returns_409(self, client):
+        """Prove the locked re-check catches a batch resolved after the pre-check.
+
+        The cheap pre-check is unlocked (#540): simulate a concurrent Apply
+        resolving the batch behind ``can_edit_plan``'s back, between the
+        pre-check and the row lock the fix takes. The locked re-check must
+        catch it — the exact same 409 the stale-Apply path already returns,
+        and nothing gets (re-)applied.
+        """
+        plan, presc, batch, _ = make_batch_with_swap()
+        client.force_login(plan.coach)
+
+        def _flip_batch_to_applied(edited_plan):
+            AgentProposalBatch.objects.filter(pk=batch.pk).update(
+                status=AgentProposalBatch.Status.APPLIED
+            )
+            return True
+
+        with mock.patch(
+            "store_project.meso.views.billing_access.can_edit_plan",
+            side_effect=_flip_batch_to_applied,
+        ):
+            resp = client.post(apply_url(batch))
+
+        assert resp.status_code == 409
+        assert resp.json() == {
+            "ok": False,
+            "error": "This batch has already been resolved.",
+        }
+        presc.refresh_from_db()
+        assert presc.name == "Back Squat"  # nothing (re-)applied
+        assert not PlanAction.objects.filter(
+            plan=plan, label="Applied agent changes"
+        ).exists()
+        assert not Event.objects.filter(name=EventName.BATCH_APPLIED).exists()
 
 
 class TestBatchApplyDeliverUrl:

@@ -204,6 +204,8 @@ jobs:
       # analytics insert must not roll back the write that called track().
       # test_billing_webhook_postgres is row-lock serialization again (#546):
       # two concurrent Stripe deliveries must not both write the ledger.
+      # test_double_submit_postgres is row-lock serialization again (#540):
+      # a double-submitted Apply/trial-start/coach-request must not both act.
       - name: Run the PostgreSQL-only tests
         run: |
           uv run pytest \
@@ -211,4 +213,5 @@ jobs:
             app/store_project/meso/tests/test_parse_at_commit_postgres.py \
             app/store_project/meso/tests/test_settle_postgres.py \
             app/store_project/analytics/tests/test_track_postgres.py \
-            app/store_project/meso/tests/test_billing_webhook_postgres.py
+            app/store_project/meso/tests/test_billing_webhook_postgres.py \
+            app/store_project/meso/tests/test_double_submit_postgres.py
