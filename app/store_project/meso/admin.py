@@ -254,7 +254,11 @@ class PrescriptionAdmin(admin.ModelAdmin):
 class LoggedSetInline(admin.TabularInline):
     model = LoggedSet
     extra = 0
-    raw_id_fields = ("prescription", "source_line", "reclaimed_line")
+    raw_id_fields = ("prescription", "source_line")
+    # An internal hint for the restore lookup (#541), not something to edit.
+    # It has no DB constraint, so it can outlive its cell; as an editable field
+    # that stale id would fail validation and block saving the whole log.
+    readonly_fields = ("reclaimed_line",)
 
 
 @admin.register(SessionLog)

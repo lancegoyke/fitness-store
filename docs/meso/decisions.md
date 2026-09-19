@@ -2021,16 +2021,20 @@ _(Append dated entries here as decisions land.)_
   by the line and not by the logger, with no new `set_logged` and no PR toast.
   The link is `LoggedSet.reclaimed_line` (migration `0048`). It's only a hint
   for this lookup, so it has no database constraint, the same call as the
-  `analytics.Event` FK. "Log session" records it when it replaces a visible
-  parsed row. A coach reclaim is the usual way a parsed row becomes visible. A
-  line the athlete edited while the coach had its row skipped is the other, and
-  it gets the same treatment. The restore never matches on values alone, since
-  that would merge a real second set with the same numbers into the copy. But
-  deciding that the page held the row uses `_client_held`'s test (same slot and
-  values), so the link shares that test's stale-tab limit from the 5a review. A
-  later save carries the link to its new copy only when the posted row restates
-  it unchanged, and an edit drops it. The logger can still clear or edit the
-  copy like any structured row.
+  `analytics.Event` FK. "Log session" records it whenever it replaces a visible
+  parsed row, however the row got that way: a coach reclaim, a coach fill over
+  the line, or a line the athlete edited while its row was skipped. The restore
+  looks only at the copy linked to this line. A same-valued structured row with
+  no link, such as a set entered separately in the logger, is never merged. On
+  the linked line, typing the copy's values back counts as a restore by design,
+  the same rule the older lookup applies when no "Log session" came between. So
+  a genuinely new set with identical numbers typed on that line folds into the
+  copy, as it already did before #541. Deciding that the page held the row uses
+  `_client_held`'s test (same slot and values), so the link also shares that
+  test's stale-tab limit from the 5a review. A later save carries the link to
+  its new copy only when the posted row restates it unchanged, and an edit drops
+  it. The logger can still clear or edit the copy like any structured row, and
+  the admin shows the link read-only.
   **Only when the line isn't showing a set of its own.** If the athlete puts a
   different set on the line and later corrects it to the copy's values, that's
   an edit of the set on the line. It gets its own row and the copy stays, so a
