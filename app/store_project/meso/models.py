@@ -2423,6 +2423,30 @@ class LoggedSet(models.Model):
         related_name="parsed_sets",
         verbose_name=_("Source line"),
     )
+    # #541. Set only on a structured-logger row (``source_line`` NULL) that
+    # just replaced a reclaimed, visible parsed row — remembers which sub-line
+    # that row's own ``source_line`` was, so ``_upsert_parsed_set`` can find and
+    # re-link this row (rather than minting a twin) once the ordinary
+    # ``source_line=cell`` search comes up empty. ``athlete_log_session``
+    # carries it forward across further saves; cleared the moment a restore
+    # consumes it, or dropped for a repost that no longer restates the same
+    # values.
+    #
+    # No DB-level FK (mirrors ``analytics.Event.actor``, #509): it's a hint for
+    # that restore lookup only, and a real constraint would make a caller's
+    # COMMIT take a lock on the referenced row for the RI check. It also keeps a
+    # code rollback safe: code that doesn't know this column can't SET_NULL it,
+    # so with a constraint its Prescription deletes would fail at COMMIT.
+    # SET_NULL is still applied in Python by Django's collector on a delete.
+    reclaimed_line = models.ForeignKey(
+        Prescription,
+        on_delete=models.SET_NULL,
+        db_constraint=False,
+        null=True,
+        blank=True,
+        related_name="reclaimed_sets",
+        verbose_name=_("Reclaimed line"),
+    )
 
     class Meta:
         ordering = ["set_number"]

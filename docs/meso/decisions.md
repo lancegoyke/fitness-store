@@ -2004,3 +2004,48 @@ _(Append dated entries here as decisions land.)_
   answers #542's question without a new event. Raw events older than 13 months are
   deleted daily in 1,000-row batches (`analytics.0002` registers the schedule). No
   rollup table.
+- 2026-09-19 — **Fixed (#541): restoring a reclaimed line after "Log session"
+  logs the set once.** Reproduced before fixing, in a Django test and in a real
+  browser. The athlete types `225 x 5` on sub-line 1 and the coach rewrites that
+  line. The athlete's page now shows the coach's text on the line and the set as
+  a filled, checked Set row, both at once. "Log session" posts that row, which
+  replaces the parsed row with a source-less structured copy. When the athlete
+  types `225 x 5` back on the line, the restore lookup in `_upsert_parsed_set`
+  searched only rows whose `source_line` is that line, so it created a second
+  row. One set then counted twice in results, 1RM, the agent's grounding and
+  `set_logged`. No stale tab is needed, unlike the "repost-then-restore" case the
+  5a review deferred.
+  **Rule (the 5a plan doesn't cover this case):** the structured copy survives,
+  and the restore re-links it to the line. That is the state a restore reaches
+  when no "Log session" happened in between: one row with `source_line` set, shown
+  by the line and not by the logger, with no new `set_logged` and no PR toast.
+  The link is `LoggedSet.reclaimed_line` (migration `0048`). It's only a hint
+  for this lookup, so it has no database constraint, the same call as the
+  `analytics.Event` FK. "Log session" records it whenever it replaces a visible
+  parsed row, however the row got that way: a coach reclaim, a coach fill over
+  the line, or a line the athlete edited while its row was skipped. The restore
+  looks only at the copy linked to this line. A same-valued structured row with
+  no link, such as a set entered separately in the logger, is never merged. On
+  the linked line, typing the copy's values back counts as a restore by design,
+  the same rule the older lookup applies when no "Log session" came between. So
+  a genuinely new set with identical numbers typed on that line folds into the
+  copy, as it already did before #541. Deciding that the page held the row uses
+  `_client_held`'s test (same slot and values), so the link also shares that
+  test's stale-tab limit from the 5a review. A later save carries the link to
+  its new copy only when the posted row restates it unchanged, and an edit drops
+  it. The logger can still clear or edit the copy like any structured row, and
+  the admin shows the link read-only.
+  **Only when the line isn't showing a set of its own.** If the athlete puts a
+  different set on the line and later corrects it to the copy's values, that's
+  an edit of the set on the line. It gets its own row and the copy stays, so a
+  later clear of the line can't take the copy with it. The older `source_line`
+  lookup keeps its behavior: its match already sits on the line, and declining
+  it would leave two identical rows there, both hidden and both deleted by one
+  clear.
+  **Undo keeps a line that a copy points at,** the same way it keeps one a
+  parsed row points at (`restore_plan_snapshot`'s stray-cell delete), so an undo
+  past the line's creation can't cut the link.
+  Not covered: copies made before this shipped have no link. A coach undo that
+  puts the text back, rather than the athlete retyping it, still shows the set
+  twice and tints the line "not logged as a set". The coach path never touches
+  `LoggedSet`, and the data holds one row (#561).

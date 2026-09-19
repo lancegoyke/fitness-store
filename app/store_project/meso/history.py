@@ -325,13 +325,18 @@ def restore_plan_snapshot(plan, snapshot):
     # gone), and the next ordinary save destroyed an earned performance. Undo
     # already refuses to touch athlete data; a cell some athlete data POINTS AT
     # is the same promise one join away.
+    #
+    # ``reclaimed_sets`` (#541) is that same promise for a THIRD kind of
+    # pointer: a structured copy a "Log session" left behind still names this
+    # cell via ``reclaimed_line``, with no ``source_line`` of its own — a cell
+    # a structured copy still answers to is athlete data pointing at it too.
     models.Prescription.objects.filter(
         week__mesocycle__plan=plan,
         exercise_slot_id__in=live_exercise_slot_pks_in_snapshot,
         week_id__in=live_week_pks_in_snapshot,
     ).exclude(pk__in=cell_pks).exclude(athlete_authored=True).exclude(
         parsed_sets__isnull=False
-    ).delete()
+    ).exclude(reclaimed_sets__isnull=False).delete()
 
 
 def record_plan_action(plan, label):
