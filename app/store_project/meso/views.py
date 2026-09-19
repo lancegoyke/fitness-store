@@ -1327,6 +1327,11 @@ class AthleteSessionView(LoginRequiredMixin, TemplateView):
         ctx["active"] = "training"
         ctx["session"] = sess
         ctx["log_data"] = presenters.athlete_log_payload(sess)
+        # Whose offline queue this page may flush (#527). The queue lives in
+        # localStorage, which outlasts a logout: without this, the next athlete
+        # to sign in on the device would replay the last one's writes under
+        # their own login, and a line refused as "not your session" is dropped.
+        ctx["log_data"]["owner"] = str(self.request.user.pk)
         ctx["athlete_name"] = self.request.user.display_name()
         ctx["athlete_initials"] = presenters.initials(ctx["athlete_name"])
         # First-log coachmark (Phase 4): teach the logger only to a first-ever

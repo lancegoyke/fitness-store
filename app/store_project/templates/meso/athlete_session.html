@@ -112,7 +112,7 @@
                  is NOT declared inline, so `.meso-phone-input--warn` can set
                  it. Tinting the cell is the whole user-visible payload of the
                  warn flag (plan §8) — declared inline it silently did nothing. {% endcomment %}
-              <input class="meso-phone-input meso-log-input" data-testid="sub-line-input" :class="l.warn ? 'meso-phone-input--warn' : ''" x-model="l.text" @blur="saveCell(ex, l.line)" placeholder="225 x 5, RPE 8 — or a note" inputmode="text"
+              <input class="meso-phone-input meso-log-input" data-testid="sub-line-input" :class="l.warn && !l.queued ? 'meso-phone-input--warn' : ''" x-model="l.text" @blur="saveCell(ex, l.line)" placeholder="225 x 5, RPE 8 — or a note" inputmode="text"
                      style="border:1px solid var(--cell-line,var(--line));background:var(--cell-bg,var(--rail));" />
               {% comment %} #527: a line whose write is waiting in the offline queue says so,
                  and says nothing else — its warn/PR state belongs to the text the

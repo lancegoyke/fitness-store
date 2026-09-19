@@ -106,6 +106,7 @@ function createLogger() {
     oneRmUrl: "", // where a manually-entered 1RM is persisted server-side (Phase 2)
     cellUrl: "", // where the athlete's freeform sub-line cells are upserted (Phase 4a)
     csrf: "",
+    owner: "", // the signed-in athlete; only their queued writes are flushed here
     status: "pending",
     unit: "", // the plan's load unit (kg/lb), for the %1RM helper
     exercises: [],
@@ -133,6 +134,7 @@ function createLogger() {
       this.logUrl = data.log_url;
       this.oneRmUrl = data.one_rm_url || "";
       this.cellUrl = data.cell_url || "";
+      this.owner = data.owner || "";
       this.status = data.status;
       this.unit = data.unit || "";
       this.exercises = data.exercises || [];
@@ -237,6 +239,7 @@ function createLogger() {
       if (!this.cellUrl) return;
       for (const item of this.readQueue()) {
         if (!isCellEntry(item) || item.url !== this.cellUrl) continue;
+        if (!this.isMine(item)) continue;
         const ex = this.exercises.find((e) => e.id === item.body.exercise_id);
         // Gone from the session: the flush sends it and the server says so.
         if (!ex) continue;
@@ -395,10 +398,7 @@ function createLogger() {
         this.queued = true;
         return;
       }
-      const refused = this.exercises.some((e) =>
-        (e.sub_lines || []).some((l) => l.saveError),
-      );
-      if (refused) {
+      if (this.hasRefusedLines()) {
         this.lineError = true;
         return;
       }
@@ -416,7 +416,15 @@ function createLogger() {
       );
       return (
         lineQueued ||
-        this.readQueue().some((i) => !isCellEntry(i) && i.url === this.logUrl)
+        this.readQueue().some(
+          (i) => !isCellEntry(i) && i.url === this.logUrl && this.isMine(i),
+        )
+      );
+    },
+
+    hasRefusedLines() {
+      return this.exercises.some((e) =>
+        (e.sub_lines || []).some((l) => l.saveError),
       );
     },
 
@@ -434,6 +442,21 @@ function createLogger() {
     // one per typed line (the latest supersedes an earlier queued one), so
     // replaying after reconnect can't pile up duplicate writes.
     queueKey: "meso-log-queue",
+
+    // An entry this page may send: queued by the athlete signed in now, or
+    // queued before entries carried an owner. localStorage outlasts a logout,
+    // so another athlete's writes can be sitting here; sent under this login
+    // they'd be refused, and a refused line is dropped. They wait for their
+    // owner instead.
+    isMine(item) {
+      return !item.owner || !this.owner || item.owner === this.owner;
+    },
+
+    // What every entry this page queues carries, so it's flushed only by its
+    // own athlete (`isMine`).
+    stamp(item) {
+      return this.owner ? { ...item, owner: this.owner } : item;
+    },
 
     readQueue() {
       try {
@@ -453,7 +476,7 @@ function createLogger() {
 
     enqueue(payload) {
       const queue = this.readQueue().filter((item) => item.url !== this.logUrl);
-      queue.push({ url: this.logUrl, body: payload });
+      queue.push(this.stamp({ url: this.logUrl, body: payload }));
       this.writeQueue(queue);
     },
 
@@ -463,7 +486,7 @@ function createLogger() {
       const queue = this.readQueue().filter(
         (item) => !isSameCell(item, this.cellUrl, body.exercise_id, body.line),
       );
-      queue.push({ kind: "cell", url: this.cellUrl, body });
+      queue.push(this.stamp({ kind: "cell", url: this.cellUrl, body }));
       this.writeQueue(queue);
     },
 
@@ -523,7 +546,7 @@ function createLogger() {
     // that fail stay queued. Uses the live CSRF token, never a stale stored
     // one.
     async flushPass() {
-      const queue = this.readQueue();
+      const queue = this.readQueue().filter((item) => this.isMine(item));
       if (!queue.length) return;
       for (const item of queue.filter(isCellEntry)) {
         if ((await this.flushCell(item)) === "offline") return;
@@ -757,7 +780,13 @@ function createLogger() {
       const previous = this._cellSaves[key] || Promise.resolve();
       const run = previous
         .catch(() => {}) // a failed save must not stall the cell's queue
-        .then(() => this._postCell(ex, line, fromQueue));
+        .then(() => this._postCell(ex, line, fromQueue))
+        .then((outcome) => {
+          // The footer's "a line couldn't save" goes once no line is refused
+          // any more — fixing the line is enough, no second "Log session".
+          if (this.lineError) this.lineError = this.hasRefusedLines();
+          return outcome;
+        });
       this._cellSaves[key] = run;
       return run;
     },
