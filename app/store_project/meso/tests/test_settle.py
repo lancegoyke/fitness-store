@@ -528,6 +528,30 @@ class TestActivityBumps:
         log.refresh_from_db()
         assert log.last_activity_at == old
 
+    def test_an_unchanged_reblur_that_now_derives_a_set_bumps(self, client):
+        # Text typed while the row was skipped saves no set. Once the coach
+        # un-skips the row, re-blurring the SAME text creates one — a change
+        # to the log's data, so the quiet clock has to restart.
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "100 x 5")  # creates the log
+        s.rdl.skipped = True
+        s.rdl.save(update_fields=["skipped"])
+        write_cell(client, s.session, s.rdl, 1, "80 x 8")  # text only, no set
+        log = the_log(s.session, s.athlete)
+        assert log.sets.filter(prescription=s.rdl).count() == 0
+        old = timezone.now() - timedelta(hours=30)
+        set_activity(log, old)
+        s.rdl.skipped = False
+        s.rdl.save(update_fields=["skipped"])
+
+        write_cell(client, s.session, s.rdl, 1, "80 x 8")  # identical text
+
+        log.refresh_from_db()
+        assert log.sets.filter(prescription=s.rdl).count() == 1
+        assert log.last_activity_at > old + timedelta(hours=29)
+        assert settle.settle_quiet_logs() == 0
+
     def test_an_untouched_coach_line_blur_does_not_bump(self, client):
         s = seed()
         client.force_login(s.athlete)

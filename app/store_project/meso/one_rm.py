@@ -153,7 +153,12 @@ def refresh_one_rms(athlete, prescriptions, unit):
     # Derive from same-unit logs only, so the stored value is unambiguously in
     # ``unit`` (the unit it's written with).
     derived = derive_one_rm_values(athlete, keys=set(reps_by_key), unit=unit)
-    for key, (exercise_id, name) in reps_by_key.items():
+    # Sorted, so every caller locks this athlete's rows in ONE order.
+    # `update_or_create` holds each row it touches until the caller's
+    # transaction ends, and two concurrent refreshes over the same lifts in
+    # opposite session order — the 5b settle sweep finishing one session while
+    # the athlete saves another — would otherwise deadlock on Postgres.
+    for key, (exercise_id, name) in sorted(reps_by_key.items()):
         if key in manual_keys:
             continue
         value = derived.get(key)

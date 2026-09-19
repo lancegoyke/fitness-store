@@ -12,7 +12,10 @@ exists, and on 0046 so the ``last_activity_at`` column the sweep reads exists
 too.
 """
 
+from datetime import timedelta
+
 from django.db import migrations
+from django.utils import timezone
 
 NAME = "meso-settle-logs"
 FUNC = "store_project.meso.tasks.settle_logs"
@@ -22,7 +25,16 @@ def create_schedule(apps, schema_editor):
     Schedule = apps.get_model("django_q", "Schedule")
     Schedule.objects.update_or_create(
         name=NAME,
-        defaults={"func": FUNC, "schedule_type": "H"},  # Schedule.HOURLY
+        defaults={
+            "func": FUNC,
+            "schedule_type": "H",  # Schedule.HOURLY
+            # First run an hour out, not "now": a deploy migrates before it
+            # replaces the running qcluster, and the old worker would pick up a
+            # due row it can't import (`settle_logs` doesn't exist in its code)
+            # and record a failed task. Nothing can settle in that first hour
+            # anyway — 0046 stamps existing logs with the migration time.
+            "next_run": timezone.now() + timedelta(hours=1),
+        },
     )
 
 

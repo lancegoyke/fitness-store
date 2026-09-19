@@ -246,6 +246,38 @@ class TestRefreshOneRms:
         assert row.value == Decimal("143.00")
         assert AthleteOneRm.objects.filter(athlete=athlete).count() == 1
 
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_touches_rows_in_key_order_whatever_the_prescription_order(
+        self, monkeypatch, reverse
+    ):
+        # One lock order for every caller: `update_or_create` holds each row
+        # until the transaction ends, so the settle sweep and an athlete save
+        # refreshing the same two lifts in opposite session order would
+        # deadlock on Postgres if the order followed the caller's list.
+        from django.db.models.query import QuerySet
+
+        athlete = UserFactory()
+        plan, session, (squat, bench) = make_session(
+            athlete,
+            prescriptions=[{"name": "Squat"}, {"name": "Bench"}],
+        )
+        log_session(
+            athlete,
+            session,
+            [(squat, 1, "5", "100", "8"), (bench, 1, "5", "80", "8")],
+        )
+        touched = []
+        real = QuerySet.update_or_create
+
+        def spy(self, *args, **kwargs):
+            touched.append(kwargs.get("key"))
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(QuerySet, "update_or_create", spy)
+        cells = [bench, squat] if reverse else [squat, bench]
+        meso_one_rm.refresh_one_rms(athlete, cells, plan.unit)
+        assert touched == ["name:bench", "name:squat"]
+
     def test_lift_with_no_usable_set_creates_nothing(self):
         athlete = UserFactory()
         plan, session, (squat,) = make_session(

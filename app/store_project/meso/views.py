@@ -1757,6 +1757,11 @@ def athlete_cell_write(request, pk):
         # parse/upsert problem is logged and swallowed, never surfaced here.
         # The return is the optimistic-PR-toast payload (§7) — empty on any
         # failure, never raises.
+        # The sets this line derives BEFORE the upsert, for the activity bump
+        # below (5b) — a set can change while the text doesn't.
+        sets_before = (
+            None if untouched_coach_line else _line_sets(session, request.user, cell)
+        )
         new_records = (
             []
             if untouched_coach_line
@@ -1769,25 +1774,23 @@ def athlete_cell_write(request, pk):
             )
         )
         # Bump `last_activity_at` (5b, settle.py) — but ONLY on a real edit.
-        # The template posts on EVERY blur, so most requests are a no-op
-        # re-blur: `untouched_coach_line` catches "the coach's own cue,
-        # never touched", and `text != previous_text` catches the other
-        # half it misses — the athlete's OWN line, re-blurred with nothing
-        # changed (`untouched_coach_line` only fires while the line is still
-        # coach-owned). Bumping on either would keep resetting the settle
-        # clock on idle focus/blur cycles, so a session that was truly
-        # abandoned would never go quiet long enough to settle.
+        # The template posts on EVERY blur, so most requests change nothing,
+        # and bumping on those would keep an abandoned session from ever going
+        # quiet long enough to settle. A real edit is either new text, or the
+        # same text now deriving different sets: a line typed while its row was
+        # skipped saves no set, and once the coach un-skips the row, re-blurring
+        # that unchanged text creates one. Values are compared, not pks — the
+        # upsert recreates the row even on an unchanged re-blur.
         #
-        # A queryset UPDATE, not `log.save()`: there may be no log at all yet
-        # (a note/cue blur that never wants a set) — a no-op filter is exactly
-        # right there. And this runs OUTSIDE `_upsert_parsed_set`'s own
-        # savepoint (it has already returned), so a swallowed upsert failure
-        # can never roll the bump back with it. Unconditional on status — a
-        # DONE log's `last_activity_at` moving is harmless (the sweep only
-        # ever reads it on PENDING logs) and keeps the field honestly "when
-        # did the athlete last touch this", not "when did it last matter to
-        # the sweep".
-        if not untouched_coach_line and text != previous_text:
+        # A queryset UPDATE, not `log.save()`: there may be no log at all (a
+        # note blur that never wanted a set). It runs outside
+        # `_upsert_parsed_set`'s savepoint, so a swallowed upsert failure can't
+        # roll it back. Status doesn't matter — the sweep only reads the field
+        # on PENDING logs.
+        if not untouched_coach_line and (
+            text != previous_text
+            or _line_sets(session, request.user, cell) != sets_before
+        ):
             SessionLog.objects.filter(session=session, athlete=request.user).update(
                 last_activity_at=timezone.now()
             )
@@ -1821,6 +1824,23 @@ def athlete_cell_write(request, pk):
             # the accepted trade for in-the-moment feedback (5b settles it).
             "new_records": [serialize_new_record(r) for r in new_records],
         }
+    )
+
+
+def _line_sets(session, athlete, cell):
+    """Every ``LoggedSet`` ``cell`` derives for this athlete, as comparable values.
+
+    ``athlete_cell_write`` snapshots this around the upsert to tell a blur that
+    changed the athlete's logged data from one that didn't (5b's activity bump).
+    """
+    return sorted(
+        LoggedSet.objects.filter(
+            session_log__session=session,
+            session_log__athlete=athlete,
+            source_line=cell,
+        ).values_list(
+            "session_log_id", "prescription_id", "set_number", "reps", "load", "rpe"
+        )
     )
 
 
