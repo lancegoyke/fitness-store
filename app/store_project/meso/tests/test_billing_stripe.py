@@ -948,8 +948,16 @@ class TestWebhookCanceledIdGuardBackfillsAMissedLivePair:
         sub = CoachSubscription.objects.get(coach=coach)
         assert sub.status == CoachSubscription.Status.CANCELED
         assert billing_access.is_active(_refetch(coach)) is False
-        assert len(_events(EventName.SUBSCRIPTION_STARTED)) == 1
-        assert len(_events(EventName.SUBSCRIPTION_CANCELLED)) == 1
+        started = _events(EventName.SUBSCRIPTION_STARTED)
+        cancelled = _events(EventName.SUBSCRIPTION_CANCELLED)
+        assert len(started) == 1
+        assert len(cancelled) == 1
+        # Reconstructed after the fact: the prior status and the cancel reason
+        # aren't known here, so the rows say so rather than guess ("canceled"
+        # would read as a returning subscriber).
+        assert started[0].props["previous"] == ""
+        assert started[0].props["backfilled"] is True
+        assert cancelled[0].props["backfilled"] is True
 
     def test_a_duplicate_late_created_does_not_duplicate_the_backfill(self):
         coach = _coach_with_customer()

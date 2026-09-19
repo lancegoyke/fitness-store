@@ -240,9 +240,7 @@ def _sync_from_subscription(sub_obj, *, deleted):
         # fail the webhook, and the mirror stays CANCELED either way.
         try:
             with transaction.atomic():
-                _backfill_missed_live_pair(
-                    coach, existing, sub_obj, incoming_id, status
-                )
+                _backfill_missed_live_pair(coach, existing, incoming_id, status)
         except Exception:
             logger.exception(
                 "Billing webhook: backfill analytics failed for subscription %s",
@@ -331,7 +329,7 @@ def _sync_from_subscription(sub_obj, *, deleted):
         )
 
 
-def _backfill_missed_live_pair(coach, existing, sub_obj, sub_id, mapped_status):
+def _backfill_missed_live_pair(coach, existing, sub_id, mapped_status):
     """Reconstruct a missed ``subscription_started``/``cancelled`` pair (#555 round 2).
 
     Called from the canceled-id guard, for an event it's about to ignore.
@@ -346,6 +344,10 @@ def _backfill_missed_live_pair(coach, existing, sub_obj, sub_id, mapped_status):
         return
     if _recorded(EventName.SUBSCRIPTION_STARTED, sub_id):
         return
+    # Reconstructed after the fact: the status before this subscription and
+    # the cancel reason were on events already handled, so they're left blank
+    # ("canceled" would read as a returning subscriber) and both rows are
+    # marked ``backfilled``.
     track(
         EventName.SUBSCRIPTION_STARTED,
         actor=coach,
@@ -353,7 +355,8 @@ def _backfill_missed_live_pair(coach, existing, sub_obj, sub_id, mapped_status):
         via="stripe",
         subscription=sub_id,
         status=mapped_status,
-        previous=existing.status,
+        previous="",
+        backfilled=True,
     )
     if not _recorded(EventName.SUBSCRIPTION_CANCELLED, sub_id):
         track(
@@ -364,7 +367,8 @@ def _backfill_missed_live_pair(coach, existing, sub_obj, sub_id, mapped_status):
             subscription=sub_id,
             status=CoachSubscription.Status.CANCELED,
             previous=mapped_status,
-            reason=(sub_obj.get("cancellation_details") or {}).get("reason") or "",
+            reason="",
+            backfilled=True,
         )
 
 
