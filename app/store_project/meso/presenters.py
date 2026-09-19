@@ -654,8 +654,14 @@ def billing_state(coach, *, checkout_pending=False):
     # flight. It can never coexist with ``past_due``: ``past_due`` requires
     # ``live`` (a real, if unpaid, Stripe subscription), and ``pending`` is
     # ANDed with ``not live`` — so the two are mutually exclusive by
-    # construction, not by template ordering.
-    pending = checkout_pending and not live
+    # construction, not by template ordering. A ``comped`` row is excluded
+    # too (#556 review, round 3): comped isn't a live Stripe subscription, so
+    # a coach comped by an admin while a pending marker from their own
+    # just-completed Checkout was still fresh would otherwise read
+    # "Finishing your subscription…" over their real, unlimited plan.
+    pending = (
+        checkout_pending and not live and status != CoachSubscription.Status.COMPED
+    )
     over_limit = billing_access.is_over_limit(coach)
     past_due = live and status == CoachSubscription.Status.PAST_DUE
     is_stripe_trial = bool(sub and sub.is_stripe_trial)

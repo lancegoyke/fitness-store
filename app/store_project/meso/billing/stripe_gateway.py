@@ -152,6 +152,20 @@ def checkout_session_is_complete(session_id):
     return session.status == "complete"
 
 
+class SubscriptionCheckoutCompleted(Exception):
+    """A Checkout Session for this customer completed while we were opening another.
+
+    Raised by ``expire_open_subscription_checkouts`` when a session it meant to
+    expire turns out to have been *paid* in the gap since it was listed (#556
+    review, round 3). The coach now has a subscription, so the caller must
+    bounce instead of opening the Checkout it was about to open.
+    """
+
+    def __init__(self, session_id):
+        super().__init__(f"Checkout Session {session_id} completed under us.")
+        self.session_id = session_id
+
+
 def expire_open_subscription_checkouts(coach):
     """Expire the customer's other open subscription Checkout Sessions (#556, item 2).
 
@@ -166,19 +180,24 @@ def expire_open_subscription_checkouts(coach):
 
     A coach with no ``stripe_customer_id`` has no Checkout Sessions to expire.
     A customer id Stripe doesn't recognize (``InvalidRequestError``,
-    ``code == "resource_missing"``, ``param == "customer"``) has none either
-    — the same tolerance ``customer_has_open_subscription`` gives it, so a
-    coach whose Stripe customer was deleted isn't bounced forever by the two
-    checks disagreeing. A session can also stop being "open" in the gap
-    between the ``list`` above and its own ``expire`` call below — its own
-    24h TTL, or another tab completing it — and Stripe then raises
+    ``code == "resource_missing"``, ``param == "customer"``) has none either —
+    the same tolerance ``customer_has_open_subscription`` gives it, so the two
+    checks can't disagree about the same coach. (In this flow the view has
+    already called ``ensure_customer``, which raises first for a stored id
+    Stripe doesn't know, so that tolerance is belt-and-braces here rather than
+    the thing that keeps such a coach unblocked.)
+
+    A session can stop being "open" in the gap between the ``list`` above and
+    its own ``expire`` call below, and Stripe then raises
     ``InvalidRequestError`` ("Only Checkout Sessions with a status in [open]
-    can be expired", ``code`` is ``None``) rather than silently no-op'ing;
-    that's caught per-session and re-checked, since the goal (no other
-    completable session survives) already holds once a session is no longer
-    open. Any other exception propagates — the caller fails closed rather
-    than opening a new Checkout it can't be sure is the only one that can
-    complete.
+    can be expired", ``code`` is ``None``) rather than silently no-op'ing. The
+    re-check tells the two cases apart: ``expired`` is fine (it can't be
+    completed any more, which is all this function wants), while ``complete``
+    means the coach just *paid* for that session, so this raises
+    ``SubscriptionCheckoutCompleted`` and the caller bounces instead of
+    opening a second billable Checkout. Any other exception propagates — the
+    caller fails closed rather than opening a new Checkout it can't be sure is
+    the only one that can complete.
     """
     if not coach.stripe_customer_id:
         return
@@ -191,7 +210,12 @@ def expire_open_subscription_checkouts(coach):
         if e.code == "resource_missing" and e.param == "customer":
             return
         raise
-    for session in sessions.auto_paging_iter():
+    # Materialise the page before expiring anything: ``auto_paging_iter``
+    # cursors through a ``status="open"`` listing, and expiring its members as
+    # we walk would leave ``starting_after`` pointing at an object that no
+    # longer matches the filter.
+    open_sessions = list(sessions.auto_paging_iter())
+    for session in open_sessions:
         if session.mode != "subscription":
             continue
         try:
@@ -200,5 +224,14 @@ def expire_open_subscription_checkouts(coach):
             refreshed = stripe.checkout.Session.retrieve(session.id)
             if refreshed.status == "open":
                 raise
-            # Already completed/expired by something else — nothing left to do.
+            if refreshed.status == "complete":
+                # The coach finished paying for this one in another tab while
+                # we were mid-flight (#556 review, round 3). A completed
+                # subscription Checkout means a subscription now exists — the
+                # thing ``customer_has_open_subscription`` looked for and
+                # didn't find a moment ago — so opening a new Checkout here
+                # would be the double-bill this whole path exists to prevent.
+                raise SubscriptionCheckoutCompleted(session.id)
+            # Expired under us (its own 24h TTL, or another request's sweep) —
+            # it can't be completed any more, so there's nothing left to do.
             continue

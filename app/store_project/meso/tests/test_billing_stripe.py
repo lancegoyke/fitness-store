@@ -489,14 +489,15 @@ class TestExpireOpenSubscriptionCheckouts:
             with pytest.raises(stripe.error.InvalidRequestError):
                 stripe_gateway.expire_open_subscription_checkouts(coach)
 
-    def test_session_no_longer_open_when_expired_is_tolerated(self):
+    def test_session_expired_under_us_is_tolerated(self):
         """The session raced closed between ``list`` and ``expire`` (#556 review).
 
-        Its own 24h TTL, or another tab completing it, can flip a session out
-        of ``"open"`` in that gap — Stripe's ``expire`` then raises instead of
-        no-op'ing (``code`` is ``None``). The goal (no other completable
-        session survives) already holds once it's not open any more, so this
-        is tolerated rather than failing the whole subscribe.
+        Its own 24h TTL, or another request's sweep, can flip a session out of
+        ``"open"`` in that gap — Stripe's ``expire`` then raises instead of
+        no-op'ing (``code`` is ``None``). An ``expired`` session can't be
+        completed any more, which is all this function wants, so it's
+        tolerated rather than failing the whole subscribe. (A session that
+        raced to ``complete`` is the opposite case — see below.)
         """
         coach = UserFactory()
         coach.stripe_customer_id = "cus_x"
@@ -517,13 +518,80 @@ class TestExpireOpenSubscriptionCheckouts:
             mock.patch(GATEWAY_SESSION_EXPIRE, side_effect=fake_expire) as expire,
             mock.patch(
                 GATEWAY_SESSION_RETRIEVE,
-                return_value=mock.Mock(status="complete"),
+                return_value=mock.Mock(status="expired"),
             ) as retrieve,
         ):
             stripe_gateway.expire_open_subscription_checkouts(coach)
         retrieve.assert_called_once_with("cs_raced")
         # The other, genuinely-still-open session was still expired.
         assert expire.call_args_list[-1].args == ("cs_still_open",)
+
+    def test_a_session_that_raced_to_complete_stops_the_subscribe(self):
+        """The coach paid for that session in another tab (#556 review, round 3).
+
+        ``complete`` means a subscription now exists — the thing the
+        open-subscription check looked for a moment earlier and didn't find.
+        Tolerating it the way an ``expired`` session is tolerated would open
+        a second billable Checkout, so this raises instead.
+        """
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        sessions = _session_list([("cs_paid", "subscription")])
+        expire_err = stripe.error.InvalidRequestError(
+            "Only Checkout Sessions with a status in [open] can be expired", None
+        )
+        with (
+            mock.patch(GATEWAY_SESSION_LIST, return_value=sessions),
+            mock.patch(GATEWAY_SESSION_EXPIRE, side_effect=expire_err),
+            mock.patch(
+                GATEWAY_SESSION_RETRIEVE,
+                return_value=mock.Mock(status="complete"),
+            ),
+        ):
+            with pytest.raises(stripe_gateway.SubscriptionCheckoutCompleted) as excinfo:
+                stripe_gateway.expire_open_subscription_checkouts(coach)
+        assert excinfo.value.session_id == "cs_paid"
+
+    def test_the_open_listing_is_materialised_before_expiring(self):
+        """Expiring while cursoring a ``status="open"`` listing would break paging.
+
+        ``auto_paging_iter``'s ``starting_after`` cursor points at the last
+        object seen; expiring it mid-walk leaves that cursor pointing at
+        something the filter no longer matches. The listing is consumed in
+        full before the first ``expire`` call.
+        """
+        coach = UserFactory()
+        coach.stripe_customer_id = "cus_x"
+        coach.save(update_fields=["stripe_customer_id"])
+        order = []
+        # A real ``ListObject`` can't have ``auto_paging_iter`` replaced per
+        # instance (``StripeObject`` keeps assignments in its own dict while
+        # attribute lookup still finds the class method), so this one case
+        # uses a stand-in whose iteration is observable. The real-object
+        # shape is covered by the other tests here.
+        listing = mock.Mock()
+        items = [
+            mock.Mock(id="cs_1", mode="subscription"),
+            mock.Mock(id="cs_2", mode="subscription"),
+        ]
+
+        def tracking_iter():
+            for item in items:
+                order.append(f"list:{item.id}")
+                yield item
+
+        listing.auto_paging_iter = tracking_iter
+        sessions = listing
+        with (
+            mock.patch(GATEWAY_SESSION_LIST, return_value=sessions),
+            mock.patch(
+                GATEWAY_SESSION_EXPIRE,
+                side_effect=lambda sid: order.append(f"expire:{sid}"),
+            ),
+        ):
+            stripe_gateway.expire_open_subscription_checkouts(coach)
+        assert order == ["list:cs_1", "list:cs_2", "expire:cs_1", "expire:cs_2"]
 
 
 # ---------------------------------------------------------------------------
@@ -2013,6 +2081,43 @@ class TestSubscribeViewExpiresOpenCheckoutsBeforeCreatingANewOne:
         create.assert_not_called()
         texts = [m.message for m in get_messages(resp.wsgi_request)]
         assert any(t == STRIPE_UNAVAILABLE_MESSAGE for t in texts)
+
+    def test_a_checkout_completed_under_us_bounces_to_the_pending_state(self, settings):
+        """The coach paid in another tab mid-request (#556 review, round 3).
+
+        The open-subscription check ran before that Checkout completed, so it
+        saw nothing; the expiry sweep is where we find out. Opening the new
+        Checkout anyway would be the second billable subscription this whole
+        path exists to prevent — so bounce, and land on the "finishing" state
+        the completed Checkout has actually earned.
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        sessions = _session_list([("cs_paid", "subscription")])
+        with (
+            mock.patch(GATEWAY_SUB_LIST, return_value=_subscription_list([])),
+            mock.patch(GATEWAY_SESSION_LIST, return_value=sessions),
+            mock.patch(
+                GATEWAY_SESSION_EXPIRE,
+                side_effect=stripe.error.InvalidRequestError("not open", None),
+            ),
+            mock.patch(
+                GATEWAY_SESSION_RETRIEVE, return_value=mock.Mock(status="complete")
+            ),
+            mock.patch(GATEWAY_CHECKOUT) as create,
+        ):
+            resp = c.post(self.URL)
+        assert resp.status_code == 302
+        assert resp.url == "/meso/billing/"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("You already have a subscription" in t for t in texts)
+        assert not any(t == STRIPE_UNAVAILABLE_MESSAGE for t in texts)
+        # The pending marker is set, so the billing page it lands on shows the
+        # "finishing" placeholder rather than another Subscribe button.
+        body = c.get("/meso/billing/").content.decode()
+        assert "Finishing your subscription" in body
+        assert 'action="/meso/billing/subscribe/"' not in body
 
 
 class TestSubscribeViewCompedCoachBounces:

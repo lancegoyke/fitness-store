@@ -729,6 +729,37 @@ class TestCheckoutPendingBillingSurfaces:
         assert "Free trial" in body
         assert 'action="/meso/billing/subscribe/"' in body
 
+    def test_a_comped_coach_never_sees_the_placeholder(self, client, settings):
+        """Comped outranks a still-fresh pending marker (#556 review, round 3).
+
+        An admin can comp a coach in the minutes after that coach completed a
+        real Checkout. ``comped`` isn't a live Stripe subscription, so the
+        pending marker would otherwise survive and read "Finishing your
+        subscription…" over the coach's true, unlimited plan — next to a
+        "Comped" badge — for the rest of the 15-minute window.
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach = _coach()
+        client.force_login(coach)
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.create_subscription_checkout_session",
+            return_value=mock.Mock(url="https://stripe/cs", id="cs_then_comped"),
+        ):
+            client.post(SUBSCRIBE_URL)
+        with mock.patch(
+            "store_project.meso.views.billing_gateway.checkout_session_is_complete",
+            return_value=True,
+        ):
+            body = client.get(f"{ROSTER_URL}?billing=success").content.decode()
+        assert "Finishing your subscription" in body
+
+        CoachSubscription.comp(coach)
+
+        for url in (URL, ROSTER_URL):
+            body = client.get(url).content.decode()
+            assert "Finishing your subscription" not in body
+            assert 'action="/meso/billing/subscribe/"' not in body
+
     def test_cancel_param_clears_the_pending_state(self, client, settings):
         settings.MESO_PRO_PRICE_ID = "price_pro_test"
         coach = _coach()

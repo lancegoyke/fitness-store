@@ -5681,6 +5681,25 @@ def billing_subscribe(request):
         # completable.
         try:
             billing_gateway.expire_open_subscription_checkouts(request.user)
+        except billing_gateway.SubscriptionCheckoutCompleted:
+            # The coach finished paying in another tab while this request was
+            # mid-flight (#556 review, round 3) — a subscription exists now,
+            # even though the check above didn't see one yet. Same landing as
+            # the Stripe-reported-subscription branch: the mirror is about to
+            # catch up, so show the "finishing" state rather than a Subscribe
+            # button that would open a second billable Checkout.
+            logger.info(
+                "Checkout completed under coach %s while opening another; "
+                "bouncing instead of opening a second one.",
+                request.user.pk,
+            )
+            messages.info(
+                request,
+                "You already have a subscription. Manage it in Manage billing.",
+            )
+            request.session[CHECKOUT_PENDING_SESSION_KEY] = timezone.now().timestamp()
+            request.session.pop(CHECKOUT_STARTED_SESSION_KEY, None)
+            return redirect("meso:billing")
         except Exception:  # noqa: BLE001 — fail closed, never silently charge
             logger.exception(
                 "Stripe checkout expiry failed for coach %s", request.user.pk
