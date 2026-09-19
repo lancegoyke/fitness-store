@@ -1104,10 +1104,27 @@ button.meso-row:hover {
   .meso-coach.meso-page {
     padding-left: 16px;
     padding-right: 16px;
-    /* A long unbroken name or email breaks rather than widening the page. */
-    overflow-wrap: break-word;
+    /* A long unbroken name (an athlete with no name shows their email's
+       local part) breaks rather than widening the page. `anywhere`, not
+       `break-word`, so it also lowers the minimum width of the flex items it
+       sits in, which is what would otherwise push them past the screen. */
+    overflow-wrap: anywhere;
   }
-  .meso-coach .meso-pagehead {
+  /* Badges and tags carry names too (a block's title, a goal), and are
+     nowrap everywhere else. */
+  .meso-coach .meso-badge,
+  .meso-coach .meso-tag {
+    white-space: normal;
+  }
+  /* A select is as wide as its longest option (an athlete's name); let it,
+     and the list-row column it sits in, shrink to the screen. */
+  .meso-coach select,
+  .meso-coach .meso-row form {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .meso-coach .meso-pagehead,
+  .meso-coach .meso-crumbs {
     flex-wrap: wrap;
   }
   /* Inline-flex rows marked for it wrap instead of overflowing; a primary
@@ -1118,9 +1135,11 @@ button.meso-row:hover {
   .meso-coach .meso-phone-wrap > .meso-btn--primary {
     margin-left: auto;
   }
-  /* A button label longer than the phone (a long athlete name) wraps. */
+  /* A button label longer than the phone (a long athlete name or email)
+     wraps; `anywhere` so a flex row can shrink it past one unbroken word. */
   .meso-coach .meso-btn {
     white-space: normal;
+    overflow-wrap: anywhere;
   }
   .meso-coach .meso-card--pad {
     padding: 16px;
@@ -1138,6 +1157,9 @@ button.meso-row:hover {
   .meso-coach .meso-row {
     flex-wrap: wrap;
     row-gap: 8px;
+  }
+  .meso-coach .meso-row > * {
+    min-width: 0;
   }
   .meso-coach .meso-row > .meso-row-main {
     flex: 1 1 calc(100% - 51px);
@@ -1218,9 +1240,17 @@ button.meso-row:hover {
   .meso-designer-fallback {
     display: block;
   }
+  /* Shown up to 900px, past the coach pages' 760px rules, so it carries
+     its own: a long unbroken plan title or athlete email wraps rather than
+     widening the page. */
   .meso-designer-fallback .meso-page {
     padding-left: 16px;
     padding-right: 16px;
+    overflow-wrap: break-word;
+  }
+  .meso-designer-fallback .meso-btn {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 .meso-designer-fallback-links {

@@ -297,3 +297,43 @@ def test_designer_phone_fallback_for_a_template(
     )
     shot("01-fallback")
     assert_fits(page)
+
+
+# An athlete with no name shows their email's local part, and a plan imported
+# from a spreadsheet can have a title with no spaces in it: one unbroken word
+# each, which a phone can't wrap at a space. Every coach page, and the
+# designer's fallback, still fits (#508; the fallback case is from review).
+@pytest.mark.parametrize("viewport", ["phone", "phone-360"], indirect=True)
+def test_long_unbroken_names_still_fit_on_a_phone(
+    page, viewport, shot, login, coach_workspace
+):
+    athlete = coach_workspace.athlete
+    athlete.name = ""
+    athlete.email = "maximilian.featherstonehaugh@example.com"
+    athlete.save()
+    plan = coach_workspace.plan
+    plan.title = "PPL_Hypertrophy_Offseason_Block_2026_v2_coach_copy"
+    plan.save()
+
+    login(coach_workspace.coach)
+    pages = {
+        "roster": reverse("meso:roster"),
+        "results": reverse(
+            "meso:results_session", kwargs={"session_id": coach_workspace.session.pk}
+        ),
+        "profile": reverse("meso:athlete", kwargs={"pk": athlete.pk}),
+        "deliver": reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk}),
+        "review": reverse(
+            "meso:review_batch", kwargs={"batch_id": coach_workspace.batch.pk}
+        ),
+        "templates": reverse("meso:template_library"),
+        "designer": reverse("meso:designer_plan", kwargs={"plan_id": plan.pk}),
+    }
+    for name, url in pages.items():
+        page.goto(url)
+        expect(page.locator("body")).to_contain_text("maximilian.featherstonehaugh")
+        try:
+            assert_fits(page)
+        except AssertionError as err:
+            raise AssertionError(f"{name}: {err}") from None
+    shot("01-designer-fallback")
