@@ -891,6 +891,81 @@ class TestAthleteRequestFunnel:
         assert path["sent"] == 0
 
 
+def _accepted_invite(coach, athlete, sent_at, accepted_after):
+    rel = _relationship(coach=coach, athlete=athlete)
+    invite = CoachInviteFactory(
+        coach=coach,
+        accepted_by=athlete,
+        accepted_link=rel,
+        status=CoachInvite.Status.ACCEPTED,
+    )
+    CoachInvite.objects.filter(pk=invite.pk).update(
+        created_at=sent_at, responded_at=sent_at + accepted_after
+    )
+    return rel
+
+
+class TestMixedCohortFunnel:
+    def test_every_step_with_one_stopping_at_each_and_medians_per_step(self, now):
+        """Email invites stop at each step in turn; one request runs the chain.
+
+        email:   A sent only; B accepted 1h; C accepted 3h, delivered +1d;
+                 D accepted 5h, delivered +3d, logged +2h.
+        request: E accepted 7h, delivered +2d, logged +4h.
+        """
+        hour = datetime.timedelta(hours=1)
+        dayd = datetime.timedelta(days=1)
+        sent_at = now - datetime.timedelta(days=20)
+
+        _invite(UserFactory(), sent_at)  # A
+        _accepted_invite(UserFactory(), UserFactory(), sent_at, 1 * hour)  # B
+        rel_c = _accepted_invite(UserFactory(), UserFactory(), sent_at, 3 * hour)
+        _deliver_week(_week_for(_plan(rel_c)), sent_at + 3 * hour + dayd)
+        athlete_d = UserFactory()
+        rel_d = _accepted_invite(UserFactory(), athlete_d, sent_at, 5 * hour)
+        plan_d = _plan(rel_d)
+        week_d = _week_for(plan_d)
+        delivered_d = sent_at + 5 * hour + 3 * dayd
+        _deliver_week(week_d, delivered_d)
+        _logged_set(athlete_d, plan_d, delivered_d + 2 * hour, week=week_d)
+
+        athlete_e = UserFactory()
+        link_e = CoachAthleteFactory(
+            coach=UserFactory(),
+            athlete=athlete_e,
+            invited_by=CoachAthlete.InvitedBy.ATHLETE,
+            status=CoachAthlete.Status.ACTIVE,
+        )
+        CoachAthlete.objects.filter(pk=link_e.pk).update(
+            created_at=sent_at, responded_at=sent_at + 7 * hour
+        )
+        plan_e = _plan(link_e)
+        week_e = _week_for(plan_e)
+        delivered_e = sent_at + 7 * hour + 2 * dayd
+        _deliver_week(week_e, delivered_e)
+        _logged_set(athlete_e, plan_e, delivered_e + 4 * hour, week=week_e)
+
+        paths = _paths(presenters.product_analytics(days=30, now=now))
+
+        email = paths["email_invite"]
+        assert (email["sent"], email["accepted"]) == (4, 3)
+        assert (email["delivered"], email["logged"]) == (2, 1)
+        assert email["median_to_accept"] == 3 * hour
+        assert email["median_to_deliver"] == 2 * dayd
+        assert email["median_to_log"] == 2 * hour
+
+        request = paths["athlete_request"]
+        assert (request["sent"], request["accepted"]) == (1, 1)
+        assert (request["delivered"], request["logged"]) == (1, 1)
+
+        both = paths["all"]
+        assert (both["sent"], both["accepted"]) == (5, 4)
+        assert (both["delivered"], both["logged"]) == (3, 2)
+        assert both["median_to_accept"] == 4 * hour  # median(1, 3, 5, 7 h)
+        assert both["median_to_deliver"] == 2 * dayd  # median(1, 3, 2 d)
+        assert both["median_to_log"] == 3 * hour  # median(2, 4 h)
+
+
 # ---------------------------------------------------------------------------
 # 3. feature adoption
 # ---------------------------------------------------------------------------
@@ -1467,6 +1542,38 @@ class TestProductAnalyticsQueryCount:
                 subject=plan,
                 created=now - datetime.timedelta(days=1),
             )
+            # Exercise every correlated subquery and every source, not just
+            # the pending-invite path.
+            invitee = UserFactory()
+            accepted_rel = _accepted_invite(
+                coach,
+                invitee,
+                now - datetime.timedelta(days=3),
+                datetime.timedelta(hours=1),
+            )
+            accepted_plan = _plan(accepted_rel)
+            accepted_week = _week_for(accepted_plan)
+            _deliver_week(accepted_week, now - datetime.timedelta(days=2))
+            _logged_set(
+                invitee,
+                accepted_plan,
+                now - datetime.timedelta(days=1),
+                week=accepted_week,
+            )
+            _plan_action(plan, now - datetime.timedelta(days=1))
+            _agent_batch(plan, coach, now - datetime.timedelta(days=1))
+            PushSubscription.objects.create(
+                athlete=athlete,
+                endpoint=f"https://push.example/{next(_seq)}",
+                p256dh="k",
+                auth="a",
+            )
+            for name in (EventName.SESSION_OPENED, EventName.SET_LOGGED):
+                _event(name, actor=athlete, created=now - datetime.timedelta(days=1))
+            sent = _sent_email(
+                EmailKind.BLOCK_DELIVERED, sent_at=now - datetime.timedelta(days=1)
+            )
+            _email_event(sent, EmailEvent.EventType.OPEN)
 
     def test_query_count_is_fixed_regardless_of_data_size(self, client, now):
         client.force_login(UserFactory(is_staff=True))
