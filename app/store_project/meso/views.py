@@ -2350,7 +2350,9 @@ def manifest_webmanifest(request):
 # activate. Keep in sync with the cache name baked into the worker template.
 # v2: added meso_onboarding.js to the precached shell (first-time UX Phase 4).
 # v3: re-skinned meso.css to the shared steel-blue accent (design-system PR 3).
-PWA_CACHE_VERSION = "meso-pwa-v3"
+# v4: meso_athlete.js queues lines typed offline (#527). Cached session pages
+#     still point at the old logger, which loses them; activation drops them.
+PWA_CACHE_VERSION = "meso-pwa-v4"
 
 
 @require_GET
