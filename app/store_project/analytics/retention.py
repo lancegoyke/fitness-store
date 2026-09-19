@@ -40,8 +40,9 @@ def purge_expired_events(*, now=None, batch_size=1000):
         )
         if not pks:
             break
-        Event.objects.filter(pk__in=pks).delete()
-        deleted += len(pks)
+        # Count what the DELETE removed, not what the SELECT saw: an overlapping
+        # run (the scheduled one and a manual one) may have taken some already.
+        deleted += Event.objects.filter(pk__in=pks).delete()[0]
         if len(pks) < batch_size:
             break
     logger.info("Purged %d expired analytics event(s).", deleted)

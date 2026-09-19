@@ -1216,6 +1216,7 @@ class TestFeatureAdoption:
 
     def test_push_enabled(self, now):
         athlete = UserFactory()
+        _relationship(athlete=athlete)  # a coach's client
         sub = PushSubscription.objects.create(
             athlete=athlete,
             endpoint="https://push.example/1",
@@ -1235,6 +1236,7 @@ class TestFeatureAdoption:
 
     def test_session_completed(self, now):
         athlete = UserFactory()
+        _relationship(athlete=athlete)  # a coach's client
         _event(
             EventName.SESSION_COMPLETED,
             actor=athlete,

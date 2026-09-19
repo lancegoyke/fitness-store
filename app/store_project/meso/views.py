@@ -857,6 +857,7 @@ def plan_create(request, pk):
             subject=plan,
             athlete=str(relationship.athlete_id),
             draft=draft,
+            demo=relationship.is_demo,
         )
     # Dispatch (and bump the plan) outside the lock, mirroring ``agent_propose``.
     if draft_batch is not None:
@@ -867,6 +868,7 @@ def plan_create(request, pk):
             actor=request.user,
             subject=draft_batch,
             trigger=draft_batch.trigger,
+            demo=relationship.is_demo,
         )
     # The tour marker (``tour=1``) picks the step from ``draft`` ("agent" vs
     # "designer"). #441 P3-2 also counts the organic twin while touring — but
@@ -4762,6 +4764,7 @@ def template_use(request, plan_id):
         subject=copy,
         template=plan.pk,
         athlete=str(relationship.athlete_id),
+        demo=relationship.is_demo,
     )
     messages.success(
         request,
@@ -4802,6 +4805,7 @@ def _notify_athlete_block_delivered(
         athlete=str(plan.athlete.pk),
         weeks=week_count,
         via=via,
+        demo=plan.is_demo,
     )
     home_url = request.build_absolute_uri(reverse("meso:athlete_home"))
     unsubscribe_url = request.build_absolute_uri(
@@ -5020,6 +5024,7 @@ def agent_propose(request, plan_id):
         actor=request.user,
         subject=batch,
         trigger=batch.trigger,
+        demo=plan.is_demo,
     )
     return JsonResponse(
         {
@@ -5143,6 +5148,7 @@ def batch_apply(request, batch_id):
         subject=batch,
         applied=result["applied"],
         skipped=result["skipped"],
+        demo=batch.plan.is_demo,
     )
     # Where the review screen sends the coach next: the deliver screen, pinned to
     # the block the batch actually edited. A bare deliver URL resolves its own

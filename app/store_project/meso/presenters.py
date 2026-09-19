@@ -1911,18 +1911,25 @@ def _subject_ids(queryset):
 
 
 def _demo_event_exclusion():
-    """Q excluding ``Event`` rows whose subject sits on a demo relationship's plan.
+    """Q excluding ``Event`` rows about a demo relationship's plan.
 
-    A demo plan (``CoachAthlete.is_demo``) has no FK from ``Event`` to filter
-    through — subjects are opaque ``(subject_type, subject_id)`` strings — so
-    exclusion has to name every subject type demo coach activity shows up as:
-    the plan itself, one of its mesocycles (blocks), or one of its agent runs.
+    Coach events about a plan carry ``props.demo`` from the moment they're
+    written, which is what survives "Remove demo data": that deletes the demo
+    plans, and a subject match finds nothing afterwards. The subject match
+    covers events written before the prop existed while their demo rows are
+    still there. ``Event`` has no FK to a plan — subjects are opaque
+    ``(subject_type, subject_id)`` strings — so it names every subject type demo
+    coach activity shows up as: the plan itself, one of its mesocycles
+    (blocks), or one of its agent runs.
     """
     demo_plans = Plan.objects.filter(relationship__is_demo=True)
     demo_mesocycles = Mesocycle.objects.filter(plan__relationship__is_demo=True)
     demo_batches = AgentProposalBatch.objects.filter(plan__relationship__is_demo=True)
     return (
-        Q(subject_type="meso.plan", subject_id__in=_subject_ids(demo_plans))
+        # ``has_key`` first: an event without the key reads the JSON value as
+        # SQL NULL, and ``NOT (NULL OR …)`` would exclude it.
+        Q(props__has_key="demo", props__demo=True)
+        | Q(subject_type="meso.plan", subject_id__in=_subject_ids(demo_plans))
         | Q(
             subject_type="meso.mesocycle",
             subject_id__in=_subject_ids(demo_mesocycles),
@@ -1934,6 +1941,37 @@ def _demo_event_exclusion():
     )
 
 
+def _client_athletes():
+    """Users who are (or were) coached by someone else: the athlete side's population.
+
+    An athlete-side ``Event`` or device row can't always be traced back to the
+    plan it was about — clearing a typed line deletes the log a ``set_logged``
+    event points at — so athlete counts also require the actor to have a link
+    that is neither self-coaching nor demo. A coach who only trains on their
+    own program is never an athlete here, whatever was deleted since.
+    """
+    return (
+        CoachAthlete.objects.filter(is_self=False, is_demo=False)
+        .order_by()
+        .values("athlete_id")
+    )
+
+
+def _self_subject_exclusion():
+    """Q excluding athlete ``Event`` rows about a self-coaching plan's session or log."""
+    self_sessionlog_ids = _subject_ids(
+        SessionLog.objects.filter(
+            session__week__mesocycle__plan__relationship__is_self=True
+        )
+    )
+    self_session_ids = _subject_ids(
+        Session.objects.filter(week__mesocycle__plan__relationship__is_self=True)
+    )
+    return Q(subject_type="meso.sessionlog", subject_id__in=self_sessionlog_ids) | Q(
+        subject_type="meso.session", subject_id__in=self_session_ids
+    )
+
+
 def product_analytics(*, days, now=None):
     """Aggregate Meso's usage tables into the staff dashboard's context (#509).
 
@@ -1942,9 +1980,11 @@ def product_analytics(*, days, now=None):
     adoption, and email sections; active-user WAU/MAU are always the trailing
     7/30 days regardless of ``days`` (``window`` uses ``days``). Every count
     excludes ``_ineligible_users()`` (staff and sandbox accounts) and, for
-    coach-side rows, demo-relationship activity (``CoachAthlete.is_demo`` —
-    self-coaching (``is_self``) is real coach activity and stays in; it's only
-    ever excluded from the *athlete* side, since it isn't a client training).
+    coach-side rows, demo-relationship activity (``CoachAthlete.is_demo``,
+    ``_demo_event_exclusion``). Self-coaching (``is_self``) is real coach
+    activity and stays in; athlete-side rows count only
+    ``_client_athletes()`` and leave self-coaching sessions out, since that
+    isn't a client training.
 
     Contract (the view + template read these exact keys):
 
@@ -2080,24 +2120,14 @@ def _athlete_activity_sources(since, until):
         .order_by()
         .values_list("athlete_id", flat=True)
     )
-    self_sessionlog_ids = _subject_ids(
-        SessionLog.objects.filter(
-            session__week__mesocycle__plan__relationship__is_self=True
-        )
-    )
-    self_session_ids = _subject_ids(
-        Session.objects.filter(week__mesocycle__plan__relationship__is_self=True)
-    )
     athlete_events = (
         Event.objects.filter(
             name__in=(EventName.SET_LOGGED, EventName.SESSION_OPENED),
             created__gte=since,
             created__lte=until,
+            actor__in=_client_athletes(),
         )
-        .exclude(
-            Q(subject_type="meso.sessionlog", subject_id__in=self_sessionlog_ids)
-            | Q(subject_type="meso.session", subject_id__in=self_session_ids)
-        )
+        .exclude(_self_subject_exclusion())
         .order_by()
         .values_list("actor_id", flat=True)
     )
@@ -2181,14 +2211,16 @@ def _email_invite_cohort(since, until):
 def _athlete_request_cohort(since, until):
     """Raw cohort rows for the ``athlete_request`` path (#509 §2) — one query.
 
-    Excludes any link that's some ``CoachInvite.accepted_link`` — an athlete's
-    pending request the coach's email invite happened to also claim — so it's
-    never counted under both paths.
+    Excludes a link that an email invite in this same cohort claimed — an
+    athlete's pending request the coach's invite happened to also accept — so
+    it's never counted under both paths. A link claimed by an invite sent
+    before the window stays here: that invite isn't in the email cohort, and
+    dropping the request too would count it nowhere.
     """
     ineligible = _ineligible_users()
-    claimed_link_ids = CoachInvite.objects.filter(accepted_link__isnull=False).values(
-        "accepted_link_id"
-    )
+    claimed_link_ids = CoachInvite.objects.filter(
+        created_at__gte=since, created_at__lte=until, accepted_link__isnull=False
+    ).values("accepted_link_id")
     delivered_sq = (
         WeekDelivery.objects.filter(
             week__mesocycle__plan__relationship_id=OuterRef("pk"),
@@ -2285,10 +2317,21 @@ def _coach_event_stats(name, *, since, until, extra=None):
 
 
 def _athlete_event_stats(name, *, since, until):
-    """``{"users", "times"}`` for an athlete-side ``Event``-sourced feature row."""
-    qs = Event.objects.filter(
-        name=name, created__gte=since, created__lte=until
-    ).exclude(actor__in=_ineligible_users())
+    """``{"users", "times"}`` for an athlete-side ``Event``-sourced feature row.
+
+    Same athlete rule as A2: the actor is someone else's client, and the event
+    isn't about a self-coaching plan's session or log.
+    """
+    qs = (
+        Event.objects.filter(
+            name=name,
+            created__gte=since,
+            created__lte=until,
+            actor__in=_client_athletes(),
+        )
+        .exclude(actor__in=_ineligible_users())
+        .exclude(_self_subject_exclusion())
+    )
     return qs.aggregate(users=Count("actor", distinct=True), times=Count("pk"))
 
 
@@ -2341,9 +2384,11 @@ def _trial_started_stats(*, since, until):
 
 
 def _push_enabled_stats(*, since, until):
-    """``{"users", "times"}`` for the ``push_enabled`` row."""
+    """``{"users", "times"}`` for the ``push_enabled`` row (client athletes only)."""
     qs = PushSubscription.objects.filter(
-        created_at__gte=since, created_at__lte=until
+        created_at__gte=since,
+        created_at__lte=until,
+        athlete__in=_client_athletes(),
     ).exclude(athlete__in=_ineligible_users())
     return qs.aggregate(users=Count("athlete", distinct=True), times=Count("pk"))
 

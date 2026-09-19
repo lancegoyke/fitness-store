@@ -278,8 +278,11 @@ applies on delete, from Django rather than the database.
 **Excluded at the helper.** Sandbox coaches (`meso.sandbox.is_sandbox`) and
 staff (`is_staff`) are dropped silently, so demo traffic and our own clicking
 don't count. `TourEvent` doesn't do this: its funnel is mostly sandbox traffic
-by design. A real coach's actions on demo-athlete plans (`is_demo` links) do
-count; they're real coach actions.
+by design. A real coach's actions on demo-athlete plans (`is_demo` links) are
+recorded; they're real coach actions. Since the dashboard slice, the events
+about a plan (plan_created, template_imported, agent_proposal_run,
+batch_applied, block_delivered) carry `props.demo`, so the dashboard can leave
+them out even after the demo is removed.
 
 **Closed set of names.** `analytics.events.EventName`. An unknown name raises
 `ValueError` when `ANALYTICS_STRICT_EVENT_NAMES` is on (test settings, and
@@ -350,12 +353,20 @@ starts there; the page prints the date of the oldest event it holds. Every
 feature row names its source.
 
 **Who is excluded, everywhere.** Staff and sandbox users, in the query itself
-(a NULL user, from a deleted account, stays in "times" counts). Activity on a
-demo relationship's plan (`is_demo`) is excluded wherever the link is
-reachable: through the join for source tables, and through the event's subject
-(`meso.plan`, `meso.mesocycle`, `meso.agentproposalbatch`) for events. A coach
-training on their own self-coaching program isn't an athlete; their edits and
-deliveries still count as coach activity.
+(a NULL user, from a deleted account, stays in "times" counts). For email
+that means recipients: `SentEmail` doesn't record the sender, so a staff
+coach's invite to a real person counts. Activity on a demo relationship's
+plan (`is_demo`) is excluded through the join for source tables. For events,
+the coach-side events about a plan (plan_created, template_imported,
+agent_proposal_run, batch_applied, block_delivered) carry `props.demo` from
+this slice on, because "Remove demo data" deletes the demo plans and a match
+on the event's subject (`meso.plan`, `meso.mesocycle`,
+`meso.agentproposalbatch`) finds nothing afterwards; the subject match stays
+for events written before the prop. An athlete is someone another coach
+coaches (a link that is neither self-coaching nor demo), so a coach training
+only on their own program is never an athlete, even after the log an event
+pointed at is deleted (clearing a typed line reaps an empty log). Their edits
+and deliveries still count as coach activity.
 
 **Active users.** WAU (last 7 days), MAU (last 30) and the selected window,
 for coaches and for athletes, each one `COUNT` of distinct users. An active
@@ -370,16 +381,22 @@ existing log with its own run time.
 
 **Activation funnel.** Cohort: invites sent in the window. Two paths and their
 union. *Email invite* reads `CoachInvite` (sent `created_at`, accepted
-`responded_at` when `accepted`). *Athlete request* reads `CoachAthlete` rows
-with `invited_by=athlete`, minus any row an email invite's `accepted_link`
-points at (claiming an invite can accept a pending request, and it must not
-count twice). This answers #542's question about coach-accepted requests from
-the source table, with no new event. Re-invites aren't in the funnel:
-`relationship_reinvite` reopens the old row and keeps its original
-`created_at`, so there's no send time to count from. After acceptance, the
+`responded_at` when `accepted`; a resend keeps `created_at`, so a resent
+invite is timed from its first send). *Athlete request* reads `CoachAthlete`
+rows with `invited_by=athlete`, minus any row that an email invite in the same
+cohort claimed (claiming an invite can accept a pending request, and it must
+not count twice). This answers #542's question about coach-accepted requests
+from the source table, with no new event. It's exact for a pair that connects
+once. `CoachAthlete` keeps one row per coach and athlete, and a repeat request
+or a `relationship_reinvite` reopens it: the row keeps its first `created_at`
+and takes the new status and `responded_at`, and a coach re-invite rewrites
+`invited_by`. So a pair that reconnects is measured from its first request,
+and a coach re-invite moves the pair out of this path. Coach re-invites
+themselves aren't in the funnel, since their send time isn't recorded. After acceptance, the
 first block is the earliest `WeekDelivery` on that relationship's plans at or
 after acceptance, and the first set is the earliest session log with a set by
-that athlete on those plans at or after that delivery. A set logged before any
+that athlete on those plans at or after that delivery, timed by when the log
+was started (`LoggedSet` has no timestamp of its own). A set logged before any
 delivery (possible, since delivery isn't a visibility gate) doesn't count, so
 the steps stay sequential. Medians are between consecutive steps. The cohort
 rows are the only ones loaded into Python, because SQLite has no percentile
@@ -394,21 +411,23 @@ delivered (`WeekDelivery`, one per block: its week rows share one
 counted again), Trial started (`CoachSubscription.trial_end` minus the 14-day
 trial), Paid subscription started (`subscription_started` event with
 `via=stripe`), Subscription cancelled (event), Push notifications enabled
-(`PushSubscription`, athletes) and Session completed (event, athletes).
+(`PushSubscription`, athletes; an unsubscribed or rejected device's row is
+deleted, so this counts subscriptions still on record) and Session completed
+(event, athletes).
 
 **Email.** The four Meso kinds (block_delivered, coach_invite,
 invite_reminder, coach_request), as a cohort: messages sent in the window
 (`SentEmail`), and how many of them were delivered, opened or clicked at any
 time since (distinct messages with at least one such `EmailEvent`). That's
 unlike `/backside/email/`, which counts events by when they happened; the page
-links there for detail. Staff recipients are excluded. An open can be a mail
-client's privacy prefetch.
+links there for detail. An open can be a mail client's privacy prefetch.
 
 **Retention.** Raw `Event` rows older than 13 months are deleted daily by the
 `analytics-purge-expired-events` schedule (`analytics.tasks`
 → `analytics_purge_events` → `analytics.retention.purge_expired_events`),
 registered in `analytics.0002`. It deletes 1,000 rows per statement until none
-are left, so a large backlog never holds one long transaction. There's no
+are left, so a large backlog never holds one long transaction, and reports
+the rows the deletes removed. There's no
 rollup table: nothing on the page is slow yet. Add a nightly rollup only when
 a query measurably is.
 

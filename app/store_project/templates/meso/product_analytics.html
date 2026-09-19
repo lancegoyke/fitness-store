@@ -57,12 +57,12 @@
       <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
         A coach is active if they edited a plan (<code>PlanAction</code>, <code>Plan</code> created),
         delivered a block (<code>WeekDelivery</code>), ran the agent (<code>AgentProposalBatch</code>),
-        sent an invite (<code>CoachInvite</code>), or have a coach-side event. An athlete is active if
-        they started a session log that holds a set (<code>SessionLog</code>), or have a
-        <code>set_logged</code> or <code>session_opened</code> event. Events exist since {% if events_since %}{{ events_since|date:"M j, Y" }}{% else %}the first one{% endif %}.
+        sent an invite (<code>CoachInvite</code>), or have a coach-side event. An athlete is someone
+        another coach coaches, and is active if they started a session log that holds a set
+        (<code>SessionLog</code>), or have a <code>set_logged</code> or <code>session_opened</code> event. Events exist since {% if events_since %}{{ events_since|date:"M j, Y" }}{% else %}the first one{% endif %}.
         Demo-athlete plans don't count for either role, and a coach training on their own
         self-coaching plan isn't counted as an athlete. Staff and sandbox accounts are left
-        out of this whole page.
+        out of every number on this page (for email, as recipients).
       </p>
     </div>
 
@@ -100,12 +100,15 @@
         </table>
       </div>
       <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
-        Invites sent in the window. Email invite: <code>CoachInvite</code>, sent then accepted.
-        Athlete request: an athlete's request the coach accepted (<code>CoachAthlete</code>), minus
-        any an email invite claimed. Delivered: the first <code>WeekDelivery</code> to that
-        athlete after acceptance. Logged: the first session log with a set after that delivery;
-        a set logged before any delivery doesn't count. Medians are between consecutive steps.
-        Re-invites of a former athlete aren't here: the reopened link keeps its first send date.
+        Invites sent in the window. Email invite: <code>CoachInvite</code>, sent then accepted; a
+        resent invite keeps its first send date. Athlete request: an athlete's request the coach
+        accepted (<code>CoachAthlete</code>), minus any that an email invite in the window claimed.
+        Delivered: the first <code>WeekDelivery</code> to that athlete after acceptance. Logged: the
+        first session log holding a set, by when the log was started, after that delivery; a set
+        logged before any delivery doesn't count. Medians are between consecutive steps.
+        <code>CoachAthlete</code> keeps one row per coach and athlete, and a repeat request or a
+        re-invite reopens it with its first send date and the new answer: a pair that reconnects
+        is measured from its first request, and leaves this path if the coach re-invites.
       </p>
     </div>
 
@@ -140,6 +143,7 @@
         Distinct users and times in the window. Rows sourced from an <code>Event</code> only have
         data since {% if events_since %}{{ events_since|date:"M j, Y" }}{% else %}the first one{% endif %}. Block delivered counts blocks, not weeks. Trial started is
         <code>trial_end</code> minus the 14-day trial. Work on demo-athlete plans isn't counted.
+        Push counts subscriptions still on record: an unsubscribed or expired device is gone.
       </p>
     </div>
 
@@ -188,8 +192,9 @@
       </div>
       <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
         Meso emails sent in the window (<code>SentEmail</code>), and how many of those were
-        delivered, opened or clicked since (distinct messages, from SES events). Staff
-        recipients are left out. Some mail clients fetch images and links on their own, so an
+        delivered, opened or clicked since (distinct messages, from SES events). Staff and
+        sandbox recipients are left out; the sender isn't recorded, so a staff coach's email to
+        a client still counts. Some mail clients fetch images and links on their own, so an
         open or a click isn't always a person. Every kind and the raw events:
         <a href="{{ email_dashboard_url }}">Email deliverability</a>.
       </p>

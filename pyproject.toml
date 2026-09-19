@@ -33,6 +33,7 @@ dependencies = [
   "pywebpush>=2.3.0",
   "django-q2>=1.10.0",
   "openpyxl>=3.1",
+  "python-dateutil>=2.9",
 ]
 
 [dependency-groups]
