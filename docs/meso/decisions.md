@@ -319,7 +319,8 @@ no `choices`, so adding a name needs no migration.
   path (`invoice.paid` flipping `past_due` to `active`) can record the start
   too, because Stripe may deliver it before the subscription update. A
   subscription that was already live before this shipped has no start on
-  record, so its first `past_due` recovery reads as one.
+  record, so its first `past_due` recovery reads as one, and a cancellation
+  that arrives while it's `past_due` (dunning churn) isn't recorded.
   `subscription_cancelled` fires once, when a subscription that was live
   reaches `canceled`; an `incomplete` checkout that expires never started
   and isn't a cancellation. `reason` carries Stripe's

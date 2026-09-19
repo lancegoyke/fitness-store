@@ -124,6 +124,10 @@ def _recorded(name, sub_id):
     subscription reads ``past_due`` locally, never ``already_live``), and it
     can't tell a subscription that was never live from one that was without
     remembering whether a ``subscription_started`` was ever written.
+
+    The ledger is only as complete as ``track()``, which drops a failed insert
+    after logging it: a start that failed to record also suppresses that
+    subscription's later cancel from ``past_due``.
     """
     return Event.objects.filter(name=name, props__subscription=sub_id).exists()
 
