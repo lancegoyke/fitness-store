@@ -1952,7 +1952,7 @@ def product_analytics(*, days, now=None):
     - ``events_since`` — the earliest ``Event`` ever recorded (``None`` before
       the first one), so the template can caveat every Event-sourced number as
       only meaningful since that date (the #509 slice-1 deploy).
-    - ``active`` — ``{"coaches": {...}, "athletes": {...}}``, each
+    - ``active_users`` — ``{"coaches": {...}, "athletes": {...}}``, each
       ``{"wau", "mau", "window"}`` distinct-user counts.
     - ``funnel`` — the three activation-funnel rows (``email_invite``,
       ``athlete_request``, ``all``), in that order.
@@ -1973,7 +1973,7 @@ def product_analytics(*, days, now=None):
         "since": since,
         "now": now,
         "events_since": events_since,
-        "active": {
+        "active_users": {
             "coaches": _active_role_counts(
                 _coach_activity_sources,
                 wau_since=wau_since,

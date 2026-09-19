@@ -195,7 +195,7 @@ class TestPresenterShape:
             "since",
             "now",
             "events_since",
-            "active",
+            "active_users",
             "funnel",
             "features",
             "email",
@@ -236,7 +236,7 @@ class TestActiveCoachSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
     def test_c1_template_plan_action_counts_the_owner(self, now):
         coach = UserFactory()
@@ -245,7 +245,7 @@ class TestActiveCoachSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
     def test_c2_plan_created_counts_the_coach(self, now):
         coach = UserFactory()
@@ -254,7 +254,7 @@ class TestActiveCoachSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
     def test_c2_template_plan_created_counts_the_owner(self, now):
         coach = UserFactory()
@@ -263,7 +263,7 @@ class TestActiveCoachSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
     def test_c3_week_delivery_counts_the_coach(self, now):
         coach = UserFactory()
@@ -273,7 +273,7 @@ class TestActiveCoachSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
     def test_c4_agent_proposal_batch_counts_the_coach(self, now):
         coach = UserFactory()
@@ -287,7 +287,7 @@ class TestActiveCoachSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
     def test_c4_eval_trigger_does_not_count(self, now):
         coach = UserFactory()
@@ -301,7 +301,7 @@ class TestActiveCoachSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 0
+        assert result["active_users"]["coaches"]["window"] == 0
 
     def test_c5_coach_invite_counts_the_coach(self, now):
         coach = UserFactory()
@@ -309,7 +309,7 @@ class TestActiveCoachSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
     def test_c6_event_counts_the_coach(self, now):
         coach = UserFactory()
@@ -321,7 +321,7 @@ class TestActiveCoachSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
 
 class TestActiveAthleteSources:
@@ -332,7 +332,7 @@ class TestActiveAthleteSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["athletes"]["window"] == 1
+        assert result["active_users"]["athletes"]["window"] == 1
 
     def test_a1_session_log_without_any_logged_set_does_not_count(self, now):
         athlete = UserFactory()
@@ -345,7 +345,7 @@ class TestActiveAthleteSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["athletes"]["window"] == 0
+        assert result["active_users"]["athletes"]["window"] == 0
 
     def test_a2_set_logged_event_counts_the_athlete(self, now):
         athlete = UserFactory()
@@ -361,7 +361,7 @@ class TestActiveAthleteSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["athletes"]["window"] == 1
+        assert result["active_users"]["athletes"]["window"] == 1
 
     def test_a2_session_opened_event_counts_the_athlete(self, now):
         athlete = UserFactory()
@@ -376,7 +376,7 @@ class TestActiveAthleteSources:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["athletes"]["window"] == 1
+        assert result["active_users"]["athletes"]["window"] == 1
 
 
 class TestActiveUsersWindows:
@@ -387,9 +387,9 @@ class TestActiveUsersWindows:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["wau"] == 0
-        assert result["active"]["coaches"]["mau"] == 1
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["wau"] == 0
+        assert result["active_users"]["coaches"]["mau"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
     def test_activity_31_days_ago_is_outside_30_but_inside_90(self, now):
         coach = UserFactory()
@@ -399,9 +399,9 @@ class TestActiveUsersWindows:
         result_30 = presenters.product_analytics(days=30, now=now)
         result_90 = presenters.product_analytics(days=90, now=now)
 
-        assert result_30["active"]["coaches"]["window"] == 0
-        assert result_30["active"]["coaches"]["mau"] == 0
-        assert result_90["active"]["coaches"]["window"] == 1
+        assert result_30["active_users"]["coaches"]["window"] == 0
+        assert result_30["active_users"]["coaches"]["mau"] == 0
+        assert result_90["active_users"]["coaches"]["window"] == 1
 
     def test_activity_29_days_ago_is_inside_a_30_day_window(self, now):
         coach = UserFactory()
@@ -410,7 +410,7 @@ class TestActiveUsersWindows:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
     def test_coach_active_via_several_sources_counts_once(self, now):
         coach = UserFactory()
@@ -425,7 +425,7 @@ class TestActiveUsersWindows:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
     def test_a_user_can_be_active_as_both_coach_and_athlete(self, now):
         person = UserFactory()
@@ -436,8 +436,8 @@ class TestActiveUsersWindows:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
-        assert result["active"]["athletes"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
+        assert result["active_users"]["athletes"]["window"] == 1
 
 
 class TestIneligibleUsersExcludedFromActive:
@@ -448,7 +448,7 @@ class TestIneligibleUsersExcludedFromActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 0
+        assert result["active_users"]["coaches"]["window"] == 0
 
     def test_sandbox_coach_activity_excluded(self, now):
         coach = _sandbox()
@@ -457,7 +457,7 @@ class TestIneligibleUsersExcludedFromActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 0
+        assert result["active_users"]["coaches"]["window"] == 0
 
     def test_staff_athlete_activity_excluded(self, now):
         athlete = UserFactory(is_staff=True)
@@ -466,7 +466,7 @@ class TestIneligibleUsersExcludedFromActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["athletes"]["window"] == 0
+        assert result["active_users"]["athletes"]["window"] == 0
 
     def test_sandbox_athlete_activity_excluded(self, now):
         athlete = _sandbox()
@@ -475,7 +475,7 @@ class TestIneligibleUsersExcludedFromActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["athletes"]["window"] == 0
+        assert result["active_users"]["athletes"]["window"] == 0
 
 
 class TestDemoExclusionFromActive:
@@ -487,7 +487,7 @@ class TestDemoExclusionFromActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 0
+        assert result["active_users"]["coaches"]["window"] == 0
 
     def test_demo_relationship_delivery_does_not_count(self, now):
         coach = UserFactory()
@@ -498,7 +498,7 @@ class TestDemoExclusionFromActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 0
+        assert result["active_users"]["coaches"]["window"] == 0
 
     def test_demo_relationship_agent_run_does_not_count(self, now):
         coach = UserFactory()
@@ -508,7 +508,7 @@ class TestDemoExclusionFromActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 0
+        assert result["active_users"]["coaches"]["window"] == 0
 
     def test_demo_subject_event_does_not_count(self, now):
         coach = UserFactory()
@@ -523,7 +523,7 @@ class TestDemoExclusionFromActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 0
+        assert result["active_users"]["coaches"]["window"] == 0
 
 
 class TestSelfCoachingActive:
@@ -535,7 +535,7 @@ class TestSelfCoachingActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["athletes"]["window"] == 0
+        assert result["active_users"]["athletes"]["window"] == 0
 
     def test_self_plan_set_logged_event_does_not_count_as_athlete_activity(self, now):
         coach = UserFactory()
@@ -551,7 +551,7 @@ class TestSelfCoachingActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["athletes"]["window"] == 0
+        assert result["active_users"]["athletes"]["window"] == 0
 
     def test_self_link_coach_plan_edits_still_count_as_coach_activity(self, now):
         coach = UserFactory()
@@ -561,7 +561,7 @@ class TestSelfCoachingActive:
 
         result = presenters.product_analytics(days=30, now=now)
 
-        assert result["active"]["coaches"]["window"] == 1
+        assert result["active_users"]["coaches"]["window"] == 1
 
 
 # ---------------------------------------------------------------------------

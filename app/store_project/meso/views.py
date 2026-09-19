@@ -706,12 +706,7 @@ class ProductAnalyticsView(UserPassesTestMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         days = self._days()
-        result = presenters.product_analytics(days=days, now=timezone.now())
-        # The presenter's own "active" key (active-user counts) would collide
-        # with the nav's "active" flag (which page is highlighted) below — pull
-        # it out under its own name before that assignment overwrites it.
-        ctx["active_users"] = result.pop("active")
-        ctx.update(result)
+        ctx.update(presenters.product_analytics(days=days))
         ctx["active"] = "analytics"
         ctx["email_dashboard_url"] = (
             reverse("notifications:email_dashboard") + f"?days={days}"

@@ -336,6 +336,82 @@ no `choices`, so adding a name needs no migration.
 for the client beacon. A coach accepting an athlete's request, a relationship
 re-invite and its acceptance, and the invite "Resend" button aren't events.
 
+## Product analytics dashboard (#509)
+
+`/meso/analytics/` (`ProductAnalyticsView`, `presenters.product_analytics`) is
+the staff read-out of Meso usage, gated like the other staff dashboards
+(anonymous → login, non-staff → 403). `?days=7|30|90`, default 30, parsed like
+the email dashboard's. A row is in the window when `now - days <= ts <= now`.
+
+**Sources.** A number comes from the table that already records the fact with
+a timestamp, and from `analytics.Event` only when nothing else does. Events
+exist only since the slice-1 deploy (2026-09-19), so an `Event`-sourced number
+starts there; the page prints the date of the oldest event it holds. Every
+feature row names its source.
+
+**Who is excluded, everywhere.** Staff and sandbox users, in the query itself
+(a NULL user, from a deleted account, stays in "times" counts). Activity on a
+demo relationship's plan (`is_demo`) is excluded wherever the link is
+reachable: through the join for source tables, and through the event's subject
+(`meso.plan`, `meso.mesocycle`, `meso.agentproposalbatch`) for events. A coach
+training on their own self-coaching program isn't an athlete; their edits and
+deliveries still count as coach activity.
+
+**Active users.** WAU (last 7 days), MAU (last 30) and the selected window,
+for coaches and for athletes, each one `COUNT` of distinct users. An active
+coach edited a plan (`PlanAction`, `Plan.created`), delivered a block
+(`WeekDelivery`), ran the agent (`AgentProposalBatch`, eval runs excluded),
+sent an invite (`CoachInvite`), or has a coach-side event (plan_created,
+template_imported, agent_proposal_run, batch_applied, block_delivered,
+invite_sent). An active athlete created a session log that holds a set
+(`SessionLog.created_at`), or has a `set_logged` or `session_opened` event.
+`SessionLog.last_activity_at` isn't used: migration 0046 stamped every
+existing log with its own run time.
+
+**Activation funnel.** Cohort: invites sent in the window. Two paths and their
+union. *Email invite* reads `CoachInvite` (sent `created_at`, accepted
+`responded_at` when `accepted`). *Athlete request* reads `CoachAthlete` rows
+with `invited_by=athlete`, minus any row an email invite's `accepted_link`
+points at (claiming an invite can accept a pending request, and it must not
+count twice). This answers #542's question about coach-accepted requests from
+the source table, with no new event. Re-invites aren't in the funnel:
+`relationship_reinvite` reopens the old row and keeps its original
+`created_at`, so there's no send time to count from. After acceptance, the
+first block is the earliest `WeekDelivery` on that relationship's plans at or
+after acceptance, and the first set is the earliest session log with a set by
+that athlete on those plans at or after that delivery. A set logged before any
+delivery (possible, since delivery isn't a visibility gate) doesn't count, so
+the steps stay sequential. Medians are between consecutive steps. The cohort
+rows are the only ones loaded into Python, because SQLite has no percentile
+function; they're bounded by invites sent in the window.
+
+**Feature adoption.** Per feature, distinct users and times in the window:
+New program (`plan_created` event), Draft with AI and Agent run
+(`AgentProposalBatch` by trigger), Agent changes applied (`batch_applied`
+event; the batch has no applied-at time), Template imported (event), Block
+delivered (`WeekDelivery`, one per block: its week rows share one
+`delivered_at`), Invite sent (`CoachInvite`; a resend reuses the row and isn't
+counted again), Trial started (`CoachSubscription.trial_end` minus the 14-day
+trial), Paid subscription started (`subscription_started` event with
+`via=stripe`), Subscription cancelled (event), Push notifications enabled
+(`PushSubscription`, athletes) and Session completed (event, athletes).
+
+**Email.** The four Meso kinds (block_delivered, coach_invite,
+invite_reminder, coach_request), as a cohort: messages sent in the window
+(`SentEmail`), and how many of them were delivered, opened or clicked at any
+time since (distinct messages with at least one such `EmailEvent`). That's
+unlike `/backside/email/`, which counts events by when they happened; the page
+links there for detail. Staff recipients are excluded. An open can be a mail
+client's privacy prefetch.
+
+**Retention.** Raw `Event` rows older than 13 months are deleted daily by the
+`analytics-purge-expired-events` schedule (`analytics.tasks`
+→ `analytics_purge_events` → `analytics.retention.purge_expired_events`),
+registered in `analytics.0002`. It deletes 1,000 rows per statement until none
+are left, so a large backlog never holds one long transaction. There's no
+rollup table: nothing on the page is slow yet. Add a nightly rollup only when
+a query measurably is.
+
 ---
 
 ## Decision log
@@ -1889,3 +1965,12 @@ _(Append dated entries here as decisions land.)_
   under `ANALYTICS_STRICT_EVENT_NAMES` (tests, DEBUG) and are logged and dropped in
   production. Migration `analytics.0001_initial`. No dashboard, beacon or
   notification ledger yet; GA untouched.
+- 2026-09-19 — **Product analytics dashboard and Event retention (#509, second slice).**
+  `/meso/analytics/` for staff: active coaches and athletes (WAU, MAU, window), the
+  invite → accept → first block → first set funnel with median times, feature adoption,
+  and open/click for the Meso emails (see "Product analytics dashboard" above). It reads
+  the source tables where they already record the fact and `Event` only for the rest.
+  The funnel also reads coach-accepted athlete requests from `CoachAthlete`, which
+  answers #542's question without a new event. Raw events older than 13 months are
+  deleted daily in 1,000-row batches (`analytics.0002` registers the schedule). No
+  rollup table.

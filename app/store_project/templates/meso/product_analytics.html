@@ -15,7 +15,7 @@
         <h1 class="meso-h1">Product analytics</h1>
         <p class="meso-sub">
           Last {{ days }} day{{ days|pluralize }}
-          {% if events_since %}· events recorded since {{ events_since|date:"M j, Y" }}{% endif %}
+          · {% if events_since %}events recorded since {{ events_since|date:"M j, Y" }}{% else %}no events recorded yet{% endif %}
         </p>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
@@ -55,12 +55,14 @@
         </table>
       </div>
       <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
-        A coach counts as active on: editing a plan, delivering a block, running the
-        AI agent, sending an invite, or an equivalent tracked event — on their own
-        roster, never on a demo relationship. An athlete counts as active on:
-        logging a set or opening a session, on a real coach's plan — never on their
-        own self-coached plan. Staff and sandbox-demo accounts are excluded
-        throughout this dashboard.
+        A coach is active if they edited a plan (<code>PlanAction</code>, <code>Plan</code> created),
+        delivered a block (<code>WeekDelivery</code>), ran the agent (<code>AgentProposalBatch</code>),
+        sent an invite (<code>CoachInvite</code>), or have a coach-side event. An athlete is active if
+        they started a session log that holds a set (<code>SessionLog</code>), or have a
+        <code>set_logged</code> or <code>session_opened</code> event. Events exist since {% if events_since %}{{ events_since|date:"M j, Y" }}{% else %}the first one{% endif %}.
+        Demo-athlete plans don't count for either role, and a coach training on their own
+        self-coaching plan isn't counted as an athlete. Staff and sandbox accounts are left
+        out of this whole page.
       </p>
     </div>
 
@@ -98,12 +100,12 @@
         </table>
       </div>
       <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
-        "Email invite" is a coach's emailed invite to a not-yet-a-client athlete;
-        "Athlete request" is an athlete's own request to a coach that the coach
-        accepted; "All" is the two combined. A relationship re-invite (reopening a
-        past link) isn't counted — a reopened row keeps its original send time, so
-        it has no fresh "sent" moment. Steps are sequential: a step's median is
-        only over rows that reached it.
+        Invites sent in the window. Email invite: <code>CoachInvite</code>, sent then accepted.
+        Athlete request: an athlete's request the coach accepted (<code>CoachAthlete</code>), minus
+        any an email invite claimed. Delivered: the first <code>WeekDelivery</code> to that
+        athlete after acceptance. Logged: the first session log with a set after that delivery;
+        a set logged before any delivery doesn't count. Medians are between consecutive steps.
+        Re-invites of a former athlete aren't here: the reopened link keeps its first send date.
       </p>
     </div>
 
@@ -135,16 +137,9 @@
         </table>
       </div>
       <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
-        {% if events_since %}
-          Event-sourced rows only reflect activity since {{ events_since|date:"M j, Y" }}
-          (when first-party event tracking shipped) — anything before that is
-          undercounted.
-        {% else %}
-          Event-sourced rows are undercounted before first-party event tracking
-          starts recording.
-        {% endif %}
-        Demo-relationship and self-coaching activity, plus staff and
-        sandbox-demo accounts, are excluded throughout.
+        Distinct users and times in the window. Rows sourced from an <code>Event</code> only have
+        data since {% if events_since %}{{ events_since|date:"M j, Y" }}{% else %}the first one{% endif %}. Block delivered counts blocks, not weeks. Trial started is
+        <code>trial_end</code> minus the 14-day trial. Work on demo-athlete plans isn't counted.
       </p>
     </div>
 
@@ -192,12 +187,11 @@
         </table>
       </div>
       <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
-        Only Meso-authored kinds (block delivered, coach invite, invite reminder,
-        coach request) appear here — see
-        <a href="{{ email_dashboard_url }}">Email deliverability</a> for every
-        outbound kind. "Opened"/"Clicked" count distinct messages with at least
-        one such event; some mail clients prefetch links and images, so an open
-        or click doesn't always mean a person read the message.
+        Meso emails sent in the window (<code>SentEmail</code>), and how many of those were
+        delivered, opened or clicked since (distinct messages, from SES events). Staff
+        recipients are left out. Some mail clients fetch images and links on their own, so an
+        open or a click isn't always a person. Every kind and the raw events:
+        <a href="{{ email_dashboard_url }}">Email deliverability</a>.
       </p>
     </div>
   </div>
