@@ -1994,14 +1994,23 @@ def athlete_request_coach(request):
 
     def _send():
         try:
-            send_coach_request_email(
+            sent = send_coach_request_email(
                 athlete=athlete, coach=coach, roster_url=roster_url
             )
         except Exception:  # mail is best-effort; never fail the request on it
             logger.exception("Failed to send coach request email to %s", coach.email)
+            sent = None
+        _flash_send_result(
+            request,
+            sent=sent,
+            success_message=f"Request sent to {coach.display_name()}.",
+            target=coach.display_name(),
+            bounce_note="Consider telling them about your request directly.",
+            noun="Request",
+            saved_note="saved",
+        )
 
     transaction.on_commit(_send)
-    messages.success(request, f"Request sent to {coach.display_name()}.")
     return redirect("meso:athlete_home")
 
 
@@ -2032,31 +2041,39 @@ def request_withdraw(request, token):
 # act on an existing CoachAthlete between two Users. See docs/archive/meso/invites-plan.md.
 
 
-def _flash_invite_send_result(request, *, email, sent, verb, saved_note):
-    """Flash the outcome of a best-effort ``send_coach_invite_email`` call.
+def _flash_send_result(
+    request, *, sent, success_message, target, bounce_note, noun, saved_note
+):
+    """Flash the outcome of a best-effort transactional-email send.
 
-    ``sent`` is the helper's return value (``True``/``False``), or ``None``
-    when the caller caught an exception from it. ``AWS_SES_USE_BLACKLIST``
-    makes the helper return ``False`` — without branching on it, a coach was
-    told "Invite sent" even when a hard-bounced/complained address meant
-    nothing went out. ``verb`` is "sent" or "resent" for the success copy;
-    ``saved_note`` describes what already happened to the invite row (so the
-    exception copy never claims the email went out when it didn't).
+    Shared by every ``transaction.on_commit`` callback that sends a
+    mail-server email and must not report success while blind to whether the
+    message actually went out. ``sent`` is the mail helper's return value
+    (``True``/``False``), or ``None`` when the caller caught an exception
+    from it. ``AWS_SES_USE_BLACKLIST`` makes a helper return ``False`` for a
+    hard-bounced/complained address — without branching on it, a caller was
+    told the message went out even when nothing did.
+
+    ``success_message`` is the full flash text for the ``True`` case.
+    ``target`` names who we tried (and failed) to email, for the warning
+    copy; ``bounce_note`` is the direction-specific suggestion appended to
+    the ``False`` warning (e.g. what the sender can do about a paused
+    address). ``noun`` ("Invite"/"Request") and ``saved_note`` describe what
+    already happened to the underlying row, so the exception copy never
+    claims the email went out when it didn't.
     """
     if sent is True:
-        messages.success(request, f"Invite {verb} to {email}.")
+        messages.success(request, success_message)
     elif sent is False:
         messages.warning(
             request,
-            f"Couldn't email {email}: that address previously bounced or "
-            "reported our mail as spam, so sending to it is paused. Ask "
-            "them for a different address, or clear it from the email "
-            "dashboard if it was a mistake.",
+            f"Couldn't email {target}: their address previously bounced or "
+            f"reported our mail as spam, so sending to it is paused. {bounce_note}",
         )
     else:
         messages.warning(
             request,
-            f"Invite {saved_note}, but the email to {email} could not be "
+            f"{noun} {saved_note}, but the email to {target} could not be "
             "sent right now.",
         )
 
@@ -2109,8 +2126,17 @@ def coach_invite(request):
         except Exception:  # mail is best-effort; never fail the invite on it
             logger.exception("Failed to send coach invite email to %s", email)
             sent = None
-        _flash_invite_send_result(
-            request, email=email, sent=sent, verb="sent", saved_note="saved"
+        _flash_send_result(
+            request,
+            sent=sent,
+            success_message=f"Invite sent to {email}.",
+            target=email,
+            bounce_note=(
+                "Ask them for a different address, or clear it from the "
+                "email dashboard if it was a mistake."
+            ),
+            noun="Invite",
+            saved_note="saved",
         )
 
     transaction.on_commit(_send)
@@ -2185,8 +2211,17 @@ def coach_invite_resend(request, token):
         except Exception:  # mail is best-effort; never fail the resend on it
             logger.exception("Failed to resend coach invite email to %s", email)
             sent = None
-        _flash_invite_send_result(
-            request, email=email, sent=sent, verb="resent", saved_note="refreshed"
+        _flash_send_result(
+            request,
+            sent=sent,
+            success_message=f"Invite resent to {email}.",
+            target=email,
+            bounce_note=(
+                "Ask them for a different address, or clear it from the "
+                "email dashboard if it was a mistake."
+            ),
+            noun="Invite",
+            saved_note="refreshed",
         )
 
     transaction.on_commit(_send)

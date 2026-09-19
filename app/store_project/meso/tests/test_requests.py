@@ -29,6 +29,7 @@ These tests cover:
 from unittest import mock
 
 import pytest
+from django.contrib.messages import get_messages
 from django.core import mail
 from django.urls import reverse
 
@@ -216,6 +217,62 @@ class TestAthleteRequestCoachView:
                 resp = client.post(self.url, {"email": coach.email})
         assert resp.status_code == 302
         assert CoachAthlete.objects.filter(coach=coach, athlete=athlete).exists()
+
+    def test_suppressed_send_flashes_warning_not_sent(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        """A blacklisted coach address (helper returns False) must not claim "sent".
+
+        See ``TestCoachInviteView.test_suppressed_send_flashes_warning_not_sent``
+        in ``test_invites.py`` for why the messages are asserted against
+        ``resp.wsgi_request`` rather than after following the redirect.
+        """
+        coach = make_coach()
+        athlete = UserFactory()
+        client.force_login(athlete)
+        with mock.patch(
+            "store_project.meso.views.send_coach_request_email", return_value=False
+        ):
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(self.url, {"email": coach.email})
+        assert CoachAthlete.objects.filter(
+            coach=coach,
+            athlete=athlete,
+            status=CoachAthlete.Status.PENDING_ATHLETE_REQUEST,
+        ).exists()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("couldn't email" in m.lower() for m in texts)
+        assert not any("Request sent" in m for m in texts)
+
+    def test_successful_send_flashes_request_sent(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = make_coach()
+        athlete = UserFactory()
+        client.force_login(athlete)
+        with mock.patch(
+            "store_project.meso.views.send_coach_request_email", return_value=True
+        ):
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(self.url, {"email": coach.email})
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Request sent" in m for m in texts)
+
+    def test_mail_exception_flashes_could_not_be_sent(
+        self, client, django_capture_on_commit_callbacks
+    ):
+        coach = make_coach()
+        athlete = UserFactory()
+        client.force_login(athlete)
+        with mock.patch(
+            "store_project.meso.views.send_coach_request_email",
+            side_effect=RuntimeError("smtp down"),
+        ):
+            with django_capture_on_commit_callbacks(execute=True):
+                resp = client.post(self.url, {"email": coach.email})
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("right now" in m for m in texts)
+        assert not any("Request sent" in m for m in texts)
 
 
 # -- withdraw view ---------------------------------------------------------
