@@ -1,0 +1,23 @@
+{% extends "admin/index.html" %}
+{% comment %}
+Issue #514: the /backside/ home page otherwise has no link at all to the
+staff-only dashboards (email deliverability, Meso usage, Meso tour funnel) --
+they're bookmark-only. This is a same-name override: Django's template
+loader resolves {% extends "admin/index.html" %} inside a template that IS
+"admin/index.html" to the *next* match in the search path (here, the one
+bundled with django.contrib.admin), same pattern as
+templates/admin/challenges/challenge/change_form.html's
+{% extends "admin/change_form.html" %}.
+{% endcomment %}
+
+{% block sidebar %}
+  {{ block.super }}
+  <div class="module" id="dashboards-module">
+    <h2>Dashboards</h2>
+    <ul class="actionlist">
+      <li><a href="{% url 'notifications:email_dashboard' %}">Email deliverability</a></li>
+      <li><a href="{% url 'meso:usage_dashboard' %}">Meso usage</a></li>
+      <li><a href="{% url 'meso:tour_funnel' %}">Meso tour funnel</a></li>
+    </ul>
+  </div>
+{% endblock %}

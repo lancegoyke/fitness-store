@@ -6,11 +6,13 @@ exactly (anon → login, non-staff → 403, staff → 200) and wires the
 flashed ``messages.error``, mirroring ``UsageDashboardView._window``) and the
 ``?q=<email>`` recipient lookup on top of ``presenters.email_dashboard``.
 
-Pre-implementation this is RED: ``notifications:email_dashboard`` has no
-URL/view yet, so every test fails with ``NoReverseMatch``.
+Issue #514 moved the template off the Meso shell onto ``admin/base_site.html``
+(``TestAdminChrome``) and dropped ``ctx["active"] = "email"`` -- nothing reads
+it now that the page no longer renders the Meso nav.
 """
 
 import datetime
+import re
 
 import pytest
 from django.urls import reverse
@@ -55,6 +57,39 @@ class TestUrl:
         assert reverse("notifications:email_dashboard") == "/backside/email/"
 
 
+class TestAdminChrome:
+    """Issue #514: the dashboard moved off the Meso shell onto ``admin/base_site.html``.
+
+    It must render with the real Django admin header/breadcrumbs/nav sidebar
+    (``admin.site.each_context`` in the view's context) and carry no trace of
+    Meso.
+    """
+
+    def test_renders_on_the_admin_base(self, client):
+        client.force_login(UserFactory(is_staff=True))
+
+        body = client.get(_url()).content.decode()
+
+        assert 'id="site-name"' in body
+        assert 'class="breadcrumbs"' in body
+        assert "Email deliverability" in body
+
+    def test_no_meso_chrome(self, client):
+        client.force_login(UserFactory(is_staff=True))
+
+        body = client.get(_url()).content.decode()
+
+        assert "Meso" not in body
+        assert "meso-" not in body
+
+    def test_breadcrumbs_home_links_to_admin_index(self, client):
+        client.force_login(UserFactory(is_staff=True))
+
+        body = client.get(_url()).content.decode()
+
+        assert reverse("admin:index") in body
+
+
 class TestGate:
     def test_anonymous_is_redirected_to_login(self, client):
         resp = client.get(_url())
@@ -73,6 +108,35 @@ class TestGate:
         assert resp.templates[0].name == "notifications/email_dashboard.html"
 
 
+def _table(body, testid):
+    """The HTML of the ``<table data-testid="{testid}">...</table>`` element."""
+    match = re.search(rf'data-testid="{testid}".*?</table>', body, re.DOTALL)
+    assert match, f"no table with data-testid={testid!r} found"
+    return match.group(0)
+
+
+class TestTextOnlyOpenRateRendersAsDash:
+    """A ``None`` open_rate (text-only kinds -- #514) renders "—", not "0%"."""
+
+    def test_password_reset_row_shows_a_dash_not_a_percentage(self, client):
+        _sent(kind=EmailKind.PASSWORD_RESET)
+        client.force_login(UserFactory(is_staff=True))
+
+        table = _table(client.get(_url()).content.decode(), "email-by-kind")
+
+        assert "None" not in table
+        assert "—" in table
+
+    def test_html_kind_still_shows_a_percentage(self, client):
+        _sent(kind=EmailKind.ORDER_CONFIRMATION)
+        _event(EmailEvent.EventType.OPEN, kind=EmailKind.ORDER_CONFIRMATION)
+        client.force_login(UserFactory(is_staff=True))
+
+        table = _table(client.get(_url()).content.decode(), "email-by-kind")
+
+        assert "100%" in table
+
+
 class TestContext:
     def test_presenter_keys_are_present(self, client):
         client.force_login(UserFactory(is_staff=True))
@@ -89,7 +153,6 @@ class TestContext:
             "recipient",
         ):
             assert key in ctx
-        assert ctx["active"] == "email"
         assert ctx["days"] == 30
         assert ctx["q"] == ""
         assert ctx["recipient"] is None
