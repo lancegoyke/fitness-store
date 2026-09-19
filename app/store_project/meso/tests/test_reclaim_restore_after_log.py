@@ -486,3 +486,14 @@ class TestTheSkipPathIsPinned:
             (r.pk, r.source_line_id, r.reclaimed_line_id, r.load, r.reps) for r in rows
         ]
         assert (rows[0].load, rows[0].reps) == ("225", "5")
+
+
+def test_the_link_has_no_database_constraint():
+    """``reclaimed_line`` is a hint, so the database doesn't enforce it.
+
+    A real FK would lock the sub-line at every COMMIT that writes a copy, and a
+    code rollback that doesn't know the column would make cell deletes fail at
+    COMMIT. A regenerated migration flipping this back would pass every other
+    test, so pin it here.
+    """
+    assert LoggedSet._meta.get_field("reclaimed_line").db_constraint is False
