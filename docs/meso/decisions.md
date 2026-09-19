@@ -1708,7 +1708,11 @@ _(Append dated entries here as decisions land.)_
   is unchanged). The topnav is shared chrome: on a phone its page buttons
   (`{% block topnav_actions %}`, now inside a `display: contents` wrapper)
   take a second row and the links wrap inside their own box, so no page
-  scrolls sideways at 360px. Desktop screenshots are pixel-identical to main.
+  scrolls sideways at 360px. A long unbroken name (an athlete with no name
+  shows their email's local part; an imported plan title can have no spaces)
+  wraps too: `overflow-wrap: anywhere` on the page, because `break-word`
+  doesn't lower a flex item's minimum width. Desktop screenshots at 1280×720
+  are pixel-identical to main.
   **Decision: the designer is not made editable on a phone.** Under 900px
   `designer.html` hides the island's mount and shows a server-rendered message
   with links to deliver the block (the island's own `?week=` target), the
@@ -1716,7 +1720,11 @@ _(Append dated entries here as decisions land.)_
   instead. Plain HTML and a media query rather than a React branch: it's there
   before the bundle loads, and the island still mounts underneath, so a window
   that grows past 900px switches straight to the editor. The mount now scrolls
-  (`overflow: auto`, the 1240px floor moved to the island's own root) instead
+  (`overflow: auto`; the 1240px floor stays on the island's own root) instead
   of clipping, so nothing is unreachable between 900 and 1240px. There is no
   separate "athlete preview" page (the preview is a panel inside the
-  designer), so the fallback links the athlete's profile. No migration.
+  designer), so the fallback links the athlete's profile.
+  `e2e/test_meso_coach_mobile.py` checks each page at all three sizes, the
+  fallback's links for a client plan and a template, and long names. Each
+  check was shown to fail with the rule it covers broken, and the page
+  checks also fail against main's files. No migration.
