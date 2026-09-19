@@ -675,6 +675,66 @@ class TourFunnelView(UserPassesTestMixin, TemplateView):
         return ctx
 
 
+class ProductAnalyticsView(UserPassesTestMixin, TemplateView):
+    """Owner-facing product-analytics dashboard (#509 slice 2).
+
+    The staff read-out of first-party ``Event`` usage plus Meso's existing
+    tables: active users, the invite→delivery→log activation funnel, feature
+    adoption, and Meso's own transactional email — the web complement to
+    querying ``Event`` directly in the admin. Aggregation lives in
+    ``presenters.product_analytics``.
+
+    Gate mirrors ``TourFunnelView``/``UsageDashboardView`` exactly: anonymous
+    bounces to login (``UserPassesTestMixin`` default); an authenticated
+    non-staff user gets a flat 403.
+
+    ``?days=7|30|90`` picks the report window (default 30; anything else
+    degrades to 30 with a flashed warning), parsed exactly like
+    ``notifications.EmailDashboardView._days``.
+    """
+
+    template_name = "meso/product_analytics.html"
+
+    def test_func(self):
+        return self.request.user.is_staff
+
+    def handle_no_permission(self):
+        if self.request.user.is_authenticated:
+            raise PermissionDenied
+        return super().handle_no_permission()
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        days = self._days()
+        result = presenters.product_analytics(days=days, now=timezone.now())
+        # The presenter's own "active" key (active-user counts) would collide
+        # with the nav's "active" flag (which page is highlighted) below — pull
+        # it out under its own name before that assignment overwrites it.
+        ctx["active_users"] = result.pop("active")
+        ctx.update(result)
+        ctx["active"] = "analytics"
+        ctx["email_dashboard_url"] = (
+            reverse("notifications:email_dashboard") + f"?days={days}"
+        )
+        return ctx
+
+    def _days(self):
+        """The report window (in days) from ``?days=``; 30 on bad/missing input."""
+        raw = self.request.GET.get("days")
+        if raw:
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError):
+                parsed = None
+            if parsed in (7, 30, 90):
+                return parsed
+            messages.error(
+                self.request,
+                f"Ignoring invalid days {raw!r}; showing the last 30 days.",
+            )
+        return 30
+
+
 class CoachBillingView(LoginRequiredMixin, TemplateView):
     """Coach-facing billing & plan page (agent-usage — coach surface).
 

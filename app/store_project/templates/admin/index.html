@@ -33,6 +33,7 @@ visible regardless of app-list length.
         <tr><th scope="row"><a href="{% url 'notifications:email_dashboard' %}">Email deliverability</a></th></tr>
         <tr><th scope="row"><a href="{% url 'meso:usage_dashboard' %}">Meso usage</a></th></tr>
         <tr><th scope="row"><a href="{% url 'meso:tour_funnel' %}">Meso tour funnel</a></th></tr>
+        <tr><th scope="row"><a href="{% url 'meso:product_analytics' %}">Meso product analytics</a></th></tr>
       </table>
     </div>
     {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}

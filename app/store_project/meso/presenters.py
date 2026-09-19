@@ -9,15 +9,29 @@ recent-completed-sessions feed) are now wired off real logged data via
 until those surfaces grow their own slices.
 """
 
+import datetime
 import math
+import statistics
 from collections import defaultdict
 
+from django.db.models import CharField
 from django.db.models import Count
 from django.db.models import Exists
+from django.db.models import Min
 from django.db.models import OuterRef
+from django.db.models import Q
+from django.db.models import Subquery
+from django.db.models.functions import Cast
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.timesince import timesince
+
+from store_project.analytics.events import EventName
+from store_project.analytics.models import Event
+from store_project.notifications.models import EmailEvent
+from store_project.notifications.models import EmailKind
+from store_project.notifications.models import SentEmail
+from store_project.users.models import User
 
 from . import adherence
 from . import tour
@@ -27,7 +41,11 @@ from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachSubscription
+from .models import Mesocycle
 from .models import Plan
+from .models import PlanAction
+from .models import PushSubscription
+from .models import Session
 from .models import SessionLog
 from .models import TourEvent
 from .models import Week
@@ -1824,3 +1842,688 @@ def tour_funnel(*, variant=None, since=None):
         "funnel": funnel,
         "total_events": qs.count(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Product analytics (#509 slice 2): the staff dashboard at /meso/analytics/.
+#
+# ``track()`` (``analytics/track.py``) writes one ``Event`` row per first-party
+# action; this rolls those up alongside the pre-existing Meso tables (``Plan``/
+# ``PlanAction``/``WeekDelivery``/``AgentProposalBatch``/``CoachInvite``/
+# ``CoachAthlete``/``SessionLog``/``PushSubscription``/``CoachSubscription``)
+# into one owner-facing read of active users, the invite→delivery→log
+# activation funnel, feature adoption, and Meso's own transactional email.
+# Everything here is ORM aggregation — ``values()``/``annotate()``/
+# ``aggregate()``, correlated ``Subquery``/``OuterRef``, ``pk__in=<queryset>``
+# — so the view runs a fixed number of queries regardless of how much data
+# exists. The only rows ever loaded into Python are the two funnel cohorts
+# (bounded by the window; needed for ``statistics.median`` since SQLite has no
+# percentile function). See ``docs/meso/decisions.md`` "First-party usage
+# events (#509)" for the product rationale.
+# ---------------------------------------------------------------------------
+
+#: Event names that count as "the coach did something" (C6 below).
+COACH_EVENT_NAMES = (
+    EventName.PLAN_CREATED,
+    EventName.TEMPLATE_IMPORTED,
+    EventName.AGENT_PROPOSAL_RUN,
+    EventName.BATCH_APPLIED,
+    EventName.BLOCK_DELIVERED,
+    EventName.INVITE_SENT,
+)
+
+#: ``SentEmail``/``EmailEvent`` kinds the Email section reports on, in display
+#: order — the four Meso-authored kinds. Account/marketing/store transactional
+#: kinds live on the SES deliverability dashboard instead.
+MESO_EMAIL_KINDS = (
+    EmailKind.BLOCK_DELIVERED,
+    EmailKind.COACH_INVITE,
+    EmailKind.INVITE_REMINDER,
+    EmailKind.COACH_REQUEST,
+)
+
+
+def _ineligible_users():
+    """Users excluded everywhere below: staff, or a throwaway sandbox account.
+
+    Mirrors ``analytics.track.track()``'s own exclusion exactly, so a coach
+    invisible to the event ledger is invisible here too. Left unordered
+    (``.order_by()``) since it's only ever used as an ``__in=`` subquery.
+    """
+    return User.objects.filter(
+        Q(is_staff=True) | Q(sandbox_session__isnull=False)
+    ).order_by()
+
+
+def _subject_ids(queryset):
+    """String pks of ``queryset``'s rows, for matching ``Event.subject_id``.
+
+    ``subject_id`` is a plain string column — non-numeric subject ids exist
+    elsewhere, so it's never cast *from*. This casts the known-integer pk side
+    instead, so ``Event.objects.filter(subject_type=..., subject_id__in=
+    _subject_ids(qs))`` can compare it against an AutoField-keyed table.
+    """
+    return (
+        queryset.order_by()
+        .annotate(sid=Cast("pk", output_field=CharField()))
+        .values("sid")
+    )
+
+
+def _demo_event_exclusion():
+    """Q excluding ``Event`` rows whose subject sits on a demo relationship's plan.
+
+    A demo plan (``CoachAthlete.is_demo``) has no FK from ``Event`` to filter
+    through — subjects are opaque ``(subject_type, subject_id)`` strings — so
+    exclusion has to name every subject type demo coach activity shows up as:
+    the plan itself, one of its mesocycles (blocks), or one of its agent runs.
+    """
+    demo_plans = Plan.objects.filter(relationship__is_demo=True)
+    demo_mesocycles = Mesocycle.objects.filter(plan__relationship__is_demo=True)
+    demo_batches = AgentProposalBatch.objects.filter(plan__relationship__is_demo=True)
+    return (
+        Q(subject_type="meso.plan", subject_id__in=_subject_ids(demo_plans))
+        | Q(
+            subject_type="meso.mesocycle",
+            subject_id__in=_subject_ids(demo_mesocycles),
+        )
+        | Q(
+            subject_type="meso.agentproposalbatch",
+            subject_id__in=_subject_ids(demo_batches),
+        )
+    )
+
+
+def product_analytics(*, days, now=None):
+    """Aggregate Meso's usage tables into the staff dashboard's context (#509).
+
+    ``now`` defaults to ``timezone.now()``. ``days`` sets the report's own
+    window (``[since, now]``, inclusive both ends) for the funnel, feature
+    adoption, and email sections; active-user WAU/MAU are always the trailing
+    7/30 days regardless of ``days`` (``window`` uses ``days``). Every count
+    excludes ``_ineligible_users()`` (staff and sandbox accounts) and, for
+    coach-side rows, demo-relationship activity (``CoachAthlete.is_demo`` —
+    self-coaching (``is_self``) is real coach activity and stays in; it's only
+    ever excluded from the *athlete* side, since it isn't a client training).
+
+    Contract (the view + template read these exact keys):
+
+    - ``days`` / ``since`` / ``now`` — the resolved window.
+    - ``events_since`` — the earliest ``Event`` ever recorded (``None`` before
+      the first one), so the template can caveat every Event-sourced number as
+      only meaningful since that date (the #509 slice-1 deploy).
+    - ``active`` — ``{"coaches": {...}, "athletes": {...}}``, each
+      ``{"wau", "mau", "window"}`` distinct-user counts.
+    - ``funnel`` — the three activation-funnel rows (``email_invite``,
+      ``athlete_request``, ``all``), in that order.
+    - ``features`` — the twelve feature-adoption rows, in the fixed order the
+      dashboard displays them.
+    - ``email`` — ``{"rows": [...], "totals": {...}}`` for the Meso-authored
+      ``SentEmail`` kinds.
+    """
+    now = now or timezone.now()
+    since = now - datetime.timedelta(days=days)
+    wau_since = now - datetime.timedelta(days=7)
+    mau_since = now - datetime.timedelta(days=30)
+
+    events_since = Event.objects.aggregate(m=Min("created"))["m"]
+
+    return {
+        "days": days,
+        "since": since,
+        "now": now,
+        "events_since": events_since,
+        "active": {
+            "coaches": _active_role_counts(
+                _coach_activity_sources,
+                wau_since=wau_since,
+                mau_since=mau_since,
+                since=since,
+                now=now,
+            ),
+            "athletes": _active_role_counts(
+                _athlete_activity_sources,
+                wau_since=wau_since,
+                mau_since=mau_since,
+                since=since,
+                now=now,
+            ),
+        },
+        "funnel": _activation_funnel(since=since, until=now),
+        "features": _feature_adoption(since=since, until=now),
+        "email": _email_section(since=since, until=now),
+    }
+
+
+# -- 1. active users --------------------------------------------------------
+
+
+def _active_role_counts(source_builder, *, wau_since, mau_since, since, now):
+    """One distinct-user ``.count()`` per window, for one role (coach/athlete).
+
+    ``source_builder(lower, upper)`` returns the list of user-id subqueries
+    for that role's activity sources in ``[lower, upper]`` (C1-C6 or A1-A2);
+    this ORs them together and counts distinct, ineligible-excluded users —
+    three queries total (wau/mau/window), fixed regardless of data size.
+    """
+    ineligible = _ineligible_users()
+
+    def _count(lower):
+        sources = source_builder(lower, now)
+        q = Q(pk__in=sources[0])
+        for source in sources[1:]:
+            q |= Q(pk__in=source)
+        return User.objects.exclude(pk__in=ineligible).filter(q).count()
+
+    return {
+        "wau": _count(wau_since),
+        "mau": _count(mau_since),
+        "window": _count(since),
+    }
+
+
+def _coach_activity_sources(since, until):
+    """User-id subqueries for every active-coach source in ``[since, until]`` (C1-C6)."""
+    plan_actions = PlanAction.objects.filter(
+        created_at__gte=since, created_at__lte=until
+    )
+    plans_created = Plan.objects.filter(created__gte=since, created__lte=until)
+    deliveries = WeekDelivery.objects.filter(
+        delivered_at__gte=since, delivered_at__lte=until
+    ).exclude(week__mesocycle__plan__relationship__is_demo=True)
+    agent_batches = (
+        AgentProposalBatch.objects.filter(created_at__gte=since, created_at__lte=until)
+        .exclude(trigger=AgentProposalBatch.Trigger.EVAL)
+        .exclude(plan__relationship__is_demo=True)
+    )
+    invites = CoachInvite.objects.filter(created_at__gte=since, created_at__lte=until)
+    coach_events = Event.objects.filter(
+        name__in=COACH_EVENT_NAMES, created__gte=since, created__lte=until
+    ).exclude(_demo_event_exclusion())
+
+    return [
+        # C1 — PlanAction: relationship coach (not demo) + template owner.
+        plan_actions.filter(plan__relationship__is_demo=False)
+        .order_by()
+        .values_list("plan__relationship__coach_id", flat=True),
+        plan_actions.filter(plan__is_template=True)
+        .order_by()
+        .values_list("plan__owner_id", flat=True),
+        # C2 — Plan.created: the same relationship/template split.
+        plans_created.filter(relationship__is_demo=False)
+        .order_by()
+        .values_list("relationship__coach_id", flat=True),
+        plans_created.filter(is_template=True)
+        .order_by()
+        .values_list("owner_id", flat=True),
+        # C3 — WeekDelivery (demo already excluded above).
+        deliveries.order_by().values_list(
+            "week__mesocycle__plan__relationship__coach_id", flat=True
+        ),
+        # C4 — AgentProposalBatch (eval trigger + demo already excluded above).
+        agent_batches.order_by().values_list("coach_id", flat=True),
+        # C5 — CoachInvite.
+        invites.order_by().values_list("coach_id", flat=True),
+        # C6 — coach-named Event (demo subjects already excluded above).
+        coach_events.order_by().values_list("actor_id", flat=True),
+    ]
+
+
+def _athlete_activity_sources(since, until):
+    """User-id subqueries for every active-athlete source in ``[since, until]`` (A1-A2)."""
+    logged_sets = (
+        SessionLog.objects.filter(
+            created_at__gte=since, created_at__lte=until, sets__isnull=False
+        )
+        .exclude(session__week__mesocycle__plan__relationship__is_demo=True)
+        .exclude(session__week__mesocycle__plan__relationship__is_self=True)
+        .order_by()
+        .values_list("athlete_id", flat=True)
+    )
+    self_sessionlog_ids = _subject_ids(
+        SessionLog.objects.filter(
+            session__week__mesocycle__plan__relationship__is_self=True
+        )
+    )
+    self_session_ids = _subject_ids(
+        Session.objects.filter(week__mesocycle__plan__relationship__is_self=True)
+    )
+    athlete_events = (
+        Event.objects.filter(
+            name__in=(EventName.SET_LOGGED, EventName.SESSION_OPENED),
+            created__gte=since,
+            created__lte=until,
+        )
+        .exclude(
+            Q(subject_type="meso.sessionlog", subject_id__in=self_sessionlog_ids)
+            | Q(subject_type="meso.session", subject_id__in=self_session_ids)
+        )
+        .order_by()
+        .values_list("actor_id", flat=True)
+    )
+    return [
+        logged_sets,  # A1
+        athlete_events,  # A2
+    ]
+
+
+# -- 2. activation funnel ----------------------------------------------------
+
+
+def _activation_funnel(*, since, until):
+    """The three funnel rows: ``email_invite``, ``athlete_request``, ``all`` (#509 §2)."""
+    email_rows = _email_invite_cohort(since, until)
+    request_rows = _athlete_request_cohort(since, until)
+    return [
+        _funnel_row("email_invite", "Email invite", email_rows),
+        _funnel_row("athlete_request", "Athlete request", request_rows),
+        _funnel_row("all", "All", email_rows + request_rows),
+    ]
+
+
+def _email_invite_cohort(since, until):
+    """Raw cohort rows for the ``email_invite`` path — one query, window-bounded.
+
+    ``t_delivered``/``t_logged`` are correlated subqueries (``Subquery`` +
+    ``OuterRef``), the second referencing the first's own annotation, so
+    nothing beyond the cohort itself (invites *sent* in the window) ever loads
+    into Python.
+    """
+    ineligible = _ineligible_users()
+    delivered_sq = (
+        WeekDelivery.objects.filter(
+            week__mesocycle__plan__relationship_id=OuterRef("accepted_link_id"),
+            delivered_at__gte=OuterRef("responded_at"),
+        )
+        .order_by("delivered_at")
+        .values("delivered_at")[:1]
+    )
+    logged_sq = (
+        SessionLog.objects.filter(
+            athlete_id=OuterRef("accepted_by_id"),
+            session__week__mesocycle__plan__relationship_id=OuterRef(
+                "accepted_link_id"
+            ),
+            sets__isnull=False,
+            created_at__gte=OuterRef("t_delivered"),
+        )
+        .order_by("created_at")
+        .values("created_at")[:1]
+    )
+    raw = (
+        CoachInvite.objects.filter(created_at__gte=since, created_at__lte=until)
+        .exclude(coach__in=ineligible)
+        .exclude(accepted_by__in=ineligible)
+        .annotate(t_delivered=Subquery(delivered_sq))
+        .annotate(t_logged=Subquery(logged_sq))
+        .values("created_at", "status", "responded_at", "t_delivered", "t_logged")
+    )
+    rows = []
+    for row in raw:
+        t_accepted = (
+            row["responded_at"]
+            if row["status"] == CoachInvite.Status.ACCEPTED
+            else None
+        )
+        t_delivered = row["t_delivered"] if t_accepted is not None else None
+        t_logged = row["t_logged"] if t_delivered is not None else None
+        rows.append(
+            {
+                "t_sent": row["created_at"],
+                "t_accepted": t_accepted,
+                "t_delivered": t_delivered,
+                "t_logged": t_logged,
+            }
+        )
+    return rows
+
+
+def _athlete_request_cohort(since, until):
+    """Raw cohort rows for the ``athlete_request`` path (#509 §2) — one query.
+
+    Excludes any link that's some ``CoachInvite.accepted_link`` — an athlete's
+    pending request the coach's email invite happened to also claim — so it's
+    never counted under both paths.
+    """
+    ineligible = _ineligible_users()
+    claimed_link_ids = CoachInvite.objects.filter(accepted_link__isnull=False).values(
+        "accepted_link_id"
+    )
+    delivered_sq = (
+        WeekDelivery.objects.filter(
+            week__mesocycle__plan__relationship_id=OuterRef("pk"),
+            delivered_at__gte=OuterRef("responded_at"),
+        )
+        .order_by("delivered_at")
+        .values("delivered_at")[:1]
+    )
+    logged_sq = (
+        SessionLog.objects.filter(
+            athlete_id=OuterRef("athlete_id"),
+            session__week__mesocycle__plan__relationship_id=OuterRef("pk"),
+            sets__isnull=False,
+            created_at__gte=OuterRef("t_delivered"),
+        )
+        .order_by("created_at")
+        .values("created_at")[:1]
+    )
+    raw = (
+        CoachAthlete.objects.filter(
+            created_at__gte=since,
+            created_at__lte=until,
+            invited_by=CoachAthlete.InvitedBy.ATHLETE,
+            is_demo=False,
+            is_self=False,
+        )
+        .exclude(pk__in=claimed_link_ids)
+        .exclude(coach__in=ineligible)
+        .exclude(athlete__in=ineligible)
+        .annotate(t_delivered=Subquery(delivered_sq))
+        .annotate(t_logged=Subquery(logged_sq))
+        .values("created_at", "status", "responded_at", "t_delivered", "t_logged")
+    )
+    accepted_statuses = (CoachAthlete.Status.ACTIVE, CoachAthlete.Status.ENDED)
+    rows = []
+    for row in raw:
+        t_accepted = row["responded_at"] if row["status"] in accepted_statuses else None
+        t_delivered = row["t_delivered"] if t_accepted is not None else None
+        t_logged = row["t_logged"] if t_delivered is not None else None
+        rows.append(
+            {
+                "t_sent": row["created_at"],
+                "t_accepted": t_accepted,
+                "t_delivered": t_delivered,
+                "t_logged": t_logged,
+            }
+        )
+    return rows
+
+
+def _funnel_row(key, label, rows):
+    """One funnel row's counts + step medians from a path's normalized rows."""
+    accepted = [r for r in rows if r["t_accepted"] is not None]
+    delivered = [r for r in accepted if r["t_delivered"] is not None]
+    logged = [r for r in delivered if r["t_logged"] is not None]
+    return {
+        "key": key,
+        "label": label,
+        "sent": len(rows),
+        "accepted": len(accepted),
+        "delivered": len(delivered),
+        "logged": len(logged),
+        "median_to_accept": _median_delta(
+            r["t_accepted"] - r["t_sent"] for r in accepted
+        ),
+        "median_to_deliver": _median_delta(
+            r["t_delivered"] - r["t_accepted"] for r in delivered
+        ),
+        "median_to_log": _median_delta(
+            r["t_logged"] - r["t_delivered"] for r in logged
+        ),
+    }
+
+
+def _median_delta(deltas):
+    """``statistics.median`` over an iterable of ``timedelta``, or ``None`` if empty."""
+    deltas = list(deltas)
+    return statistics.median(deltas) if deltas else None
+
+
+# -- 3. feature adoption ------------------------------------------------------
+
+
+def _coach_event_stats(name, *, since, until, extra=None):
+    """``{"users", "times"}`` for a coach-side ``Event``-sourced feature row.
+
+    Excludes ineligible actors and demo-subject events, same as C6.
+    """
+    qs = Event.objects.filter(name=name, created__gte=since, created__lte=until)
+    qs = qs.exclude(actor__in=_ineligible_users()).exclude(_demo_event_exclusion())
+    if extra:
+        qs = qs.filter(**extra)
+    return qs.aggregate(users=Count("actor", distinct=True), times=Count("pk"))
+
+
+def _athlete_event_stats(name, *, since, until):
+    """``{"users", "times"}`` for an athlete-side ``Event``-sourced feature row."""
+    qs = Event.objects.filter(
+        name=name, created__gte=since, created__lte=until
+    ).exclude(actor__in=_ineligible_users())
+    return qs.aggregate(users=Count("actor", distinct=True), times=Count("pk"))
+
+
+def _agent_batch_stats(trigger, *, since, until):
+    """``{"users", "times"}`` for the ``agent_draft``/``agent_run`` rows."""
+    qs = (
+        AgentProposalBatch.objects.filter(
+            trigger=trigger, created_at__gte=since, created_at__lte=until
+        )
+        .exclude(coach__in=_ineligible_users())
+        .exclude(plan__relationship__is_demo=True)
+    )
+    return qs.aggregate(users=Count("coach", distinct=True), times=Count("pk"))
+
+
+def _block_delivered_stats(*, since, until):
+    """``users`` = distinct coaches; ``times`` = distinct (block, delivered_at) pairs.
+
+    One block delivery writes a ``WeekDelivery`` per week, all stamped with
+    the same ``delivered_at`` — counting rows would overcount a multi-week
+    block as several "times".
+    """
+    qs = (
+        WeekDelivery.objects.filter(delivered_at__gte=since, delivered_at__lte=until)
+        .exclude(week__mesocycle__plan__relationship__coach__in=_ineligible_users())
+        .exclude(week__mesocycle__plan__relationship__is_demo=True)
+    )
+    users = qs.aggregate(
+        n=Count("week__mesocycle__plan__relationship__coach", distinct=True)
+    )["n"]
+    times = qs.values("week__mesocycle_id", "delivered_at").distinct().count()
+    return {"users": users, "times": times}
+
+
+def _invite_sent_stats(*, since, until):
+    """``{"users", "times"}`` for the ``invite_sent`` row."""
+    qs = CoachInvite.objects.filter(
+        created_at__gte=since, created_at__lte=until
+    ).exclude(coach__in=_ineligible_users())
+    return qs.aggregate(users=Count("coach", distinct=True), times=Count("pk"))
+
+
+def _trial_started_stats(*, since, until):
+    """Trials that *started* in the window — ``trial_end - TRIAL_DAYS`` falls in it."""
+    lead = datetime.timedelta(days=CoachSubscription.TRIAL_DAYS)
+    qs = CoachSubscription.objects.filter(
+        trial_end__gte=since + lead, trial_end__lte=until + lead
+    ).exclude(coach__in=_ineligible_users())
+    return qs.aggregate(users=Count("coach", distinct=True), times=Count("pk"))
+
+
+def _push_enabled_stats(*, since, until):
+    """``{"users", "times"}`` for the ``push_enabled`` row."""
+    qs = PushSubscription.objects.filter(
+        created_at__gte=since, created_at__lte=until
+    ).exclude(athlete__in=_ineligible_users())
+    return qs.aggregate(users=Count("athlete", distinct=True), times=Count("pk"))
+
+
+def _feature_row(key, label, who, source, stats):
+    return {"key": key, "label": label, "who": who, "source": source, **stats}
+
+
+def _feature_adoption(*, since, until):
+    """The twelve feature-adoption rows (#509 §3), in display order.
+
+    Each row is its own independent ``.aggregate()``/``.count()`` call — a
+    fixed number of queries, never one per row of underlying data.
+    """
+    return [
+        _feature_row(
+            "plan_created",
+            "New program",
+            "coaches",
+            "Event plan_created",
+            _coach_event_stats(EventName.PLAN_CREATED, since=since, until=until),
+        ),
+        _feature_row(
+            "agent_draft",
+            "Draft with AI",
+            "coaches",
+            "AgentProposalBatch (draft)",
+            _agent_batch_stats(
+                AgentProposalBatch.Trigger.DRAFT, since=since, until=until
+            ),
+        ),
+        _feature_row(
+            "agent_run",
+            "Agent run",
+            "coaches",
+            "AgentProposalBatch (manual)",
+            _agent_batch_stats(
+                AgentProposalBatch.Trigger.MANUAL, since=since, until=until
+            ),
+        ),
+        _feature_row(
+            "batch_applied",
+            "Agent changes applied",
+            "coaches",
+            "Event batch_applied",
+            _coach_event_stats(EventName.BATCH_APPLIED, since=since, until=until),
+        ),
+        _feature_row(
+            "template_imported",
+            "Template imported",
+            "coaches",
+            "Event template_imported",
+            _coach_event_stats(EventName.TEMPLATE_IMPORTED, since=since, until=until),
+        ),
+        _feature_row(
+            "block_delivered",
+            "Block delivered",
+            "coaches",
+            "WeekDelivery",
+            _block_delivered_stats(since=since, until=until),
+        ),
+        _feature_row(
+            "invite_sent",
+            "Invite sent",
+            "coaches",
+            "CoachInvite",
+            _invite_sent_stats(since=since, until=until),
+        ),
+        _feature_row(
+            "trial_started",
+            "Trial started",
+            "coaches",
+            "CoachSubscription.trial_end",
+            _trial_started_stats(since=since, until=until),
+        ),
+        _feature_row(
+            "subscription_started",
+            "Paid subscription started",
+            "coaches",
+            "Event subscription_started (stripe)",
+            _coach_event_stats(
+                EventName.SUBSCRIPTION_STARTED,
+                since=since,
+                until=until,
+                extra={"props__via": "stripe"},
+            ),
+        ),
+        _feature_row(
+            "subscription_cancelled",
+            "Subscription cancelled",
+            "coaches",
+            "Event subscription_cancelled",
+            _coach_event_stats(
+                EventName.SUBSCRIPTION_CANCELLED, since=since, until=until
+            ),
+        ),
+        _feature_row(
+            "push_enabled",
+            "Push notifications enabled",
+            "athletes",
+            "PushSubscription",
+            _push_enabled_stats(since=since, until=until),
+        ),
+        _feature_row(
+            "session_completed",
+            "Session completed",
+            "athletes",
+            "Event session_completed",
+            _athlete_event_stats(EventName.SESSION_COMPLETED, since=since, until=until),
+        ),
+    ]
+
+
+# -- 4. email -----------------------------------------------------------------
+
+
+def _email_row(kind, label, counts):
+    """One email row's rate math, shared between a per-kind row and ``totals``."""
+    sent = counts["sent"]
+    row = {
+        "sent": sent,
+        "delivered": counts["delivered"],
+        "opened": counts["opened"],
+        "clicked": counts["clicked"],
+        "open_rate": _rate(counts["opened"], sent),
+        "click_rate": _rate(counts["clicked"], sent),
+    }
+    if kind is not None:
+        row = {"kind": kind, "label": label, **row}
+    return row
+
+
+def _rate(n, sent):
+    """A percentage of ``sent``, rounded and capped at 100; ``None`` at 0 sent."""
+    return min(100, round(100 * n / sent)) if sent else None
+
+
+def _email_section(*, since, until):
+    """The Email section: per-kind + totals, Meso-authored kinds only (#509 §4).
+
+    One query: ``Count(..., filter=Q(...), distinct=True)`` per event type
+    counts *distinct messages* with at least one such event, not raw event
+    rows (two opens on one message is one "opened" message).
+    """
+    kind_labels = dict(EmailKind.choices)
+    qs = SentEmail.objects.filter(
+        kind__in=MESO_EMAIL_KINDS, sent_at__gte=since, sent_at__lte=until
+    ).exclude(user__in=_ineligible_users())
+    counts_by_kind = {
+        row["kind"]: row
+        for row in qs.values("kind").annotate(
+            sent=Count("pk", distinct=True),
+            delivered=Count(
+                "pk",
+                filter=Q(events__event_type=EmailEvent.EventType.DELIVERY),
+                distinct=True,
+            ),
+            opened=Count(
+                "pk",
+                filter=Q(events__event_type=EmailEvent.EventType.OPEN),
+                distinct=True,
+            ),
+            clicked=Count(
+                "pk",
+                filter=Q(events__event_type=EmailEvent.EventType.CLICK),
+                distinct=True,
+            ),
+        )
+    }
+    empty = {"sent": 0, "delivered": 0, "opened": 0, "clicked": 0}
+    rows = [
+        _email_row(kind, kind_labels[kind], counts_by_kind.get(kind, empty))
+        for kind in MESO_EMAIL_KINDS
+    ]
+    totals = _email_row(
+        None,
+        None,
+        {
+            key: sum(row[key] for row in rows)
+            for key in ("sent", "delivered", "opened", "clicked")
+        },
+    )
+    return {"rows": rows, "totals": totals}
