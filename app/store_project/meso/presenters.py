@@ -2485,7 +2485,7 @@ def _feature_adoption(*, since, until):
         ),
         _feature_row(
             "subscription_started",
-            "Paid subscription started",
+            "Pro subscription started",
             "coaches",
             "Event subscription_started (stripe)",
             _coach_event_stats(

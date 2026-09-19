@@ -413,8 +413,10 @@ event; the batch has no applied-at time), Template imported (event), Block
 delivered (`WeekDelivery`, one per block: its week rows share one
 `delivered_at`), Invite sent (`CoachInvite`; a resend reuses the row and isn't
 counted again), Trial started (`CoachSubscription.trial_end` minus the 14-day
-trial), Paid subscription started (`subscription_started` event with
-`via=stripe`), Subscription cancelled (event), Push notifications enabled
+trial), Pro subscription started (`subscription_started` event with
+`via=stripe` — fires when the Stripe subscription is created, including a
+coach who subscribes during the trial and isn't charged until it ends),
+Subscription cancelled (event), Push notifications enabled
 (`PushSubscription`, athletes; an unsubscribed or rejected device's row is
 deleted, so this counts subscriptions still on record, dated by the device's
 first registration even if it later changed hands) and Session completed
