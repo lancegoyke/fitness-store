@@ -154,3 +154,20 @@ class TestSandboxExpiryScheduleRegistration:
         module_path, _, attr = self.FUNC.rpartition(".")
         resolved = getattr(importlib.import_module(module_path), attr)
         assert callable(resolved)
+
+
+class TestSettleScheduleRegistration:
+    """The hourly 24h-settle sweep is registered (5b, ``settle.py``)."""
+
+    NAME = "meso-settle-logs"
+    FUNC = "store_project.meso.tasks.settle_logs"
+
+    def test_settle_schedule_registered_hourly(self):
+        sched = Schedule.objects.get(name=self.NAME)
+        assert sched.func == self.FUNC
+        assert sched.schedule_type == Schedule.HOURLY
+
+    def test_settle_func_is_importable_callable(self):
+        module_path, _, attr = self.FUNC.rpartition(".")
+        resolved = getattr(importlib.import_module(module_path), attr)
+        assert callable(resolved)

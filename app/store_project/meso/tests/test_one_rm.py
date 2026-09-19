@@ -427,9 +427,14 @@ class TestLogEndpointRefreshesOneRm:
         assert resp.status_code == 200
         assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
 
-    def test_downgrade_to_pending_clears_the_estimate(self, client):
-        # A done log creates the row; downgrading the same session back to pending
-        # (no completed performance remains) must clear it, not leave it stale.
+    def test_pending_save_on_a_done_log_keeps_done_and_the_estimate(self, client):
+        # 5b (settle.py): status is STICKY once DONE — a posted "pending" on an
+        # already-DONE log no longer downgrades it (the sweep can now flip a log
+        # to DONE server-side, and a tab left open across that settle, or a
+        # replayed offline-queued save, must not silently undo it; see
+        # ``athlete_log_session``'s docstring). This test used to pin the OLD
+        # behaviour (a downgrade cleared the estimate) — it now pins the
+        # opposite: the log stays DONE and the estimate survives.
         athlete = UserFactory()
         _, session, (squat,) = make_session(
             athlete, prescriptions=[{"name": "Back Squat"}]
@@ -447,7 +452,9 @@ class TestLogEndpointRefreshesOneRm:
         post_log(client, session, {"status": "done", "sets": sets})
         assert AthleteOneRm.objects.filter(athlete=athlete).exists()
         post_log(client, session, {"status": "pending", "sets": sets})
-        assert not AthleteOneRm.objects.filter(athlete=athlete).exists()
+        log = SessionLog.objects.get(session=session, athlete=athlete)
+        assert log.status == SessionLog.Status.DONE
+        assert AthleteOneRm.objects.filter(athlete=athlete).exists()
 
     def test_relogging_lower_recomputes_downward(self, client):
         athlete = UserFactory()

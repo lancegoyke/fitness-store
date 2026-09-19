@@ -37,3 +37,8 @@ def agent_margin_alert():
 def expire_sandboxes():
     """Reap expired demo-sandbox coach accounts (``meso_expire_sandboxes``)."""
     call_command("meso_expire_sandboxes")
+
+
+def settle_logs():
+    """Flip quiet PENDING session logs to DONE (5b, ``meso_settle_logs``)."""
+    call_command("meso_settle_logs")

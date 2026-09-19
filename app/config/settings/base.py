@@ -337,6 +337,10 @@ MESO_MARGIN_ALERT_THRESHOLD = os.environ.get("MESO_MARGIN_ALERT_THRESHOLD") or "
 # as it; this is how long the account (and its data) lives before the Phase 2
 # expiry sweep reaps it. See docs/meso/public-sandbox-demo-plan.md.
 MESO_SANDBOX_TTL_HOURS = int(os.environ.get("MESO_SANDBOX_TTL_HOURS", "48"))
+# 24h settle sweep (5b, meso/settle.py): how long a PENDING SessionLog with at
+# least one logged set (typed or structured) sits with no athlete activity
+# before the hourly sweep promotes it to DONE. See SessionLog.last_activity_at.
+MESO_SETTLE_QUIET_HOURS = int(os.environ.get("MESO_SETTLE_QUIET_HOURS", "24"))
 # Sandbox abuse controls (Phase 2). Each ``/meso/demo/`` visit mints real DB
 # rows, so entry is bounded two ways: a per-IP creation rate (cache-counted,
 # rolling hour) and a global cap on live sandboxes (the hourly expiry sweep

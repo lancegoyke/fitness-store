@@ -64,6 +64,14 @@ un-versioned approach we're moving away from).
   stranding it `drafting`. No migration — the agent job rides the same cluster +
   ORM broker the sweeps already use.
 
+- **The 24 h settle sweep** (Meso 5b, `meso/0047_register_settle_schedule`):
+  hourly `meso-settle-logs` → `tasks.settle_logs` → `meso_settle_logs`
+  (logic in `meso/settle.py`). Flips a PENDING `SessionLog` with sets to DONE
+  after `MESO_SETTLE_QUIET_HOURS` without an athlete edit, so typed-but-never-
+  "logged" sessions reach the DONE-only reads. Takes the same `Session` row lock
+  as the athlete write paths. See `parse-at-commit-plan.md` ("5b settle —
+  decisions").
+
 ## Deferred
 
 - **Configurable schedule times / per-coach cadence**; an admin surface beyond
