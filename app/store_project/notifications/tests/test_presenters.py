@@ -151,11 +151,11 @@ class TestByKind:
 
     def test_zero_sent_gives_zero_rate(self):
         since = timezone.now() - datetime.timedelta(days=1)
-        _event(EmailEvent.EventType.OPEN, kind=EmailKind.CONTACT_ACK)
+        _event(EmailEvent.EventType.OPEN, kind=EmailKind.COACH_INVITE)
 
         result = presenters.email_dashboard(since=since)
 
-        row = next(r for r in result["by_kind"] if r["kind"] == EmailKind.CONTACT_ACK)
+        row = next(r for r in result["by_kind"] if r["kind"] == EmailKind.COACH_INVITE)
         assert row["open"] == 1
         assert row["sent"] == 0
         assert row["open_rate"] == 0
@@ -169,10 +169,10 @@ class TestByKind:
 class TestTextOnlyOpenRate:
     """SES can only track an open via a tracking pixel in an HTML part.
 
-    ``account_confirmation``, ``password_reset``, and ``account_notice``
-    are sent as plain text (issue #514) — their
-    ``open_rate`` must be ``None`` regardless of sent/open counts, not a
-    number that implies the metric is meaningful for them.
+    ``account_confirmation``, ``password_reset``, ``account_notice``,
+    ``contact_owner``, and ``contact_ack`` are sent as plain text (issue
+    #514) — their ``open_rate`` must be ``None`` regardless of sent/open
+    counts, not a number that implies the metric is meaningful for them.
     """
 
     @pytest.mark.parametrize("kind", sorted(TEXT_ONLY_KINDS))
