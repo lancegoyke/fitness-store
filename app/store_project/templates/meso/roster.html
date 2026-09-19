@@ -3,7 +3,7 @@
 {% block title %}Roster · Meso{% endblock %}
 
 {% block content %}
-  <div class="meso-page">
+  <div class="meso-page meso-coach">
     <div class="meso-pagehead">
       <div>
         <p class="meso-eyebrow">Coach workspace</p>
@@ -12,7 +12,7 @@
       </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:minmax(0,1fr) 312px;gap:18px;align-items:start;">
+    <div class="meso-roster-split">
       <!-- main column -->
       <div style="display:flex;flex-direction:column;gap:18px;">
 
@@ -99,7 +99,7 @@
         {% endif %}
 
         <div class="meso-card" data-tour="roster-individuals">
-          <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
+          <div class="meso-phone-wrap meso-roster-head" style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line-2);">
             <p class="meso-eyebrow" style="margin:0;">Individuals</p>
             <div class="meso-spacer"></div>
             <span class="meso-row-meta">{{ athletes|length }} athlete{{ athletes|length|pluralize }}</span>
@@ -110,7 +110,7 @@
             {% for a in athletes %}
               <a class="meso-row" href="{% url 'meso:athlete' a.id %}"{% if a.is_self %} data-tour="roster-athlete-row-first"{% endif %}>
                 <div class="meso-avatar {% if a.tone == 'accent' %}meso-avatar--accent{% endif %}">{{ a.initials }}</div>
-                <div style="min-width:0;">
+                <div class="meso-row-main" style="min-width:0;">
                   <div class="meso-row-name">{{ a.name }}</div>
                   <div class="meso-row-meta">{{ a.meta }}</div>
                 </div>
@@ -145,7 +145,7 @@
           {% for inv in pending_invites %}
             <div class="meso-row" style="cursor:default;">
               <div class="meso-avatar" style="background:var(--rail);color:var(--dim);">@</div>
-              <div style="min-width:0;">
+              <div class="meso-row-main" style="min-width:0;">
                 <div class="meso-row-name">{{ inv.email }}</div>
                 {% if inv.is_expired %}
                   <div class="meso-row-meta">Invited {{ inv.when|date:"M j" }} · invite expired</div>
@@ -174,7 +174,7 @@
           {% for req in pending_requests %}
             <div class="meso-row" style="cursor:default;">
               <div class="meso-avatar">{{ req.initials }}</div>
-              <div style="min-width:0;">
+              <div class="meso-row-main" style="min-width:0;">
                 <div class="meso-row-name">{{ req.name }}</div>
                 <div class="meso-row-meta">Requested {{ req.when|date:"M j" }} · wants to train with you</div>
               </div>

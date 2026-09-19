@@ -79,7 +79,13 @@
           {% endblock %}
         </div>
         <div class="meso-spacer"></div>
-        {% block topnav_actions %}{% endblock %}
+        {% comment %}
+          A page's own buttons. The wrapper is `display: contents` on wide
+          screens, so they lay out exactly as direct children of the bar; on a
+          phone (meso.css, #508) it becomes the bar's second row. No whitespace
+          around the block, so `:empty` hides the row when a page has none.
+        {% endcomment %}
+        <div class="meso-topnav-actions">{% block topnav_actions %}{% endblock %}</div>
         {% comment %}
           The corner's job is identity (issue #387): show *who* is signed in —
           the one thing the site nav's Account/Logout links above don't. It

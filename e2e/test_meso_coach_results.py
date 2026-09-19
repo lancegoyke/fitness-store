@@ -18,14 +18,7 @@ from django.test import Client
 from django.urls import reverse
 from playwright.sync_api import expect
 
-pytestmark = [
-    pytest.mark.django_db,
-    # Not at phone-360 yet: the coach's athlete profile renders ~650px wide on
-    # a phone (its fixed 320px column), and at 360 the tap on the off-screen
-    # "Latest session" card misses. That page is #508's coach slice, which
-    # should drop this override.
-    pytest.mark.parametrize("viewport", ["desktop", "phone"], indirect=True),
-]
+pytestmark = pytest.mark.django_db
 
 
 def _log_a_box_squat_set(delivered_plan):

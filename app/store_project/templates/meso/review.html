@@ -8,7 +8,7 @@
 {% endblock %}
 
 {% block content %}
-  <div class="meso-page meso-page--narrow"
+  <div class="meso-page meso-page--narrow meso-coach"
        x-data="mesoReview({{ batch_id }}, '{{ csrf_token }}', {{ is_pending|yesno:'true,false' }}, { {% for c in changes %}'{{ c.id }}': '{% if c.status == 'rejected' %}rejected{% else %}approved{% endif %}',{% endfor %} })">
     <div class="meso-crumbs">
       <a href="{% url 'meso:roster' %}">Roster</a> <span>/</span>
@@ -35,7 +35,7 @@
              :style="statuses[{{ c.id }}] === 'rejected'
                      ? 'opacity:0.55;border-color:var(--line)'
                      : 'border-color:var(--soft-line);box-shadow:0 1px 2px rgba(16,18,22,0.05)'">
-          <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px;">
+          <div class="meso-phone-wrap" style="display:flex;align-items:center;gap:9px;margin-bottom:9px;">
             <span class="meso-badge meso-badge--accent">{{ c.kind }}</span>
             <span class="meso-row-meta">{{ c.day }}</span>
             <div class="meso-spacer"></div>
@@ -53,7 +53,7 @@
 
           <p style="margin:0 0 10px;font-size:12.5px;color:var(--ink);line-height:1.45;">{{ c.rationale }}</p>
 
-          <div style="display:flex;align-items:center;gap:10px;">
+          <div class="meso-phone-wrap" style="display:flex;align-items:center;gap:10px;">
             {% if c.honors %}<span class="meso-badge meso-badge--warn" style="font-weight:600;">Honors: {{ c.honors }}</span>{% endif %}
             <div class="meso-spacer"></div>
             <div class="meso-seg">
@@ -67,7 +67,7 @@
       {% endfor %}
     </div>
 
-    <div class="meso-card meso-card--pad" style="margin-top:16px;display:flex;align-items:center;gap:14px;position:sticky;bottom:16px;">
+    <div class="meso-card meso-card--pad meso-phone-wrap" style="margin-top:16px;display:flex;align-items:center;gap:14px;position:sticky;bottom:16px;">
       <div style="font-size:13px;font-weight:700;"><span x-text="approved"></span> of {{ changes|length }} changes approved</div>
       <div class="meso-row-meta">Rejected edits are discarded — the program keeps its current values.</div>
       <div class="meso-spacer"></div>

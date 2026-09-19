@@ -3,7 +3,7 @@
 {% block title %}Templates · Meso{% endblock %}
 
 {% block content %}
-  <div class="meso-page">
+  <div class="meso-page meso-coach">
     <div class="meso-pagehead">
       <div>
         <p class="meso-eyebrow">Coach workspace</p>
@@ -29,7 +29,7 @@
           </div>
           {% for t in templates %}
             <div class="meso-row" style="cursor:default;align-items:flex-start;flex-wrap:wrap;gap:10px;">
-              <div style="min-width:0;flex:1;">
+              <div class="meso-row-main" style="min-width:0;">
                 <div class="meso-row-name">
                   <a href="{% url 'meso:designer_plan' plan_id=t.pk %}" style="text-decoration:none;color:inherit;">{{ t.title }}</a>
                 </div>

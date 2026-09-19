@@ -292,7 +292,33 @@ class MesoDesignerView(LoginRequiredMixin, TemplateView):
             "signup_url": reverse("meso:sandbox_signup"),
             "price_summary": presenters.PRICE_SUMMARY,
         }
+        ctx["phone_fallback"] = self._phone_fallback(plan, ctx.get("grid_data"))
         return ctx
+
+    @staticmethod
+    def _phone_fallback(plan, grid_data):
+        """What designer.html shows instead of the island under 900px (#508).
+
+        The designer isn't editable on a phone, so a coach who opens it there
+        gets links to what they can use: the athlete's profile, and the deliver
+        screen for the block on screen (the same ``?week=`` as the island's own
+        Deliver link, and none when the block has no live week, as there).
+        A template has no athlete and isn't delivered (``DeliverView`` bounces
+        it back here), so it gets neither.
+        """
+        fallback = {"title": plan.title, "is_template": plan.is_template}
+        if plan.is_template:
+            return fallback
+        athlete = plan.relationship.athlete
+        fallback["athlete_name"] = athlete.display_name()
+        fallback["athlete_url"] = reverse("meso:athlete", kwargs={"pk": athlete.pk})
+        weeks = (grid_data or {}).get("weeks") or []
+        if weeks:
+            deliver_url = reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk})
+            fallback["deliver_url"] = (
+                f"{deliver_url}?{urlencode({'week': weeks[0]['id']})}"
+            )
+        return fallback
 
 
 class RosterView(TemplateView):
