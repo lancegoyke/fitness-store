@@ -595,7 +595,7 @@ def agent_allowance(coach):
     }
 
 
-def billing_state(coach):
+def billing_state(coach, *, checkout_pending=False):
     """The coach's billing/paywall state for the roster (S6 Phase 3).
 
     A template-friendly read over ``billing/access.py`` + the subscription row:
@@ -613,11 +613,73 @@ def billing_state(coach):
     now* would defer to (``billing/access.deferred_first_charge``) — present
     only when there's enough of the local trial left for Stripe to accept it;
     the template falls back to an "under 2 days" charge-today notice otherwise.
+
+    ``checkout_pending`` (#556, item 2) is the ``?billing=success`` query param
+    a completed Checkout's ``success_url`` always carries — passed in by the
+    view, since the webhook that would update the mirror may not have arrived
+    yet. It's exposed here only when it's still *true*: once
+    ``has_live_stripe_subscription`` goes true the mirror has caught up, so
+    the flag turns itself off and the page shows the real state instead of a
+    stale "finishing" placeholder.
+
+    ``past_due`` (#556, item 1) is its own state — a past_due coach has a live
+    (if unpaid) Stripe subscription, so it must never fall through to the
+    free-plan Subscribe copy. ``cancelling``/``pro_until``/``is_stripe_trial``
+    (#556, item 3) mirror a scheduled cancel (``CoachSubscription.cancel_at``):
+    a live trialing/active row that's scheduled to end reads "Pro until
+    {date}" instead of promising a first charge or a renewal that won't
+    happen — ``past_due`` wins over ``cancelling`` (no Pro access to
+    promise), and ``first_charge_at`` is suppressed while cancelling.
+    ``cancelling`` also requires ``cancel_at`` to still be in the future
+    (adversarial review of #556): a delayed or dropped
+    ``customer.subscription.deleted`` webhook would otherwise leave "Pro
+    until {a past date}" on the page forever even though the coach still
+    reads as active — once that date has passed, this falls through to the
+    ordinary active/first-charge branch instead.
+
+    ``show_subscribe``/``show_manage_billing`` fold the scattered per-template
+    conditions (comped, live, pending, over_limit, on_trial, …) into two keys
+    so a template branches on one read instead of re-deriving the logic.
     """
     sub = getattr(coach, "coach_subscription", None)
     status = sub.status if sub else CoachSubscription.Status.FREE
     seat_limit = billing_access.effective_seat_limit(coach)
     active = billing_access.is_active(coach)
+    live = bool(sub and sub.has_live_stripe_subscription)
+    # Once the mirror shows a live subscription, the page shows the real
+    # state — the pending placeholder is only for the gap before the webhook
+    # lands. ``pending`` deliberately outranks ``over_limit`` below (via
+    # ``show_subscribe``'s ``not pending`` gate) — a coach who just paid
+    # shouldn't be told to re-subscribe while the webhook is still in
+    # flight. It can never coexist with ``past_due``: ``past_due`` requires
+    # ``live`` (a real, if unpaid, Stripe subscription), and ``pending`` is
+    # ANDed with ``not live`` — so the two are mutually exclusive by
+    # construction, not by template ordering. A ``comped`` row is excluded
+    # too (#556 review, round 3): comped isn't a live Stripe subscription, so
+    # a coach comped by an admin while a pending marker from their own
+    # just-completed Checkout was still fresh would otherwise read
+    # "Finishing your subscription…" over their real, unlimited plan.
+    pending = (
+        checkout_pending and not live and status != CoachSubscription.Status.COMPED
+    )
+    over_limit = billing_access.is_over_limit(coach)
+    past_due = live and status == CoachSubscription.Status.PAST_DUE
+    is_stripe_trial = bool(sub and sub.is_stripe_trial)
+    # past_due wins: a past_due coach has no Pro access to promise, so a
+    # scheduled cancel on top of that is moot.
+    cancelling = bool(
+        sub
+        and live
+        and sub.cancel_at is not None
+        and sub.cancel_at > timezone.now()
+        and status
+        in (CoachSubscription.Status.TRIALING, CoachSubscription.Status.ACTIVE)
+    )
+    on_trial = (
+        active
+        and status == CoachSubscription.Status.TRIALING
+        and not (sub and sub.stripe_subscription_id)
+    )
     # The no-card trial is single-use: offer it only to a free coach who has never
     # trialed (no row, or a row whose ``trial_end`` was never set).
     can_start_trial = (
@@ -629,13 +691,22 @@ def billing_state(coach):
         "status": status,
         "status_label": CoachSubscription.Status(status).label,
         "is_active": active,
-        "on_trial": active
-        and status == CoachSubscription.Status.TRIALING
-        and not (sub and sub.stripe_subscription_id),
+        "has_live_stripe_subscription": live,
+        "checkout_pending": pending,
+        "past_due": past_due,
+        "cancelling": cancelling,
+        "is_stripe_trial": is_stripe_trial,
+        # The date a scheduled cancel ends Pro access — always set whenever
+        # ``cancelling`` is true (#556, item 3).
+        "pro_until": sub.cancel_at if cancelling else None,
+        "on_trial": on_trial,
         "trial_end": sub.trial_end if sub else None,
         # The Stripe-trial first-charge date (#555) — None off a Stripe trial
-        # (a local trial, or any other status).
-        "first_charge_at": sub.trial_end if sub and sub.is_stripe_trial else None,
+        # (a local trial, any other status), or while cancelling (never
+        # promise a charge that won't happen).
+        "first_charge_at": (
+            sub.trial_end if sub and sub.is_stripe_trial and not cancelling else None
+        ),
         # What subscribing *right now* would defer the first charge to, or None
         # when there isn't enough of the local trial left (#555).
         "deferred_first_charge": billing_access.deferred_first_charge(coach),
@@ -644,17 +715,30 @@ def billing_state(coach):
         "can_add_athlete": billing_access.can_add_athlete(coach),
         "can_use_agent": billing_access.can_use_agent(coach),
         "agent": agent_allowance(coach),
-        "over_limit": billing_access.is_over_limit(coach),
+        "over_limit": over_limit,
         # How many active athletes are soft-suspended by the downgrade (S6 Phase 5):
         # 0 unless over the limit, then the count beyond the oldest free cap.
         "suspended_count": len(billing_access.suspended_athlete_ids(coach)),
         "can_start_trial": can_start_trial,
         "has_stripe_subscription": bool(sub and sub.stripe_subscription_id),
+        # The two keys the templates branch the Subscribe / Manage billing
+        # forms on (#556): a comped or already-live (or pending) coach never
+        # sees Subscribe; Manage billing shows for any coach with a real
+        # subscription id, or while a Checkout is pending and a customer
+        # already exists.
+        "show_subscribe": (
+            not live
+            and not pending
+            and status != CoachSubscription.Status.COMPED
+            and (not active or on_trial or over_limit)
+        ),
+        "show_manage_billing": bool(sub and sub.stripe_subscription_id)
+        or (pending and bool(coach.stripe_customer_id)),
         "price_summary": PRICE_SUMMARY,
     }
 
 
-def coach_billing(coach):
+def coach_billing(coach, *, checkout_pending=False):
     """The coach-facing billing & usage page context (agent-usage — coach surface).
 
     The complement to the staff-only owner dashboard (``usage_dashboard``): that
@@ -666,9 +750,10 @@ def coach_billing(coach):
 
     The month window is the report's current calendar month, the same window the
     agent meter counts against, so ``runs_this_month`` reconciles with the allowance
-    in ``state["agent"]``.
+    in ``state["agent"]``. ``checkout_pending`` is passed straight through to
+    ``billing_state`` (#556, item 2).
     """
-    state = billing_state(coach)
+    state = billing_state(coach, checkout_pending=checkout_pending)
     start, end = agent_usage_report.current_month_bounds()
     breakdown = agent_usage_report.coach_run_breakdown(coach, start=start, end=end)
     return {

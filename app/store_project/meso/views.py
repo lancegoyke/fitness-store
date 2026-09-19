@@ -433,7 +433,10 @@ class RosterView(TemplateView):
         ]
         # Billing/paywall state (S6 Phase 3): tier, seat usage, and the upgrade
         # CTAs (start trial / subscribe / manage billing).
-        ctx["billing"] = presenters.billing_state(self.request.user)
+        ctx["billing"] = presenters.billing_state(
+            self.request.user,
+            checkout_pending=_checkout_pending(self.request),
+        )
         # Recent-activity feed: the coach's athletes' latest completed sessions.
         ctx["activity"] = presenters.roster_activity(self.request.user)
         # Needs-review (agent batch state) is a separate slice — still neutral.
@@ -756,7 +759,12 @@ class CoachBillingView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "billing"
-        ctx.update(presenters.coach_billing(self.request.user))
+        ctx.update(
+            presenters.coach_billing(
+                self.request.user,
+                checkout_pending=_checkout_pending(self.request),
+            )
+        )
         return ctx
 
 
@@ -5371,6 +5379,134 @@ def batch_dismiss(request, batch_id):
 # ``billing.webhooks`` into the local ``CoachSubscription`` mirror. The paywall /
 # upgrade UI + enforcement choke points land in Phase 3; these are the plumbing.
 
+#: Session keys behind the "Finishing your subscription…" placeholder
+#: (adversarial review of #556). The bare ``?billing=success`` query param
+#: Checkout's ``success_url`` carries can't tell a just-completed Checkout
+#: apart from a stale bookmark, browser history, or a typed URL — any of
+#: which would otherwise show the placeholder forever, since no webhook is
+#: actually coming. ``billing_subscribe`` sets the *started* marker right
+#: before it sends the coach to a real Checkout (or the *pending* marker
+#: directly when Stripe itself reports an existing subscription);
+#: ``_checkout_pending`` is the only place either is read.
+#:
+#: The *started* marker is a ``{"id": <Checkout Session id>, "at": <unix ts>}``
+#: dict (round 2 of the adversarial review, Fix B) — not just a timestamp — so
+#: ``_checkout_pending`` can ask Stripe whether THAT session actually
+#: completed before trusting ``?billing=success``. A bare ``?billing=success``
+#: is reachable from an abandoned Checkout too (the coach never left the tab,
+#: or came back to a stale bookmark): the old bare-timestamp marker had no way
+#: to tell that apart from a real completion, so it showed the placeholder
+#: over the coach's real state — Subscribe hidden — for up to 15 minutes,
+#: and starting the free local trial in between didn't clear it either.
+CHECKOUT_STARTED_SESSION_KEY = "meso_checkout_started_at"
+CHECKOUT_PENDING_SESSION_KEY = "meso_checkout_pending_at"
+#: How long a real Checkout redirect stays eligible to convert into the
+#: pending state once ``?billing=success`` comes back — comfortably longer
+#: than paying actually takes, short enough that a days-old abandoned tab
+#: can't resurrect it.
+CHECKOUT_STARTED_MAX_AGE = datetime.timedelta(hours=2)
+#: How long the "Finishing…" placeholder itself is shown before giving up on
+#: the webhook and falling back to the real (still free/trial) state.
+CHECKOUT_PENDING_MAX_AGE = datetime.timedelta(minutes=15)
+
+#: One accurate message for every "couldn't reach Stripe, so we didn't touch
+#: Checkout" bounce in ``billing_subscribe``. The old wording promised
+#: "nothing was charged" — not something this code can vouch for, since a
+#: concurrent tab may have completed a Checkout of its own while this
+#: particular call to Stripe failed.
+STRIPE_UNAVAILABLE_MESSAGE = (
+    "We couldn't reach Stripe just now, so we didn't open checkout. Try "
+    "again in a minute."
+)
+
+
+def _checkout_pending(request):
+    """Should the billing surfaces show the "Finishing…" placeholder right now?
+
+    Driven by the coach's own session, not the bare ``?billing=success`` query
+    param alone (adversarial review of #556): that param can't tell a
+    just-completed Checkout apart from a stale bookmark, browser history, a
+    typed URL, or an abandoned tab that's simply still sitting on the success
+    URL — and it disappears the instant the coach clicks the nav's plain
+    "Billing" link, which would otherwise contradict whatever the Checkout
+    redirect just showed. ``billing_subscribe`` sets
+    ``CHECKOUT_STARTED_SESSION_KEY`` right before redirecting to a real
+    Checkout, carrying that Checkout Session's own id; an incoming
+    ``?billing=success`` while that marker is fresh asks Stripe whether THAT
+    session actually completed (round 2 of the adversarial review, Fix B)
+    before converting it into the pending state — a query param alone (no
+    Checkout ever started in this session, or one that never finished) does
+    nothing. ``?billing=cancel`` clears both markers — the coach abandoned
+    Checkout, so there's nothing to finish.
+
+    The started→pending conversion:
+
+    - Stripe says the session is ``complete`` → the pending marker is set and
+      the started one dropped.
+    - Stripe says it isn't (``open``/``expired`` — abandoned, or its own TTL
+      passed) → the started marker is dropped and this returns the real
+      state. Starting the free local trial in between (the review's own
+      counterexample) is unaffected either way, since it never touches either
+      marker.
+    - The Stripe lookup itself raises → transient; the started marker is left
+      alone (so a reload can try again) and this returns the real state for
+      now, never a placeholder it can't back.
+    - A legacy bare-float marker (pre-Fix-B, from a coach mid-Checkout across
+      the deploy that shipped this) carries no session id to verify — treated
+      as if there's no started marker at all rather than trusted blind.
+
+    Once converted, the pending marker persists across requests with no query
+    string at all (until it ages out, ``CHECKOUT_PENDING_MAX_AGE``), so the
+    roster and the billing page agree regardless of which one the Checkout
+    redirect landed on. ``billing_state`` ANDs this with "the mirror has no
+    live Stripe subscription yet", so the placeholder disappears the moment
+    the webhook actually lands, whatever is still sitting in the session.
+    """
+    now = timezone.now().timestamp()
+    started = request.session.get(CHECKOUT_STARTED_SESSION_KEY)
+    if isinstance(started, dict):
+        started_at = started.get("at")
+        started_session_id = started.get("id")
+    elif started is not None:
+        # Legacy bare-float marker — no session id to verify against.
+        started_at = started
+        started_session_id = None
+    else:
+        started_at = None
+        started_session_id = None
+    if (
+        request.GET.get("billing") == "success"
+        and started_session_id is not None
+        and started_at is not None
+        and now - started_at < CHECKOUT_STARTED_MAX_AGE.total_seconds()
+    ):
+        try:
+            complete = billing_gateway.checkout_session_is_complete(started_session_id)
+        except Exception:  # noqa: BLE001 — transient; try again on reload
+            logger.exception(
+                "Stripe Checkout Session status check failed for %s (coach %s)",
+                started_session_id,
+                request.user.pk,
+            )
+        else:
+            if complete:
+                request.session[CHECKOUT_PENDING_SESSION_KEY] = now
+                request.session.pop(CHECKOUT_STARTED_SESSION_KEY, None)
+            else:
+                # Not complete: abandoned or expired. Nothing to finish.
+                request.session.pop(CHECKOUT_STARTED_SESSION_KEY, None)
+    if request.GET.get("billing") == "cancel":
+        request.session.pop(CHECKOUT_STARTED_SESSION_KEY, None)
+        request.session.pop(CHECKOUT_PENDING_SESSION_KEY, None)
+        return False
+    pending_at = request.session.get(CHECKOUT_PENDING_SESSION_KEY)
+    if pending_at is None:
+        return False
+    if now - pending_at < CHECKOUT_PENDING_MAX_AGE.total_seconds():
+        return True
+    request.session.pop(CHECKOUT_PENDING_SESSION_KEY, None)
+    return False
+
 
 @login_required
 @require_POST
@@ -5388,78 +5524,211 @@ def billing_subscribe(request):
     if not settings.MESO_PRO_PRICE_ID:
         messages.error(request, "Subscriptions aren't configured yet.")
         return redirect("meso:roster")
-    # Don't open a second Checkout for a coach who already has a live Stripe
-    # subscription — completing it would create a duplicate (double-billing).
-    # They manage the existing one in the Portal; a canceled mirror re-subscribes
-    # freely. A Stripe trial (#555) counts as live here too: it already has a
-    # real subscription, just not yet a charge.
-    sub = getattr(request.user, "coach_subscription", None)
-    if sub and sub.has_live_stripe_subscription:
+    # Cheap early exits off the coach's possibly-stale, already-loaded mirror
+    # (adversarial review, round 2 of #556, Fix A) — a comped coach or one who
+    # already has a live Stripe subscription is blocked either way, so there's
+    # no reason to pay for a Stripe customer lookup first. Both are
+    # re-checked authoritatively under the lock below, off a freshly re-read
+    # row, so a stale read here can only cost an unnecessary bounce-and-retry,
+    # never a wrong Checkout.
+    precheck_sub = getattr(request.user, "coach_subscription", None)
+    if precheck_sub and precheck_sub.status == CoachSubscription.Status.COMPED:
+        messages.info(request, "Your plan changed. Nothing was charged.")
+        return redirect("meso:billing")
+    if precheck_sub and precheck_sub.has_live_stripe_subscription:
         messages.info(
             request,
-            "You already have a subscription — manage it in the billing portal.",
+            "You already have a subscription. Manage it in Manage billing.",
         )
-        return redirect("meso:roster")
-    # A coach subscribing during their local trial keeps the rest of it (#555):
-    # ``deferred_first_charge`` is the local trial_end when there's enough of it
-    # left for Stripe to accept as ``subscription_data.trial_end``, else None.
-    trial_end = billing_access.deferred_first_charge(request.user)
-    # Stale-page guard: the billing page promised a deferred charge, rendering
-    # a hidden ``first_charge=<unix timestamp>`` on the Subscribe form carrying
-    # the *promised* date (#555 P2) — but the trial may have since dropped
-    # under the 48h+margin threshold, or its end date moved (an admin edit, a
-    # Stripe event) between page load and this POST. Either way, don't
-    # silently charge on a date other than what the coach saw.
-    promised = request.POST.get("first_charge")
-    if promised:
-        if trial_end is None:
-            # `deferred_first_charge` is also None once the row is no longer
-            # a local trial at all (round 2 nit) — e.g. the coach subscribed
-            # and canceled in another tab between page load and this POST.
-            # "your trial has less than 2 days left" would be wrong there, and
-            # for a trial that has already lapsed; keep it only for a live
-            # local trial with a clock.
-            still_local_trial = (
-                sub is not None
-                and sub.status == CoachSubscription.Status.TRIALING
-                and not sub.stripe_subscription_id
-                and sub.trial_end is not None
-                and sub.is_active
-            )
-            if still_local_trial:
-                messages.info(
-                    request,
-                    "Your trial has less than 2 days left, so subscribing now "
-                    "starts billing today. Click Subscribe again to continue.",
-                )
-            else:
-                messages.info(
-                    request,
-                    "Your plan changed since this page loaded, so subscribing "
-                    "now starts billing today. Click Subscribe again to "
-                    "continue.",
-                )
-            return redirect("meso:roster")
-        if promised != str(int(trial_end.timestamp())):
+        return redirect("meso:billing")
+    # The Stripe customer must exist BEFORE the lock below, not inside it
+    # (adversarial review, round 2 of #556, Fix A): the atomic block holds the
+    # coach's row lock across several Stripe calls (the open-subscription
+    # check, expiring other Checkouts, creating the new one), and
+    # stripe-python's own read timeout on those (80s) outlives gunicorn's
+    # default worker timeout (30s) — if the worker died mid-transaction, the
+    # customer id write would roll back with it, orphaning the customer
+    # Stripe already has. Creating the customer here, in autocommit, makes
+    # the id durable the instant it's written, independent of anything that
+    # happens later in this request. This is still safe under a race: two
+    # concurrent first-time requests both reaching this line converge on ONE
+    # customer because ``stripe_customer_get_or_create`` writes the id
+    # write-once (see ``payments/utils.py``) — the loser here simply reads
+    # back the winner's id instead of racing it for real.
+    try:
+        billing_gateway.ensure_customer(request.user)
+    except Exception:  # noqa: BLE001 — fail closed, never silently charge
+        logger.exception("Stripe customer lookup failed for coach %s", request.user.pk)
+        messages.error(request, STRIPE_UNAVAILABLE_MESSAGE)
+        return redirect("meso:billing")
+    # Two concurrent Subscribe POSTs for one coach (two tabs, or a double
+    # submit) must not both pass the checks below and both create a Checkout
+    # Session — completing both would double-bill. The mirror can also lag
+    # the webhook by a few seconds, long enough for a double-click or an
+    # older Checkout tab to slip a second subscription past a mirror-only
+    # guard. Lock the coach's user row — ``no_key=True`` for the same reason
+    # ``billing.webhooks._lock_mirror`` / ``CoachSubscription.start_trial_for``
+    # need it (a plain ``FOR UPDATE`` would deadlock against the commit-time
+    # ``FOR KEY SHARE`` a concurrent insert referencing this user row takes) —
+    # and hold it across every Stripe call below: the open-subscription check,
+    # expiring the coach's other open Checkouts, and creating the new one must
+    # happen as one atomic step for a single coach, or a second request can
+    # still slip through the gap between them exactly like the bug this fixes.
+    # The customer itself is deliberately created ABOVE, outside this block
+    # (see the comment there) — only the Checkout-creation steps need the
+    # lock's atomicity.
+    with transaction.atomic():
+        User.objects.select_for_update(no_key=True).filter(pk=request.user.pk).first()
+        # The loser of the lock wakes up holding stale reads — the winner may
+        # have just changed exactly what these checks depend on (the
+        # customer id above all).
+        request.user.refresh_from_db(fields=["stripe_customer_id"])
+        sub = CoachSubscription.objects.filter(coach=request.user).first()
+        # A comped coach has no Subscribe button — any Subscribe POST from one is
+        # stale (an admin comped them between page load and this POST, with or
+        # without a stray `first_charge` marker) and must not open a real
+        # Checkout (#556, item 6).
+        if sub and sub.status == CoachSubscription.Status.COMPED:
+            messages.info(request, "Your plan changed. Nothing was charged.")
+            return redirect("meso:billing")
+        # Don't open a second Checkout for a coach who already has a live Stripe
+        # subscription — completing it would create a duplicate (double-billing).
+        # They manage the existing one in the Portal; a canceled mirror re-subscribes
+        # freely. A Stripe trial (#555) counts as live here too: it already has a
+        # real subscription, just not yet a charge.
+        if sub and sub.has_live_stripe_subscription:
             messages.info(
                 request,
-                "Your trial end date changed since this page loaded. Check "
-                "when you'll be charged and click Subscribe again.",
+                "You already have a subscription. Manage it in Manage billing.",
             )
+            return redirect("meso:billing")
+        # The local mirror can lag the webhook by a few seconds — long enough for
+        # a double-click, or an older Checkout tab, to slip a second subscription
+        # past the mirror-only guard above (#556, item 2). Ask Stripe directly.
+        try:
+            open_sub = billing_gateway.customer_has_open_subscription(request.user)
+        except Exception:  # noqa: BLE001 — fail closed, never silently charge
+            logger.exception(
+                "Stripe subscription check failed for coach %s", request.user.pk
+            )
+            messages.error(request, STRIPE_UNAVAILABLE_MESSAGE)
+            return redirect("meso:billing")
+        if open_sub:
+            # The mirror hasn't seen this subscription yet (its webhook is most
+            # likely still in flight) — land on the billing page's pending
+            # state instead of a bare bounce. Stripe just told us a
+            # subscription exists, so set the pending marker directly rather
+            # than a ``?billing=success`` round trip a plain "Billing" nav
+            # click would immediately drop.
+            messages.info(
+                request,
+                "You already have a subscription. Manage it in Manage billing.",
+            )
+            request.session[CHECKOUT_PENDING_SESSION_KEY] = timezone.now().timestamp()
+            request.session.pop(CHECKOUT_STARTED_SESSION_KEY, None)
+            return redirect("meso:billing")
+        # A coach subscribing during their local trial keeps the rest of it (#555):
+        # ``deferred_first_charge`` is the local trial_end when there's enough of it
+        # left for Stripe to accept as ``subscription_data.trial_end``, else None.
+        trial_end = billing_access.deferred_first_charge(request.user, sub=sub)
+        # Stale-page guard: the billing page promised a deferred charge, rendering
+        # a hidden ``first_charge=<unix timestamp>`` on the Subscribe form carrying
+        # the *promised* date (#555 P2) — but the trial may have since dropped
+        # under the 48h+margin threshold, or its end date moved (an admin edit, a
+        # Stripe event) between page load and this POST. Either way, don't
+        # silently charge on a date other than what the coach saw.
+        promised = request.POST.get("first_charge")
+        if promised:
+            if trial_end is None:
+                # `deferred_first_charge` is also None once the row is no longer
+                # a local trial at all (round 2 nit) — e.g. the coach subscribed
+                # and canceled in another tab between page load and this POST.
+                # "your trial has less than 2 days left" would be wrong there, and
+                # for a trial that has already lapsed; keep it only for a live
+                # local trial with a clock.
+                still_local_trial = (
+                    sub is not None
+                    and sub.status == CoachSubscription.Status.TRIALING
+                    and not sub.stripe_subscription_id
+                    and sub.trial_end is not None
+                    and sub.is_active
+                )
+                if still_local_trial:
+                    messages.info(
+                        request,
+                        "Your trial has less than 2 days left, so subscribing now "
+                        "starts billing today. Click Subscribe again to continue.",
+                    )
+                else:
+                    messages.info(
+                        request,
+                        "Your plan changed since this page loaded, so subscribing "
+                        "now starts billing today. Click Subscribe again to "
+                        "continue.",
+                    )
+                return redirect("meso:roster")
+            if promised != str(int(trial_end.timestamp())):
+                messages.info(
+                    request,
+                    "Your trial end date changed since this page loaded. Check "
+                    "when you'll be charged and click Subscribe again.",
+                )
+                return redirect("meso:roster")
+        # Right before opening the new Checkout, expire the customer's other open
+        # subscription Checkout Sessions (#556, item 2) — the open-subscription
+        # check above can't stop an *older* tab that was already open before the
+        # first subscription existed, so this is what keeps only the newest one
+        # completable.
+        try:
+            billing_gateway.expire_open_subscription_checkouts(request.user)
+        except billing_gateway.SubscriptionCheckoutCompleted:
+            # The coach finished paying in another tab while this request was
+            # mid-flight (#556 review, round 3) — a subscription exists now,
+            # even though the check above didn't see one yet. Same landing as
+            # the Stripe-reported-subscription branch: the mirror is about to
+            # catch up, so show the "finishing" state rather than a Subscribe
+            # button that would open a second billable Checkout.
+            logger.info(
+                "Checkout completed under coach %s while opening another; "
+                "bouncing instead of opening a second one.",
+                request.user.pk,
+            )
+            messages.info(
+                request,
+                "You already have a subscription. Manage it in Manage billing.",
+            )
+            request.session[CHECKOUT_PENDING_SESSION_KEY] = timezone.now().timestamp()
+            request.session.pop(CHECKOUT_STARTED_SESSION_KEY, None)
+            return redirect("meso:billing")
+        except Exception:  # noqa: BLE001 — fail closed, never silently charge
+            logger.exception(
+                "Stripe checkout expiry failed for coach %s", request.user.pk
+            )
+            messages.error(request, STRIPE_UNAVAILABLE_MESSAGE)
+            return redirect("meso:billing")
+        roster_url = request.build_absolute_uri(reverse("meso:roster"))
+        try:
+            session = billing_gateway.create_subscription_checkout_session(
+                request.user,
+                success_url=f"{roster_url}?billing=success",
+                cancel_url=f"{roster_url}?billing=cancel",
+                trial_end=trial_end,
+            )
+        except Exception:  # noqa: BLE001 — surface a friendly error, never a 500
+            logger.exception(
+                "Stripe checkout session failed for coach %s", request.user.pk
+            )
+            messages.error(request, "Could not start checkout. Please try again.")
             return redirect("meso:roster")
-    roster_url = request.build_absolute_uri(reverse("meso:roster"))
-    try:
-        session = billing_gateway.create_subscription_checkout_session(
-            request.user,
-            success_url=f"{roster_url}?billing=success",
-            cancel_url=f"{roster_url}?billing=cancel",
-            trial_end=trial_end,
-        )
-    except Exception:  # noqa: BLE001 — surface a friendly error, never a 500
-        logger.exception("Stripe checkout session failed for coach %s", request.user.pk)
-        messages.error(request, "Could not start checkout. Please try again.")
-        return redirect("meso:roster")
-    return redirect(session.url)
+        # Carries the Checkout Session's own id, not just a timestamp (round 2
+        # of the adversarial review, Fix B) — ``_checkout_pending`` verifies
+        # THIS session actually completed before trusting a later
+        # ``?billing=success``, rather than trusting the query param alone.
+        request.session[CHECKOUT_STARTED_SESSION_KEY] = {
+            "id": session.id,
+            "at": timezone.now().timestamp(),
+        }
+        return redirect(session.url)
 
 
 @login_required

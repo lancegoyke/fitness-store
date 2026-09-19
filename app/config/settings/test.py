@@ -82,6 +82,28 @@ stripe.checkout.Session.list_line_items = unittest.mock.Mock(
         data=[unittest.mock.Mock(description="Test Product", amount_total=1000)]
     )
 )
+# Safe defaults for the #556 "never open a second subscription" checks: an
+# empty result (no open Stripe subscriptions / Checkout Sessions) unless a
+# test patches these to something else. ``auto_paging_iter`` must work on
+# EVERY call, not just once — a ``Mock(side_effect=lambda: iter([]))`` builds
+# a fresh empty iterator each time, unlike a bare exhausted iterator.
+stripe.Subscription.list = _autospec_stripe_mock(
+    stripe.Subscription.list,
+    auto_paging_iter=unittest.mock.Mock(side_effect=lambda: iter([])),
+)
+stripe.checkout.Session.list = _autospec_stripe_mock(
+    stripe.checkout.Session.list,
+    auto_paging_iter=unittest.mock.Mock(side_effect=lambda: iter([])),
+)
+stripe.checkout.Session.expire = _autospec_stripe_mock(stripe.checkout.Session.expire)
+# Default: the ordinary post-Checkout path (a real completed session) works
+# even in a test that never mocks this itself — the ``?billing=success``
+# pending-state check (#556 round 2) retrieves the Checkout Session it
+# started to confirm it actually completed. A test asserting the abandoned/
+# failure paths patches this locally to something else.
+stripe.checkout.Session.retrieve = _autospec_stripe_mock(
+    stripe.checkout.Session.retrieve, status="complete"
+)
 stripe.Webhook.construct_event = unittest.mock.Mock(
     return_value={
         "type": "checkout.session.completed",

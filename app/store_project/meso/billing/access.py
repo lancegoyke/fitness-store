@@ -78,7 +78,7 @@ def is_active(coach):
     return bool(sub and sub.is_active)
 
 
-def deferred_first_charge(coach):
+def deferred_first_charge(coach, sub=None):
     """The local ``trial_end`` when subscribing *right now* would defer to it (#555).
 
     A coach on the local no-card trial who clicks Subscribe should keep the rest
@@ -90,13 +90,23 @@ def deferred_first_charge(coach):
     combined threshold, subscribing charges today instead — the page should say so
     before the coach clicks.
 
+    ``sub``, when given, is used instead of ``coach.coach_subscription`` (adversarial
+    review of #556, round 2, Fix C): the reverse one-to-one accessor caches on the
+    instance once read, and ``refresh_from_db(fields=["stripe_customer_id"])`` in
+    ``billing_subscribe`` doesn't clear that cache — so a caller that re-read the row
+    itself under a lock (to get the current, not-stale, state) must pass it
+    explicitly rather than let this function silently re-read the stale cached one.
+    Omitted, this falls back to the ordinary ``coach.coach_subscription`` lookup, so
+    every existing caller behaves exactly as before.
+
     Returns the unchanged local ``trial_end`` (never extends the trial) when the
     coach is on a **local** trial (``TRIALING``, no ``stripe_subscription_id`` yet)
     with enough of it left; ``None`` otherwise (free, active, canceled, comped, a
     lapsed trial, a trial with under 48h05m left, a coach already on a Stripe
     trial, or no subscription row at all).
     """
-    sub = _subscription(coach)
+    if sub is None:
+        sub = _subscription(coach)
     if sub is None or sub.status != CoachSubscription.Status.TRIALING:
         return None
     if sub.stripe_subscription_id or sub.trial_end is None:

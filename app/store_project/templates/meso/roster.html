@@ -260,8 +260,14 @@
           {% if is_sandbox %}
             <p class="meso-sub" style="margin:0;">Billing is disabled in the demo.</p>
           {% else %}
-            {% if billing.over_limit %}
+            {% if billing.checkout_pending %}
+              <p class="meso-sub" style="margin:0;">Finishing your subscription&#8230; This takes a few seconds. Refresh to see your plan.</p>
+            {% elif billing.past_due %}
+              <p class="meso-sub" style="margin:0;color:var(--warn);">Your last payment failed. Update your card in Manage billing.{% if billing.over_limit %} Until then, your longest-standing athletes stay editable; the other {{ billing.suspended_count }} {{ billing.suspended_count|pluralize:"is,are" }} suspended.{% endif %}</p>
+            {% elif billing.over_limit %}
               <p class="meso-sub" style="margin:0;color:var(--warn);">Over your plan limit &#8212; {{ billing.seat_count }} of {{ billing.seat_limit }} athlete{{ billing.seat_limit|pluralize }}. Your longest-standing athletes stay editable; the other {{ billing.suspended_count }} {{ billing.suspended_count|pluralize:"is,are" }} suspended until you re-subscribe or end a relationship.</p>
+            {% elif billing.cancelling %}
+              <p class="meso-sub" style="margin:0;">{% if billing.is_stripe_trial %}Pro until <time datetime="{{ billing.pro_until|date:'c' }}" data-local-date>{{ billing.pro_until|date:"M j" }}</time> &#8212; cancelled, so you won't be charged.{% else %}Pro until <time datetime="{{ billing.pro_until|date:'c' }}" data-local-date>{{ billing.pro_until|date:"M j" }}</time> &#8212; cancelled, so it won't renew.{% endif %} &#183; {{ billing.seat_count }} active athlete{{ billing.seat_count|pluralize }} &#183; unlimited athletes{% if billing.agent.metered %} &#183; {{ billing.agent.remaining }} of {{ billing.agent.allowance }} agent run{{ billing.agent.allowance|pluralize }} left this month{% else %} &#183; unlimited agent runs{% endif %}.</p>
             {% elif billing.first_charge_at %}
               <p class="meso-sub" style="margin:0;">Pro &#8212; first charge on <time datetime="{{ billing.first_charge_at|date:'c' }}" data-local-date>{{ billing.first_charge_at|date:"M j" }}</time> &#183; {{ billing.seat_count }} active athlete{{ billing.seat_count|pluralize }} &#183; unlimited athletes{% if billing.agent.metered %} &#183; {{ billing.agent.remaining }} of {{ billing.agent.allowance }} agent run{{ billing.agent.allowance|pluralize }} left this month{% else %} &#183; unlimited agent runs{% endif %}.</p>
             {% elif billing.on_trial %}
@@ -284,17 +290,17 @@
                   <button type="submit" class="meso-btn meso-btn--primary">Start free trial</button>
                 </form>
               {% endif %}
-              {% if not billing.is_active or billing.on_trial or billing.over_limit %}
+              {% if billing.show_subscribe %}
                 <form method="post" action="{% url 'meso:billing_subscribe' %}" style="margin:0;">
                   {% csrf_token %}
                   {% if billing.deferred_first_charge %}<input type="hidden" name="first_charge" value="{{ billing.deferred_first_charge|date:'U' }}">{% endif %}
                   <button type="submit" class="meso-btn {% if billing.can_start_trial %}meso-btn--ghost{% else %}meso-btn--primary{% endif %}">Subscribe</button>
                 </form>
               {% endif %}
-              {% if billing.has_stripe_subscription %}
+              {% if billing.show_manage_billing %}
                 <form method="post" action="{% url 'meso:billing_portal' %}" style="margin:0;">
                   {% csrf_token %}
-                  <button type="submit" class="meso-btn meso-btn--ghost">Manage billing</button>
+                  <button type="submit" class="meso-btn {% if billing.past_due %}meso-btn--primary{% else %}meso-btn--ghost{% endif %}">Manage billing</button>
                 </form>
               {% endif %}
             </div>

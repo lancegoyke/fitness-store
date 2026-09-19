@@ -138,6 +138,22 @@ class TestCoachSubscriptionModel:
         sub.refresh_from_db()
         assert sub.is_active is False
 
+    def test_start_trial_clears_a_leftover_cancel_at(self):
+        """A FREE row can carry a stale scheduled-end date (adversarial review of #556).
+
+        E.g. an admin resets a subscriber whose subscription was scheduled to
+        cancel back to free by hand — a fresh trial must not inherit a
+        ``cancel_at`` that has nothing to do with it.
+        """
+        sub = CoachSubscriptionFactory(
+            status=CoachSubscription.Status.FREE,
+            cancel_at=timezone.now() + timedelta(days=3),
+            trial_end=None,
+        )
+        sub.start_trial()
+        sub.refresh_from_db()
+        assert sub.cancel_at is None
+
     def test_start_trial_rejects_non_free(self):
         sub = CoachSubscriptionFactory(status=CoachSubscription.Status.ACTIVE)
         with pytest.raises(InvalidTransition):
@@ -168,6 +184,17 @@ class TestCoachSubscriptionModel:
         # The clock is preserved, so the trial stays single-use.
         assert sub.trial_end is not None
 
+    def test_expire_trial_clears_a_leftover_cancel_at(self):
+        sub = CoachSubscriptionFactory(
+            status=CoachSubscription.Status.TRIALING,
+            trial_end=timezone.now() - timedelta(minutes=1),
+            cancel_at=timezone.now() + timedelta(days=3),
+        )
+        sub.expire_trial()
+        sub.refresh_from_db()
+        assert sub.status == CoachSubscription.Status.FREE
+        assert sub.cancel_at is None
+
     def test_expire_trial_rejects_a_live_trial(self):
         sub = CoachSubscriptionFactory(
             status=CoachSubscription.Status.TRIALING,
@@ -196,6 +223,20 @@ class TestCoachSubscriptionModel:
         assert again.pk == sub.pk
         assert again.status == CoachSubscription.Status.COMPED
         assert CoachSubscription.objects.filter(coach=sub.coach).count() == 1
+
+    def test_comp_clears_a_leftover_cancel_at(self):
+        """A row comped over a scheduled-to-end subscription drops the date.
+
+        Otherwise it would keep reading "Pro until {date}" after becoming
+        comped and unlimited (adversarial review of #556).
+        """
+        sub = CoachSubscriptionFactory(
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_1",
+            cancel_at=timezone.now() + timedelta(days=3),
+        )
+        again = CoachSubscription.comp(sub.coach)
+        assert again.cancel_at is None
 
     def test_start_trial_for_get_or_creates_then_trials(self):
         coach = UserFactory()
