@@ -121,7 +121,7 @@ class Product(LifecycleModelMixin, models.Model):
         stripe.api_key = settings.STRIPE_SECRET_KEY
         try:
             stripe.Product.modify(
-                sid=str(self.id),
+                str(self.id),
                 name=self.name,
                 description=self.description,
             )
@@ -177,10 +177,11 @@ class Product(LifecycleModelMixin, models.Model):
         """
         stripe.api_key = settings.STRIPE_SECRET_KEY
         try:
-            product = stripe.Product.modify(sid=str(self.id), active=False)
-            price = stripe.Price.modify(sid=str(self.id), active=False)
+            product = stripe.Product.modify(str(self.id), active=False)
             logger.info(f"Product {product} has been marked inactive in Stripe.")
-            logger.info(f"Price {price} has been marked inactive in Stripe.")
+            if self.stripe_price_id:
+                price = stripe.Price.modify(self.stripe_price_id, active=False)
+                logger.info(f"Price {price} has been marked inactive in Stripe.")
         except stripe.error.InvalidRequestError as e:
             logger.error(f"ERROR: {e}")
             logger.error(

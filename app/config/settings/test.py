@@ -53,30 +53,28 @@ MESO_VAPID_SUBJECT = "mailto:test@example.com"
 # Mock Stripe API calls for testing
 # Using unittest.mock to prevent real API calls during testing
 
+
+def _autospec_stripe_mock(real_method, **return_attrs):
+    """Autospec the real stripe method so tests can't hide a signature bug.
+
+    A wrong-keyword call (e.g. the `sid=`/`id=` mismatches from #548) raises
+    TypeError here instead of silently passing, the way a bare Mock() would.
+    """
+    return unittest.mock.create_autospec(
+        real_method, return_value=unittest.mock.Mock(**return_attrs)
+    )
+
+
 # Mock all Stripe API calls
-stripe.Product.create = unittest.mock.Mock(
-    return_value=unittest.mock.Mock(id="prod_test")
-)
-stripe.Product.modify = unittest.mock.Mock(
-    return_value=unittest.mock.Mock(id="prod_test")
-)
-stripe.Product.retrieve = unittest.mock.Mock(
-    return_value=unittest.mock.Mock(id="prod_test")
-)
-stripe.Price.create = unittest.mock.Mock(
-    return_value=unittest.mock.Mock(id="price_test")
-)
-stripe.Price.modify = unittest.mock.Mock(
-    return_value=unittest.mock.Mock(id="price_test")
-)
-stripe.Price.retrieve = unittest.mock.Mock(
-    return_value=unittest.mock.Mock(id="price_test")
-)
-stripe.Customer.create = unittest.mock.Mock(
-    return_value=unittest.mock.Mock(id="cus_test")
-)
-stripe.Customer.retrieve = unittest.mock.Mock(
-    return_value=unittest.mock.Mock(id="cus_test")
+stripe.Product.create = _autospec_stripe_mock(stripe.Product.create, id="prod_test")
+stripe.Product.modify = _autospec_stripe_mock(stripe.Product.modify, id="prod_test")
+stripe.Product.retrieve = _autospec_stripe_mock(stripe.Product.retrieve, id="prod_test")
+stripe.Price.create = _autospec_stripe_mock(stripe.Price.create, id="price_test")
+stripe.Price.modify = _autospec_stripe_mock(stripe.Price.modify, id="price_test")
+stripe.Price.retrieve = _autospec_stripe_mock(stripe.Price.retrieve, id="price_test")
+stripe.Customer.create = _autospec_stripe_mock(stripe.Customer.create, id="cus_test")
+stripe.Customer.retrieve = _autospec_stripe_mock(
+    stripe.Customer.retrieve, id="cus_test"
 )
 stripe.checkout.Session.create = unittest.mock.Mock(return_value={"id": "cs_test"})
 stripe.checkout.Session.list_line_items = unittest.mock.Mock(
