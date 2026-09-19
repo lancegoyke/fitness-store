@@ -5243,11 +5243,29 @@ def billing_subscribe(request):
     promised = request.POST.get("first_charge")
     if promised:
         if trial_end is None:
-            messages.info(
-                request,
-                "Your trial has less than 2 days left, so subscribing now "
-                "starts billing today. Click Subscribe again to continue.",
+            # `deferred_first_charge` is also None once the row is no longer
+            # a local trial at all (round 2 nit) — e.g. the coach subscribed
+            # and canceled in another tab between page load and this POST.
+            # "your trial has less than 2 days left" would be wrong there;
+            # keep it only when the row is still genuinely a local trial.
+            still_local_trial = (
+                sub is not None
+                and sub.status == CoachSubscription.Status.TRIALING
+                and not sub.stripe_subscription_id
             )
+            if still_local_trial:
+                messages.info(
+                    request,
+                    "Your trial has less than 2 days left, so subscribing now "
+                    "starts billing today. Click Subscribe again to continue.",
+                )
+            else:
+                messages.info(
+                    request,
+                    "Your plan changed since this page loaded, so subscribing "
+                    "now starts billing today. Click Subscribe again to "
+                    "continue.",
+                )
             return redirect("meso:roster")
         if promised != str(int(trial_end.timestamp())):
             messages.info(

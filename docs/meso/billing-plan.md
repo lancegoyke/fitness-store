@@ -201,6 +201,11 @@ handler has to treat every event as possibly late or retried):
    already passed is ignored before the mirror write. A `trialing` event with
    no `trial_end` is unaffected (trap 4's "left alone" case).
 
+An admin who hand-sets a row to `trialing` must also clear
+`stripe_subscription_id` — a trialing row with a Stripe id is read as a
+Stripe trial and never lapses on the local clock (trap 1); `start_trial`
+already clears it for the one in-app path that starts a trial.
+
 **Analytics (#509):** `subscription_started` fires exactly once — on
 `created(trialing)` — not again when the subscription flips to `active` at
 trial end. The existing `already_live` / ledger check already gives that: the

@@ -1409,6 +1409,30 @@ class TestSubscribeViewDeferredCharge:
         texts = [m.message for m in get_messages(resp.wsgi_request)]
         assert any("trial end date changed" in t for t in texts)
 
+    def test_canceled_coach_gets_a_neutral_stale_page_message(self, settings):
+        """The row is no longer a local trial at all (#555 round 2 nit).
+
+        E.g. the coach subscribed and canceled in another tab between page
+        load and this POST — `deferred_first_charge` is None here too, but
+        "your trial has less than 2 days left" would be wrong (there's no
+        trial to speak of any more).
+        """
+        settings.MESO_PRO_PRICE_ID = "price_pro_test"
+        coach, c = self._coach_client()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_old",
+        )
+        with mock.patch(GATEWAY_CHECKOUT) as create:
+            resp = c.post(self.URL, data={"first_charge": "1234567890"})
+        assert resp.status_code == 302
+        assert resp.url == "/meso/"
+        create.assert_not_called()
+        texts = [m.message for m in get_messages(resp.wsgi_request)]
+        assert any("Your plan changed since this page loaded" in t for t in texts)
+        assert not any("trial has less than 2 days left" in t for t in texts)
+
 
 class TestPortalView:
     URL = "/meso/billing/portal/"
