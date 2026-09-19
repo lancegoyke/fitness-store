@@ -23,9 +23,7 @@ from store_project.payments.utils import order_confirmation_email
 from store_project.payments.utils import stripe_customer_get_or_create
 from store_project.payments.utils import stripe_price_get_or_create
 from store_project.products.models import Book
-from store_project.products.models import Category
 from store_project.products.models import Program
-from store_project.users.factories import UserFactory
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -150,54 +148,58 @@ def stripe_webhook(request):
         return HttpResponse(status=400)
 
     if event["type"] == "checkout.session.completed":
+        checkout_session = event.data.object
+
+        if checkout_session["mode"] != "payment":
+            # Meso Pro subscriptions complete a Checkout Session too (#545)
+            # and land on this same webhook; `/meso/billing/webhook/` handles
+            # them via the `customer.subscription.*` events instead.
+            logger.info(
+                f"[payments.views.stripe_webhook] Ignoring non-payment session "
+                f'"{checkout_session["mode"]}" (id={checkout_session["id"]}).'
+            )
+            return HttpResponse(status=200)
+
         print("[payments.views.stripe_webhook] Payment was successful.")
 
-        checkout_session = event.data.object
         metadata = checkout_session.metadata  # CLI test: {}
+        if "product_name" not in metadata or "product_type" not in metadata:
+            logger.warning(
+                f"[payments.views.stripe_webhook] Payment session "
+                f"{checkout_session['id']} has no product metadata; "
+                "granting nothing."
+            )
+            return HttpResponse(status=200)
+
         try:
             user = User.objects.get(stripe_customer_id=checkout_session["customer"])
             # Current bug: if user changes email address in Stripe, it's not
             # changed in Django. So we're finding User object with
             # `stripe_customer_id` instead.
         except User.DoesNotExist:
-            user = UserFactory(
-                username="lancegoyke", email="lancegoyke@gmail.com"
-            )  # user for testing
+            logger.error(
+                f"[payments.views.stripe_webhook] No user with "
+                f"stripe_customer_id={checkout_session['customer']!r} "
+                f"(session={checkout_session['id']}); payment taken but "
+                "nobody got the product."
+            )
+            return HttpResponse(status=200)
 
         print(f"[payments.views.stripe_webhook] User = {user}")
 
-        try:
-            product_name = metadata["product_name"]
-        except KeyError:
-            # if metadata not supplied, we're testing
-            product_name = "Test Program"
+        product_name = metadata["product_name"]
+        product_type = metadata["product_type"]
 
-        try:
-            product_type = metadata["product_type"]
-        except KeyError:
-            # if metadata not supplied, we're testing
-            product_type = "program"
-
-        if product_type == "program":
-            try:
-                product = Program.objects.get(name=product_name)
-            except Program.DoesNotExist:
-                # create new Program for testing
-                product = Program.objects.create(
-                    name="Test Program",
-                    description="Test description.",
-                    slug="test-program",
-                    price=1100,
-                    author=User.objects.filter(email="lance@lancegoyke.com").first(),
-                    duration=1,
-                    frequency=3,
-                )
-                test_category, created = Category.objects.get_or_create(
-                    name="Test Category"
-                )
-                product.categories.add(test_category)
-        elif product_type == "book":
-            product = Book.objects.get(name=product_name)
+        model_by_product_type = {"program": Program, "book": Book}
+        model = model_by_product_type.get(product_type)
+        product = model.objects.filter(name=product_name).first() if model else None
+        if product is None:
+            logger.error(
+                f"[payments.views.stripe_webhook] Unknown product "
+                f"type={product_type!r} name={product_name!r} "
+                f"(session={checkout_session['id']}); granting nothing."
+            )
+            return HttpResponse(status=200)
 
         print(f"[payments.views.stripe_webhook] Product = {product_name}")
 
