@@ -61,7 +61,7 @@
         another coach coaches, and is active if they started a session log that holds a set
         (<code>SessionLog</code>), or have a <code>set_logged</code> or <code>session_opened</code> event. Events exist since {% if events_since %}{{ events_since|date:"M j, Y" }}{% else %}the first one{% endif %}.
         Demo-athlete plans don't count for either role, and a coach training on their own
-        self-coaching plan isn't counted as an athlete. Staff and sandbox accounts are left
+        self-coaching plan isn't counted as an athlete for it. Staff and sandbox accounts are left
         out of every number on this page (for email, as recipients).
       </p>
     </div>
@@ -103,7 +103,7 @@
         Invites sent in the window. Email invite: <code>CoachInvite</code>, sent then accepted; a
         resent invite keeps its first send date. Athlete request: an athlete's request the coach
         accepted (<code>CoachAthlete</code>), minus any that an email invite in the window claimed.
-        Delivered: the first <code>WeekDelivery</code> to that athlete after acceptance. Logged: the
+        Delivered: the first <code>WeekDelivery</code> on that pair's plans after acceptance. Logged: the
         first session log holding a set, by when the log was started, after that delivery; a set
         logged before any delivery doesn't count. Medians are between consecutive steps.
         <code>CoachAthlete</code> keeps one row per coach and athlete, and a repeat request or a

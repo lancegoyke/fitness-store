@@ -2326,15 +2326,12 @@ def _athlete_event_stats(name, *, since, until):
     """``{"users", "times"}`` for an athlete-side ``Event``-sourced feature row.
 
     Same athlete rule as A2: the actor is someone else's client, and the event
-    isn't about a self-coaching plan's session or log.
+    isn't about a self-coaching plan's session or log. A NULL actor (a deleted
+    account) stays in ``times``, as everywhere on the page.
     """
     qs = (
-        Event.objects.filter(
-            name=name,
-            created__gte=since,
-            created__lte=until,
-            actor__in=_client_athletes(),
-        )
+        Event.objects.filter(name=name, created__gte=since, created__lte=until)
+        .filter(Q(actor__isnull=True) | Q(actor__in=_client_athletes()))
         .exclude(actor__in=_ineligible_users())
         .exclude(_self_subject_exclusion())
     )
