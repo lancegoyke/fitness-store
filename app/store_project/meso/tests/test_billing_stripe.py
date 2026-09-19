@@ -34,6 +34,7 @@ from django.utils import timezone
 
 from store_project.analytics.events import EventName
 from store_project.analytics.models import Event
+from store_project.meso import presenters
 from store_project.meso.billing import access as billing_access
 from store_project.meso.billing import stripe_gateway
 from store_project.meso.billing import webhooks as billing_webhooks
@@ -810,6 +811,143 @@ class TestInvoicePaymentFailedDuringAStripeTrial:
         billing_webhooks.handle_event(_real_invoice_event("invoice.paid"))
         sub = CoachSubscription.objects.get(coach=coach)
         assert sub.status == CoachSubscription.Status.TRIALING
+
+
+# ---------------------------------------------------------------------------
+# webhooks — a canceled subscription id is terminal (P1-A, adversarial review)
+#
+# Stripe never reactivates a canceled subscription (`canceled` and
+# `incomplete_expired` are terminal), so a non-delete event for the SAME id
+# as an already-CANCELED row is stale by definition — a late/retried
+# `created`/`updated` must not reopen it.
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookCanceledSubscriptionIdIsTerminal:
+    def test_late_created_trialing_for_the_same_id_does_not_reopen(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_1",
+        )
+        future_trial_end = int((timezone.now() + timedelta(days=10)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created",
+                status="trialing",
+                trial_end=future_trial_end,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.CANCELED
+        assert billing_access.is_active(_refetch(coach)) is False
+
+    def test_late_updated_active_for_the_same_id_does_not_reopen(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_1",
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.updated", status="active")
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.CANCELED
+
+    def test_a_new_id_still_takes_over_a_canceled_row(self):
+        """Regression guard for the existing re-subscribe path.
+
+        A different subscription id must still take over. May already pass
+        before the fix (P1-A only ignores events for the SAME id as the
+        canceled row).
+        """
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_1",
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created", sub_id="sub_2", status="active"
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.ACTIVE
+        assert sub.stripe_subscription_id == "sub_2"
+
+    def test_ignored_events_write_no_extra_analytics(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.CANCELED,
+            stripe_subscription_id="sub_1",
+        )
+        future_trial_end = int((timezone.now() + timedelta(days=10)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created",
+                status="trialing",
+                trial_end=future_trial_end,
+            )
+        )
+        billing_webhooks.handle_event(
+            _real_sub_event("customer.subscription.updated", status="active")
+        )
+        assert _events(EventName.SUBSCRIPTION_STARTED) == []
+        assert _events(EventName.SUBSCRIPTION_CANCELLED) == []
+
+
+# ---------------------------------------------------------------------------
+# webhooks — a stale `trialing` event past its own trial_end (P1-B, review)
+#
+# Stripe moves a subscription out of `trialing` at `trial_end`; a late or
+# retried `created`/`updated(trialing)` reporting a `trial_end` already in
+# the past can't be describing the subscription's current state.
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookStaleTrialingPastItsTrialEndIsIgnored:
+    def test_late_trialing_for_an_active_row_does_not_revert_it(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.ACTIVE,
+            stripe_subscription_id="sub_1",
+        )
+        past_trial_end = int((timezone.now() - timedelta(hours=1)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.created",
+                status="trialing",
+                trial_end=past_trial_end,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.ACTIVE
+        state = presenters.billing_state(_refetch(coach))
+        assert state["first_charge_at"] is None
+
+    def test_late_trialing_for_a_past_due_row_does_not_revert_it(self):
+        coach = _coach_with_customer()
+        CoachSubscriptionFactory(
+            coach=coach,
+            status=CoachSubscription.Status.PAST_DUE,
+            stripe_subscription_id="sub_1",
+        )
+        past_trial_end = int((timezone.now() - timedelta(hours=1)).timestamp())
+        billing_webhooks.handle_event(
+            _real_sub_event(
+                "customer.subscription.updated",
+                status="trialing",
+                trial_end=past_trial_end,
+            )
+        )
+        sub = CoachSubscription.objects.get(coach=coach)
+        assert sub.status == CoachSubscription.Status.PAST_DUE
+        assert billing_access.is_active(_refetch(coach)) is False
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ import stripe
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.utils import timezone
 
 from store_project.analytics.events import EventName
 from store_project.analytics.models import Event
@@ -213,6 +214,42 @@ def _sync_from_subscription(sub_obj, *, deleted):
     # stale event for another id could clobber a coach who just subscribed
     # mid-trial and hasn't been charged yet.
     existing = _lock_mirror(coach)
+    # A canceled subscription id is terminal (adversarial review, #555): Stripe
+    # never reactivates a canceled subscription (``canceled``/``incomplete_expired``
+    # are terminal states), so a non-delete event for the SAME id as an
+    # already-CANCELED row is stale by definition — a late/retried created or
+    # updated must not reopen it into a permanent (never-lapsing) TRIALING/ACTIVE
+    # row. A duplicate ``deleted`` still falls through to the idempotent upsert.
+    if (
+        not deleted
+        and existing
+        and existing.status == CoachSubscription.Status.CANCELED
+        and existing.stripe_subscription_id == incoming_id
+    ):
+        logger.info(
+            "Billing webhook: ignoring stale event for canceled subscription %s",
+            incoming_id,
+        )
+        return
+    # A stale ``trialing`` event past its own trial_end (adversarial review,
+    # #555): Stripe moves a subscription out of ``trialing`` at ``trial_end``, so
+    # a late/retried created or updated reporting a ``trialing`` status whose
+    # trial_end has already passed can't be describing the subscription's
+    # current state — it would otherwise flip an already-charged coach back to
+    # "first charge on <past date>" and misreport them as unpaid.
+    incoming_trial_end_ts = sub_obj.get("trial_end")
+    if (
+        not deleted
+        and sub_obj.get("status") == "trialing"
+        and incoming_trial_end_ts
+        and _ts_to_dt(incoming_trial_end_ts) <= timezone.now()
+    ):
+        logger.info(
+            "Billing webhook: ignoring stale trialing event for subscription %s "
+            "(trial_end already passed)",
+            incoming_id,
+        )
+        return
     incoming_live = status in CoachSubscription.ACTIVE_STATUSES
     existing_current = existing and existing.has_live_stripe_subscription
     if (
