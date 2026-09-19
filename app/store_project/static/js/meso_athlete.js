@@ -367,7 +367,7 @@ function createLogger() {
       // Written ahead, like a line (#527): the wait below can take a while on
       // bad wifi, and leaving the page meanwhile must not lose the Set rows.
       // The flush leaves this entry to save(), which replaces it with what it
-      // finally sends, or takes it out once that lands.
+      // finally sends, and takes that out once it lands.
       const ahead = this.enqueue(this.buildPayload(markDone));
       // Lines first (#527). Pressing the button blurs the line being typed, so
       // its save is already on its way: let it land, then send any line still
@@ -383,6 +383,10 @@ function createLogger() {
       // Built after the wait, which can take a while on bad wifi: the Set rows
       // stay editable meanwhile, and a change made then belongs in this save.
       const payload = this.buildPayload(markDone);
+      // And queued in place of the click-time copy before it goes out: if the
+      // page dies mid-request, this newer log is the one to replay. (Storage
+      // refusing it leaves the click-time copy, the best there is.)
+      const sending = this.enqueue(payload) || ahead;
       let res;
       try {
         res = await postJson(this.logUrl, payload, this.csrf);
@@ -403,7 +407,7 @@ function createLogger() {
           return;
         }
         if (!res.ok) throw new Error("Request failed: " + res.status);
-        if (ahead) this.dropEntry(ahead);
+        if (sending) this.dropEntry(sending);
         const data = await res.json();
         this.status = data.log.status;
         this.syncFromLog(data.log);
@@ -425,7 +429,7 @@ function createLogger() {
         console.error("Log save failed", err);
         this.error = true;
         // An HTTP error is the athlete's to retry, not the outbox's.
-        if (ahead) this.dropEntry(ahead);
+        if (sending) this.dropEntry(sending);
       } finally {
         this.saving = false;
       }
@@ -576,6 +580,11 @@ function createLogger() {
       );
     },
 
+    isQueued(item) {
+      const key = JSON.stringify(item);
+      return this.readQueue().some((queued) => JSON.stringify(queued) === key);
+    },
+
     // Remove one replayed entry, but only as it was sent: a newer write queued
     // for the same log or cell while this one was in flight must survive.
     dropEntry(sent) {
@@ -627,6 +636,10 @@ function createLogger() {
       for (const item of queue.filter((i) => !isCellEntry(i))) {
         // Mid-save, this session's log is save()'s to send, right after.
         if (this.saving && item.url === this.logUrl) continue;
+        // The lines before it can take a while: a log sent or replaced since
+        // this pass read the outbox (save() landing meanwhile) is not resent,
+        // or its older copy would replace the newer log on the server.
+        if (!this.isQueued(item)) continue;
         const outcome = await this.flushLog(item);
         if (outcome === "offline") break;
         if (outcome === "mine") flushedMine = true;
@@ -681,6 +694,11 @@ function createLogger() {
       if (!res.ok) return "kept";
       this.dropEntry(item);
       if (item.url !== this.logUrl) return "saved";
+      // A pass can already be sending this session's older log when save()
+      // starts: its reply lands mid-save. Leave the rows alone — reconciling
+      // them to the older log would un-tick rows ticked since, just before
+      // save() builds its payload from them. save's own reply reconciles.
+      if (this.saving) return "mine";
       try {
         const data = await res.json();
         this.status = data.log.status;

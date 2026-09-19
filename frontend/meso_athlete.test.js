@@ -2350,6 +2350,112 @@ describe("a newer blur, an unknown outcome, a slow Log session (#527)", () => {
   });
 });
 
+describe("Log session and an older log of the session (#527)", () => {
+  // Each fetch waits until the test answers it by index.
+  function controlled() {
+    const calls = [];
+    const fetchMock = vi.fn().mockImplementation(
+      (url, opts) =>
+        new Promise((resolve) => {
+          calls.push({ url, body: JSON.parse(opts.body), resolve });
+        }),
+    );
+    const answer = (i, reply) => calls[i].resolve(reply);
+    const logReply = (body) =>
+      res({
+        body: {
+          log: {
+            status: body.status,
+            sets: body.sets.map((s) => ({
+              prescription: s.prescription,
+              set_number: s.set_number,
+            })),
+          },
+        },
+      });
+    return { calls, fetchMock, answer, logReply };
+  }
+
+  it("keeps rows ticked since, when an older log is already out as Log session starts", async () => {
+    vi.useFakeTimers();
+    const c = makeLogger();
+    // An offline "Save progress" left set 1 queued; set 2 was ticked since.
+    c.enqueue({
+      status: "pending",
+      sets: [{ prescription: 1, set_number: 1, reps: "", load: "", rpe: "" }],
+    });
+    c.exercises[0].set_rows[0].done = true;
+    c.exercises[0].set_rows[1].done = true;
+    const { calls, fetchMock, answer, logReply } = controlled();
+    global.fetch = fetchMock;
+    const flushing = c.flushQueue(); // signal's back: the older log goes out
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const saving = c.save(true); // tapped while it's in flight
+    answer(0, logReply(calls[0].body));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    answer(1, logReply(calls[1].body));
+    await saving;
+    await flushing;
+    expect(calls[1].body.sets.map((s) => s.set_number)).toEqual([1, 2]);
+    expect(c.exercises[0].set_rows[1].done).toBe(true);
+  });
+
+  it("keeps what it's sending in the outbox, not the log as it was at the tap", async () => {
+    // The app closing mid-send must replay the newer log, not the older one.
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].set_rows = [
+      { set_number: 1, reps: "", load: "", rpe: "", done: false },
+    ];
+    c.exercises[0].sub_lines[0].text = "RPE 8";
+    const { calls, fetchMock, answer, logReply } = controlled();
+    global.fetch = fetchMock;
+    c.saveCell(c.exercises[0], 1); // a line save that's slow to answer
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    c.exercises[0].set_rows[0].load = "100"; // typed during "Saving…"
+    c.exercises[0].set_rows[0].reps = "5";
+    answer(0, res({ body: { ok: true, cell: { line: 1, text: "RPE 8" } } }));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    const log = c.readQueue().find((i) => i.url === LOG_URL);
+    expect(log.body.sets).toEqual([
+      { prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
+    ]);
+    answer(1, logReply(calls[1].body));
+    await saving;
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("doesn't replay a log that save() sent while a flush pass was busy", async () => {
+    vi.useFakeTimers();
+    const c = cellLogger({ logUrl: LOG_URL });
+    c.exercises[0].set_rows = [
+      { set_number: 1, reps: "5", load: "100", rpe: "", done: true },
+    ];
+    // A line whose earlier write got a 5xx waits in the outbox.
+    c.enqueueCell({ exercise_id: 1, line: 1, text: "RPE 8" });
+    c.exercises[0].sub_lines[0].queued = true;
+    const { calls, fetchMock, answer, logReply } = controlled();
+    global.fetch = fetchMock;
+    const saving = c.save(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(1)); // the line, again
+    answer(0, res({ ok: false, status: 500 })); // still failing: kept
+    await vi.waitFor(() => expect(calls).toHaveLength(2)); // save's log
+    const flushing = c.flushQueue(); // an `online` event mid-POST
+    await vi.waitFor(() => expect(calls).toHaveLength(3)); // the line
+    answer(1, logReply(calls[1].body)); // save's log lands
+    await saving;
+    answer(2, res({ ok: false, status: 500 }));
+    // Either the pass ends, or it replays the log save() already sent.
+    await vi.waitFor(() =>
+      expect(c._flushing === null || calls.length === 4).toBe(true),
+    );
+    const logPosts = calls.filter((call) => call.url === LOG_URL);
+    if (calls[3]) answer(3, logReply(calls[3].body)); // let a replay finish
+    await flushing;
+    expect(logPosts).toHaveLength(1);
+  });
+});
+
 describe("footer line error clears once the line saves (#527)", () => {
   it("drops 'a line above couldn't save' when the refused line is fixed", async () => {
     const c = cellLogger({ logUrl: LOG_URL });
