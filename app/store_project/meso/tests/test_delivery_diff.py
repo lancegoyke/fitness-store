@@ -320,6 +320,42 @@ class TestDiffWeekSnapshots:
         assert diff["has_changes"] is False
         assert diff["sessions"] == []
 
+    @staticmethod
+    def _one_line_snap(text, *, athlete_authored=None):
+        line = {"line": 1, "text": text}
+        if athlete_authored is not None:
+            line["athlete_authored"] = athlete_authored
+        return _snap([_session(1, 1, "Lower", [_presc(10, "Squat", lines=[line])])])
+
+    def test_athlete_overwriting_a_delivered_coach_line_is_not_a_change(self):
+        previous = self._one_line_snap("Pause for two seconds", athlete_authored=False)
+        current = self._one_line_snap("155 x 8, RPE 7", athlete_authored=True)
+
+        diff = diff_week_snapshots(current, previous)
+
+        assert diff["has_changes"] is False
+        assert diff["sessions"] == []
+
+    def test_legacy_payload_line_the_athlete_owns_now_is_not_a_change(self):
+        previous = self._one_line_snap("155 x 8, RPE 7")
+        current = self._one_line_snap("155 x 8, RPE 7", athlete_authored=True)
+
+        diff = diff_week_snapshots(current, previous)
+
+        assert diff["has_changes"] is False
+        assert diff["sessions"] == []
+
+    def test_coach_reclaiming_an_athlete_line_still_surfaces(self):
+        previous = self._one_line_snap("155 x 8, RPE 7", athlete_authored=True)
+        current = self._one_line_snap("Pause for two seconds", athlete_authored=False)
+
+        diff = diff_week_snapshots(current, previous)
+
+        assert diff["has_changes"] is True
+        field = diff["sessions"][0]["changed"][0]["fields"][0]
+        assert field["after"] == "Pause for two seconds"
+        assert "155 x 8" not in str(diff)
+
 
 # --------------------------------------------------------------------------- #
 # Presenter + view (DB-backed)                                                 #

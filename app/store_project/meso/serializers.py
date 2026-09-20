@@ -331,6 +331,19 @@ def _diff_fields(before, after, fields):
     return out
 
 
+def _coach_lines(lines, hidden=()):
+    """Content-only ``{line, text}`` for the coach's own lines, for diffing.
+
+    Drops athlete-authored lines (a missing flag reads as coach-authored) and
+    any line number in ``hidden``.
+    """
+    return [
+        {"line": line.get("line"), "text": line.get("text")}
+        for line in lines
+        if not line.get("athlete_authored", False) and line.get("line") not in hidden
+    ]
+
+
 def _diff_exercises(current, previous):
     """Added / removed / changed exercise rows between two session grids.
 
@@ -370,22 +383,19 @@ def _diff_exercises(current, previous):
         # since ``skipped`` itself is one of the diffed fields below).
         if prev_e.get("skipped") and e.get("skipped"):
             continue
+        # A line the athlete owns NOW is hidden from both sides: an athlete who
+        # typed over a delivered coach line (or a payload stored before the flag
+        # existed) must not read as the coach's line vanishing.
+        athlete_lines = {
+            line.get("line")
+            for line in e.get("lines", [])
+            if line.get("athlete_authored", False)
+        }
         prev_for_diff = {
             **prev_e,
-            "lines": [
-                {"line": line.get("line"), "text": line.get("text")}
-                for line in prev_e.get("lines", [])
-                if not line.get("athlete_authored", False)
-            ],
+            "lines": _coach_lines(prev_e.get("lines", []), athlete_lines),
         }
-        current_for_diff = {
-            **e,
-            "lines": [
-                {"line": line.get("line"), "text": line.get("text")}
-                for line in e.get("lines", [])
-                if not line.get("athlete_authored", False)
-            ],
-        }
+        current_for_diff = {**e, "lines": _coach_lines(e.get("lines", []))}
         fields = _diff_fields(
             prev_for_diff, current_for_diff, _PRESCRIPTION_DIFF_FIELDS
         )
