@@ -444,8 +444,16 @@ def serialize_session_log(log):
     Excluded via ``models.parsed_set_is_hidden`` — the one predicate shared
     with the presenter and the logger's replace-delete. Once the source line
     stops showing a performance (the coach reclaims and rewrites it), that set
-    is a real logged row again and belongs in the logger.
+    is a real logged row again and belongs in the logger. Computed set-wise
+    (``models.hidden_parsed_set_pks``, #561) rather than per row: a coach undo
+    can leave a row displayed only through ``reclaimed_line``, and the
+    one-row-per-line ranking that answers for a copy needs every row that
+    could be displayed by the same line, not just this one.
     """
+    rows = list(
+        log.sets.select_related("source_line", "reclaimed_line").order_by("set_number")
+    )
+    hidden_pks = models.hidden_parsed_set_pks(rows)
     return {
         "id": log.pk,
         "status": log.status,
@@ -460,8 +468,8 @@ def serialize_session_log(log):
                 "load": s.load,
                 "rpe": s.rpe,
             }
-            for s in log.sets.select_related("source_line").order_by("set_number")
-            if not models.parsed_set_is_hidden(s)
+            for s in rows
+            if s.pk not in hidden_pks
         ],
     }
 

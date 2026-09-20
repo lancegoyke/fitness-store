@@ -2342,7 +2342,47 @@ class ProposedChange(models.Model):
         return self.title
 
 
-def parsed_set_is_hidden(logged_set):
+def _line_shows(line, logged_set):
+    """Does ``line``'s current text render exactly this performance?"""
+    return parsing.performed_text_shows(
+        line.text, reps=logged_set.reps, load=logged_set.load, rpe=logged_set.rpe
+    )
+
+
+def display_line_id(logged_set):
+    """The sub-line that could be displaying this row.
+
+    Its own ``source_line``, else the ``reclaimed_line`` a "Log session" left
+    behind (#541) — the two ways a row can be standing behind a line's text.
+    """
+    if logged_set.source_line_id is not None:
+        return logged_set.source_line_id
+    return logged_set.reclaimed_line_id
+
+
+def line_displays(line, rows):
+    """Which of ``rows`` ``line``'s text is currently showing, if any.
+
+    A sub-line renders one line of text, so it stands in for ONE performance.
+    A row whose own ``source_line`` is this line outranks a source-less copy
+    that only answers to it through ``reclaimed_line``; between two copies the
+    older row wins. Without the ranking, a line whose text matches both hid
+    both, and a real logger row silently disappeared off the athlete's page.
+    """
+    candidates = [
+        row
+        for row in rows
+        if (
+            row.source_line_id == line.pk
+            or (row.source_line_id is None and row.reclaimed_line_id == line.pk)
+        )
+        and _line_shows(line, row)
+    ]
+    candidates.sort(key=lambda row: (row.source_line_id is None, row.pk))
+    return candidates[0] if candidates else None
+
+
+def parsed_set_is_hidden(logged_set, *, line_rows=None):
     """Is this set already on screen as its own sub-line's text (5a §6)?
 
     Hidden means suppressed from every structured surface — ``athlete_session``'s
@@ -2362,16 +2402,61 @@ def parsed_set_is_hidden(logged_set):
 
     Not a queryset ``Q``: the test re-parses text, which SQL cannot express.
     Callers filter in Python so all three surfaces share this one predicate.
+
+    ``line_rows`` is only consulted for a copy (``source_line`` is ``None``,
+    ``reclaimed_line`` set): the other rows that could be displayed by the
+    SAME line, so the one-row-per-line ranking (``line_displays``) can be
+    answered without a query. Pass it when the caller already holds the
+    log's sets in memory; otherwise it is looked up.
     """
     line = logged_set.source_line
+    if line is not None:
+        # Parsed rows keep main's rule verbatim: no sibling tie-break needed,
+        # because ``_upsert_parsed_set`` already refuses to mint a same-valued
+        # twin ON ONE LINE, so two parsed rows can never both match this text.
+        return _line_shows(line, logged_set)
+    # #561: a coach undo restores the reclaimed line's text but never touches
+    # ``LoggedSet`` (undo must not write athlete data, and a GET must not
+    # write either), so the ``reclaimed_line`` link #541 recorded at "Log
+    # session" time is the only thing left that can answer this.
+    line = logged_set.reclaimed_line
     if line is None:
         return False
-    return parsing.performed_text_shows(
-        line.text,
-        reps=logged_set.reps,
-        load=logged_set.load,
-        rpe=logged_set.rpe,
+    rows = (
+        list(line_rows)
+        if line_rows is not None
+        else list(
+            LoggedSet.objects.filter(session_log_id=logged_set.session_log_id)
+            .filter(
+                models.Q(source_line=line)
+                | models.Q(source_line__isnull=True, reclaimed_line=line)
+            )
+            .select_related("source_line", "reclaimed_line")
+        )
     )
+    if all(row.pk != logged_set.pk for row in rows):
+        rows.append(logged_set)
+    displayed = line_displays(line, rows)
+    return displayed is not None and displayed.pk == logged_set.pk
+
+
+def hidden_parsed_set_pks(rows):
+    """Which of ``rows`` a sub-line's own text is currently showing.
+
+    The set-wise form of ``parsed_set_is_hidden``: it groups by the line that
+    could display each row, so the one-row-per-line ranking is answered from
+    memory instead of a query per row. Callers that hold a whole log's sets
+    (the presenter, the log serializer, the logger's replace-delete) use this.
+    """
+    rows = list(rows)
+    by_line = defaultdict(list)
+    for row in rows:
+        by_line[display_line_id(row)].append(row)
+    return {
+        row.pk
+        for row in rows
+        if parsed_set_is_hidden(row, line_rows=by_line[display_line_id(row)])
+    }
 
 
 def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
@@ -2390,8 +2475,14 @@ def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
        swallowed) where checking any single cause covers only that one.
 
     ``backing_sets`` lets a caller pass rows it already has in memory; without
-    it the row is looked up. Reuses ``parsed_set_is_hidden``, so "backed by its
-    own line" means one thing across the slice.
+    it the row is looked up (also finding a copy through ``reclaimed_line``,
+    #561 — a line the coach put back can be backed by the copy "Log session"
+    left behind rather than by a row of its own). Reuses ``parsed_set_is_hidden``
+    via ``line_displays``, so "backed by its own line" means one thing across
+    the slice: the line is backed when its text is showing a row, whether that
+    row is its own parsed one or a reclaim's copy — otherwise a line a coach
+    undo restored was tinted "not logged as a set" while the set it was
+    showing sat right there.
     """
     if parsing.cell_should_warn(cell.text, loggable=loggable):
         return True
@@ -2400,9 +2491,12 @@ def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
     rows = (
         backing_sets
         if backing_sets is not None
-        else LoggedSet.objects.filter(source_line=cell).select_related("source_line")
+        else LoggedSet.objects.filter(
+            models.Q(source_line=cell)
+            | models.Q(source_line__isnull=True, reclaimed_line=cell)
+        ).select_related("source_line", "reclaimed_line")
     )
-    return not any(parsed_set_is_hidden(row) for row in rows)
+    return line_displays(cell, rows) is None
 
 
 class LoggedSet(models.Model):

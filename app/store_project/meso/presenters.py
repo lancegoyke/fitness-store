@@ -52,7 +52,8 @@ from .models import SessionLog
 from .models import TourEvent
 from .models import Week
 from .models import WeekDelivery
-from .models import parsed_set_is_hidden
+from .models import display_line_id
+from .models import hidden_parsed_set_pks
 from .models import sub_line_should_warn
 from .one_rm import key_str
 from .one_rm import one_rm_values
@@ -1650,7 +1651,7 @@ def athlete_session(session, athlete):
     log = (
         SessionLog.objects.filter(session=session, athlete=athlete)
         .order_by("-created_at")
-        .prefetch_related("sets__source_line")
+        .prefetch_related("sets__source_line", "sets__reclaimed_line")
         .first()
     )
     # No double-display (5a, plan §6): a freeform sub-line's text already
@@ -1663,11 +1664,20 @@ def athlete_session(session, athlete):
     # mutated to make a reclaimed set reappear, which is what ``history.py``
     # requires ("undo must never touch ... athlete data") since a coach edit
     # is undoable.
+    #
+    # #561: a coach undo restores a reclaimed line's text without touching
+    # ``LoggedSet``, so the row it now shows can be a source-less copy
+    # answering only through ``reclaimed_line``. Computed once over the whole
+    # log (``hidden_parsed_set_pks``) rather than per row, because that ranking
+    # — a line shows at most one performance — can only be answered by looking
+    # at every row that could be displayed by the same line, not one at a time.
+    all_sets = list(log.sets.all()) if log else []
+    hidden_pks = hidden_parsed_set_pks(all_sets)
     logged = (
         {
             (s.prescription_id, s.set_number): s
-            for s in log.sets.all()
-            if not parsed_set_is_hidden(s)
+            for s in all_sets
+            if s.pk not in hidden_pks
         }
         if log
         else {}
@@ -1685,9 +1695,15 @@ def athlete_session(session, athlete):
     # Sub-lines whose text is currently backed by a parsed set — i.e. the row
     # exists AND still matches what the line says. Reuses the same predicate the
     # suppression rule uses, so "displayed by its line" means one thing here.
+    #
+    # Keyed on ``display_line_id`` (#561), not the raw ``source_line_id``: a
+    # copy left behind by "Log session" answers to its line only through
+    # ``reclaimed_line``, and a cell's ``backing_sets`` has to include it or a
+    # line a coach undo restored gets tinted as unlogged despite the set the
+    # copy carries.
     sets_by_line = {}
-    for row in log.sets.all() if log else ():
-        sets_by_line.setdefault(row.source_line_id, []).append(row)
+    for row in all_sets:
+        sets_by_line.setdefault(display_line_id(row), []).append(row)
 
     def _sub_lines(slot_id):
         # The row's editable tracking stack (Phase 4a): its line>=1 cells for
