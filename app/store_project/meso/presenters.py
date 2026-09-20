@@ -1735,6 +1735,20 @@ def athlete_session(session, athlete):
         # database error — and each of those leaves the same state this warning
         # exists for: ordinary-looking performed text that quietly counts for
         # nothing.
+        # #567/#568 P2-C: no ``loggable`` is passed here, so it defaults
+        # ``True`` — hard-wired, unlike ``views._cell_warn_or_false``, which
+        # passes ``not skipped``. The two answers still agree, but only
+        # because of an INVISIBLE coupling at the call site, not because a
+        # skipped line can't warn: ``_sub_lines`` is only ever called (below)
+        # for ``p in prescriptions``, and ``prescriptions`` comes from
+        # ``session.trainable_cells()`` (this function's own docstring, above,
+        # already records that this exact distinction from ``session.cells()``
+        # drifted once), which excludes every skipped cell before ``_sub_lines``
+        # ever runs. If a future change ever rendered a skipped row's sub-lines
+        # here too — a "show its history" mode, say — this default would warn
+        # a line that cannot accept a set at all, exactly the disagreement
+        # #568 exists to prevent; that caller would need to pass its own
+        # ``loggable=not skipped`` rather than relying on this default.
         return [
             {
                 "line": line_cell.line,

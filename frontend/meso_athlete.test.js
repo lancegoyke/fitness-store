@@ -253,8 +253,10 @@ describe("syncFromLog", () => {
     expect(clientId).toBeTruthy(); // sanity: a client_id really was posted
     c.syncFromLog(
       {
-        // No `client_id` at all on the response item -- an old server's shape.
-        sets: [{ prescription: 1, set_number: 2, id: 999 }],
+        // No `client_id` at all on the response item -- an old server's
+        // shape. reps/load/rpe echo exactly what this row posted (#567/#568
+        // P1-I's value check requires that of the slot leg too).
+        sets: [{ prescription: 1, set_number: 2, id: 999, reps: "5", load: "", rpe: "" }],
       },
       payload,
     );
@@ -276,7 +278,13 @@ describe("syncFromLog", () => {
     const row = c.exercises[0].set_rows[0]; // has a server id (11)
     row.reps = "5";
     const payload = c.buildPayload(false);
-    c.syncFromLog({ sets: [{ prescription: 1, set_number: 1 }] }, payload); // no id
+    // No `id` on the response item, but reps/load/rpe echo exactly what was
+    // posted -- #567/#568 P1-I's value check is what lets the slot leg match
+    // here despite the missing id.
+    c.syncFromLog(
+      { sets: [{ prescription: 1, set_number: 1, reps: "5", load: "", rpe: "" }] },
+      payload,
+    );
     expect(row.done).toBe(true);
     expect(row.id).toBe(11); // unchanged, not clobbered to undefined
   });
@@ -324,6 +332,101 @@ describe("syncFromLog", () => {
     const row2 = next.sets.find((s) => s.set_number === 2);
     expect(row2.id).toBeUndefined();
     expect(typeof row2.client_id).toBe("string");
+  });
+
+  // #567/#568 P1-I: the slot fallback's soundness argument assumed the only
+  // visible row left at a posted slot, after the save, is the one the server
+  // created FOR that exact posted set -- true when the set was CREATED,
+  // false when it was ABSORBED (see the rewritten comment above this method,
+  // and `athlete_log_session`'s twin-absorb comment in views.py). When it's
+  // absorbed, `posted` there is recomputed AFTER the absorb, so the
+  // collision renumbering never moves a spared VISIBLE row off that slot --
+  // and the response's item at that slot is then a DIFFERENT row than the
+  // one this grid row posted. Without a value check, the slot leg plants
+  // that foreign row's pk onto this grid row, and the next ordinary edit
+  // posts it, letting the server delete a performance the page never
+  // rendered.
+  it("does not adopt a response item at the posted slot when its values differ from what this row posted", () => {
+    const c = makeLogger();
+    const row = c.exercises[0].set_rows[0]; // has a server id (11)
+    row.reps = "5";
+    row.load = "225";
+    const payload = c.buildPayload(false); // posts {id: 11, reps: "5", load: "225", rpe: ""}
+
+    // The response carries a DIFFERENT row at this same slot -- a foreign
+    // survivor (Y in the views.py comment) this save never touched, with its
+    // own distinct id and values.
+    c.syncFromLog(
+      {
+        sets: [
+          { prescription: 1, set_number: 1, id: 999, reps: "8", load: "315", rpe: "" },
+        ],
+      },
+      payload,
+    );
+
+    expect(row.done).toBe(false);
+    expect(row.id).toBe(11); // unchanged -- the foreign pk must NOT be planted
+    expect(row.client_id).toBeNull();
+    // The next save still posts THIS row's own id, never the foreign one.
+    expect(c.buildPayload(false).sets[0]).toMatchObject({ id: 11 });
+  });
+
+  // The mirror of the case above: when the response item at the posted slot
+  // DOES carry what this row posted, it is adopted exactly as before -- the
+  // value check is a new REFUSAL condition, not a new requirement that
+  // breaks the ordinary echo.
+  it("adopts a response item at the posted slot when its values match what this row posted", () => {
+    const c = makeLogger();
+    const row = c.exercises[0].set_rows[0]; // has a server id (11)
+    row.reps = "5";
+    row.load = "225";
+    const payload = c.buildPayload(false); // posts {id: 11, reps: "5", load: "225", rpe: ""}
+
+    // A different id than the row's own (e.g. the row was replaced under a
+    // new pk server-side) but the SAME values this row posted -- still a
+    // legitimate match via the slot leg.
+    c.syncFromLog(
+      {
+        sets: [
+          { prescription: 1, set_number: 1, id: 555, reps: "5", load: "225", rpe: "" },
+        ],
+      },
+      payload,
+    );
+
+    expect(row.done).toBe(true);
+    expect(row.id).toBe(555);
+    expect(row.client_id).toBeNull();
+  });
+
+  // #567/#568 P1-I, the byId leg's own version of the same gap: an id match
+  // at a DIFFERENT set_number than this row posted, carrying different
+  // values -- e.g. a spared row the collision renumbering moved elsewhere.
+  // Without the value check this bound the grid row to a set it never
+  // restated (and, separately, to the wrong `set_number` -- see the comment
+  // above this method).
+  it("does not adopt a byId match whose values differ from what this row posted (a renumbered row)", () => {
+    const c = makeLogger();
+    const row = c.exercises[0].set_rows[0]; // has a server id (11)
+    row.reps = "5";
+    row.load = "225";
+    const payload = c.buildPayload(false); // posts {id: 11, reps: "5", load: "225", rpe: ""}
+
+    // The response's item for THIS row's own id sits at a different slot,
+    // with different values -- not the row this save actually restated.
+    c.syncFromLog(
+      {
+        sets: [
+          { prescription: 1, set_number: 2, id: 11, reps: "8", load: "315", rpe: "" },
+        ],
+      },
+      payload,
+    );
+
+    expect(row.done).toBe(false);
+    expect(row.id).toBe(11); // unchanged
+    expect(row.client_id).toBeNull();
   });
 });
 

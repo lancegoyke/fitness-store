@@ -98,6 +98,27 @@ function newClientId() {
   return "c" + _clientIdSeq.toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
+// #567/#568 P1-I: does `item` (a response set) carry what `posted` (the set
+// object THIS grid row actually posted, from the payload being reconciled —
+// see `syncFromLog`) says it posted? Only `reps`/`load`/`rpe` are compared —
+// never `id`/`client_id`/`prescription`/`set_number`, which is exactly what
+// the caller used to FIND `item` in the first place and so is already
+// settled by the time this runs. A missing field on either side defaults to
+// `""`, since a hand-built response stub (or a genuinely blank set) omits
+// fields the same way an empty string would compare. Sound because the
+// server (`_clean_logged_sets`) stores these three fields verbatim, with no
+// normalisation — a row the server created FOR a posted set always echoes
+// back byte-identical values, while a row that merely happens to sit at the
+// same slot or share the same id essentially never does.
+function postedValuesMatch(item, posted) {
+  if (!item || !posted) return false;
+  return (
+    (item.reps ?? "") === (posted.reps ?? "") &&
+    (item.load ?? "") === (posted.load ?? "") &&
+    (item.rpe ?? "") === (posted.rpe ?? "")
+  );
+}
+
 // The offline outbox (`meso-log-queue`) holds two kinds of write. A session
 // log is `{url, body}`, the shape it has always had, so a queue written before
 // #527 still replays. A typed line is `{kind: "cell", url, body: {exercise_id,
@@ -814,42 +835,85 @@ function createLogger() {
     // those repeated posts renumbered the real survivor one `set_number`
     // higher.
     //
-    // The soundness argument that follows was ALWAYS scoped to slots this
-    // payload posted — it just wasn't enforced. The server always creates a
-    // posted set's row AT the exact slot it was posted under, two posted sets
-    // can never share a slot (the server 400s a duplicate `(prescription,
-    // set_number)`), and `athlete_log_session`'s collision renumbering moves
-    // every SPARED displayed row off a slot this request posted — so after
-    // the save, the only visible row left at a POSTED slot is the one created
-    // for that exact posted set. Applied to a slot nothing was posted at, the
-    // argument simply doesn't hold: nothing here guarantees the row sitting
-    // there is related to this save at all.
+    // #567/#568 P1-I: the paragraph this replaces argued the only visible row
+    // left at a POSTED slot, after the save, is the one the server created
+    // FOR that exact posted set — but that is only true when the set was
+    // CREATED. When a posted set is instead ABSORBED (the twin absorb in
+    // `athlete_log_session`), nothing is created at that slot at all, and
+    // `posted` there is RECOMPUTED after the absorb runs — so the slot never
+    // enters `posted` in the first place, and the collision renumbering (which
+    // only moves a row off a slot IN `posted`) never even looks at it. A
+    // visible parsed row already sitting at that same slot, left over from
+    // before this save, is therefore untouched — and it is a DIFFERENT row
+    // than the one whose id this grid row posted.
+    //
+    // Concretely: a hidden row X and a visible row Y can both exist on one
+    // exercise's rows, at different set numbers, after a coach rewrite/undo
+    // cycle. A payload posting `{id: X.pk, set_number: 1, reps: "5", load:
+    // "225"}` is absorbed by X — the absorb matches on pk and VALUES alone,
+    // with no `set_number` agreement, so this works even though X's own
+    // `set_number` is 2, not 1 — which drops slot 1 out of `posted` entirely.
+    // Y, sitting at slot 1 the whole time, is left exactly where it was. The
+    // response's item at slot 1 is therefore Y, not X: without a value check,
+    // legs 2 and 3 below would plant Y's pk onto this grid row, and the very
+    // next ordinary edit into it would post that pk and let the server delete
+    // a performance the page never rendered.
+    //
+    // So the rule that actually holds is narrower than "the only row at a
+    // posted slot is the one this save created for it": a grid row may only
+    // adopt a response item that carries what THAT ROW ITSELF POSTED — see
+    // `postedValuesMatch`, above `newClientId`. Sound because
+    // `_clean_logged_sets` stores `reps`/`load`/`rpe` verbatim, with no
+    // normalisation, so a row the server created FOR a posted set always
+    // echoes back byte-identical values, while a row that merely happens to
+    // share a slot or an id essentially never does. Leg 1 (`client_id`) needs
+    // no such check: a `client_id` the server echoes is an exact,
+    // server-minted identity for THIS request's set, so a value check there
+    // adds no safety and only risks a false negative.
+    //
+    // This also closes a second, related gap in leg 2 (`byId`): without the
+    // value check it bound a grid row to a response item at a DIFFERENT
+    // `set_number` without noticing — after a spared row is renumbered away
+    // by the collision pass, the page would show a tick at the row's OLD
+    // number for a row that has since moved to a different one. The values
+    // check refuses that match too, since the renumbered row's own values
+    // didn't change but nothing in this payload actually posted its new slot.
     //
     // Match order, for a grid row `r`, where "posted" means this payload's
     // OWN `sets` list actually named `r`'s current `(prescription,
-    // set_number)`:
+    // set_number)` — and, for legs 2 and 3, that the matched item's
+    // `reps`/`load`/`rpe` equal what THIS row posted there (`postedValuesMatch`):
     //   1. `r.client_id`, against the response's client_id map — the row the
-    //      server just created FOR this grid row. No posted-gate needed: the
-    //      server only ever echoes a client_id it just minted FROM this same
-    //      request's payload, so a match here is impossible unless this row
-    //      really was posted.
-    //   2. posted AND `r.id != null`, against the response's id map — exact
-    //      identity, for a row that already had a server id.
-    //   3. posted, against the slot map (first write wins, as before) — the
-    //      rolling-deploy fallback: an OLD server build doesn't know
-    //      `client_id` and never echoes it, so leg 1 fails for a client_id
-    //      row even though it truly was posted; matching ONLY by client_id
-    //      then left such a row un-ticked forever — `rowFilled` drops an
-    //      unticked, empty-looking row from the NEXT save's payload, and that
-    //      save deletes the very row the old server just created for it.
+    //      server just created FOR this grid row. No posted-gate or value
+    //      check needed: the server only ever echoes a client_id it just
+    //      minted FROM this same request's payload, so a match here is
+    //      impossible unless this row really was posted, and the id is
+    //      strictly stronger evidence than a value comparison could be.
+    //   2. posted AND `r.id != null`, against the response's id map, values
+    //      matching — exact identity, for a row that already had a server id.
+    //   3. posted, against the slot map (first write wins, as before), values
+    //      matching — the rolling-deploy fallback: an OLD server build
+    //      doesn't know `client_id` and never echoes it, so leg 1 fails for a
+    //      client_id row even though it truly was posted; matching ONLY by
+    //      client_id then left such a row un-ticked forever — `rowFilled`
+    //      drops an unticked, empty-looking row from the NEXT save's payload,
+    //      and that save deletes the very row the old server just created
+    //      for it.
     // A row with NO match — posted or not — gets `r.done = false` and
     // NEITHER `r.id` NOR `r.client_id` touched:
-    //   * POSTED, no match: the server ABSORBED it (it restated a row hidden
-    //     from the logger, a twin the coach's rewrite created), so the
-    //     response carries no set for it. Clearing its id here would make
-    //     the NEXT save mint a fresh client_id and post it as a brand-new
-    //     row — creating the very duplicate #567 exists to prevent. Keeping
-    //     the id lets the server absorb it again next time, which is stable.
+    //   * POSTED, nothing at the id/slot at all: the server ABSORBED it (it
+    //     restated a row hidden from the logger, a twin the coach's rewrite
+    //     created), so the response carries no set for it. Clearing its id
+    //     here would make the NEXT save mint a fresh client_id and post it as
+    //     a brand-new row — creating the very duplicate #567 exists to
+    //     prevent. Keeping the id lets the server absorb it again next time,
+    //     which is stable.
+    //   * POSTED, an item sits at the id/slot but its VALUES differ (P1-I):
+    //     that item is a FOREIGN row this save never touched, exactly the
+    //     scenario above. Leaving the row un-ticked and its id untouched
+    //     means the worst case is a stale tick lingering one save longer, not
+    //     a stranger's pk getting planted here — a reload re-derives this
+    //     row from `_set_rows`, which knows the truth.
     //   * UNPOSTED: this save never touched the row at all, so there is
     //     nothing here to reconcile it against, whatever the response
     //     happens to carry at its slot. A reload renders it properly from
@@ -857,9 +921,12 @@ function createLogger() {
     //     actually knows this row's true state.
     syncFromLog(log, payload) {
       const sets = log.sets || [];
-      const posted = new Set(
+      // #567/#568 P1-I: a Map from slot to the posted set OBJECT, not a Set
+      // of slot keys — legs 2 and 3 below need the actual values this row
+      // posted, not just proof that its slot was posted at all.
+      const posted = new Map(
         (payload && Array.isArray(payload.sets) ? payload.sets : []).map(
-          (s) => `${s.prescription}:${s.set_number}`,
+          (s) => [`${s.prescription}:${s.set_number}`, s],
         ),
       );
       const byClientId = new Map();
@@ -882,13 +949,21 @@ function createLogger() {
       }
       for (const e of this.exercises) {
         for (const r of e.set_rows) {
-          const rowPosted = posted.has(`${e.id}:${r.set_number}`);
-          // #567/#568 P1-E/F: identity first, slot second, and NEVER for a
-          // row this payload didn't post — see the comment above this method.
+          const postedSet = posted.get(`${e.id}:${r.set_number}`);
+          // `undefined` (not merely falsy `null`) whenever the posted-gate
+          // fails, so `postedValuesMatch` — which requires both arguments —
+          // rejects it the same way it rejects "no item found".
+          const idItem = postedSet && r.id != null ? byId.get(r.id) : undefined;
+          const slotItem = postedSet
+            ? bySlot.get(`${e.id}:${r.set_number}`)
+            : undefined;
+          // #567/#568 P1-E/F/I: identity first, slot second — posted AND
+          // value-matched only, for legs 2/3 — and NEVER for a row this
+          // payload didn't post. See the comment above this method.
           const match =
             (r.client_id && byClientId.get(r.client_id)) ||
-            (rowPosted && r.id != null && byId.get(r.id)) ||
-            (rowPosted && bySlot.get(`${e.id}:${r.set_number}`));
+            (postedValuesMatch(idItem, postedSet) && idItem) ||
+            (postedValuesMatch(slotItem, postedSet) && slotItem);
           r.done = !!match;
           if (match) {
             // P3: a response item can legitimately omit `id` (nothing to
@@ -904,7 +979,8 @@ function createLogger() {
           }
           // NO match, POSTED or not: leave r.id and r.client_id exactly as
           // they are — do NOT clear them. See the comment above this method
-          // for the two shapes this covers (absorbed vs. simply untouched).
+          // for the shapes this covers (absorbed, a foreign row at the same
+          // id/slot, or simply untouched).
         }
       }
     },

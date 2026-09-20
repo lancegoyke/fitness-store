@@ -2860,13 +2860,58 @@ def _cell_warn_or_false(cell, line_zero_cell, *, session, athlete):
     running here, AFTER the write's transaction has already closed, is what
     guarantees a swallowed failure in this function can never reach back and
     touch a write that already succeeded — the one thing the tolerance
-    guarantee (plan §11) exists to protect. It also loses nothing worth
-    protecting: writes to this cell/log are already serialized by
-    ``athlete_cell_write``'s own session lock and ``_upsert_parsed_set``'s row
-    lock on the line-0 ``Prescription`` (see their comments), so there is no
-    concurrent write that could land in the gap between "the transaction that
-    just committed" and "this read" — nothing here needs a savepoint's
-    protection because there is nothing left in flight to protect.
+    guarantee (plan §11) exists to protect.
+
+    #567/#568 P2-A — this read is deliberately POST-COMMIT, best-effort, and
+    NOT serialized against a concurrent writer. An earlier version of this
+    docstring claimed the opposite — that "there is no concurrent write that
+    could land in the gap between the transaction that just committed and
+    this read", reasoning that the session lock and ``_upsert_parsed_set``'s
+    row lock already serialize every writer. That claim is FALSE: both locks
+    release AT commit, not after this function returns, and this read then
+    runs in autocommit as several separate, unserialized statements — so a
+    second writer that was merely PARKED on the session lock is freed by that
+    very commit and can run, and finish, before this read even starts. An
+    ordinary trigger, not a contrived one: a sub-line has focus while the
+    athlete taps "Log session" — the blur's POST and the save's POST are
+    concurrent by construction, and ``athlete_log_session`` takes the exact
+    same session lock this function's own caller does. The PLACEMENT is still
+    correct, and must not move back inside the transaction (P1-D, above) — but
+    the reason is narrower than the old claim: this function's only hard
+    requirement is that ITS OWN failure can never touch a write that already
+    committed. It is a display hint, free to read a moment that has already
+    moved on, exactly like the presenter's own next read — the two are not
+    required to agree with a THIRD write racing both of them, only with each
+    other once each has settled. An overstated justification here is what
+    invites the next person to move this call back inside the transaction, on
+    the reasoning that "nothing can race it anyway" — which is precisely the
+    bug this placement exists to prevent.
+
+    #567/#568 P2-B — the argument above (that a *database* failure here can
+    never roll back a write that already committed) itself depends on this
+    call running OUTSIDE any request-level ``transaction.atomic()``, not just
+    outside the one this file opens explicitly. Django's ``ATOMIC_REQUESTS``
+    setting would wrap every view — this one included — in exactly such a
+    transaction, committed only if the view returns without raising. As of
+    this writing ``ATOMIC_REQUESTS = True`` is set at MODULE scope in
+    ``config/settings/base.py`` rather than inside ``DATABASES["default"]``
+    — the only place Django actually reads it: ``BaseHandler.make_view_atomic``
+    (``django/core/handlers/base.py``) walks ``connections.settings`` and
+    checks ``settings_dict["ATOMIC_REQUESTS"]`` **per database alias**, so a
+    bare module-level name of the same spelling is not the setting Django
+    means at all — so today it is inert and changes nothing. If it were ever
+    moved into the database config, this call would start running inside a
+    request-level atomic block
+    again, and the ``except Exception`` below would leave the connection's
+    ``needs_rollback`` flag set on a database failure — silently rolling back
+    the athlete's already-``cell.save()``d text and parsed ``LoggedSet`` while
+    ``athlete_cell_write`` still returns 200, the exact failure P1-D exists to
+    rule out. Recorded here, not fixed: the setting is NOT changed by this
+    slice, and no test pins it at ``False`` — either would pin an accidental,
+    currently-harmless placement as though it were a deliberate contract, and
+    the next person to touch ``ATOMIC_REQUESTS`` needs to find this warning by
+    reading code that depends on it, not by tripping a test that merely
+    freezes today's setting.
 
     #567/#568 P1-H — ``loggable`` is derived from a FRESH read of the line-0
     row here, not from the caller's ``line_zero_cell`` instance.

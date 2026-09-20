@@ -1228,3 +1228,118 @@ class TestMixedAnchoredAndStaleIdsInOneRequest:
             "unaffected by the stale squat id sharing the request: "
             f"{[(r.pk, *t) for r, t in zip(rdl_rows, _row_tuples(rdl_rows))]}"
         )
+
+
+# -- adversarial review round 3: P1-I ----------------------------------------
+
+
+class TestAnAbsorbedSetCanLeaveAForeignRowAtItsPostedSlot:
+    """#567/#568 P1-I: the state that arms the client's soundness gap.
+
+    ``syncFromLog``'s slot fallback used to reason that the only visible row
+    left at a POSTED slot, after a save, is the one the server created FOR
+    that exact posted set -- true when the set was CREATED, false when it
+    was ABSORBED. This class pins the ABSORBED half on the server, which is
+    what makes that client-side reasoning unsound: it shows a spared VISIBLE
+    parsed row can still occupy the exact slot a payload posted, and that
+    ``serialize_session_log`` echoes that FOREIGN row back at that slot --
+    the exact shape the client-side fix (``meso_athlete.js``,
+    ``frontend/meso_athlete.test.js``) must refuse to adopt.
+
+    Built the shortest honest way, through the real views:
+
+    1. the athlete types "245 x 5" on sub-line 1 -> parsed row Y, hidden (its
+       own line still shows it);
+    2. the coach rewrites sub-line 1 to a cue -> Y becomes VISIBLE (no
+       longer shown by its line's text), still at set_number 1;
+    3. the athlete types "225 x 5" on sub-line 2 -> parsed row X, hidden
+       (its own line still shows it), at set_number 2 -- a DIFFERENT slot
+       than Y;
+    4. a payload posts X's own id, X's own values, but under set_number 1 --
+       Y's slot, not X's true slot 2. The twin absorb matches on pk and
+       VALUES alone, with no ``set_number`` agreement (see
+       ``athlete_log_session``'s twin-absorb comment), so it is absorbed by
+       X regardless of the slot claimed.
+
+    ``posted`` is recomputed AFTER the absorb (``views.py``, the twin-absorb
+    loop) and the absorbed cleaned set is gone from ``cleaned_sets`` by then,
+    so slot 1 never re-enters ``posted`` at all -- the collision renumbering
+    (gated on ``if posted:``) never runs, and Y is left exactly where it
+    was. Nothing is created. The response's item at slot 1 is therefore Y,
+    not X: a different row than the one the payload named.
+    """
+
+    def test_a_survivor_can_sit_at_the_slot_an_absorbed_id_posted(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+
+        # Y: parsed, hidden, at set_number 1 -- then made VISIBLE by a coach
+        # rewrite, so it survives the replace-delete untouched (`_client_held`
+        # spares it: nothing in the payload below names it).
+        write_cell(client, s.session, s.squat, 1, "245 x 5")
+        y_pk = LoggedSet.objects.get(prescription=s.squat).pk
+
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="brace harder", line=1).status_code == 200
+
+        client.force_login(s.athlete)
+        rendered = serialize_session_log(the_log(s.session, s.athlete))["sets"]
+        assert [row["id"] for row in rendered] == [y_pk], (
+            "Y must be the one visible Set row at this point"
+        )
+
+        # X: parsed, hidden, at set_number 2 -- a DIFFERENT slot than Y's.
+        write_cell(client, s.session, s.squat, 2, "225 x 5")
+        x_pk = LoggedSet.objects.exclude(pk=y_pk).get(prescription=s.squat).pk
+
+        # A payload naming X's own id and X's own values, but claiming Y's
+        # slot (1), not X's true slot (2).
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "done",
+                "sets": [
+                    {
+                        "id": x_pk,
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+        rows = _squat_rows(s)
+        assert _row_tuples(rows) == [
+            # Y, untouched, still at slot 1 -- still linked to its own
+            # source line (the coach's rewrite only changes the line's
+            # TEXT, never the row's `source_line`), just no longer HIDDEN
+            # because that text no longer parses back to Y's own values.
+            (sub_cell(s.squat, 1).pk, None, 1, "245", "5"),
+            (sub_cell(s.squat, 2).pk, None, 2, "225", "5"),  # X, untouched
+        ], (
+            "both rows must survive exactly as they were -- nothing created, "
+            f"nothing deleted: {[(r.pk, *t) for r, t in zip(rows, _row_tuples(rows))]}"
+        )
+
+        log_sets = resp.json()["log"]["sets"]
+        assert len(log_sets) == 1, "X stays hidden; only Y is a visible Set row"
+        assert log_sets[0]["id"] == y_pk, (
+            "the response's item at slot 1 is Y, a DIFFERENT row than the id "
+            f"(X, pk {x_pk}) the payload posted at that slot: {log_sets}"
+        )
+        assert (
+            log_sets[0]["set_number"],
+            log_sets[0]["load"],
+            log_sets[0]["reps"],
+        ) == (
+            1,
+            "245",
+            "5",
+        ), (
+            "a client trusting the slot alone would plant Y's pk on the grid row that posted X's id"
+        )
