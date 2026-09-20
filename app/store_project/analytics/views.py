@@ -43,8 +43,14 @@ def _rate_limited(user):
     Same cache-counted idiom as ``meso.views._sandbox_rate_limited`` (read
     that one first) — ``cache.add`` seeds the counter with its one-hour TTL
     (a no-op once it exists), then ``incr`` bumps it, which on Redis
-    preserves the existing TTL rather than resetting it, so the window
-    rolls instead of restarting on every hit. Keyed per user rather than
+    preserves the existing TTL rather than resetting it on every hit.
+
+    That makes it a **fixed** window anchored at the first post of the hour,
+    not a sliding one: a client that spends its budget just before the TTL
+    lapses and again just after gets through roughly twice the limit in a
+    short span. That's accepted rather than fixed with overlapping buckets —
+    this bounds a misbehaving page, and 120 tiny events in a bad minute is
+    not a number worth a second cache key. Keyed per user rather than
     per IP, unlike the sandbox limiter: a beacon post always carries an
     authenticated session (see ``track_beacon``), so the account is the
     natural, stable bound — an IP key would either conflate every signed-in
@@ -99,15 +105,24 @@ def track_beacon(request):
     before doing more work on a request that's already going nowhere:
 
     1. anonymous → 204, nothing recorded (see the module docstring).
-    2. an oversized body → 400, before it's even read as JSON.
-    3. a body that isn't a JSON object → 400.
-    4. the rate limit → 429. Checked after parsing (so the counter only
-       tracks real posts, not e.g. a request with no body at all) but
-       before validating the payload's *contents* (so a client hammering
-       nonsense names is bounded exactly the same as one hammering valid
-       ones — the limit is about request volume, not about being wrong).
-    5. ``beacon.validate`` → 400 with its returned reason.
-    6. ``track()``, with ``source=Event.Source.CLIENT`` — the one call site
+    2. the rate limit → 429. First, so it counts every authenticated
+       *attempt* — the same reasoning as ``meso.views._sandbox_rate_limited``
+       ("counts attempts, so hammering past the limit never re-opens it
+       early"). A limiter that only counted well-formed posts would let a
+       client send malformed ones at no budget cost, which is exactly the
+       traffic it most wants to bound.
+    3. a content type other than ``application/json`` → 415. This must come
+       **before** anything reads ``request.body``. ``CsrfViewMiddleware``
+       looks for ``csrfmiddlewaretoken`` in ``request.POST`` before it falls
+       back to the ``X-CSRFToken`` header, and for ``multipart/form-data``
+       that parse consumes the stream without stashing ``_body`` — so a
+       later ``request.body`` raises ``RawPostDataException`` and the view
+       500s. The beacon only ever speaks JSON, so saying so plainly is both
+       the right contract and the fix.
+    4. an oversized body → 400, before it's read as JSON.
+    5. a body that isn't a JSON object → 400.
+    6. ``beacon.validate`` → 400 with its returned reason.
+    7. ``track()``, with ``source=Event.Source.CLIENT`` — the one call site
        in the codebase allowed to pass that, because this is the one place
        a fact reaches us because the *browser* reported it rather than
        because our own code observed it server-side.
@@ -118,13 +133,17 @@ def track_beacon(request):
     """
     if not request.user.is_authenticated:
         return HttpResponse(status=204)
+    if _rate_limited(request.user):
+        return JsonResponse({"ok": False, "error": "Too many events."}, status=429)
+    if request.content_type != "application/json":
+        return JsonResponse(
+            {"ok": False, "error": "Expected application/json."}, status=415
+        )
     if len(request.body) > beacon.MAX_BODY_BYTES:
         return JsonResponse({"ok": False, "error": "Body too large."}, status=400)
     payload, bad = _json_object_body(request)
     if bad is not None:
         return bad
-    if _rate_limited(request.user):
-        return JsonResponse({"ok": False, "error": "Too many events."}, status=429)
     name, result = beacon.validate(payload.get("name"), payload.get("props"))
     if name is None:
         return JsonResponse({"ok": False, "error": result}, status=400)

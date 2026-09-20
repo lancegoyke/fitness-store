@@ -35,14 +35,20 @@
     return { url: url, csrf: cfg.dataset.csrf || "" };
   }
 
-  // POST one event and forget it. Never throws and never rejects: a beacon is
-  // a courtesy to analytics, not something a caller (a push permission flow,
-  // an install listener) should have to guard against or let block on. Callers
-  // that want to know it's finished (tests, mainly) can still `await` it,
-  // since a swallowed failure still resolves.
+  // POST one event. Never throws and never rejects: a beacon is a courtesy to
+  // analytics, not something a caller (a push permission flow, an install
+  // listener) should have to guard against or let block on.
+  //
+  // Resolves TRUE when the server accepted the event and FALSE otherwise —
+  // a network failure, an offline load, a 4xx, or no beacon configured at
+  // all. Callers that only *report a fact once* must be able to tell those
+  // apart: meso_onboarding.js remembers a device's install in localStorage,
+  // and if it wrote that flag for a beacon that never arrived, the install
+  // would be lost for good. Swallowing the failure but still saying so is
+  // what lets it retry on the next load.
   function mesoTrack(name, props) {
     var cfg = beaconConfig(root.document);
-    if (!cfg) return Promise.resolve();
+    if (!cfg) return Promise.resolve(false);
     return fetch(cfg.url, {
       method: "POST",
       headers: {
@@ -50,9 +56,13 @@
         "X-CSRFToken": cfg.csrf,
       },
       body: JSON.stringify({ name: name, props: props || {} }),
-    }).catch(function () {
-      /* best-effort — nothing on the page reads a beacon's answer */
-    });
+    })
+      .then(function (response) {
+        return !!(response && response.ok);
+      })
+      .catch(function () {
+        return false;
+      });
   }
   root.mesoTrack = mesoTrack;
 

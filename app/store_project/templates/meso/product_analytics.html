@@ -248,7 +248,10 @@
         them, and how many were tapped. A tap is counted when the athlete opens the link the
         notification carried, so one swiped away — or opened on a device that can't reach us —
         isn't counted. One row per device, so an athlete with two subscribed devices is two rows
-        for one delivery.
+        for one delivery. Click rate is of attempts (sent + failed), not sent alone: a push our
+        own send call recorded as failed can still be tapped — a timeout on our side, a delivery
+        on theirs — and a real tap is the strongest evidence a push arrived, whatever our send
+        call reported.
       </p>
     </div>
   </div>

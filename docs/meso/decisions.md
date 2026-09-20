@@ -360,16 +360,44 @@ nothing a page can compute reaches the ledger:
   `localStorage` flag makes a device report once, whichever signal comes
   first. That flag is per browser profile, so the same person installing on a
   phone and a laptop is two installs, and clearing site data can produce a
-  second one.
+  second one. Two rules the review added: the flag is written only once the
+  beacon has **landed** (writing it first lost the install for good the first
+  time an athlete opened the installed app with no signal — for a gym PWA, an
+  ordinary Tuesday), and when `localStorage` can't persist at all (private
+  mode, blocked site data, ITP eviction) the install is **not reported** at
+  all. `isDismissed` answers "not dismissed" when storage throws, which is
+  right for a card the athlete waved away and catastrophic here: on an
+  installed iOS device every load is standalone, so an inert flag would report
+  an install on every page view. Under-counting installs beats inventing them.
 - `push_permission`, `result` ∈ {`granted`, `denied`, `default`}. Recorded only
   when the athlete actually answers: `meso_push.js` reads the permission
-  *before* asking and reports only if it was `default`. `default` is itself a
+  *before* asking and reports only if it was `default`, and holds an in-flight
+  guard so a second tap on the CTA — Chrome's prompt is a non-modal bubble, the
+  page stays live under it — can't report one answer twice. `default` is itself a
   real answer — Chrome leaves the permission there when the prompt is
   dismissed.
-- `push_clicked` is accepted so the browser-only set has one home, but nothing
-  in the app posts it. The server writes it (see below), with the default
-  `source=server`: our own code observed that request, the way it observes
-  `session_opened`. Only a beacon post is `client`.
+- `push_clicked` is **not** beacon-postable, though it is one of the
+  browser-only names. The server writes it, from the notification's landing
+  URL (see below), with the default `source=server`: our own code observed
+  that request, the way it observes `session_opened`. Accepting it at the
+  beacon too was the original plan and the review killed it — nothing in the
+  app posts it, so it was pure inbound surface, and it would have cost the
+  thing that makes the number worth reading: today a `push_clicked` event
+  always has a `PushNotification` row behind it, and any signed-in browser
+  could otherwise have added events with no row.
+
+The beacon speaks JSON and only JSON — anything else is a 415, checked before
+the body is read. That isn't fussiness: `CsrfViewMiddleware` looks for
+`csrfmiddlewaretoken` in `request.POST` before falling back to the
+`X-CSRFToken` header, and for `multipart/form-data` that parse consumes the
+stream without stashing `_body`, so a later `request.body` raises
+`RawPostDataException` and the view 500s. The rate limit is checked first of
+all, so it counts every authenticated attempt rather than only the well-formed
+ones — otherwise malformed traffic, the kind most worth bounding, would cost
+no budget. It is a fixed window anchored at the hour's first post, not a
+sliding one, so a client spending its budget on either side of the boundary
+gets through about twice the limit in a short span; that is accepted for a
+courtesy limiter on tiny events.
 
 **Not tracked yet.** A coach accepting an athlete's request, a relationship
 re-invite and its acceptance, and the invite "Resend" button aren't events.
@@ -417,13 +445,47 @@ The write is a conditional UPDATE on `clicked_at IS NULL` scoped to the
 requesting user, so a reload, a shared link, or two simultaneous loads count
 once; an id that is unknown, malformed, or someone else's is ignored in
 silence. An inline script drops the parameter from the address bar with
-`history.replaceState` once the server has counted it. `/meso/me/` is the only
-URL a push targets today, so that is the only view that calls the helper.
+`history.replaceState` once the server has counted it. A speculative fetch —
+`Sec-Purpose: prefetch`, or the older `Purpose: prefetch` an iOS link preview
+sends — is skipped, so a link the athlete never tapped can't burn the row's
+one shot. `/meso/me/` is the only URL a push targets today, so that is the only
+view that calls the helper.
+
+**What a per-send parameter did to the service worker.** Three separate things
+in `sw.js` assumed the notification's URL was a stable, bare `/meso/me/`, and
+all three broke quietly when it stopped being one; the review caught them and
+`PWA_CACHE_VERSION` went to `meso-pwa-v5` so installed clients pick up the fix.
+Cache reads and writes now go through an `n`-stripped key, because Cache
+Storage matches on the full URL: otherwise every tap stored a whole extra copy
+of the athlete home under a key nothing would ask for again, while the plain
+`/meso/me/` entry — the one the offline fallback looks for — went stale, so an
+offline tap landed on the offline page instead of the cached home. And
+`notificationclick` now matches an open window on **path** rather than on the
+whole URL (an open tab's URL can never contain a fresh `?n=`, so it spawned a
+second window every time beside the running PWA), then *navigates* that window
+to the full target rather than merely focusing it — a bare `focus()` would have
+shown the right page and counted nothing. `meso_track.js` also joined the
+precache list, beside the two athlete scripts that call it.
 
 What this can't see: a notification the athlete reads and swipes away is not a
 click, and neither is one tapped on a device that can't reach us. One row per
 device, so an athlete with two subscribed devices is two sent rows for one
-delivery.
+delivery — and *at most* one row, since a ledger insert that fails is swallowed
+and that push goes out without an id, untrackable but sent. The ledger's bias
+is optimistic in one more place: a blank `error` means "the push left", so a
+rejected push whose error we then failed to write reads as delivered. A third
+"unknown" state would fix it and isn't worth a column yet. For a staff or
+sandbox athlete the click UPDATE still lands while `track()` drops the event,
+so the row reads clicked and never yields its `push_clicked`; harmless, since
+the dashboard excludes the same people from both numbers.
+
+A sandbox coach never reaches any of this: `_notify_athlete_block_delivered`
+returns before it notifies when the plan's coach is a sandbox, and that is the
+only path to `_fan_out`. Worth stating because the Push table's exclusion is a
+read-time join to a user row the sandbox reaper deletes, so if a sandbox push
+ever *were* written, reaping would launder it into a real send — the same shape
+as the subject-match problem the dashboard slice hit. The gate upstream is what
+keeps that hypothetical.
 
 **Retention.** Push rows follow the same 13-month rule as `Event`, swept by the
 same daily `analytics-purge-expired-events` schedule — the
@@ -2184,7 +2246,17 @@ _(Append dated entries here as decisions land.)_
   kind) beside Email, and "App installed" and "Push permission granted" feature
   rows whose "who" is *anyone* — the beacon fires from the athlete surface,
   which a self-coaching coach uses too, and carries no subject. Push rows ride
-  the existing 13-month sweep. Migration `notifications.0003`. `sw.js`
-  unchanged, so no `PWA_CACHE_VERSION` bump. Not in this slice: designer
-  feature beacons, the in-app toast, migrating `TourEvent`, the GA property
-  ids, and the privacy-page line.
+  the existing 13-month sweep. Migration `notifications.0003`.
+  `PWA_CACHE_VERSION` → `meso-pwa-v5`, because putting a per-send parameter in
+  the notification's URL broke three `sw.js` assumptions at once (see the push
+  ledger section). Not in this slice: designer feature beacons, the in-app
+  toast, migrating `TourEvent`, the GA property ids, and the privacy-page line.
+  The adversarial review before merge changed four decisions: `push_clicked`
+  left the beacon's accepted set, the beacon became JSON-only (a multipart post
+  made CSRF drain the stream and `request.body` 500), the rate limit moved
+  ahead of the other checks so it counts every attempt, and install reporting
+  learned to wait for the beacon to land and to stay silent when storage can't
+  remember. One finding was declined: a sandbox coach's push counting as a real
+  send after the reaper nulls the user — `_notify_athlete_block_delivered`
+  returns before notifying for a sandbox coach, and that is the only path to
+  `_fan_out`, so the row can't exist.

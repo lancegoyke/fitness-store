@@ -67,9 +67,20 @@
     cta.hidden = !(supported() && Notification.permission === "default");
   }
 
+  // One answer, one run. Chrome's permission prompt is a non-modal omnibox
+  // bubble: the page stays live under it, so a second tap on the CTA (or a
+  // mobile double-tap, or a second `mesoEnablePush()` call) starts a second
+  // `enable()` while the first is still awaiting the SAME prompt. Both would
+  // sample `before === "default"`, both would resolve off the one "Allow", and
+  // one answer would be reported twice — and subscribed twice. The guard is
+  // not cleared on failure within a page load; a retry is a reload away.
+  let answering = false;
+
   // The gesture-driven entry point (wired to the "Enable notifications" button).
   async function enable() {
     if (!supported()) return;
+    if (answering) return;
+    answering = true;
     // Captured before the prompt: requestPermission() resolves immediately
     // with no prompt shown when the athlete already decided (granted/denied)
     // on an earlier visit, so "before" is how we tell an actual answer just

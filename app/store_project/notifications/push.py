@@ -16,6 +16,18 @@ ledger hiccup cost the athlete their notification or break the page that
 happens to carry ``?n=``. On PostgreSQL a failed statement aborts the whole
 transaction it ran in; confining the failure to a savepoint (rather than just
 catching the exception) keeps the caller's own transaction alive.
+
+One caveat on that, because it isn't structural: ``PushNotification.user``
+keeps a real foreign key, which PostgreSQL checks at COMMIT, *after* the
+savepoint has released and ``log_push_sent`` has already handed its row back.
+That is safe here only because the one production caller runs inside
+``transaction.on_commit`` — under autocommit, so ``atomic()`` is its own short
+transaction, a commit-time error surfaces in ``__exit__`` and is caught right
+here, and no long caller transaction is holding a lock on ``users_user``.
+``analytics.Event.actor`` dropped its constraint (``db_constraint=False``)
+precisely because it is written from inside a caller's open transaction and
+had no such luxury. Move a ledger write into one and that reasoning has to be
+redone.
 """
 
 import logging
@@ -69,6 +81,13 @@ def log_push_error(record, error):
     way ``notifications.ses_events._fit`` truncates SES payload fields: the
     caller (``meso.push._fan_out``) builds it from whatever the push service
     or ``pywebpush`` handed back, which isn't bounded to our column.
+
+    Note the one direction this can be wrong in: because a swallowed failure
+    leaves ``error`` blank, and blank means "the push left", a rejected push
+    whose error we then failed to write reads as delivered. The ledger's bias
+    is therefore optimistic, not pessimistic. A third "unknown" state would
+    fix it and isn't worth a column until the dashboard's sent number is ever
+    in doubt.
     """
     if record is None:
         return
@@ -95,7 +114,15 @@ def url_with_notification(url, record):
     if record is None:
         return url
     parts = urlsplit(url)
-    query = [(key, value) for key, value in parse_qsl(parts.query) if key != "n"]
+    # keep_blank_values: the default drops a valueless or empty parameter
+    # (`?week=`, `?flag`) outright, which would make "merges into any query
+    # the URL already carries" quietly untrue for exactly the shapes a
+    # hand-built deep link is most likely to have.
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key != "n"
+    ]
     query.append(("n", str(record.pk)))
     return urlunsplit(parts._replace(query=urlencode(query)))
 
@@ -123,6 +150,12 @@ def record_push_click(request):
     Returns ``True`` when it recorded a click, ``False`` otherwise (no ``n``,
     a bad id, someone else's row, or one already clicked). The whole body is
     wrapped so a ledger failure never 500s the athlete's home page.
+
+    One asymmetry worth knowing: for a staff or sandbox user the UPDATE still
+    lands but ``track()`` drops the event at its own exclusion check, so the
+    row reads clicked and can never yield its ``push_clicked``. That's
+    harmless — the dashboard excludes the same people from both numbers — but
+    "exactly one event per click" is a statement about the people we count.
     """
     try:
         if not request.user.is_authenticated:

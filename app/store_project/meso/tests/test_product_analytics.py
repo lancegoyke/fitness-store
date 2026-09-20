@@ -1641,8 +1641,40 @@ class TestPushSection:
         assert row["sent"] == 2  # blank error: the two non-rejected sends
         assert row["failed"] == 1
         assert row["clicked"] == 1
-        assert row["click_rate"] == 50  # round(100 * 1/2)
+        # click_rate divides by ATTEMPTS (sent + failed = 3), not sent alone
+        # (#509 review fix 2) — round(100 * 1/3).
+        assert row["click_rate"] == 33
         assert clicked.error == ""
+
+    def test_other_kind_row_is_excluded_from_rows_and_leaves_totals_unchanged(
+        self, now
+    ):
+        """A ``PushKind.OTHER`` row must count nowhere on the page (#509 review, fix 1).
+
+        ``OTHER`` is the model's deliberate default for "a sender that forgot
+        to name itself" (see ``PushKind``) — real rows can exist with this
+        kind, but the table is keyed off ``MESO_PUSH_KINDS`` (today, just
+        ``BLOCK_DELIVERED``) the same way ``_email_section`` is keyed off
+        ``MESO_EMAIL_KINDS``. An unscoped queryset happens to still isolate
+        per kind under a plain ``GROUP BY``, so this doesn't actually corrupt
+        ``BLOCK_DELIVERED``'s own count either way — but scoping the queryset
+        with ``kind__in=MESO_PUSH_KINDS`` (matching ``_email_section``) makes
+        that exclusion explicit and intentional by construction, the same
+        contract email's non-Meso kinds already have, rather than an
+        accident of how ``GROUP BY`` happens to partition rows.
+        """
+        sent_at = now - datetime.timedelta(days=1)
+        _push_notification(sent_at=sent_at)
+        _push_notification(kind=PushKind.OTHER, sent_at=sent_at, clicked_at=sent_at)
+
+        result = presenters.product_analytics(days=30, now=now)
+
+        assert [r["kind"] for r in result["push"]["rows"]] == [PushKind.BLOCK_DELIVERED]
+        row = _push_kind_row(result, PushKind.BLOCK_DELIVERED)
+        assert row["sent"] == 1
+        assert row["clicked"] == 0
+        assert result["push"]["totals"]["sent"] == 1
+        assert result["push"]["totals"]["clicked"] == 0
 
     def test_every_meso_kind_present_and_zero_filled(self, now):
         result = presenters.product_analytics(days=30, now=now)
@@ -1689,16 +1721,44 @@ class TestPushSection:
 
         assert row["sent"] == 0
 
-    def test_click_rate_is_none_at_zero_sends(self, now):
-        # error non-blank means this row isn't a "sent" (only a "failed") —
-        # click_rate divides by sent, which is 0 here.
-        _push_notification(sent_at=now - datetime.timedelta(days=1), error="500")
+    def test_click_rate_is_none_only_at_zero_attempts(self, now):
+        """No row at all for this kind: 0 sent, 0 failed, 0 attempts, rate ``None``.
+
+        Distinct from a failed-but-attempted push (see
+        ``test_click_rate_counts_a_click_the_send_call_itself_marked_failed``
+        below) — this is the true "nothing happened" case, not "something was
+        attempted and rejected."
+        """
+        result = presenters.product_analytics(days=30, now=now)
+        row = _push_kind_row(result, PushKind.BLOCK_DELIVERED)
+
+        assert row["sent"] == 0
+        assert row["failed"] == 0
+        assert row["click_rate"] is None
+
+    def test_click_rate_counts_a_click_the_send_call_itself_marked_failed(self, now):
+        """The click-rate denominator is ATTEMPTS, not ``sent`` alone (#509 review, fix 2).
+
+        A push that really arrived and was tapped, but whose HTTP response hit
+        ``PUSH_TIMEOUT_SECONDS`` (a timeout on our side, not necessarily a
+        non-delivery) gets stamped with a non-blank ``error`` — ``sent`` (blank
+        error) is 0, ``failed`` is 1. Dividing by ``sent`` gives a click rate
+        of ``None`` for a push we know for a fact was tapped, which is
+        nonsensical. ``clicked`` stays counted over the whole cohort — a click
+        is the strongest evidence a push arrived, whatever our own send call
+        reported — and the rate divides by ``sent + failed`` (attempts, never
+        zero when ``clicked`` is non-zero) instead.
+        """
+        sent_at = now - datetime.timedelta(days=1)
+        _push_notification(sent_at=sent_at, error="timeout", clicked_at=sent_at)
 
         result = presenters.product_analytics(days=30, now=now)
         row = _push_kind_row(result, PushKind.BLOCK_DELIVERED)
 
         assert row["sent"] == 0
-        assert row["click_rate"] is None
+        assert row["failed"] == 1
+        assert row["clicked"] == 1
+        assert row["click_rate"] == 100  # round(100 * 1 clicked / 1 attempt)
 
     def test_totals_sum_across_kinds_and_recompute_rate(self, now):
         sent_at = now - datetime.timedelta(days=1)
@@ -1714,7 +1774,8 @@ class TestPushSection:
         assert totals["clicked"] == 1
         assert "kind" not in totals
         assert "label" not in totals
-        assert totals["click_rate"] == 50  # round(100 * 1/2)
+        # attempts = sent + failed = 3 (#509 review fix 2) — round(100 * 1/3).
+        assert totals["click_rate"] == 33
 
 
 # ---------------------------------------------------------------------------
@@ -2069,6 +2130,28 @@ class TestProductAnalyticsQueryCount:
                 endpoint=f"https://push.example/{next(_seq)}",
                 p256dh="k",
                 auth="a",
+            )
+            # Push ledger + the two "anyone" client events (#509 review, fix
+            # 4a): without these the push table and the pwa_installed /
+            # push_permission_granted feature rows never carry any data as
+            # ``n`` grows, so this guard never actually exercises their query
+            # shape.
+            _push_notification(
+                sent_at=now - datetime.timedelta(days=1),
+                user=athlete,
+                clicked_at=now - datetime.timedelta(days=1),
+            )
+            _event(
+                EventName.PWA_INSTALLED,
+                actor=athlete,
+                created=now - datetime.timedelta(days=1),
+                via="standalone",
+            )
+            _event(
+                EventName.PUSH_PERMISSION,
+                actor=athlete,
+                created=now - datetime.timedelta(days=1),
+                result="granted",
             )
             for name in (EventName.SESSION_OPENED, EventName.SET_LOGGED):
                 _event(name, actor=athlete, created=now - datetime.timedelta(days=1))

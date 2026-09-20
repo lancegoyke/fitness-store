@@ -34,13 +34,13 @@ class EventName(models.TextChoices):
     # Devices.
     PUSH_SUBSCRIBED = "push_subscribed", _("Push subscribed")
 
-    # Browser-only moments, recorded through the client beacon (#509 slice 3).
-    # These are the facts no server request reveals: whether the athlete
-    # installed the app, and what they answered when the browser asked about
-    # notifications. `push_clicked` is the exception in this group — the server
-    # writes it from the notification's landing URL (see
-    # `notifications.push.record_push_click`), and the beacon accepts it only
-    # so the whole browser-only set has one home.
+    # Browser-only moments (#509 slice 3): the facts no server request reveals
+    # on its own. The first two are reported by the browser through the client
+    # beacon (`analytics.beacon` holds the closed set it accepts, and their
+    # props). `push_clicked` is the odd one out — the server writes it, from
+    # the notification's landing URL (`notifications.push.record_push_click`),
+    # so it is NOT beacon-postable: an event of this name always has a
+    # `PushNotification` row behind it.
     PWA_INSTALLED = "pwa_installed", _("PWA installed")
     PUSH_PERMISSION = "push_permission", _("Push permission answered")
     PUSH_CLICKED = "push_clicked", _("Push notification clicked")

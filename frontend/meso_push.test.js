@@ -8,6 +8,13 @@
 // called). A page load with an already-decided permission, or a repeat call
 // after the athlete decided, must report nothing.
 //
+// Also covers the `answering` in-flight guard (#509 hardening): Chrome's
+// permission prompt is a non-modal omnibox bubble, so the page stays live
+// under it and a second tap on the CTA can start a second enable() call
+// while the first is still awaiting the SAME prompt. Without the guard both
+// calls would sample `before === "default"` and both would resolve off the
+// one "Allow", reporting (and subscribing) twice.
+//
 // meso_push.js's IIFE reads its config (and bails out entirely with no
 // #meso-pwa-config span) once, when the script executes — unlike
 // meso_track.js, which reads lazily per call and so can be statically
@@ -143,7 +150,10 @@ describe("enable(): permission reporting (#509 slice 3)", () => {
     const enable = await loadEnable();
 
     await enable(); // default -> granted: reports once
-    await enable(); // permission is now "granted" already: no report
+    // Already decided AND the `answering` guard is still set — it isn't
+    // cleared on success within a page load, so either fact alone would
+    // block this repeat call.
+    await enable();
 
     expect(window.mesoTrack).toHaveBeenCalledTimes(1);
   });
@@ -155,5 +165,31 @@ describe("enable(): permission reporting (#509 slice 3)", () => {
     const enable = await loadEnable();
 
     await enable(); // must not throw even though window.mesoTrack is undefined
+  });
+});
+
+describe("enable(): the in-flight guard for a second call before the first resolves", () => {
+  // Pins the `answering` guard: a second enable() fired WITHOUT awaiting the
+  // first (the double-tap / non-modal-bubble scenario) must not double the
+  // work. The first call's synchronous prefix (through `answering = true`)
+  // runs before the second call is even made, so the second call returns
+  // immediately without touching Notification.requestPermission again.
+  it("reports the permission exactly once and subscribes at most once when called twice without awaiting the first", async () => {
+    setConfig();
+    stubPushPlumbing();
+    stubNotification("default", "granted");
+    window.mesoTrack = vi.fn().mockResolvedValue();
+    const enable = await loadEnable();
+
+    const first = enable();
+    const second = enable(); // fired before `first` has resolved
+    await Promise.all([first, second]);
+
+    expect(window.Notification.requestPermission).toHaveBeenCalledTimes(1);
+    expect(window.mesoTrack).toHaveBeenCalledTimes(1);
+    expect(window.mesoTrack).toHaveBeenCalledWith("push_permission", {
+      result: "granted",
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(1); // the subscribe POST, not doubled
   });
 });

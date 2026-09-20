@@ -25,6 +25,7 @@ const PRECACHE = [
   OFFLINE_URL,
   "{% static 'css/meso.css' %}",
   "{% static 'js/meso_athlete.js' %}",
+  "{% static 'js/meso_track.js' %}",
   "{% static 'js/meso_push.js' %}",
   "{% static 'js/meso_onboarding.js' %}",
   "{% static 'js/alpine.min.js' %}",
@@ -57,6 +58,23 @@ function isNavigation(request) {
   );
 }
 
+// The block-delivered push deep-links with `?n=<ledger id>` so the server can
+// count the tap (#509 slice 3). That id is fresh for every send, and the page
+// strips it from the address bar the moment it loads, so it must never reach
+// Cache Storage: keyed by the full URL, one push would store a whole extra
+// copy of the athlete home under a key nothing ever asks for again, while the
+// plain `/meso/me/` entry — the one the offline fallback looks for — went
+// stale. Cache reads and writes both go through the stripped URL; only the
+// network request keeps the parameter, because only the server cares.
+const LEDGER_PARAM = "n";
+
+function cacheKey(request) {
+  const url = new URL(request.url);
+  if (!url.searchParams.has(LEDGER_PARAM)) return request;
+  url.searchParams.delete(LEDGER_PARAM);
+  return new Request(url.toString(), { headers: request.headers });
+}
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
 
@@ -83,13 +101,13 @@ self.addEventListener("fetch", (event) => {
           // athlete page with a login screen, breaking offline reopen.
           if (response.ok && !response.redirected) {
             const copy = response.clone();
-            caches.open(CACHE).then((cache) => cache.put(request, copy));
+            caches.open(CACHE).then((cache) => cache.put(cacheKey(request), copy));
           }
           return response;
         })
         .catch(() =>
           caches
-            .match(request)
+            .match(cacheKey(request))
             .then((cached) => cached || caches.match(OFFLINE_URL)),
         ),
     );
@@ -140,12 +158,30 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const target = (event.notification.data && event.notification.data.url) || HOME_URL;
+  // Match an already-open window on PATH, not on the whole URL. The target
+  // carries a per-send `?n=<ledger id>` (#509 slice 3) and the page strips it
+  // as soon as the server has counted the tap, so an open tab's URL can never
+  // contain the target — a `includes(target)` test would miss every time and
+  // spawn a second window beside the running PWA. Having found it, NAVIGATE it
+  // to the full target rather than just focusing: a bare focus() would show
+  // the right page and count nothing, because the server only learns about the
+  // tap from a request carrying that id.
+  const targetPath = new URL(target, self.location.origin).pathname;
   event.waitUntil(
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then((clientList) => {
         for (const client of clientList) {
-          if (client.url.includes(target) && "focus" in client) return client.focus();
+          if (new URL(client.url).pathname !== targetPath) continue;
+          if (!("focus" in client)) continue;
+          // `navigate` is only available on a client this worker controls; an
+          // uncontrolled one rejects, and focusing it unchanged still beats
+          // opening a duplicate window.
+          const navigated =
+            "navigate" in client
+              ? client.navigate(target).catch(() => client)
+              : Promise.resolve(client);
+          return navigated.then((c) => (c || client).focus());
         }
         if (self.clients.openWindow) return self.clients.openWindow(target);
       }),

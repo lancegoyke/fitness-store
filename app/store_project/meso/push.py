@@ -84,9 +84,16 @@ def send_web_push(subscription_info, payload, *, ttl=DEFAULT_TTL_SECONDS):
 
 
 def _is_gone(exc):
-    """A 404/410 from the push service means the subscription is dead."""
-    response = getattr(exc, "response", None)
-    return response is not None and response.status_code in (404, 410)
+    """A 404/410 from the push service means the subscription is dead.
+
+    Both attributes are read defensively: ``WebPushException`` carries a
+    ``response`` only when the push service actually answered, and a
+    transport-level failure builds one without a ``status_code``. Reading
+    either one directly would raise an ``AttributeError`` out of
+    ``_fan_out``'s ``except WebPushException`` block — skipping every
+    remaining device in the fan-out over one odd failure.
+    """
+    return getattr(getattr(exc, "response", None), "status_code", None) in (404, 410)
 
 
 def notify_block_delivered(*, athlete, coach, plan, mesocycle, week_count, home_url):
@@ -151,11 +158,16 @@ def _fan_out(subscriptions, payload, *, kind, user):
     sent = 0
     for subscription in subscriptions:
         record = notifications_push.log_push_sent(kind=kind, user=user)
-        device_payload = dict(payload)
-        device_payload["url"] = notifications_push.url_with_notification(
-            payload["url"], record
-        )
         try:
+            # Inside the try with the send, not before it: building this
+            # device's URL is ledger work, and a payload without a `url` or
+            # one `urlsplit` chokes on would otherwise raise out of the loop
+            # and cost every REMAINING device its push too — the one thing
+            # "a ledger failure never stops a push" is supposed to rule out.
+            device_payload = dict(payload)
+            device_payload["url"] = notifications_push.url_with_notification(
+                payload.get("url", ""), record
+            )
             if send_web_push(subscription.as_subscription_info(), device_payload):
                 sent += 1
         except WebPushException as exc:

@@ -2746,13 +2746,29 @@ def _push_row(kind, label, counts):
     Mirrors ``_email_row``'s shape (#509 slice 3): a push has no "delivered"
     signal the way SES gives email one — the send call to the push service
     either raised or didn't — so this reports ``failed`` in that slot instead.
+
+    ``click_rate`` divides by **attempts** (``sent + failed``), not ``sent``
+    alone (adversarial review of #509, fix 2). ``sent``/``failed`` partition
+    the cohort by whether *our own send call* raised — but a push can still
+    reach the athlete and get tapped after our side already logged it as
+    failed (a ``PUSH_TIMEOUT_SECONDS`` timeout on our end, a delivery on
+    theirs): that produces ``sent=0, failed=1, clicked=1``, and dividing by
+    ``sent`` gives ``None`` (or, with a differently-shaped denominator, a rate
+    clamped to a nonsensical 100%+) for a push we know for a fact was tapped.
+    ``clicked`` stays counted over the *whole* cohort — a click is the
+    strongest possible evidence a push arrived, whatever our own send call
+    reported — while attempts (never zero when ``clicked`` is non-zero) gives
+    a stable, monotonic denominator: "of the pushes we attempted, this share
+    were tapped."
     """
     sent = counts["sent"]
+    failed = counts["failed"]
+    attempts = sent + failed
     row = {
         "sent": sent,
-        "failed": counts["failed"],
+        "failed": failed,
         "clicked": counts["clicked"],
-        "click_rate": _rate(counts["clicked"], sent),
+        "click_rate": _rate(counts["clicked"], attempts),
     }
     if kind is not None:
         row = {"kind": kind, "label": label, **row}
@@ -2765,13 +2781,20 @@ def _push_section(*, since, until):
     Cohort = ``PushNotification`` rows *sent* (``sent_at``) in the window,
     ineligible recipients excluded — the same window and exclusion shape
     ``_email_section`` uses, so the two tables read as one story about the
-    same block-delivery nudge. ``error`` partitions the cohort in two with no
-    third state: blank means the push left for the service (``sent``), a
-    non-empty string means the service rejected it (``failed``) — unlike
-    ``_email_section``'s ``events__event_type`` filters, these are plain
-    columns on the row itself, not a join to a related event table, so there's
-    nothing here that can fan out and no ``distinct=True`` needed. ``clicked``
-    is ``clicked_at`` set — recorded once, on the athlete's own landing GET
+    same block-delivery nudge. Scoped to ``MESO_PUSH_KINDS`` in the query
+    itself, the way ``_email_section`` scopes to ``MESO_EMAIL_KINDS``
+    (adversarial review of #509, fix 1): a row with an out-of-scope kind
+    (``PushKind.OTHER`` — the model's deliberate default for "a sender that
+    forgot to name itself") must count nowhere on this page, so the exclusion
+    is made explicit by construction rather than relying on the display loop
+    below (``for kind in MESO_PUSH_KINDS``) to happen to leave it out.
+    ``error`` partitions the cohort in two with no third state: blank means
+    the push left for the service (``sent``), a non-empty string means the
+    service rejected it (``failed``) — unlike ``_email_section``'s
+    ``events__event_type`` filters, these are plain columns on the row
+    itself, not a join to a related event table, so there's nothing here
+    that can fan out and no ``distinct=True`` needed. ``clicked`` is
+    ``clicked_at`` set — recorded once, on the athlete's own landing GET
     (``notifications.push.record_push_click``), never from the service
     worker. One ``.values("kind").annotate(...)`` query over the fixed
     ``MESO_PUSH_KINDS`` tuple, zero-filled for a kind with no rows in the
@@ -2779,7 +2802,7 @@ def _push_section(*, since, until):
     """
     kind_labels = dict(PushKind.choices)
     qs = PushNotification.objects.filter(
-        sent_at__gte=since, sent_at__lte=until
+        kind__in=MESO_PUSH_KINDS, sent_at__gte=since, sent_at__lte=until
     ).exclude(user__in=_ineligible_users())
     counts_by_kind = {
         row["kind"]: row

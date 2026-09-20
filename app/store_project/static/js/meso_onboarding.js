@@ -202,6 +202,47 @@
   // Report a fresh install to the beacon (window.mesoTrack, #509 slice 3),
   // once per device. Two independent signals, either of which can fire
   // first:
+  // Whether this browser can actually *remember* something, probed with a
+  // round trip rather than assumed. `isDismissed` answers "not dismissed"
+  // when storage throws (Safari private mode, blocked site data, ITP having
+  // evicted script-writable storage), which is the right default for a card
+  // the athlete waved away — showing it again is a small annoyance. It is
+  // the wrong default for install reporting: on an installed iOS device
+  // every load is standalone, so an inert flag would report an install on
+  // every single page view, unbounded. When we can't bound it, we don't
+  // report it — under-counting installs beats inventing them.
+  function storagePersists(storage) {
+    try {
+      const store = storage || root.localStorage;
+      if (!store) return false;
+      const probe = "meso-storage-probe";
+      store.setItem(probe, "1");
+      const ok = store.getItem(probe) === "1";
+      store.removeItem(probe);
+      return ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Report this device's install, at most once ever and at most once per page
+  // load. The flag is written only when the beacon actually LANDED: writing it
+  // first (and `mesoTrack` swallowing the failure) would lose the install for
+  // good the first time the athlete opens the app with no signal — which for
+  // a gym PWA is an ordinary Tuesday, not an edge case. A failed report just
+  // retries on the next load.
+  let installReportStarted = false;
+  function reportInstall(via) {
+    if (installReportStarted) return;
+    if (!root.mesoTrack) return;
+    if (!storagePersists()) return;
+    if (isDismissed(INSTALL_TRACKED_KEY)) return;
+    installReportStarted = true;
+    root.mesoTrack("pwa_installed", { via: via }).then(function (landed) {
+      if (landed) setDismissed(INSTALL_TRACKED_KEY);
+    });
+  }
+
   //  - `appinstalled`: Chromium/Android's real event, fired once right after
   //    the athlete accepts an install (this flow's prompt, or another one —
   //    Chrome's omnibox icon, say).
@@ -209,14 +250,10 @@
   //    gives us (it never fires `appinstalled`), and also the fallback for
   //    an install this page never saw the event for. It reads true on EVERY
   //    load once installed, so it needs the flag to fire only once.
-  // Whichever wins sets INSTALL_TRACKED_KEY first, so the other is a no-op.
+  // Whichever wins writes INSTALL_TRACKED_KEY first, so the other is a no-op.
   function initInstallTracking(doc) {
     root.addEventListener("appinstalled", function () {
-      if (isDismissed(INSTALL_TRACKED_KEY)) return;
-      setDismissed(INSTALL_TRACKED_KEY);
-      if (root.mesoTrack) {
-        root.mesoTrack("pwa_installed", { via: "appinstalled" });
-      }
+      reportInstall("appinstalled");
     });
 
     if (
@@ -225,10 +262,7 @@
         tracked: isDismissed(INSTALL_TRACKED_KEY),
       })
     ) {
-      setDismissed(INSTALL_TRACKED_KEY);
-      if (root.mesoTrack) {
-        root.mesoTrack("pwa_installed", { via: "standalone" });
-      }
+      reportInstall("standalone");
     }
   }
 

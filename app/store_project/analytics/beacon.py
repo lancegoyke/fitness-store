@@ -25,15 +25,20 @@ from .events import EventName
 
 #: Every accepted prop is one short string from a closed set. No free-form
 #: values, no URLs, no user agent — a client can only choose among values we
-#: named here, so nothing a page can compute ends up in the ledger. An empty
-#: prop map (``PUSH_CLICKED``) means the name is accepted but takes no props
-#: at all — it exists in this table only so the whole browser-only set has
-#: one home (see ``events.py``'s note on why the server, not the beacon,
-#: is the one that actually writes ``push_clicked``).
+#: named here, so nothing a page can compute ends up in the ledger.
+#:
+#: ``push_clicked`` is deliberately **not** here, even though it is one of the
+#: browser-only names in ``events.py``. The server writes it, from the
+#: notification's landing URL, once per ledger row
+#: (``notifications.push.record_push_click``), and nothing in the app ever
+#: posts it. Accepting it anyway would have been pure inbound surface with no
+#: caller — and it would have broken the thing that makes the number worth
+#: reading: today a ``push_clicked`` event implies a ``PushNotification`` row
+#: that was actually clicked, and any signed-in browser could otherwise have
+#: added events with no row behind them.
 CLIENT_EVENTS = {
     EventName.PWA_INSTALLED: {"via": {"appinstalled", "standalone"}},
     EventName.PUSH_PERMISSION: {"result": {"granted", "denied", "default"}},
-    EventName.PUSH_CLICKED: {},
 }
 
 #: Props a name cannot be recorded without. Anything not listed here is
