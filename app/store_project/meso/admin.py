@@ -269,10 +269,20 @@ class LoggedSetInline(admin.TabularInline):
     extra = 0
     raw_id_fields = ("prescription", "source_line")
     # ``exercise_slot`` (#578 C1) is DERIVED, not edited: ``LoggedSet.save()``
-    # fills it from ``prescription`` whenever it's left blank, so an editable
-    # raw-id box here could only do harm — accept "left empty" (a NULL anchor
-    # nothing will ever fill once this row exists) or "a slot that disagrees
-    # with this row's own ``prescription``". Shown, not editable.
+    # re-derives it from ``prescription`` on every save (not just when it's
+    # left blank — see that method's docstring), so it always mirrors
+    # ``prescription.exercise_slot`` while this row's ``prescription`` (which
+    # IS editable here) is live. An editable raw-id box for ``exercise_slot``
+    # itself could therefore only ever contribute a value that disagrees with
+    # the row's own cell — save() would just overwrite it back into
+    # agreement. Shown, not editable.
+    #
+    # The one shape that really is uncountable, and worth naming rather than
+    # leaving implicit: an inline ADD with ``prescription`` also left blank
+    # commits both pointers NULL, and no later save repairs that (there is no
+    # ``prescription`` to derive from). Not a regression introduced here —
+    # ``main`` produces an equally uncountable row from the same blank add —
+    # just a gap this field doesn't close either.
     #
     # ``reclaimed_line`` is an internal hint for the restore lookup (#541),
     # not something to edit either. It has no DB constraint, so it can

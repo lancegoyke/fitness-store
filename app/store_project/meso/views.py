@@ -1685,10 +1685,19 @@ def athlete_log_session(request, pk):
         posted_prescription_ids = {cs["prescription_id"] for cs in cleaned_sets}
         missing = posted_prescription_ids - slot_id_by_cell_pk.keys()
         if missing:
+            # Scoped to this session's own week/day — defense in depth, not a
+            # fix for a reachable bug: `_clean_logged_sets` already restricts
+            # every posted `prescription_id` to `session.trainable_cells()`
+            # (~1600 lines above this fallback), so nothing here can actually
+            # attribute a set to another session or week today. The scoping
+            # just means this lookup fails closed on its own, rather than
+            # depending on that other guard staying correct forever.
             slot_id_by_cell_pk.update(
-                Prescription.objects.filter(pk__in=missing).values_list(
-                    "pk", "exercise_slot_id"
-                )
+                Prescription.objects.filter(
+                    pk__in=missing,
+                    week=session.week,
+                    exercise_slot__session_slot=session.session_slot,
+                ).values_list("pk", "exercise_slot_id")
             )
         for row in rows:
             if row.prescription_id not in trainable_pks:

@@ -2799,29 +2799,67 @@ class LoggedSet(models.Model):
         return f"Set {self.set_number}"
 
     def save(self, *args, **kwargs):
-        """Fill ``exercise_slot`` from ``prescription`` before every save.
+        """Keep ``exercise_slot`` mirroring ``prescription.exercise_slot``.
 
-        #578 C1's own lesson: per-call-site discipline about setting
+        The invariant is: while there IS a ``prescription``, ``exercise_slot``
+        mirrors ``prescription.exercise_slot`` — not merely "fill it once if
+        it's blank" — and it outlives ``prescription`` once that FK goes NULL
+        (a hard delete, #577/#581). A fill-when-blank guard converges once and
+        then silently diverges the moment ``prescription`` is RE-POINTED at a
+        different slot on an already-anchored row — e.g. a staffer opens
+        ``LoggedSetInline``, retypes the row's ``prescription`` raw-id from one
+        slot to another, and Saves: the old guard was False (the anchor was
+        already set) and the row would commit with two pointers permanently
+        disagreeing. Re-deriving whenever ``prescription`` is live is what
+        makes that re-point correctly re-file the set, rather than requiring
+        ``prescription`` to be treated as frozen once set.
+
+        #578 C1's own lesson generally: per-call-site discipline about setting
         ``exercise_slot`` alongside ``prescription`` does not converge — three
         defects in one recent PR on these same files were traced to exactly
         that kind of stale, site-local assumption. A ``LoggedSet`` that knows
         its ``prescription`` also knows its slot (``prescription.exercise_slot``
-        is non-nullable), so that fill belongs here, as a model invariant, not
-        repeated at every ``.save()`` call site.
+        is non-nullable), so that derivation belongs here, as a model
+        invariant, not repeated at every ``.save()`` call site.
+
+        Resolved with a plain ``.filter(pk=...).values_list(...).first()``
+        query rather than by dereferencing ``self.prescription`` — this fires
+        on every ordinary save of a row whose ``prescription`` may have been
+        hard-deleted concurrently (#577/#581), and ``self.prescription`` would
+        raise ``Prescription.DoesNotExist`` out of ``save()`` in exactly that
+        case, where the old fill-when-blank guard was inert. With ``.first()``
+        a vanished prescription simply leaves the anchor alone. The write (and
+        the addition to ``update_fields``) only happens when the resolved
+        value actually differs from what the instance already holds, so an
+        ordinary save of an already-correctly-anchored row stays a no-op query
+        plus no write, not an extra UPDATE.
 
         This does NOT cover ``bulk_create`` — Django never calls ``save()``
-        per row for a bulk insert, so the two ``bulk_create`` sites in
-        ``views.py`` (``athlete_log_session``, the sandbox seeder) still set
+        per row for a bulk insert, so the four ``bulk_create`` sites
+        (``views.athlete_log_session``, ``demo.py``'s sample-log seeder, and
+        ``seed_meso_demo.py``'s two sample-log seeders) still set
         ``exercise_slot_id`` themselves. It DOES cover ``_upsert_parsed_set``'s
         re-link of a reclaimed row (``existing.save(update_fields=["source_line",
-        "reclaimed_line"])``) — if that row's ``exercise_slot`` was ever left
-        NULL, this backstop fills it in on that very save.
+        "reclaimed_line"])``) and ``athlete_log_session``'s collision-renumbering
+        walk (``row.save(update_fields=["set_number"])``) — that walk is
+        bounded and rare (``MAX_LOGGED_SET_NUMBER``), so the one extra
+        lightweight query this adds there is an acceptable price for the
+        invariant holding everywhere, not just at creation.
         """
-        if self.exercise_slot_id is None and self.prescription_id is not None:
-            self.exercise_slot_id = self.prescription.exercise_slot_id
-            update_fields = kwargs.get("update_fields")
-            if update_fields is not None:
-                kwargs["update_fields"] = set(update_fields) | {"exercise_slot"}
+        if self.prescription_id is not None:
+            resolved_slot_id = (
+                Prescription.objects.filter(pk=self.prescription_id)
+                .values_list("exercise_slot_id", flat=True)
+                .first()
+            )
+            if (
+                resolved_slot_id is not None
+                and resolved_slot_id != self.exercise_slot_id
+            ):
+                self.exercise_slot_id = resolved_slot_id
+                update_fields = kwargs.get("update_fields")
+                if update_fields:
+                    kwargs["update_fields"] = set(update_fields) | {"exercise_slot"}
         super().save(*args, **kwargs)
 
     @property

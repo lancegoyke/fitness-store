@@ -8,13 +8,21 @@ Django admin can hard-delete with no guard at all (#581). The FK is
 derivation filtered ``prescription__isnull=False``.
 
 ``exercise_slot`` is a second, independent FK straight to the durable
-``ExerciseSlot`` — app code only ever *soft*-deletes that (``deleted_at``),
-never hard-deletes it — so it survives exactly the hard deletes that null out
-``prescription``. This module proves the two hard-delete paths (#577's guard
-regressing, #581's unguarded admin) no longer silently detach a set, and that
-the model-level anchor resolution (``anchor_slot``/``anchor_slot_id``) does
-the right thing in each of its four states: exercise_slot set, exercise_slot
-NULL with a live prescription (the transitional mid-deploy case), and neither.
+``ExerciseSlot`` — ORDINARY app code only ever *soft*-deletes that
+(``deleted_at``); the designer's own delete/undo paths never hard-delete it,
+so it survives exactly the hard deletes that null out ``prescription``. That
+premise isn't absolute, though: a plan/mesocycle rebuild (``plan.mesocycles.
+all().delete()`` in ``management/commands/meso_import_template.py`` and
+``seed_meso_demo.py``) hard-deletes the whole tree, cascading ``Mesocycle``
+→ ``SessionSlot`` → ``ExerciseSlot`` — see ``LoggedSet.exercise_slot``'s
+model comment for why that path doesn't orphan anything either. This module
+proves the two hard-delete paths (#577's guard regressing, #581's unguarded
+admin) no longer silently detach a set, and that the model-level anchor
+resolution (``anchor_slot``/``anchor_slot_id``) does the right thing in each
+of its four states: ``exercise_slot`` set with a live ``prescription``,
+``exercise_slot`` set with ``prescription`` NULL (the two hard-delete
+scenarios below leave a row in this state), ``exercise_slot`` NULL with a
+live ``prescription`` (the transitional mid-deploy case), and neither.
 
 The first two tests (the two hard-delete scenarios) are RED against the
 pre-C1 read path — verified by temporarily reverting the ``one_rm.py`` /
@@ -317,7 +325,21 @@ class TestBackfillMigration:
 
 
 class TestAnchorSlotResolution:
-    """``anchor_slot``/``anchor_slot_id``'s four states, read straight off the model."""
+    """Two of the four ``anchor_slot``/``anchor_slot_id`` states, read straight off the model.
+
+    This class pins the two states where ``exercise_slot`` is itself NULL:
+    ``exercise_slot`` NULL with a live ``prescription`` (the transitional
+    mid-deploy fallback) and neither pointer set (no identity at all). The
+    other two — ``exercise_slot`` set with a live ``prescription``, and
+    ``exercise_slot`` set with ``prescription`` NULL — are covered by the two
+    hard-delete tests earlier in this module (``TestCoachUndoHardDeleteIs
+    DefenseInDepth`` and ``TestAdminDeleteIsDefenseInDepth``): each asserts
+    ``exercise_slot_id`` directly, both before its hard delete (the first
+    state) and again after (the second) — and it's only the AFTER assertion
+    that additionally proves that state resolves correctly, by driving
+    ``anchor_slot_id``'s own consumers (``one_rm``/``personal_records``)
+    rather than the property directly.
+    """
 
     def test_exercise_slot_null_with_a_live_prescription_still_counts(self):
         """The transitional fallback: what an old container writes mid-deploy.
@@ -525,9 +547,22 @@ class TestExerciseSlotCascadeBlastRadius:
     delete calls ``obj.delete()`` straight from
     ``BaseModelFormSet.save_existing_objects()`` with no confirmation page,
     so ``ExerciseSlotInline``/``SessionSlotInline`` both set
-    ``can_delete = False`` (review item C.1) precisely so this CASCADE, real
-    as it is, can only be triggered through a model's OWN admin page — never
-    silently through an inline Save.
+    ``can_delete = False``.
+
+    That guard is NOT "this CASCADE can only be triggered through a model's
+    OWN admin page" — ``MesocycleInline`` (on ``PlanAdmin``) and
+    ``WeekInline`` (on ``MesocycleAdmin``) have no ``can_delete = False`` and
+    both reach ``LoggedSet`` too, via ``Mesocycle``/``Week`` → ``SessionSlot``/
+    ``Session`` → ... The accurate boundary: no inline can silently destroy a
+    ``LoggedSet`` row that ``origin/main`` would have preserved. A
+    ``Mesocycle``/``Week`` inline delete also cascades ``Week`` → ``Session``
+    → ``SessionLog`` → ``LoggedSet`` down the other branch, so those rows die
+    on ``main`` too — not a divergence this FK introduces. Freezing
+    ``MesocycleInline``/``WeekInline`` with ``can_delete = False`` would buy
+    nothing for this PR, so they're deliberately left alone; only
+    ``ExerciseSlotInline``/``SessionSlotInline`` — the two inlines whose
+    silent delete would newly detach a ``LoggedSet`` that ``main`` would have
+    kept alive as an orphan (``prescription = NULL``) — get the guard.
     """
 
     def test_hard_deleting_the_slot_cascades_to_the_logged_set(self):
@@ -553,9 +588,100 @@ class TestExerciseSlotCascadeBlastRadius:
         )
         assert not Prescription.objects.filter(pk=s.squat.pk).exists()
 
-    def test_admin_inlines_refuse_the_delete(self):
+    def test_admin_inlines_refuse_the_delete(self, client):
+        """Drives the real ``SessionSlotAdmin`` change form, not just the class attribute.
+
+        Asserting ``can_delete is False`` alone would stay green even if a
+        later ``get_formset``/``can_delete`` override re-enabled deletion at
+        request time — the class attribute isn't what protects a live
+        request. This POSTs the actual change-form payload, WITH an
+        ``exercise_slots-0-DELETE=on`` field added by hand (the checkbox
+        ``can_delete = False`` keeps out of the rendered page — this
+        simulates a crafted POST, not a click nobody can make), and proves
+        the ``ExerciseSlot`` and its ``LoggedSet`` still exist afterward:
+        with no ``DELETE`` field declared on the form, Django's formset
+        machinery has nothing to look at and silently ignores the extra key.
+        """
         assert ExerciseSlotInline.can_delete is False
         assert SessionSlotInline.can_delete is False
+
+        s = seed()
+        squat_slot = s.squat.exercise_slot
+        session_slot = squat_slot.session_slot
+        slots = list(session_slot.exercise_slots.order_by("order"))
+        assert slots[0].pk == squat_slot.pk
+
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
+        )
+        row = LoggedSetFactory(
+            session_log=log,
+            prescription=s.squat,
+            set_number=1,
+            reps="5",
+            load="225",
+            rpe="8",
+        )
+
+        client.force_login(SuperAdminFactory())
+        url = reverse("admin:meso_sessionslot_change", args=[session_slot.pk])
+        data = {
+            "mesocycle": str(session_slot.mesocycle_id),
+            "name": session_slot.name,
+            "order": str(session_slot.order),
+            "bias": session_slot.bias,
+            "day_number": str(session_slot.day_number),
+            "deleted_at_0": "",
+            "deleted_at_1": "",
+            "exercise_slots-TOTAL_FORMS": str(len(slots)),
+            "exercise_slots-INITIAL_FORMS": str(len(slots)),
+            "exercise_slots-MIN_NUM_FORMS": "0",
+            "exercise_slots-MAX_NUM_FORMS": "1000",
+            "_save": "Save",
+        }
+        for i, slot in enumerate(slots):
+            prefix = f"exercise_slots-{i}"
+            data.update(
+                {
+                    f"{prefix}-id": str(slot.pk),
+                    f"{prefix}-session_slot": str(slot.session_slot_id),
+                    f"{prefix}-exercise": (
+                        "" if slot.exercise_id is None else str(slot.exercise_id)
+                    ),
+                    f"{prefix}-name": slot.name,
+                    f"{prefix}-order": str(slot.order),
+                    f"{prefix}-tags": json.dumps(slot.tags),
+                    f"{prefix}-tempo": slot.tempo,
+                    f"{prefix}-rest": slot.rest,
+                    f"{prefix}-note": slot.note,
+                    f"{prefix}-deleted_at_0": "",
+                    f"{prefix}-deleted_at_1": "",
+                }
+            )
+        # The tampered field: never rendered (``can_delete = False``), added
+        # here to prove the boundary holds even against a crafted POST, not
+        # only against the real admin UI.
+        data["exercise_slots-0-DELETE"] = "on"
+
+        resp = client.post(url, data)
+        if resp.status_code != 302:
+            errors = [
+                iaf.formset.errors for iaf in resp.context["inline_admin_formsets"]
+            ]
+            raise AssertionError(
+                f"expected a successful save (302), got {resp.status_code}: "
+                f"main form errors {resp.context['adminform'].form.errors!r}, "
+                f"inline formset errors {errors!r}"
+            )
+
+        assert ExerciseSlot.objects.filter(pk=squat_slot.pk).exists(), (
+            "a tampered DELETE field the inline never rendered should not "
+            "delete the ExerciseSlot"
+        )
+        assert LoggedSet.objects.filter(pk=row.pk).exists(), (
+            "the LoggedSet anchored to that slot should not have been "
+            "cascaded away by a delete that never should have happened"
+        )
 
 
 # -- 10. the admin cannot create a NULL anchor (item B) ----------------------
@@ -616,6 +742,46 @@ class TestModelInvariantClosesTheAdminPath:
             "save(update_fields=[...]) must add 'exercise_slot' to the list "
             "passed to super().save(), or the derived fill never reaches the "
             "database even though the in-memory instance looks right"
+        )
+
+    def test_a_re_pointed_prescription_re_derives_the_anchor(self):
+        """An admin re-point of ``prescription`` re-files the set onto the new slot.
+
+        RED against round 1's fill-WHEN-BLANK guard (``if self.exercise_slot_id
+        is None and self.prescription_id is not None``): once ``exercise_slot_id``
+        is set at all, that guard never fires again, so a ``LoggedSet`` whose
+        ``prescription`` is later RE-POINTED at a different ``ExerciseSlot``'s
+        cell — e.g. a staffer opening ``LoggedSetInline``, retyping the row's
+        ``prescription`` raw-id from one slot to another, and Saving — would
+        keep the OLD anchor forever, permanently disagreeing with its own
+        ``prescription.exercise_slot``. The fix re-derives on every save with
+        a live ``prescription``, not only when the anchor starts out blank.
+        """
+        s = seed()
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
+        )
+        row = LoggedSet.objects.create(
+            session_log=log, prescription=s.squat, set_number=1, reps="5", load="225"
+        )
+        assert row.exercise_slot_id == s.squat.exercise_slot_id, (
+            "sanity: derived on create"
+        )
+        assert s.rdl.exercise_slot_id != s.squat.exercise_slot_id, (
+            "sanity: the two cells must anchor different slots for this test to prove anything"
+        )
+
+        row.prescription = s.rdl
+        row.save()
+
+        assert row.exercise_slot_id == s.rdl.exercise_slot_id, (
+            "re-pointing prescription at a different slot's cell should "
+            "re-file the set's anchor onto that new slot, not leave the "
+            "stale one behind"
+        )
+        row.refresh_from_db()
+        assert row.exercise_slot_id == s.rdl.exercise_slot_id, (
+            "the re-derived value must persist, not just live on the in-memory instance"
         )
 
 

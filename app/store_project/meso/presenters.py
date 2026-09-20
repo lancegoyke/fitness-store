@@ -1174,12 +1174,13 @@ def session_results(session):
     # unique, so within this one session's week each slot has at most one
     # line-0 cell — ``prescriptions`` (``session.trainable_cells()``) below
     # therefore has distinct ``exercise_slot_id``s, and grouping logged sets
-    # by that id keys them AT MOST AS COARSELY as the old `prescription_id`
-    # did — strictly coarser for a NULL-`prescription` row (#577/#581), which
-    # the old key dropped from every group entirely and this one now folds in
-    # under its surviving `exercise_slot`. That's not a free win: if the
-    # replacement row `_upsert_parsed_set` mints beside such an orphan is
-    # ALSO live in this log, both key to the same slot now, so `logged_n`
+    # by that id keys them AT LEAST AS COARSELY as the old `prescription_id`
+    # did — never more finely, and strictly coarser for a NULL-`prescription`
+    # row (#577/#581), which the old key dropped from every group entirely
+    # and this one now folds in under its surviving `exercise_slot`. That's
+    # not a free win: if the replacement row `_upsert_parsed_set` mints
+    # beside such an orphan is ALSO live in this log, both key to the same
+    # slot now, so `logged_n`
     # below double-counts that one performance, `completion`'s numerator
     # double-counts it too, and `_avg_rpe_delta` averages in the same RPE
     # twice. Same double-count `views.py`'s `_upsert_parsed_set` comment
