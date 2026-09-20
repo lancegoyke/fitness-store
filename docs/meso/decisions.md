@@ -684,6 +684,18 @@ a sufficient reason: the `DELETE` takes its own `FOR UPDATE` when it runs, and
 reserving the row earlier at that strength buys ordering you already have while
 blocking every deferred FK check in the meantime.
 
+One thing `no_key` does not change: an `UPDATE` that rewrites a column in a
+unique index (a `token` rotation in `CoachAthlete._open` or
+`CoachInvite.resend`) takes `FOR UPDATE` on that row at write time regardless of
+the explicit lock. What the explicit `no_key` buys those paths is that the
+strong lock is taken only at the write, after their parents, instead of at the
+top of the transaction. It is safe for the same reason the rest of the order is:
+every `Plan` creator locks its link first (#596), so nothing is mid-insert
+against that link holding a pending `KEY SHARE` for the write to wait on. The
+#611 sweep applied this test to all fifteen plain sites and none needed to stay
+plain; the only plain `Prescription` locks left are `history.py`'s (#584) and
+`views._upsert_parsed_set`'s, whose strength #611 deliberately left alone.
+
 **Why this order and not another.** Any total order prevents deadlock; this is
 the one the code already mostly followed. The coach's write paths open with the
 `Plan` row (`history.record_plan_action`, `api_plan_undo`, `api_plan_redo`), and
