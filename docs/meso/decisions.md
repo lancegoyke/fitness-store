@@ -2294,4 +2294,15 @@ _(Append dated entries here as decisions land.)_
   both visible at one number and a single save can then delete both while
   reposting one. `hidden_parsed_set_pks` is the set-wise form both sides use.
   Not covered, still: a copy made before #541 shipped has no link, so a coach
-  undo of its reclaim shows it twice exactly as before.
+  undo of its reclaim shows it twice exactly as before. And the logger still
+  decides what a posted row MEANS by matching `(prescription, set_number,
+  values)`, which a hidden row's number cannot carry reliably — a tab left open
+  across the undo can re-create the performance as a second row if the copy was
+  renumbered in between, and a genuinely new set with the same numbers, typed
+  into the Set row the hidden copy invisibly occupies, is read as a restatement
+  and dropped. Both were reproduced on `main` with an ordinary hidden parsed row
+  and no `reclaimed_line` at all, so this fix gives a pre-existing defect a
+  second trigger rather than creating it; the payload cannot tell the two
+  meanings apart, and the real fix is to post each row's id back (#567). The
+  warn lookup's own database fallback is also unscoped by log, so a set from
+  another session can clear a line's tint (#568).

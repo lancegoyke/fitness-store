@@ -2378,7 +2378,10 @@ def line_displays(line, rows):
         )
         and _line_shows(line, row)
     ]
-    candidates.sort(key=lambda row: (row.source_line_id is None, row.pk))
+    # ``pk or 0`` keeps the order total: ``parsed_set_is_hidden`` appends the
+    # row it was asked about, and an unsaved one has no pk to compare against a
+    # saved sibling's.
+    candidates.sort(key=lambda row: (row.source_line_id is None, row.pk or 0))
     return candidates[0] if candidates else None
 
 
@@ -2426,12 +2429,12 @@ def parsed_set_is_hidden(logged_set, *, line_rows=None):
         list(line_rows)
         if line_rows is not None
         else list(
-            LoggedSet.objects.filter(session_log_id=logged_set.session_log_id)
-            .filter(
+            # No ``select_related``: ``line_displays`` reads the two link ids
+            # and re-parses ``line``'s own text, never a row's related cell.
+            LoggedSet.objects.filter(session_log_id=logged_set.session_log_id).filter(
                 models.Q(source_line=line)
                 | models.Q(source_line__isnull=True, reclaimed_line=line)
             )
-            .select_related("source_line", "reclaimed_line")
         )
     )
     if all(row.pk != logged_set.pk for row in rows):
@@ -2494,7 +2497,7 @@ def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
         else LoggedSet.objects.filter(
             models.Q(source_line=cell)
             | models.Q(source_line__isnull=True, reclaimed_line=cell)
-        ).select_related("source_line", "reclaimed_line")
+        )
     )
     return line_displays(cell, rows) is None
 
