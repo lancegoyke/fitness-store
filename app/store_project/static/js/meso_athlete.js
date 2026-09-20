@@ -152,6 +152,32 @@ function isRetryableStatus(status) {
   return status >= 500 || status === 408 || status === 429;
 }
 
+// #570: a non-retryable refusal (`athlete_log_session`'s 400, "Too many sets
+// logged for Box Squat.") names the exercise, and the generic "try again"
+// banner would tell the athlete to retry a save that can never succeed — so
+// the server's own message has to reach them.
+//
+// Only a JSON body carrying an `error` string qualifies, which is the shape
+// that endpoint uses for exactly one refusal. Its OTHER 400s are bare
+// `HttpResponseBadRequest`s whose text is developer-facing ("Duplicate id in
+// sets.", "status must be 'pending' or 'done'."): reading the body as plain
+// text would put those in front of an athlete who can do nothing about them,
+// and would also render whatever a proxy or load balancer answered with.
+// Opting in per-message beats guessing from the body's shape. Truncated
+// rather than dropped when long — an exercise name can be 255 characters, and
+// a clipped message still names the lift, where no message at all doesn't.
+async function readErrorMessage(res) {
+  let data;
+  try {
+    data = await res.json();
+  } catch (e) {
+    return "";
+  }
+  const message =
+    data && typeof data.error === "string" ? data.error.trim() : "";
+  return message.slice(0, 200);
+}
+
 // How long a logging write may take before it counts as offline (#527). fetch
 // has no timeout of its own, and gym wifi that connects but never answers would
 // hold a write open forever — and "Log session" with it, since it waits for the
@@ -190,6 +216,11 @@ function createLogger() {
     saving: false,
     saved: false,
     error: false,
+    // #570: the refusal's own message ("Too many sets logged for Box
+    // Squat."), when the last save's `error` came from a non-retryable
+    // response that named one — blank otherwise, in which case the template
+    // falls back to the generic banner text.
+    errorMessage: "",
     queued: false, // a save is stashed locally, waiting for the network
     lineError: false, // the log landed, but a line the server refused didn't
     newRecords: [], // PRs the last save beat (Phase 4c) — the celebration toast
@@ -438,9 +469,16 @@ function createLogger() {
       this.saving = true;
       this.saved = false;
       this.error = false;
+      this.errorMessage = "";
       this.queued = false;
       this.lineError = false;
       this.newRecords = []; // clear any prior toast; this save recomputes it
+      // #570: what to put back if this save is REFUSED (a non-retryable
+      // response, below) rather than merely delayed — the database kept
+      // nothing, so the optimistic flip right below has to come back off
+      // too, and it can only do that if the value it's overwriting was
+      // captured first.
+      const previousStatus = this.status;
       // Reflect the intended status locally right away so the UI is responsive
       // whether the request lands now or after a sync.
       if (markDone) this.status = "done";
@@ -473,7 +511,7 @@ function createLogger() {
       } catch (netErr) {
         // Network unreachable → queue it; the upsert endpoint is idempotent, so
         // replaying on reconnect is safe (latest save for a session wins).
-        this.keepForLater(payload);
+        if (!this.keepForLater(payload)) this.status = previousStatus;
         this.saving = false;
         return;
       }
@@ -483,10 +521,24 @@ function createLogger() {
         // HTML). Don't lose it: queue for retry, where the next online flush
         // (after re-login) carries a fresh CSRF.
         if (res.redirected) {
-          this.keepForLater(payload);
+          if (!this.keepForLater(payload)) this.status = previousStatus;
           return;
         }
-        if (!res.ok) throw new Error("Request failed: " + res.status);
+        if (!res.ok) {
+          if (!isRetryableStatus(res.status)) {
+            // #570: a refusal (e.g. "Too many sets logged for Box Squat.")
+            // is deterministic — retrying the same payload can only fail
+            // again — so the optimistic "done" above comes back off (the
+            // database kept nothing) and the server's own message, naming
+            // what actually went wrong, replaces the generic banner text.
+            // A retryable status (5xx/408/429) falls through untouched: the
+            // write might yet land, so neither the status nor the message
+            // changes here — same as a network failure above.
+            this.status = previousStatus;
+            this.errorMessage = await readErrorMessage(res);
+          }
+          throw new Error("Request failed: " + res.status);
+        }
         if (sending) this.dropEntry(sending);
         const data = await res.json();
         this.status = data.log.status;
@@ -534,6 +586,13 @@ function createLogger() {
         this.lineError = true;
         return;
       }
+      // Everything this page wrote has landed, so an earlier refusal's banner
+      // — and its exercise-named message — is no longer what's true; clearing
+      // it here is what stops "Too many sets logged for Box Squat." sitting
+      // beside "Saved ✓". Only here, where this function is about to CLAIM
+      // saved: a refusal with nothing landed since keeps its message.
+      this.error = false;
+      this.errorMessage = "";
       this.saved = true;
       setTimeout(() => {
         this.saved = false;
@@ -631,9 +690,18 @@ function createLogger() {
 
     // Queue this session's log and say so — or, when storage refused it, say
     // it didn't save.
+    // True when the outbox took it. False means storage refused (a full or
+    // blocked store), and then NOTHING holds this save — not the server, not
+    // the queue — so the caller must not leave the optimistic "done" badge up
+    // (#570, round 2): "Logged" with no log anywhere and no retry pending is
+    // the worst version of the claim this whole slice exists to stop.
     keepForLater(payload) {
-      if (this.enqueue(payload)) this.queued = true;
-      else this.error = true;
+      if (this.enqueue(payload)) {
+        this.queued = true;
+        return true;
+      }
+      this.error = true;
+      return false;
     },
 
     // Returns the entry as stored, or null when storage refused it.

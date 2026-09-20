@@ -558,8 +558,10 @@ def cell_warn_reason(text, *, loggable=True):
     #572: the reason is returned, not just a boolean, because the CLIENT acts
     on it differently — ``_lineNeedsSending`` re-posts a warned line whose text
     hasn't changed, and whether that re-post is the repair or the bug depends
-    entirely on which reason fired. ``cell_should_warn`` below is this same
-    answer collapsed back to a bool for the callers that only need the tint.
+    entirely on which reason fired. The bare-bool wrapper this used to feed
+    (``cell_should_warn``) was deleted once every caller wanted the reason
+    instead — see ``models.sub_line_warn_reason`` and
+    ``views._cell_warn_reason_or_blank``.
     """
     parsed = parse_performed(text)
     if not parsed:
@@ -582,15 +584,6 @@ def cell_warn_reason(text, *, loggable=True):
         )
     )
     return "too-long" if too_long else None
-
-
-def cell_should_warn(text, *, loggable=True):
-    """Derive-on-read ``warn`` (5a, plan §8): should this cell be tinted?
-
-    ``cell_warn_reason`` collapsed to a bool, for the surfaces that only need
-    the tint and not the reason behind it.
-    """
-    return cell_warn_reason(text, loggable=loggable) is not None
 
 
 def performed_reps_text(parsed):

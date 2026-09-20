@@ -28,6 +28,8 @@ from store_project.meso.models import SessionLog
 from store_project.meso.tests._helpers import sub_line
 from store_project.meso.tests.test_parse_at_commit import log_post
 from store_project.meso.tests.test_parse_at_commit import seed
+from store_project.meso.tests.test_parse_at_commit import sub_cell
+from store_project.meso.tests.test_parse_at_commit import write_cell
 
 pytestmark = pytest.mark.django_db
 
@@ -65,9 +67,30 @@ class TestCollisionWalkCeiling:
         s = seed()
         client.force_login(s.athlete)
         log = SessionLog.objects.create(
-            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
+            session=s.session,
+            athlete=s.athlete,
+            status=SessionLog.Status.PENDING,
+            notes="pre-refusal notes",
         )
         rows = _fill_every_number_with_hidden_rows(log, s.squat)
+
+        # A plain structured row (no `source_line`/`reclaimed_line`) — none of
+        # the 50 hidden rows above is one. `athlete_log_session`'s
+        # replace-delete sweeps EVERY such row unconditionally (the
+        # `row.source_line_id is not None and not _client_held(...)` guard
+        # only ever fires for a row that HAS a `source_line`), regardless of
+        # whether this payload posts it, so this one lands in `replaceable`
+        # and gets `.delete()`d before the renumbering loop below ever runs —
+        # which is what makes it prove the rollback rather than the set-number
+        # bookkeeping the rest of this test already covers.
+        structured = LoggedSet.objects.create(
+            session_log=log,
+            prescription=s.squat,
+            set_number=2,
+            reps="3",
+            load="150",
+            rpe="",
+        )
 
         # The client posts a NEW performance at set_number 1 — a different
         # value than the hidden row sitting there, so it can't be absorbed as
@@ -92,21 +115,289 @@ class TestCollisionWalkCeiling:
         )
 
         assert resp.status_code == 400
-        assert resp.content == b"Too many sets logged for Box Squat."
+        # JSON, not plain text: the client renders `error` to the athlete
+        # verbatim, and only a refusal written for them carries that shape
+        # (the endpoint's validation 400s stay bare text so they can't).
+        assert resp.json() == {
+            "ok": False,
+            "error": "Too many sets logged for Box Squat.",
+        }
 
         # Nothing was written: the atomic block's rollback undoes even the
         # earlier `.delete()` this save ran before reaching the renumbering
         # loop — a bare `return` from inside it would have committed that
         # delete and refused the save anyway, silently losing the rows.
-        assert LoggedSet.objects.filter(session_log=log).count() == 50
+        assert LoggedSet.objects.filter(session_log=log).count() == 51
         for number, row in rows.items():
             row.refresh_from_db()
             assert row.set_number == number
             assert row.reps == "5"
             assert row.load == "100"
+        # Raises DoesNotExist if the earlier `.delete()` actually committed —
+        # this is the row two independent reviewers pointed out the old
+        # version of this test never checked: `replaceable` in THAT version
+        # was empty (every fixture row had a `source_line`), so the delete was
+        # a no-op and this assertion couldn't have told the rollback apart
+        # from its absence. With this row in the mix, the delete is genuinely
+        # non-empty.
+        structured.refresh_from_db()
+        assert structured.set_number == 2
+        assert structured.reps == "3"
+        assert structured.load == "150"
         assert (
             SessionLog.objects.filter(session=s.session, athlete=s.athlete).count() == 1
         )
+        # `log.save()` — which flips PENDING to DONE and resets `notes` to
+        # whatever this payload posted ("", since it posts none) — runs
+        # BEFORE the renumbering loop refuses the save, and it is a write
+        # `transaction.set_rollback(True)` must undo just as much as the
+        # `.delete()` above: without it, this commits regardless of the 400.
+        # (Verified by hand: commenting out `transaction.set_rollback(True)`
+        # in `athlete_log_session` turns both of these green assertions red —
+        # `status` reads back `"done"` and `notes` reads back `""`.)
+        log.refresh_from_db()
+        assert log.status == SessionLog.Status.PENDING
+        assert log.notes == "pre-refusal notes"
+
+
+class TestReplaceDeleteSparesOutOfRangeRow:
+    """#570: a row the presenter can't render is history, not draft state.
+
+    ``athlete_log_session``'s replace-delete now skips any row with
+    ``set_number > MAX_LOGGED_SET_NUMBER`` before deciding whether to sweep
+    it — see the "#570: a row the logger cannot RENDER" comment there. Without
+    that skip this row is a plain structured row (``source_line=None``), so
+    the same unconditional sweep ``TestCollisionWalkCeiling`` above relies on
+    would delete it outright, and nothing in the posted payload could ever
+    bring it back (the client can't name a set_number the presenter never
+    rendered).
+    """
+
+    def test_a_row_past_the_ceiling_survives_an_ordinary_save(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        log = SessionLog.objects.create(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
+        )
+        LoggedSet.objects.create(
+            session_log=log,
+            prescription=s.squat,
+            set_number=1,
+            reps="5",
+            load="200",
+            rpe="8",
+        )
+        out_of_range = LoggedSet.objects.create(
+            session_log=log,
+            prescription=s.squat,
+            set_number=MAX_LOGGED_SET_NUMBER + 5,
+            reps="3",
+            load="300",
+            rpe="9",
+        )
+
+        # An ordinary save reposting only the in-range row — the presenter
+        # never renders the out-of-range one, so no real client payload could
+        # ever name it.
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "200",
+                        "rpe": "8",
+                    }
+                ]
+            },
+        )
+
+        assert resp.status_code == 200
+        out_of_range.refresh_from_db()
+        assert out_of_range.set_number == MAX_LOGGED_SET_NUMBER + 5
+        assert out_of_range.reps == "3"
+        assert out_of_range.load == "300"
+        # The in-range row is fair game for the ordinary replace/recreate
+        # cycle; only its value is pinned, not its identity (a fresh row
+        # absorbing the same repost is just as correct).
+        assert LoggedSet.objects.filter(
+            session_log=log, prescription=s.squat, set_number=1, reps="5", load="200"
+        ).exists()
+
+
+class TestUpsertDeclinesPastTheCeiling:
+    """#570: ``_upsert_parsed_set`` must decline, not mint, past the ceiling.
+
+    Every number in the legal range is already taken by plain structured rows
+    (``source_line=None``) — a shape ``_upsert_parsed_set``'s own savepoint
+    never deletes, since it only ever deletes rows whose ``source_line`` IS
+    the cell just blurred (see its ``mine`` lookup). That makes the range
+    genuinely exhausted by the time a brand-new sub-line's blur asks for a
+    free number, no matter which line the athlete types into.
+    """
+
+    def test_a_new_sub_line_declines_rather_than_minting_an_out_of_range_row(
+        self, client
+    ):
+        s = seed()
+        client.force_login(s.athlete)
+        log = SessionLog.objects.create(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
+        )
+        for number in range(1, MAX_LOGGED_SET_NUMBER + 1):
+            LoggedSet.objects.create(
+                session_log=log,
+                prescription=s.squat,
+                set_number=number,
+                reps="5",
+                load="100",
+                rpe="",
+            )
+
+        # A brand-new sub-line (line 1 has never been written before) whose
+        # text parses as a real set.
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        # The cell's text is saved either way — declining to mint a row must
+        # never cost the athlete their typed text.
+        assert sub_cell(s.squat, 1).text == "225 x 5"
+        assert not LoggedSet.objects.filter(
+            set_number__gt=MAX_LOGGED_SET_NUMBER
+        ).exists()
+        # Nothing backs the line: the set-shaped text resolved, but every
+        # legal number was taken, so no row was minted for it at all.
+        assert body["cell"]["warn_reason"] == "unlogged"
+
+
+class TestUpsertFreedNumberFallback:
+    """#570 round 2: replacing an out-of-range row must not delete-and-lose it.
+
+    ``_first_free_set_number`` only scans ``1..MAX_LOGGED_SET_NUMBER``. A row
+    THIS sub-line already held above that ceiling — left there by the old
+    unbounded renumbering walk, before this same round bounded it too — frees
+    a number outside that scan the instant ``_upsert_parsed_set`` deletes it
+    to replace it with the edited performance. Before the ``freed_numbers``
+    fallback (see the "#570 round 2" comment above ``_upsert_parsed_set``'s
+    ``mine`` lookup), an exercise whose legal range was otherwise fully
+    occupied made the helper answer "nothing free", and the athlete's
+    performed set was deleted with nothing put back in its place — a 200
+    response, no error anywhere, and a set they actually did just vanished.
+    """
+
+    def test_replacing_an_out_of_range_row_lands_on_the_number_it_freed(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        log = SessionLog.objects.create(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
+        )
+        # Every legal number already taken by a plain structured row (no
+        # `source_line`) — what makes `_first_free_set_number` come back
+        # empty-handed and forces the walk down to the `freed_numbers`
+        # fallback, rather than just landing on an ordinary free slot.
+        for number in range(1, MAX_LOGGED_SET_NUMBER + 1):
+            LoggedSet.objects.create(
+                session_log=log,
+                prescription=s.squat,
+                set_number=number,
+                reps="5",
+                load="100",
+                rpe="",
+            )
+        cell = sub_line(s.squat, "225 x 5", line=1, athlete_authored=True)
+        stranded = LoggedSet.objects.create(
+            session_log=log,
+            prescription=s.squat,
+            source_line=cell,
+            set_number=MAX_LOGGED_SET_NUMBER + 5,
+            reps="5",
+            load="225",
+            rpe="",
+        )
+
+        # An ordinary edit — a genuinely different value on the same line,
+        # not a no-op re-blur of the same text.
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 6")
+
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        rows = LoggedSet.objects.filter(session_log=log, source_line=cell)
+        assert rows.count() == 1
+        row = rows.get()
+        # Delete-then-recreate, like every other edit on this line — not an
+        # in-place update of the stranded row.
+        assert row.pk != stranded.pk
+        assert row.reps == "6"
+        assert row.load == "225"
+        # On the number the deleted row freed — the one number
+        # `_first_free_set_number`'s bounded scan can never reach on its own.
+        assert row.set_number == MAX_LOGGED_SET_NUMBER + 5
+
+    def test_a_freed_number_already_taken_by_this_exercise_is_not_reused(self, client):
+        """The fallback is re-checked against ``taken``, not taken on faith.
+
+        Builds, directly via the ORM, the exact state ``_upsert_parsed_set``'s
+        own comment calls out ("a freed number can belong to a DIFFERENT
+        line-0 cell — a history restore replaces the pk") rather than
+        reproducing the history-restore flow that produces it in production:
+        the row hiding behind this cell is stamped ``prescription=rdl``, a
+        DIFFERENT line-0 cell than the one actually being edited (``squat``),
+        even though ``source_line`` still points at squat's own sub-line —
+        `mine`'s lookup filters on ``source_line`` alone, so this is a shape
+        the code has to defend against regardless of how it's reached.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        log = SessionLog.objects.create(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.PENDING
+        )
+        for number in range(1, MAX_LOGGED_SET_NUMBER + 1):
+            LoggedSet.objects.create(
+                session_log=log,
+                prescription=s.squat,
+                set_number=number,
+                reps="5",
+                load="100",
+                rpe="",
+            )
+        cell = sub_line(s.squat, "225 x 5", line=1, athlete_authored=True)
+        # `mine` for this cell — deleted below — but its `prescription` is
+        # RDL's, not squat's. The number it frees (3) says nothing about
+        # squat's own range: squat's LEGITIMATE row already sits on 3 (the
+        # fill loop above), and `taken` (scoped to `prescription=squat`)
+        # already reflects that.
+        LoggedSet.objects.create(
+            session_log=log,
+            prescription=s.rdl,
+            source_line=cell,
+            set_number=3,
+            reps="5",
+            load="225",
+            rpe="",
+        )
+
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 6")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        # Nothing was minted for this cell: the only number this delete
+        # freed (3) is already taken by squat's own legitimate row, and the
+        # bounded scan found nothing else free either.
+        assert not LoggedSet.objects.filter(source_line=cell).exists()
+        # Squat's own row at 3 is untouched — the fallback must not have
+        # collided with it by reusing a number it doesn't actually own.
+        untouched = LoggedSet.objects.get(
+            session_log=log, prescription=s.squat, set_number=3
+        )
+        assert untouched.reps == "5"
+        assert untouched.load == "100"
+        assert body["cell"]["warn_reason"] == "unlogged"
 
 
 class TestPresenterHardCap:
@@ -123,7 +414,7 @@ class TestPresenterHardCap:
         LoggedSet.objects.create(
             session_log=log,
             prescription=s.squat,
-            set_number=55,
+            set_number=MAX_LOGGED_SET_NUMBER + 5,
             reps="5",
             load="225",
             rpe="8",

@@ -1682,6 +1682,29 @@ def athlete_log_session(request, pk):
                 continue
             if row.pk in hidden_pks:
                 continue
+            # #570: a row the logger cannot RENDER is one the client cannot
+            # repost, so it is history rather than draft state — the same
+            # reasoning the two skips above make. `presenters._set_rows` now
+            # stops at MAX_LOGGED_SET_NUMBER, so a row left above it by the old
+            # unbounded walk (or by `_upsert_parsed_set`'s own walk before it
+            # was bounded) is absent from every payload, and without this skip
+            # the replace below would delete it silently and nothing would
+            # bring it back. Before the cap such a row rendered, the client
+            # posted it, and the save 400'd with the row intact — a lockout,
+            # which is bad, but not a silent deletion of a set the athlete
+            # performed.
+            #
+            # Sparing it is not the same as repairing it. A row past the
+            # ceiling whose `source_line` still names a live sub-line gets
+            # pulled back into range by `_upsert_parsed_set` the next time
+            # that line is edited; a SOURCE-LESS one (a `reclaimed_line` copy)
+            # has no such path — the renumbering loop below can never see it
+            # either, because its slot can never appear in `posted`, which
+            # `_clean_logged_sets` bounds to the legal range. It stays where
+            # it is, invisible on the page and still counting toward 1RM and
+            # PRs. That is the state this skip preserves rather than fixes.
+            if row.set_number > MAX_LOGGED_SET_NUMBER:
+                continue
             if row.source_line_id is not None and not _client_held(
                 row, cleaned_sets, identified, live_rows
             ):
@@ -1897,8 +1920,26 @@ def athlete_log_session(request, pk):
                     # transaction is poisoned no query may run, and
                     # `row.prescription` is a lazy FK fetch.
                     refused = f"Too many sets logged for {row.prescription.name}."
+                    # 400, not `athlete_cell_write`'s 503 (#571) — deliberately
+                    # the other way, and both are load-bearing: this refusal is
+                    # DETERMINISTIC (the same payload exhausts the same range
+                    # again), so retrying it can only fail again and the client
+                    # drops the queued entry rather than keep retrying
+                    # something that can never succeed. #571's 503 is for a
+                    # write that MIGHT yet land — a poisoned connection, not a
+                    # rejected payload — so that client keeps its entry queued
+                    # and retries.
                     transaction.set_rollback(True)
-                    return HttpResponseBadRequest(refused)
+                    # JSON with an `error` string, not the bare
+                    # `HttpResponseBadRequest` this endpoint's OTHER 400s use,
+                    # and the difference is the contract: `meso_athlete.js`
+                    # renders `error` to the athlete VERBATIM, so only a
+                    # refusal actually written for them may carry that shape.
+                    # The validation 400s from `_clean_logged_sets`
+                    # ("Duplicate id in sets.") are developer-facing and stay
+                    # plain text, which is exactly how the client tells the
+                    # two apart instead of guessing from the body.
+                    return JsonResponse({"ok": False, "error": refused}, status=400)
                 row.set_number = number
                 row.save(update_fields=["set_number"])
 
@@ -2495,6 +2536,16 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                     previous_text, reps=row.reps, load=row.load, rpe=row.rpe
                 )
             ]
+            # The numbers those rows are about to free. Load-bearing for the
+            # bounded walk below (#570 round 2): a row left ABOVE the ceiling
+            # by the old unbounded walk frees a number outside the range
+            # `_first_free_set_number` scans, so that helper answers "nothing
+            # free" while this line's own slot is sitting right there — and
+            # declining to create then DELETES a performed set and puts
+            # nothing back, which is worse than the out-of-range row it was
+            # trying to avoid. Captured before the delete, since afterwards
+            # there is nothing left to ask.
+            freed_numbers = sorted({row.set_number for row in mine})
             # What this cell held before, so an unchanged re-blur can be told
             # apart from a real edit (see the toast filter below).
             previous = mine[0] if mine else None
@@ -2526,9 +2577,9 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                 # and roll the DELETE back too — leaving the OLD set counting
                 # while the response cheerfully reported warn=false.
                 #
-                # Same constant `cell_should_warn` tests, deliberately: storing
-                # nothing is fine, but the cell has to SAY so, and the two would
-                # be free to drift if each had its own limit.
+                # Same constant `cell_warn_reason` tests (`too-long`), deliberately:
+                # storing nothing is fine, but the cell has to SAY so, and the
+                # two would be free to drift if each had its own limit.
                 if all(
                     len(value) <= parsing.MAX_LOGGED_FIELD for value in values.values()
                 ):
@@ -2618,17 +2669,47 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                                 "set_number", flat=True
                             )
                         )
-                        number = cell.line
-                        while number in taken:
-                            number += 1
-                        created = LoggedSet.objects.create(
-                            session_log=log,
-                            prescription=line_zero_cell,
-                            source_line=cell,
-                            set_number=number,
-                            **values,
-                        )
-                        is_new_set = previous is None
+                        # #570: bounded by the SAME helper `athlete_log_session`
+                        # uses. This was the fourth writer of a `set_number` and
+                        # the only one still unbounded, so an exercise already
+                        # carrying the full legal range could mint a row at 51+ —
+                        # a number `_clean_logged_sets` rejects and
+                        # `presenters._set_rows` no longer renders, i.e. a set
+                        # that counts toward records while being invisible and
+                        # unpostable.
+                        #
+                        # `None` means nothing in the legal range is free. A
+                        # line that just replaced a row of its OWN can still
+                        # land, on the number that row freed a moment ago —
+                        # including one above the ceiling, which the scan
+                        # cannot reach but which this very performance already
+                        # occupied. Without that fallback, replacing a row left
+                        # at 51+ by the old unbounded walk deleted it and
+                        # created nothing: a performed set destroyed by an
+                        # ordinary edit, on a 200 response. Re-checked against
+                        # `taken` because a freed number can belong to a
+                        # DIFFERENT line-0 cell (a history restore replaces the
+                        # pk), and then it says nothing about this one.
+                        #
+                        # Still `None` after that means there is genuinely
+                        # nowhere to put the row, and none is created. The
+                        # cell's text is saved either way, and
+                        # `sub_line_warn_reason` reports the line as unlogged —
+                        # which is exactly true.
+                        number = _first_free_set_number(taken, cell.line)
+                        if number is None:
+                            number = next(
+                                (n for n in freed_numbers if n not in taken), None
+                            )
+                        if number is not None:
+                            created = LoggedSet.objects.create(
+                                session_log=log,
+                                prescription=line_zero_cell,
+                                source_line=cell,
+                                set_number=number,
+                                **values,
+                            )
+                            is_new_set = previous is None
                     # Reps and load ONLY. The record is derived from those two
                     # (`personal_records._performed_sets` never reads RPE), so
                     # including RPE here made a pure RPE correction —
@@ -2639,8 +2720,15 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                     # Compared as VALUES, not strings: `120` and `120.0` are one
                     # record, so spelling one of them differently re-fired a 🎉
                     # already celebrated.
-                    unchanged = previous_values is not None and parsing.same_logged_set(
-                        previous_values[:2], (created.reps, created.load)
+                    # `created is not None` guards the bounded walk above
+                    # declining to mint a row (#570) — with no row there is no
+                    # value to compare, and nothing to re-celebrate either.
+                    unchanged = (
+                        created is not None
+                        and previous_values is not None
+                        and parsing.same_logged_set(
+                            previous_values[:2], (created.reps, created.load)
+                        )
                     )
 
             # This blur left no set on the cell, so the log may now hold
@@ -2723,7 +2811,10 @@ def _first_free_set_number(taken, start):
     than a save being refused that could have succeeded. ``None`` means every
     number in the legal range is genuinely taken.
     """
-    for number in range(start, MAX_LOGGED_SET_NUMBER + 1):
+    # `max(start, 1)` keeps the first scan inside the range this docstring
+    # promises. No caller passes less than 1 today, but the helper is the one
+    # place that decides what a legal number is, so it says so itself.
+    for number in range(max(start, 1), MAX_LOGGED_SET_NUMBER + 1):
         if number not in taken:
             return number
     for number in range(1, MAX_LOGGED_SET_NUMBER + 1):
@@ -3082,6 +3173,16 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
         # travels with it, so the rows left behind still name this cell
         # through `source_line`/`reclaimed_line` while their `SessionLog`
         # stays on the day they were actually logged.
+        #
+        # Deliberately NOT pinned to one log the way `backing_sets` above is
+        # (`-created_at, -pk`, #568): a row stranded on a split/older log, or
+        # on a soft-deleted day, still counts toward the athlete's live 1RM
+        # and PRs — neither `one_rm.derive_one_rm_values` nor
+        # `personal_records._live_logged_sets` filters by log recency or by
+        # `session__deleted_at` — so it is still a genuine double-count risk
+        # and a repost of this line would still duplicate it. A reviewer
+        # proposed adding `session_log__session__deleted_at__isnull=True`
+        # here; that would be WRONG for exactly this reason, so don't.
         elsewhere_sets = LoggedSet.objects.filter(
             Q(source_line=cell) | Q(source_line__isnull=True, reclaimed_line=cell),
             session_log__athlete=athlete,
@@ -5787,9 +5888,10 @@ def agent_propose(request, plan_id):
     # the allowance, and create the batch in one transaction so concurrent
     # agent_propose calls serialize — the lock is held until the batch row commits,
     # so a second request blocks and then re-counts against the cap. The
-    # transaction must be *explicit*: the project's module-level ``ATOMIC_REQUESTS``
-    # is inert (Django reads it per-entry from ``DATABASES``, which ``dj_database_url``
-    # doesn't set), so without this ``select_for_update`` would raise in autocommit
+    # transaction must be *explicit*: this project does not set
+    # ``DATABASES["default"]["ATOMIC_REQUESTS"]`` (see the note in
+    # ``config/settings/base.py`` for why it must stay that way), so without
+    # this ``select_for_update`` would raise in autocommit
     # on Postgres and the count-then-create gate would be racy. (On SQLite/tests the
     # lock is a no-op; the real serialization is on Postgres in prod.) Early returns
     # below just commit an empty transaction — nothing is written on those paths.

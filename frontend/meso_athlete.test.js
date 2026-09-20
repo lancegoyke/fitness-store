@@ -45,9 +45,20 @@ function makeLogger(overrides = {}) {
   return Object.assign(c, overrides);
 }
 
-// Build a fetch Response stub. `body` is returned from .json().
-function res({ ok = true, status = 200, redirected = false, body = {} } = {}) {
-  return { ok, status, redirected, json: async () => body };
+// Build a fetch Response stub. `body` is returned from .json() — including
+// on the refusal-message path (#570 round 2: `readErrorMessage` reads
+// `res.json()`, never `.text()` — a plain-text or HTML body must FAIL that
+// call, not hand back raw text, which is what `jsonError` simulates below).
+function res({ ok = true, status = 200, redirected = false, body = {}, jsonError = false } = {}) {
+  return {
+    ok,
+    status,
+    redirected,
+    json: async () => {
+      if (jsonError) throw new SyntaxError("Unexpected token < in JSON");
+      return body;
+    },
+  };
 }
 
 beforeEach(() => {
@@ -471,6 +482,10 @@ describe("save", () => {
     expect(c.error).toBe(false);
     expect(c.saving).toBe(false);
     expect(c.readQueue()).toHaveLength(1);
+    // #570 round 2 pin: storage TOOK the queued save, so the optimistic
+    // "done" set at the top of save() stands -- keepForLater returning true
+    // is exactly the case where nothing should be put back.
+    expect(c.status).toBe("done");
   });
 
   it("queues the write when the request is redirected to login", async () => {
@@ -483,6 +498,17 @@ describe("save", () => {
     expect(c.readQueue()).toHaveLength(1);
   });
 
+  it("keeps the optimistic 'done' status when storage accepts a login-redirect queue", async () => {
+    // Same pin as the network-unreachable case above, for the OTHER call
+    // site `keepForLater` guards (#570 round 2): a login redirect queues the
+    // write just as successfully, so there's nothing to put back either.
+    const c = makeLogger();
+    global.fetch = vi.fn().mockResolvedValue(res({ redirected: true }));
+    await c.save(true);
+    expect(c.queued).toBe(true);
+    expect(c.status).toBe("done");
+  });
+
   it("surfaces an HTTP error the athlete should retry", async () => {
     const c = makeLogger();
     c.exercises[0].set_rows[0].done = true;
@@ -492,6 +518,109 @@ describe("save", () => {
     expect(c.error).toBe(true);
     expect(c.queued).toBe(false);
     expect(c.readQueue()).toHaveLength(0);
+  });
+
+  // #570: a refusal like `athlete_log_session`'s 400 ("Too many sets logged
+  // for Box Squat.") is deterministic — retrying the same payload can only
+  // fail again — so the message has to reach the athlete and the optimistic
+  // "done" set at the top of save() has to come back off (the database kept
+  // nothing).
+  it("surfaces a refusal's own message and takes the optimistic status back off", async () => {
+    const c = makeLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        ok: false,
+        status: 400,
+        body: { ok: false, error: "Too many sets logged for Box Squat." },
+      }),
+    );
+    await c.save(true);
+    expect(c.error).toBe(true);
+    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
+    expect(c.status).toBe("pending"); // back to what it was before this save
+    expect(c.readQueue()).toHaveLength(0);
+  });
+
+  it("falls back to no message when a non-retryable body isn't JSON (an HTML error page)", async () => {
+    const c = makeLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // A proxy/load-balancer error page, or anything else that isn't JSON —
+    // `res.json()` itself rejects on this, exactly like a real fetch would.
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ ok: false, status: 400, jsonError: true }),
+    );
+    await c.save(false);
+    expect(c.error).toBe(true);
+    // The template's static fallback text covers this, not a multi-KB
+    // document in the banner.
+    expect(c.errorMessage).toBe("");
+  });
+
+  it("falls back to no message for a plain validation 400 with no error key", async () => {
+    // The endpoint's OTHER 400s (`_clean_logged_sets`'s "Duplicate id in
+    // sets.", "status must be 'pending' or 'done'.") are developer-facing
+    // and never carry this shape — modeled here as JSON with no `error`
+    // field at all, which is the one thing `readErrorMessage` actually
+    // checks for, rather than the bare-text body those 400s really send
+    // (any real body of theirs would already fail `res.json()`, covered by
+    // the HTML case above).
+    const c = makeLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ ok: false, status: 400, body: { ok: false } }),
+    );
+    await c.save(false);
+    expect(c.error).toBe(true);
+    expect(c.errorMessage).toBe("");
+  });
+
+  it("falls back to no message when error is present but not a string", async () => {
+    const c = makeLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ ok: false, status: 400, body: { ok: false, error: 12345 } }),
+    );
+    await c.save(false);
+    expect(c.error).toBe(true);
+    expect(c.errorMessage).toBe("");
+  });
+
+  it("truncates a long error message to 200 characters instead of dropping it", async () => {
+    // An exercise name can run up to 255 characters, and a clipped message
+    // still names the lift — worth keeping over showing nothing at all.
+    const c = makeLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const long = "Too many sets logged for " + "X".repeat(220) + ".";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ ok: false, status: 400, body: { ok: false, error: long } }),
+    );
+    await c.save(false);
+    expect(c.errorMessage).toHaveLength(200);
+    expect(c.errorMessage).toBe(long.slice(0, 200));
+  });
+
+  it("leaves status and errorMessage alone for a retryable HTTP status (unlike a refusal)", async () => {
+    const c = makeLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // The body is never even read here: `isRetryableStatus(503)` is true, so
+    // `save()` skips `readErrorMessage` altogether -- a 503 body's shape
+    // (JSON, text, whatever a proxy sends) is simply not this path's concern.
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 503 }));
+    await c.save(true);
+    expect(c.error).toBe(true);
+    expect(c.errorMessage).toBe(""); // the write might yet land -- no message swap
+    expect(c.status).toBe("done"); // -- and no status revert either
+  });
+
+  it("leaves status and errorMessage alone when the network is unreachable", async () => {
+    const c = makeLogger();
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.save(true);
+    expect(c.queued).toBe(true);
+    expect(c.error).toBe(false);
+    expect(c.errorMessage).toBe("");
+    expect(c.status).toBe("done"); // unchanged from #570 -- still queued, not refused
   });
 
   it("reflects the server's log on success", async () => {
@@ -1311,12 +1440,18 @@ describe("saveCell", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it.each(["skipped", "unlogged", ""])(
+  it.each(["skipped", "unlogged", "", undefined])(
     "still reposts an unchanged warned line whose reason is %j",
     async (reason) => {
       // "" is what an older server sends mid rolling deploy — pinned
       // alongside the real reasons because it must keep TODAY's behavior
-      // (repost), not the new "elsewhere" suppression.
+      // (repost), not the new "elsewhere" suppression. `undefined` is a line
+      // never hydrated with the key at all — e.g. one `addLine` just
+      // appended (`{ line, text: "", savedText: "" }`, no `warn`/`warn_reason`
+      // at all) — and `_lineNeedsSending`'s `warn_reason !== "elsewhere"`
+      // check is exactly as true for `undefined` as for any other non-
+      // "elsewhere" value, so it belongs in this same list, not a separate
+      // one.
       const c = cellLogger({
         exercises: [
           {
@@ -2487,6 +2622,28 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     await c.save(true);
     expect(c.queued).toBe(false);
     expect(c.error).toBe(true);
+    // #570 round 2: storage refused the queue, so NOTHING holds this save --
+    // not the server, not the outbox -- and the optimistic "done" set at the
+    // top of save() has to come back off, or the badge claims "Logged" over
+    // a write that landed nowhere at all.
+    expect(c.status).toBe("pending");
+  });
+
+  it("also takes the optimistic status back off when storage refuses a login-redirect queue", async () => {
+    // Same failure, the OTHER call site `keepForLater` guards: a login
+    // redirect means the write never reached the endpoint either, so a
+    // storage refusal here is exactly as total a loss as the network-failure
+    // case above.
+    const c = makeLogger();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    global.fetch = vi.fn().mockResolvedValue(res({ redirected: true }));
+    await c.save(true);
+    expect(c.queued).toBe(false);
+    expect(c.error).toBe(true);
+    expect(c.status).toBe("pending");
   });
 });
 
@@ -2988,6 +3145,49 @@ describe("footer line error clears once the line saves (#527)", () => {
     );
     await c.saveCell(c.exercises[0], 1);
     expect(c.lineError).toBe(true);
+  });
+});
+
+// #570 round 2: `reportSaved` is the ONE place a refusal's message gets
+// cleared — right where it's about to claim "Saved ✓" — so an exercise-named
+// refusal ("Too many sets logged for Box Squat.") can't go on sitting beside
+// that claim once the thing it was refusing has actually landed some other
+// way (a retry, a fixed line, an offline flush). It must NOT clear on either
+// early return, though: those mean something this page wrote still hasn't
+// landed, and the refusal is still the truest thing on screen.
+describe("reportSaved clears a stale refusal", () => {
+  it("clears error and errorMessage once it's about to claim saved", () => {
+    const c = makeLogger();
+    c.error = true;
+    c.errorMessage = "Too many sets logged for Box Squat.";
+    c.reportSaved();
+    expect(c.saved).toBe(true);
+    expect(c.error).toBe(false);
+    expect(c.errorMessage).toBe("");
+  });
+
+  it("leaves a stale refusal in place while this page's log is still queued", () => {
+    const c = makeLogger();
+    c.error = true;
+    c.errorMessage = "Too many sets logged for Box Squat.";
+    c.enqueue({ status: "pending", sets: [] }); // this session's own log, still in the outbox
+    c.reportSaved();
+    expect(c.queued).toBe(true);
+    expect(c.saved).toBe(false);
+    expect(c.error).toBe(true);
+    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
+  });
+
+  it("leaves a stale refusal in place while a line is still refused", () => {
+    const c = makeLogger();
+    c.error = true;
+    c.errorMessage = "Too many sets logged for Box Squat.";
+    c.exercises[0].sub_lines = [{ line: 1, text: "100 x 5", saveError: true }];
+    c.reportSaved();
+    expect(c.lineError).toBe(true);
+    expect(c.saved).toBe(false);
+    expect(c.error).toBe(true);
+    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
   });
 });
 

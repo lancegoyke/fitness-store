@@ -2446,6 +2446,74 @@ _(Append dated entries here as decisions land.)_
   for a later save to find two rows on one number. (`set_rollback` rather than
   raising a private exception so the whole 400-line block doesn't have to move
   a level deeper inside a `try` for a three-line guard.)
+  **A fourth writer, found by the adversarial review.** `_upsert_parsed_set`
+  had the same unbounded walk (`number = cell.line; while number in taken:
+  number += 1`), so the "three constants now agree" claim above was false as
+  written: an exercise already carrying the full legal range could still mint
+  a row at 51+ through a sub-line blur. It uses `_first_free_set_number` too
+  now, and when nothing is free it simply creates no row. Nothing is lost by
+  that — the rows a blur replaces are deleted before the number is chosen, so
+  a line that HAD a row always finds its own number free again, and `None`
+  can only mean this line never had one. The cell's text is saved either way
+  and the line reports itself unlogged, which is exactly true.
+  **Lowering the presenter's cap needed a matching skip in the
+  replace-delete.** Dropping `hard_cap` 60 -> 50 means a row already sitting
+  at 51..60 (left by either unbounded walk) stops rendering — and a row the
+  logger doesn't render is one the client can't repost, so `athlete_log_session`
+  would have swept it into `replaceable` and deleted it silently on the next
+  save. That trades a hard lockout for losing a set, which is the worse half
+  of the trade. The `replaceable` loop now skips any row above the cap, for
+  the same reason it already skips non-trainable and hidden rows: it is
+  history, not draft state. No backfill migration, because nothing is
+  destroyed and such a row still counts everywhere it did before.
+  **The bound needed a fallback, found by re-attacking it.** The first
+  version of the `_upsert_parsed_set` bound simply created nothing when no
+  number was free, on the reasoning — written into a comment, and wrong —
+  that "a line that HAD a row always finds its own number free again, so
+  `None` can only mean this line never had one". False for exactly the rows
+  #570 is about: the blur deletes the row this line was showing BEFORE the
+  number is chosen, so a row left at 51+ by the old unbounded walk frees a
+  number outside the range the scan covers. The helper answered "nothing
+  free" while this line's own slot sat right there, and an ordinary edit
+  deleted a performed set and put nothing back — on a 200 response, which is
+  worse than the out-of-range row the bound was introduced to prevent. The
+  numbers the blur frees are now captured before the delete and used as a
+  fallback, re-checked against `taken` because a history restore can leave a
+  freed number belonging to a different line-0 cell entirely.
+  **Sparing an out-of-range row is not repairing it.** A row past the ceiling
+  whose `source_line` still names a live sub-line comes back into range the
+  next time that line is edited. A source-less `reclaimed_line` copy has no
+  such path — the renumbering loop can never see it either, since its slot
+  can never appear in `posted` — so it stays where it is, invisible on the
+  page and still counting toward 1RM and PRs. The skip preserves that state
+  rather than fixing it, which is the right trade against deleting it, but it
+  is a state and not a repair.
+  **400 here, 503 for #571 — deliberately different.** This refusal is a 400,
+  which `meso_athlete.js` classifies as "rejected" and drops from the outbox;
+  #571's poisoned-transaction answer is a 503, which it keeps queued and
+  retries. The difference is whether retrying can help: a save with no free
+  set number is refused deterministically and will be refused identically
+  next time, while a poisoned connection is a transient the next attempt may
+  well get past. The athlete sees the server's own message naming the
+  exercise, so a refusal that cannot be retried at least says why.
+  **That message is a JSON `error` field, not the response body.** The client
+  renders it to the athlete verbatim, so only a refusal written FOR them may
+  carry it. This endpoint's other 400s — `_clean_logged_sets`'s "Duplicate id
+  in sets.", "status must be 'pending' or 'done'." — are developer-facing and
+  stay bare `HttpResponseBadRequest` text, which is exactly how the client
+  tells the two apart. An earlier version guessed from the body instead (drop
+  it if it is long or looks like HTML), which both let every validation
+  message through and would silently drop a legitimate one once an exercise
+  name made it long enough. Opting in per message beats sniffing the shape.
+  **Two sibling claims the review caught in the same client.** `save()` sets
+  the status to "done" optimistically; restoring it on a refusal fixed one
+  half and left the other — when `localStorage` refuses the write-ahead
+  entry, NOTHING holds the save, not the server and not the outbox, and the
+  badge still read "Logged" with no retry pending. `keepForLater` now reports
+  whether it kept anything, and the status goes back when it didn't. And
+  `reportSaved()` clears a stale refusal at the point it claims "Saved ✓", so
+  an exercise-named message can't sit beside a tick; a refusal with nothing
+  landed since keeps it.
 - 2026-09-20 — **Fixed (#571): `athlete_cell_write` no longer claims a save
   the database didn't keep.** Found by the same adversarial review as #570.
   `_upsert_parsed_set` wraps its work in a nested savepoint and swallows
@@ -2560,11 +2628,41 @@ _(Append dated entries here as decisions land.)_
   **Renamed, not duplicated:** `views._cell_warn_or_false` is now
   `_cell_warn_reason_or_blank` (returns the reason string or `""`, not a
   bool), and `models.sub_line_should_warn` is now `sub_line_warn_reason`
-  (returns the reason or `None`); `parsing.cell_should_warn` stays as a thin
-  bool wrapper over the new `parsing.cell_warn_reason`, since nothing needed
-  it to change shape. `PWA_CACHE_VERSION` bumped to `meso-pwa-v7` so an
+  (returns the reason or `None`); `parsing.cell_warn_reason` replaces
+  `cell_should_warn`, which the adversarial review found had no callers left
+  once every surface wanted the reason. `PWA_CACHE_VERSION` bumped to `meso-pwa-v7` so an
   already-installed PWA picks up the new response shape rather than keep
   serving a cached one that never carries `warn_reason`.
+  **What the client-side gate can and cannot enforce — narrowed by the
+  adversarial review.** The suppression lives in `_lineNeedsSending`, which
+  only governs the blur path, so it closes the case the issue describes: a
+  line tinted by a move, focused and left with its text UNCHANGED, no longer
+  posts. It does not close every route to a second row, and the first draft
+  of this entry claimed it did. `_postCell`'s `fromQueue` branch never
+  consults `_lineNeedsSending` at all — deliberately, because #527's outbox
+  must drain — so an offline edit-then-revert on an `"elsewhere"` line leaves
+  a queued entry whose text is byte-identical to what the server already
+  holds, and the replay mints the second row. So does any forced post: a
+  trailing-space edit is enough. Neither is a regression (on `main` the
+  plainer focus-and-leave path did the same), and the obvious server-side
+  cure is worse than the disease — refusing to create a row whose text is
+  backed on another day would also refuse a genuine RE-performance of the
+  same numbers on the new day, which is real data loss. The residue is filed
+  as its own follow-up rather than patched here.
+  **`elsewhere_sets` reads ANY log of the other session, unlike
+  `backing_sets`.** #568 deliberately pinned `backing_sets` to the newest
+  `SessionLog` (`-created_at`, `-pk`); this read deliberately does not, and
+  the asymmetry is not an oversight. A row stranded on a split or older log —
+  or on a day the coach has since soft-deleted — is invisible on every
+  athlete surface, but `one_rm.derive_one_rm_values` and
+  `personal_records._live_logged_sets` filter by neither log recency nor
+  `deleted_at`, so it still counts toward the athlete's 1RM and PRs. A repost
+  would therefore still genuinely double-count it, which makes `"elsewhere"`
+  the true answer. A review round proposed adding
+  `session_log__session__deleted_at__isnull=True` to both reads; that would
+  have turned a correct suppression into the very duplicate this slice
+  exists to prevent. (That those rows count at all is a separate,
+  pre-existing bug, filed on its own.)
   **Part 1 of #572 is explicitly NOT fixed here.** `prescription_move`
   re-points `exercise_slot.session_slot`, and an `ExerciseSlot` is shared
   across every week of the mesocycle, so one cross-day drag still re-tints

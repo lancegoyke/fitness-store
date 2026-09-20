@@ -101,19 +101,19 @@ class TestElsewhereSuppressesTheMoveRepostHazard:
             "rendering the athlete's session page must never mutate LoggedSet"
         )
 
-        # "The cell-write response for the same unchanged text" — computed
-        # directly via the exact helper `athlete_cell_write` uses to build
-        # that field (`views._cell_warn_reason_or_blank`), rather than through
-        # an ACTUAL POST: a real POST to an already athlete-authored line
-        # always re-runs `_upsert_parsed_set` (see its own "authorship follows
-        # actual authorship" comment — an unchanged blur is only a no-op for a
+        # This asserts on the FUNCTION that builds the field
+        # (`views._cell_warn_reason_or_blank`), not on an actual POST's
+        # response — a real POST to an already athlete-authored line always
+        # re-runs `_upsert_parsed_set` (see its own "authorship follows actual
+        # authorship" comment — an unchanged blur is only a no-op for a
         # coach's own untouched cue), which would itself immediately create a
         # backing row on this new day and clear the reason to "" as a result.
-        # That would make a read of the LIVE endpoint's response silently
-        # stop being the "elsewhere" the client's blur-time check actually
-        # sees and acts on. Calling the same helper the view calls, on the
+        # So the wire-level "elsewhere" this test pins never actually reaches
+        # the client through a live `athlete_cell_write` response — only
+        # through the page-load payload (`presenters.athlete_session`,
+        # asserted above). Calling the same helper the view calls, on the
         # same unmutated state the client's blur would see, is what actually
-        # answers "what would this blur's response say" honestly.
+        # answers "what would this blur compute" honestly.
         fresh_line_zero = Prescription.objects.get(pk=s.squat.pk)
         would_be_reason = views._cell_warn_reason_or_blank(
             cell, fresh_line_zero, session=day2, athlete=s.athlete
@@ -261,6 +261,25 @@ class TestSubLineWarnReasonElsewhereVsUnlogged:
         cell = sub_line(s.squat, "225 x 5", line=1)
         assert (
             sub_line_warn_reason(cell, backing_sets=(), elsewhere_sets=()) == "unlogged"
+        )
+
+    def test_an_elsewhere_row_the_cell_no_longer_shows_is_unlogged_not_elsewhere(
+        self,
+    ):
+        # `elsewhere_sets` is non-empty here too -- the only thing that
+        # differs from the "elsewhere" case above is that the cell's text has
+        # since moved on to a DIFFERENT performance, one the old row's values
+        # (225 x 5) no longer render. `line_displays` must say so: nothing
+        # here checks a bare `bool(elsewhere_sets)`, which would wrongly call
+        # this "elsewhere" and suppress a repost the athlete's NEW set still
+        # needs -- exactly the direction that loses a write.
+        s = seed()
+        cell, row = self._cell_with_a_row_elsewhere(s)
+        cell.text = "185 x 8"
+        cell.save(update_fields=["text"])
+        assert (
+            sub_line_warn_reason(cell, backing_sets=(), elsewhere_sets=(row,))
+            == "unlogged"
         )
 
     def test_elsewhere_sets_not_passed_defaults_to_the_safe_unlogged(self):

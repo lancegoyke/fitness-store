@@ -36,6 +36,7 @@ from store_project.notifications.models import SentEmail
 from store_project.users.models import User
 
 from . import adherence
+from . import parsing
 from . import tour
 from .billing import access as billing_access
 from .billing import agent_usage_report
@@ -56,6 +57,7 @@ from .models import Week
 from .models import WeekDelivery
 from .models import display_line_id
 from .models import hidden_parsed_set_pks
+from .models import line_displays
 from .models import sub_line_warn_reason
 from .one_rm import key_str
 from .one_rm import one_rm_values
@@ -1736,7 +1738,24 @@ def athlete_session(session, athlete):
     # it exists for, merely focusing and leaving such a line minted a SECOND row
     # for one performance. One query for the whole session, grouped the same way
     # `sets_by_line` is, rather than one per warned line.
-    line_cell_pks = [cell.pk for cells in lines_by_slot.values() for cell in cells]
+    #
+    # Restricted to the cells that could actually REACH the branch that reads
+    # it. `sub_line_warn_reason` consults `elsewhere_sets` only when the text
+    # resolves to a set AND nothing on THIS day is already showing it, so both
+    # tests are repeated here: a cue, a note, a blank cell or a skip/swap
+    # can never get that far, and neither can a line already backed by its own
+    # row — which is every line of a session the athlete is actively logging.
+    # Without the second test this query still fired (and still found nothing
+    # any line could use) on exactly the sessions that see the most traffic.
+    # Both predicates are the same calls on the same in-memory objects the
+    # reason itself will make, so narrowing here cannot change an answer.
+    line_cell_pks = [
+        cell.pk
+        for cells in lines_by_slot.values()
+        for cell in cells
+        if parsing.performed_is_set(cell.text)
+        and line_displays(cell, sets_by_line.get(cell.pk, ())) is None
+    ]
     elsewhere_by_line = defaultdict(list)
     if line_cell_pks:
         for row in (
@@ -1744,9 +1763,12 @@ def athlete_session(session, athlete):
                 Q(source_line_id__in=line_cell_pks)
                 | Q(source_line__isnull=True, reclaimed_line_id__in=line_cell_pks),
                 session_log__athlete=athlete,
-            )
-            .exclude(session_log__session_id=session.pk)
-            .select_related("source_line", "reclaimed_line")
+            ).exclude(session_log__session_id=session.pk)
+            # No `select_related` (F2): every row here only ever reaches
+            # `line_displays` (via `sub_line_warn_reason`), which reads
+            # `source_line_id`/`reclaimed_line_id` and re-parses the CELL's
+            # own text — never a related `source_line`/`reclaimed_line`
+            # object. Joining them in was pure waste.
         ):
             elsewhere_by_line[display_line_id(row)].append(row)
 
