@@ -2791,23 +2791,56 @@ _(Append dated entries here as decisions land.)_
   EvalPlanQual recheck, docs §13.2). The re-check repeats it anyway, so
   "what spares a cell" is answered in one place, once the rows can no longer
   move.
-  **Plain `FOR UPDATE`, not `no_key=True`.** A `LoggedSet` insert takes a
-  `FOR KEY SHARE` lock on the `Prescription` row it references (Postgres's
-  normal FK-under-MVCC mechanism); `FOR KEY SHARE` conflicts with
-  `FOR UPDATE` but not with `FOR NO KEY UPDATE` (what `no_key=True` takes).
-  Since this lock exists to make a DELETE serialize against that KEY SHARE,
-  the weaker lock #560 needed for a plain user-row mutex (never contending
-  with a concurrent FK reference in the first place) would silently defeat
-  this fix by coexisting with it instead of waiting on it.
-  **Lock order is unchanged.** `api_plan_undo`/`api_plan_redo` already lock
-  `Plan` first; `restore_plan_snapshot` already wrote Week → SessionSlot →
-  ExerciseSlot → Session → Prescription, Prescription last. The old
-  `.delete()` already took a `FOR UPDATE`-strength lock on these same rows
-  as part of executing its DELETE statement — this only moves *when* that
-  wait happens, earlier, not the shape of the lock graph. The new
-  collision-resolution delete above (#583) gets the identical lock-then-
-  recheck treatment for the same reason: leaving it unlocked would have
-  reopened, in brand-new code, the exact race #584 exists to close.
+  **What actually serializes an athlete write today is the `Session` row
+  lock, not this one — and the adversarial review is what established that.**
+  A first draft of this entry claimed a `LoggedSet` insert holds `FOR KEY
+  SHARE` on the `Prescription` it references for the rest of its
+  transaction. That is false: Django emits these FKs `DEFERRABLE INITIALLY
+  DEFERRED`, so the constraint's own `FOR KEY SHARE` fires only at COMMIT,
+  and an in-flight insert holds nothing. What keeps the two apart is the
+  `session.save()` loop earlier in `restore_plan_snapshot`, which UPDATEs
+  every snapshotted `Session` row, while both athlete write paths
+  (`athlete_cell_write`, `athlete_log_session`) take
+  `Session.objects.select_for_update()` as their first statement — so the
+  two transactions cannot overlap at all. Verified by experiment, not by
+  argument: giving the regression test's athlete thread that Session lock
+  makes the cell survive **on `main`**, both for a writer that updates the
+  cell and for the `athlete_log_session` shape that never touches it. So
+  #584's own framing ("the two don't serialize against each other") is not
+  right for any writer that exists today.
+  **The lock is still worth taking, for a narrower reason:** it stops the
+  purge depending on an incidental UPDATE in an unrelated earlier loop.
+  Make that `session.save()` conditional — skip unchanged rows, a plausible
+  optimization — and the race reopens with nothing to catch it. It also
+  covers a writer that touches one of these cells without holding the plan's
+  Session rows. `test_undo_purge_postgres.py` now pins both halves
+  separately: one forced-interleaving test for this lock in isolation (its
+  athlete thread deliberately does NOT take the Session lock; fails on
+  `main`), and one characterization test for the Session-lock serialization
+  (passes on `main` too, and exists so that a future change making the
+  Session save conditional fails there instead of silently).
+  **Plain `FOR UPDATE`, not `no_key=True`,** for two reasons: a DELETE takes
+  a lock of that strength anyway, and `FOR UPDATE` is what conflicts with
+  the commit-time `FOR KEY SHARE`, so a writer already *inside* its COMMIT
+  makes this lock wait and the re-check then sees its row. #560's
+  `no_key=True` was right for a user-row mutex never contending with an FK
+  reference; this is the opposite case.
+  **Lock order is unchanged; the locked SET is wider.** The sequence is
+  still Plan → Week → SessionSlot → ExerciseSlot → Session → Prescription.
+  But the `.delete()` this replaces carried its spare clauses inside its own
+  qualifying SELECT, so it only ever locked the *doomed* rows, whereas this
+  locks every snapshot-absent, non-athlete-authored stray and then spares
+  some. That widens a Prescription↔Plan cycle that already existed on this
+  path (`athlete_cell_write` is Prescription→Plan; a restore is
+  Plan→Prescription) rather than creating one — the same endpoint pair
+  already inverts on Session-vs-Plan per #562. Keeping `athlete_authored` in
+  the candidate filter is what stops the widening being far larger.
+  **The collision-resolution delete above (#583) removes an occupant only
+  when this purge itself would**, including the same soft-deleted-slot/week
+  scoping, so the two halves cannot disagree about which cells are
+  protected. Its occupancy read is unlocked, and what stops a
+  concurrently-inserted occupant there is again the Session lock, not this
+  one.
   **#562 is untouched and does not conflict.** It's a `Session`-vs-`Plan`
   ordering issue on a different path entirely (`athlete_cell_write`'s
   `Session` lock vs. `api_plan_undo`/`api_plan_redo`'s `Plan` lock) — no
@@ -2823,3 +2856,28 @@ _(Append dated entries here as decisions land.)_
   `test_undo_purge_postgres.py` (Postgres-only, a forced two-thread
   interleaving proving the lock, per the same barrier recipe
   `test_settle_postgres.py`/`test_billing_webhook_postgres.py` use).
+  **Declined, with reasons (adversarial review, 5 angles, round 1).** (a) The
+  coach's profile card: `_profile_results` picks its session by `-date`
+  across sessions and then calls `session_results`, which now resolves the
+  log by `-created_at`, so for a pair whose newest write carries an older
+  workout date the card can describe a log `_profile_results` did not pick.
+  That is the intended unification, not a regression — the card now agrees
+  with the results screen it reuses and with the athlete's own page. (b) The
+  PR callout: `personal_records._logged_before` defines the prior-best
+  baseline by `date` first, so moving `session_results`' subject to the
+  newest-by-`created_at` log can, on such a pair, announce a record already
+  beaten by its sibling. Narrow and legacy-only (it needs two DONE logs for
+  one `(session, athlete)` plus a date/created_at inversion), and *not* new
+  behaviour in kind: `athlete_log_session` and `_upsert_parsed_set` already
+  selected the subject that way on `main`, so the athlete's own toast has
+  always behaved like this — this change aligns the coach with it. Fixing
+  `_logged_before` is a PR-provenance product decision; filed on #578, which
+  is already chartered to replace the hand-written orderings with one
+  selector. (c) A within-snapshot coordinate swap or chain still raises:
+  unreachable, because `restore_plan_snapshot` is the only code in the repo
+  that ever assigns a cell's coordinate, so a snapshotted pk's coordinate is
+  identical in every snapshot naming it. (d) `reclaimed_line` is protected
+  by neither the lock nor an FK, and is safe today only by an incidental
+  property of `_consume_carried_link` (every carried link names a cell some
+  already-committed `LoggedSet` also names). Unverified and untested; noted
+  on #578 rather than asserted here.

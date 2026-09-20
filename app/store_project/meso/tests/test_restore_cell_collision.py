@@ -90,6 +90,7 @@ from store_project.meso import history
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import PlanAction
 from store_project.meso.models import Prescription
+from store_project.meso.tests._helpers import presc
 from store_project.meso.tests._helpers import sub_line
 from store_project.meso.tests.test_parse_at_commit import seed
 from store_project.meso.tests.test_parse_at_commit import sub_cell
@@ -310,3 +311,112 @@ class TestSnapshotSwapIsNotHandled:
 
         with pytest.raises(IntegrityError):
             history.restore_plan_snapshot(s.plan, snapshot)
+
+
+class TestCollisionGuardSparesAnOccupantUnderASoftDeletedCoordinate:
+    """A collision occupant the purge itself would never touch must not be purged either.
+
+    The stray-cell purge at the end of ``restore_plan_snapshot`` only ever
+    hard-deletes a cell whose ``ExerciseSlot`` **and** ``Week`` are BOTH live
+    in the snapshot being restored (``live_exercise_slot_pks_in_snapshot`` /
+    ``live_week_pks_in_snapshot``) — a cell sitting under a slot or week the
+    snapshot itself records as soft-deleted is deliberately left alone,
+    because it's already hidden via that join without touching the row. The
+    coordinate-collision guard above it (#583, #584) applies the SAME rule
+    "one join earlier", in the ``coord[0] not in
+    live_exercise_slot_pks_in_snapshot or coord[1] not in
+    live_week_pks_in_snapshot`` branch right before
+    ``stray_candidate_pks.add(occupant_pk)`` in ``history.py``: an occupant
+    the guard would otherwise delete to make room for a revived pk is instead
+    spared when the purge downstream of it would spare it too, and the
+    snapshotted cell that wanted the coordinate is skipped rather than
+    revived onto it. This test pins exactly that: the occupant it builds
+    (``Q``) survives, and the stale snapshotted pk (``P``) — whose coordinate
+    sits under a slot the snapshot itself records as soft-deleted — is not
+    revived over it. Before that scoping existed, this same setup purged
+    ``Q`` and revived ``P`` in its place, exactly backwards from what's
+    asserted below; the rule this test pins is "the collision guard removes
+    an occupant only when the purge itself would."
+
+    ON REACHABILITY. This shape is **not known to be reachable through any
+    real endpoint sequence** — same honesty as this file's other stood-up
+    preconditions (``TestUndoWithAStaleSnapshotCollidingWithAnAthleteCell``,
+    above). Getting a snapshot to name a stale pk P at a coordinate under a
+    slot it also records as soft-deleted is plausible on its own (a coach
+    deletes a row via a real endpoint, which soft-deletes its
+    ``ExerciseSlot`` in place without touching any of that row's cells, so
+    the very next ``PlanAction`` snapshot naturally captures both facts
+    together). What is NOT verified is a real path that then makes P vanish
+    from the database entirely while that particular snapshot is still the
+    one a later undo/redo restores — the purge itself would never do it
+    (P's slot isn't live, so the purge — before OR after this fix — always
+    skips it), so it would take some OTHER, older undo/redo cycle purging P
+    under a DIFFERENT, earlier snapshot where its slot was still live, timed
+    so this snapshot is still on the stack afterward. The author did not
+    find or attempt that sequence. Both P's disappearance and Q's arrival at
+    the freed coordinate are stood up directly here, the same way this
+    file's other hand-built-snapshot tests stand up their own preconditions.
+    """
+
+    def test_the_occupant_survives_and_the_stale_pk_is_not_revived(self, client):
+        s = seed()
+
+        # A row isolated from `s.squat`/`s.rdl` so soft-deleting its
+        # `ExerciseSlot` below touches nothing else in the plan.
+        row = presc(s.session, name="Isolation Row", sets="3", reps="10")
+        dead_slot = row.exercise_slot
+        stale_cell = sub_line(row, "old coach note", line=1)
+        stale_pk = stale_cell.pk
+
+        # Soft-delete the ROW itself — exactly what a real "delete this
+        # exercise" endpoint does (`ExerciseSlot.soft_delete()`), and exactly
+        # the condition the purge's own `live_exercise_slot_pks_in_snapshot`
+        # rule cares about. Doing this BEFORE taking the snapshot means the
+        # snapshot below both records `dead_slot` as soft-deleted AND still
+        # names `stale_cell` at its coordinate — a cell carries no
+        # `deleted_at` of its own, so `serialize_plan_snapshot` captures it
+        # regardless of whether its slot is live.
+        dead_slot.soft_delete()
+        snapshot = history.serialize_plan_snapshot(s.plan)
+        dead_slot_row = next(
+            r for r in snapshot["exercise_slots"] if r["pk"] == dead_slot.pk
+        )
+        assert dead_slot_row["deleted_at"] is not None, (
+            "setup assumption: the snapshot must record the row's ExerciseSlot "
+            "as soft-deleted"
+        )
+        assert any(r["pk"] == stale_pk for r in snapshot["cells"]), (
+            "setup assumption: the snapshot must still name the stale cell "
+            "at its coordinate, dead slot notwithstanding"
+        )
+
+        # Stand in for "P no longer exists" — see the class docstring's ON
+        # REACHABILITY section for why a bare ORM delete, not a second real
+        # undo/redo cycle, is used here, matching every other hand-built
+        # precondition in this file.
+        Prescription.objects.filter(pk=stale_pk).delete()
+
+        # A DIFFERENT, non-athlete-data cell lands at the exact same
+        # coordinate afterward — created directly, not through an endpoint,
+        # so it carries NO athlete_authored flag and NO LoggedSet of any
+        # kind: the plainest possible occupant, same idiom as the stray in
+        # `TestStrayWithNoAthleteDataIsPurgedAndTheSnapshottedPkRevives`.
+        occupant = Prescription.objects.create(
+            exercise_slot=dead_slot, week=s.week, line=1, text="new occupant text"
+        )
+        assert occupant.pk != stale_pk
+
+        history.restore_plan_snapshot(s.plan, snapshot)
+
+        occupant.refresh_from_db()
+        assert occupant.text == "new occupant text", (
+            "an occupant sitting under a slot the snapshot itself records as "
+            "soft-deleted must be spared — the purge downstream of this guard "
+            "would never touch it either, and the collision guard must not be "
+            "stricter than the purge it's mirroring"
+        )
+        assert not Prescription.objects.filter(pk=stale_pk).exists(), (
+            "a stale snapshotted cell whose slot is soft-deleted in the "
+            "snapshot must not be revived onto a coordinate a spared occupant "
+            "already holds"
+        )

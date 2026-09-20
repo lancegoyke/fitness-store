@@ -2576,7 +2576,16 @@ def newest_session_logs(session, athlete, *, status=None):
     seventh, ``presenters.session_results``, asked the same question and
     answered it differently (``-date, -created_at``, no tie-break at all), so
     the coach's results screen and the athlete's own page could read different
-    logs for one session (#579). One selector, so they cannot drift again.
+    logs for one session (#579). One selector, so the ORDERING cannot drift
+    again.
+
+    That is all this promises, and the limit is deliberate: sharing the
+    ordering is not the same as always landing on the same row.
+    ``session_results`` passes ``status=DONE`` and ``athlete_session`` passes
+    no status at all, so a pair holding a DONE log and a NEWER pending one
+    still, correctly, gives the coach the DONE one and the athlete the pending
+    one. A pending draft is not feedback yet; that difference is a filter, not
+    an ordering, and it is the reads' own business.
 
     Ordered by ``-created_at``, not ``-date``. ``SessionLog.date`` is
     athlete-supplied — ``views.athlete_log_session`` accepts an explicit date

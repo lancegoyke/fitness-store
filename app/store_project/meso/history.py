@@ -314,6 +314,19 @@ def restore_plan_snapshot(plan, snapshot):
         c.pk: c for c in models.Prescription.objects.filter(pk__in=cell_pks)
     }
 
+    # Which slots and weeks the snapshot records as LIVE. Both the collision
+    # guard immediately below and the stray-cell purge at the end of this
+    # function key off these: a cell whose slot or week is soft-deleted in the
+    # snapshot is already hidden without touching the cell row, and the purge
+    # deliberately leaves it alone. Computed here, once, so the two use the
+    # same definition rather than drifting apart.
+    live_exercise_slot_pks_in_snapshot = {
+        pk for pk, row in exercise_slot_rows.items() if row["deleted_at"] is None
+    }
+    live_week_pks_in_snapshot = {
+        pk for pk, row in week_rows.items() if row["deleted_at"] is None
+    }
+
     # #583 — a snapshotted cell is revived BY PK (that's the whole point of the
     # upsert below: a redo must put back the SAME row a corresponding undo
     # took away, not a lookalike with a new pk), but ``Prescription`` also
@@ -353,16 +366,29 @@ def restore_plan_snapshot(plan, snapshot):
     #     revived pk wants to go — so it is deleted now, freeing the
     #     coordinate for the upsert loop.
     #
-    # This delete gets the SAME lock-then-recheck treatment #584 gives the
-    # purge, for the identical reason: an unlocked read-then-delete here would
-    # reopen, in brand new code, the exact race #584 exists to close (a
-    # ``LoggedSet`` or an ``athlete_authored`` flip committed by a concurrent
-    # athlete write, between our read and our delete, that we'd otherwise
-    # never see). See the purge's own comment below for the full lock
-    # reasoning (``of=("self",)``, plain ``FOR UPDATE`` not ``no_key=True``,
-    # lock order) — it applies here verbatim, just against a narrower
-    # candidate set (occupants of a snapshotted coordinate, not every
-    # snapshot-absent cell).
+    # An occupant is removed ONLY when the stray-cell purge at the end of this
+    # function would itself have removed it — same spare rule, and the same
+    # liveness scoping: a cell whose slot or week is soft-deleted in the
+    # snapshot is one the purge deliberately leaves standing, so this guard
+    # leaves it standing too and skips the snapshotted cell instead. Without
+    # that, this block would hard-delete rows the purge protects, which is a
+    # rule the two halves must not disagree about.
+    #
+    # The delete takes the same lock-then-recheck as the purge (see its
+    # comment below for the full reasoning). Note what that lock does and does
+    # not do HERE: the occupancy read just below is NOT locked, so it cannot
+    # see a cell some other transaction has inserted at one of these
+    # coordinates but not yet committed. What keeps that from becoming a
+    # unique-constraint violation is a lock this function already takes for
+    # another reason entirely — the ``session.save()`` loop above UPDATEs
+    # every snapshotted ``Session`` row, and both athlete write paths
+    # (``athlete_cell_write``, ``athlete_log_session``) take
+    # ``Session.objects.select_for_update()`` as their first statement, so an
+    # athlete transaction and this restore cannot overlap at all. Any FUTURE
+    # cell writer that holds neither that Session row nor the ``Plan`` row
+    # would reopen the window; ``agent/apply.py`` already bulk-creates cells
+    # without the ``Plan`` lock and is safe only because its coordinates are
+    # always brand new.
     coord_of_pk = {
         pk: (row["exercise_slot_id"], row["week_id"], row.get("line", 0))
         for pk, row in cell_rows.items()
@@ -386,18 +412,33 @@ def restore_plan_snapshot(plan, snapshot):
         if occupant_pk is None or occupant_pk == pk:
             continue  # coordinate free, or already correctly occupied by pk itself
         if occupant_pk in cell_pks:
-            # The occupant is ANOTHER snapshotted cell — a genuine coordinate
-            # SWAP within this one restore (e.g. two rows dragged past each
-            # other and back). Resolving that safely would need to move one
-            # side off its coordinate onto a temporary, unclaimed spot before
-            # either pk could be revived in place — ``unique_cell_slot_week_line``
-            # is checked immediately, not deferred, so neither side can simply
-            # write into the other's still-occupied coordinate — and no known
-            # real path produces this shape today (see
-            # ``test_restore_cell_collision.py``'s module docstring). Left
-            # AS-IS: such a swap still raises ``IntegrityError`` out of the
-            # upsert loop below, exactly as it did before this fix, rather
-            # than being silently (and possibly incorrectly) papered over here.
+            # The occupant is ANOTHER snapshotted cell: this restore wants two
+            # pks to trade coordinates (a 2-cycle) or to shuffle along a chain
+            # (P1 wants what P2 is about to vacate). Neither is resolved here.
+            # ``unique_cell_slot_week_line`` is checked immediately, not
+            # deferred, so a 2-cycle genuinely needs one side parked on a
+            # temporary, unclaimed coordinate first; a chain would only need
+            # the upsert loop ordered free-coordinate-first. Both are left
+            # alone for the same reason: a snapshotted pk's coordinate is
+            # identical in every snapshot that names it, because
+            # ``restore_plan_snapshot`` is the ONLY code in the repo that ever
+            # assigns a cell's ``(exercise_slot, week, line)`` — every other
+            # creation site mints a cell at a coordinate and never moves it.
+            # So neither shape is reachable, and both still raise
+            # ``IntegrityError`` out of the upsert loop exactly as they did
+            # before this fix rather than being papered over on a path no test
+            # can exercise. See ``test_restore_cell_collision.py``.
+            continue
+        if (
+            coord[0] not in live_exercise_slot_pks_in_snapshot
+            or coord[1] not in live_week_pks_in_snapshot
+        ):
+            # The purge would spare this occupant (its slot or week is
+            # soft-deleted in the snapshot), so this guard spares it too — and
+            # therefore must skip the snapshotted cell that wanted its
+            # coordinate, or the upsert below would hit the very constraint
+            # this block exists to avoid.
+            colliding_pks_to_skip.add(pk)
             continue
         stray_candidate_pks.add(occupant_pk)
     if stray_candidate_pks:
@@ -418,7 +459,13 @@ def restore_plan_snapshot(plan, snapshot):
         )
         doomed_stray_pks = [pk for pk in locked_stray_pks if pk not in spared_stray_pks]
         if doomed_stray_pks:
-            models.Prescription.objects.filter(pk__in=doomed_stray_pks).delete()
+            # ``week__mesocycle__plan`` is redundant given where these pks came
+            # from, and kept anyway: the pre-change purge carried that scoping
+            # in the DELETE's own WHERE, and a delete that can only ever touch
+            # this plan's rows should say so at the point it deletes.
+            models.Prescription.objects.filter(
+                pk__in=doomed_stray_pks, week__mesocycle__plan=plan
+            ).delete()
         # Whichever snapshotted cell wanted a coordinate a SPARED occupant
         # still holds must be excluded from the upsert loop below — sparing
         # only the occupant and then still trying to revive the snapshotted
@@ -473,12 +520,6 @@ def restore_plan_snapshot(plan, snapshot):
     # write path creates a cell alongside whichever of the two is new), but
     # such a stray cell must be purged or it would resurface as a live row
     # the snapshot never accounted for.
-    live_exercise_slot_pks_in_snapshot = {
-        pk for pk, row in exercise_slot_rows.items() if row["deleted_at"] is None
-    }
-    live_week_pks_in_snapshot = {
-        pk for pk, row in week_rows.items() if row["deleted_at"] is None
-    }
     #
     # ``parsed_sets`` joins the same exclusion for a reason the flag misses: a
     # RECLAIMED sub-line is ``athlete_authored=False``, so undoing back past its
@@ -540,44 +581,68 @@ def restore_plan_snapshot(plan, snapshot):
     # its own. ``settle.settle_log`` already takes exactly this shape of lock,
     # for the same reason; matched here.
     #
-    # Plain ``FOR UPDATE``, deliberately **not** ``no_key=True``. The purpose
-    # of this lock is to make the racing write and this delete serialize —
-    # concretely, to make sure that if a ``LoggedSet`` insert referencing one
-    # of these cells is concurrently in flight, this lock either waits behind
-    # it (and the re-check below then sees it and spares the cell) or is
-    # granted only once that insert has fully committed (same outcome). A
-    # ``LoggedSet`` insert takes a ``FOR KEY SHARE`` lock on the
-    # ``Prescription`` row it references, to protect that reference for the
-    # rest of its own transaction (Postgres's normal mechanism for enforcing a
-    # foreign key under MVCC) — and ``FOR KEY SHARE`` conflicts with
-    # ``FOR UPDATE`` but NOT with ``FOR NO KEY UPDATE`` (what
-    # ``select_for_update(no_key=True)`` takes). We intend to DELETE these
-    # rows if they're still doomed, and a delete needs the stronger lock
-    # precisely so it conflicts with that KEY SHARE — using ``no_key=True``
-    # here, the fix #560 needed for a plain user-row MUTEX (a lock that was
-    # never contending with a concurrent FK reference in the first place),
-    # would silently let this lock coexist with the athlete's KEY SHARE
-    # instead of waiting on it, defeating the fix in exactly the window it
-    # exists to close.
+    # WHAT ACTUALLY SERIALIZES AN ATHLETE WRITE TODAY — and it is not this
+    # lock, so do not let this comment imply otherwise. An inserted
+    # ``LoggedSet`` takes NO lock at all on the ``Prescription`` it
+    # references while its transaction runs: Django emits these FKs
+    # ``DEFERRABLE INITIALLY DEFERRED`` on Postgres (confirmed against the
+    # live schema), so the constraint's own ``FOR KEY SHARE`` on the parent
+    # row fires only at COMMIT. The thing that keeps a racing athlete write
+    # and this purge apart is the ``session.save()`` loop earlier in this
+    # function: it UPDATEs every snapshotted ``Session`` row, and BOTH athlete
+    # write paths (``athlete_cell_write``, ``athlete_log_session``) take
+    # ``Session.objects.select_for_update()`` as their first statement — so an
+    # athlete transaction either commits entirely before this restore reaches
+    # that loop, or cannot start until this restore has committed. Verified:
+    # giving the regression test's athlete thread that Session lock makes the
+    # cell survive on ``main`` too, for a writer that updates the cell AND for
+    # the ``athlete_log_session`` shape that never touches it.
+    #
+    # WHAT THIS LOCK ADDS, then, is that the guarantee stops depending on an
+    # incidental UPDATE in an unrelated earlier loop. Make that Session save
+    # conditional (skip unchanged rows — a plausible optimization) and the
+    # race reopens with nothing to catch it; hold the lock here and the purge
+    # states its own requirement locally. It also covers a writer that touches
+    # one of these cells without holding the plan's Session rows: such a write
+    # takes Postgres's implicit row lock on the cell, this lock waits on it,
+    # and the re-check below then sees whatever it committed. See
+    # ``test_undo_purge_postgres.py``, which pins both halves separately.
+    #
+    # Plain ``FOR UPDATE``, deliberately **not** ``no_key=True``, for two
+    # reasons. We intend to DELETE these rows, and a DELETE takes a lock of
+    # that strength anyway — acquiring a weaker one first would only mean
+    # upgrading mid-statement. And ``FOR UPDATE`` is what conflicts with the
+    # commit-time ``FOR KEY SHARE`` above, so a writer already INSIDE its
+    # COMMIT makes this lock wait, and the re-check then sees its row;
+    # ``FOR NO KEY UPDATE`` (what ``no_key=True`` takes) does not conflict
+    # with ``FOR KEY SHARE`` and would let the delete proceed alongside it.
+    # #560's ``no_key=True`` was the right call for a plain user-row MUTEX
+    # that was never contending with an FK reference; this is the opposite
+    # case.
     #
     # ``.order_by("pk")`` gives a deterministic lock-acquisition order among
     # the candidates themselves — irrelevant to any lock this function's
     # caller already holds, but keeps two concurrent restores that both reach
     # this purge from fighting each other over lock order.
     #
-    # LOCK ORDER. This stays inside the caller's existing order, unchanged:
-    # ``api_plan_undo``/``api_plan_redo`` take ``Plan.objects.select_for_update()``
-    # first, then ``restore_plan_snapshot`` writes Week -> SessionSlot ->
-    # ExerciseSlot -> Session -> Prescription (the collision guard above, then
-    # this purge, last). The plain ``.delete()`` this replaces ALREADY took a
-    # lock of ``FOR UPDATE`` strength on these same candidate rows as part of
-    # executing its own DELETE statement — issuing a DELETE has always implied
-    # locking its targets — so this change only moves *when* that wait happens
-    # (before the re-check, instead of implicitly during the DELETE); it
-    # introduces no lock-ordering shape that didn't already exist on this path.
-    # (#562 is a Session-vs-Plan ordering issue on a DIFFERENT path —
-    # ``athlete_cell_write`` vs ``api_plan_undo``/``api_plan_redo`` — and is
-    # untouched by this change.)
+    # LOCK ORDER. The sequence is unchanged: ``api_plan_undo``/``api_plan_redo``
+    # take ``Plan.objects.select_for_update()`` first, then this function
+    # writes Week -> SessionSlot -> ExerciseSlot -> Session -> Prescription
+    # (the collision guard above, then this purge, last). What DID change is
+    # the SIZE of the locked set, and it is worth being exact rather than
+    # claiming nothing moved: the ``.delete()`` this replaces carried its
+    # three spare clauses inside its own qualifying SELECT, so it only ever
+    # locked the DOOMED rows, whereas this locks every snapshot-absent,
+    # non-athlete-authored stray — including ones a ``LoggedSet`` names, which
+    # are then spared. Those extra rows can include a reclaimed sub-line an
+    # athlete is actively blurring, and ``athlete_cell_write`` takes
+    # Prescription before ``Plan`` (``cell.save`` then ``_touch_plan``) while
+    # this path holds ``Plan`` and wants Prescription. That is a widening of a
+    # cycle that already existed on this path, not a new one — the same
+    # endpoint pair already inverts on Session-vs-Plan (#562) — and keeping
+    # ``athlete_authored`` in the candidate filter below is what stops the
+    # widening from being far larger. #562 itself is untouched here, and its
+    # direction (pick one Session/Plan order) stays compatible either way.
     #
     # ``athlete_authored`` STAYS in the candidate filter, and is re-checked
     # under the lock as well. Both halves are deliberate.
@@ -605,11 +670,15 @@ def restore_plan_snapshot(plan, snapshot):
     # clause against the UPDATED row version and skips it if it no longer
     # matches (the EvalPlanQual recheck, PostgreSQL docs §13.2). So a cell the
     # athlete claims mid-restore drops out of ``candidate_pks`` on its own.
-    # The re-check below repeats the test anyway, under the lock, for the same
-    # reason ``settle.settle_log`` re-verifies every one of its own
-    # conditions rather than trusting the read that selected the row: one
-    # place to look for "what spares a cell", evaluated once the row can no
-    # longer move.
+    #
+    # Which makes the ``athlete_authored`` half of the re-check below dead on
+    # Postgres — it can only ever return zero rows there, and that is said
+    # here rather than left for the next reader to work out. It is kept for
+    # one reason: "what spares a cell" is then answered in exactly one place,
+    # evaluated once the rows can no longer move, the same way
+    # ``settle.settle_log`` re-verifies every one of its own conditions
+    # instead of trusting the read that selected the row. On a backend where
+    # ``select_for_update`` is a no-op (SQLite) it is the only check there is.
     #
     # ``select_for_update`` is a documented no-op on SQLite (its
     # ``has_select_for_update`` is ``False`` and the compiler drops the
@@ -645,7 +714,11 @@ def restore_plan_snapshot(plan, snapshot):
         )
         doomed_pks = [pk for pk in candidate_pks if pk not in spared_pks]
         if doomed_pks:
-            models.Prescription.objects.filter(pk__in=doomed_pks).delete()
+            # Plan-scoped at the point of deletion, as the single-statement
+            # delete this replaces was — see the collision guard's note above.
+            models.Prescription.objects.filter(
+                pk__in=doomed_pks, week__mesocycle__plan=plan
+            ).delete()
 
 
 def record_plan_action(plan, label):
