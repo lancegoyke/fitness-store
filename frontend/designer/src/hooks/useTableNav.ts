@@ -356,9 +356,35 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
   // Flips true the first time any cell actually receives focus — gates
   // whether restoration is allowed to steal DOM focus, mirrors useGridNav.
   const focusedOnceRef = useRef(false);
+  // Chrome performs a pointer-driven focus transfer across mousedown: it
+  // blurs the old input before focusing the clicked one. If that blur
+  // synchronously commits an optimistic grid update, restoration runs while
+  // the browser's transfer is still in flight; calling focus() on the old
+  // anchor at that point makes Chrome abandon the pending focus for the
+  // clicked input. Track the whole pointer press at document capture level
+  // for issue #597 so no descendant can hide that in-flight window from the
+  // restoration effect.
+  const pointerDownRef = useRef(false);
   // Cell key -> value captured at focus time, for Escape's revert target.
   const focusValuesRef = useRef<Record<string, string>>({});
   const appendPendingRef = useRef<AppendPending | null>(null);
+
+  useEffect(() => {
+    const onPointerDown = () => {
+      pointerDownRef.current = true;
+    };
+    const onPointerEnd = () => {
+      pointerDownRef.current = false;
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("pointerup", onPointerEnd, true);
+    document.addEventListener("pointercancel", onPointerEnd, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("pointerup", onPointerEnd, true);
+      document.removeEventListener("pointercancel", onPointerEnd, true);
+    };
+  }, []);
 
   function commitAnchor(next: TableCellId | null, flatForLookup: FlatTable, shouldFocus: boolean) {
     anchorRef.current = next;
@@ -402,10 +428,11 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
     // patch — keeps focus.
     const active = document.activeElement as HTMLElement | null;
     const allowFocusMove =
-      !active ||
-      active === document.body ||
-      active.hasAttribute("data-grid-cell") ||
-      active.closest("[data-grid-restore]") !== null;
+      !pointerDownRef.current &&
+      (!active ||
+        active === document.body ||
+        active.hasAttribute("data-grid-cell") ||
+        active.closest("[data-grid-restore]") !== null);
 
     // Enter-adds-row landing (Phase 2b): once the day's last row CHANGED,
     // the appended row is in this grid — focus it at the column Enter came
