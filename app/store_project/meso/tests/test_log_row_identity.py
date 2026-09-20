@@ -400,7 +400,7 @@ class TestCleanLoggedSetsRowIdentityValidation:
 class TestSubLineWarnAgreesAcrossSurfaces:
     """The blur response and the next render must agree on a line's tint.
 
-    ``sub_line_should_warn``'s fallback used to match a ``LoggedSet`` on ANY
+    ``sub_line_warn_reason``'s fallback used to match a ``LoggedSet`` on ANY
     ``SessionLog`` in the database, while the presenter always reads one
     specific log. The two ways they can diverge, per the issue: a stray
     second log for the same (session, athlete), and a coach move that takes
@@ -414,7 +414,7 @@ class TestSubLineWarnAgreesAcrossSurfaces:
         # A coach-authored sub-line the athlete never touched, so a blur that
         # re-posts its own unchanged text is a no-op (`untouched_coach_line`)
         # and never re-derives a fresh backing row -- the only way to observe
-        # `_cell_warn_or_false`'s read without it healing the very gap this
+        # `_cell_warn_reason_or_blank`'s read without it healing the very gap this
         # test means to catch.
         cell = sub_line(s.squat, "225 x 5", line=1)
         old_log = SessionLog.objects.create(
@@ -1070,7 +1070,7 @@ class TestCellWarnAgreesWithAFreshSkipRead:
     ``athlete_cell_write`` builds ``line_zero`` (the exercise's line-0 cell)
     BEFORE the write transaction. ``_upsert_parsed_set`` re-reads it under
     ``select_for_update`` and acts on THAT fresh value. If
-    ``_cell_warn_or_false`` instead reads the caller's stale pre-transaction
+    ``_cell_warn_reason_or_blank`` instead reads the caller's stale pre-transaction
     instance, the two disagree the moment a coach's ``prescription_unskip``
     lands inside this same request's window: the request logs a REAL set
     (fresh: unskipped) but the response reports ``warn=True`` from the stale

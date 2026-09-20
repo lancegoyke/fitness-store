@@ -1260,6 +1260,128 @@ describe("saveCell", () => {
     await c.saveCell(c.exercises[0], 1);
     expect(c.newRecords).toBe(existing); // untouched, not reset to []
   });
+
+  // -- #571: the server now answers 503 (not 200) when it can't confirm a
+  // write actually landed, precisely so this client behaviour kicks in.
+  // `isRetryableStatus` already treats any `>= 500` as outcome "kept" — the
+  // server failed, not the write — so a 503 must leave the line queued for
+  // the next retry exactly like an ordinary 500 does. This pins that
+  // existing behaviour, which #571's server fix now depends on.
+  it("a 503 (server couldn't confirm the save) leaves the cell queued for retry", async () => {
+    const c = cellLogger();
+    const entry = c.exercises[0].sub_lines[0];
+    entry.savedText = "RPE 7"; // this line was already saved once
+    entry.text = "RPE 8"; // then edited, so the blur has something to send
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ ok: false, status: 503, body: { ok: false, error: "nope" } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.readQueue().map((i) => i.body.text)).toEqual(["RPE 8"]);
+    expect(entry.queued).toBe(true);
+    expect(entry.savedText).toBeUndefined(); // so the next blur reposts it
+  });
+
+  // -- #572: `warn_reason` tells a cross-day-move tint ("elsewhere" — the
+  // performance is already logged, on the day the coach dragged this
+  // exercise off) apart from every other warn cause (a repost is the
+  // repair). `_lineNeedsSending`'s dirty check treats them differently even
+  // when the text hasn't changed at all.
+
+  it("does not repost an unchanged line whose warn_reason is 'elsewhere'", async () => {
+    const c = cellLogger({
+      exercises: [
+        {
+          id: 1,
+          sub_lines: [
+            {
+              line: 1,
+              text: "225 x 5",
+              savedText: "225 x 5",
+              warn: true,
+              warn_reason: "elsewhere",
+            },
+          ],
+          set_rows: [],
+        },
+      ],
+    });
+    global.fetch = vi.fn();
+    const outcome = await c.saveCell(c.exercises[0], 1);
+    expect(outcome).toBe("skipped");
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["skipped", "unlogged", ""])(
+    "still reposts an unchanged warned line whose reason is %j",
+    async (reason) => {
+      // "" is what an older server sends mid rolling deploy — pinned
+      // alongside the real reasons because it must keep TODAY's behavior
+      // (repost), not the new "elsewhere" suppression.
+      const c = cellLogger({
+        exercises: [
+          {
+            id: 1,
+            sub_lines: [
+              {
+                line: 1,
+                text: "225 x 5",
+                savedText: "225 x 5",
+                warn: true,
+                warn_reason: reason,
+              },
+            ],
+            set_rows: [],
+          },
+        ],
+      });
+      global.fetch = vi.fn().mockResolvedValue(
+        res({
+          body: {
+            ok: true,
+            cell: { id: 5, line: 1, text: "225 x 5", warn: true, warn_reason: reason },
+          },
+        }),
+      );
+      const outcome = await c.saveCell(c.exercises[0], 1);
+      expect(outcome).toBe("saved");
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("copies the response's warn_reason onto the entry", async () => {
+    const c = cellLogger({
+      exercises: [
+        { id: 1, sub_lines: [{ line: 1, text: "225 x 5" }], set_rows: [] },
+      ],
+    });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        body: {
+          ok: true,
+          cell: { id: 5, line: 1, text: "225 x 5", warn: true, warn_reason: "unlogged" },
+        },
+      }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.exercises[0].sub_lines[0].warn_reason).toBe("unlogged");
+  });
+
+  it("clears warn_reason to \"\" when the response omits it (an older server)", async () => {
+    const c = cellLogger({
+      exercises: [
+        {
+          id: 1,
+          sub_lines: [{ line: 1, text: "225 x 5", warn_reason: "unlogged" }],
+          set_rows: [],
+        },
+      ],
+    });
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { ok: true, cell: { id: 5, line: 1, text: "225 x 5", warn: false } } }),
+    );
+    await c.saveCell(c.exercises[0], 1);
+    expect(c.exercises[0].sub_lines[0].warn_reason).toBe("");
+  });
 });
 
 describe("addLine", () => {

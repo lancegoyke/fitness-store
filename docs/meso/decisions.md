@@ -2403,3 +2403,174 @@ _(Append dated entries here as decisions land.)_
   presenter already tinted those lines on `main`, before #567/#568 touched
   any of this) and are tracked separately, not fixed in this slice.
   No model change, no migration.
+- 2026-09-20 — **Fixed (#570): the collision-renumbering walk now has a
+  ceiling, and refuses honestly when nothing is free.** Found by the
+  adversarial review on #567/#568 and declined there as pre-existing. The
+  walk that moves a surviving parsed row off a set number the client just
+  claimed used to be a bare `number += 1` with no upper bound, while
+  `_clean_logged_sets` rejected any posted `set_number` above
+  `MAX_LOGGED_SET_NUMBER` (50) and the presenter's `_set_rows` rendered up to
+  a separate `hard_cap=60` — three numbers that didn't agree with each other.
+  A survivor could climb past 50, the presenter would still draw it as an
+  ordinary fillable Set row, and the moment the athlete filled or ticked it
+  the endpoint rejected that number and 400'd the WHOLE payload — a hard
+  lockout, since the athlete couldn't save anything else in that session
+  either. Reaching it takes roughly 50 rows on one prescription, so it's not
+  a likely accident, but the three constants disagreeing was a bug regardless
+  of how rarely it bites.
+  **The three constants now agree.** `MAX_LOGGED_SET_NUMBER` moved out of
+  `views.py` into `models.py`, next to `LoggedSet` (it's really a property of
+  that model), because `presenters.py` cannot import from `views.py` — the
+  reverse import already exists. `views.py` re-exports it
+  (`from .models import MAX_LOGGED_SET_NUMBER`) so nothing that already spells
+  it `views.MAX_LOGGED_SET_NUMBER` had to change. `presenters._set_rows`'s
+  `hard_cap` now defaults to that same constant instead of a hand-picked 60,
+  so the grid can never render a row the endpoint would go on to reject.
+  **The walk is bounded, not just capped.** `_first_free_set_number` searches
+  upward from the row's own number to the ceiling first — preserving the
+  existing "fall through to the next free number" behavior — and only when
+  nothing is free there does it scan the whole `1..MAX_LOGGED_SET_NUMBER`
+  range from the bottom, so a hole an earlier step in the same save already
+  opened up is still found rather than needlessly refusing.
+  **No free number left means the save is refused, not corrupted.** When the
+  legal range is genuinely full, `athlete_log_session` calls
+  `transaction.set_rollback(True)` and returns an `HttpResponseBadRequest`
+  naming the exercise (`f"Too many sets logged for {name}."`, `name` off the
+  line-0 `Prescription` the row's `prescription` points at). The
+  `set_rollback` is load-bearing, not decorative: this save's own
+  `log.sets.filter(pk__in=replaceable).delete()` has already run inside the
+  same `atomic()` block, so returning the response without it would commit
+  those deletes and refuse the save anyway — the athlete's rows gone AND the
+  save rejected. Marked for rollback, the block's exit undoes everything, so a
+  refused save writes nothing at all, and the collision is never left in place
+  for a later save to find two rows on one number. (`set_rollback` rather than
+  raising a private exception so the whole 400-line block doesn't have to move
+  a level deeper inside a `try` for a three-line guard.)
+- 2026-09-20 — **Fixed (#571): `athlete_cell_write` no longer claims a save
+  the database didn't keep.** Found by the same adversarial review as #570.
+  `_upsert_parsed_set` wraps its work in a nested savepoint and swallows
+  every exception, on the reasoning that a parse or DB problem inside it must
+  never turn a blur into a 4xx/5xx or lose the athlete's already-committed
+  cell text (parse-at-commit plan §11). That reasoning holds for a failure
+  *raised inside* the savepoint — an ordinary single-statement failure
+  recovers fine through `ROLLBACK TO SAVEPOINT`, even from an aborted
+  transaction. It does not hold when the savepoint's OWN rollback also fails
+  — a dropped connection, a pgbouncer `server_lifetime` cycle, a mid-request
+  DB restart — which is exactly when Django leaves `connection.needs_rollback`
+  set in a way no enclosing savepoint absorbs. Two shapes followed, depending
+  on what ran next: **(1)** a query following the swallow inside the same
+  outer atomic — the `_line_sets(...)` re-read or the `SessionLog...update()`
+  activity bump — raised `TransactionManagementError`, which escaped as a 500
+  AND took the outer atomic's already-saved `cell.save()` down with it, both
+  halves of the tolerance guarantee broken at once; **(2)** nothing following
+  — the outer atomic exited with no exception and `needs_rollback` still set,
+  so it rolled back SILENTLY and the view answered 200 with the text echoed
+  back, which `meso_athlete.js` records as a landed save (drops the
+  offline-queue copy, sets `savedText`) — so nothing ever retried and the
+  write was simply gone.
+  **The check has to live inside the `with transaction.atomic():` block, not
+  after it.** `Atomic.__exit__` clears `connection.needs_rollback` on its own
+  way out, so a check placed after the block always reads an already-cleared
+  flag and can never see this. `athlete_cell_write` now captures
+  `poisoned = connection.needs_rollback` as the LAST statement inside the
+  block — a plain attribute read, not a query, so it's safe even against a
+  poisoned connection — and answers off `poisoned` once the block has exited.
+  A GUARD ahead of that capture closes shape 1: the activity-bump `if` now
+  checks `not connection.needs_rollback` FIRST in its `and` chain, so a
+  poisoned connection short-circuits the whole condition before either
+  `_line_sets(...)` or the `.update()` — both queries — ever runs, instead of
+  raising `TransactionManagementError` into the block. (If the connection is
+  genuinely dead rather than merely marked, the block's own exit can still
+  raise on its real rollback — a 500, which is honest in the same direction
+  as the fix below: the client treats any 5xx as "kept, not lost.")
+  **A poisoned response is a 503, not a 4xx.** `meso_athlete.js`'s
+  `isRetryableStatus` treats `status >= 500` (plus 408/429) as outcome
+  `"kept"` — the server failed, not the write — which leaves the cell's
+  outbox entry in place and clears `entry.savedText` so the next blur
+  reposts it; a 4xx reads as `"rejected"`, dropped from the outbox and never
+  retried, which is exactly wrong for a write the database never actually
+  kept. `athlete_cell_write` returns `{"ok": false, ...}` with status 503 in
+  this one case, so the client's existing retry path — already exercised for
+  ordinary 5xx failures — does the recovery instead of a new mechanism.
+  **`ATOMIC_REQUESTS = True` deleted, not moved.** It sat at MODULE scope in
+  `config/settings/base.py`, outside `DATABASES["default"]` — not where
+  Django reads it (`BaseHandler.make_view_atomic` checks
+  `settings_dict["ATOMIC_REQUESTS"]` per database alias) — so it was inert
+  and had been since it was written; #567/#568's investigation found it but
+  left it alone pending this fix. Moving it into `DATABASES["default"]`
+  would wrap every view in a request-level transaction and re-arm this whole
+  class of bug for every swallowed failure anywhere in the request, not only
+  this one now-fixed call site — a deliberate change that needs every other
+  swallowed-failure pattern in the app found and handled first, which this
+  slice does not do. The line is deleted with a comment explaining why,
+  `_cell_warn_reason_or_blank`'s own P2-B docstring paragraph is updated to match
+  (the setting is gone, not merely relocated, and #571's fix does not cover
+  that function's own post-commit read — it runs after
+  `athlete_cell_write`'s block has already exited, so it would sit inside a
+  *different*, outer, request-level atomic that this fix never sees). No
+  test pins `ATOMIC_REQUESTS` off, on the same reasoning #567/#568 gave: that
+  would freeze an accidental, currently-harmless absence as though it were a
+  deliberate contract.
+- 2026-09-20 — **Fixed (#572 part 2): a warned line now carries WHY, not just
+  whether, so the client can tell a repair from a duplicate.**
+  `_lineNeedsSending` (`meso_athlete.js`) has always reposted a warned line
+  whose text hasn't changed — that's the un-skip repair: set-shaped text
+  typed while a row was skipped saves no set, and re-sending the same text
+  once the coach un-skips the row is how it gets one. #568's day-scoping put
+  a second case behind the same `warn: true` with the opposite correct
+  answer: after a cross-day move, a line whose set is logged on the OLD day
+  reads tinted on the new one (the cell travels with the block-shared
+  `ExerciseSlot`; the `LoggedSet` stays on the old day's log — #568's
+  decision, and it stands; see below). Reposting THAT line isn't a repair —
+  the performance already exists — it runs `_upsert_parsed_set` against the
+  new day's log and mints a SECOND row for one performance, while the old one
+  stays, hidden but still counting toward results, 1RM and the agent's
+  grounding. A bare boolean cannot tell the two cases apart, so
+  `parsing.cell_warn_reason` and `models.sub_line_warn_reason` now return the
+  REASON — `None` / `"unresolved"` / `"skipped"` / `"too-long"` /
+  `"unlogged"` / `"elsewhere"` — and `_lineNeedsSending`'s gate became
+  `entry.warn && entry.warn_reason !== "elsewhere"`: every reason still
+  reposts except this one.
+  **"elsewhere" vs "unlogged" is decided by `line_displays`, not by whether a
+  row exists anywhere.** `sub_line_warn_reason` takes an `elsewhere_sets`
+  argument — the athlete's rows for this cell on any OTHER session — and only
+  answers `"elsewhere"` when `line_displays(cell, elsewhere_sets)` finds one
+  of them still SHOWING this cell's exact text, the same one-row-per-line
+  ranking `parsed_set_is_hidden` uses everywhere else in this slice. A row
+  that merely exists on another day but no longer matches the cell's current
+  text — the athlete has since edited it — doesn't count: reposting would
+  create a NEW performance, not duplicate an old one, so `"unlogged"` is the
+  honest answer and the client goes ahead and sends it.
+  **A caller that never passes `elsewhere_sets` gets `"unlogged"`, on
+  purpose.** Both real callers (`athlete_session`, the renamed
+  `_cell_warn_reason_or_blank`) pass it — one query per session, batched the
+  same way `sets_by_line` already is — but the fallback for a caller that
+  forgets is the reason that keeps the un-skip repost firing, not the one
+  that would silently start swallowing sets. Between an occasional needless
+  repost (idempotent) and an occasional missing one (a lost set), the second
+  is the one worth being wrong in the direction of.
+  **`""` from an older server, mid rolling deploy, also keeps today's
+  behavior.** The client reads `data.cell.warn_reason || ""`, so a server
+  that hasn't shipped this change yet — or a stale service-worker cache —
+  sends no `warn_reason` at all, and `"" !== "elsewhere"` is true: the line
+  reposts exactly as it always has. Only a server that actively answers
+  `"elsewhere"` changes the client's behavior, so the two halves of a rolling
+  deploy can never disagree in the dangerous direction; that's why `""` is
+  the safe default rather than, say, refusing to repost until told otherwise.
+  **Renamed, not duplicated:** `views._cell_warn_or_false` is now
+  `_cell_warn_reason_or_blank` (returns the reason string or `""`, not a
+  bool), and `models.sub_line_should_warn` is now `sub_line_warn_reason`
+  (returns the reason or `None`); `parsing.cell_should_warn` stays as a thin
+  bool wrapper over the new `parsing.cell_warn_reason`, since nothing needed
+  it to change shape. `PWA_CACHE_VERSION` bumped to `meso-pwa-v7` so an
+  already-installed PWA picks up the new response shape rather than keep
+  serving a cached one that never carries `warn_reason`.
+  **Part 1 of #572 is explicitly NOT fixed here.** `prescription_move`
+  re-points `exercise_slot.session_slot`, and an `ExerciseSlot` is shared
+  across every week of the mesocycle, so one cross-day drag still re-tints
+  every already-logged week of the block, not just the week the coach was
+  looking at — an athlete opening an old, completed week still sees "not
+  logged as a set" on work they already logged. Whether a move should
+  instead carry the athlete's `LoggedSet` rows along with the slot, or scope
+  the tint to one week some other way, is left open on #572 as a product
+  decision this slice does not make by default.

@@ -1191,6 +1191,20 @@ function createLogger() {
     // unknown (a response that couldn't be read or had gone stale), and then
     // the line always posts.
     //
+    // ...but not EVERY warned one (#572). A tint says the line has no set
+    // backing it HERE, and the repost above is the repair only when the reason
+    // is that no set exists at all. `warn_reason === "elsewhere"` means the
+    // opposite: the athlete already logged this performance, on the day the
+    // coach has since dragged the exercise off, and the cell travelled with the
+    // `ExerciseSlot` while the `LoggedSet` stayed behind (#568's decision). For
+    // that reason a repost isn't a repair — `_upsert_parsed_set` writes against
+    // the NEW day's log and mints a SECOND row for one performance, with the
+    // old one still counting toward results, 1RM and the agent's grounding. So
+    // merely focusing and leaving such a line duplicated the set. Any other
+    // reason — including "" from a server that doesn't send one yet, mid
+    // rolling deploy — keeps the old behavior, which is the safe direction: a
+    // needless repost is idempotent, a missing one loses the set.
+    //
     // And a line this page has an entry queued for always posts: a blur made
     // while an earlier save of it ran queued text that hasn't been sent. The
     // line as it is now replaces it — or that older text would replay later,
@@ -1200,7 +1214,7 @@ function createLogger() {
         entry.savedText === undefined ||
         text !== entry.savedText ||
         entry.queued ||
-        entry.warn
+        (entry.warn && entry.warn_reason !== "elsewhere")
       ) {
         return true;
       }
@@ -1336,6 +1350,11 @@ function createLogger() {
       }
       entry.savedText = text;
       entry.warn = !!(data.cell && data.cell.warn);
+      // WHY it's tinted, not just whether (#572) — `_lineNeedsSending` treats
+      // one reason as a repair to re-post and one as a duplicate to leave
+      // alone. Derive-on-read like `warn` itself, so a reason that stops
+      // applying clears on the next blur. "" when the server sent none.
+      entry.warn_reason = (data.cell && data.cell.warn_reason) || "";
       // Optimistic PR (5a §7), marked ON THE LINE THAT EARNED IT rather than in
       // `newRecords`. That card renders at the top of the page, which is right
       // for `save()` — "Log session" is a whole-session act — but wrong here: a

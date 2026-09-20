@@ -39,10 +39,12 @@ from . import adherence
 from . import tour
 from .billing import access as billing_access
 from .billing import agent_usage_report
+from .models import MAX_LOGGED_SET_NUMBER
 from .models import AgentProposalBatch
 from .models import CoachAthlete
 from .models import CoachInvite
 from .models import CoachSubscription
+from .models import LoggedSet
 from .models import Mesocycle
 from .models import Plan
 from .models import PlanAction
@@ -54,7 +56,7 @@ from .models import Week
 from .models import WeekDelivery
 from .models import display_line_id
 from .models import hidden_parsed_set_pks
-from .models import sub_line_should_warn
+from .models import sub_line_warn_reason
 from .one_rm import key_str
 from .one_rm import one_rm_values
 from .personal_records import new_records_in
@@ -1589,7 +1591,9 @@ def _prescribed_set_count(prescription):
     return max(sets, 0) if isinstance(sets, int) else 0
 
 
-def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
+def _set_rows(
+    prescription, logged, *, default=3, cap=12, hard_cap=MAX_LOGGED_SET_NUMBER
+):
     """Pre-filled set-input rows for one prescription (Phase 2 logger).
 
     ``logged`` maps ``(prescription_id, set_number)`` to the athlete's own
@@ -1597,7 +1601,11 @@ def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
     when the cell is free-form), widened to show every set the athlete already
     logged so a reload never hides logged data — but ``hard_cap`` bounds the
     render unconditionally so a stray large ``set_number`` can never balloon the
-    page (the log endpoint also rejects set numbers above its own ceiling).
+    page. #570: ``hard_cap`` defaults to the SAME ``MAX_LOGGED_SET_NUMBER`` the
+    log endpoint enforces (both the posted-set_number ceiling and the
+    collision-renumbering walk's cap) — a mismatch here is exactly what let a
+    row past 50 render as an ordinary fillable row the endpoint would then
+    reject outright.
 
     ``logged`` must already be scoped to ``source_line__isnull=True`` by the
     caller (``athlete_session``) — a parse-at-commit ``LoggedSet`` derived from
@@ -1659,7 +1667,7 @@ def athlete_session(session, athlete):
     # #567/#568 P2-C: ``-pk`` tiebreaks a shared ``created_at`` the same
     # deterministic way ``views.athlete_log_session``'s own lookup does — see
     # its comment. Without it, this read and the blur response's
-    # (``views._cell_warn_or_false``) could each pick a different "newest"
+    # (``views._cell_warn_reason_or_blank``) could each pick a different "newest"
     # log for a tied pair and disagree about what backs a line.
     log = (
         SessionLog.objects.filter(session=session, athlete=athlete)
@@ -1718,6 +1726,30 @@ def athlete_session(session, athlete):
     for row in all_sets:
         sets_by_line.setdefault(display_line_id(row), []).append(row)
 
+    # The same rows, for the days this exercise is NOT on any more (#572). A
+    # coach's cross-day drag re-points the `ExerciseSlot`, so the sub-line cell
+    # travels to the new day while the `LoggedSet` it derived stays on the old
+    # day's log — #568's decision, and it means the line reads as unlogged here.
+    # The tint is right; a re-post is not, because the performance already
+    # exists. `_lineNeedsSending` re-posts a warned line whose text hasn't
+    # changed, so without a reason to tell this case apart from the un-skip case
+    # it exists for, merely focusing and leaving such a line minted a SECOND row
+    # for one performance. One query for the whole session, grouped the same way
+    # `sets_by_line` is, rather than one per warned line.
+    line_cell_pks = [cell.pk for cells in lines_by_slot.values() for cell in cells]
+    elsewhere_by_line = defaultdict(list)
+    if line_cell_pks:
+        for row in (
+            LoggedSet.objects.filter(
+                Q(source_line_id__in=line_cell_pks)
+                | Q(source_line__isnull=True, reclaimed_line_id__in=line_cell_pks),
+                session_log__athlete=athlete,
+            )
+            .exclude(session_log__session_id=session.pk)
+            .select_related("source_line", "reclaimed_line")
+        ):
+            elsewhere_by_line[display_line_id(row)].append(row)
+
     def _sub_lines(slot_id):
         # The row's editable tracking stack (Phase 4a): its line>=1 cells for
         # this week as ``[{line, text, warn}]``. Blank cells are dropped from
@@ -1736,7 +1768,7 @@ def athlete_session(session, athlete):
         # exists for: ordinary-looking performed text that quietly counts for
         # nothing.
         # #567/#568 P2-C: no ``loggable`` is passed here, so it defaults
-        # ``True`` — hard-wired, unlike ``views._cell_warn_or_false``, which
+        # ``True`` — hard-wired, unlike ``views._cell_warn_reason_or_blank``, which
         # passes ``not skipped``. The two answers still agree, but only
         # because of an INVISIBLE coupling at the call site, not because a
         # skipped line can't warn: ``_sub_lines`` is only ever called (below)
@@ -1749,17 +1781,29 @@ def athlete_session(session, athlete):
         # a line that cannot accept a set at all, exactly the disagreement
         # #568 exists to prevent; that caller would need to pass its own
         # ``loggable=not skipped`` rather than relying on this default.
-        return [
-            {
-                "line": line_cell.line,
-                "text": line_cell.text,
-                "warn": sub_line_should_warn(
-                    line_cell, backing_sets=sets_by_line.get(line_cell.pk, ())
-                ),
-            }
-            for line_cell in lines_by_slot.get(slot_id, ())
-            if line_cell.text.strip()
-        ]
+        rendered = []
+        for line_cell in lines_by_slot.get(slot_id, ()):
+            if not line_cell.text.strip():
+                continue
+            # #572: the client needs WHY, not just whether — see
+            # `sub_line_warn_reason`. `warn` stays a bool so every template
+            # and the client's own tinting are untouched; `warn_reason` rides
+            # alongside it, and an older client that ignores the new key
+            # simply behaves as it does today.
+            reason = sub_line_warn_reason(
+                line_cell,
+                backing_sets=sets_by_line.get(line_cell.pk, ()),
+                elsewhere_sets=elsewhere_by_line.get(line_cell.pk, ()),
+            )
+            rendered.append(
+                {
+                    "line": line_cell.line,
+                    "text": line_cell.text,
+                    "warn": reason is not None,
+                    "warn_reason": reason or "",
+                }
+            )
+        return rendered
 
     # The athlete's persisted, log-derived 1RM per lift (in this plan's unit) — the
     # %1RM logger seeds its suggested bar load from it (no manual estimate needed).

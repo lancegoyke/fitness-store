@@ -57,7 +57,26 @@ CORS_ALLOWED_ORIGINS = list(
     ).split(" ")
 )
 
-ATOMIC_REQUESTS = True
+# ATOMIC_REQUESTS used to be set here — deleted rather than moved (#571).
+# Django only reads it per-database, from `DATABASES["default"]["ATOMIC_REQUESTS"]`
+# (`BaseHandler.make_view_atomic` in django/core/handlers/base.py walks
+# `connections.settings` and checks `settings_dict["ATOMIC_REQUESTS"]` for
+# each alias); a bare module-level name of the same spelling is a different
+# thing entirely, so this was always inert — no view has ever run inside a
+# request-level transaction because of it. Moving it into `DATABASES["default"]`
+# is NOT a harmless tidy-up: it would wrap every view in exactly such a
+# transaction, committed only if the view returns without raising, and
+# re-arm a whole class of bug for every swallowed failure anywhere in the
+# request — a database error caught and swallowed deep inside a view marks
+# the connection `needs_rollback`, and the request-level atomic then rolls
+# the entire response back SILENTLY on exit while the view still answers
+# 200. `store_project/meso/views.py::athlete_cell_write` had exactly this
+# shape until #571 fixed it locally, by checking `connection.needs_rollback`
+# from inside its own `transaction.atomic()` block before trusting its
+# response — see that fix and `_cell_warn_reason_or_blank`'s docstring. Turning
+# ATOMIC_REQUESTS on for real means finding and fixing every other view with
+# a swallowed-failure pattern like it first; that has not been done, so do
+# NOT re-add this under DATABASES.
 
 ALLOWED_HOSTS = os.environ.get(
     "DJANGO_ALLOWED_HOSTS", "localhost 127.0.0.1 [::1]"
