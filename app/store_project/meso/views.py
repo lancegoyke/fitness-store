@@ -847,6 +847,17 @@ def plan_create(request, pk):
     draft = bool(request.POST.get("draft"))
     draft_batch = None
     with transaction.atomic():
+        if draft:
+            # LOCK ORDER (#590) — the coach's User row BEFORE the link. The draft
+            # path reaches ``_reserve_plan_draft``'s coach lock after the link and
+            # the new plan, which was link -> User: harmless while only the sandbox
+            # reap locked a coach and then their links (and it returns early here).
+            # ``clear_demo`` now takes the coach mutex and then the demo links, so
+            # a draft for a plan-less demo athlete raced it into a deadlock. Taken
+            # up front, the later re-acquire in ``_reserve_plan_draft`` is a no-op.
+            User.objects.select_for_update(no_key=True).filter(
+                pk=request.user.pk
+            ).first()
         relationship = (
             CoachAthlete.objects.select_for_update()
             .for_coach(request.user)

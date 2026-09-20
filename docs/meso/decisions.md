@@ -633,9 +633,14 @@ User  →  CoachAthlete  →  Plan  →  AgentProposalBatch
 and **ascending pk within a table** whenever a path locks more than one row of
 one table. `clear_demo` is the explicit #590 exception: it locks the coach's
 `User` row first as the per-coach mutex, then locks the demo athletes' `User`
-rows ascending. That combined User sequence is not globally pk-sorted, but it
-is safe because every path that can touch both sets takes the same coach row
-first.
+rows ascending. That combined User sequence is not globally pk-sorted. It is
+safe against every path that takes the coach row first — the segment loaders,
+`plan_create`'s draft path, the sandbox reap. It is **not** safe against a
+`UserAdmin` bulk delete whose selection contains both a coach and one of that
+coach's own demo athletes: `lock_cascade_parents` sorts the whole selection by
+pk, so an athlete whose UUID sorts below the coach is locked before the coach
+while `clear_demo` runs coach → athlete. Staff-only and contrived; filed rather
+than papered over.
 
 Every path that takes two or more row locks takes them in that sequence,
 counting both `select_for_update` and the implicit exclusive lock an
@@ -710,11 +715,13 @@ restore's existing sequence a violation for no gain.
   without holding the batch lock first.
 - `agent.service._persist_result` / `_fail` — batch, then its children (#558).
 - `views.plan_create` — `CoachAthlete`, then `Plan`. Conforming as of #559,
-  which extended this order upward to cover it. Its `draft=1` path is the
-  exception: `_reserve_plan_draft` locks the coach's own `User` row *after* the
-  link and the new plan, which inverts. No cycle is constructible today (it
-  returns early for sandbox coaches, and the sandbox reap is the only path that
-  locks a coach's `User` row and then their links).
+  which extended this order upward to cover it. Its `draft=1` path takes the
+  coach's `User` row *first*, before the link: `_reserve_plan_draft` used to lock
+  it after the link and the new plan, which inverted, and stayed harmless only
+  while the sandbox reap was the one path locking a coach's `User` row and then
+  their links. #590 made `clear_demo` a second such path, so the draft now
+  reserves the coach up front (a later re-acquire in `_reserve_plan_draft` is a
+  no-op).
 - `views.template_use` / `plan_batch_deliver` lock their target links before
   duplicating a plan; `roster_add_self` / `relationship_reinvite` take the
   coach `User` first; `invite_claim` accept takes both participant `User` rows
@@ -731,11 +738,9 @@ restore's existing sequence a violation for no gain.
 The #587/#588/#589/#590/#596 reachable cycles above are closed. The remaining
 inventory is explicit rather than implied to conform:
 
-- `_reserve_plan_draft` still takes the coach `User` after the link and newly
-  created plan. That is an order inversion, but no reachable cycle is known:
-  sandbox coaches return before it, and sandbox reap is the only path taking a
-  coach `User` before that coach's links. #589 changed its strength to
-  `no_key=True`; it did not pretend to repair this separate ordering question.
+- `UserAdmin` bulk delete of a coach together with one of that coach's demo
+  athletes can deadlock against a concurrent `clear_demo` — see the #590
+  exception above.
 - The #589 strength sweep intentionally did not change `Mesocycle`,
   `CoachAthlete`, `CoachInvite`, `AgentProposalBatch`, `CoachSubscription`, or
   `Prescription` locks. The plain `Prescription` locks in `history.py` are
@@ -3031,7 +3036,10 @@ _(Append dated entries here as decisions land.)_
   the coach mutex before reading its demo-athlete set. Plan/link creators now
   reserve their parent rows, invite acceptance reserves both User parents
   ascending, and hard deletes in the four admins plus `merge_users` use shared
-  top-down `lock_cascade_*` helpers. The explicit exceptions remain the
-  `_reserve_plan_draft` User-after-link/plan inversion (no reachable cycle),
-  the unswept lock classes and creator entry points listed above, and #584's
-  deliberately plain Prescription locks.
+  top-down `lock_cascade_*` helpers. `plan_create`'s draft path takes the coach
+  `User` before the link, because `clear_demo`'s new coach mutex would otherwise
+  have made the old link → User order in `_reserve_plan_draft` a reachable
+  deadlock (the codex review of this change caught that). The explicit
+  exceptions remain the coach+demo-athlete bulk admin delete above, the unswept
+  lock classes and creator entry points listed above, and #584's deliberately
+  plain Prescription locks.

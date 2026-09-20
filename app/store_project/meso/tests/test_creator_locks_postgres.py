@@ -4,6 +4,7 @@ import threading
 import time
 
 import pytest
+from django.db import DatabaseError
 from django.db import connection
 from django.db import transaction
 from django.test import Client
@@ -138,6 +139,69 @@ def test_template_use_does_not_lock_the_athlete_user_row():
 
     assert not blocked, "template_use locked the athlete's User row via its join"
     assert not holder.is_alive() and not worker.is_alive()
+    assert holder_errors == []
+    assert request_errors == []
+    assert result["response"].status_code == 302
+    assert relationship.plans.count() == 1
+
+
+def test_plan_create_draft_takes_the_coach_lock_before_the_link():
+    """A draft must not hold the link while it waits for the coach row.
+
+    `clear_demo` holds the coach row and then wants the demo links (#590), so a
+    draft `plan_create` that took the link first and `_reserve_plan_draft`'s coach
+    lock second ran link -> User against it: a deadlock. Post-fix the draft waits
+    on the coach row holding nothing, so another transaction can still take the
+    link while it waits.
+    """
+    coach = UserFactory()
+    relationship = CoachAthleteFactory(coach=coach, athlete=UserFactory())
+    # Log in BEFORE the coach row is held: the login signal UPDATEs that row.
+    client = Client()
+    client.force_login(coach)
+    locked = threading.Event()
+    release = threading.Event()
+    holder_errors = []
+    request_errors = []
+    result = {}
+    holder = threading.Thread(
+        target=_hold_rows, args=(User, [coach.pk], locked, release, holder_errors)
+    )
+
+    def post_draft():
+        try:
+            result["response"] = client.post(
+                reverse("meso:plan_create", kwargs={"pk": relationship.athlete_id}),
+                {"draft": "1"},
+            )
+        except Exception as exc:  # pragma: no cover - surfaced below
+            request_errors.append(exc)
+        finally:
+            connection.close()
+
+    worker = threading.Thread(target=post_draft)
+    holder.start()
+    assert locked.wait(timeout=5)
+    worker.start()
+    blocked = _wait_until_a_backend_is_lock_blocked()
+    link_is_free = False
+    try:
+        with transaction.atomic():
+            list(
+                CoachAthlete.objects.select_for_update(no_key=True, nowait=True).filter(
+                    pk=relationship.pk
+                )
+            )
+        link_is_free = True
+    except DatabaseError:
+        pass
+    finally:
+        release.set()
+        holder.join(timeout=10)
+        worker.join(timeout=10)
+
+    assert blocked, "plan_create(draft) never waited for the coach row"
+    assert link_is_free, "plan_create(draft) held the link while waiting for the coach"
     assert holder_errors == []
     assert request_errors == []
     assert result["response"].status_code == 302
