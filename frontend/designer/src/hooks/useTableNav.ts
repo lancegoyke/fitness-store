@@ -356,9 +356,56 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
   // Flips true the first time any cell actually receives focus — gates
   // whether restoration is allowed to steal DOM focus, mirrors useGridNav.
   const focusedOnceRef = useRef(false);
+  // True while the browser is carrying out a press-driven focus transfer
+  // (#597). Focus-on-press is the default action of `mousedown`: the browser
+  // blurs the old input, then focuses the pressed one. The designer commits
+  // ON that blur, which repaints the grid optimistically, which runs the
+  // restoration effect below WHILE the transfer is still in flight — and a
+  // focus() on the old anchor there makes Chrome observe that the focused
+  // element changed during the blur and abandon the pending focus for the
+  // pressed input. mouseup and click still land on the new cell, but focus
+  // never gets there, so the coach's next keystrokes go into the cell they
+  // just left. While this is armed the browser is already putting focus
+  // where the coach asked, and restoration must not race it.
+  //
+  // Armed on `pointerdown` AND `mousedown`, because the two input classes
+  // order those differently and only `mousedown` is common to both:
+  //
+  //   mouse:     pointerdown -> mousedown -> TRANSFER -> pointerup -> mouseup
+  //   touch/pen: pointerdown -> pointerup -> mousedown -> TRANSFER -> mouseup
+  //
+  // A tap's focus rides the COMPATIBILITY mousedown, which arrives after
+  // pointerup — so arming on pointerdown alone would leave #597 live on
+  // every touchscreen wide enough to get the real editor, and the designer
+  // only swaps in its phone fallback under 900px (a tablet turned sideways
+  // gets the table). `pointercancel` disarms a touch the browser took over
+  // for a scroll, which never reaches mousedown at all.
+  //
+  // Registered at document CAPTURE level so nothing in the tree can hide the
+  // window from us. If a release event is ever lost, the worst case is that
+  // restoration declines to move focus until the next press — it degrades to
+  // today's keyboard-only restoration, and never misdirects a keystroke.
+  const pressingRef = useRef(false);
   // Cell key -> value captured at focus time, for Escape's revert target.
   const focusValuesRef = useRef<Record<string, string>>({});
   const appendPendingRef = useRef<AppendPending | null>(null);
+
+  useEffect(() => {
+    const arm = () => {
+      pressingRef.current = true;
+    };
+    const disarm = () => {
+      pressingRef.current = false;
+    };
+    const ARMING = ["pointerdown", "mousedown"] as const;
+    const DISARMING = ["pointerup", "mouseup", "pointercancel"] as const;
+    for (const type of ARMING) document.addEventListener(type, arm, true);
+    for (const type of DISARMING) document.addEventListener(type, disarm, true);
+    return () => {
+      for (const type of ARMING) document.removeEventListener(type, arm, true);
+      for (const type of DISARMING) document.removeEventListener(type, disarm, true);
+    };
+  }, []);
 
   function commitAnchor(next: TableCellId | null, flatForLookup: FlatTable, shouldFocus: boolean) {
     anchorRef.current = next;
@@ -402,10 +449,11 @@ export function useTableNav(options: UseTableNavOptions): UseTableNavResult {
     // patch — keeps focus.
     const active = document.activeElement as HTMLElement | null;
     const allowFocusMove =
-      !active ||
-      active === document.body ||
-      active.hasAttribute("data-grid-cell") ||
-      active.closest("[data-grid-restore]") !== null;
+      !pressingRef.current &&
+      (!active ||
+        active === document.body ||
+        active.hasAttribute("data-grid-cell") ||
+        active.closest("[data-grid-restore]") !== null);
 
     // Enter-adds-row landing (Phase 2b): once the day's last row CHANGED,
     // the appended row is in this grid — focus it at the column Enter came

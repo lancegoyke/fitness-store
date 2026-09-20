@@ -5,8 +5,9 @@
 // sub-line inputs and a trailing ghost input that mints the next sub-line;
 // Tempo/Notes/Rest are per-ROW columns off the slot. The %1RM editor, the
 // load_type toggle, and the one-week swap UI are retired.
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { MesoTable } from "./MesoTable";
 import { tableCellDomKey, tableCellAriaLabel } from "../hooks/useTableNav";
 import type { GridCell, GridDay, GridRow, GridWeek, MesoGrid } from "../lib/api";
@@ -813,6 +814,116 @@ const NAV_GRID: MesoGrid = grid({
       ],
     }),
   ],
+});
+
+type StatefulGridHarnessProps = Partial<Pick<Parameters<typeof MesoTable>[0], "onPatchCell" | "onRenameExercise">>;
+
+function StatefulGridHarness({ onPatchCell = vi.fn(), onRenameExercise = vi.fn() }: StatefulGridHarnessProps) {
+  const [currentGrid, setCurrentGrid] = useState(NAV_GRID);
+
+  return (
+    <MesoTable
+      {...baseProps({
+        grid: currentGrid,
+        onPatchCell: (cellId, patch) => {
+          onPatchCell(cellId, patch);
+          setCurrentGrid((previous) => ({
+            ...previous,
+            days: previous.days.map((currentDay) => ({
+              ...currentDay,
+              rows: currentDay.rows.map((currentRow) => ({
+                ...currentRow,
+                cells: Object.fromEntries(
+                  Object.entries(currentRow.cells).map(([weekId, currentCell]) => [
+                    weekId,
+                    currentCell.prescription_id === cellId ? { ...currentCell, ...patch } : currentCell,
+                  ]),
+                ),
+              })),
+            })),
+          }));
+        },
+        onRenameExercise: (exerciseSlotId, name) => {
+          onRenameExercise(exerciseSlotId, name);
+          setCurrentGrid((previous) => ({
+            ...previous,
+            days: previous.days.map((currentDay) => ({
+              ...currentDay,
+              rows: currentDay.rows.map((currentRow) =>
+                currentRow.exercise_slot_id === exerciseSlotId ? { ...currentRow, name } : currentRow,
+              ),
+            })),
+          }));
+        },
+      })}
+    />
+  );
+}
+
+describe("pointer focus transfer (issue #597)", () => {
+  it("does not restore focus to the source while a pointer-driven focus change is in flight", () => {
+    render(<StatefulGridHarness />);
+    const source = screen.getByTestId("cell-text-900") as HTMLInputElement;
+    const target = screen.getByTestId("cell-text-901") as HTMLInputElement;
+
+    act(() => source.focus());
+    fireEvent.change(source, { target: { value: "5 x 5" } });
+    const sourceFocus = vi.spyOn(source, "focus");
+
+    fireEvent.pointerDown(target);
+    fireEvent.mouseDown(target);
+    fireEvent.blur(source);
+
+    expect(sourceFocus).not.toHaveBeenCalled();
+    fireEvent.pointerUp(target);
+  });
+
+  // A tap's focus rides the COMPATIBILITY mousedown, which the browser fires
+  // AFTER pointerup — so a guard armed only on pointerdown is already
+  // disarmed by the time the transfer runs, and #597 stays live on every
+  // touchscreen wide enough to get the real editor (the designer only falls
+  // back to its phone message under 900px).
+  it("does not restore focus to the source across a TAP, whose focus rides the compatibility mousedown", () => {
+    render(<StatefulGridHarness />);
+    const source = screen.getByTestId("cell-text-900") as HTMLInputElement;
+    const target = screen.getByTestId("cell-text-901") as HTMLInputElement;
+
+    act(() => source.focus());
+    fireEvent.change(source, { target: { value: "5 x 5" } });
+    const sourceFocus = vi.spyOn(source, "focus");
+
+    fireEvent.pointerDown(target);
+    fireEvent.pointerUp(target); // touch releases BEFORE the compat mousedown
+    fireEvent.mouseDown(target);
+    fireEvent.blur(source);
+
+    expect(sourceFocus).not.toHaveBeenCalled();
+    fireEvent.mouseUp(target);
+  });
+
+  it("commits the source edit and lets the clicked target receive the next edit", async () => {
+    const user = userEvent.setup();
+    const onPatchCell = vi.fn();
+    const onRenameExercise = vi.fn();
+    render(<StatefulGridHarness onPatchCell={onPatchCell} onRenameExercise={onRenameExercise} />);
+    const source = screen.getByTestId("cell-text-900") as HTMLInputElement;
+    const target = screen.getByTestId("row-name-9") as HTMLInputElement;
+
+    await user.click(source);
+    await user.clear(source);
+    await user.type(source, "5 x 5");
+    await user.click(target);
+
+    expect(target).toHaveFocus();
+    await user.clear(target);
+    await user.type(target, "Front Squat");
+    await user.tab();
+
+    expect(source).toHaveValue("5 x 5");
+    expect(target).toHaveValue("Front Squat");
+    expect(onPatchCell).toHaveBeenCalledWith(900, { text: "5 x 5" });
+    expect(onRenameExercise).toHaveBeenCalledWith(9, "Front Squat");
+  });
 });
 
 describe("keyboard grid navigation", () => {
