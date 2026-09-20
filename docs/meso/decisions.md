@@ -740,6 +740,15 @@ introduced by #558/#559/#562, and none is fixed by them:
 - **`clear_demo` does not take `demo._lock(coach)`** (#590) although every segment
   loader does, so a concurrent `load_demo` can re-create rows the cascade is
   deleting.
+- **Several creator paths take no lock at any level** (#596) — `template_start`
+  and `plan_batch_deliver` (both via `Plan.duplicate_for`), `roster_add_self`,
+  and `CoachInvite` acceptance all insert a `Plan` or `CoachAthlete` while
+  holding nothing. They are what the rule above means by "a path that can race
+  one must take the `Plan` lock even if it does not otherwise need it":
+  `plan_create` cooperates by locking the link first, and these do not, so a row
+  they commit mid-delete is collected but never locked, and a third transaction
+  editing it can still close the cycle. `plan_create` is listed as conforming
+  above precisely because it is the exception among the creators, not the rule.
 
 ## Decision log
 

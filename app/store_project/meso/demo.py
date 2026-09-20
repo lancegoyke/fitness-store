@@ -301,12 +301,21 @@ def lock_cascade_parents(user_ids):
     leaving every ordering property intact. This is #560's lesson, one level
     up: the strength that matters is the one a deferred FK check will want.
 
-    The cost, stated rather than glossed: a child row INSERTed concurrently by
-    such a transaction can be missed by the collector's own SELECT and leave the
-    delete to fail its deferred FK check at commit. That is exactly what
-    happens today with no lock at all, so it is not a regression — and a
-    deadlock aborts somebody's request either way, while this one at worst
-    aborts the delete that chose to run.
+    The cost, stated rather than glossed, and it cuts both ways. A CHILD row
+    INSERTed concurrently by such a transaction can be missed by the collector's
+    own SELECT, leaving the delete to fail its own deferred FK check at commit —
+    the delete that chose to run is the one that aborts. And a PARENT row can
+    escape too: a creator that takes no lock at all (``template_start`` and
+    ``plan_batch_deliver`` both call ``Plan.duplicate_for`` under no row lock,
+    #596) can commit a whole new plan into the window after the plan query has
+    run. The cascade still COLLECTS it — every collector SELECT takes a fresh
+    snapshot — so the data ends consistent, but nothing holds that plan's row,
+    and a third transaction editing it can still close the #559 cycle against
+    the collector. Both shapes are exactly what happens today with no lock at
+    all, so neither is a regression; the second is filed rather than papered
+    over, because the fix belongs in those creators (take the link lock, as
+    ``plan_create`` does) and NOT in strengthening this lock back to
+    ``FOR UPDATE``, which is the deadlock above.
 
     ``.order_by("pk")`` puts the acquisition order in ascending pk:
     PostgreSQL's ``LockRows`` node sits above the sort, so rows are locked in
