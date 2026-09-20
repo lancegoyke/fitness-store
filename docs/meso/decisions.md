@@ -710,6 +710,15 @@ restore's existing sequence a violation for no gain.
 - `views.batch_apply` — takes the `Plan` row before the batch as of #559. It ran
   batch → `Plan` (via `record_plan_action`), which only became reachable once
   `lock_cascade_parents` started going parent-first.
+- #611's strength sweep uses `FOR NO KEY UPDATE` for the row mutexes in
+  `CoachSubscription.start_trial_for`, `views.plan_create`,
+  `relationship_reinvite`, `athlete_request_coach`, the CoachInvite
+  revoke/resend/claim transitions, `session_add`, `week_add`, `batch_apply`,
+  `batch_dismiss`, `change_set_status`, `agent.service._still_resolvable`,
+  `billing.webhooks._lock_mirror`, and its invoice nudge. The querysets are
+  unjoined, so none needs `OF`; `_upsert_parsed_set` separately uses
+  `of=("self",)` on its deliberately plain Prescription lock so
+  `Prescription.Meta.ordering` cannot also lock the joined ExerciseSlot.
 - `views.change_set_status` — batch, then its `ProposedChange`. Skips `Plan`
   legitimately: it never touches that row, and no delete path can race it
   without holding the batch lock first.
@@ -741,10 +750,8 @@ inventory is explicit rather than implied to conform:
 - `UserAdmin` bulk delete of a coach together with one of that coach's demo
   athletes can deadlock against a concurrent `clear_demo` — see the #590
   exception above.
-- The #589 strength sweep intentionally did not change `Mesocycle`,
-  `CoachAthlete`, `CoachInvite`, `AgentProposalBatch`, `CoachSubscription`, or
-  `Prescription` locks. The plain `Prescription` locks in `history.py` are
-  deliberate: #584's purge must conflict with a commit-time `FOR KEY SHARE`.
+- The plain `Prescription` locks in `history.py` are deliberate: #584's purge
+  must conflict with a commit-time `FOR KEY SHARE`.
 - Creator entry points `athlete_request_coach`, `CoachAthlete._open` /
   `invite` / `request`, and the coach email-invite view were not swept by #596.
   Any expansion of their reachable delete races must add parent locks at the

@@ -859,7 +859,9 @@ def plan_create(request, pk):
                 pk=request.user.pk
             ).first()
         relationship = (
-            CoachAthlete.objects.select_for_update()
+            # STRENGTH (#611) — this is a same-row creator mutex; no key
+            # identity is changing, so deferred child-FK commits may proceed.
+            CoachAthlete.objects.select_for_update(no_key=True)
             .for_coach(request.user)
             .active()
             .filter(athlete_id=pk)
@@ -2581,6 +2583,11 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
             # skip bail below. `line_zero` was built before the transaction, and
             # the session lock doesn't help — `prescription_skip` never touches
             # the session row. Locking the Prescription makes that UPDATE wait.
+            # `Prescription.Meta.ordering` joins ExerciseSlot, so `OF SELF`
+            # prevents this lock from taking that earlier row too (#611). Its
+            # plain strength is deliberately unchanged here: this part of #611
+            # scopes only the joined-row fix, alongside #584's Prescription
+            # coordination.
             #
             # Order matters as much as the lock: with the bail reading the stale
             # instance first, a skip landing mid-blur only turned `wants_set`
@@ -2588,7 +2595,7 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
             # already-logged performance on an unchanged stale blur, which is
             # precisely the data loss the bail exists to prevent.
             fresh_line_zero = (
-                Prescription.objects.select_for_update()
+                Prescription.objects.select_for_update(of=("self",))
                 .filter(pk=line_zero_cell.pk)
                 .first()
             )
@@ -3812,7 +3819,7 @@ def relationship_reinvite(request, token):
         if locked_coach is None:
             raise Http404("Unknown coach")
         link = get_object_or_404(
-            CoachAthlete.objects.select_for_update(),
+            CoachAthlete.objects.select_for_update(no_key=True),
             token=token,
             coach=request.user,
         )
@@ -3890,11 +3897,11 @@ def athlete_request_coach(request):
         # second ``coach_request_sent`` event and email, or a reopened link's
         # token rotating twice (#540). Lock in ``billing.webhooks._lock_mirror``'s
         # order: the link if it exists, else the athlete's user row, then re-read.
-        # ``no_key``: a plain FOR UPDATE would block the commit-time FK KEY SHARE
-        # lock of a concurrent insert that references this user — e.g. an invite
-        # claim — and deadlock.
+        # STRENGTH (#611): both row mutexes use ``no_key``. Plain FOR UPDATE
+        # would block a deferred child-FK KEY SHARE at commit — e.g. an invite
+        # claim referencing this user — while NO KEY still excludes peers.
         existing = (
-            CoachAthlete.objects.select_for_update()
+            CoachAthlete.objects.select_for_update(no_key=True)
             .filter(coach=coach, athlete=request.user)
             .first()
         )
@@ -3903,7 +3910,7 @@ def athlete_request_coach(request):
                 pk=request.user.pk
             ).first()
             existing = (
-                CoachAthlete.objects.select_for_update()
+                CoachAthlete.objects.select_for_update(no_key=True)
                 .filter(coach=coach, athlete=request.user)
                 .first()
             )
@@ -4092,7 +4099,9 @@ def coach_invite_revoke(request, token):
     """
     with transaction.atomic():
         invite = get_object_or_404(
-            CoachInvite.objects.select_for_update(),
+            # STRENGTH (#611) — transition peers still exclude one another;
+            # deferred children need not wait on a key-preserving transition.
+            CoachInvite.objects.select_for_update(no_key=True),
             token=token,
             coach=request.user,
         )
@@ -4125,7 +4134,8 @@ def coach_invite_resend(request, token):
         return redirect("meso:roster")
     with transaction.atomic():
         invite = get_object_or_404(
-            CoachInvite.objects.select_for_update(),
+            # Same transition mutex and strength as revoke (#611).
+            CoachInvite.objects.select_for_update(no_key=True),
             token=token,
             coach=request.user,
         )
@@ -4219,7 +4229,7 @@ def invite_claim(request, token):
             # link (Phase-3 "resend kills the previous token"), so a superseded
             # token finds no row → 404 rather than accepting on stale authority.
             invite = get_object_or_404(
-                CoachInvite.objects.select_for_update(), token=token
+                CoachInvite.objects.select_for_update(no_key=True), token=token
             )
             if action == "accept" and (
                 invite.coach_id != invite_coach_id
@@ -4271,7 +4281,7 @@ def invite_claim(request, token):
     if invite.is_pending and invite.is_expired:
         with transaction.atomic():
             invite = get_object_or_404(
-                CoachInvite.objects.select_for_update(), token=token
+                CoachInvite.objects.select_for_update(no_key=True), token=token
             )
             if invite.is_pending and invite.is_expired:
                 invite.expire()
@@ -4660,7 +4670,9 @@ def session_add(request, plan_id):
         # e.g. week_delete, all lock the plan first, then touch weeks) — taking
         # the mesocycle lock first here could deadlock against them.
         Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
-        Mesocycle.objects.select_for_update().filter(pk=meso.pk).first()
+        # STRENGTH (#611) — same-row allocation exclusion needs NO KEY, not
+        # conflict with a deferred child-FK check at commit.
+        Mesocycle.objects.select_for_update(no_key=True).filter(pk=meso.pk).first()
         # Mirrors ``week_add``'s own indexing (over ALL slots, deleted
         # included) so a soft-deleted day's number/order is never reused.
         agg = meso.session_slots.aggregate(
@@ -4943,7 +4955,8 @@ def week_add(request, plan_id):
     with transaction.atomic():
         # Lock ordering: plan first (see session_add).
         Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
-        Mesocycle.objects.select_for_update().filter(pk=mesocycle.pk).first()
+        # Same block-allocation mutex and strength as session_add (#611).
+        Mesocycle.objects.select_for_update(no_key=True).filter(pk=mesocycle.pk).first()
         # Mirrors ``Mesocycle.append_week``'s own indexing (over ALL weeks,
         # deleted included) so the recorded label matches the week it creates —
         # computed under the same lock, so there's no race between the two.
@@ -6337,7 +6350,9 @@ def change_set_status(request, pk):
     # that is now gone, rather than deadlock with it.
     with transaction.atomic():
         batch = (
-            AgentProposalBatch.objects.select_for_update()
+            # STRENGTH (#611) — NO KEY preserves batch/child exclusion without
+            # blocking a deferred ProposedChange.batch FK check at commit.
+            AgentProposalBatch.objects.select_for_update(no_key=True)
             .filter(pk=change.batch_id)
             .first()
         )
@@ -6389,7 +6404,9 @@ def batch_apply(request, batch_id):
         # costs nothing: that call now re-acquires a lock already held.
         Plan.objects.select_for_update(no_key=True).filter(pk=batch.plan_id).first()
         batch = (
-            AgentProposalBatch.objects.select_for_update().filter(pk=batch.pk).first()
+            AgentProposalBatch.objects.select_for_update(no_key=True)
+            .filter(pk=batch.pk)
+            .first()
         )
         if batch is None:  # its plan was deleted since the lookup above
             raise Http404("Unknown proposal batch")
@@ -6442,7 +6459,9 @@ def batch_dismiss(request, batch_id):
         # The same lock and re-check as ``batch_apply`` (#540), so a Dismiss
         # racing an Apply can't mark the applied batch DISMISSED.
         batch = (
-            AgentProposalBatch.objects.select_for_update().filter(pk=batch.pk).first()
+            AgentProposalBatch.objects.select_for_update(no_key=True)
+            .filter(pk=batch.pk)
+            .first()
         )
         if batch is None:
             raise Http404("Unknown proposal batch")

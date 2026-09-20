@@ -201,20 +201,24 @@ def _lock_mirror(coach):
     guard in ``_sync_from_subscription`` and overwrites the subscription a concurrent delivery just took
     over. With no mirror row yet there's nothing to lock, so lock the coach's
     user row instead and re-read: a concurrent first delivery holds that lock
-    until its new row has committed. That user-row lock is ``no_key=True``
-    (``FOR NO KEY UPDATE``, same reasoning as #540/#560): Postgres FKs are
-    ``DEFERRABLE INITIALLY DEFERRED``, so the ``CoachSubscription`` insert this
-    same delivery is about to make takes ``FOR KEY SHARE`` on this user row at
-    **commit** — a plain ``FOR UPDATE`` here would deadlock against that (or
-    against any other concurrent insert referencing this user, e.g. a
-    ``CoachAthlete`` row), while ``FOR NO KEY UPDATE`` still serializes against
-    another concurrent writer of this same row.
+    until its new row has committed. Both mutexes are ``no_key=True`` (#611,
+    same reasoning as #540/#560): Postgres FKs are ``DEFERRABLE INITIALLY
+    DEFERRED``, so a child insert takes ``FOR KEY SHARE`` on its parent at
+    **commit**. Plain ``FOR UPDATE`` would block that (the fresh-subscription
+    path itself references User), while ``FOR NO KEY UPDATE`` still serializes
+    every concurrent mirror writer.
     """
-    existing = CoachSubscription.objects.select_for_update().filter(coach=coach).first()
+    existing = (
+        CoachSubscription.objects.select_for_update(no_key=True)
+        .filter(coach=coach)
+        .first()
+    )
     if existing is None:
         User.objects.select_for_update(no_key=True).filter(pk=coach.pk).first()
         existing = (
-            CoachSubscription.objects.select_for_update().filter(coach=coach).first()
+            CoachSubscription.objects.select_for_update(no_key=True)
+            .filter(coach=coach)
+            .first()
         )
     return existing
 
@@ -468,9 +472,10 @@ def _nudge_status(invoice_obj, *, from_statuses, to_status):
         return
     # The same mirror row lock as ``_lock_mirror``, taken before the ledger
     # check in ``_track_invoice_start`` (#546). Also captures the pre-nudge
-    # status as ``previous`` for that analytics event below.
+    # status as ``previous`` for that analytics event below. NO KEY (#611)
+    # preserves mirror-writer exclusion without blocking deferred child FKs.
     locked = (
-        CoachSubscription.objects.select_for_update()
+        CoachSubscription.objects.select_for_update(no_key=True)
         .filter(stripe_subscription_id=sub_id)
         .first()
     )

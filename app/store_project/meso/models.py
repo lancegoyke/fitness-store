@@ -1213,16 +1213,18 @@ class CoachSubscription(models.Model):
         # the coach's user row, then re-read) so this can't deadlock against a
         # webhook delivery. ``start_trial``'s own status check is the re-check:
         # the loser raises ``InvalidTransition``, which both callers handle.
-        # ``no_key``: a plain FOR UPDATE would also block the commit-time FK KEY
-        # SHARE lock of a concurrent insert that references this user (e.g.
-        # ``comp``'s row) and could deadlock with it.
+        # Both row mutexes are ``no_key`` (#611): that still excludes competing
+        # trial starts, while the User fallback does not block the commit-time
+        # FK KEY SHARE of a concurrent insert (e.g. ``comp``'s row).
         with transaction.atomic():
-            sub = cls.objects.select_for_update().filter(coach=coach).first()
+            sub = cls.objects.select_for_update(no_key=True).filter(coach=coach).first()
             if sub is None:
                 get_user_model().objects.select_for_update(no_key=True).filter(
                     pk=coach.pk
                 ).first()
-                sub, _ = cls.objects.select_for_update().get_or_create(coach=coach)
+                sub, _ = cls.objects.select_for_update(no_key=True).get_or_create(
+                    coach=coach
+                )
             sub.start_trial()
         # subscription_started analytics: one choke point for both
         # ``billing_start_trial`` and ``start_coaching``'s ``plan=trial``. Only
