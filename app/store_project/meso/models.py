@@ -2568,6 +2568,70 @@ def sub_line_warn_reason(
     return "unlogged"
 
 
+def newest_session_logs(session, athlete, *, status=None):
+    """Every ``SessionLog`` for one ``(session, athlete)`` pair, newest first.
+
+    Answers "which log is THE current one for this athlete's attempt at this
+    session". Six call sites spelled this ordering out by hand (#567/#568); a
+    seventh, ``presenters.session_results``, asked the same question and
+    answered it differently (``-date, -created_at``, no tie-break at all), so
+    the coach's results screen and the athlete's own page could read different
+    logs for one session (#579). One selector, so the ORDERING cannot drift
+    again.
+
+    That is all this promises, and the limit is deliberate: sharing the
+    ordering is not the same as always landing on the same row.
+    ``session_results`` passes ``status=DONE`` and ``athlete_session`` passes
+    no status at all, so a pair holding a DONE log and a NEWER pending one
+    still, correctly, gives the coach the DONE one and the athlete the pending
+    one. A pending draft is not feedback yet; that difference is a filter, not
+    an ordering, and it is the reads' own business.
+
+    Ordered by ``-created_at``, not ``-date``. ``SessionLog.date`` is
+    athlete-supplied — ``views.athlete_log_session`` accepts an explicit date
+    from the payload and only stamps today when none is given — so a log
+    written LATER can carry an EARLIER workout date. Ordering by ``-date``
+    first (as ``presenters.session_results`` used to) lets that older-dated,
+    newer log lose to a truly older one; ``-created_at`` always answers "which
+    write actually happened last", which is the question every one of these
+    reads is asking. ``-pk`` breaks a tie on a shared ``created_at`` (#568) —
+    exactly what a split-log race produces, two rows created in the same
+    transaction-committed instant — so a caller can't have the database hand
+    back either row nondeterministically from one call to the next.
+
+    Returns the ordered queryset, not a single row, so a caller can still
+    layer its own ``select_related``/``prefetch_related``/``values`` before
+    slicing (``.first()``, or ``.values("pk")[:1]`` inside a ``Subquery``).
+    ``session`` and ``athlete`` take whatever ``filter(session=...)``/
+    ``filter(athlete=...)`` already accepts — a model instance, a raw pk, or
+    an ``OuterRef`` — because ``settle.settleable_logs`` correlates this
+    against an outer query with ``OuterRef`` while every other caller passes
+    ids or instances.
+
+    ``status`` is an optional extra filter (``presenters.session_results``
+    wants DONE only — a pending draft isn't feedback yet); left ``None``, no
+    status filter is applied.
+
+    Shared by: ``presenters.athlete_session``, ``presenters.session_results``,
+    ``views.athlete_log_session``, ``views._upsert_parsed_set``,
+    ``views._cell_warn_reason_or_blank``, ``settle.settleable_logs``,
+    ``settle.settle_log``.
+
+    Deliberately NOT shared by ``presenters._profile_results``,
+    ``views._coach_latest_logged_session``, ``serializers.serialize_recent_logs``,
+    or ``adherence.link_last_trained``/``adherence.recent_logs``. Those answer
+    a different question — the athlete's newest DONE log ACROSS many
+    sessions, or a plain list of several recent logs — not one pair's rows,
+    so there is no single-pair tie for ``-pk`` to break, and ``-date`` (or, in
+    ``adherence.py``, ``-created_at`` alone — see its module docstring) is the
+    right primary key for THAT question, not a miss of this one.
+    """
+    logs = SessionLog.objects.filter(session=session, athlete=athlete)
+    if status is not None:
+        logs = logs.filter(status=status)
+    return logs.order_by("-created_at", "-pk")
+
+
 # A generous ceiling on a set's number — no real session has this many sets.
 # #570: lives HERE, not in views.py, because three places must agree on one
 # number and ``presenters.py`` cannot import from ``views.py`` (views already

@@ -206,6 +206,12 @@ jobs:
       # two concurrent Stripe deliveries must not both write the ledger.
       # test_double_submit_postgres is row-lock serialization again (#540):
       # a double-submitted Apply/trial-start/coach-request must not both act.
+      # test_undo_purge_postgres is row-lock serialization again (#584): a
+      # coach undo's stray-cell purge must not delete a cell an athlete's set
+      # was committed against mid-race. THIS LIST IS THE ONLY PLACE THESE RUN
+      # — every file here skips itself on SQLite, so one left off the list
+      # executes in no CI job at all and looks green while testing nothing.
+      # Add a new Postgres-only file here in the same commit that creates it.
       - name: Run the PostgreSQL-only tests
         run: |
           uv run pytest \
@@ -214,4 +220,5 @@ jobs:
             app/store_project/meso/tests/test_settle_postgres.py \
             app/store_project/analytics/tests/test_track_postgres.py \
             app/store_project/meso/tests/test_billing_webhook_postgres.py \
-            app/store_project/meso/tests/test_double_submit_postgres.py
+            app/store_project/meso/tests/test_double_submit_postgres.py \
+            app/store_project/meso/tests/test_undo_purge_postgres.py

@@ -77,6 +77,7 @@ from .models import LoggedSet
 from .models import Prescription
 from .models import Session
 from .models import SessionLog
+from .models import newest_session_logs
 
 logger = logging.getLogger(__name__)
 
@@ -96,23 +97,17 @@ def settleable_logs(cutoff):
     predicate at all — it's "no other row for the same pair has a later
     ``created_at``", which is naturally a correlated subquery.
 
-    #567/#568 P2: ``-pk`` tiebreaks a shared ``created_at`` the same
-    deterministic way every other "newest ``SessionLog`` for one (session,
-    athlete) pair" read does (``views.athlete_log_session``,
-    ``views._upsert_parsed_set``, ``views._cell_warn_reason_or_blank``,
-    ``presenters.athlete_session``, and ``settle_log`` below) — without it,
+    The pair-newest ordering is the shared rule — see
+    ``models.newest_session_logs`` for the ordering rationale and the full
+    list of reads (including ``settle_log`` below) that share it. Without it,
     two logs sharing a ``created_at`` (precisely the split-log rows #568
-    exists for) sort ambiguously here, and this query could pick a different
-    one of the pair than those other reads do, settling a log the
+    exists for) would sort ambiguously here, and this query could pick a
+    different one of the pair than those other reads do, settling a log the
     athlete-facing surfaces never treat as current.
     """
-    newest_pk_for_pair = (
-        SessionLog.objects.filter(
-            session=OuterRef("session"), athlete=OuterRef("athlete")
-        )
-        .order_by("-created_at", "-pk")
-        .values("pk")[:1]
-    )
+    newest_pk_for_pair = newest_session_logs(
+        OuterRef("session"), OuterRef("athlete")
+    ).values("pk")[:1]
     has_a_logged_set = LoggedSet.objects.filter(session_log=OuterRef("pk"))
     return SessionLog.objects.filter(
         status=SessionLog.Status.PENDING,
@@ -167,16 +162,8 @@ def settle_log(pk, *, cutoff):
         )
         if log is None or log.session_id != session_id:
             return False
-        # #567/#568 P2: same ``-pk`` tiebreak as ``settleable_logs`` above and
-        # every other "newest log for this (session, athlete) pair" read —
-        # see that comment.
-        newest = (
-            SessionLog.objects.filter(
-                session_id=log.session_id, athlete_id=log.athlete_id
-            )
-            .order_by("-created_at", "-pk")
-            .first()
-        )
+        # The shared newest-log rule — see models.newest_session_logs.
+        newest = newest_session_logs(log.session_id, log.athlete_id).first()
         if newest is None or newest.pk != log.pk:
             return False
         if log.status != SessionLog.Status.PENDING:

@@ -2713,3 +2713,201 @@ _(Append dated entries here as decisions land.)_
   instead carry the athlete's `LoggedSet` rows along with the slot, or scope
   the tint to one week some other way, is left open on #572 as a product
   decision this slice does not make by default.
+- 2026-09-20 — **Fixed (#583, #584): a coach redo/undo can no longer collide
+  with a live coordinate, and the stray-cell purge now locks before it
+  deletes.** Both found by the adversarial review on the #577 branch (PR
+  #582), both confirmed to fire on `main` too — pre-existing, not caused by
+  that PR.
+  **#583 — the pk is an implementation detail of REVIVING a cell; the
+  `(exercise_slot, week, line)` coordinate is what the cell actually IS.**
+  `restore_plan_snapshot` revives a snapshotted cell by pk (deliberately — a
+  redo has to put back the exact row a matching undo took away, not a
+  lookalike with a new pk), but `Prescription` also enforces
+  `unique_cell_slot_week_line` on that coordinate. The verified reproduction:
+  a coach writes a sub-line (pk 3), undoes it (the stray-cell purge
+  hard-deletes pk 3, since nothing else names it yet), the athlete then
+  blurs a value onto the SAME sub-line — `athlete_cell_write`'s
+  `get_or_create` mints a brand-new pk 4 at the coordinate the purge just
+  freed, and (by design) records no `PlanAction`, so the pending redo entry
+  still thinks pk 3 belongs there — and the coach's redo then tries to
+  `save()` pk 3 straight onto a coordinate pk 4 now occupies, violating the
+  unique constraint and 500ing the whole redo.
+  **The fix resolves every coordinate collision BEFORE the cell upsert loop
+  runs, applying the SAME rule the stray-cell purge already states for a
+  cell absent from the snapshot — one join earlier, to a coordinate a
+  REVIVED pk wants rather than only to a stray pk the purge would delete on
+  its own.** An occupant that is athlete data — `athlete_authored`, or a
+  cell some `LoggedSet` still points at through `prescription`/`source_line`/
+  `reclaimed_line` (factored into one shared helper,
+  `history._cells_athlete_data_points_at`, used by both this guard and the
+  purge below) — KEEPS the coordinate, and the snapshotted cell that wanted
+  it is skipped for this restore entirely. Otherwise the occupant is a
+  coach-made row absent from the snapshot — exactly what the purge would
+  remove anyway, just discovered here one step earlier — and it is deleted,
+  freeing the coordinate for the revive.
+  **The accepted cost is the same trade #577's `logged_sets` spare clause
+  already makes: a coach's redo of that one line silently does nothing —
+  the athlete's coordinate wins — rather than 500ing the whole redo.** A
+  coach can retype a line; nobody can retype the athlete's performance. This
+  is consistent with the root shape #578 is reviewing (one cell, two writers
+  with different history semantics) rather than a new precedent: wherever
+  the two collide, the athlete's data has been the one that survives since
+  #577, and this extends that same rule from "cell some athlete data points
+  at" to "coordinate a revived pk wants but athlete data already occupies."
+  **A genuine within-snapshot SWAP (two snapshotted cells trading
+  coordinates in one restore) is deliberately left unresolved** —
+  `unique_cell_slot_week_line` is checked immediately, not deferred, so
+  neither side can be written into the other's still-occupied coordinate
+  without first parking one of them on a temporary, unclaimed coordinate,
+  and no known real path produces this shape today. It still raises
+  `IntegrityError` out of the upsert loop exactly as before this fix; see
+  `test_restore_cell_collision.py::TestSnapshotSwapIsNotHandled`, which pins
+  that this is a conscious non-fix, not an oversight.
+  **#584 — the stray-cell purge qualified its candidates without a row
+  lock, so a `LoggedSet` committed between the qualifying SELECT and the
+  DELETE was invisible to all three spare checks and the cell was deleted
+  anyway.** `QuerySet.delete()` is SELECT-then-DELETE with no lock of its
+  own. For `prescription`/`source_line` (real FKs) that surfaced as a
+  COMMIT-time deferred constraint violation — a 500 on the coach's undo; for
+  `reclaimed_line` (`db_constraint=False`, #541) nothing stopped it and the
+  hint was left dangling. Fixed by qualifying the purge's candidates under
+  `select_for_update(of=("self",))` and re-checking every spare test AFTER
+  the lock is held, not before — `settle.settle_log` already uses this exact
+  `of=("self",)` shape, for the same reason (the queryset joins through to
+  `Plan`, and without `of` Postgres would lock those joined rows too).
+  **`athlete_authored` stays in the candidate filter and is re-checked under
+  the lock too.** It cannot be moved out: an athlete-authored cell is never
+  captured in a snapshot, so it is never in `cell_pks`, and dropping the
+  exclusion would make every athlete-authored cell of the plan a candidate —
+  this `FOR UPDATE` would lock all of them on every undo and redo. Those are
+  exactly the rows a logging athlete writes, and `athlete_cell_write` takes
+  its locks the other way round (sub-line `Prescription`, then `Plan`) while
+  a restore holds `Plan` throughout and reaches `Prescription` last, so that
+  would have manufactured a routine deadlock out of a fix for a different
+  race. Nothing is lost by keeping it: the flip the re-check exists for is a
+  concurrent UPDATE of one of these rows, and under READ COMMITTED a
+  `SELECT ... FOR UPDATE` that waits on such a row re-evaluates its own
+  WHERE clause against the updated version and drops it (PostgreSQL's
+  EvalPlanQual recheck, docs §13.2). The re-check repeats it anyway, so
+  "what spares a cell" is answered in one place, once the rows can no longer
+  move.
+  **What actually serializes an athlete write today is the `Session` row
+  lock, not this one — and the adversarial review is what established that.**
+  A first draft of this entry claimed a `LoggedSet` insert holds `FOR KEY
+  SHARE` on the `Prescription` it references for the rest of its
+  transaction. That is false: Django emits these FKs `DEFERRABLE INITIALLY
+  DEFERRED`, so the constraint's own `FOR KEY SHARE` fires only at COMMIT,
+  and an in-flight insert holds nothing. What keeps the two apart is the
+  `session.save()` loop earlier in `restore_plan_snapshot`, which UPDATEs
+  every snapshotted `Session` row, while both athlete write paths
+  (`athlete_cell_write`, `athlete_log_session`) take
+  `Session.objects.select_for_update()` as their first statement — so the
+  two transactions cannot overlap at all. Verified by experiment, not by
+  argument: giving the regression test's athlete thread that Session lock
+  makes the cell survive **on `main`**, both for a writer that updates the
+  cell and for the `athlete_log_session` shape that never touches it. So
+  #584's own framing ("the two don't serialize against each other") is not
+  right for any writer that exists today.
+  **The lock is still worth taking, for a narrower reason:** it stops the
+  purge depending on an incidental UPDATE in an unrelated earlier loop.
+  Make that `session.save()` conditional — skip unchanged rows, a plausible
+  optimization — and the race reopens with nothing to catch it. It also
+  covers a writer that touches one of these cells without holding the plan's
+  Session rows. `test_undo_purge_postgres.py` now pins both halves
+  separately: one forced-interleaving test for this lock in isolation (its
+  athlete thread deliberately does NOT take the Session lock; fails on
+  `main`), and one characterization test for the Session-lock serialization
+  (passes on `main` too, and exists so that a future change making the
+  Session save conditional fails there instead of silently).
+  **Plain `FOR UPDATE`, not `no_key=True`,** for two reasons: a DELETE takes
+  a lock of that strength anyway, and `FOR UPDATE` is what conflicts with
+  the commit-time `FOR KEY SHARE`, so a writer already *inside* its COMMIT
+  makes this lock wait and the re-check then sees its row. #560's
+  `no_key=True` was right for a user-row mutex never contending with an FK
+  reference; this is the opposite case.
+  **Lock order is unchanged; the locked SET is wider.** The sequence is
+  still Plan → Week → SessionSlot → ExerciseSlot → Session → Prescription.
+  But the `.delete()` this replaces carried its spare clauses inside its own
+  qualifying SELECT, so it only ever locked the *doomed* rows, whereas this
+  locks every snapshot-absent, non-athlete-authored stray and then spares
+  some. That widens a Prescription↔Plan cycle that already existed on this
+  path (`athlete_cell_write` is Prescription→Plan; a restore is
+  Plan→Prescription) rather than creating one — the same endpoint pair
+  already inverts on Session-vs-Plan per #562. Keeping `athlete_authored` in
+  the candidate filter is what stops the widening being far larger.
+  **The collision-resolution delete above (#583) removes an occupant only
+  when this purge itself would**, including the same soft-deleted-slot/week
+  scoping AND the same split between what is filtered and what is
+  re-checked, so the two halves cannot disagree about which cells are
+  protected. Its occupancy read is unlocked, and what stops a
+  concurrently-inserted occupant there is again the Session lock, not this
+  one.
+  **The guard must never take `FOR UPDATE` on an athlete-authored occupant,
+  and a review round caught it doing exactly that.** Both round-2 reviewers
+  found it independently: the guard locked its candidates before testing
+  them, which contradicted the purge's own argument one screen below for
+  keeping `athlete_authored` in the FILTER. It is not theoretical —
+  `cell_line_write`'s reclaim writes that row
+  (`existing.save(update_fields=["athlete_authored"])`) *before*
+  `record_plan_action` takes the `Plan` lock, so it is Prescription→Plan
+  while a redo is Plan→Prescription, and #583's headline occupant IS an
+  athlete-authored cell, putting the cycle on the guard's main path. The
+  flag is now decided from the unlocked occupancy read and those occupants
+  are never locked; only the `LoggedSet` pointers are re-checked under the
+  lock.
+  **A skipped cell is now logged.** Skipping is otherwise invisible — the
+  endpoint answers `ok: true` and the line simply does not come back — so
+  `history` logs the skipped pk, its coordinate and the occupant's pk. The
+  message says only that the coordinate is taken, deliberately: three
+  branches reach that skip and only two of them involve athlete data, and a
+  skip is not necessarily permanent (a later restore whose snapshot has that
+  slot and week live takes the stray-delete branch, and a coach reclaim
+  through `cell_line_write` makes an athlete-authored occupant deletable
+  again). Round 3 caught an earlier draft of that message asserting both the
+  reason and the permanence, and being wrong on each.
+  **`test_undo_purge_postgres.py` is in the Postgres CI job's file list.**
+  That list is the only place these files run — each skips itself on SQLite,
+  so one left off it executes in no job at all and looks green while testing
+  nothing. Round 3 caught the new file missing from it; the list now carries
+  a comment saying to add Postgres-only files in the commit that creates
+  them.
+  **#562 is untouched and does not conflict.** It's a `Session`-vs-`Plan`
+  ordering issue on a different path entirely (`athlete_cell_write`'s
+  `Session` lock vs. `api_plan_undo`/`api_plan_redo`'s `Plan` lock) — no
+  `Session` row is locked anywhere in this fix, so there is nothing here for
+  that ordering to conflict with. #562 remains open and is not addressed by
+  this change.
+  Tests: `test_restore_cell_collision.py` (the #583 reproduction through the
+  real `api_cell_line_write` → `api_plan_undo` → `athlete_cell_write` →
+  `api_plan_redo` sequence, an undo-leg counterpart constructed directly
+  against a hand-built `PlanAction.snapshot` since no real endpoint sequence
+  was found to reach it, the "stray with no athlete data is still purged"
+  counter-case, and the swap-is-not-handled pin) and
+  `test_undo_purge_postgres.py` (Postgres-only, a forced two-thread
+  interleaving proving the lock, per the same barrier recipe
+  `test_settle_postgres.py`/`test_billing_webhook_postgres.py` use).
+  **Declined, with reasons (adversarial review, 5 angles, round 1).** (a) The
+  coach's profile card: `_profile_results` picks its session by `-date`
+  across sessions and then calls `session_results`, which now resolves the
+  log by `-created_at`, so for a pair whose newest write carries an older
+  workout date the card can describe a log `_profile_results` did not pick.
+  That is the intended unification, not a regression — the card now agrees
+  with the results screen it reuses and with the athlete's own page. (b) The
+  PR callout: `personal_records._logged_before` defines the prior-best
+  baseline by `date` first, so moving `session_results`' subject to the
+  newest-by-`created_at` log can, on such a pair, announce a record already
+  beaten by its sibling. Narrow and legacy-only (it needs two DONE logs for
+  one `(session, athlete)` plus a date/created_at inversion), and *not* new
+  behaviour in kind: `athlete_log_session` and `_upsert_parsed_set` already
+  selected the subject that way on `main`, so the athlete's own toast has
+  always behaved like this — this change aligns the coach with it. Fixing
+  `_logged_before` is a PR-provenance product decision; filed on #578, which
+  is already chartered to replace the hand-written orderings with one
+  selector. (c) A within-snapshot coordinate swap or chain still raises:
+  unreachable, because `restore_plan_snapshot` is the only code in the repo
+  that ever assigns a cell's coordinate, so a snapshotted pk's coordinate is
+  identical in every snapshot naming it. (d) `reclaimed_line` is protected
+  by neither the lock nor an FK, and is safe today only by an incidental
+  property of `_consume_carried_link` (every carried link names a cell some
+  already-committed `LoggedSet` also names). Unverified and untested; noted
+  on #578 rather than asserted here.

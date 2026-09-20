@@ -91,6 +91,7 @@ from .models import Week
 from .models import WeekDelivery
 from .models import display_line_id
 from .models import hidden_parsed_set_pks
+from .models import newest_session_logs
 from .models import sub_line_warn_reason
 from .parsing import parse_performed
 from .parsing import performed_reps_text
@@ -1542,30 +1543,10 @@ def athlete_log_session(request, pk):
         # leaves that race wide open. One workout split across two logs loses
         # the older one's sets from every later read, which takes the newest.
         Session.objects.select_for_update().filter(pk=session.pk).first()
-        # #567/#568 P2-C: ``-pk`` is a secondary sort key, not just tiebreak
-        # noise. Two ``SessionLog``s for one (session, athlete) sharing a
-        # ``created_at`` — precisely the split-log rows #568 exists for — sort
-        # ambiguously on ``-created_at`` alone, and Postgres gives no promise
-        # of a stable order for ties: the same query can hand back either row
-        # as "first" on different calls. This read, ``_upsert_parsed_set``'s,
-        # ``_cell_warn_reason_or_blank``'s, ``presenters.athlete_session``'s, and the
-        # 24h settle sweep's two reads (``settle.settleable_logs``,
-        # ``settle.settle_log`` — #567/#568 P2) all take the SAME secondary
-        # key, so "the newest ``SessionLog`` for one (session, athlete) pair"
-        # is one deterministic thing everywhere THAT QUESTION is asked —
-        # without it, any two of these reads could each pick a different log
-        # and never agree, reopening exactly the disagreement #568 closed. Two
-        # reads in ``adherence.py`` are deliberately NOT on this list: they
-        # answer a DIFFERENT question — the newest *done* log across a whole
-        # coach-athlete link (``link_last_trained``, many sessions, not one)
-        # and a plain list of several recent logs (``recent_logs``) — neither
-        # is "the newest log for one (session, athlete) pair", so there is no
-        # tie for a secondary key to break there.
-        log = (
-            SessionLog.objects.filter(session=session, athlete=request.user)
-            .order_by("-created_at", "-pk")
-            .first()
-        )
+        # The shared newest-log rule for one (session, athlete) pair — see
+        # models.newest_session_logs for the ordering rationale, the full
+        # list of reads that share it, and the reads that deliberately don't.
+        log = newest_session_logs(session, request.user).first()
         if log is None:
             log = SessionLog(session=session, athlete=request.user)
         # set_logged / session_completed analytics (#509): captured right here,
@@ -2501,14 +2482,8 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                 and (parsed.get("reps") or parsed.get("load"))
             )
 
-            # #567/#568 P2-C: ``-pk`` tiebreaks a shared ``created_at`` the
-            # same deterministic way ``athlete_log_session``'s own lookup
-            # does — see its comment.
-            log = (
-                SessionLog.objects.filter(session=session, athlete=athlete)
-                .order_by("-created_at", "-pk")
-                .first()
-            )
+            # The shared newest-log rule — see models.newest_session_logs.
+            log = newest_session_logs(session, athlete).first()
             if log is None:
                 # Parse BEFORE creating. Creating up front meant a no-op blur —
                 # tapping "add a line" and leaving it empty — persisted a dated
@@ -3065,9 +3040,8 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
     direction — the cell reloads with the presenter's own, independently
     derived answer — and it is strictly better than losing the response.
 
-    #568: reads the SAME log the presenter reads (``athlete_session`` —
-    ``SessionLog.objects.filter(session=session, athlete=athlete)
-    .order_by("-created_at", "-pk").first()``) and hands
+    #568: reads the SAME log the presenter reads (``athlete_session``, via
+    the shared ``models.newest_session_logs``) and hands
     ``sub_line_warn_reason`` its ``backing_sets`` scoped to that one log,
     rather than letting it fall back to its own unscoped query — which used
     to match a ``LoggedSet`` for this cell on ANY session log in the
@@ -3183,11 +3157,8 @@ def _cell_warn_reason_or_blank(cell, line_zero_cell, *, session, athlete):
     identical fallback for that case.
     """
     try:
-        log = (
-            SessionLog.objects.filter(session=session, athlete=athlete)
-            .order_by("-created_at", "-pk")
-            .first()
-        )
+        # The shared newest-log rule — see models.newest_session_logs.
+        log = newest_session_logs(session, athlete).first()
         backing_sets = (
             tuple(row for row in log.sets.all() if display_line_id(row) == cell.pk)
             if log is not None

@@ -58,6 +58,7 @@ from .models import WeekDelivery
 from .models import display_line_id
 from .models import hidden_parsed_set_pks
 from .models import line_displays
+from .models import newest_session_logs
 from .models import sub_line_warn_reason
 from .one_rm import key_str
 from .one_rm import one_rm_values
@@ -1138,21 +1139,24 @@ def session_results(session):
     """The coach's results screen for one session, off the athlete's real log.
 
     Reads the athlete's most recent *done* ``SessionLog`` for ``session`` and
-    scores its sets against the prescribed targets. A pending draft (the athlete
-    hit "Save progress" but hasn't finished) is not feedback yet, so it — like an
-    unlogged session — renders an honest awaiting state (targets only, 0%
-    complete) rather than inventing numbers. ``session`` arrives coach-scoped;
-    its cells are read via ``session.cells()`` (P0 fixed-lineup cutover).
+    scores its sets against the prescribed targets. "Most recent" means the
+    newest log by ``created_at`` (models.newest_session_logs, #579) — not the
+    athlete-supplied workout ``date`` — so this agrees with the athlete's own
+    page (``athlete_session``) about which log is current. A pending draft
+    (the athlete hit "Save progress" but hasn't finished) is not feedback
+    yet, so it — like an unlogged session — renders an honest awaiting state
+    (targets only, 0% complete) rather than inventing numbers. ``session``
+    arrives coach-scoped; its cells are read via ``session.cells()`` (P0
+    fixed-lineup cutover).
     """
     plan = session.week.mesocycle.plan
     athlete = plan.athlete
     prescriptions = list(session.trainable_cells())
     sub_lines_by_slot = _coach_sub_lines_by_slot(session)
+    # #579: shares the newest-log rule every other "current SessionLog for
+    # this (session, athlete) pair" read uses — see models.newest_session_logs.
     log = (
-        SessionLog.objects.filter(
-            session=session, athlete=athlete, status=SessionLog.Status.DONE
-        )
-        .order_by("-date", "-created_at")
+        newest_session_logs(session, athlete, status=SessionLog.Status.DONE)
         .prefetch_related("sets")
         .first()
     )
@@ -1666,14 +1670,12 @@ def athlete_session(session, athlete):
     ``trainable_cells()`` since, and the difference matters: it is why a skipped
     row needs no warn handling on reload, only in the cell-write response.)
     """
-    # #567/#568 P2-C: ``-pk`` tiebreaks a shared ``created_at`` the same
-    # deterministic way ``views.athlete_log_session``'s own lookup does — see
-    # its comment. Without it, this read and the blur response's
+    # #567/#568/#579: the shared newest-log rule — see models.newest_session_logs.
+    # Without it, this read and the blur response's
     # (``views._cell_warn_reason_or_blank``) could each pick a different "newest"
     # log for a tied pair and disagree about what backs a line.
     log = (
-        SessionLog.objects.filter(session=session, athlete=athlete)
-        .order_by("-created_at", "-pk")
+        newest_session_logs(session, athlete)
         .prefetch_related("sets__source_line", "sets__reclaimed_line")
         .first()
     )
