@@ -1695,14 +1695,21 @@ def athlete_log_session(request, pk):
             # performed.
             #
             # Sparing it is not the same as repairing it. A row past the
-            # ceiling whose `source_line` still names a live sub-line gets
-            # pulled back into range by `_upsert_parsed_set` the next time
-            # that line is edited; a SOURCE-LESS one (a `reclaimed_line` copy)
-            # has no such path — the renumbering loop below can never see it
-            # either, because its slot can never appear in `posted`, which
-            # `_clean_logged_sets` bounds to the legal range. It stays where
-            # it is, invisible on the page and still counting toward 1RM and
-            # PRs. That is the state this skip preserves rather than fixes.
+            # ceiling whose `source_line` still names a live sub-line USUALLY
+            # comes back into range the next time that line is edited —
+            # `_upsert_parsed_set` re-picks its number from the bottom — but
+            # not always: not when the legal range is already full (it then
+            # keeps the number it just freed, deliberately, rather than be
+            # deleted), and not when the edit lands on one of that function's
+            # `existing` reuse branches, which keep the row and its number as
+            # they are. A SOURCE-LESS row (a `reclaimed_line` copy) has no
+            # such path at all — the renumbering loop below can never see it
+            # either, since its slot can never appear in `posted`, which
+            # `_clean_logged_sets` bounds to the legal range. Such a row stays
+            # where it is, invisible on the page and still counting toward 1RM
+            # and PRs. This skip preserves that state rather than fixing it,
+            # which is the right way round: the alternative is deleting a set
+            # the athlete performed.
             if row.set_number > MAX_LOGGED_SET_NUMBER:
                 continue
             if row.source_line_id is not None and not _client_held(
@@ -2529,9 +2536,25 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
             # they already earned. Judged against `previous_text`, not the text
             # just saved: under the NEW text a normal re-blur's own row looks
             # unrelated too, and sparing it would append instead of replace.
+            #
+            # Scoped to `line_zero_cell` as well as `source_line` (#570 round
+            # 3). Every row this path creates carries BOTH — same slot, same
+            # blur — so the prescription filter costs nothing in the ordinary
+            # case, and it closes one that isn't ordinary: a row pointing at
+            # this sub-line while belonging to a DIFFERENT exercise is
+            # incoherent data, and deleting it here charged the athlete for
+            # that. `taken` below is scoped to this prescription, so such a
+            # row's freed number says nothing about where the replacement can
+            # go — the delete could succeed while the create had nowhere to
+            # land, which is a performed set destroyed outright. Sparing it
+            # instead is the same call the replace-delete's own
+            # trainable/hidden skips already make: a row this path cannot
+            # account for is history, not draft state.
             mine = [
                 row
-                for row in log.sets.filter(source_line=cell)
+                for row in log.sets.filter(
+                    source_line=cell, prescription=line_zero_cell
+                )
                 if parsing.performed_text_shows(
                     previous_text, reps=row.reps, load=row.load, rpe=row.rpe
                 )
@@ -2686,10 +2709,10 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                         # occupied. Without that fallback, replacing a row left
                         # at 51+ by the old unbounded walk deleted it and
                         # created nothing: a performed set destroyed by an
-                        # ordinary edit, on a 200 response. Re-checked against
-                        # `taken` because a freed number can belong to a
-                        # DIFFERENT line-0 cell (a history restore replaces the
-                        # pk), and then it says nothing about this one.
+                        # ordinary edit, on a 200 response. Still
+                        # re-checked against `taken` rather than trusted: this
+                        # is the one place that decides a number, and a freed
+                        # one is only free while nothing else has taken it.
                         #
                         # Still `None` after that means there is genuinely
                         # nowhere to put the row, and none is created. The

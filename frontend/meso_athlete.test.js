@@ -780,6 +780,55 @@ describe("flushQueue", () => {
     expect(c.readQueue()).toHaveLength(1);
   });
 
+  // #570 round 3: `flushLog` had no retryable/refusal split — every non-ok
+  // answer returned "kept", so the 400 that refuses a save for good stayed in
+  // the outbox and was re-POSTed on every `online` event, forever, behind a
+  // footer promising it would sync. The refusal has to end the entry and say
+  // what went wrong, exactly as `flushCell` already did for a line.
+  it("drops this session's log on a refusal and surfaces its message", async () => {
+    const c = makeLogger();
+    c.enqueue({ status: "done", sets: [] });
+    c.queued = true;
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        ok: false,
+        status: 400,
+        body: { ok: false, error: "Too many sets logged for Box Squat." },
+      }),
+    );
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(0); // never retried again
+    expect(c.error).toBe(true);
+    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
+    expect(c.queued).toBe(false);
+    expect(c.saved).toBe(false); // a refusal outranks the tick
+  });
+
+  it("keeps this session's log queued for a retryable status", async () => {
+    const c = makeLogger();
+    c.enqueue({ status: "done", sets: [] });
+    c.queued = true;
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status: 503 }));
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(1); // the server failed, not the write
+    expect(c.error).toBe(false);
+  });
+
+  it("keeps ANOTHER session's refused log queued, with nothing here to show it", async () => {
+    const c = makeLogger();
+    c.writeQueue([
+      c.stamp({ url: "/meso/api/me/session/99/log/", body: { status: "done", sets: [] } }),
+    ]);
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ ok: false, status: 400, body: { ok: false, error: "nope" } }),
+    );
+    await c.flushQueue();
+    // Dropping it here would lose it silently: this page has no row for
+    // session 99 to report the refusal on. Its own page will refuse it again.
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.errorMessage).toBe("");
+  });
+
   it("does nothing when the queue is empty", async () => {
     const c = makeLogger();
     global.fetch = vi.fn();
@@ -3148,22 +3197,36 @@ describe("footer line error clears once the line saves (#527)", () => {
   });
 });
 
-// #570 round 2: `reportSaved` is the ONE place a refusal's message gets
-// cleared — right where it's about to claim "Saved ✓" — so an exercise-named
-// refusal ("Too many sets logged for Box Squat.") can't go on sitting beside
-// that claim once the thing it was refusing has actually landed some other
-// way (a retry, a fixed line, an offline flush). It must NOT clear on either
-// early return, though: those mean something this page wrote still hasn't
-// landed, and the refusal is still the truest thing on screen.
-describe("reportSaved clears a stale refusal", () => {
-  it("clears error and errorMessage once it's about to claim saved", () => {
+// #570 round 3: a refusal OUTRANKS a tick. Round 2 had `reportSaved` clear
+// the refusal where it was about to claim "Saved ✓", which states the wrong
+// thing more confidently: a refused save drops its own outbox entry, so
+// nothing is retrying it, and the flush that gets us here may have landed a
+// log queued by ANOTHER tab on this session (`flushedMine` means a log for
+// this URL landed, not that this page's did). So it never claims saved while
+// a refusal stands; `save()` clears both at the top of the next real attempt,
+// which is the moment the refusal stops being true.
+describe("reportSaved and a standing refusal", () => {
+  it("does not claim saved while a refusal stands, and keeps its message", () => {
     const c = makeLogger();
     c.error = true;
     c.errorMessage = "Too many sets logged for Box Squat.";
     c.reportSaved();
-    expect(c.saved).toBe(true);
+    expect(c.saved).toBe(false);
+    expect(c.error).toBe(true);
+    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
+  });
+
+  it("claims saved again once a fresh save() clears the refusal", async () => {
+    const c = makeLogger();
+    c.error = true;
+    c.errorMessage = "Too many sets logged for Box Squat.";
+    global.fetch = vi.fn().mockResolvedValue(
+      res({ body: { log: { status: "done", sets: [] }, new_records: [] } }),
+    );
+    await c.save(true);
     expect(c.error).toBe(false);
     expect(c.errorMessage).toBe("");
+    expect(c.saved).toBe(true);
   });
 
   it("leaves a stale refusal in place while this page's log is still queued", () => {

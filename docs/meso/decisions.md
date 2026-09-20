@@ -2488,6 +2488,19 @@ _(Append dated entries here as decisions land.)_
   page and still counting toward 1RM and PRs. The skip preserves that state
   rather than fixing it, which is the right trade against deleting it, but it
   is a state and not a repair.
+  **Round 3: `mine` is scoped by prescription too.** The freed-number
+  fallback still had a path to a net deletion, and the branch had briefly
+  pinned it as a TEST rather than a bug. `mine` — the rows a blur replaces —
+  filtered on `source_line` alone, so a row pointing at this sub-line while
+  belonging to a DIFFERENT exercise was deleted by a blur on this one; `taken`
+  is scoped to THIS prescription, so that row's freed number said nothing
+  about where the replacement could go, and with the legal range full nothing
+  was created. One fewer performance, on a 200. `mine` now requires
+  `prescription=line_zero_cell` as well, so such a row is never a candidate
+  for this delete — sparing a row this path cannot account for, the same call
+  the replace-delete's own trainable/hidden skips make. The freed-number
+  re-check against `taken` stays: it is the one place a number is decided, and
+  a freed number is only free while nothing else has taken it.
   **400 here, 503 for #571 — deliberately different.** This refusal is a 400,
   which `meso_athlete.js` classifies as "rejected" and drops from the outbox;
   #571's poisoned-transaction answer is a 503, which it keeps queued and
@@ -2511,9 +2524,25 @@ _(Append dated entries here as decisions land.)_
   entry, NOTHING holds the save, not the server and not the outbox, and the
   badge still read "Logged" with no retry pending. `keepForLater` now reports
   whether it kept anything, and the status goes back when it didn't. And
-  `reportSaved()` clears a stale refusal at the point it claims "Saved ✓", so
-  an exercise-named message can't sit beside a tick; a refusal with nothing
-  landed since keeps it.
+  `reportSaved()` no longer claims "Saved ✓" at all while a refusal stands.
+  **Round 3 corrected both of those again.** Clearing the refusal to make room
+  for the tick — round 2's version — states the wrong thing more confidently:
+  a refused save drops its own outbox entry, so nothing retries it, and the
+  flush that reaches `reportSaved` may have landed a log queued by ANOTHER tab
+  on the same session (`flushedMine` means a log for this URL landed, not that
+  this page's did). A refusal now outranks a tick, and `save()` clears it at
+  the top of the next real attempt — the moment it stops being true. Round 3
+  also found the refusal contract stopped at `save()`: `flushLog` returned
+  "kept" for EVERY non-ok answer, so a refusal replayed from the outbox was
+  re-POSTed on every `online` event, forever, behind a footer promising it
+  would sync — and the comment added beside the 400 claiming the client drops
+  such an entry was therefore false. `flushLog` now makes the same
+  retryable/refusal split `flushCell` always had, keeping another session's
+  refused log queued for `flushCell`'s own reason: this page has nothing on
+  screen to report it on. And `keepForLater` returning false no longer reverts
+  the status when an earlier write-ahead copy of the same save is still in the
+  outbox — `writeQueue` is all-or-nothing, so a later `enqueue` can fail while
+  that copy sits there due to flush.
 - 2026-09-20 — **Fixed (#571): `athlete_cell_write` no longer claims a save
   the database didn't keep.** Found by the same adversarial review as #570.
   `_upsert_parsed_set` wraps its work in a nested savepoint and swallows

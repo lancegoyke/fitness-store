@@ -338,18 +338,24 @@ class TestUpsertFreedNumberFallback:
         # `_first_free_set_number`'s bounded scan can never reach on its own.
         assert row.set_number == MAX_LOGGED_SET_NUMBER + 5
 
-    def test_a_freed_number_already_taken_by_this_exercise_is_not_reused(self, client):
-        """The fallback is re-checked against ``taken``, not taken on faith.
+    def test_a_row_belonging_to_another_exercise_is_spared_not_deleted(self, client):
+        """A blur on one exercise must never delete another exercise's row.
 
-        Builds, directly via the ORM, the exact state ``_upsert_parsed_set``'s
-        own comment calls out ("a freed number can belong to a DIFFERENT
-        line-0 cell — a history restore replaces the pk") rather than
-        reproducing the history-restore flow that produces it in production:
-        the row hiding behind this cell is stamped ``prescription=rdl``, a
-        DIFFERENT line-0 cell than the one actually being edited (``squat``),
-        even though ``source_line`` still points at squat's own sub-line —
-        `mine`'s lookup filters on ``source_line`` alone, so this is a shape
-        the code has to defend against regardless of how it's reached.
+        The round-3 review built this state and found the branch DELETING the
+        row and creating nothing — a performed set destroyed on a 200. The
+        chain was: ``mine`` filtered on ``source_line`` alone, so it picked up
+        a row stamped with a DIFFERENT line-0 cell (``rdl``) than the one
+        being edited (``squat``); the delete ran; ``taken`` is scoped to
+        ``squat`` and was full, so neither the bounded scan nor the
+        freed-number fallback (the freed number, 3, is one squat's own row
+        holds) could place a replacement. Net: one fewer performance, nothing
+        on screen to say so.
+
+        ``mine`` is now scoped to ``line_zero_cell`` as well, so the row is
+        never a candidate for this delete in the first place. Sparing a row
+        this path cannot account for is the same call the replace-delete's own
+        trainable/hidden skips make. Built directly via the ORM: the shape is
+        incoherent data, and the code has to hold regardless of how it arose.
         """
         s = seed()
         client.force_login(s.athlete)
@@ -366,12 +372,8 @@ class TestUpsertFreedNumberFallback:
                 rpe="",
             )
         cell = sub_line(s.squat, "225 x 5", line=1, athlete_authored=True)
-        # `mine` for this cell — deleted below — but its `prescription` is
-        # RDL's, not squat's. The number it frees (3) says nothing about
-        # squat's own range: squat's LEGITIMATE row already sits on 3 (the
-        # fill loop above), and `taken` (scoped to `prescription=squat`)
-        # already reflects that.
-        LoggedSet.objects.create(
+        # Points at squat's sub-line, but belongs to RDL.
+        foreign = LoggedSet.objects.create(
             session_log=log,
             prescription=s.rdl,
             source_line=cell,
@@ -386,17 +388,23 @@ class TestUpsertFreedNumberFallback:
         assert resp.status_code == 200
         body = resp.json()
         assert body["ok"] is True
-        # Nothing was minted for this cell: the only number this delete
-        # freed (3) is already taken by squat's own legitimate row, and the
-        # bounded scan found nothing else free either.
-        assert not LoggedSet.objects.filter(source_line=cell).exists()
-        # Squat's own row at 3 is untouched — the fallback must not have
-        # collided with it by reusing a number it doesn't actually own.
+        # THE point of this test: the performance survives. Before the scoping
+        # fix this row was gone, with nothing created in its place.
+        foreign.refresh_from_db()
+        assert foreign.reps == "5"
+        assert foreign.load == "225"
+        assert foreign.set_number == 3
+        # Squat's own row at 3 is untouched too — nothing collided with it.
         untouched = LoggedSet.objects.get(
             session_log=log, prescription=s.squat, set_number=3
         )
         assert untouched.reps == "5"
         assert untouched.load == "100"
+        # Squat's line still has no row of its own (the legal range is full),
+        # and says so rather than pretending otherwise.
+        assert not LoggedSet.objects.filter(
+            source_line=cell, prescription=s.squat
+        ).exists()
         assert body["cell"]["warn_reason"] == "unlogged"
 
 
