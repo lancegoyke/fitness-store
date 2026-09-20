@@ -162,9 +162,9 @@ function updateCellLineInGrid(
         const lines = [...(cell.lines ?? [])];
         const idx = lines.findIndex((l) => l.line === line);
         if (idx >= 0) {
-          lines[idx] = { ...lines[idx]!, text };
+          lines[idx] = { ...lines[idx]!, text, athlete_authored: false };
         } else {
-          lines.push({ line, text });
+          lines.push({ line, text, athlete_authored: false });
           lines.sort((a, b) => a.line - b.line);
         }
         return { ...row, cells: { ...row.cells, [key]: { ...cell, lines } } };

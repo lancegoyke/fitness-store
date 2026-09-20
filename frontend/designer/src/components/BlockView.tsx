@@ -13,21 +13,15 @@
 // periodStyle control)" component-tree comment.
 import type { CSSProperties } from "react";
 import { barH, cellOn, cellStyle } from "../lib/grid";
-import type { GridWeek, Phase } from "../lib/api";
+import type { GridDay, GridWeek, Phase } from "../lib/api";
 import type { Id } from "../hooks/useGrid";
-
-const CAL_DAYS = ["M", "T", "W", "T", "F", "S", "S"];
 
 export type PeriodStyle = "timeline" | "ladder" | "calendar";
 
 export interface BlockViewProps {
   phases: Phase[];
-  // Issue #455 phase A5: sourced straight off the grid (gridState.grid.weeks)
-  // now that the one-week planData owner is retired — GridWeek already
-  // structurally satisfies cellOn/cellStyle's Pick<Week, "deload"> and
-  // carries its own vol/inten (serialize_mesocycle_grid additions), so no
-  // render-logic change was needed here, only this prop type.
   weeks: GridWeek[];
+  days: GridDay[];
   periodStyle: PeriodStyle;
   onSetPeriodStyle(style: PeriodStyle): void;
   onSwitchWeek(weekId: Id): void;
@@ -49,7 +43,7 @@ function parseStyleString(css: string): CSSProperties {
   return out as CSSProperties;
 }
 
-export function BlockView({ phases, weeks, periodStyle, onSetPeriodStyle, onSwitchWeek }: BlockViewProps) {
+export function BlockView({ phases, weeks, days, periodStyle, onSetPeriodStyle, onSwitchWeek }: BlockViewProps) {
   return (
     <div className="meso-block-view">
       <div className="meso-seg meso-block-periodseg">
@@ -155,20 +149,24 @@ export function BlockView({ phases, weeks, periodStyle, onSetPeriodStyle, onSwit
 
         {periodStyle === "calendar" && (
           <div className="meso-calendar">
-            <div className="meso-cal-header-row">
+            <div className="meso-cal-header-row" style={{ gridTemplateColumns: `50px repeat(${days.length}, 1fr)` }}>
               <div />
-              {CAL_DAYS.map((d, i) => (
-                <div key={i} className="meso-cal-day-label">
-                  {d}
+              {days.map((day) => (
+                <div key={day.session_slot_id} className="meso-cal-day-label">
+                  Day {day.day_number}
                 </div>
               ))}
             </div>
-            {weeks.map((w, ri) => (
-              <div key={ri} className="meso-cal-row">
+            {weeks.map((w) => (
+              <div
+                key={w.id}
+                className="meso-cal-row"
+                style={{ gridTemplateColumns: `50px repeat(${days.length}, 1fr)` }}
+              >
                 <div className="meso-cal-week-label">{w.label}</div>
-                {CAL_DAYS.map((_, ci) => (
-                  <div key={ci} style={parseStyleString(cellStyle(w, ci))}>
-                    {cellOn(w, ci) && <div className="meso-cal-dot" />}
+                {days.map((day) => (
+                  <div key={day.session_slot_id} style={parseStyleString(cellStyle(day, w))}>
+                    {cellOn(day, w) && <div className="meso-cal-dot" />}
                   </div>
                 ))}
               </div>

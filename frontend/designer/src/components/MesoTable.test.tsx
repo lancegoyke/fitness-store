@@ -5,7 +5,7 @@
 // sub-line inputs and a trailing ghost input that mints the next sub-line;
 // Tempo/Notes/Rest are per-ROW columns off the slot. The %1RM editor, the
 // load_type toggle, and the one-week swap UI are retired.
-import { act, render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { MesoTable } from "./MesoTable";
@@ -205,6 +205,54 @@ describe("cell sub-lines", () => {
     expect(screen.getByTestId("cell-line-100-1")).toHaveValue("RPE 8");
     expect(screen.getByTestId("cell-line-100-2")).toHaveValue("slow eccentric");
     expect(screen.getByTestId("cell-line-new-100")).toHaveValue("");
+  });
+
+  it("marks only athlete-authored lines and clears the mark after a coach edit", async () => {
+    const user = userEvent.setup();
+    const onWriteCellLine = vi.fn();
+    const athleteLine = { id: 5, line: 1, text: "100 x 5", athlete_authored: true };
+    const coachLine = { id: 6, line: 2, text: "Pause for two seconds", athlete_authored: false };
+    const athleteGrid = grid({
+      days: [day({ rows: [row({ cells: { "1": cell({ lines: [athleteLine, coachLine] }) } })] })],
+    });
+    const view = render(<MesoTable {...baseProps({ grid: athleteGrid, onWriteCellLine })} />);
+
+    const athleteMark = screen.getByTestId("cell-line-athlete-5");
+    expect(athleteMark).toHaveTextContent("athlete");
+    expect(athleteMark).toHaveAttribute("title", "Logged by your athlete");
+    expect(athleteMark).not.toHaveAttribute("tabindex");
+    expect(athleteMark).not.toHaveAttribute("data-grid-cell");
+    expect(screen.queryByTestId("cell-line-athlete-6")).not.toBeInTheDocument();
+
+    const athleteInput = screen.getByTestId("cell-line-100-1");
+    expect(athleteInput.parentElement).toHaveClass("meso-line-row--athlete");
+    await user.clear(athleteInput);
+    await user.type(athleteInput, "105 x 5");
+    await user.tab();
+
+    expect(onWriteCellLine).toHaveBeenCalledWith(9, 1, 1, "105 x 5");
+    const reclaimedGrid = grid({
+      days: [
+        day({
+          rows: [
+            row({
+              cells: {
+                "1": cell({
+                  lines: [
+                    { ...athleteLine, text: "105 x 5", athlete_authored: false },
+                    coachLine,
+                  ],
+                }),
+              },
+            }),
+          ],
+        }),
+      ],
+    });
+    view.rerender(
+      <MesoTable {...baseProps({ grid: reclaimedGrid, onWriteCellLine })} />,
+    );
+    expect(screen.queryByTestId("cell-line-athlete-5")).not.toBeInTheDocument();
   });
 
   // designer-simplify: the ghost must stay a real, focusable keyboard grid
@@ -603,6 +651,58 @@ describe("add affordances", () => {
     expect(onAddDay).toHaveBeenCalledTimes(1);
     await user.click(screen.getByTestId("add-week"));
     expect(onAddWeek).toHaveBeenCalledTimes(1);
+  });
+
+  it("focuses the new row's exercise name after add resolves", async () => {
+    const user = userEvent.setup();
+
+    function AddHarness() {
+      const [currentGrid, setCurrentGrid] = useState(grid());
+      return (
+        <MesoTable
+          {...baseProps({
+            grid: currentGrid,
+            onAddExercise: async (targetDay) => {
+              setCurrentGrid((current) => ({
+                ...current,
+                days: current.days.map((candidate) =>
+                  candidate.session_slot_id === targetDay.session_slot_id
+                    ? {
+                        ...candidate,
+                        rows: [
+                          ...candidate.rows,
+                          row({
+                            exercise_slot_id: 20,
+                            name: "New exercise",
+                            cells: { "1": cell({ prescription_id: 200 }) },
+                          }),
+                        ],
+                      }
+                    : candidate,
+                ),
+              }));
+            },
+          })}
+        />
+      );
+    }
+
+    render(<AddHarness />);
+    await user.click(screen.getByTestId("add-exercise-1"));
+    await waitFor(() => expect(screen.getByTestId("row-name-20")).toHaveFocus());
+  });
+
+  it("does not move focus when add resolves without a new row", async () => {
+    const user = userEvent.setup();
+    const unchanged = grid();
+    const view = render(<MesoTable {...baseProps({ grid: unchanged, onAddExercise: async () => {} })} />);
+    const addButton = screen.getByTestId("add-exercise-1");
+
+    await user.click(addButton);
+    view.rerender(<MesoTable {...baseProps({ grid: { ...unchanged }, onAddExercise: async () => {} })} />);
+
+    await waitFor(() => expect(addButton).toHaveFocus());
+    expect(screen.getByTestId("row-name-9")).not.toHaveFocus();
   });
 });
 

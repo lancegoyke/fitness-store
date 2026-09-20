@@ -284,9 +284,9 @@ as PR A). Hydrates once on mount:
 
 Composes `useGrid` (the sole data owner), `useTableReorder`,
 `useUndoKeyboard`, `useAgentChat`, and `useCoachmarks`; owns
-`view`/`periodStyle`/`checks` as local
-`useState` (see "View-state rules"); derives `program` for `AthletePreview`
-via `gridToProgram(grid, weekId)` and `cycleLabel` for `TopBar`
+`view`/`periodStyle` as local `useState` (see "View-state rules"); passes the
+live grid to `AthletePreview`, which derives each selected week's program via
+`gridToProgram(grid, weekId)`, and derives `cycleLabel` for `TopBar`
 via `cycleLabelFromGrid(phases, weeks)` (both pure helpers in `lib/grid.ts`
 added in A5 step 3 — the grid analogs of the retired `usePlanData`'s
 `athleteDay`/`aTotal`/`aDone` view-shaping and `cycleLabel` memo). No prop
@@ -404,20 +404,18 @@ there's no multi-file component boundary left to pin.
 
 ### BlockView
 
-Props: `{ phases, weeks, periodStyle, onSetPeriodStyle, onSwitchWeek }`.
+Props: `{ phases, weeks, days, periodStyle, onSetPeriodStyle, onSwitchWeek }`.
 Renders the macro strip, then one of the three period styles (timeline /
-ladder / calendar) per `periodStyle`; the calendar cells use `cellStyle`/
-`cellOn` from `lib/grid.ts` (with the default `sessionDays`, per that
-module's documented decision). Testids: `period-style-timeline-button`,
+ladder / calendar) per `periodStyle`; the calendar columns are the program's
+own days, and each week/day cell is on only when `day.session_ids` contains
+that week. Testids: `period-style-timeline-button`,
 `period-style-ladder-button`, `period-style-calendar-button`,
 `block-week-{id}` (timeline bars, clickable → `onSwitchWeek`).
 
 `weeks: GridWeek[]` (issue #455 phase A5 — was `Week[]`, sourced from the
 retired `usePlanData`; now straight off `gridState.grid.weeks`).
-`GridWeek` already structurally satisfies `cellOn`/`cellStyle`'s
-`Pick<Week, "deload">` (`"current"` dropped with the `is_current`
-removal), and gained its own `vol`/`inten`
-fields (`serialize_mesocycle_grid` additions, A5 step 1) so the timeline's
+`GridWeek` gained its own `vol`/`inten` fields
+(`serialize_mesocycle_grid` additions, A5 step 1) so the timeline's
 `barH(w.vol ?? 0, 156)` bars don't silently render at the floor height — no
 render-logic change in `BlockView.tsx` itself, only the prop type. **Real
 behavior change, not just a wiring swap**: `onSwitchWeek` used to switch
@@ -429,22 +427,13 @@ to the table, it doesn't scroll to that specific week.
 
 ### AthletePreview
 
-Props: `{ program, unit, checks, onToggleCheck }` (plus optional
-`coachmarkVisible`/`dismissCoachmark` for the "phone" coachmark). A pure,
-derived render of the phone mock's first day/first-three-lifts view
-(`athleteDay`/`aTotal`/`aDone`, computed as a `useMemo` inside this
-component). Testid: `athlete-check-{k}` (`k` = the source's `"a0-{xi}-{i}"`
-key). Component itself needed **zero** changes for A5 — only its caller
-changed what it passes as `program`: `DesignerRoot` now derives it via
-`gridToProgram(grid, weekId)` (`lib/grid.ts`, added in A5 step 3) — a pure
-transform that walks `grid.days`, picks each row's cell at the resolved
-week (default: `grid.weeks[0]` — the block's first week, since the
-`is_current` pointer is gone), and omits a row with no cell for that week. Replaces the retired `usePlanData`'s hydrated `program`
-array; no server round trip. Phase 2a: the derived `Exercise` is the new
-text-first shape (`name` is just `row.name` — the one-week swap fields are
-gone — plus `text`/`lines` off the cell and `tempo`/`rest`/`note` off the
-row), and the phone mock renders the prescription text verbatim with ONE
-loggable row per lift (no sets count left to fan set rows out from).
+Props: `{ grid }` (plus optional `coachmarkVisible`/`dismissCoachmark` for
+the "phone" coachmark). Week and day segmented controls select the live
+program derived by `gridToProgram(grid, weekId)` and fall back to the first
+available choice when an edit removes the selection. The phone mirrors the
+athlete session header and renders every trainable exercise's folded target,
+optional note, and non-blank sub-lines. Set rows and logging controls remain
+exclusive to the real athlete page.
 
 ## `meso-designer-flags` payload
 
@@ -507,9 +496,6 @@ changes them):
 - **`periodStyle`** (`"timeline" | "ladder" | "calendar"`): default
   `"timeline"`. Set only by `BlockView`'s own segmented control; irrelevant
   outside `view === "block"`.
-- **`checks`** (`Record<string, boolean>`): the athlete-preview set-done
-  toggles, keyed by the source's `"a0-{xi}-{i}"`. Local, ephemeral,
-  never persisted — ported verbatim (`toggleCheck`).
 
 ## Non-goals
 
@@ -528,9 +514,7 @@ changes them):
 - **Not ported** (confirmed dead by the inventory, already dropped from
   `lib/`): `accent`, `theme`, `onDeliver()`/`delivered` toast (unreachable —
   no template ever set `delivered`), `round25`, `exSeq`, every `!this.live`
-  fixture branch, and `sessionDays` as *fixture state* (its shape survives
-  as `cellOn`/`cellStyle`'s optional parameter with the same default value —
-  see `lib/grid.ts`).
+  fixture branch, and the fixture-only `sessionDays` weekday state.
 - Out of scope for this port entirely (per `phase2-spec.md`): no
   HMR/django-vite integration, no athlete-logger island, review/deliver/
   athlete/cardio pages stay Alpine, no visual redesign (design tokens are

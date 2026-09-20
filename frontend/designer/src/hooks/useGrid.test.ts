@@ -225,7 +225,9 @@ describe("writeCellLine", () => {
     });
 
     // Optimistic: the sub-line appears immediately, before the fetch resolves.
-    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([{ line: 1, text: "RPE 8" }]);
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([
+      { line: 1, text: "RPE 8", athlete_authored: false },
+    ]);
     const [url, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("/meso/api/plan/7/row/9/cell/");
     expect(opts.method).toBe("POST");
@@ -261,8 +263,39 @@ describe("writeCellLine", () => {
     });
 
     expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([
-      { id: 5, line: 1, text: "RPE 9" },
+      { id: 5, line: 1, text: "RPE 9", athlete_authored: false },
       { id: 6, line: 2, text: "slow eccentric" },
+    ]);
+  });
+
+  it("optimistically reclaims an athlete-authored line on a coach write", () => {
+    const { result } = setup(
+      grid({
+        days: [
+          day({
+            rows: [
+              row({
+                cells: {
+                  "1": cell({
+                    lines: [
+                      { id: 5, line: 1, text: "100 x 5", athlete_authored: true },
+                    ],
+                  }),
+                },
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    globalThis.fetch = vi.fn().mockResolvedValue(res({ ok: true })) as unknown as typeof fetch;
+
+    act(() => {
+      result.current.writeCellLine(9, 1, 1, "105 x 5");
+    });
+
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([
+      { id: 5, line: 1, text: "105 x 5", athlete_authored: false },
     ]);
   });
 
@@ -279,7 +312,7 @@ describe("writeCellLine", () => {
     });
 
     expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([
-      { line: 1, text: "RPE 8" },
+      { line: 1, text: "RPE 8", athlete_authored: false },
       { id: 6, line: 3, text: "cue" },
     ]);
   });
@@ -307,7 +340,9 @@ describe("writeCellLine", () => {
     });
 
     await waitFor(() => expect(console.error).toHaveBeenCalled());
-    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([{ line: 1, text: "RPE 8" }]);
+    expect(result.current.grid?.days[0]?.rows[0]?.cells["1"]?.lines).toEqual([
+      { line: 1, text: "RPE 8", athlete_authored: false },
+    ]);
   });
 });
 

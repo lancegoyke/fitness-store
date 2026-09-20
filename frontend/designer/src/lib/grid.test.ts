@@ -1,8 +1,4 @@
-// numeric/barH/cellOn/cellStyle had no direct spec on createMeso() before
-// (exercised only indirectly via the Alpine template) — the specs here pin
-// them to the source read verbatim from meso.js so the port is provably
-// faithful. (loadSuffix retired in Phase 2a with the typed load fields —
-// its cases went with it.)
+// Pure helper coverage for the designer grid.
 import { describe, expect, it } from "vitest";
 import { barH, cellOn, cellStyle, cycleLabelFromGrid, gridToProgram, numeric } from "./grid";
 import type { GridCell, GridDay, GridRow, GridWeek, MesoGrid, Phase } from "./api";
@@ -36,21 +32,10 @@ describe("barH", () => {
 });
 
 describe("cellOn", () => {
-  it("is on for the default Mon/Wed/Fri fixture columns", () => {
-    expect(cellOn({ deload: false }, 0)).toBe(true); // Mon
-    expect(cellOn({ deload: false }, 2)).toBe(true); // Wed
-    expect(cellOn({ deload: false }, 4)).toBe(true); // Fri
-    expect(cellOn({ deload: false }, 1)).toBe(false); // Tue
-  });
-
-  it("a deload week suppresses the Friday (index 4) column", () => {
-    expect(cellOn({ deload: true }, 4)).toBe(false);
-    expect(cellOn({ deload: true }, 0)).toBe(true); // Monday unaffected
-  });
-
-  it("accepts an injected sessionDays override", () => {
-    expect(cellOn({ deload: false }, 1, [1, 3])).toBe(true);
-    expect(cellOn({ deload: false }, 0, [1, 3])).toBe(false);
+  it("follows the day's live per-week session map, including deload weeks", () => {
+    const scheduled = day({ session_ids: { "1": 11 } });
+    expect(cellOn(scheduled, week({ id: 1, deload: true }))).toBe(true);
+    expect(cellOn(scheduled, week({ id: 2 }))).toBe(false);
   });
 });
 
@@ -59,13 +44,13 @@ describe("cellStyle", () => {
   // (docs/meso/remove-current-week-plan.md) — every live week paints the
   // same border/on-color now.
   it("paints an on cell with the soft color", () => {
-    const style = cellStyle({ deload: false }, 0);
+    const style = cellStyle(day({ session_ids: { "1": 11 } }), week({ id: 1 }));
     expect(style).toContain("background:var(--soft)");
     expect(style).toContain("border:1px solid var(--line)");
   });
 
   it("paints an off cell with the rail color", () => {
-    const style = cellStyle({ deload: false }, 1);
+    const style = cellStyle(day({ session_ids: {} }), week({ id: 1 }));
     expect(style).toContain("background:var(--rail)");
   });
 });

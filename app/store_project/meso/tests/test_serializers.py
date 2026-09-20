@@ -37,6 +37,7 @@ from store_project.meso.serializers import serialize_athlete_identity
 from store_project.meso.serializers import serialize_mesocycle_grid
 from store_project.meso.serializers import serialize_plan
 from store_project.meso.serializers import serialize_plan_history
+from store_project.meso.serializers import serialize_session
 
 from ._helpers import day
 from ._helpers import presc
@@ -722,10 +723,47 @@ class TestSerializeMesocycleGrid:
         squat = result["days"][0]["rows"][0]
         assert squat["name"] == "Back Squat"
         assert squat["cells"][str(f.week2.pk)]["lines"] == [
-            {"id": sub.pk, "line": 1, "text": "Front Squat"}
+            {
+                "id": sub.pk,
+                "line": 1,
+                "text": "Front Squat",
+                "athlete_authored": False,
+            }
         ]
         # The untouched week's stack is empty.
         assert squat["cells"][str(f.week1.pk)]["lines"] == []
+
+    def test_sub_lines_carry_athlete_authorship(self):
+        f = _build_grid_meso()
+        coach_line = sub_line(f.squat_cell1, "Pause for two seconds")
+        athlete_line = sub_line(f.squat_cell1, "105 x 5, RPE 8", athlete_authored=True)
+
+        result = serialize_mesocycle_grid(f.meso)
+
+        squat = result["days"][0]["rows"][0]
+        assert squat["cells"][str(f.week1.pk)]["lines"] == [
+            {
+                "id": coach_line.pk,
+                "line": 1,
+                "text": "Pause for two seconds",
+                "athlete_authored": False,
+            },
+            {
+                "id": athlete_line.pk,
+                "line": 2,
+                "text": "105 x 5, RPE 8",
+                "athlete_authored": True,
+            },
+        ]
+
+    def test_session_serialization_keeps_its_existing_line_shape(self):
+        f = _build_grid_meso()
+        sub_line(f.squat_cell1, "105 x 5, RPE 8", athlete_authored=True)
+
+        result = serialize_session(f.day1)
+
+        squat = result["exercises"][0]
+        assert squat["lines"] == [{"line": 1, "text": "105 x 5, RPE 8"}]
 
     def test_blank_sub_line_is_kept_in_the_grid_stack(self):
         # Unlike athlete-facing serialization, the editor grid keeps a cleared
@@ -735,7 +773,12 @@ class TestSerializeMesocycleGrid:
         result = serialize_mesocycle_grid(f.meso)
         squat = result["days"][0]["rows"][0]
         assert squat["cells"][str(f.week1.pk)]["lines"] == [
-            {"id": cleared.pk, "line": 1, "text": ""}
+            {
+                "id": cleared.pk,
+                "line": 1,
+                "text": "",
+                "athlete_authored": False,
+            }
         ]
 
     def test_history_reuses_serialize_plan_history(self):
@@ -821,8 +864,34 @@ class TestSerializeMesocycleGridIdentity:
         f = _build_grid_meso()
         result = serialize_mesocycle_grid(f.meso)
         assert result["phases"] == [
-            {"name": "Hypertrophy", "weeks": "4 wk", "state": "current"}
+            {"name": "Hypertrophy", "weeks": "2 wk", "state": "current"}
         ]
+
+    def test_current_phase_uses_live_week_count_and_other_phases_stay_planned(self):
+        plan = PlanFactory()
+        plan.scaffold()
+        current = plan.mesocycles.get()
+        future = MesocycleFactory(
+            plan=plan, name="Future", order=current.order + 1, week_count=6
+        )
+
+        phases = serialize_mesocycle_grid(current)["phases"]
+        assert phases == [
+            {"name": "Block 1", "weeks": "1 wk", "state": "current"},
+            {"name": future.name, "weeks": "6 wk", "state": "next"},
+        ]
+
+        current.append_week()
+        current.append_week()
+        phases = serialize_mesocycle_grid(current)["phases"]
+        assert phases[0]["weeks"] == "3 wk"
+
+        current.weeks.filter(deleted_at__isnull=True).order_by(
+            "index"
+        ).last().soft_delete()
+        phases = serialize_mesocycle_grid(current)["phases"]
+        assert phases[0]["weeks"] == "2 wk"
+        assert phases[1]["weeks"] == "6 wk"
 
     def test_phases_are_scoped_to_the_grid_mesocycle_not_the_plans_viewed_week(self):
         # A later block, added after the gridded one: `serialize_mesocycle_

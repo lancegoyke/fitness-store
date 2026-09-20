@@ -23,6 +23,14 @@
     {{ designer_flags|json_script:"meso-designer-flags" }}
     <span id="meso-csrf" data-token="{{ csrf_token }}" hidden></span>
 
+    {% if messages %}
+      <div class="meso-designer-flash" role="status">
+        {% for message in messages %}
+          <div class="meso-designer-flash-item{% if message.tags == 'error' %} is-error{% endif %}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
     {% comment %}
       Phone fallback (#508). Editing isn't built for a phone, so under 900px
       meso.css hides the island's mount and shows this instead: plain server

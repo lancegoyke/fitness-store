@@ -1241,6 +1241,44 @@ button.meso-row:hover {
 .meso-designer-fallback {
   display: none;
 }
+/* Server messages over the designer (#605). Fixed so they never push the
+   100vh mount into a page scroll; they fade out on their own because the
+   island has no control to dismiss them. */
+.meso-designer-flash {
+  position: fixed;
+  top: 66px;
+  right: 16px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+  animation: meso-designer-flash 8s forwards;
+}
+.meso-designer-flash-item {
+  padding: 11px 14px;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 9px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+.meso-designer-flash-item.is-error {
+  border-left-color: var(--warn);
+}
+@keyframes meso-designer-flash {
+  0%,
+  85% {
+    opacity: 1;
+    visibility: visible;
+  }
+  100% {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
 @media (max-width: 900px) {
   .meso-designer-mount {
     display: none;

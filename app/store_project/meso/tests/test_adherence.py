@@ -332,6 +332,22 @@ class TestRosterPresenters:
             == "Last trained 1 day ago"
         )
 
+    def test_logged_athlete_without_training_intake_has_an_honest_fallback(self):
+        rel = CoachAthleteFactory()
+        delivered_week(rel, sessions=1, done=1)
+
+        row = presenters.roster_athlete(
+            rel.athlete, recency_days=adherence.link_recency_days(rel)
+        )
+
+        assert row["recency_label"] == "Last trained today"
+        assert row["meta"] == "Training experience not on file"
+        assert "No training history on file" not in row["meta"]
+        assert (
+            presenters.profile_athlete(rel.athlete)["subtitle"]
+            == "Training experience not on file"
+        )
+
     def test_roster_athlete_omits_contraindications(self):
         # Issue #382: contraindications belong on the athlete profile, not the
         # scannable roster row — the presenter must not carry them as flags.

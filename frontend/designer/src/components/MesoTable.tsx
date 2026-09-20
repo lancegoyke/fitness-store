@@ -181,10 +181,12 @@ export const tableKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) 
 
 interface CellSubLineInputProps {
   cellId: number;
+  lineId?: number;
   rowId: number;
   weekId: number;
   line: number;
   text: string;
+  athleteAuthored?: boolean;
   /** The trailing "next line" input — commits only non-blank (a blank ghost
    * has nothing to create), and remounts empty via its parent's key once the
    * optimistic upsert promotes its text to a real `cell.lines` entry. */
@@ -201,7 +203,18 @@ interface CellSubLineInputProps {
  * arrows all come from cellProps now instead of a local onKeyDown.
  * Blanking an EXISTING line commits "" — the line clears in place (the row
  * stays), mirroring the server's blank-text upsert. */
-function CellSubLineInput({ cellId, rowId, weekId, line, text, ghost, tableNav, onWrite }: CellSubLineInputProps) {
+function CellSubLineInput({
+  cellId,
+  lineId,
+  rowId,
+  weekId,
+  line,
+  text,
+  athleteAuthored,
+  ghost,
+  tableNav,
+  onWrite,
+}: CellSubLineInputProps) {
   const [draft, setDraft] = useState(text);
   const dirtyRef = useRef(false);
 
@@ -232,20 +245,31 @@ function CellSubLineInput({ cellId, rowId, weekId, line, text, ghost, tableNav, 
   );
 
   return (
-    <input
-      className={`meso-cell meso-line-input${ghost ? " meso-line-input--ghost" : ""}`}
-      data-testid={ghost ? `cell-line-new-${cellId}` : `cell-line-${cellId}-${line}`}
-      data-grid-cell={tableCellDomKey(rowId, weekId, "text", line)}
-      aria-label={ghost ? "Add a line" : `Line ${line}`}
-      placeholder={ghost ? "+ line" : "—"}
-      value={draft}
-      onChange={(e) => {
-        dirtyRef.current = true;
-        setDraft(e.target.value);
-      }}
-      onBlur={commitIfDirty}
-      {...navProps}
-    />
+    <div className={`meso-line-row${athleteAuthored ? " meso-line-row--athlete" : ""}`}>
+      {athleteAuthored && lineId != null ? (
+        <span
+          className="meso-line-athlete-mark"
+          data-testid={`cell-line-athlete-${lineId}`}
+          title="Logged by your athlete"
+        >
+          athlete
+        </span>
+      ) : null}
+      <input
+        className={`meso-cell meso-line-input${ghost ? " meso-line-input--ghost" : ""}`}
+        data-testid={ghost ? `cell-line-new-${cellId}` : `cell-line-${cellId}-${line}`}
+        data-grid-cell={tableCellDomKey(rowId, weekId, "text", line)}
+        aria-label={ghost ? "Add a line" : athleteAuthored ? `Line ${line} — logged by your athlete` : `Line ${line}`}
+        placeholder={ghost ? "+ line" : "—"}
+        value={draft}
+        onChange={(e) => {
+          dirtyRef.current = true;
+          setDraft(e.target.value);
+        }}
+        onBlur={commitIfDirty}
+        {...navProps}
+      />
+    </div>
   );
 }
 
@@ -422,10 +446,12 @@ function GridCellEditor({
         <CellSubLineInput
           key={l.line}
           cellId={cellId}
+          lineId={l.id}
           rowId={row.exercise_slot_id}
           weekId={week.id}
           line={l.line}
           text={l.text}
+          athleteAuthored={l.athlete_authored}
           tableNav={tableNav}
           onWrite={(line, text) => onWriteCellLine(row.exercise_slot_id, week.id, line, text)}
         />
@@ -1001,6 +1027,26 @@ export function MesoTable(props: MesoTableProps) {
     },
   });
 
+  const [pendingAddedRow, setPendingAddedRow] = useState<{
+    dayId: number;
+    existingRowIds: Set<number>;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!pendingAddedRow || !grid) return;
+    const targetDay = grid.days.find((day) => day.session_slot_id === pendingAddedRow.dayId);
+    const addedRow = targetDay?.rows.find((row) => !pendingAddedRow.existingRowIds.has(row.exercise_slot_id));
+    setPendingAddedRow(null);
+    if (!addedRow) return;
+    document.querySelector<HTMLInputElement>(`[data-testid="row-name-${addedRow.exercise_slot_id}"]`)?.focus();
+  }, [grid, pendingAddedRow]);
+
+  async function addExerciseAndFocus(day: GridDay) {
+    const existingRowIds = new Set(day.rows.map((row) => row.exercise_slot_id));
+    await onAddExercise(day);
+    setPendingAddedRow({ dayId: day.session_slot_id, existingRowIds });
+  }
+
   // Issue #455 phase A2 (drag reordering): PointerSensor gets a small
   // activation distance so a plain click into a cell input doesn't start a
   // drag; KeyboardSensor rides the handle buttons' tab-order focus
@@ -1077,7 +1123,7 @@ export function MesoTable(props: MesoTableProps) {
               onWriteCellLine={onWriteCellLine}
               onPatchRowColumns={onPatchRowColumns}
               onRenameExercise={onRenameExercise}
-              onAddExercise={onAddExercise}
+              onAddExercise={addExerciseAndFocus}
               onRemoveExercise={onRemoveExercise}
               onRemoveDay={onRemoveDay}
               onSkipCell={onSkipCell}

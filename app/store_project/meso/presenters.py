@@ -182,7 +182,7 @@ def roster_athlete(
         "name": name,
         "initials": initials(name),
         "tone": "neutral",
-        "meta": " · ".join(meta_parts) or "No training history on file",
+        "meta": " · ".join(meta_parts) or "Training experience not on file",
         # Contraindications are intentionally absent here (issue #382): they belong
         # on the athlete profile, not as badges cluttering the scannable roster row.
         "recency_label": _recency_label(recency_days),
@@ -204,7 +204,7 @@ def profile_athlete(user):
         "name": name,
         "initials": initials(name),
         "tone": "neutral",
-        "subtitle": " · ".join(subtitle_parts) or "No training history on file",
+        "subtitle": " · ".join(subtitle_parts) or "Training experience not on file",
         # Goals are per-plan (D-b); they arrive with the program schema (Phase 2).
         "goals": [],
         "contraindications": [c.text for c in _active_contraindications(user)],
