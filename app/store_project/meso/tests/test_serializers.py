@@ -864,8 +864,34 @@ class TestSerializeMesocycleGridIdentity:
         f = _build_grid_meso()
         result = serialize_mesocycle_grid(f.meso)
         assert result["phases"] == [
-            {"name": "Hypertrophy", "weeks": "4 wk", "state": "current"}
+            {"name": "Hypertrophy", "weeks": "2 wk", "state": "current"}
         ]
+
+    def test_current_phase_uses_live_week_count_and_other_phases_stay_planned(self):
+        plan = PlanFactory()
+        plan.scaffold()
+        current = plan.mesocycles.get()
+        future = MesocycleFactory(
+            plan=plan, name="Future", order=current.order + 1, week_count=6
+        )
+
+        phases = serialize_mesocycle_grid(current)["phases"]
+        assert phases == [
+            {"name": "Block 1", "weeks": "1 wk", "state": "current"},
+            {"name": future.name, "weeks": "6 wk", "state": "next"},
+        ]
+
+        current.append_week()
+        current.append_week()
+        phases = serialize_mesocycle_grid(current)["phases"]
+        assert phases[0]["weeks"] == "3 wk"
+
+        current.weeks.filter(deleted_at__isnull=True).order_by(
+            "index"
+        ).last().soft_delete()
+        phases = serialize_mesocycle_grid(current)["phases"]
+        assert phases[0]["weeks"] == "2 wk"
+        assert phases[1]["weeks"] == "6 wk"
 
     def test_phases_are_scoped_to_the_grid_mesocycle_not_the_plans_viewed_week(self):
         # A later block, added after the gridded one: `serialize_mesocycle_

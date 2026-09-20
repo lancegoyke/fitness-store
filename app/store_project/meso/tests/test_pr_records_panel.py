@@ -188,3 +188,18 @@ class TestCoachProfileRendersRecords:
         url = reverse("meso:athlete", kwargs={"pk": s.athlete.pk})
         body = client.get(url).content.decode()
         assert "Personal records" not in body
+
+    def test_records_explanation_matches_the_viewer(self, client):
+        s = seed()
+        log_done(s, squat=[("5", "120", "8")])
+
+        client.force_login(s.coach)
+        coach_body = client.get(
+            reverse("meso:athlete", kwargs={"pk": s.athlete.pk})
+        ).content.decode()
+        assert "from their logged sets" in coach_body
+        assert "from your logged sets" not in coach_body
+
+        client.force_login(s.athlete)
+        athlete_body = client.get(reverse("meso:athlete_home")).content.decode()
+        assert "from your logged sets" in athlete_body

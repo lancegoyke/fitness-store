@@ -404,20 +404,18 @@ there's no multi-file component boundary left to pin.
 
 ### BlockView
 
-Props: `{ phases, weeks, periodStyle, onSetPeriodStyle, onSwitchWeek }`.
+Props: `{ phases, weeks, days, periodStyle, onSetPeriodStyle, onSwitchWeek }`.
 Renders the macro strip, then one of the three period styles (timeline /
-ladder / calendar) per `periodStyle`; the calendar cells use `cellStyle`/
-`cellOn` from `lib/grid.ts` (with the default `sessionDays`, per that
-module's documented decision). Testids: `period-style-timeline-button`,
+ladder / calendar) per `periodStyle`; the calendar columns are the program's
+own days, and each week/day cell is on only when `day.session_ids` contains
+that week. Testids: `period-style-timeline-button`,
 `period-style-ladder-button`, `period-style-calendar-button`,
 `block-week-{id}` (timeline bars, clickable → `onSwitchWeek`).
 
 `weeks: GridWeek[]` (issue #455 phase A5 — was `Week[]`, sourced from the
 retired `usePlanData`; now straight off `gridState.grid.weeks`).
-`GridWeek` already structurally satisfies `cellOn`/`cellStyle`'s
-`Pick<Week, "deload">` (`"current"` dropped with the `is_current`
-removal), and gained its own `vol`/`inten`
-fields (`serialize_mesocycle_grid` additions, A5 step 1) so the timeline's
+`GridWeek` gained its own `vol`/`inten` fields
+(`serialize_mesocycle_grid` additions, A5 step 1) so the timeline's
 `barH(w.vol ?? 0, 156)` bars don't silently render at the floor height — no
 render-logic change in `BlockView.tsx` itself, only the prop type. **Real
 behavior change, not just a wiring swap**: `onSwitchWeek` used to switch
@@ -516,9 +514,7 @@ changes them):
 - **Not ported** (confirmed dead by the inventory, already dropped from
   `lib/`): `accent`, `theme`, `onDeliver()`/`delivered` toast (unreachable —
   no template ever set `delivered`), `round25`, `exSeq`, every `!this.live`
-  fixture branch, and `sessionDays` as *fixture state* (its shape survives
-  as `cellOn`/`cellStyle`'s optional parameter with the same default value —
-  see `lib/grid.ts`).
+  fixture branch, and the fixture-only `sessionDays` weekday state.
 - Out of scope for this port entirely (per `phase2-spec.md`): no
   HMR/django-vite integration, no athlete-logger island, review/deliver/
   athlete/cardio pages stay Alpine, no visual redesign (design tokens are

@@ -18,7 +18,7 @@
     <div class="meso-pagehead">
       <div>
         <p class="meso-eyebrow">Agent · proposed edits</p>
-        <h1 class="meso-h1">{{ changes|length }} changes for {{ athlete.name }}</h1>
+        <h1 class="meso-h1">{{ changes|length }} change{{ changes|length|pluralize }} for {{ athlete.name }}</h1>
         <p class="meso-sub">Grounded on {{ athlete.name }}'s profile, contraindications, and last block's logged sessions.</p>
       </div>
     </div>
@@ -68,7 +68,7 @@
     </div>
 
     <div class="meso-card meso-card--pad meso-phone-wrap" style="margin-top:16px;display:flex;align-items:center;gap:14px;position:sticky;bottom:16px;">
-      <div style="font-size:13px;font-weight:700;"><span x-text="approved"></span> of {{ changes|length }} changes approved</div>
+      <div style="font-size:13px;font-weight:700;"><span x-text="approved"></span> of {{ changes|length }} change{{ changes|length|pluralize }} approved</div>
       <div class="meso-row-meta">Rejected edits are discarded — the program keeps its current values.</div>
       <div class="meso-spacer"></div>
       <button class="meso-btn" @click="dismiss()" :disabled="!pending || busy">Discard</button>

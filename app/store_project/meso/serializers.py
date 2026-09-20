@@ -1042,7 +1042,12 @@ def serialize_mesocycle_grid(mesocycle):
     # the plan's globally-current week's mesocycle (P4 precedent).
     mesocycles = list(plan.mesocycles.all())
     states = _phase_states(mesocycles, mesocycle)
-    phases = [serialize_mesocycle(m, s) for m, s in zip(mesocycles, states)]
+    phases = []
+    for item, state in zip(mesocycles, states):
+        phase = serialize_mesocycle(item, state)
+        if item.pk == mesocycle.pk:
+            phase["weeks"] = f"{len(weeks)} wk"
+        phases.append(phase)
 
     return {
         "plan": {

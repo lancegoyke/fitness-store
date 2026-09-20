@@ -429,6 +429,21 @@ class TestReviewBatch:
         assert "Maya Okonkwo" in body
         assert "Back Squat → Box Squat" in body
 
+    def test_review_heading_pluralizes_change_count(self, client):
+        plan, _, _ = make_plan(athlete=UserFactory(name="Maya Okonkwo"))
+        batch = AgentProposalBatchFactory(plan=plan, coach=plan.coach)
+        ProposedChangeFactory(batch=batch)
+        client.force_login(plan.coach)
+        url = reverse("meso:review_batch", kwargs={"batch_id": batch.pk})
+
+        body = client.get(url).content.decode()
+        assert "1 change for Maya Okonkwo" in body
+        assert "1 changes" not in body
+
+        ProposedChangeFactory(batch=batch)
+        body = client.get(url).content.decode()
+        assert "2 changes for Maya Okonkwo" in body
+
     def test_non_owned_batch_404(self, client):
         plan, _, _ = make_plan()
         batch = AgentProposalBatchFactory(plan=plan, coach=plan.coach)
@@ -452,6 +467,33 @@ class TestReviewBatch:
         resp = client.get(reverse("meso:review"))
         assert resp.status_code == 302
         assert resp.url == reverse("meso:designer")
+
+    def test_no_proposals_message_renders_once_in_designer_then_is_consumed(
+        self, client
+    ):
+        plan, _, _ = make_plan()
+        client.force_login(plan.coach)
+
+        resp = client.get(reverse("meso:review"), follow=True)
+
+        assert resp.status_code == 200
+        assert resp.content.decode().count("No proposals to review yet.") == 1
+        deliver = client.get(reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk}))
+        assert "No proposals to review yet." not in deliver.content.decode()
+
+    def test_no_proposals_messages_queued_before_render_do_not_leak_to_deliver(
+        self, client
+    ):
+        plan, _, _ = make_plan()
+        client.force_login(plan.coach)
+        client.get(reverse("meso:review"))
+        client.get(reverse("meso:review"))
+
+        designer = client.get(reverse("meso:designer"), follow=True)
+
+        assert designer.content.decode().count("No proposals to review yet.") == 2
+        deliver = client.get(reverse("meso:deliver_plan", kwargs={"plan_id": plan.pk}))
+        assert "No proposals to review yet." not in deliver.content.decode()
 
     def test_bare_review_finds_a_batch_on_any_owned_plan(self, client):
         # A pending batch on a non-working plan must still be reachable.

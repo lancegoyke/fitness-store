@@ -259,6 +259,7 @@ export function DesignerRoot() {
               <BlockView
                 phases={grid?.phases ?? []}
                 weeks={grid?.weeks ?? []}
+                days={grid?.days ?? []}
                 periodStyle={periodStyle}
                 onSetPeriodStyle={setPeriodStyle}
                 // Issue #455 phase A5 product-behavior change: there is no

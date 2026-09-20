@@ -1027,6 +1027,26 @@ export function MesoTable(props: MesoTableProps) {
     },
   });
 
+  const [pendingAddedRow, setPendingAddedRow] = useState<{
+    dayId: number;
+    existingRowIds: Set<number>;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!pendingAddedRow || !grid) return;
+    const targetDay = grid.days.find((day) => day.session_slot_id === pendingAddedRow.dayId);
+    const addedRow = targetDay?.rows.find((row) => !pendingAddedRow.existingRowIds.has(row.exercise_slot_id));
+    setPendingAddedRow(null);
+    if (!addedRow) return;
+    document.querySelector<HTMLInputElement>(`[data-testid="row-name-${addedRow.exercise_slot_id}"]`)?.focus();
+  }, [grid, pendingAddedRow]);
+
+  async function addExerciseAndFocus(day: GridDay) {
+    const existingRowIds = new Set(day.rows.map((row) => row.exercise_slot_id));
+    await onAddExercise(day);
+    setPendingAddedRow({ dayId: day.session_slot_id, existingRowIds });
+  }
+
   // Issue #455 phase A2 (drag reordering): PointerSensor gets a small
   // activation distance so a plain click into a cell input doesn't start a
   // drag; KeyboardSensor rides the handle buttons' tab-order focus
@@ -1103,7 +1123,7 @@ export function MesoTable(props: MesoTableProps) {
               onWriteCellLine={onWriteCellLine}
               onPatchRowColumns={onPatchRowColumns}
               onRenameExercise={onRenameExercise}
-              onAddExercise={onAddExercise}
+              onAddExercise={addExerciseAndFocus}
               onRemoveExercise={onRemoveExercise}
               onRemoveDay={onRemoveDay}
               onSkipCell={onSkipCell}

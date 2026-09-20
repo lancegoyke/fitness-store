@@ -5,7 +5,7 @@
 // sub-line inputs and a trailing ghost input that mints the next sub-line;
 // Tempo/Notes/Rest are per-ROW columns off the slot. The %1RM editor, the
 // load_type toggle, and the one-week swap UI are retired.
-import { act, render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { MesoTable } from "./MesoTable";
@@ -651,6 +651,58 @@ describe("add affordances", () => {
     expect(onAddDay).toHaveBeenCalledTimes(1);
     await user.click(screen.getByTestId("add-week"));
     expect(onAddWeek).toHaveBeenCalledTimes(1);
+  });
+
+  it("focuses the new row's exercise name after add resolves", async () => {
+    const user = userEvent.setup();
+
+    function AddHarness() {
+      const [currentGrid, setCurrentGrid] = useState(grid());
+      return (
+        <MesoTable
+          {...baseProps({
+            grid: currentGrid,
+            onAddExercise: async (targetDay) => {
+              setCurrentGrid((current) => ({
+                ...current,
+                days: current.days.map((candidate) =>
+                  candidate.session_slot_id === targetDay.session_slot_id
+                    ? {
+                        ...candidate,
+                        rows: [
+                          ...candidate.rows,
+                          row({
+                            exercise_slot_id: 20,
+                            name: "New exercise",
+                            cells: { "1": cell({ prescription_id: 200 }) },
+                          }),
+                        ],
+                      }
+                    : candidate,
+                ),
+              }));
+            },
+          })}
+        />
+      );
+    }
+
+    render(<AddHarness />);
+    await user.click(screen.getByTestId("add-exercise-1"));
+    await waitFor(() => expect(screen.getByTestId("row-name-20")).toHaveFocus());
+  });
+
+  it("does not move focus when add resolves without a new row", async () => {
+    const user = userEvent.setup();
+    const unchanged = grid();
+    const view = render(<MesoTable {...baseProps({ grid: unchanged, onAddExercise: async () => {} })} />);
+    const addButton = screen.getByTestId("add-exercise-1");
+
+    await user.click(addButton);
+    view.rerender(<MesoTable {...baseProps({ grid: { ...unchanged }, onAddExercise: async () => {} })} />);
+
+    await waitFor(() => expect(addButton).toHaveFocus());
+    expect(screen.getByTestId("row-name-9")).not.toHaveFocus();
   });
 });
 
