@@ -102,8 +102,8 @@ def test_naming_a_new_exercise_then_clicking_its_week_cell(
         page,
         live_server,
         block_plan.plan,
-        {f"row-name-{new_slot_id}": "Overhead Press"},
-        {f"cell-text-{_cell_id_for(block_plan.plan, new_slot_id, 1)}": "3x8 @ 95"},
+        slot_names={new_slot_id: "Overhead Press"},
+        cell_texts={_cell_id_for(block_plan.plan, new_slot_id, 1): "3x8 @ 95"},
     )
 
 
@@ -137,8 +137,7 @@ def test_typing_in_one_week_cell_then_clicking_the_next(
         page,
         live_server,
         block_plan.plan,
-        {},
-        {f"cell-text-{wk2_id}": "3x5 @ 235", f"cell-text-{wk3_id}": "3x3 @ 250"},
+        cell_texts={wk2_id: "3x5 @ 235", wk3_id: "3x3 @ 250"},
     )
 
 
@@ -170,8 +169,7 @@ def test_clicking_a_cell_in_another_row(page, live_server, login, block_plan):
         page,
         live_server,
         block_plan.plan,
-        {},
-        {f"cell-text-{squat_id}": "5x3 @ 85%", f"cell-text-{rdl_id}": "4x6 @ 100"},
+        cell_texts={squat_id: "5x3 @ 85%", rdl_id: "4x6 @ 100"},
     )
 
 
@@ -181,9 +179,46 @@ def _cell_id_for(plan, slot_id, week_index):
     ).pk
 
 
-def _reload_and_expect(page, live_server, plan, names, cells):
-    """Everything typed is still there after a reload — it really was saved."""
-    page.wait_for_timeout(600)  # let the fire-and-forget autosaves land
+def _reload_and_expect(page, live_server, plan, *, slot_names=None, cell_texts=None):
+    """Everything typed is still there after a reload — it really was saved.
+
+    The designer's autosaves are fire-and-forget, so this waits on the stored
+    rows rather than on a fixed delay: navigating while a POST is still in
+    flight would cancel it, and the assertion would read back the old value
+    for a reason that has nothing to do with what is under test.
+    """
+    slot_names = slot_names or {}
+    cell_texts = cell_texts or {}
+    _wait_until_saved(page, slot_names, cell_texts)
     _open_designer(page, live_server, plan)
-    for testid, value in {**names, **cells}.items():
-        expect(page.get_by_test_id(testid)).to_have_value(value)
+    for slot_id, value in slot_names.items():
+        expect(page.get_by_test_id(f"row-name-{slot_id}")).to_have_value(value)
+    for cell_id, value in cell_texts.items():
+        expect(page.get_by_test_id(f"cell-text-{cell_id}")).to_have_value(value)
+
+
+def _wait_until_saved(page, slot_names, cell_texts, attempts=100, step_ms=100):
+    """Poll the rows the autosaves write until they all match, or say which didn't."""
+    outstanding = {}
+    for _ in range(attempts):
+        outstanding = {
+            f"ExerciseSlot {pk}.name": (ExerciseSlot.objects.get(pk=pk).name, want)
+            for pk, want in slot_names.items()
+            if ExerciseSlot.objects.get(pk=pk).name != want
+        }
+        outstanding.update(
+            {
+                f"Prescription {pk}.text": (Prescription.objects.get(pk=pk).text, want)
+                for pk, want in cell_texts.items()
+                if Prescription.objects.get(pk=pk).text != want
+            }
+        )
+        if not outstanding:
+            return
+        page.wait_for_timeout(step_ms)
+    raise AssertionError(
+        f"autosaves never landed within {attempts * step_ms}ms: "
+        + ", ".join(
+            f"{k} is {got!r}, wanted {want!r}" for k, (got, want) in outstanding.items()
+        )
+    )

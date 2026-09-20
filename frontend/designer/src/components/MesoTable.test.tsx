@@ -878,6 +878,29 @@ describe("pointer focus transfer (issue #597)", () => {
     fireEvent.pointerUp(target);
   });
 
+  // A tap's focus rides the COMPATIBILITY mousedown, which the browser fires
+  // AFTER pointerup — so a guard armed only on pointerdown is already
+  // disarmed by the time the transfer runs, and #597 stays live on every
+  // touchscreen wide enough to get the real editor (the designer only falls
+  // back to its phone message under 900px).
+  it("does not restore focus to the source across a TAP, whose focus rides the compatibility mousedown", () => {
+    render(<StatefulGridHarness />);
+    const source = screen.getByTestId("cell-text-900") as HTMLInputElement;
+    const target = screen.getByTestId("cell-text-901") as HTMLInputElement;
+
+    act(() => source.focus());
+    fireEvent.change(source, { target: { value: "5 x 5" } });
+    const sourceFocus = vi.spyOn(source, "focus");
+
+    fireEvent.pointerDown(target);
+    fireEvent.pointerUp(target); // touch releases BEFORE the compat mousedown
+    fireEvent.mouseDown(target);
+    fireEvent.blur(source);
+
+    expect(sourceFocus).not.toHaveBeenCalled();
+    fireEvent.mouseUp(target);
+  });
+
   it("commits the source edit and lets the clicked target receive the next edit", async () => {
     const user = userEvent.setup();
     const onPatchCell = vi.fn();
