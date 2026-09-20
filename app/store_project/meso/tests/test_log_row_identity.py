@@ -503,3 +503,291 @@ class TestSubLineWarnAgreesAcrossSurfaces:
             "the old day's set must not back the line on its new day -- both "
             f"surfaces must read unlogged (blur={blur_warn}, render={render_warn})"
         )
+
+
+# -- adversarial review round: P1-A/P1-B/P2-A/P2-B ---------------------------
+
+
+class TestBlankPostedIdMustNotDestroyARowWithValues:
+    """#567/#568 P1-A: a wholly blank id match must not destroy a real row.
+
+    A wholly blank posted set must not count as HOLDING a visible parsed row
+    that still carries real values. The chain, as the review found it: a
+    hidden parsed row X becomes VISIBLE when the coach reclaims its sub-line.
+    A stale page that saves without
+    naming X spares it (nothing in its payload holds it) -- but the RESPONSE
+    now includes X, since it's visible. The client's ``syncFromLog`` matches
+    its own empty grid row to X by slot, ticks it, and adopts ``r.id = X.pk``
+    while the row's inputs stay blank; ``rowFilled`` reads ``r.done`` alone,
+    so the row's NEXT save posts ``{id: X.pk, reps: "", load: "", rpe:
+    ""}``. A pure id match (no value check) then reads that as "the client is
+    holding X" and deletes it, replacing it with nothing -- the performance
+    is gone. Reproduced directly at the server: the blank payload is built by
+    hand, since the client itself never needs to be driven through the stale
+    round trip to produce it.
+    """
+
+    def test_a_wholly_blank_id_match_spares_the_row_it_names(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        x_pk = LoggedSet.objects.get(prescription=s.squat).pk
+
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="brace harder").status_code == 200
+
+        client.force_login(s.athlete)
+        rendered = serialize_session_log(the_log(s.session, s.athlete))["sets"]
+        assert [row["id"] for row in rendered] == [x_pk], (
+            "X must be the one visible Set row at this point"
+        )
+
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "done",
+                "sets": [
+                    {
+                        "id": x_pk,
+                        "prescription": s.squat.pk,
+                        "set_number": rendered[0]["set_number"],
+                        "reps": "",
+                        "load": "",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+        x_row = LoggedSet.objects.get(pk=x_pk)
+        assert (x_row.load, x_row.reps) == ("225", "5"), (
+            "a wholly blank posted set must not destroy a row that still "
+            "carries real values"
+        )
+
+
+class TestStaleIdReplayDegradesToPositionalNotNoMatch:
+    """#567/#568 P1-B: a STALE id must degrade to the positional match.
+
+    A STALE id (tagged, but names no row this log holds) must fall back to
+    today's positional match, not be treated as "no match" at all. The
+    write-ahead outbox (#527) replays a body whose first delivery already
+    committed but whose response was lost -- and that body names a row the
+    first delivery already deleted and recreated under a new pk. Both
+    scenarios below share the same setup: the athlete logs ``225 x 5`` (row
+    A), the coach reclaims the line (A becomes a visible Set row), and the
+    athlete's FIRST "Log session" -- naming A by id, exactly as
+    ``serialize_session_log`` handed it out -- replaces A with a copy that
+    carries A's own ``reclaimed_line`` forward. They differ only in WHEN the
+    write-ahead replay of that same first save lands relative to the athlete
+    retyping the sub-line back.
+    """
+
+    def _replace_with_carried_copy(self, client, s):
+        """The shared setup. Returns the replayable ``body`` dict."""
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        a_pk = LoggedSet.objects.get(prescription=s.squat).pk
+
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="brace harder").status_code == 200
+
+        client.force_login(s.athlete)
+        rendered = serialize_session_log(the_log(s.session, s.athlete))["sets"]
+        assert [row["id"] for row in rendered] == [a_pk]
+        body = {
+            "status": "done",
+            "sets": [
+                {
+                    "id": a_pk,
+                    "prescription": row["prescription"],
+                    "set_number": row["set_number"],
+                    "reps": row["reps"],
+                    "load": row["load"],
+                    "rpe": row["rpe"],
+                }
+                for row in rendered
+            ],
+        }
+        resp = log_post(client, s.session, body)
+        assert resp.status_code == 200
+        rows = _squat_rows(s)
+        assert len(rows) == 1
+        assert rows[0].pk != a_pk, "the first save must replace A under a new pk"
+        assert rows[0].reclaimed_line_id == sub_cell(s.squat, 1).pk, (
+            "the copy must carry A's own reclaim link forward"
+        )
+        return body
+
+    def test_replay_after_a_retype_is_absorbed_positionally_not_duplicated(
+        self, client
+    ):
+        """The replay lands AFTER the retype -- absorbed, not duplicated.
+
+        (Review harm 1: "the twin absorb misses, so one performance is
+        stored TWICE".)
+        """
+        s = seed()
+        body = self._replace_with_carried_copy(client, s)
+
+        # The athlete retypes the original text -- `_upsert_parsed_set`
+        # re-links the copy (source_line=cell, reclaimed_line=None) and it
+        # goes back to being hidden by its own sub-line's text.
+        client.force_login(s.athlete)
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.status_code == 200
+        assert len(_squat_rows(s)) == 1
+
+        # The write-ahead outbox replays the FIRST save's own body -- its
+        # `id` now names a row this log no longer holds at all.
+        resp = log_post(client, s.session, body)
+        assert resp.status_code == 200
+
+        rows = _squat_rows(s)
+        assert len(rows) == 1, (
+            "a stale id must be absorbed positionally, not create a second "
+            "row: "
+            f"{[(r.pk, r.source_line_id, r.reclaimed_line_id, r.load, r.reps) for r in rows]}"
+        )
+        assert (rows[0].load, rows[0].reps) == ("225", "5")
+
+    def test_replay_before_a_retype_still_carries_the_link_forward(self, client):
+        """The replay lands BEFORE any retype -- a recreate, not an absorb.
+
+        The RECREATED row must still carry the reclaim link, or a later
+        retype mints a duplicate instead of re-linking it. (Review harm 2:
+        "#541's carried reclaimed_line is dropped, reopening the duplicate
+        #541 fixed".)
+        """
+        s = seed()
+        body = self._replace_with_carried_copy(client, s)
+
+        # The write-ahead outbox replays the FIRST save's own body BEFORE the
+        # athlete ever retypes the sub-line -- the copy is still VISIBLE, so
+        # this genuinely replaces it under a new pk, not an absorb.
+        client.force_login(s.athlete)
+        resp = log_post(client, s.session, body)
+        assert resp.status_code == 200
+        rows = _squat_rows(s)
+        assert len(rows) == 1
+        assert rows[0].reclaimed_line_id == sub_cell(s.squat, 1).pk, (
+            "the RECREATED row must still carry the reclaim link forward, or "
+            "the retype below cannot re-link it"
+        )
+
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.status_code == 200
+
+        rows = _squat_rows(s)
+        assert len(rows) == 1, (
+            "the dropped link reopened #541's duplicate: "
+            f"{[(r.pk, r.source_line_id, r.reclaimed_line_id, r.load, r.reps) for r in rows]}"
+        )
+        assert (rows[0].load, rows[0].reps) == ("225", "5")
+
+
+class TestPrescriptionGuardOnIdentifiedMatches:
+    """#567/#568 P2-A: an identified match also requires the SAME prescription.
+
+    Every identified match requires the SAME prescription as the row it
+    names -- pk equality alone is not enough. Crafted-payload only (no legitimate client ever posts a real id under
+    the wrong prescription), but the carried-link version can hang exercise
+    A's sub-line on a row under exercise B as ``reclaimed_line``, and a later
+    coach undo would then hide the athlete's exercise-B row.
+    """
+
+    def test_a_valid_id_under_the_wrong_prescription_does_not_delete_the_row(
+        self, client
+    ):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.rdl, 1, "185 x 5")
+        x_pk = LoggedSet.objects.get(prescription=s.rdl).pk
+
+        client.force_login(s.coach)
+        resp = client.post(
+            reverse(
+                "meso:api_cell_line_write",
+                kwargs={"plan_id": s.plan.pk, "slot_id": s.rdl.exercise_slot.pk},
+            ),
+            data=json.dumps({"week_id": s.week.pk, "line": 1, "text": "brace harder"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+
+        client.force_login(s.athlete)
+        rendered = serialize_session_log(the_log(s.session, s.athlete))["sets"]
+        assert [row["id"] for row in rendered] == [x_pk], (
+            "X must be the one visible Set row at this point"
+        )
+
+        # A crafted payload: X's real pk, but claimed under squat -- a
+        # DIFFERENT prescription than X actually belongs to (rdl).
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "done",
+                "sets": [
+                    {
+                        "id": x_pk,
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+        assert LoggedSet.objects.filter(pk=x_pk).exists(), (
+            "a valid id under the WRONG prescription must not delete the "
+            "row it names -- pk equality alone is not enough"
+        )
+        x_row = LoggedSet.objects.get(pk=x_pk)
+        assert (x_row.load, x_row.reps) == ("185", "5"), (
+            "the row's own performance must survive untouched"
+        )
+
+
+class TestMixedTaggedAndUntaggedPayloadIsMalformed:
+    """#567 P2-B: a payload that mixes tagged and untagged sets is a 400.
+
+    No shipped client emits this shape -- a client on this contract tags
+    every set it knows how to, always -- so it demoted the WHOLE request to
+    the legacy positional path silently, hiding a client bug behind the same
+    fallback a genuinely old client uses on purpose.
+    """
+
+    def test_a_mixed_tagged_and_untagged_payload_is_rejected(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "id": 1,
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    },
+                    {
+                        "prescription": s.rdl.pk,
+                        "set_number": 1,
+                        "reps": "8",
+                        "load": "80",
+                        "rpe": "",
+                    },
+                ],
+            },
+        )
+        assert resp.status_code == 400

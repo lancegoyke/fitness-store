@@ -1656,9 +1656,14 @@ def athlete_session(session, athlete):
     ``trainable_cells()`` since, and the difference matters: it is why a skipped
     row needs no warn handling on reload, only in the cell-write response.)
     """
+    # #567/#568 P2-C: ``-pk`` tiebreaks a shared ``created_at`` the same
+    # deterministic way ``views.athlete_log_session``'s own lookup does — see
+    # its comment. Without it, this read and the blur response's
+    # (``views._cell_warn_or_false``) could each pick a different "newest"
+    # log for a tied pair and disagree about what backs a line.
     log = (
         SessionLog.objects.filter(session=session, athlete=athlete)
-        .order_by("-created_at")
+        .order_by("-created_at", "-pk")
         .prefetch_related("sets__source_line", "sets__reclaimed_line")
         .first()
     )

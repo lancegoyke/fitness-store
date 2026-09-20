@@ -147,11 +147,11 @@ describe("syncFromLog", () => {
     expect(c.exercises[1].set_rows[0].done).toBe(true);
   });
 
-  // Issue #567: a row that posted a client_id (a brand-new, never-saved row)
-  // is matched ONLY by that client_id, never by falling back to slot — a
-  // slot fallback here would be exactly the ambiguity #567 removes. Once
-  // matched, the row adopts the server's real id and drops the client_id: the
-  // next save posts `id`, not a client_id, for this row.
+  // Issue #567: a row that posted a client_id is matched by that client_id
+  // FIRST — an ordinary round trip like this one never needs the slot
+  // fallback below (#567/#568 P1-C), since the current server always echoes
+  // it. Once matched, the row adopts the server's real id and drops the
+  // client_id: the next save posts `id`, not a client_id, for this row.
   it("adopts the server id and clears client_id once a new row's client_id round-trips", () => {
     const c = makeLogger();
     c.exercises[0].set_rows[1].id = null; // never saved yet
@@ -213,6 +213,44 @@ describe("syncFromLog", () => {
     const payload = c.buildPayload(false);
     expect(payload.sets[0]).toMatchObject({ id: 11 });
     expect(payload.sets[0].client_id).toBeUndefined();
+  });
+
+  // #567/#568 P1-C: a rolling deploy can answer a client_id POST with an OLD
+  // server build that doesn't know the field and so never echoes it back.
+  // Matching ONLY by client_id then left the row un-ticked forever —
+  // `rowFilled` drops an unticked, empty-looking row from the next save's
+  // payload, and that save deletes the very row the old server just created
+  // for it. The fix falls back to the slot the response DOES carry.
+  it("ticks a client_id row by slot and adopts its id when the response echoes no client_id", () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[1].id = null; // never saved yet
+    c.exercises[0].set_rows[1].reps = "5";
+    const clientId = c.buildPayload(false).sets[0].client_id;
+    expect(clientId).toBeTruthy(); // sanity: a client_id really was posted
+    c.syncFromLog({
+      // No `client_id` at all on the response item -- an old server's shape.
+      sets: [{ prescription: 1, set_number: 2, id: 999 }],
+    });
+    const row = c.exercises[0].set_rows[1];
+    expect(row.id).toBe(999);
+    expect(row.done).toBe(true);
+    expect(row.client_id).toBeNull();
+    // Stays in later payloads: the next save posts the adopted id.
+    expect(c.buildPayload(false).sets[0]).toMatchObject({ id: 999 });
+  });
+
+  // P3: a response item can legitimately omit `id` (nothing to report — see
+  // the server's `client_ids` comment in `athlete_log_session`). Assigning
+  // `match.id` unguarded set `r.id` to `undefined`, which `r.id != null`
+  // then read as "no id" — so the very next `buildPayload` minted a
+  // brand-new `client_id` for a row the server already knows.
+  it("does not adopt an undefined id from a response item that omits it", () => {
+    const c = makeLogger();
+    const row = c.exercises[0].set_rows[0]; // has a server id (11)
+    row.reps = "5";
+    c.syncFromLog({ sets: [{ prescription: 1, set_number: 1 }] }); // no id
+    expect(row.done).toBe(true);
+    expect(row.id).toBe(11); // unchanged, not clobbered to undefined
   });
 });
 

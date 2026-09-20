@@ -782,16 +782,24 @@ function createLogger() {
     // stay un-checked until a reload. The returned log is the source of truth.
     //
     // Issue #567: reconcile by IDENTITY first, position second. A row that
-    // posted a `client_id` gets matched ONLY by that client_id — never by
-    // slot as a fallback — because a slot match for such a row would be
-    // exactly the ambiguity #567 exists to remove: the server would have
-    // created (or not) a specific row for this client_id, and a different
-    // LoggedSet that happens to sit at the same `(prescription, set_number)`
-    // right now (a hidden row the renumbering just moved there, say) is not
-    // this row. A row with no `client_id` — the ordinary case, a grid row
-    // hydrated with a real server id — still reconciles by slot exactly as
-    // before; that path is unchanged and is what keeps old sessions/queued
-    // payloads from earlier saves working.
+    // posted a `client_id` is matched by that client_id FIRST, and only
+    // falls back to its slot when the response echoes no `client_id` that
+    // matches it (#567/#568 P1-C). That fallback is sound, not a
+    // reintroduction of the ambiguity #567 removed: the server ALWAYS
+    // creates a `client_id` row at the exact slot it was posted under, two
+    // posted sets can never share a slot (the server 400s a duplicate
+    // `(prescription, set_number)`), and `athlete_log_session`'s collision
+    // renumbering moves every SPARED displayed row off a slot this request
+    // posted — so after the save, the only visible row left at a posted slot
+    // is the one created for that exact posted set. It exists for a rolling
+    // deploy: an OLD server build doesn't know `client_id` and never echoes
+    // it, and matching ONLY by `client_id` then left such a row un-ticked
+    // forever — `rowFilled` drops an unticked, empty-looking row from the
+    // NEXT save's payload, and that save deletes the very row the old server
+    // just created for it. A row with no `client_id` — the ordinary case, a
+    // grid row hydrated with a real server id — still reconciles by slot
+    // exactly as before; that path is unchanged and is what keeps old
+    // sessions/queued payloads from earlier saves working.
     syncFromLog(log) {
       const sets = log.sets || [];
       const byClientId = new Map();
@@ -802,16 +810,33 @@ function createLogger() {
         // including a pre-existing row posted by `id`) — so this map can
         // only ever match the one row that named it.
         if (s.client_id) byClientId.set(s.client_id, s);
-        bySlot.set(`${s.prescription}:${s.set_number}`, s);
+        // P3: the FIRST entry wins a slot, not the last. Two response items
+        // can only share a slot when the server is on an old build that
+        // ignores `client_id` (see above) — the first is exactly the row
+        // that build created FOR this slot; a later item that happens to
+        // report the same slot (a survivor absorbed into it, say) is not.
+        const slotKey = `${s.prescription}:${s.set_number}`;
+        if (!bySlot.has(slotKey)) bySlot.set(slotKey, s);
       }
       for (const e of this.exercises) {
         for (const r of e.set_rows) {
-          const match = r.client_id
-            ? byClientId.get(r.client_id)
-            : bySlot.get(`${e.id}:${r.set_number}`);
+          // #567/#568 P1-C: try identity first, slot second — never slot
+          // ONLY, never identity ONLY. See the comment above this method for
+          // why the slot fallback can't reintroduce the ambiguity #567 fixed.
+          const match =
+            (r.client_id && byClientId.get(r.client_id)) ||
+            bySlot.get(`${e.id}:${r.set_number}`);
           r.done = !!match;
           if (match) {
-            r.id = match.id;
+            // P3: a response item can legitimately omit `id` (nothing to
+            // report — see the server's `client_ids` comment in
+            // `athlete_log_session`). Assigning `match.id` unguarded then set
+            // `r.id` to `undefined`, which `r.id != null` reads as "no id" —
+            // so the very next `buildPayload` minted a brand-new `client_id`
+            // for a row the server already knows, instead of leaving `r.id`
+            // as it was.
+            const matchId = match.id ?? null;
+            if (matchId != null) r.id = matchId;
             r.client_id = null;
           }
           // NO match: leave r.id and r.client_id exactly as they are — do
