@@ -7,6 +7,14 @@
   justify-content: center;
   flex-wrap: wrap;
 }
+.meso-athlete-preview-controls {
+  flex: 0 0 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .meso-phone {
   flex: 0 0 auto;
   width: 336px;
@@ -57,20 +65,17 @@
   padding: 6px 18px 14px;
   border-bottom: 1px solid var(--line-2);
 }
-.meso-phone-header-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 11px;
-}
-.meso-phone-back {
+.meso-phone-blocklabel {
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--dim);
+  margin-bottom: 9px;
 }
 .meso-phone-daylabel {
   font-size: 11px;
-  color: var(--dim);
+  color: var(--ink);
+  font-weight: 700;
+  margin-bottom: 2px;
 }
 .meso-phone-title {
   margin: 0 0 2px;
@@ -80,33 +85,6 @@
 }
 .meso-phone-sub {
   font-size: 12px;
-  color: var(--dim);
-  margin-bottom: 12px;
-}
-.meso-phone-progress {
-  align-items: center;
-  gap: 9px;
-}
-.meso-phone-count {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--ink);
-}
-.meso-phone-dots {
-  flex: 1;
-  gap: 3px;
-}
-.meso-phone-dot {
-  flex: 1;
-  height: 5px;
-  border-radius: 3px;
-  background: var(--line);
-}
-.meso-phone-dot.is-done {
-  background: var(--accent);
-}
-.meso-phone-setslabel {
-  font-size: 11px;
   color: var(--dim);
 }
 .meso-phone-body {
@@ -135,64 +113,32 @@
   font-size: 11.5px;
   color: var(--dim);
 }
-.meso-phone-set-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 8px 13px;
-  border-bottom: 1px solid var(--line-2);
+.meso-phone-exercise-log {
+  padding: 9px 13px 11px;
 }
-.meso-phone-set-n {
-  width: 18px;
+.meso-phone-exercise-log-label {
   font-size: 11px;
-  font-weight: 700;
   color: var(--dim);
+  font-family: "IBM Plex Mono", monospace;
+  margin-bottom: 6px;
 }
-.meso-phone-input {
-  width: 46px;
-  text-align: center;
+.meso-phone-exercise-line {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
   appearance: none;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--rail);
-  font: inherit;
   font-family: "IBM Plex Mono", monospace;
-  font-size: 13px;
-  padding: 6px 4px;
+  font-size: 11.5px;
+  padding: 7px 8px;
+  margin-bottom: 6px;
   outline: none;
   color: var(--ink);
 }
-.meso-phone-set-target {
-  flex: 1;
-  font-size: 10.5px;
-  color: var(--dim);
-  text-align: right;
-}
-.meso-phone-check {
-  appearance: none;
-  border: 0;
-  background: none;
-  cursor: pointer;
-  padding: 0;
-  flex: 0 0 auto;
-}
-.meso-check-on {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent-ink);
-  font-size: 13px;
-}
-.meso-check-off {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: 1.5px solid var(--line);
-  background: var(--surface);
+.meso-phone-exercise-line:last-child {
+  margin-bottom: 0;
 }
 
 /* Phone-preview coachmark: full-width so it sits above the phone (ported from

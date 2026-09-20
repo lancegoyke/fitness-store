@@ -31,7 +31,7 @@ import type { ChatMessage } from "./hooks/useAgentChat";
 import { useCoachmarks } from "./hooks/useCoachmarks";
 
 import type { MesoGrid } from "./lib/api";
-import { cycleLabelFromGrid, gridToProgram } from "./lib/grid";
+import { cycleLabelFromGrid } from "./lib/grid";
 import { deliverHref as buildDeliverHref } from "./lib/deliver";
 
 // Issue #455 phase A5: the one-week "week" view is gone — the table shows
@@ -43,7 +43,6 @@ export type ViewMode = "table" | "block" | "athlete";
 
 interface Hydrated {
   planId: Id;
-  unit: string;
   csrf: string;
   gridData: MesoGrid;
   initialMessages: ChatMessage[];
@@ -120,7 +119,6 @@ function readHydration(): Hydrated | null {
 
   return {
     planId: gridData.mesocycle.plan_id,
-    unit: gridData.plan?.unit || "kg",
     csrf,
     gridData,
     initialMessages,
@@ -136,11 +134,9 @@ export function DesignerRoot() {
   // collapse it from the top bar to hand the full width to the grid.
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [periodStyle, setPeriodStyle] = useState<PeriodStyle>("timeline");
-  const [checks, setChecks] = useState<Record<string, boolean>>({});
 
   const planId: Id = hydrated?.planId ?? "";
   const csrf = hydrated?.csrf ?? "";
-  const unit = hydrated?.unit ?? "kg";
   // §4b (docs/meso/remove-current-week-plan.md): the block the coach has
   // open — sent on every agent POST so grounding/validation/apply (which
   // run across time-separated requests) scope to it instead of silently
@@ -200,7 +196,6 @@ export function DesignerRoot() {
   // link that would silently open a different block.
   const deliverHref = gridCurrentWeekId != null ? buildDeliverHref(planId, gridCurrentWeekId) : null;
   const cycleLabel = cycleLabelFromGrid(grid?.phases ?? [], grid?.weeks ?? []);
-  const athleteProgram = grid ? gridToProgram(grid) : [];
 
   return (
     <div className="meso-designer-root">
@@ -276,12 +271,9 @@ export function DesignerRoot() {
               />
             )}
 
-            {view === "athlete" && (
+            {view === "athlete" && grid && (
               <AthletePreview
-                program={athleteProgram}
-                unit={unit}
-                checks={checks}
-                onToggleCheck={(k) => setChecks((prev) => ({ ...prev, [k]: !prev[k] }))}
+                grid={grid}
                 coachmarkVisible={coachmarks.coachmarkVisible}
                 dismissCoachmark={coachmarks.dismissCoachmark}
               />

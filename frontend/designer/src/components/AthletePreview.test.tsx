@@ -1,120 +1,242 @@
-// Specs for AthletePreview (CONTRACT.md "AthletePreview") — the phone mock's
-// first-day/first-three-lifts view. Ported from meso.js's athleteDay/aTotal/
-// aDone getters (now computed inside this component per the contract, since
-// they're view-shaping with no existing lib coverage). Phase 2a (text-first
-// cells): the prescription is one freeform string plus optional sub-lines —
-// no sets count to fan set rows out from, so the mock shows ONE loggable row
-// per lift (key "a0-<xi>-0") with the verbatim text as its target.
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { MesoGrid } from "../lib/api";
 import { AthletePreview } from "./AthletePreview";
-import type { Day } from "../lib/api";
 
-function program(): Day[] {
-  return [
-    {
-      id: 1,
-      n: 1,
-      name: "Lower · Quad bias",
-      exercises: [
-        { id: 1, name: "Back Squat", text: "3 x 5, 100" },
-        { id: 2, name: "Leg Press", text: "2 x 10, 75%", lines: [{ line: 1, text: "RPE 8" }] },
-      ],
-    },
-  ];
-}
-
-function baseProps(overrides: Partial<Parameters<typeof AthletePreview>[0]> = {}) {
+function grid(): MesoGrid {
   return {
-    program: program(),
-    unit: "kg",
-    checks: {} as Record<string, boolean>,
-    onToggleCheck: vi.fn(),
-    ...overrides,
+    plan: { id: 7, title: "Build to Nationals", unit: "kg" },
+    mesocycle: { id: 4, plan_id: 7, name: "Accumulation", week_count: 2 },
+    weeks: [
+      { id: 10, index: 0, label: "Wk 1", phase: "Build", deload: false, delivered_at: null },
+      { id: 20, index: 1, label: "Wk 2", phase: "Build", deload: false, delivered_at: null },
+    ],
+    days: [
+      {
+        session_slot_id: 1,
+        session_id: 1001,
+        session_ids: { "10": 1001, "20": 2001 },
+        day_number: 1,
+        name: "Lower Strength",
+        bias: "Squat focus",
+        order: 0,
+        rows: [
+          {
+            exercise_slot_id: 101,
+            name: "Back Squat",
+            exercise_id: 1,
+            order: 0,
+            tags: [],
+            tempo: "",
+            rest: "",
+            note: "Brace hard",
+            cells: {
+              "10": {
+                prescription_id: 1010,
+                text: "4 x 6\nRPE 7",
+                skipped: false,
+                lines: [
+                  { id: 1, line: 1, text: "Pause the first rep", athlete_authored: false },
+                  { id: 2, line: 2, text: "100 x 6", athlete_authored: true },
+                  { id: 3, line: 3, text: "   ", athlete_authored: false },
+                ],
+              },
+              "20": { prescription_id: 1020, text: "5 x 4, RPE 8", skipped: false, lines: [] },
+            },
+          },
+          {
+            exercise_slot_id: 102,
+            name: "Romanian Deadlift",
+            exercise_id: 2,
+            order: 1,
+            tags: [],
+            tempo: "",
+            rest: "",
+            note: "",
+            cells: {
+              "10": { prescription_id: 2010, text: "3 x 8", skipped: false, lines: [] },
+              "20": { prescription_id: 2020, text: "3 x 7", skipped: false, lines: [] },
+            },
+          },
+          {
+            exercise_slot_id: 103,
+            name: "Leg Press",
+            exercise_id: 3,
+            order: 2,
+            tags: [],
+            tempo: "",
+            rest: "",
+            note: "",
+            cells: {
+              "10": { prescription_id: 3010, text: "3 x 12", skipped: false, lines: [] },
+              "20": { prescription_id: 3020, text: "3 x 10", skipped: false, lines: [] },
+            },
+          },
+          {
+            exercise_slot_id: 104,
+            name: "Calf Raise",
+            exercise_id: 4,
+            order: 3,
+            tags: [],
+            tempo: "",
+            rest: "",
+            note: "",
+            cells: {
+              "10": { prescription_id: 4010, text: "3 x 15", skipped: false, lines: [] },
+              "20": { prescription_id: 4020, text: "3 x 15", skipped: false, lines: [] },
+            },
+          },
+          {
+            exercise_slot_id: 105,
+            name: "Skipped Curl",
+            exercise_id: 5,
+            order: 4,
+            tags: [],
+            tempo: "",
+            rest: "",
+            note: "",
+            cells: {
+              "10": { prescription_id: 5010, text: "2 x 12", skipped: true, lines: [] },
+              "20": { prescription_id: 5020, text: "2 x 12", skipped: true, lines: [] },
+            },
+          },
+        ],
+      },
+      {
+        session_slot_id: 2,
+        session_id: 1002,
+        session_ids: { "10": 1002, "20": 2002 },
+        day_number: 2,
+        name: "Upper Strength",
+        bias: "",
+        order: 1,
+        rows: [
+          {
+            exercise_slot_id: 201,
+            name: "Bench Press",
+            exercise_id: 6,
+            order: 0,
+            tags: [],
+            tempo: "",
+            rest: "",
+            note: "",
+            cells: {
+              "10": { prescription_id: 6010, text: "4 x 6", skipped: false, lines: [] },
+              "20": { prescription_id: 6020, text: "5 x 5", skipped: false, lines: [] },
+            },
+          },
+        ],
+      },
+      {
+        session_slot_id: 3,
+        session_id: 1003,
+        session_ids: { "10": 1003 },
+        day_number: 3,
+        name: "Accessories",
+        bias: "Arms",
+        order: 2,
+        rows: [
+          {
+            exercise_slot_id: 301,
+            name: "Cable Curl",
+            exercise_id: 7,
+            order: 0,
+            tags: [],
+            tempo: "",
+            rest: "",
+            note: "",
+            cells: {
+              "10": { prescription_id: 7010, text: "3 x 12", skipped: false, lines: [] },
+              "20": { prescription_id: 7020, text: "3 x 10", skipped: false, lines: [] },
+            },
+          },
+        ],
+      },
+    ],
+    history: { can_undo: false, can_redo: false, undo_label: "", redo_label: "" },
   };
 }
 
+function baseProps(overrides: Partial<Parameters<typeof AthletePreview>[0]> = {}) {
+  return { grid: grid(), ...overrides };
+}
+
 describe("AthletePreview", () => {
-  it("renders the first day's lifts with one loggable row each, keyed a0-<xi>-0", () => {
-    render(<AthletePreview {...baseProps()} />);
-    expect(screen.getByText("Back Squat")).toBeInTheDocument();
-    expect(screen.getByText("Leg Press")).toBeInTheDocument();
-    expect(screen.getByTestId("athlete-check-a0-0-0")).toBeInTheDocument();
-    expect(screen.getByTestId("athlete-check-a0-1-0")).toBeInTheDocument();
-  });
-
-  it("renders the prescription text verbatim as the target", () => {
-    render(<AthletePreview {...baseProps()} />);
-    expect(screen.getByText("target 3 x 5, 100")).toBeInTheDocument();
-    expect(screen.getByText("target 2 x 10, 75%")).toBeInTheDocument();
-  });
-
-  it("renders a lift's sub-lines under its head, skipping blank ones", () => {
-    const p = program();
-    p[0]!.exercises[1]!.lines = [
-      { line: 1, text: "RPE 8" },
-      { line: 2, text: "   " }, // blank sub-line: cleared in place, not shown
-      { line: 3, text: "sub: Cable Crunch" },
-    ];
-    render(<AthletePreview {...baseProps({ program: p })} />);
-    expect(screen.getByTestId("athlete-line-2-0")).toHaveTextContent("RPE 8");
-    expect(screen.getByTestId("athlete-line-2-1")).toHaveTextContent("sub: Cable Crunch");
-    expect(screen.queryByTestId("athlete-line-2-2")).not.toBeInTheDocument();
-  });
-
-  it("renders nothing (empty) when the current week has no sessions yet", () => {
-    render(<AthletePreview {...baseProps({ program: [] })} />);
-    expect(screen.queryByTestId(/athlete-check-/)).not.toBeInTheDocument();
-  });
-
-  it("toggleCheck fires onToggleCheck with the row's key and reflects `checks`", async () => {
+  it("switches weeks and days and shows every exercise", async () => {
     const user = userEvent.setup();
-    const onToggleCheck = vi.fn();
-    render(<AthletePreview {...baseProps({ onToggleCheck })} />);
-    await user.click(screen.getByTestId("athlete-check-a0-0-0"));
-    expect(onToggleCheck).toHaveBeenCalledWith("a0-0-0");
+    render(<AthletePreview {...baseProps()} />);
+
+    expect(screen.getAllByTestId("athlete-preview-exercise-card")).toHaveLength(4);
+    expect(screen.getByText("target 4 x 6 · RPE 7 · Brace hard")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("athlete-preview-week-20"));
+    expect(screen.getByText("target 5 x 4, RPE 8 · Brace hard")).toBeInTheDocument();
+    expect(screen.queryByText("target 4 x 6 · RPE 7 · Brace hard")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("athlete-preview-day-2"));
+    expect(screen.getByText("Bench Press")).toBeInTheDocument();
+    expect(screen.queryByText("Back Squat")).not.toBeInTheDocument();
   });
 
-  it("shows a done set as checked when `checks` marks it true", () => {
-    render(<AthletePreview {...baseProps({ checks: { "a0-0-0": true } })} />);
-    const done = screen.getByTestId("athlete-check-a0-0-0");
-    // The done indicator renders a check glyph; assert it differs from an
-    // undone row's rendering rather than assuming a specific DOM shape.
-    const undone = screen.getByTestId("athlete-check-a0-1-0");
-    expect(done.innerHTML).not.toBe(undone.innerHTML);
+  it("mirrors the real session header without fabricated copy", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<AthletePreview {...baseProps()} />);
+
+    expect(screen.getByText("Accumulation · Wk 1")).toBeInTheDocument();
+    expect(screen.getByText("Day 1 · Squat focus")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Lower Strength" })).toBeInTheDocument();
+    expect(screen.getByText("Build to Nationals")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("athlete-preview-day-2"));
+    expect(container.querySelector(".meso-phone-daylabel")).toHaveTextContent("Day 2");
+    expect(container.querySelector(".meso-phone-daylabel")).not.toHaveTextContent("Day 2 ·");
+    expect(screen.queryByText(/Wed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/knee-safe/)).not.toBeInTheDocument();
   });
 
-  it("does not render a skipped exercise, but keeps a non-skipped one", () => {
-    const p = program();
-    p[0]!.exercises.push({
-      id: 3,
-      name: "Leg Curl",
-      text: "3 x 12, 40",
-      skipped: true,
-    });
-    render(<AthletePreview {...baseProps({ program: p })} />);
-    expect(screen.getByText("Back Squat")).toBeInTheDocument();
-    expect(screen.getByText("Leg Press")).toBeInTheDocument();
-    expect(screen.queryByText("Leg Curl")).not.toBeInTheDocument();
+  it("folds target text, appends only non-blank notes, and omits unavailable training", async () => {
+    const user = userEvent.setup();
+    render(<AthletePreview {...baseProps()} />);
+
+    expect(screen.getByText("target 4 x 6 · RPE 7 · Brace hard")).toBeInTheDocument();
+    expect(screen.getByText("target 3 x 8")).toBeInTheDocument();
+    expect(screen.queryByText("target 3 x 8 ·")).not.toBeInTheDocument();
+    expect(screen.queryByText("Skipped Curl")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("athlete-preview-week-20"));
+    expect(screen.queryByTestId("athlete-preview-day-3")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cable Curl")).not.toBeInTheDocument();
   });
 
-  it("only considers the first three exercises of the first day", () => {
-    const p = program();
-    p[0]!.exercises.push(
-      { id: 3, name: "Leg Curl", text: "3 x 12, 40" },
-      { id: 4, name: "Calf Raise", text: "3 x 15, 20" },
-    );
-    render(<AthletePreview {...baseProps({ program: p })} />);
-    expect(screen.getByText("Back Squat")).toBeInTheDocument();
-    expect(screen.getByText("Leg Press")).toBeInTheDocument();
-    expect(screen.getByText("Leg Curl")).toBeInTheDocument();
-    expect(screen.queryByText("Calf Raise")).not.toBeInTheDocument();
+  it("shows coach and athlete-authored sub-lines under what you did", () => {
+    render(<AthletePreview {...baseProps()} />);
+
+    expect(screen.getAllByText("what you did")).toHaveLength(4);
+    expect(screen.getByTestId("athlete-line-1010-0")).toHaveValue("Pause the first rep");
+    expect(screen.getByTestId("athlete-line-1010-1")).toHaveValue("100 x 6");
+    expect(screen.queryByDisplayValue("   ")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the first live week and day when a selection disappears", async () => {
+    const user = userEvent.setup();
+    const initial = grid();
+    const { rerender } = render(<AthletePreview grid={initial} />);
+    await user.click(screen.getByTestId("athlete-preview-week-20"));
+    await user.click(screen.getByTestId("athlete-preview-day-2"));
+
+    const next = grid();
+    next.weeks = [next.weeks[0]!];
+    next.days[0]!.session_ids = { "10": 1001 };
+    next.days[1]!.session_ids = {};
+    rerender(<AthletePreview grid={next} />);
+
+    expect(screen.getByTestId("athlete-preview-week-10")).toHaveClass("is-on");
+    expect(screen.getByTestId("athlete-preview-day-1")).toHaveClass("is-on");
+    expect(screen.getByRole("heading", { name: "Lower Strength" })).toBeInTheDocument();
   });
 });
 
 describe("AthletePreview phone coachmark", () => {
-  // Parity with the Alpine template's dismissible first-run note ("Preview as
-  // your athlete") — same coachmark plumbing as WeekGrid's "grid" key.
   function coachmarkProps(visible: boolean) {
     return baseProps({
       coachmarkVisible: vi.fn((key: string) => visible && key === "phone"),
@@ -122,17 +244,24 @@ describe("AthletePreview phone coachmark", () => {
     });
   }
 
-  it("shows the phone coachmark until dismissed", () => {
+  it("describes the selected week without claiming exact parity", async () => {
+    const user = userEvent.setup();
     render(<AthletePreview {...coachmarkProps(true)} />);
+
     expect(screen.getByText("Preview as your athlete")).toBeInTheDocument();
+    expect(screen.getByText(/Wk 1 follows/)).toBeInTheDocument();
+    expect(screen.queryByText(/exactly/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("athlete-preview-week-20"));
+    expect(screen.getByText(/Wk 2 follows/)).toBeInTheDocument();
   });
 
-  it("hides the coachmark when dismissed", () => {
+  it("hides the coachmark when it is not visible", () => {
     render(<AthletePreview {...coachmarkProps(false)} />);
     expect(screen.queryByText("Preview as your athlete")).not.toBeInTheDocument();
   });
 
-  it("the dismiss button reports the phone key", async () => {
+  it("reports the phone key when dismissed", async () => {
     const user = userEvent.setup();
     const props = coachmarkProps(true);
     render(<AthletePreview {...props} />);

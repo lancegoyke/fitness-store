@@ -21,6 +21,7 @@
 import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DesignerRoot } from "./DesignerRoot";
+import type { MesoGrid } from "./lib/api";
 
 function jsonScript(id: string, data: unknown) {
   const el = document.createElement("script");
@@ -179,6 +180,47 @@ describe("table view (issue #455 phase A5: the only view left besides periodizat
 
     await user.click(screen.getByText("Table"));
     expect(screen.getByTestId("meso-table-view")).toBeInTheDocument();
+  });
+
+  it("shows a table cell edit in Athlete view for the edited week", async () => {
+    const user = userEvent.setup();
+    const payload = gridPayload() as MesoGrid;
+    payload.weeks.push({
+      id: 2,
+      index: 1,
+      label: "Wk 2",
+      phase: "Accum",
+      deload: false,
+      delivered_at: null,
+      vol: 75,
+      inten: 70,
+    });
+    payload.days[0]!.session_ids["2"] = 12;
+    payload.days[0]!.rows[0]!.cells["2"] = {
+      prescription_id: 101,
+      text: "3 x 4, RPE 8, 105",
+      skipped: false,
+      lines: [],
+    };
+    jsonScript("meso-grid-data", payload);
+    jsonScript("meso-chat-thread", []);
+    csrfSpan();
+    jsonScript("meso-designer-flags", flagsPayload());
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    }) as unknown as typeof fetch;
+
+    render(<DesignerRoot />);
+    const weekTwoCell = screen.getByTestId("cell-text-101");
+    await user.clear(weekTwoCell);
+    await user.type(weekTwoCell, "5 x 3, RPE 9, 110");
+    await user.tab();
+    await user.click(screen.getByText("Athlete view"));
+    await user.click(screen.getByTestId("athlete-preview-week-2"));
+
+    expect(screen.getByText("target 5 x 3, RPE 9, 110")).toBeInTheDocument();
   });
 
   it("clicking a Periodization timeline week switches back to the table view (issue #455 A5 product-behavior change)", async () => {
