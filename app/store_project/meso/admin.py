@@ -29,8 +29,14 @@ class CascadeLockDeleteMixin:
     """Pre-lock a hard delete's cascade parents in the app-wide order (#587)."""
 
     cascade_lock_helper = None
+    lock_delete_coach_mutexes = False
 
     def _lock_delete_roots(self, pks):
+        # LOCK ORDER (#610) — a User selection can contain a coach and their
+        # lower-pk demo athlete. Reserve selected coach mutexes before the
+        # globally sorted cascade pass so it cannot invert against clear_demo.
+        if self.lock_delete_coach_mutexes:
+            meso_demo.lock_coach_mutexes(pks)
         getattr(meso_demo, self.cascade_lock_helper)(pks)
 
     def delete_model(self, request, obj):

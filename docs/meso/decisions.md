@@ -635,12 +635,12 @@ one table. `clear_demo` is the explicit #590 exception: it locks the coach's
 `User` row first as the per-coach mutex, then locks the demo athletes' `User`
 rows ascending. That combined User sequence is not globally pk-sorted. It is
 safe against every path that takes the coach row first — the segment loaders,
-`plan_create`'s draft path, the sandbox reap. It is **not** safe against a
-`UserAdmin` bulk delete whose selection contains both a coach and one of that
-coach's own demo athletes: `lock_cascade_parents` sorts the whole selection by
-pk, so an athlete whose UUID sorts below the coach is locked before the coach
-while `clear_demo` runs coach → athlete. Staff-only and contrived; filed rather
-than papered over.
+`plan_create`'s draft path, the sandbox reap — and, as of #610, `UserAdmin` and
+`merge_users`: those delete paths first lock every selected coach ascending,
+while holding no athlete row, then run the ordinary sorted cascade pass. If
+`clear_demo(C)` owns C, that first pass holds nothing it needs; if the delete
+owns C, clear cannot pass its first lock. When C is not selected, neither path
+wants it and both take their shared athletes ascending. No cycle can form.
 
 Every path that takes two or more row locks takes them in that sequence,
 counting both `select_for_update` and the implicit exclusive lock an
@@ -740,18 +740,19 @@ restore's existing sequence a violation for no gain.
 - `demo.clear_demo` takes the coach mutex before reading its athlete set, then
   uses `demo.lock_cascade_parents`; `sandbox.expire_sandboxes` safely re-locks
   that same coach row inside its later delete transaction (#590).
+- `demo.lock_coach_mutexes` identifies selected coaches through unjoined
+  subqueries and reserves their `User` mutex rows ascending before a multi-User
+  hard delete's sorted cascade pass (#610).
 - `UserAdmin`, `CoachAthleteAdmin`, `PlanAdmin`, `AgentProposalBatchAdmin`, and
   `merge_users` wrap their hard delete and the matching
-  `demo.lock_cascade_*` helper in one transaction (#587).
+  `demo.lock_cascade_*` helper in one transaction; the two User-rooted callers
+  take the #610 coach-mutex pre-pass first (#587).
 
 ### Known gaps and deliberately unswept sites
 
 The #587/#588/#589/#590/#596 reachable cycles above are closed. The remaining
 inventory is explicit rather than implied to conform:
 
-- `UserAdmin` bulk delete of a coach together with one of that coach's demo
-  athletes can deadlock against a concurrent `clear_demo` — see the #590
-  exception above.
 - The plain `Prescription` locks in `history.py` are deliberate: #584's purge
   must conflict with a commit-time `FOR KEY SHARE`.
 - The `CoachAthlete._open` / `invite` / `request` / `add_self` and

@@ -46,6 +46,8 @@ ADMIN_CASES = [
     ),
 ]
 
+OTHER_ADMIN_CASES = ADMIN_CASES[1:]
+
 
 @pytest.mark.parametrize(
     ("admin_class", "model", "factory", "helper_name"), ADMIN_CASES
@@ -78,15 +80,86 @@ def test_admin_delete_queryset_locks_all_matching_cascade_roots(
     assert not model.objects.filter(pk__in=pks).exists()
 
 
+def test_user_admin_delete_model_locks_coach_mutexes_before_cascade():
+    user = UserFactory()
+    pk = user.pk
+    calls = mock.Mock()
+
+    with (
+        mock.patch.object(
+            demo, "lock_coach_mutexes", calls.lock_coach_mutexes, create=True
+        ),
+        mock.patch.object(demo, "lock_cascade_parents", calls.lock_cascade_parents),
+    ):
+        UserAdmin(User, admin.site).delete_model(None, user)
+
+    assert calls.mock_calls == [
+        mock.call.lock_coach_mutexes([pk]),
+        mock.call.lock_cascade_parents([pk]),
+    ]
+
+
+def test_user_admin_delete_queryset_locks_coach_mutexes_before_cascade():
+    users = [UserFactory(), UserFactory()]
+    pks = sorted(user.pk for user in users)
+    calls = mock.Mock()
+
+    with (
+        mock.patch.object(
+            demo, "lock_coach_mutexes", calls.lock_coach_mutexes, create=True
+        ),
+        mock.patch.object(demo, "lock_cascade_parents", calls.lock_cascade_parents),
+    ):
+        UserAdmin(User, admin.site).delete_queryset(
+            None, User.objects.filter(pk__in=pks)
+        )
+
+    assert calls.mock_calls == [
+        mock.call.lock_coach_mutexes(pks),
+        mock.call.lock_cascade_parents(pks),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("admin_class", "model", "factory", "helper_name"), OTHER_ADMIN_CASES
+)
+@pytest.mark.parametrize("delete_method", ["delete_model", "delete_queryset"])
+def test_non_user_admins_do_not_lock_coach_mutexes(
+    admin_class, model, factory, helper_name, delete_method
+):
+    obj = factory()
+    lock_coach_mutexes = mock.Mock()
+    with (
+        mock.patch.object(demo, "lock_coach_mutexes", lock_coach_mutexes, create=True),
+        mock.patch.object(demo, helper_name),
+    ):
+        model_admin = admin_class(model, admin.site)
+        if delete_method == "delete_model":
+            model_admin.delete_model(None, obj)
+        else:
+            model_admin.delete_queryset(None, model.objects.filter(pk=obj.pk))
+
+    lock_coach_mutexes.assert_not_called()
+
+
 def test_merge_users_locks_the_source_cascade_before_deleting(monkeypatch):
     source = UserFactory(email="source-merge@example.com")
     target = UserFactory(email="target-merge@example.com")
     monkeypatch.setattr("builtins.input", lambda prompt: "yes")
 
-    with mock.patch.object(demo, "lock_cascade_parents") as lock_helper:
+    calls = mock.Mock()
+    with (
+        mock.patch.object(
+            demo, "lock_coach_mutexes", calls.lock_coach_mutexes, create=True
+        ),
+        mock.patch.object(demo, "lock_cascade_parents", calls.lock_cascade_parents),
+    ):
         call_command("merge_users", source.email, target.email, verbosity=0)
 
-    lock_helper.assert_called_once_with([source.pk])
+    assert calls.mock_calls == [
+        mock.call.lock_coach_mutexes([source.pk]),
+        mock.call.lock_cascade_parents([source.pk]),
+    ]
     assert not User.objects.filter(pk=source.pk).exists()
     assert User.objects.filter(pk=target.pk).exists()
 
