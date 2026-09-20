@@ -2713,3 +2713,113 @@ _(Append dated entries here as decisions land.)_
   instead carry the athlete's `LoggedSet` rows along with the slot, or scope
   the tint to one week some other way, is left open on #572 as a product
   decision this slice does not make by default.
+- 2026-09-20 — **Fixed (#583, #584): a coach redo/undo can no longer collide
+  with a live coordinate, and the stray-cell purge now locks before it
+  deletes.** Both found by the adversarial review on the #577 branch (PR
+  #582), both confirmed to fire on `main` too — pre-existing, not caused by
+  that PR.
+  **#583 — the pk is an implementation detail of REVIVING a cell; the
+  `(exercise_slot, week, line)` coordinate is what the cell actually IS.**
+  `restore_plan_snapshot` revives a snapshotted cell by pk (deliberately — a
+  redo has to put back the exact row a matching undo took away, not a
+  lookalike with a new pk), but `Prescription` also enforces
+  `unique_cell_slot_week_line` on that coordinate. The verified reproduction:
+  a coach writes a sub-line (pk 3), undoes it (the stray-cell purge
+  hard-deletes pk 3, since nothing else names it yet), the athlete then
+  blurs a value onto the SAME sub-line — `athlete_cell_write`'s
+  `get_or_create` mints a brand-new pk 4 at the coordinate the purge just
+  freed, and (by design) records no `PlanAction`, so the pending redo entry
+  still thinks pk 3 belongs there — and the coach's redo then tries to
+  `save()` pk 3 straight onto a coordinate pk 4 now occupies, violating the
+  unique constraint and 500ing the whole redo.
+  **The fix resolves every coordinate collision BEFORE the cell upsert loop
+  runs, applying the SAME rule the stray-cell purge already states for a
+  cell absent from the snapshot — one join earlier, to a coordinate a
+  REVIVED pk wants rather than only to a stray pk the purge would delete on
+  its own.** An occupant that is athlete data — `athlete_authored`, or a
+  cell some `LoggedSet` still points at through `prescription`/`source_line`/
+  `reclaimed_line` (factored into one shared helper,
+  `history._cells_athlete_data_points_at`, used by both this guard and the
+  purge below) — KEEPS the coordinate, and the snapshotted cell that wanted
+  it is skipped for this restore entirely. Otherwise the occupant is a
+  coach-made row absent from the snapshot — exactly what the purge would
+  remove anyway, just discovered here one step earlier — and it is deleted,
+  freeing the coordinate for the revive.
+  **The accepted cost is the same trade #577's `logged_sets` spare clause
+  already makes: a coach's redo of that one line silently does nothing —
+  the athlete's coordinate wins — rather than 500ing the whole redo.** A
+  coach can retype a line; nobody can retype the athlete's performance. This
+  is consistent with the root shape #578 is reviewing (one cell, two writers
+  with different history semantics) rather than a new precedent: wherever
+  the two collide, the athlete's data has been the one that survives since
+  #577, and this extends that same rule from "cell some athlete data points
+  at" to "coordinate a revived pk wants but athlete data already occupies."
+  **A genuine within-snapshot SWAP (two snapshotted cells trading
+  coordinates in one restore) is deliberately left unresolved** —
+  `unique_cell_slot_week_line` is checked immediately, not deferred, so
+  neither side can be written into the other's still-occupied coordinate
+  without first parking one of them on a temporary, unclaimed coordinate,
+  and no known real path produces this shape today. It still raises
+  `IntegrityError` out of the upsert loop exactly as before this fix; see
+  `test_restore_cell_collision.py::TestSnapshotSwapIsNotHandled`, which pins
+  that this is a conscious non-fix, not an oversight.
+  **#584 — the stray-cell purge qualified its candidates without a row
+  lock, so a `LoggedSet` committed between the qualifying SELECT and the
+  DELETE was invisible to all three spare checks and the cell was deleted
+  anyway.** `QuerySet.delete()` is SELECT-then-DELETE with no lock of its
+  own. For `prescription`/`source_line` (real FKs) that surfaced as a
+  COMMIT-time deferred constraint violation — a 500 on the coach's undo; for
+  `reclaimed_line` (`db_constraint=False`, #541) nothing stopped it and the
+  hint was left dangling. Fixed by qualifying the purge's candidates under
+  `select_for_update(of=("self",))` and re-checking every spare test AFTER
+  the lock is held, not before — `settle.settle_log` already uses this exact
+  `of=("self",)` shape, for the same reason (the queryset joins through to
+  `Plan`, and without `of` Postgres would lock those joined rows too).
+  **`athlete_authored` stays in the candidate filter and is re-checked under
+  the lock too.** It cannot be moved out: an athlete-authored cell is never
+  captured in a snapshot, so it is never in `cell_pks`, and dropping the
+  exclusion would make every athlete-authored cell of the plan a candidate —
+  this `FOR UPDATE` would lock all of them on every undo and redo. Those are
+  exactly the rows a logging athlete writes, and `athlete_cell_write` takes
+  its locks the other way round (sub-line `Prescription`, then `Plan`) while
+  a restore holds `Plan` throughout and reaches `Prescription` last, so that
+  would have manufactured a routine deadlock out of a fix for a different
+  race. Nothing is lost by keeping it: the flip the re-check exists for is a
+  concurrent UPDATE of one of these rows, and under READ COMMITTED a
+  `SELECT ... FOR UPDATE` that waits on such a row re-evaluates its own
+  WHERE clause against the updated version and drops it (PostgreSQL's
+  EvalPlanQual recheck, docs §13.2). The re-check repeats it anyway, so
+  "what spares a cell" is answered in one place, once the rows can no longer
+  move.
+  **Plain `FOR UPDATE`, not `no_key=True`.** A `LoggedSet` insert takes a
+  `FOR KEY SHARE` lock on the `Prescription` row it references (Postgres's
+  normal FK-under-MVCC mechanism); `FOR KEY SHARE` conflicts with
+  `FOR UPDATE` but not with `FOR NO KEY UPDATE` (what `no_key=True` takes).
+  Since this lock exists to make a DELETE serialize against that KEY SHARE,
+  the weaker lock #560 needed for a plain user-row mutex (never contending
+  with a concurrent FK reference in the first place) would silently defeat
+  this fix by coexisting with it instead of waiting on it.
+  **Lock order is unchanged.** `api_plan_undo`/`api_plan_redo` already lock
+  `Plan` first; `restore_plan_snapshot` already wrote Week → SessionSlot →
+  ExerciseSlot → Session → Prescription, Prescription last. The old
+  `.delete()` already took a `FOR UPDATE`-strength lock on these same rows
+  as part of executing its DELETE statement — this only moves *when* that
+  wait happens, earlier, not the shape of the lock graph. The new
+  collision-resolution delete above (#583) gets the identical lock-then-
+  recheck treatment for the same reason: leaving it unlocked would have
+  reopened, in brand-new code, the exact race #584 exists to close.
+  **#562 is untouched and does not conflict.** It's a `Session`-vs-`Plan`
+  ordering issue on a different path entirely (`athlete_cell_write`'s
+  `Session` lock vs. `api_plan_undo`/`api_plan_redo`'s `Plan` lock) — no
+  `Session` row is locked anywhere in this fix, so there is nothing here for
+  that ordering to conflict with. #562 remains open and is not addressed by
+  this change.
+  Tests: `test_restore_cell_collision.py` (the #583 reproduction through the
+  real `api_cell_line_write` → `api_plan_undo` → `athlete_cell_write` →
+  `api_plan_redo` sequence, an undo-leg counterpart constructed directly
+  against a hand-built `PlanAction.snapshot` since no real endpoint sequence
+  was found to reach it, the "stray with no athlete data is still purged"
+  counter-case, and the swap-is-not-handled pin) and
+  `test_undo_purge_postgres.py` (Postgres-only, a forced two-thread
+  interleaving proving the lock, per the same barrier recipe
+  `test_settle_postgres.py`/`test_billing_webhook_postgres.py` use).
