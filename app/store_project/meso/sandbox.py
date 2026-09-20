@@ -88,7 +88,17 @@ def expire_sandboxes(now=None):
     for session in overdue:
         try:
             demo.clear_demo(session.user)
-            session.user.delete()
+            # #559: the coach delete cascades too — their plans, their
+            # ``AgentProposalBatch`` rows (a CASCADE FK straight to ``User``,
+            # as well as through the plans) and everything under them — so it
+            # takes the same parent locks first, for the same reason
+            # ``clear_demo`` does. Its own ``atomic``, not one wrapping both
+            # calls: the sweep is best-effort PER SANDBOX, and pairing them in
+            # one transaction would mean a failure on the coach delete rolled
+            # back the demo clear that had already succeeded.
+            with transaction.atomic():
+                demo.lock_cascade_parents([session.user_id])
+                session.user.delete()
         except Exception:  # reaping is best-effort; never wedge the sweep
             logger.exception("Failed to reap sandbox for user %s", session.user_id)
             continue

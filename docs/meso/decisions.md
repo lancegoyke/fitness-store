@@ -620,6 +620,78 @@ page is slow yet. Add a nightly rollup only when a query measurably is.
 
 ---
 
+## Row-lock order (#558, #559, #562)
+
+**One order for the whole app, and it is this:**
+
+```
+Plan  →  AgentProposalBatch  →  Week / SessionSlot / ExerciseSlot  →  Session
+      →  Prescription  →  SessionLog / LoggedSet
+```
+
+and **ascending pk within a table** whenever a path locks more than one row of
+one table.
+
+Every path that takes two or more row locks — `select_for_update`, or the
+implicit exclusive lock an `UPDATE`/`DELETE` takes on the row it writes — takes
+them in that sequence. A path may **skip** a level (`change_set_status` locks a
+batch and its `ProposedChange` rows without ever touching the `Plan` row; the
+athlete's log path locks a `Session` and its children without touching the
+`Plan`). What a path may never do is take two of these in the reverse order.
+That is the whole rule: a total order plus "don't invert it" is what makes a
+lock cycle unconstructible, so PostgreSQL never has a deadlock to resolve by
+aborting somebody's request with a 500.
+
+**Why this order and not another.** Any total order prevents deadlock; this one
+is the one the code already mostly followed. The coach's write paths all open
+with the `Plan` row (`history.record_plan_action`, `api_plan_undo`,
+`api_plan_redo`), and `history.restore_plan_snapshot` then walks down through
+`Week` → `SessionSlot` → `ExerciseSlot` → `Session` → `Prescription` (#584/#583
+kept that sequence and it is adopted here as the app-wide one). Two things were
+made to conform rather than the other way round, because inverting the rule
+instead would have meant re-ordering every designer endpoint:
+
+- `views.athlete_cell_write` took the `Session` lock and then wrote the `Plan`
+  row via `_touch_plan` — Session→Plan, against the restore's Plan→Session
+  (#562). It now takes the `Plan` row first.
+- `views.batch_apply` took the batch and then the `Plan` row via
+  `record_plan_action` (#540) — child→parent, which only became reachable once
+  `demo.clear_demo` started locking Plan→batches (#559). It now takes the
+  `Plan` row first; `record_plan_action` re-acquires a lock already held.
+
+**The structural rows are unordered among themselves on purpose.** `Week`,
+`SessionSlot` and `ExerciseSlot` sit at one level because every writer of them
+holds the `Plan` row already, so their relative order can't produce a cycle —
+and pinning one would make `restore_plan_snapshot`'s existing sequence a
+violation for no gain.
+
+**Strength, not just order.** Take `select_for_update(no_key=True)` where the
+path's real intent is an `UPDATE` of a non-key column (`athlete_cell_write`'s
+`Plan` lock stands in for `_touch_plan`'s own `UPDATE`): `FOR NO KEY UPDATE`
+still conflicts with another writer's `FOR UPDATE`, so the mutual exclusion is
+real, but it does **not** conflict with the `FOR KEY SHARE` a concurrent insert
+of some child row takes on its deferred FK at commit time — the deadlock #560
+hit on a user row. Take plain `FOR UPDATE` when the path intends to `DELETE` the
+row, or when it needs to conflict with exactly that commit-time `FOR KEY SHARE`
+(#584's purge).
+
+**A cascade delete runs the order backwards, so lock its parents first.**
+`Collector.delete` fast-deletes children before it updates or deletes parents,
+which is this order in reverse and therefore a cycle with every edit path.
+`demo.lock_cascade_parents` takes the `Plan` and `AgentProposalBatch` locks, in
+this order and ascending by pk, inside the same transaction as the `.delete()`;
+`demo.clear_demo` and `sandbox.expire_sandboxes` both call it (#559). Any new
+user-or-plan-deleting path does the same.
+
+**Known exception, not yet fixed.** `views.cell_line_write` was the third
+inversion (`Prescription`→`Plan` on its reclaim path) and is fixed here for the
+same reason `batch_apply` is. Above the `Plan` level, though, `CoachAthlete` and
+`User` are still taken both ways round — the plan-create endpoint locks
+`CoachAthlete` and then writes a `Plan`, while a cascade delete of a user
+reaches the `Plan` rows before the link rows — which predates all of this and is
+filed separately. Extend this order upward (`User` → `CoachAthlete` → `Plan`)
+when that is fixed.
+
 ## Decision log
 
 _(Append dated entries here as decisions land.)_

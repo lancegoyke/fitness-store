@@ -2217,6 +2217,36 @@ def athlete_cell_write(request, pk):
     # the block always reads a freshly-cleared flag and never catches this.
     poisoned = False
     with transaction.atomic():
+        # LOCK ORDER (#562) — the Plan row FIRST, above the Session lock below.
+        # The app-wide order is written down in ``docs/meso/decisions.md``
+        # ("Row-lock order"): Plan, then Session, then their children.
+        #
+        # This path already took both of those locks; it took them in the
+        # wrong order. `_touch_plan` further down UPDATEs the Plan row — an
+        # implicit exclusive row lock — so a blur that changed anything held
+        # Session-then-Plan, while `api_plan_undo`/`api_plan_redo` hold Plan
+        # (`select_for_update`) and then UPDATE every snapshotted Session row
+        # from inside `restore_plan_snapshot`. An athlete blur overlapping a
+        # coach undo on the same plan closed that cycle, and Postgres aborted
+        # one side: either the athlete's set or the coach's undo 500'd.
+        #
+        # `no_key=True` deliberately. FOR NO KEY UPDATE is the exact strength
+        # `_touch_plan`'s own UPDATE takes, so this adds no strength the path
+        # didn't already need; it still conflicts with the undo/redo
+        # endpoints' plain FOR UPDATE, which is what makes the two genuinely
+        # exclude each other; and it does NOT conflict with the FOR KEY SHARE
+        # a concurrent insert of some other Plan child takes on its deferred
+        # FK at commit time — the trap #560 hit on a user row.
+        #
+        # Taken UNCONDITIONALLY, including on the `untouched_coach_line` no-op
+        # path that never reaches `_touch_plan`. Deciding whether to lock would
+        # mean reading the cell first, and the Session lock has to sit above
+        # that read (next comment) — so the real choice is a Plan lock on
+        # every blur, or Session-before-Plan on some of them. The order is
+        # what matters, and a plan is one athlete's, so the contention this
+        # adds is between that athlete's own overlapping blurs (already
+        # serialized on the Session row) and their coach's designer edits.
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
         # Serialize the WHOLE write on the session row, before anything is read.
         #
         # `(session, athlete)` has no uniqueness, so two overlapping blurs can
@@ -2261,16 +2291,22 @@ def athlete_cell_write(request, pk):
             cell.text = text
             cell.athlete_authored = True
             cell.save(update_fields=["text", "athlete_authored"])
-            # LOCK ORDER — load-bearing. `_touch_plan` locks the Plan row;
-            # `_upsert_parsed_set` below locks the line-0 Prescription (its
-            # re-read is `select_for_update`). Plan MUST be taken first, because
+            # LOCK ORDER — load-bearing, and since #562 satisfied STRUCTURALLY:
+            # the Plan row is already held from the top of this block, so this
+            # call is only the `modified` bump, not the acquisition.
+            #
+            # The requirement it used to carry on its own: `_upsert_parsed_set`
+            # below locks the line-0 Prescription (its re-read is
+            # `select_for_update`), and Plan MUST be held first, because
             # `prescription_skip` locks Plan (`record_plan_action`,
             # history.py) then that same Prescription (`cell.save`). A coach
             # skip racing an athlete blur on the same row deadlocks on Postgres
-            # if the two disagree on order — so never move the Prescription lock
-            # ahead of this `_touch_plan`. (This is exactly what a review round
-            # got wrong: `prescription_skip` is Plan→Prescription, not the
-            # reverse.)
+            # if the two disagree on order. (This is exactly what a review
+            # round got wrong: `prescription_skip` is Plan→Prescription, not
+            # the reverse.) That still holds — it is simply no longer this
+            # line's job to establish it, and moving the Prescription lock
+            # ahead of the Plan lock at the top of the block is what would now
+            # break it.
             _touch_plan(plan)
         # Parse-at-commit (5a): derive a silent, structured LoggedSet from the
         # text just committed above. Defensively wrapped inside the helper — a
@@ -5315,6 +5351,21 @@ def cell_line_write(request, plan_id, slot_id):
         return JsonResponse({"ok": False, "error": "text is too long."}, status=400)
 
     with transaction.atomic():
+        # LOCK ORDER (#562) — the Plan row before any Prescription of it, per
+        # ``docs/meso/decisions.md`` ("Row-lock order"). `record_plan_action`
+        # below takes this same lock (a no-op re-acquire once it's held), so
+        # this line exists purely to move the acquisition AHEAD of the reclaim
+        # write under it: `existing.save(...)` UPDATEs a Prescription row, and
+        # taking that before the Plan row made this endpoint the one path that
+        # ran Prescription→Plan. Harmless while `athlete_cell_write` also
+        # reached a cell before the Plan row; a deadlock the moment that path
+        # was corrected to take Plan first (#562), because the cell in question
+        # is precisely the athlete-authored one an athlete may be blurring.
+        #
+        # It changes no WRITE order: the flag flip below still lands before
+        # `record_plan_action` snapshots, which is what the next comment is
+        # about.
+        Plan.objects.select_for_update().filter(pk=plan.pk).first()
         existing = Prescription.objects.filter(
             exercise_slot=slot, week=week, line=line
         ).first()
@@ -6155,9 +6206,18 @@ def change_set_status(request, pk):
     if status not in allowed:
         return HttpResponseBadRequest("status must be 'approved' or 'rejected'.")
     # The pre-check above is unlocked, so this can land after a concurrent
-    # ``batch_apply`` commits (#540) — lock the batch (same order as
-    # ``batch_apply``) and re-check before writing, so a reject can't mark a
-    # change REJECTED after the batch that applied it.
+    # ``batch_apply`` commits (#540) — lock the batch and re-check before
+    # writing, so a reject can't mark a change REJECTED after the batch that
+    # applied it.
+    #
+    # LOCK ORDER (#559): batch, then its ``ProposedChange`` — no ``Plan`` lock,
+    # deliberately. This endpoint never touches the Plan row, and the app-wide
+    # order (``docs/meso/decisions.md``) forbids taking two locks out of
+    # sequence, not skipping a level. So it stays consistent with both
+    # ``batch_apply`` (Plan -> batch -> children) and ``demo.clear_demo``
+    # (Plan -> batches -> cascade), and a "Remove demo data" that already holds
+    # this batch simply makes this request wait and then answer 404 for a row
+    # that is now gone, rather than deadlock with it.
     with transaction.atomic():
         batch = (
             AgentProposalBatch.objects.select_for_update()
@@ -6196,9 +6256,21 @@ def batch_apply(request, batch_id):
     with transaction.atomic():
         # The pre-check above is unlocked, so two concurrent Applies can both
         # pass it (#540). Lock the batch row and re-check, so only the winner
-        # records the undo action and applies. Lock order: the batch, then the
-        # Plan row ``record_plan_action`` locks; nothing locks them the other
-        # way round. (No ``select_related``: it would lock the joined rows too.)
+        # records the undo action and applies. (No ``select_related``: it would
+        # lock the joined rows too.)
+        #
+        # LOCK ORDER (#559) — the Plan row FIRST, then the batch. This used to
+        # read the other way round ("the batch, then the Plan row
+        # ``record_plan_action`` locks; nothing locks them the other way
+        # round"), which was true until ``demo.clear_demo`` started locking a
+        # plan and then its batches ahead of its cascade delete. That made this
+        # endpoint the inversion: an Apply holding the batch and waiting on the
+        # Plan, against a "Remove demo data" holding the Plan and waiting on
+        # the batch. Plan-before-child is the app-wide order
+        # (``docs/meso/decisions.md``), and this path took the Plan lock a few
+        # statements later anyway (via ``record_plan_action``), so hoisting it
+        # costs nothing: that call now re-acquires a lock already held.
+        Plan.objects.select_for_update().filter(pk=batch.plan_id).first()
         batch = (
             AgentProposalBatch.objects.select_for_update().filter(pk=batch.pk).first()
         )
