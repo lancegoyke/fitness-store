@@ -875,9 +875,18 @@ function createLogger() {
     // value check it bound a grid row to a response item at a DIFFERENT
     // `set_number` without noticing — after a spared row is renumbered away
     // by the collision pass, the page would show a tick at the row's OLD
-    // number for a row that has since moved to a different one. The values
-    // check refuses that match too, since the renumbered row's own values
-    // didn't change but nothing in this payload actually posted its new slot.
+    // number for a row that has since moved to a different one.
+    //
+    // Why the value check refuses that match is worth stating exactly,
+    // because the obvious reason is the WRONG one: it is not that "the
+    // renumbered row's values didn't change" — unchanged values would make
+    // `postedValuesMatch` ACCEPT it. It is that a row can only be both
+    // SPARED and renumbered when its values differ from what this payload
+    // posted: `_client_held` deletes any visible row an anchored id restates
+    // verbatim (see `athlete_log_session`), so a visible survivor is one the
+    // payload did NOT restate, and a hidden survivor never reaches the
+    // response at all. Either way there is nothing left at the old number
+    // for this row's own posted values to match.
     //
     // Match order, for a grid row `r`, where "posted" means this payload's
     // OWN `sets` list actually named `r`'s current `(prescription,
@@ -899,6 +908,14 @@ function createLogger() {
     //      drops an unticked, empty-looking row from the NEXT save's payload,
     //      and that save deletes the very row the old server just created
     //      for it.
+    //      Leg 3 can still land on a FOREIGN row whose values happen to
+    //      equal what this row posted — `athlete_log_session` itself calls
+    //      two identical performances ("225 x 5" twice) an ordinary thing to
+    //      do. That is harmless, and deliberately so: the collision
+    //      renumbering leaves at most one VISIBLE row at a slot this payload
+    //      posted, so the pk adopted there is exactly the one a reload would
+    //      bind to this grid row showing these values. Adopting it agrees
+    //      with the render rather than guessing against it.
     // A row with NO match — posted or not — gets `r.done = false` and
     // NEITHER `r.id` NOR `r.client_id` touched:
     //   * POSTED, nothing at the id/slot at all: the server ABSORBED it (it
