@@ -363,14 +363,13 @@ def restore_plan_snapshot(plan, snapshot):
     #   * an occupant that is athlete data — ``athlete_authored``, or a cell
     #     some ``LoggedSet`` still points at (``_cells_athlete_data_points_at``
     #     above) — KEEPS the coordinate. The snapshotted cell that wanted it
-    #     is left for the upsert loop below to handle via its existing
-    #     same-pk ``athlete_authored`` guard: if the snapshotted pk itself
-    #     still exists, that guard `continue`s past it unchanged; if it
-    #     doesn't exist (the redo case above), the loop tries to *revive* it
-    #     at a coordinate this pass has left occupied, and the same unique
-    #     constraint that would have 500ed the whole transaction blocks that
-    #     one ``save()`` — so a snapshotted cell must be excluded from the
-    #     loop entirely once its coordinate is spared, not merely left alone.
+    #     must be excluded from the upsert loop ENTIRELY, not merely left to
+    #     that loop's own same-pk ``athlete_authored`` guard, which fires only
+    #     when the snapshotted row is itself athlete-authored and so would not
+    #     catch this at all. Left in the loop, the snapshotted pk would be
+    #     revived onto a coordinate this pass has just decided to leave
+    #     occupied, and the same unique constraint that would have 500ed the
+    #     whole transaction blocks that one ``save()`` instead.
     #   * otherwise the occupant is a coach-made row absent from the snapshot
     #     — exactly what the stray-cell purge below removes on its own, just
     #     discovered here one step earlier because it happens to sit where a
@@ -385,12 +384,16 @@ def restore_plan_snapshot(plan, snapshot):
     # that, this block would hard-delete rows the purge protects, which is a
     # rule the two halves must not disagree about.
     #
-    # The delete takes the same lock-then-recheck as the purge, down to the
-    # same split between what is FILTERED and what is RE-CHECKED:
-    # ``athlete_authored`` is decided from the unlocked read below and those
-    # occupants are never locked (see the branch that spares them for why
-    # locking one would deadlock against ``cell_line_write``), while the three
-    # ``LoggedSet`` pointers are re-read under the lock.
+    # The delete takes the same lock-then-recheck as the purge, and treats
+    # ``athlete_authored`` the same way it does — as a FILTER, never as a
+    # locked re-check. Here that decision is made twice over: such an occupant
+    # is spared from the unlocked read below and so never reaches the locking
+    # SELECT at all, and that SELECT carries ``.exclude(athlete_authored=True)``
+    # anyway. (See the branch that spares them for why taking ``FOR UPDATE``
+    # on one would deadlock against ``cell_line_write``.) The purge keeps a
+    # third, redundant re-read of the flag; this guard drops it, because the
+    # filter has already answered it. Only the three ``LoggedSet`` pointers
+    # are re-read under the lock.
     #
     # What that lock does NOT do here: the occupancy read below is unlocked,
     # so it cannot see a cell another transaction has inserted at one of these
@@ -514,15 +517,25 @@ def restore_plan_snapshot(plan, snapshot):
 
     for pk, row in cell_rows.items():
         if pk in colliding_pks_to_skip:
-            # A skipped cell is a silent, invisible outcome otherwise: the
-            # endpoint answers ``ok: true``, that one line simply does not come
-            # back, and no later undo or redo can revive it either (every older
-            # snapshot meets the same occupant and takes the same branch). Say
-            # so in the log, with both pks, so "my redo lost a line" is
-            # answerable after the fact instead of being a mystery.
+            # A skip is otherwise a silent outcome: the endpoint answers
+            # ``ok: true`` and that one line simply does not come back. Log
+            # both pks so "my redo lost a line" is answerable afterwards.
+            #
+            # The message deliberately says only that the coordinate is taken,
+            # not WHY. Three different branches above land here — an
+            # athlete-authored occupant, an occupant under a slot or week this
+            # snapshot has soft-deleted, and an occupant some ``LoggedSet``
+            # names — and only the first and third involve athlete data at
+            # all. Nor is a skip necessarily permanent: a later restore whose
+            # snapshot has that slot and week live takes the stray-delete
+            # branch instead, and a coach reclaim through ``cell_line_write``
+            # flips an athlete-authored occupant back to coach-owned, after
+            # which it is deletable again. An earlier draft of this comment
+            # claimed both the reason and the permanence, and was wrong on
+            # each.
             logger.info(
                 "meso.history: skipped restoring cell %s at %s — "
-                "occupied by cell %s, which athlete data holds",
+                "coordinate held by cell %s",
                 pk,
                 coord_of_pk.get(pk),
                 (occupant_by_coord.get(coord_of_pk.get(pk)) or (None,))[0],
@@ -727,8 +740,10 @@ def restore_plan_snapshot(plan, snapshot):
     # one reason: "what spares a cell" is then answered in exactly one place,
     # evaluated once the rows can no longer move, the same way
     # ``settle.settle_log`` re-verifies every one of its own conditions
-    # instead of trusting the read that selected the row. On a backend where
-    # ``select_for_update`` is a no-op (SQLite) it is the only check there is.
+    # instead of trusting the read that selected the row. It is the only
+    # check evaluated AFTER the rows could no longer move — the candidate
+    # filter still runs on every backend, including the ones where
+    # ``select_for_update`` is a no-op (SQLite).
     #
     # ``select_for_update`` is a documented no-op on SQLite (its
     # ``has_select_for_update`` is ``False`` and the compiler drops the

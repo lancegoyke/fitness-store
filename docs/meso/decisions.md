@@ -2856,10 +2856,21 @@ _(Append dated entries here as decisions land.)_
   are never locked; only the `LoggedSet` pointers are re-checked under the
   lock.
   **A skipped cell is now logged.** Skipping is otherwise invisible — the
-  endpoint answers `ok: true`, the line simply does not come back, and no
-  later undo or redo revives it, since every older snapshot meets the same
-  occupant and takes the same branch. `history` logs the skipped pk and the
-  occupant so "my redo lost a line" is answerable afterwards.
+  endpoint answers `ok: true` and the line simply does not come back — so
+  `history` logs the skipped pk, its coordinate and the occupant's pk. The
+  message says only that the coordinate is taken, deliberately: three
+  branches reach that skip and only two of them involve athlete data, and a
+  skip is not necessarily permanent (a later restore whose snapshot has that
+  slot and week live takes the stray-delete branch, and a coach reclaim
+  through `cell_line_write` makes an athlete-authored occupant deletable
+  again). Round 3 caught an earlier draft of that message asserting both the
+  reason and the permanence, and being wrong on each.
+  **`test_undo_purge_postgres.py` is in the Postgres CI job's file list.**
+  That list is the only place these files run — each skips itself on SQLite,
+  so one left off it executes in no job at all and looks green while testing
+  nothing. Round 3 caught the new file missing from it; the list now carries
+  a comment saying to add Postgres-only files in the commit that creates
+  them.
   **#562 is untouched and does not conflict.** It's a `Session`-vs-`Plan`
   ordering issue on a different path entirely (`athlete_cell_write`'s
   `Session` lock vs. `api_plan_undo`/`api_plan_redo`'s `Plan` lock) — no
