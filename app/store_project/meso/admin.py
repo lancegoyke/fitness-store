@@ -145,6 +145,13 @@ class WeekInline(admin.TabularInline):
 class SessionSlotInline(admin.TabularInline):
     model = SessionSlot
     extra = 0
+    # #578 C1: an inline delete calls ``obj.delete()`` straight from
+    # ``BaseModelFormSet.save_existing_objects()`` — no confirmation page
+    # renders, so the "CASCADE is the loud option" story in
+    # ``LoggedSet.exercise_slot``'s model comment only holds on this model's
+    # OWN admin page (``SessionSlotAdmin``), not here. Mirrors
+    # ``WeekDeliveryInline``'s ``can_delete = False``.
+    can_delete = False
 
 
 @admin.register(Mesocycle)
@@ -158,6 +165,12 @@ class ExerciseSlotInline(admin.TabularInline):
     model = ExerciseSlot
     extra = 0
     raw_id_fields = ("exercise",)
+    # #578 C1: same reasoning as ``SessionSlotInline`` — an inline delete
+    # skips the confirmation page entirely, so a single Save here would
+    # silently CASCADE to this slot's ``Prescription`` and ``LoggedSet`` rows
+    # (an athlete's performed history) with no warning shown. The loud path
+    # stays this model's OWN admin page (``ExerciseSlotAdmin``).
+    can_delete = False
 
 
 @admin.register(SessionSlot)
@@ -254,11 +267,18 @@ class PrescriptionAdmin(admin.ModelAdmin):
 class LoggedSetInline(admin.TabularInline):
     model = LoggedSet
     extra = 0
-    raw_id_fields = ("prescription", "source_line", "exercise_slot")
-    # An internal hint for the restore lookup (#541), not something to edit.
-    # It has no DB constraint, so it can outlive its cell; as an editable field
-    # that stale id would fail validation and block saving the whole log.
-    readonly_fields = ("reclaimed_line",)
+    raw_id_fields = ("prescription", "source_line")
+    # ``exercise_slot`` (#578 C1) is DERIVED, not edited: ``LoggedSet.save()``
+    # fills it from ``prescription`` whenever it's left blank, so an editable
+    # raw-id box here could only do harm — accept "left empty" (a NULL anchor
+    # nothing will ever fill once this row exists) or "a slot that disagrees
+    # with this row's own ``prescription``". Shown, not editable.
+    #
+    # ``reclaimed_line`` is an internal hint for the restore lookup (#541),
+    # not something to edit either. It has no DB constraint, so it can
+    # outlive its cell; as an editable field that stale id would fail
+    # validation and block saving the whole log.
+    readonly_fields = ("exercise_slot", "reclaimed_line")
 
 
 @admin.register(SessionLog)

@@ -35,32 +35,71 @@ from django.db.models import OuterRef, Subquery
 def backfill_exercise_slot(apps, schema_editor):
     LoggedSet = apps.get_model("meso", "LoggedSet")
     Prescription = apps.get_model("meso", "Prescription")
+    db_alias = schema_editor.connection.alias
 
-    LoggedSet.objects.filter(
+    LoggedSet.objects.using(db_alias).filter(
         exercise_slot__isnull=True, prescription__isnull=False
     ).update(
         exercise_slot_id=Subquery(
-            Prescription.objects.filter(pk=OuterRef("prescription_id")).values(
-                "exercise_slot_id"
-            )[:1]
+            # ``.order_by()`` (clearing it) matters here: ``Prescription.Meta.
+            # ordering = ["exercise_slot__order", "line"]`` otherwise leaks
+            # into this SET subquery and makes the emitted SQL carry an INNER
+            # JOIN on ``meso_exerciseslot`` (to sort by ``U1."order"``) that
+            # has nothing to do with the value being selected. Harmless today
+            # only because ``Prescription.exercise_slot`` is ``null=False`` —
+            # the INNER JOIN can never drop a row. If that field ever became
+            # nullable, the implicit join would turn into a filter and a
+            # ``Prescription`` with no ``exercise_slot`` would make this
+            # subquery return no row at all, so the ``UPDATE`` would write
+            # NULL for that ``LoggedSet`` instead of leaving it alone (or
+            # correctly resolving it) — a silent behavior change hiding
+            # inside an ORDER BY that was never meant to affect this query.
+            Prescription.objects.using(db_alias)
+            .filter(pk=OuterRef("prescription_id"))
+            .order_by()
+            .values("exercise_slot_id")[:1]
         )
     )
 
-    # Whatever is still NULL has no ``prescription`` to have backfilled it
-    # from (see the module docstring) — report it rather than guess, so an
-    # operator can chase these pks down (they're the pre-existing #577/#581
-    # casualties this whole change exists to stop producing more of).
-    leftover_pks = list(
-        LoggedSet.objects.filter(exercise_slot__isnull=True)
-        .order_by("pk")
-        .values_list("pk", flat=True)[:20]
+    # Whatever is still NULL either (a) never had a ``prescription`` to
+    # backfill from (a genuine #577/#581 casualty — hard-deleted before this
+    # migration ever ran), or (b) raced the ``UPDATE`` above: under Postgres
+    # READ COMMITTED, a still-running old container can INSERT a fresh
+    # ``LoggedSet`` (``exercise_slot`` NULL, ``prescription`` live) in the gap
+    # between the ``UPDATE`` above and the counts below, during a rolling
+    # deploy. That row's ``prescription`` is perfectly live — it just missed
+    # the ``UPDATE`` sweep — so it is NOT a #577/#581 casualty, and reporting
+    # it as one would send an operator chasing a data-loss bug that isn't
+    # there. The two are told apart by whether ``prescription`` itself is
+    # NULL: only that half is unrecoverable, so only that half is the
+    # headline count. The other half is real but expected to self-heal —
+    # named separately, as rows the follow-up's re-run will pick up.
+    unrecoverable_qs = LoggedSet.objects.using(db_alias).filter(
+        exercise_slot__isnull=True, prescription__isnull=True
     )
-    remaining = LoggedSet.objects.filter(exercise_slot__isnull=True).count()
-    if remaining:
+    unrecoverable_pks = list(
+        unrecoverable_qs.order_by("pk").values_list("pk", flat=True)[:20]
+    )
+    unrecoverable = unrecoverable_qs.count()
+    if unrecoverable:
         print(
-            f"0051_backfill_loggedset_exercise_slot: {remaining} LoggedSet "
+            f"0051_backfill_loggedset_exercise_slot: {unrecoverable} LoggedSet "
             "row(s) have no prescription to backfill exercise_slot from "
-            f"(first {len(leftover_pks)} pks): {leftover_pks}"
+            f"(first {len(unrecoverable_pks)} pks): {unrecoverable_pks}"
+        )
+
+    still_null = (
+        LoggedSet.objects.using(db_alias).filter(exercise_slot__isnull=True).count()
+    )
+    raced = still_null - unrecoverable
+    if raced:
+        print(
+            f"0051_backfill_loggedset_exercise_slot: {raced} additional "
+            "LoggedSet row(s) still have exercise_slot NULL but a LIVE "
+            "prescription — these raced this migration's UPDATE (e.g. a "
+            "still-running old container inserted them mid-deploy) rather "
+            "than predating it, and the follow-up backfill re-run will pick "
+            "them up."
         )
 
 

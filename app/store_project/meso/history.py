@@ -157,7 +157,7 @@ def serialize_plan_snapshot(plan):
 
 
 def _cells_athlete_data_points_at(pks):
-    """The subset of ``pks`` some ``LoggedSet`` still names, by any of its three pointers.
+    """The subset of ``pks`` some ``LoggedSet`` still names, by any of its three pointers AT A CELL.
 
     Shared by both halves of ``restore_plan_snapshot``'s "never touch a cell
     athlete data points at" rule — the stray-cell purge at the end of this

@@ -23,7 +23,9 @@ right reason (see the PR description / task report for the exact commands
 run and output).
 """
 
+import json
 from decimal import Decimal
+from unittest import mock
 
 import pytest
 from django.db import connection
@@ -36,6 +38,8 @@ from store_project.meso import personal_records
 from store_project.meso import presenters
 from store_project.meso import serializers
 from store_project.meso import settle
+from store_project.meso.admin import ExerciseSlotInline
+from store_project.meso.admin import SessionSlotInline
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import MesocycleFactory
@@ -46,6 +50,7 @@ from store_project.meso.models import AthleteOneRm
 from store_project.meso.models import ExerciseSlot
 from store_project.meso.models import LoggedSet
 from store_project.meso.models import Prescription
+from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
@@ -315,7 +320,18 @@ class TestAnchorSlotResolution:
     """``anchor_slot``/``anchor_slot_id``'s four states, read straight off the model."""
 
     def test_exercise_slot_null_with_a_live_prescription_still_counts(self):
-        """The transitional fallback: what an old container writes mid-deploy."""
+        """The transitional fallback: what an old container writes mid-deploy.
+
+        Built by bypassing ``LoggedSet.save()`` — ``.filter(...).update(...)``
+        rather than ``.create()`` — because item B's model-invariant
+        ``save()`` override now fills ``exercise_slot`` from a live
+        ``prescription`` on every ordinary write. A row with
+        ``exercise_slot=None`` next to a live ``prescription`` can therefore
+        no longer come from ``.create()`` (that would immediately backfill
+        it via ``save()``); it can only come from code that predates the
+        column — a stale container mid-deploy, or a bulk write that bypasses
+        ``save()`` the way this construction deliberately does.
+        """
         s = seed()
         log = SessionLogFactory(
             session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
@@ -323,11 +339,13 @@ class TestAnchorSlotResolution:
         row = LoggedSet.objects.create(
             session_log=log,
             prescription=s.squat,
-            exercise_slot=None,
             set_number=1,
             reps="5",
             load="225",
         )
+        LoggedSet.objects.filter(pk=row.pk).update(exercise_slot=None)
+        row.refresh_from_db()
+        assert row.exercise_slot_id is None, "the update() bypass should have held"
         assert row.anchor_slot_id == s.squat.exercise_slot_id
         assert row.anchor_slot == s.squat.exercise_slot
 
@@ -492,3 +510,221 @@ class TestLastLoggedLabelsSurvivesAHardDelete:
         assert labels.get(s.squat.pk) == "1×5 · 225kg · RPE8", (
             "the lift should still show its last-logged summary"
         )
+
+
+# -- 9. CASCADE blast radius + admin inlines can't reach it ------------------
+
+
+class TestExerciseSlotCascadeBlastRadius:
+    """Hard-deleting an ``ExerciseSlot`` deletes its ``LoggedSet`` rows.
+
+    Nothing in this module pins what CASCADE (``LoggedSet.exercise_slot``'s
+    model comment) actually does end to end — every other test here
+    hard-deletes a ``Prescription`` (the line-0 cell), never the
+    ``ExerciseSlot`` itself. Paired with the admin-inline guard: an inline
+    delete calls ``obj.delete()`` straight from
+    ``BaseModelFormSet.save_existing_objects()`` with no confirmation page,
+    so ``ExerciseSlotInline``/``SessionSlotInline`` both set
+    ``can_delete = False`` (review item C.1) precisely so this CASCADE, real
+    as it is, can only be triggered through a model's OWN admin page — never
+    silently through an inline Save.
+    """
+
+    def test_hard_deleting_the_slot_cascades_to_the_logged_set(self):
+        s = seed()
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
+        )
+        row = LoggedSetFactory(
+            session_log=log,
+            prescription=s.squat,
+            set_number=1,
+            reps="5",
+            load="225",
+            rpe="8",
+        )
+        slot_id = s.squat.exercise_slot_id
+        assert row.exercise_slot_id == slot_id
+
+        ExerciseSlot.objects.get(pk=slot_id).delete()
+
+        assert not LoggedSet.objects.filter(pk=row.pk).exists(), (
+            "hard-deleting the ExerciseSlot should CASCADE to its LoggedSet rows"
+        )
+        assert not Prescription.objects.filter(pk=s.squat.pk).exists()
+
+    def test_admin_inlines_refuse_the_delete(self):
+        assert ExerciseSlotInline.can_delete is False
+        assert SessionSlotInline.can_delete is False
+
+
+# -- 10. the admin cannot create a NULL anchor (item B) ----------------------
+
+
+class TestModelInvariantClosesTheAdminPath:
+    """A ``LoggedSet`` saved with a ``prescription`` and no ``exercise_slot`` derives it.
+
+    That's the ``save()`` invariant (review item B), and it's what makes it
+    safe to leave ``exercise_slot`` ``readonly`` on ``LoggedSetInline`` (item
+    C.2) rather than merely blocked-but-still-wrong.
+
+    Driving the real admin ``LoggedSetInline`` POST end to end would need
+    hand-built management-form data with no precedent anywhere in this
+    suite; the behavior being pinned lives entirely in ``LoggedSet.save()``,
+    so a direct ``.save()`` assertion is the honest test here, per the
+    review's own "acceptable if driving the inline formset is
+    disproportionate."
+    """
+
+    def test_a_plain_save_derives_the_anchor(self):
+        s = seed()
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
+        )
+        row = LoggedSet(
+            session_log=log, prescription=s.squat, set_number=1, reps="5", load="225"
+        )
+        assert row.exercise_slot_id is None, "not derived yet"
+
+        row.save()
+
+        assert row.exercise_slot_id == s.squat.exercise_slot_id
+        row.refresh_from_db()
+        assert row.exercise_slot_id == s.squat.exercise_slot_id, (
+            "the derived value must persist, not just live on the in-memory instance"
+        )
+
+    def test_an_update_fields_save_still_persists_the_derived_anchor(self):
+        """The ``update_fields`` branch: a targeted save must not skip the fill."""
+        s = seed()
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
+        )
+        row = LoggedSet.objects.create(
+            session_log=log, prescription=s.squat, set_number=1, reps="5", load="225"
+        )
+        LoggedSet.objects.filter(pk=row.pk).update(exercise_slot=None)
+        row.refresh_from_db()
+        assert row.exercise_slot_id is None
+
+        row.reps = "6"
+        row.save(update_fields=["reps"])
+
+        row.refresh_from_db()
+        assert row.reps == "6"
+        assert row.exercise_slot_id == s.squat.exercise_slot_id, (
+            "save(update_fields=[...]) must add 'exercise_slot' to the list "
+            "passed to super().save(), or the derived fill never reaches the "
+            "database even though the in-memory instance looks right"
+        )
+
+
+# -- 11. athlete_log_session: the anchor map survives a mid-request race -----
+
+
+class TestAthleteLogSessionAnchorsThroughTheRace:
+    """Item A: the anchor map must not depend on trainability.
+
+    ``_clean_logged_sets`` validates the payload against
+    ``session.trainable_cells()`` BEFORE ``athlete_log_session`` takes its
+    lock; the view re-reads ``trainable_cells()`` a SECOND time inside the
+    transaction, to build the ``exercise_slot`` map ``bulk_create`` uses. A
+    coach's ``prescription_skip``/``prescription_delete`` committing in that
+    gap can make a validated cell non-trainable by the second read. This
+    patches ``Session.trainable_cells`` to answer differently across its two
+    calls within one request — full on the first (validation), missing the
+    posted cell on the second (in-transaction) — to simulate that race
+    directly, without needing a second real request to land mid-transaction.
+
+    Deleting the fallback query item A adds to ``athlete_log_session`` (the
+    ``Prescription.objects.filter(pk__in=missing)`` lookup) makes this fail:
+    the posted set would persist with ``exercise_slot_id = None``.
+    """
+
+    def test_a_cell_that_stops_being_trainable_mid_request_still_anchors(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        real_trainable_cells = Session.trainable_cells
+        calls = {"n": 0}
+
+        def flaky_trainable_cells(self):
+            calls["n"] += 1
+            cells = list(real_trainable_cells(self))
+            if calls["n"] > 1:
+                # The in-transaction re-read: the posted cell just stopped
+                # being trainable (a skip/delete landed in the gap).
+                cells = [c for c in cells if c.pk != s.squat.pk]
+            return cells
+
+        with mock.patch.object(Session, "trainable_cells", flaky_trainable_cells):
+            resp = client.post(
+                reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
+                data=json.dumps(
+                    {
+                        "sets": [
+                            {
+                                "prescription": s.squat.pk,
+                                "set_number": 1,
+                                "reps": "5",
+                                "load": "225",
+                            }
+                        ]
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        assert resp.status_code == 200, resp.content
+        assert calls["n"] >= 2, "the test must actually exercise both reads"
+        row = LoggedSet.objects.get(
+            session_log__session=s.session, session_log__athlete=s.athlete
+        )
+        assert row.prescription_id == s.squat.pk
+        assert row.exercise_slot_id == s.squat.exercise_slot_id, (
+            "a cell that stopped being trainable mid-request must still get "
+            "a real exercise_slot, not a NULL anchor"
+        )
+
+
+# -- 12. the N+1 guard on the transitional fallback is pinned ----------------
+
+
+class TestSessionResultsAnchorFallbackHasNoNPlus1:
+    """``select_related("prescription")`` in ``session_results``'s ``Prefetch``.
+
+    ``LoggedSetFactory`` always derives ``exercise_slot`` from its own
+    ``prescription`` (see the factory), so no other test in this suite ever
+    builds a set whose ``anchor_slot_id`` actually falls through to the
+    ``.prescription`` hop — meaning ``test_results.py``'s
+    ``django_assert_num_queries(11)`` never dereferences ``prescription`` at
+    all, and would stay green even if ``select_related("prescription")`` were
+    deleted from the ``Prefetch``. This test forces the transitional shape on
+    purpose (bypassing ``save()`` the same way item B's test does), across
+    MULTIPLE sets sharing one log, and pins the query count as fixed rather
+    than growing with how many such sets exist — proof the join is doing
+    real work: without it, each set's own, per-instance-uncached
+    ``.prescription`` access would cost its own query.
+    """
+
+    def test_multiple_transitional_sets_cost_no_extra_queries(
+        self, django_assert_num_queries
+    ):
+        s = seed()
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
+        )
+        rows = [
+            LoggedSetFactory(
+                session_log=log,
+                prescription=s.squat,
+                set_number=n,
+                reps="5",
+                load="225",
+                rpe="8",
+            )
+            for n in range(1, 4)
+        ]
+        LoggedSet.objects.filter(pk__in=[r.pk for r in rows]).update(exercise_slot=None)
+
+        with django_assert_num_queries(11):
+            presenters.session_results(s.session)

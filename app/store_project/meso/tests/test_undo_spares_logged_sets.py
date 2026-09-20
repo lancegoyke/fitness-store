@@ -6,9 +6,12 @@ at — but for two of the three pointers only: ``parsed_sets``
 #541). ``logged_sets`` (``LoggedSet.prescription``, ``SET_NULL``) — the most
 direct of the three, the line-0 cell every logged set is filed under — was left
 out, so an undo could hard-delete a cell an ordinary structured row names. The
-row survived with ``prescription = NULL``, and every derivation filters that
-out: the set stayed on the athlete's page as text while silently ceasing to
-count toward their estimated 1RM and their records.
+row survived with ``prescription = NULL``, and before #578 C1 every
+derivation filtered that out: the set stayed on the athlete's page as text
+while silently ceasing to count toward their estimated 1RM and their
+records. Since C1, that same row keeps counting through its own
+``exercise_slot`` — see ``TestRestoreAfterReclaimSparesANullPrescriptionRow``
+below for what changed and what didn't.
 
 ON REACHING THE PRECONDITION. The purge only fires on a cell absent from the
 snapshot whose slot *and* week are both live in it. No real endpoint produces
@@ -284,7 +287,11 @@ class TestRestoreAfterReclaimSparesANullPrescriptionRow:
         live = LoggedSet.objects.get(source_line=cell, prescription__isnull=False)
         assert live.pk != original.pk, (
             "the restore adopted the NULL-prescription row instead of "
-            "minting a fresh, countable one"
+            "minting a fresh row — since #578 C1 the NULL-prescription "
+            "survivor already counts on its own via exercise_slot, so "
+            "adopting it here would leave the restored performance "
+            "double-counted (both rows live and both anchored) rather than "
+            "invisible"
         )
         assert live.prescription_id == s.squat.pk
         assert (live.load, live.reps) == ("225", "5")

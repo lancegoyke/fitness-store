@@ -243,6 +243,13 @@ source_line = models.ForeignKey(
   `key_str` identity, coach `session_results`, and e1RM/PR all keep working (coach
   results only fetch line-0 cells).
 
+  > **Superseded by #578 C1** — see `LoggedSet.exercise_slot`'s comment in
+  > `models.py`: since C1 all three of these — `key_str` identity, coach
+  > `session_results`, and e1RM/PR — resolve through `exercise_slot`/
+  > `anchor_slot`, not through `prescription` directly. `prescription` is
+  > still written but is no longer what these derivations read. Left as
+  > design-time prose above; not rewritten.
+
 **Migration:** additive nullable FK. Number it the next free slot — if the
 current-week removal (`0043`) has landed, this is `0044`; otherwise `0043`. **Pure
 append, no renumber, no backfill** (existing rows default NULL = structured

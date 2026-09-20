@@ -1664,12 +1664,32 @@ def athlete_log_session(request, pk):
         trainable_pks = {p.pk for p in trainable_cells}
         # #578 C1: `LoggedSet.exercise_slot_id` for a posted set, keyed by the
         # line-0 cell (`Prescription`) pk the payload names as
-        # `prescription_id`. `_clean_logged_sets` already refuses any set
-        # that doesn't reference a trainable cell in this session, so every
-        # `cs["prescription_id"]` below is a key this map holds — the
-        # `.get()` fallback to `None` at the `bulk_create` call is belt only,
-        # never expected to fire.
+        # `prescription_id`. `_clean_logged_sets` validates against
+        # `trainable_cells()` up front, at ~1520, BEFORE the lock this
+        # function takes above — but `trainable_cells` here is read AGAIN
+        # inside the transaction, and a coach's `prescription_skip` or
+        # `prescription_delete` can commit in that gap and make a validated
+        # cell non-trainable by the time we get here. So this map can be
+        # missing a `cs["prescription_id"]` that was perfectly valid at
+        # validation time — the `.get()` fallback below is not a "never
+        # expected to fire" belt, it is a real, if narrow, race window.
         slot_id_by_cell_pk = {p.pk: p.exercise_slot_id for p in trainable_cells}
+        # Close that gap directly: fetch the slot for any posted cell this
+        # in-transaction read no longer counts as trainable, straight from
+        # the cell itself rather than from `trainable_cells()`. A cell that
+        # stopped being trainable didn't stop existing, and its
+        # `exercise_slot_id` doesn't change just because it was skipped or
+        # deleted — that's the whole anchor invariant this PR exists to
+        # guarantee. Guarded by `if missing` so the ordinary (no race) path
+        # costs no extra query.
+        posted_prescription_ids = {cs["prescription_id"] for cs in cleaned_sets}
+        missing = posted_prescription_ids - slot_id_by_cell_pk.keys()
+        if missing:
+            slot_id_by_cell_pk.update(
+                Prescription.objects.filter(pk__in=missing).values_list(
+                    "pk", "exercise_slot_id"
+                )
+            )
         for row in rows:
             if row.prescription_id not in trainable_pks:
                 continue

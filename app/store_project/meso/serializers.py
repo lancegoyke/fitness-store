@@ -525,7 +525,9 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
         # #578 C1: one `Prefetch` joining both hops the anchor can resolve
         # through, so `s.anchor_slot` below never fires an N+1 query either
         # way — a plain `"sets__exercise_slot", "sets__prescription__exercise_slot"`
-        # lookup would cost three queries instead of one.
+        # lookup would cost four prefetch queries instead of one: `sets`,
+        # `sets__exercise_slot`, `sets__prescription`, and
+        # `sets__prescription__exercise_slot`.
         .prefetch_related(
             Prefetch(
                 "sets",
