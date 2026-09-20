@@ -13,12 +13,14 @@ count toward their estimated 1RM and their records.
 ON REACHING THE PRECONDITION. The purge only fires on a cell absent from the
 snapshot whose slot *and* week are both live in it. No real endpoint produces
 that for a line-0 cell: every path that creates an ``ExerciseSlot``
-(``_new_block_wide_row``, ``session_add``, ``Mesocycle.scaffold``,
+(``_new_block_wide_row``, ``session_add``, ``Plan.scaffold``,
 ``append_week`` — including its ``source is None`` fallback to ``{0: ""}`` — and
 the agent's ``_apply_add``) creates the line-0 cell for every live week in the
 SAME transaction, and the purge below is the only hard-delete of a
-``Prescription`` in the whole codebase. Undo/redo's strict LIFO can't
-manufacture the gap either: reviving an older row means first undoing every
+``Prescription`` that leaves its slot and week standing (``meso_import_template``
+and ``seed_meso_demo`` cascade whole subtrees, taking the logs with them).
+Undo/redo's strict LIFO can't manufacture the gap either: reviving an older row
+means first undoing every
 later action, which removes whatever that action created. So the one step below
 that does NOT go through an endpoint is creating a bare ``ExerciseSlot`` with no
 cells; the lazy line-0 create, the athlete's logged set and the coach's undo are
@@ -165,9 +167,38 @@ class TestUndoSparesACellALoggedSetPointsAt:
             "the set stopped counting toward the athlete's records"
         )
 
+        # The other half of sparing it, stated so it can't drift: the cell the
+        # undo declined to delete keeps the text the undo meant to erase, so
+        # for THIS cell the undo is a visual no-op. That is the same trade the
+        # ``parsed_sets``/``reclaimed_sets`` clauses already make — the
+        # athlete's performance outranks reverting a coach's line — and it is
+        # deliberate, not a gap. Losing the set is the worse outcome.
+        cell.refresh_from_db()
+        assert cell.text == "3 x 5, 225"
+
     def test_a_cell_nothing_points_at_is_still_purged(self, client):
-        """The exclusion must spare pointed-at cells, not stop purging."""
+        """The exclusion must spare pointed-at cells, not stop purging.
+
+        The plan holds a real ``LoggedSet`` throughout — one pointing at a
+        DIFFERENT cell — on purpose. With no logged sets anywhere, a correct
+        per-cell ``NOT EXISTS`` and a broken plan-wide "any set exists at all"
+        read identically, and this test would pass either way. The other
+        exercise's set makes the two disagree.
+        """
         coach, athlete, plan, week, session, slot = _seed_slot_without_cells()
+
+        # A second row, fully set up, that the athlete logs against — so the
+        # purge below runs with athlete data present in the same plan.
+        other = ExerciseSlot.objects.create(
+            session_slot=session.session_slot, name="Row", order=2
+        )
+        other_cell = Prescription.objects.create(
+            exercise_slot=other, week=week, line=0, text="3 x 10"
+        )
+        client.force_login(athlete)
+        assert _log_one_set(client, session, other_cell).status_code == 200
+        kept = LoggedSet.objects.get(prescription=other_cell)
+
         before_the_cell = history.serialize_plan_snapshot(plan)
 
         client.force_login(coach)
@@ -182,6 +213,10 @@ class TestUndoSparesACellALoggedSetPointsAt:
 
         assert not Prescription.objects.filter(pk=stray.pk).exists(), (
             "a stray cell no athlete data points at must still be purged"
+        )
+        kept.refresh_from_db()
+        assert kept.prescription_id == other_cell.pk, (
+            "the purge severed a set pointing at an unrelated cell"
         )
 
 
@@ -224,9 +259,11 @@ class TestRestoreAfterReclaimSparesANullPrescriptionRow:
 
         # Simulate the #577 damage directly: a pre-fix `restore_plan_snapshot`
         # purge hard-deleted this row's line-0 cell out from under it, and
-        # `LoggedSet.prescription` is SET_NULL on delete -- this is exactly
-        # the state a buggy undo left behind, not a shortcut around
-        # exercising it.
+        # `LoggedSet.prescription` is SET_NULL on delete. That is the state a
+        # pre-fix undo left behind -- and, per the module docstring, one no
+        # real endpoint sequence reaches today, so this is a guard against a
+        # row damaged before the fix (or by admin, #581), not a reproduction
+        # of a state the app can still produce.
         LoggedSet.objects.filter(pk=original.pk).update(prescription=None)
 
         client.force_login(s.athlete)

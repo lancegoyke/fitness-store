@@ -344,6 +344,15 @@ def restore_plan_snapshot(plan, snapshot):
     # count toward their estimated 1RM and their records, with nothing to say
     # so. Those filters are right; the cell simply must not be deleted out from
     # under them.
+    #
+    # Sparing has a visible cost, and it is accepted: a spared cell keeps the
+    # text (and ``skipped``) it had when the snapshot was taken WITHOUT it, so
+    # for that one cell the undo is a no-op rather than a revert — the restore
+    # never rewrites it, since it isn't in ``cell_pks``. That was already true
+    # of the two clauses above; with ``logged_sets`` it now reaches the
+    # prescription LINE and the em-dash skip, not just freeform sub-lines. It
+    # is still the right trade: a coach can retype a line, and nobody can
+    # retype the athlete's performance.
     models.Prescription.objects.filter(
         week__mesocycle__plan=plan,
         exercise_slot_id__in=live_exercise_slot_pks_in_snapshot,

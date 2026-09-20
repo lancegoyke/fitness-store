@@ -2415,8 +2415,14 @@ def parsed_set_is_hidden(logged_set, *, line_rows=None):
     line = logged_set.source_line
     if line is not None:
         # Parsed rows keep main's rule verbatim: no sibling tie-break needed,
-        # because ``_upsert_parsed_set`` already refuses to mint a same-valued
-        # twin ON ONE LINE, so two parsed rows can never both match this text.
+        # because ``_upsert_parsed_set`` declines to mint a same-valued twin
+        # ON ONE LINE, so two LIVE parsed rows can never both match this text.
+        # One exception, and it is inert (#577): the upsert's reuse lookups are
+        # scoped by ``prescription``, so a row whose ``prescription`` already
+        # went NULL is passed over and a fresh row minted beside it. Both then
+        # carry this ``source_line``, but the NULL one is invisible everywhere
+        # that counts — every derivation filters ``prescription__isnull=False``
+        # — so there is still only one row a tie-break could be about.
         return _line_shows(line, logged_set)
     # #561: a coach undo restores the reclaimed line's text but never touches
     # ``LoggedSet`` (undo must not write athlete data, and a GET must not
