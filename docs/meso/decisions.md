@@ -640,7 +640,11 @@ safe against every path that takes the coach row first — the segment loaders,
 while holding no athlete row, then run the ordinary sorted cascade pass. If
 `clear_demo(C)` owns C, that first pass holds nothing it needs; if the delete
 owns C, clear cannot pass its first lock. When C is not selected, neither path
-wants it and both take their shared athletes ascending. No cycle can form.
+wants it and both take their shared athletes ascending. No cycle can form —
+provided a demo athlete is never itself a coach. They are created with an
+unusable password and no request path gives one a `CoachProfile` or a link as
+coach, so only a staff-made row breaks that; a coach that sorts below its own
+owner would be locked first and reopen the cycle (#614).
 
 Every path that takes two or more row locks takes them in that sequence,
 counting both `select_for_update` and the implicit exclusive lock an
