@@ -330,13 +330,36 @@ def restore_plan_snapshot(plan, snapshot):
     # pointer: a structured copy a "Log session" left behind still names this
     # cell via ``reclaimed_line``, with no ``source_line`` of its own — a cell
     # a structured copy still answers to is athlete data pointing at it too.
+    #
+    # ``logged_sets`` (#577) closes the set: ``LoggedSet.prescription`` is the
+    # MOST direct of the three pointers — the line-0 cell every logged set is
+    # filed under, whatever its origin — and was the one left out. It is also
+    # the costliest to lose, because nothing downstream survives it: where a
+    # missing ``source_line`` merely strips a row of the protection its link
+    # carries, a NULL ``prescription`` drops the set from every derivation that
+    # reads it (``personal_records._live_logged_sets``,
+    # ``one_rm.derive_one_rm_values``, ``settle`` — all filter
+    # ``prescription__isnull=False``). The set stays in the database and stays
+    # on the athlete's page as its sub-line's text, while silently ceasing to
+    # count toward their estimated 1RM and their records, with nothing to say
+    # so. Those filters are right; the cell simply must not be deleted out from
+    # under them.
+    #
+    # Sparing has a visible cost, and it is accepted: a spared cell keeps the
+    # text (and ``skipped``) it had when the snapshot was taken WITHOUT it, so
+    # for that one cell the undo is a no-op rather than a revert — the restore
+    # never rewrites it, since it isn't in ``cell_pks``. That was already true
+    # of the two clauses above; with ``logged_sets`` it now reaches the
+    # prescription LINE and the em-dash skip, not just freeform sub-lines. It
+    # is still the right trade: a coach can retype a line, and nobody can
+    # retype the athlete's performance.
     models.Prescription.objects.filter(
         week__mesocycle__plan=plan,
         exercise_slot_id__in=live_exercise_slot_pks_in_snapshot,
         week_id__in=live_week_pks_in_snapshot,
     ).exclude(pk__in=cell_pks).exclude(athlete_authored=True).exclude(
         parsed_sets__isnull=False
-    ).exclude(reclaimed_sets__isnull=False).delete()
+    ).exclude(reclaimed_sets__isnull=False).exclude(logged_sets__isnull=False).delete()
 
 
 def record_plan_action(plan, label):
