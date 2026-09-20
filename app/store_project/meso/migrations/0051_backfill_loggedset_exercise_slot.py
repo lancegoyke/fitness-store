@@ -10,11 +10,15 @@ raw correlated-update SQL string would.
 A row can be left with ``exercise_slot`` still NULL after this, for one of
 two reasons, told apart by whether its ``prescription`` is itself NULL:
 
-- **unrecoverable**: ``prescription`` was already NULL when this migration
-  ran (hard-deleted before it, e.g. by #577's now-fixed purge or #581's
-  unguarded admin delete). There is no slot to recover it from: guessing one
-  from ``source_line`` or ``reclaimed_line`` would fabricate an identity
-  this migration didn't actually observe.
+- **unrecoverable**: has no ``prescription`` at the moment of this read (e.g.
+  hard-deleted before this migration ever ran, by #577's now-fixed purge or
+  #581's unguarded admin delete — but not necessarily: a row inserted after
+  the ``UPDATE`` below whose ``prescription`` is then hard-deleted before
+  this migration's own snapshot read runs lands here too, even though its
+  ``prescription`` was perfectly live when the ``UPDATE`` ran). There is no
+  slot to recover it from either way: guessing one from ``source_line`` or
+  ``reclaimed_line`` would fabricate an identity this migration didn't
+  actually observe.
 - **raced**: ``prescription`` is still live, but the row missed the
   ``UPDATE`` above anyway — e.g. inserted by a still-running old container,
   during a rolling deploy, in the gap between the ``UPDATE`` and this
@@ -41,6 +45,20 @@ NULL.
 
 from django.db import migrations
 from django.db.models import OuterRef, Subquery
+
+
+def _partition(rows):
+    """Split ``(pk, prescription_id)`` pairs into unrecoverable vs. raced pks.
+
+    A pure function of the one snapshot read the migration takes (see the
+    module docstring for why it must be exactly one read, not several) —
+    factored out so a plain unit test can pin both buckets without a second
+    database connection, which is what an actual raced row would need to
+    construct for real (the migration holds the write lock throughout).
+    """
+    unrecoverable_pks = [pk for pk, prescription_id in rows if prescription_id is None]
+    raced_pks = [pk for pk, prescription_id in rows if prescription_id is not None]
+    return unrecoverable_pks, raced_pks
 
 
 def backfill_exercise_slot(apps, schema_editor):
@@ -96,9 +114,9 @@ def backfill_exercise_slot(apps, schema_editor):
         .order_by("pk")
         .values_list("pk", "prescription_id")
     )
-    unrecoverable_pks = [pk for pk, prescription_id in rows if prescription_id is None]
-    raced = sum(1 for _, prescription_id in rows if prescription_id is not None)
+    unrecoverable_pks, raced_pks = _partition(rows)
     unrecoverable = len(unrecoverable_pks)
+    raced = len(raced_pks)
 
     if unrecoverable:
         shown_pks = unrecoverable_pks[:20]
@@ -109,13 +127,14 @@ def backfill_exercise_slot(apps, schema_editor):
         )
 
     if raced:
+        shown_pks = raced_pks[:20]
         print(
             f"0051_backfill_loggedset_exercise_slot: {raced} additional "
             "LoggedSet row(s) still have exercise_slot NULL but a LIVE "
             "prescription — these raced this migration's UPDATE (e.g. a "
             "still-running old container inserted them mid-deploy) rather "
             "than predating it, and the follow-up backfill re-run will pick "
-            "them up."
+            f"them up (first {len(shown_pks)} pks): {shown_pks}"
         )
 
 

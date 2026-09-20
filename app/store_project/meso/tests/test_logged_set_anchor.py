@@ -31,6 +31,7 @@ right reason (see the PR description / task report for the exact commands
 run and output).
 """
 
+import importlib
 import json
 from decimal import Decimal
 from unittest import mock
@@ -60,6 +61,7 @@ from store_project.meso.models import LoggedSet
 from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
+from store_project.meso.models import SessionSlot
 from store_project.meso.tests._helpers import day
 from store_project.meso.tests._helpers import presc
 from store_project.meso.tests.test_parse_at_commit import seed
@@ -319,6 +321,58 @@ class TestBackfillMigration:
         finally:
             executor.loader.build_graph()
             executor.migrate(leaf_nodes)
+
+
+_backfill_0051 = importlib.import_module(
+    "store_project.meso.migrations.0051_backfill_loggedset_exercise_slot"
+)
+
+
+class TestPartitionHelper:
+    """``0051``'s ``_partition`` — the unrecoverable/raced split, with no database at all.
+
+    The real "raced" branch (a ``LoggedSet`` whose ``prescription`` is live
+    but which missed the migration's own ``UPDATE``) can't be constructed in
+    a single-connection SQLite test — building one for real needs a second
+    connection racing the migration's write lock, which
+    ``TestBackfillMigration`` above can't do. Factoring the partition logic
+    into a plain function of already-fetched ``(pk, prescription_id)`` pairs
+    sidesteps that entirely: this pins both buckets — including one with a
+    live ``prescription`` (raced) — without touching a database or a
+    migration executor.
+    """
+
+    def test_splits_unrecoverable_from_raced(self):
+        rows = [
+            (1, None),  # unrecoverable: no prescription at all
+            (2, 101),  # raced: prescription is live
+            (3, None),  # unrecoverable
+            (4, 102),  # raced
+        ]
+
+        unrecoverable_pks, raced_pks = _backfill_0051._partition(rows)
+
+        assert unrecoverable_pks == [1, 3]
+        assert raced_pks == [2, 4]
+
+    def test_an_empty_read_partitions_to_two_empty_lists(self):
+        assert _backfill_0051._partition([]) == ([], [])
+
+    def test_all_unrecoverable_leaves_raced_empty(self):
+        rows = [(1, None), (2, None)]
+
+        unrecoverable_pks, raced_pks = _backfill_0051._partition(rows)
+
+        assert unrecoverable_pks == [1, 2]
+        assert raced_pks == []
+
+    def test_all_raced_leaves_unrecoverable_empty(self):
+        rows = [(1, 101), (2, 102)]
+
+        unrecoverable_pks, raced_pks = _backfill_0051._partition(rows)
+
+        assert unrecoverable_pks == []
+        assert raced_pks == [1, 2]
 
 
 # -- 4 & 5. the transitional anchor_slot fallback ----------------------------
@@ -694,12 +748,15 @@ class TestModelInvariantClosesTheAdminPath:
     safe to leave ``exercise_slot`` ``readonly`` on ``LoggedSetInline`` (item
     C.2) rather than merely blocked-but-still-wrong.
 
-    Driving the real admin ``LoggedSetInline`` POST end to end would need
-    hand-built management-form data with no precedent anywhere in this
-    suite; the behavior being pinned lives entirely in ``LoggedSet.save()``,
-    so a direct ``.save()`` assertion is the honest test here, per the
-    review's own "acceptable if driving the inline formset is
-    disproportionate."
+    Most of this class pins that invariant directly against
+    ``LoggedSet.save()`` — the behavior being proved lives entirely there, so
+    a direct ``.save()`` assertion is the precise test.
+    ``test_the_real_admin_inline_post_derives_the_anchor`` below also drives
+    the actual ``LoggedSetInline`` POST end to end: hand-built
+    management-form data DOES have a precedent in this suite —
+    ``TestExerciseSlotCascadeBlastRadius.test_admin_inlines_refuse_the_delete``
+    builds exactly that for ``ExerciseSlotInline`` — so there is no reason
+    left to settle for the model-level test alone.
     """
 
     def test_a_plain_save_derives_the_anchor(self):
@@ -744,6 +801,36 @@ class TestModelInvariantClosesTheAdminPath:
             "database even though the in-memory instance looks right"
         )
 
+    def test_an_empty_update_fields_list_leaves_memory_and_db_agreeing(self):
+        """``save(update_fields=[])`` must be a TRUE no-op, not just a DB no-op.
+
+        Django's own ``Model.save()`` returns before writing anything when
+        ``update_fields`` is an explicit, non-``None`` EMPTY list. Mutating
+        ``self.exercise_slot_id`` before that guard would leave the in-memory
+        instance re-anchored while the database keeps the old value — the
+        opposite of a no-op, and a live divergence between what the caller's
+        object says and what a fresh read would return.
+        """
+        s = seed()
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
+        )
+        row = LoggedSet.objects.create(
+            session_log=log, prescription=s.squat, set_number=1, reps="5", load="225"
+        )
+        LoggedSet.objects.filter(pk=row.pk).update(exercise_slot=None)
+        row.refresh_from_db()
+        assert row.exercise_slot_id is None
+
+        row.save(update_fields=[])
+
+        assert row.exercise_slot_id is None, (
+            "an empty update_fields list must not re-anchor the in-memory "
+            "instance either, not just skip writing it to the database"
+        )
+        row.refresh_from_db()
+        assert row.exercise_slot_id is None, "and the database must be untouched"
+
     def test_a_re_pointed_prescription_re_derives_the_anchor(self):
         """An admin re-point of ``prescription`` re-files the set onto the new slot.
 
@@ -784,6 +871,84 @@ class TestModelInvariantClosesTheAdminPath:
             "the re-derived value must persist, not just live on the in-memory instance"
         )
 
+    def test_the_real_admin_inline_post_derives_the_anchor(self, client):
+        """Drives the real ``SessionLogAdmin``/``LoggedSetInline`` POST, not just ``.save()``.
+
+        Reuses the hand-built management-form recipe
+        ``TestExerciseSlotCascadeBlastRadius.test_admin_inlines_refuse_the_delete``
+        established for ``ExerciseSlotInline``. ``exercise_slot`` is readonly
+        on ``LoggedSetInline`` (never a form field the POST can name), so the
+        only thing this proves that the ``.save()``-level tests above don't
+        is that the REAL inline save path — ``BaseModelFormSet.
+        save_existing_objects()`` → ``form.save()`` → ``LoggedSet.save()`` —
+        still reaches the derivation with no ``exercise_slot`` key in the
+        payload at all.
+
+        Gotcha worth pinning in the comment, not just the code:
+        ``save_existing_objects()`` only calls ``form.save()`` for a row
+        whose form ``has_changed()`` — an unchanged existing form is skipped
+        entirely, ``LoggedSet.save()`` included. So this POST must actually
+        change some editable field (``reps``, here) for the derivation to
+        fire at all; a POST that merely restates the row's current values
+        would pass for the wrong reason (nothing ran), not the right one.
+        """
+        s = seed()
+        log = SessionLogFactory(
+            session=s.session, athlete=s.athlete, status=SessionLog.Status.DONE
+        )
+        row = LoggedSetFactory(
+            session_log=log, prescription=s.squat, set_number=1, reps="5", load="225"
+        )
+        LoggedSet.objects.filter(pk=row.pk).update(exercise_slot=None)
+        row.refresh_from_db()
+        assert row.exercise_slot_id is None, "sanity: starts transitional"
+
+        client.force_login(SuperAdminFactory())
+        url = reverse("admin:meso_sessionlog_change", args=[log.pk])
+        data = {
+            "session": str(log.session_id),
+            "athlete": str(log.athlete_id),
+            "date": "",
+            "status": log.status,
+            "notes": "",
+            "last_activity_at_0": "2026-01-01",
+            "last_activity_at_1": "00:00:00",
+            "sets-TOTAL_FORMS": "1",
+            "sets-INITIAL_FORMS": "1",
+            "sets-MIN_NUM_FORMS": "0",
+            "sets-MAX_NUM_FORMS": "1000",
+            "sets-0-id": str(row.pk),
+            "sets-0-session_log": str(log.pk),
+            "sets-0-prescription": str(s.squat.pk),
+            "sets-0-set_number": "1",
+            # Changed from the row's actual "5" — see the docstring: an
+            # unchanged inline form is never saved at all.
+            "sets-0-reps": "6",
+            "sets-0-load": "225",
+            "sets-0-rpe": "",
+            "sets-0-source_line": "",
+            "_save": "Save",
+        }
+
+        resp = client.post(url, data)
+        if resp.status_code != 302:
+            errors = [
+                iaf.formset.errors for iaf in resp.context["inline_admin_formsets"]
+            ]
+            raise AssertionError(
+                f"expected a successful save (302), got {resp.status_code}: "
+                f"main form errors {resp.context['adminform'].form.errors!r}, "
+                f"inline formset errors {errors!r}"
+            )
+
+        row.refresh_from_db()
+        assert row.reps == "6", "sanity: the POST actually changed the row"
+        assert row.exercise_slot_id == s.squat.exercise_slot_id, (
+            "the real LoggedSetInline POST, with no exercise_slot field in "
+            "the payload at all, must still derive the anchor from "
+            "prescription via LoggedSet.save()"
+        )
+
 
 # -- 11. athlete_log_session: the anchor map survives a mid-request race -----
 
@@ -796,11 +961,20 @@ class TestAthleteLogSessionAnchorsThroughTheRace:
     lock; the view re-reads ``trainable_cells()`` a SECOND time inside the
     transaction, to build the ``exercise_slot`` map ``bulk_create`` uses. A
     coach's ``prescription_skip``/``prescription_delete`` committing in that
-    gap can make a validated cell non-trainable by the second read. This
-    patches ``Session.trainable_cells`` to answer differently across its two
-    calls within one request — full on the first (validation), missing the
-    posted cell on the second (in-transaction) — to simulate that race
-    directly, without needing a second real request to land mid-transaction.
+    gap can make a validated cell non-trainable by the second read.
+
+    A single 200 POST to ``athlete_log_session`` actually calls
+    ``trainable_cells()`` THREE times, not two: ``_clean_logged_sets``
+    (validation, before the lock), the anchor-map build below (in-transaction,
+    what this race targets), and ``refresh_one_rms``'s lift list (also
+    in-transaction, after ``bulk_create``, unconditional on every save). This
+    patches ``Session.trainable_cells`` to answer differently ONLY across the
+    first two — full on the first (validation), missing the posted cell on
+    the second (the anchor map) — to simulate that race directly, without
+    needing a second real request to land mid-transaction. The patch is
+    scoped to leave the THIRD call untouched (the real, unfiltered list),
+    because stripping the posted cell from ``refresh_one_rms`` too would be a
+    second, unrelated side effect this test isn't about and doesn't assert on.
 
     Deleting the fallback query item A adds to ``athlete_log_session`` (the
     ``Prescription.objects.filter(pk__in=missing)`` lookup) makes this fail:
@@ -816,9 +990,12 @@ class TestAthleteLogSessionAnchorsThroughTheRace:
         def flaky_trainable_cells(self):
             calls["n"] += 1
             cells = list(real_trainable_cells(self))
-            if calls["n"] > 1:
-                # The in-transaction re-read: the posted cell just stopped
-                # being trainable (a skip/delete landed in the gap).
+            if calls["n"] == 2:
+                # The in-transaction anchor-map re-read (views.py ~1663), and
+                # ONLY that one — the posted cell just stopped being
+                # trainable (a skip/delete landed in the gap). The third call
+                # (~2051, refresh_one_rms's lift list) is deliberately left
+                # alone; see the class docstring.
                 cells = [c for c in cells if c.pk != s.squat.pk]
             return cells
 
@@ -841,7 +1018,11 @@ class TestAthleteLogSessionAnchorsThroughTheRace:
             )
 
         assert resp.status_code == 200, resp.content
-        assert calls["n"] >= 2, "the test must actually exercise both reads"
+        assert calls["n"] == 3, (
+            "the test must actually exercise all three reads — validation, "
+            "the anchor map, and the 1RM refresh — or it isn't proving what "
+            "the class docstring says it proves"
+        )
         row = LoggedSet.objects.get(
             session_log__session=s.session, session_log__athlete=s.athlete
         )
@@ -849,6 +1030,92 @@ class TestAthleteLogSessionAnchorsThroughTheRace:
         assert row.exercise_slot_id == s.squat.exercise_slot_id, (
             "a cell that stopped being trainable mid-request must still get "
             "a real exercise_slot, not a NULL anchor"
+        )
+
+    def test_a_cell_whose_slot_moves_to_another_day_mid_request_still_anchors(
+        self, client
+    ):
+        """RED against scoping the fallback query by day/week (round 2's mistake).
+
+        A coach's ``prescription_move`` re-homes an ``ExerciseSlot`` onto a
+        DIFFERENT day's ``SessionSlot`` with a plain
+        ``ExerciseSlot.objects.filter(pk=...).update(session_slot_id=...)`` —
+        no lock shared with this session's ``athlete_log_session`` request.
+        If that commits in the same validated-but-not-yet-locked gap the
+        other test above exercises, the in-transaction re-read of
+        ``trainable_cells()`` naturally stops returning the posted cell too
+        (``cells()`` joins ``exercise_slot__session_slot=self.session_slot``),
+        landing it in ``missing`` — but this time the cell's row still
+        physically exists, just filed under another day. A fallback query
+        scoped to ``week=session.week, exercise_slot__session_slot=
+        session.session_slot`` filters on the day the slot USED to be on and
+        matches nothing, so it must fail this test (NULL anchor); the
+        unscoped fallback still finds the cell by its own pk and passes.
+
+        Unlike the previous test's synthetic per-call list filtering, the
+        move here is a REAL, persisted ``.update()`` — fired once, between
+        the first call (validation) and the second (the anchor map), mirroring
+        exactly when ``prescription_move`` could actually land. It is not
+        undone afterward, so the THIRD ``trainable_cells()`` call
+        (``refresh_one_rms``'s lift list, ~2051) naturally reflects the same
+        moved state too — an honest consequence of a real mutation, not a
+        hidden side effect of this patch, and this test makes no assertion
+        about that refresh either way.
+        """
+        s = seed()
+        client.force_login(s.athlete)
+        other_session_slot = SessionSlot.objects.create(
+            mesocycle=s.week.mesocycle,
+            day_number=99,
+            name="Upper",
+            bias="",
+            order=99,
+        )
+        real_trainable_cells = Session.trainable_cells
+        calls = {"n": 0}
+
+        def flaky_trainable_cells(self):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                # The gap: a coach's prescription_move commits here, once,
+                # re-homing the slot onto another day. No list-comprehension
+                # filtering — the real query, re-run below (and by every
+                # later call in this request), naturally excludes the cell
+                # once its exercise_slot really points at another day's
+                # SessionSlot.
+                ExerciseSlot.objects.filter(pk=s.squat.exercise_slot_id).update(
+                    session_slot_id=other_session_slot.pk
+                )
+            return list(real_trainable_cells(self))
+
+        with mock.patch.object(Session, "trainable_cells", flaky_trainable_cells):
+            resp = client.post(
+                reverse("meso:athlete_log_session", kwargs={"pk": s.session.pk}),
+                data=json.dumps(
+                    {
+                        "sets": [
+                            {
+                                "prescription": s.squat.pk,
+                                "set_number": 1,
+                                "reps": "5",
+                                "load": "225",
+                            }
+                        ]
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        assert resp.status_code == 200, resp.content
+        assert calls["n"] == 3, "the test must actually exercise all three reads"
+        row = LoggedSet.objects.get(
+            session_log__session=s.session, session_log__athlete=s.athlete
+        )
+        assert row.prescription_id == s.squat.pk
+        assert row.exercise_slot_id == s.squat.exercise_slot_id, (
+            "a cell whose slot moved to another day mid-request must still "
+            "get its own real exercise_slot, not a NULL anchor — the day it "
+            "currently sits on is irrelevant to which slot IS its anchor"
         )
 
 

@@ -268,21 +268,34 @@ class LoggedSetInline(admin.TabularInline):
     model = LoggedSet
     extra = 0
     raw_id_fields = ("prescription", "source_line")
-    # ``exercise_slot`` (#578 C1) is DERIVED, not edited: ``LoggedSet.save()``
-    # re-derives it from ``prescription`` on every save (not just when it's
-    # left blank — see that method's docstring), so it always mirrors
-    # ``prescription.exercise_slot`` while this row's ``prescription`` (which
-    # IS editable here) is live. An editable raw-id box for ``exercise_slot``
-    # itself could therefore only ever contribute a value that disagrees with
-    # the row's own cell — save() would just overwrite it back into
-    # agreement. Shown, not editable.
+    # ``exercise_slot`` (#578 C1) is DERIVED, not edited — but the trade is
+    # different depending on whether this row's ``prescription`` is live.
+    #
+    # While ``prescription`` (which IS editable here) is live: ``save()``
+    # re-derives ``exercise_slot`` from it on every save (not just when it's
+    # left blank — see that method's docstring), so an editable raw-id box
+    # for ``exercise_slot`` could only ever contribute a value that
+    # disagrees with the row's own cell for one request — the next save
+    # overwrites it back into agreement. Shown, not editable.
+    #
+    # For a ``prescription``-NULL orphan (a #577/#581 hard-delete, or the
+    # blank-add case below): ``save()``'s re-derive is guarded by
+    # ``if self.prescription_id is not None``, so it does NOT fire, and an
+    # editable box would in fact be the only way to re-attach an identity to
+    # such a row. Leaving it readonly here anyway is a deliberate choice,
+    # not an oversight — it matches migration 0051's own refusal to guess a
+    # slot for an unrecoverable row from ``source_line``/``reclaimed_line``:
+    # hand-typing a slot id in the admin would invent an identity the system
+    # never actually observed, which is worse than leaving the row
+    # unattached and countable as orphaned.
     #
     # The one shape that really is uncountable, and worth naming rather than
     # leaving implicit: an inline ADD with ``prescription`` also left blank
     # commits both pointers NULL, and no later save repairs that (there is no
-    # ``prescription`` to derive from). Not a regression introduced here —
-    # ``main`` produces an equally uncountable row from the same blank add —
-    # just a gap this field doesn't close either.
+    # ``prescription`` to derive from, and re-attaching by hand is the same
+    # invented-identity problem as the paragraph above). Not a regression
+    # introduced here — ``main`` produces an equally uncountable row from the
+    # same blank add — just a gap this field doesn't close either.
     #
     # ``reclaimed_line`` is an internal hint for the restore lookup (#541),
     # not something to edit either. It has no DB constraint, so it can

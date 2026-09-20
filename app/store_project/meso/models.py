@@ -18,6 +18,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import models
+from django.db import router
 from django.db import transaction
 from django.db.models.functions import Now
 from django.utils import timezone
@@ -2844,11 +2845,41 @@ class LoggedSet(models.Model):
         walk (``row.save(update_fields=["set_number"])``) — that walk is
         bounded and rare (``MAX_LOGGED_SET_NUMBER``), so the one extra
         lightweight query this adds there is an acceptable price for the
-        invariant holding everywhere, not just at creation.
+        invariant holding everywhere, not just at creation. It also does NOT
+        cover ``save(raw=True)`` — the path ``DeserializedObject.save()`` uses
+        for ``loaddata`` — which calls ``Model.save_base(..., raw=True)``
+        directly and never reaches this override at all. Latent only: the repo
+        has no ``fixtures/`` directory and no ``loaddata`` call anywhere.
+
+        ``update_fields=[]`` (an explicit, non-``None`` EMPTY iterable) is
+        Django's own signal to skip the write entirely — ``Model.save()``
+        returns before touching the database when ``update_fields is not None
+        and not update_fields``. The mutation of ``self.exercise_slot_id``
+        below is guarded the same way, not just the "add it to update_fields"
+        step further down: without that guard, ``row.save(update_fields=[])``
+        would re-anchor the IN-MEMORY instance while ``super().save()`` writes
+        nothing, leaving the Python object and the database permanently
+        disagreeing about a save that was supposed to be a no-op.
+
+        The derivation query also honors the caller's own ``using`` (or, absent
+        one, ``router.db_for_write``) rather than always reading ``default`` —
+        matching what ``super().save(**kwargs)`` already does with the same
+        kwarg. Unreachable today (one ``default`` alias, no database routers),
+        but a caller doing ``LoggedSet.objects.using(alias).create(...)``
+        writes through ``alias``; a hardcoded ``default`` read here would
+        silently derive the anchor from a different database than the one
+        being written to.
         """
-        if self.prescription_id is not None:
+        update_fields = kwargs.get("update_fields")
+        if self.prescription_id is not None and (
+            update_fields is None or update_fields
+        ):
+            db_alias = kwargs.get("using") or router.db_for_write(
+                type(self), instance=self
+            )
             resolved_slot_id = (
-                Prescription.objects.filter(pk=self.prescription_id)
+                Prescription.objects.using(db_alias)
+                .filter(pk=self.prescription_id)
                 .values_list("exercise_slot_id", flat=True)
                 .first()
             )
@@ -2857,7 +2888,6 @@ class LoggedSet(models.Model):
                 and resolved_slot_id != self.exercise_slot_id
             ):
                 self.exercise_slot_id = resolved_slot_id
-                update_fields = kwargs.get("update_fields")
                 if update_fields:
                     kwargs["update_fields"] = set(update_fields) | {"exercise_slot"}
         super().save(*args, **kwargs)

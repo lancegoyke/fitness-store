@@ -1685,19 +1685,28 @@ def athlete_log_session(request, pk):
         posted_prescription_ids = {cs["prescription_id"] for cs in cleaned_sets}
         missing = posted_prescription_ids - slot_id_by_cell_pk.keys()
         if missing:
-            # Scoped to this session's own week/day — defense in depth, not a
-            # fix for a reachable bug: `_clean_logged_sets` already restricts
-            # every posted `prescription_id` to `session.trainable_cells()`
-            # (~1600 lines above this fallback), so nothing here can actually
-            # attribute a set to another session or week today. The scoping
-            # just means this lookup fails closed on its own, rather than
-            # depending on that other guard staying correct forever.
+            # Unscoped on purpose — do NOT filter this by `week=`/
+            # `exercise_slot__session_slot=`. The cell's own `exercise_slot_id`
+            # is the right answer regardless of which day its slot sits on
+            # *right now*; that is the whole point of anchoring to the slot
+            # instead of the cell. `_clean_logged_sets`, called at ~1520
+            # (above this block), has already restricted every posted
+            # `prescription_id` to this session's `trainable_cells()` — so
+            # scoping this fallback query too doesn't add safety, it
+            # reintroduces the bug this map exists to close: a coach's
+            # `prescription_move` can commit between that validation and this
+            # in-transaction read and re-home the slot onto another day's
+            # `session_slot` (via a plain `ExerciseSlot.objects.filter(...)
+            # .update(...)`, no lock shared with this session), which makes a
+            # day/week-scoped query return nothing for a cell that is still
+            # exactly the right cell. A zero-row result here leaves the
+            # `.get()` fallback below to write `exercise_slot_id=None` — the
+            # very NULL anchor this fallback was added to prevent — and
+            # nothing ever repairs it afterward.
             slot_id_by_cell_pk.update(
-                Prescription.objects.filter(
-                    pk__in=missing,
-                    week=session.week,
-                    exercise_slot__session_slot=session.session_slot,
-                ).values_list("pk", "exercise_slot_id")
+                Prescription.objects.filter(pk__in=missing).values_list(
+                    "pk", "exercise_slot_id"
+                )
             )
         for row in rows:
             if row.prescription_id not in trainable_pks:

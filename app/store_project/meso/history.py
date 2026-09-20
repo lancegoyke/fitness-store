@@ -614,17 +614,18 @@ def restore_plan_snapshot(plan, snapshot):
     # untouched by hard-deleting the ``Prescription`` cell this purge is
     # about — so the set keeps counting toward 1RM/PRs either way.
     #
-    # The guard stays in the OR anyway, because sparing costs nothing (see
-    # below) and because the OTHER two pointers still carry protection the
-    # TYPED path actually depends on: a missing ``source_line`` is how a
-    # re-blur of a sub-line finds and replaces its own derived row rather
-    # than minting a twin, and a missing ``reclaimed_line`` loses #541's hint
-    # linking a structured "Log session" copy back to the sub-line it
-    # replaced. Losing either is a live bug in the write path itself, wholly
-    # apart from whether the set still counts — so this clause is defense in
-    # depth for ``logged_sets`` now, not the load-bearing one it was before
-    # C1, but there is no reason to narrow the OR just because one of its
-    # three reasons got weaker.
+    # The guard stays in the OR anyway. Sparing has a real, visible cost (see
+    # below), and it is accepted — worth paying rather than free — and the
+    # OTHER two pointers still carry protection the TYPED path actually
+    # depends on: losing ``source_line`` breaks how a re-blur of a sub-line
+    # finds and replaces its own derived row rather than minting a twin
+    # (a *present* ``source_line`` is what the lookup keys on), and a missing
+    # ``reclaimed_line`` loses #541's hint linking a structured "Log session"
+    # copy back to the sub-line it replaced. Losing either is a live bug in
+    # the write path itself, wholly apart from whether the set still counts —
+    # so this clause is defense in depth for ``logged_sets`` now, not the
+    # load-bearing one it was before C1, but there is no reason to narrow the
+    # OR just because one of its three reasons got weaker.
     #
     # Sparing has a visible cost, and it is accepted: a spared cell keeps the
     # text (and ``skipped``) it had when the snapshot was taken WITHOUT it, so
