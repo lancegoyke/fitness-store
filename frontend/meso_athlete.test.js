@@ -17,6 +17,11 @@ const LOG_URL = "/meso/api/me/session/42/log/";
 const ONE_RM_URL = "/meso/api/me/session/42/one-rm/";
 
 // A minimal logger with two exercises (one prescription each, two sets each).
+// Each row carries a server `id` (11/12/21), as init() would hydrate it from
+// an already-rendered log — the ordinary case, and the one where `buildPayload`
+// posts `id` rather than minting a `client_id` (#567). A test exercising a
+// brand-new, never-saved row clears a row's `id` back to `null` itself (see
+// the "#567" cases under `buildPayload` / `syncFromLog` below).
 function makeLogger(overrides = {}) {
   const c = createLogger();
   c.logUrl = LOG_URL;
@@ -26,13 +31,15 @@ function makeLogger(overrides = {}) {
     {
       id: 1,
       set_rows: [
-        { set_number: 1, reps: "", load: "", rpe: "", done: false },
-        { set_number: 2, reps: "", load: "", rpe: "", done: false },
+        { id: 11, client_id: null, set_number: 1, reps: "", load: "", rpe: "", done: false },
+        { id: 12, client_id: null, set_number: 2, reps: "", load: "", rpe: "", done: false },
       ],
     },
     {
       id: 2,
-      set_rows: [{ set_number: 1, reps: "", load: "", rpe: "", done: false }],
+      set_rows: [
+        { id: 21, client_id: null, set_number: 1, reps: "", load: "", rpe: "", done: false },
+      ],
     },
   ];
   return Object.assign(c, overrides);
@@ -74,8 +81,8 @@ describe("buildPayload", () => {
     // exercise 2's only row stays empty → excluded.
     const payload = c.buildPayload(false);
     expect(payload.sets).toEqual([
-      { prescription: 1, set_number: 1, reps: "", load: "", rpe: "" },
-      { prescription: 1, set_number: 2, reps: "5", load: "", rpe: "" },
+      { prescription: 1, set_number: 1, reps: "", load: "", rpe: "", id: 11 },
+      { prescription: 1, set_number: 2, reps: "5", load: "", rpe: "", id: 12 },
     ]);
   });
 
@@ -86,21 +93,340 @@ describe("buildPayload", () => {
     const logged = makeLogger({ status: "done" });
     expect(logged.buildPayload(false).status).toBe("done");
   });
+
+  // Issue #567: `athlete_log_session` used to decide what a posted row MEANT
+  // by matching `(prescription, set_number, values)` — but a hidden parsed
+  // row isn't on screen, so the client's `set_number` is only evidence about
+  // a render that can be several saves stale. The fix is row identity: a row
+  // that already has a server id posts that id; a row that doesn't mints its
+  // own `client_id` — never both.
+  it("posts id for a row with a server id, and client_id (never both) for one without", () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[0].done = true; // has a server id (11)
+    c.exercises[0].set_rows[1].id = null; // never saved yet
+    c.exercises[0].set_rows[1].reps = "5";
+    const payload = c.buildPayload(false);
+    const [saved, fresh] = payload.sets;
+    expect(saved.id).toBe(11);
+    expect(saved.client_id).toBeUndefined();
+    expect(fresh.id).toBeUndefined();
+    expect(typeof fresh.client_id).toBe("string");
+    expect(fresh.client_id.length).toBeGreaterThan(0);
+    expect(fresh.client_id.length).toBeLessThanOrEqual(64);
+  });
+
+  // The remembered client_id is the whole point: save() builds this payload
+  // TWICE (once before settleLines(), once after), and the offline outbox
+  // can replay a third copy later — the click-time `enqueue`, the actual
+  // `fetch`, and any replay all have to name the SAME not-yet-created row,
+  // or the server sees three different new rows instead of one retried
+  // write.
+  it("mints a client_id once and reuses it on the next buildPayload call", () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[1].id = null;
+    c.exercises[0].set_rows[1].reps = "5";
+    const first = c.buildPayload(false).sets[0];
+    const second = c.buildPayload(false).sets[0];
+    expect(first.client_id).toBeTruthy();
+    expect(second.client_id).toBe(first.client_id);
+  });
 });
 
 describe("syncFromLog", () => {
+  // #567/#568 P1-E/F: `syncFromLog` is now part of a two-argument contract —
+  // it reconciles the response against `payload`, the body THIS SAVE
+  // actually sent, not just against the response by itself. Every case below
+  // passes one, built either directly or via a real `buildPayload()` call.
   it("reconciles row check state to exactly what the server persisted", () => {
     const c = makeLogger();
     c.exercises[0].set_rows[1].done = true; // will be cleared (not in log)
-    c.syncFromLog({
+    const payload = {
       sets: [
         { prescription: 1, set_number: 1 },
         { prescription: 2, set_number: 1 },
       ],
-    });
+    };
+    c.syncFromLog(
+      {
+        sets: [
+          { prescription: 1, set_number: 1 },
+          { prescription: 2, set_number: 1 },
+        ],
+      },
+      payload,
+    );
     expect(c.exercises[0].set_rows[0].done).toBe(true);
     expect(c.exercises[0].set_rows[1].done).toBe(false);
     expect(c.exercises[1].set_rows[0].done).toBe(true);
+  });
+
+  // Issue #567: a row that posted a client_id is matched by that client_id
+  // FIRST — an ordinary round trip like this one never needs the slot
+  // fallback below (#567/#568 P1-C), since the current server always echoes
+  // it. Once matched, the row adopts the server's real id and drops the
+  // client_id: the next save posts `id`, not a client_id, for this row.
+  it("adopts the server id and clears client_id once a new row's client_id round-trips", () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[1].id = null; // never saved yet
+    c.exercises[0].set_rows[1].reps = "5";
+    const payload = c.buildPayload(false);
+    const clientId = payload.sets[0].client_id;
+    c.syncFromLog(
+      {
+        sets: [{ prescription: 1, set_number: 2, id: 999, client_id: clientId }],
+      },
+      payload,
+    );
+    const row = c.exercises[0].set_rows[1];
+    expect(row.id).toBe(999);
+    expect(row.client_id).toBeNull();
+    expect(row.done).toBe(true);
+  });
+
+  // The same round trip, driven through the real save() plumbing (stubbed
+  // fetch) rather than calling buildPayload/syncFromLog directly. save()
+  // itself threads the payload it actually sent through to syncFromLog.
+  it("round-trips a new row's client_id through a full save()", async () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[1].id = null;
+    c.exercises[0].set_rows[1].reps = "5";
+    let sentClientId;
+    global.fetch = vi.fn().mockImplementation(async (_url, opts) => {
+      const body = JSON.parse(opts.body);
+      sentClientId = body.sets[0].client_id;
+      return res({
+        body: {
+          log: {
+            status: "pending",
+            sets: [
+              { prescription: 1, set_number: 2, id: 555, client_id: sentClientId },
+            ],
+          },
+        },
+      });
+    });
+    await c.save(false);
+    const row = c.exercises[0].set_rows[1];
+    expect(sentClientId).toBeTruthy();
+    expect(row.id).toBe(555);
+    expect(row.client_id).toBeNull();
+    expect(row.done).toBe(true);
+  });
+
+  // A row the server ABSORBED — it restated a row hidden from the logger, so
+  // the response carries no set for it — comes back un-ticked but KEEPS its
+  // id. Clearing it would make the next save mint a fresh client_id and post
+  // it as a brand-new row, duplicating the performance (#567); keeping it
+  // lets the server absorb it again next time, which is stable. This row
+  // WAS posted (it's filled), so the "un-posted" rule below does not apply
+  // to it — the id survives because it was posted-but-absorbed, not because
+  // it was never sent.
+  it("keeps a row's id when the server doesn't return it (absorbed by a hidden twin)", () => {
+    const c = makeLogger();
+    const row = c.exercises[0].set_rows[0]; // has a server id (11)
+    row.reps = "5"; // filled by content, independent of `done`
+    row.done = true;
+    const payload = c.buildPayload(false);
+    c.syncFromLog({ sets: [] }, payload);
+    expect(row.done).toBe(false);
+    expect(row.id).toBe(11);
+    expect(row.client_id).toBeNull();
+    // The next save posts the SAME id — not a freshly minted client_id.
+    const next = c.buildPayload(false);
+    expect(next.sets[0]).toMatchObject({ id: 11 });
+    expect(next.sets[0].client_id).toBeUndefined();
+  });
+
+  // #567/#568 P1-C: a rolling deploy can answer a client_id POST with an OLD
+  // server build that doesn't know the field and so never echoes it back.
+  // Matching ONLY by client_id then left the row un-ticked forever —
+  // `rowFilled` drops an unticked, empty-looking row from the next save's
+  // payload, and that save deletes the very row the old server just created
+  // for it. The fix falls back to the slot the response DOES carry — but
+  // only because this row's own slot really was posted.
+  it("ticks a client_id row by slot and adopts its id when the response echoes no client_id", () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[1].id = null; // never saved yet
+    c.exercises[0].set_rows[1].reps = "5";
+    const payload = c.buildPayload(false);
+    const clientId = payload.sets[0].client_id;
+    expect(clientId).toBeTruthy(); // sanity: a client_id really was posted
+    c.syncFromLog(
+      {
+        // No `client_id` at all on the response item -- an old server's
+        // shape. reps/load/rpe echo exactly what this row posted (#567/#568
+        // P1-I's value check requires that of the slot leg too).
+        sets: [{ prescription: 1, set_number: 2, id: 999, reps: "5", load: "", rpe: "" }],
+      },
+      payload,
+    );
+    const row = c.exercises[0].set_rows[1];
+    expect(row.id).toBe(999);
+    expect(row.done).toBe(true);
+    expect(row.client_id).toBeNull();
+    // Stays in later payloads: the next save posts the adopted id.
+    expect(c.buildPayload(false).sets[0]).toMatchObject({ id: 999 });
+  });
+
+  // P3: a response item can legitimately omit `id` (nothing to report — see
+  // the server's `client_ids` comment in `athlete_log_session`). Assigning
+  // `match.id` unguarded set `r.id` to `undefined`, which `r.id != null`
+  // then read as "no id" — so the very next `buildPayload` minted a
+  // brand-new `client_id` for a row the server already knows.
+  it("does not adopt an undefined id from a response item that omits it", () => {
+    const c = makeLogger();
+    const row = c.exercises[0].set_rows[0]; // has a server id (11)
+    row.reps = "5";
+    const payload = c.buildPayload(false);
+    // No `id` on the response item, but reps/load/rpe echo exactly what was
+    // posted -- #567/#568 P1-I's value check is what lets the slot leg match
+    // here despite the missing id.
+    c.syncFromLog(
+      { sets: [{ prescription: 1, set_number: 1, reps: "5", load: "", rpe: "" }] },
+      payload,
+    );
+    expect(row.done).toBe(true);
+    expect(row.id).toBe(11); // unchanged, not clobbered to undefined
+  });
+
+  // #567/#568 P1-E/F, THE ROOT CAUSE three independent reviewers traced back
+  // here: the old slot fallback ran over EVERY grid row, including one this
+  // payload never posted at all — so a hidden parsed row a coach's rewrite
+  // just made visible (echoed in the response because it's visible now, at
+  // a slot this stale page's own empty grid row happens to share) got
+  // silently ticked, and its pk got planted onto that unposted grid row.
+  // The NEXT ordinary edit into that same-looking-empty row then posted the
+  // planted id and let the server delete a real, distinct performance the
+  // athlete never touched. A grid row this payload did not post must get NO
+  // match at all, full stop — not even from the slot table.
+  it("leaves an UNPOSTED grid row un-ticked, with id still null, when the response carries a set at its slot", () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[1].id = null; // never saved, and never posted below
+    c.exercises[0].set_rows[0].reps = "5"; // only row 0 (slot 1) is posted
+    const payload = c.buildPayload(false);
+    expect(payload.sets.map((s) => s.set_number)).toEqual([1]); // sanity: slot 2 unposted
+
+    // The response carries a set at slot 2 anyway -- e.g. a hidden parsed
+    // row a coach's rewrite just made visible, unrelated to this save.
+    c.syncFromLog(
+      {
+        sets: [
+          { prescription: 1, set_number: 1, id: 11 },
+          { prescription: 1, set_number: 2, id: 777 },
+        ],
+      },
+      payload,
+    );
+
+    const untouched = c.exercises[0].set_rows[1];
+    expect(untouched.done).toBe(false);
+    expect(untouched.id).toBeNull();
+    expect(untouched.client_id).toBeNull();
+
+    // The athlete now types their own, genuinely new set into that
+    // same-looking-empty row. It must mint its OWN client_id -- never post
+    // the planted `777`.
+    untouched.reps = "8";
+    untouched.load = "315";
+    const next = c.buildPayload(false);
+    const row2 = next.sets.find((s) => s.set_number === 2);
+    expect(row2.id).toBeUndefined();
+    expect(typeof row2.client_id).toBe("string");
+  });
+
+  // #567/#568 P1-I: the slot fallback's soundness argument assumed the only
+  // visible row left at a posted slot, after the save, is the one the server
+  // created FOR that exact posted set -- true when the set was CREATED,
+  // false when it was ABSORBED (see the rewritten comment above this method,
+  // and `athlete_log_session`'s twin-absorb comment in views.py). When it's
+  // absorbed, `posted` there is recomputed AFTER the absorb, so the
+  // collision renumbering never moves a spared VISIBLE row off that slot --
+  // and the response's item at that slot is then a DIFFERENT row than the
+  // one this grid row posted. Without a value check, the slot leg plants
+  // that foreign row's pk onto this grid row, and the next ordinary edit
+  // posts it, letting the server delete a performance the page never
+  // rendered.
+  it("does not adopt a response item at the posted slot when its values differ from what this row posted", () => {
+    const c = makeLogger();
+    const row = c.exercises[0].set_rows[0]; // has a server id (11)
+    row.reps = "5";
+    row.load = "225";
+    const payload = c.buildPayload(false); // posts {id: 11, reps: "5", load: "225", rpe: ""}
+
+    // The response carries a DIFFERENT row at this same slot -- a foreign
+    // survivor (Y in the views.py comment) this save never touched, with its
+    // own distinct id and values.
+    c.syncFromLog(
+      {
+        sets: [
+          { prescription: 1, set_number: 1, id: 999, reps: "8", load: "315", rpe: "" },
+        ],
+      },
+      payload,
+    );
+
+    expect(row.done).toBe(false);
+    expect(row.id).toBe(11); // unchanged -- the foreign pk must NOT be planted
+    expect(row.client_id).toBeNull();
+    // The next save still posts THIS row's own id, never the foreign one.
+    expect(c.buildPayload(false).sets[0]).toMatchObject({ id: 11 });
+  });
+
+  // The mirror of the case above: when the response item at the posted slot
+  // DOES carry what this row posted, it is adopted exactly as before -- the
+  // value check is a new REFUSAL condition, not a new requirement that
+  // breaks the ordinary echo.
+  it("adopts a response item at the posted slot when its values match what this row posted", () => {
+    const c = makeLogger();
+    const row = c.exercises[0].set_rows[0]; // has a server id (11)
+    row.reps = "5";
+    row.load = "225";
+    const payload = c.buildPayload(false); // posts {id: 11, reps: "5", load: "225", rpe: ""}
+
+    // A different id than the row's own (e.g. the row was replaced under a
+    // new pk server-side) but the SAME values this row posted -- still a
+    // legitimate match via the slot leg.
+    c.syncFromLog(
+      {
+        sets: [
+          { prescription: 1, set_number: 1, id: 555, reps: "5", load: "225", rpe: "" },
+        ],
+      },
+      payload,
+    );
+
+    expect(row.done).toBe(true);
+    expect(row.id).toBe(555);
+    expect(row.client_id).toBeNull();
+  });
+
+  // #567/#568 P1-I, the byId leg's own version of the same gap: an id match
+  // at a DIFFERENT set_number than this row posted, carrying different
+  // values -- e.g. a spared row the collision renumbering moved elsewhere.
+  // Without the value check this bound the grid row to a set it never
+  // restated (and, separately, to the wrong `set_number` -- see the comment
+  // above this method).
+  it("does not adopt a byId match whose values differ from what this row posted (a renumbered row)", () => {
+    const c = makeLogger();
+    const row = c.exercises[0].set_rows[0]; // has a server id (11)
+    row.reps = "5";
+    row.load = "225";
+    const payload = c.buildPayload(false); // posts {id: 11, reps: "5", load: "225", rpe: ""}
+
+    // The response's item for THIS row's own id sits at a different slot,
+    // with different values -- not the row this save actually restated.
+    c.syncFromLog(
+      {
+        sets: [
+          { prescription: 1, set_number: 2, id: 11, reps: "8", load: "315", rpe: "" },
+        ],
+      },
+      payload,
+    );
+
+    expect(row.done).toBe(false);
+    expect(row.id).toBe(11); // unchanged
+    expect(row.client_id).toBeNull();
   });
 });
 
@@ -1896,8 +2222,11 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
   it("sends Set rows edited while it waited for the lines", async () => {
     vi.useFakeTimers();
     const c = cellLogger({ logUrl: LOG_URL });
+    // A real id (#567) — this test is about the outbox race, not identity,
+    // and a row with no id would mint a client_id and break the exact-shape
+    // assertion below.
     c.exercises[0].set_rows = [
-      { set_number: 1, reps: "", load: "", rpe: "", done: false },
+      { id: 31, set_number: 1, reps: "", load: "", rpe: "", done: false },
     ];
     let logBody;
     let land;
@@ -1919,7 +2248,7 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     land();
     await saving;
     expect(logBody.sets).toEqual([
-      { prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
+      { id: 31, prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
     ]);
   });
 
@@ -2446,8 +2775,11 @@ describe("Log session and an older log of the session (#527)", () => {
   it("keeps what it's sending in the outbox, not the log as it was at the tap", async () => {
     // The app closing mid-send must replay the newer log, not the older one.
     const c = cellLogger({ logUrl: LOG_URL });
+    // A real id (#567) — this test is about the outbox race, not identity,
+    // and a row with no id would mint a client_id and break the exact-shape
+    // assertion below.
     c.exercises[0].set_rows = [
-      { set_number: 1, reps: "", load: "", rpe: "", done: false },
+      { id: 41, set_number: 1, reps: "", load: "", rpe: "", done: false },
     ];
     c.exercises[0].sub_lines[0].text = "RPE 8";
     const { calls, fetchMock, answer, logReply } = controlled();
@@ -2461,7 +2793,7 @@ describe("Log session and an older log of the session (#527)", () => {
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     const log = c.readQueue().find((i) => i.url === LOG_URL);
     expect(log.body.sets).toEqual([
-      { prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
+      { id: 41, prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
     ]);
     answer(1, logReply(calls[1].body));
     await saving;

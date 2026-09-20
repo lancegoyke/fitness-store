@@ -1604,6 +1604,13 @@ def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
     a freeform sub-line (5a) renders itself as that sub-line's text, so
     admitting it here too would double-display the same performed data as a
     phantom structured input row (plan §6).
+
+    Each row also carries ``id`` — the ``LoggedSet.pk`` visible at this
+    (prescription, set_number), or ``None`` for a blank/unlogged row (#567,
+    row identity). This is how the client learns the id it should post back
+    for a row it's editing, instead of the server having to infer which row a
+    save means from ``(prescription, set_number)`` alone — evidence that goes
+    stale the moment a hidden row's own number moves out from under it.
     """
     prescribed = _prescribed_set_count(prescription) or default
     logged_numbers = [n for (pid, n) in logged if pid == prescription.pk]
@@ -1619,6 +1626,7 @@ def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
                 "load": s.load if s else "",
                 "rpe": s.rpe if s else "",
                 "done": s is not None,
+                "id": s.pk if s else None,
             }
         )
     return rows
@@ -1648,9 +1656,14 @@ def athlete_session(session, athlete):
     ``trainable_cells()`` since, and the difference matters: it is why a skipped
     row needs no warn handling on reload, only in the cell-write response.)
     """
+    # #567/#568 P2-C: ``-pk`` tiebreaks a shared ``created_at`` the same
+    # deterministic way ``views.athlete_log_session``'s own lookup does — see
+    # its comment. Without it, this read and the blur response's
+    # (``views._cell_warn_or_false``) could each pick a different "newest"
+    # log for a tied pair and disagree about what backs a line.
     log = (
         SessionLog.objects.filter(session=session, athlete=athlete)
-        .order_by("-created_at")
+        .order_by("-created_at", "-pk")
         .prefetch_related("sets__source_line", "sets__reclaimed_line")
         .first()
     )
@@ -1722,6 +1735,20 @@ def athlete_session(session, athlete):
         # database error — and each of those leaves the same state this warning
         # exists for: ordinary-looking performed text that quietly counts for
         # nothing.
+        # #567/#568 P2-C: no ``loggable`` is passed here, so it defaults
+        # ``True`` — hard-wired, unlike ``views._cell_warn_or_false``, which
+        # passes ``not skipped``. The two answers still agree, but only
+        # because of an INVISIBLE coupling at the call site, not because a
+        # skipped line can't warn: ``_sub_lines`` is only ever called (below)
+        # for ``p in prescriptions``, and ``prescriptions`` comes from
+        # ``session.trainable_cells()`` (this function's own docstring, above,
+        # already records that this exact distinction from ``session.cells()``
+        # drifted once), which excludes every skipped cell before ``_sub_lines``
+        # ever runs. If a future change ever rendered a skipped row's sub-lines
+        # here too — a "show its history" mode, say — this default would warn
+        # a line that cannot accept a set at all, exactly the disagreement
+        # #568 exists to prevent; that caller would need to pass its own
+        # ``loggable=not skipped`` rather than relying on this default.
         return [
             {
                 "line": line_cell.line,
