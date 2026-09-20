@@ -631,7 +631,16 @@ User  →  CoachAthlete  →  Plan  →  AgentProposalBatch
 ```
 
 and **ascending pk within a table** whenever a path locks more than one row of
-one table.
+one table. `clear_demo` is the explicit #590 exception: it locks the coach's
+`User` row first as the per-coach mutex, then locks the demo athletes' `User`
+rows ascending. That combined User sequence is not globally pk-sorted. It is
+safe against every path that takes the coach row first — the segment loaders,
+`plan_create`'s draft path, the sandbox reap. It is **not** safe against a
+`UserAdmin` bulk delete whose selection contains both a coach and one of that
+coach's own demo athletes: `lock_cascade_parents` sorts the whole selection by
+pk, so an athlete whose UUID sorts below the coach is locked before the coach
+while `clear_demo` runs coach → athlete. Staff-only and contrived; filed rather
+than papered over.
 
 Every path that takes two or more row locks takes them in that sequence,
 counting both `select_for_update` and the implicit exclusive lock an
@@ -649,10 +658,12 @@ that skips `Plan` is fine against a designer save, and is **not** fine against a
 delete of that plan's tree: nothing is left to serialize them. Two consequences,
 both load-bearing:
 
-- a delete path must pre-lock **every level its cascade reaches**, not just the
-  top two (`demo.lock_cascade_parents`);
-- a path that can race one must take the `Plan` lock even if it does not
-  otherwise need it.
+- every hard delete must pre-lock its cascade through the matching
+  `demo.lock_cascade_*` helper;
+- every athlete write path must take the `Plan` row first, even when its own
+  mutation lives below `Session`;
+- every creator of a `Plan` must first lock its `CoachAthlete` parent, and every
+  creator of a `CoachAthlete` must first lock its parent `User` rows.
 
 **Strength, not just order.** Default to `select_for_update(no_key=True)`.
 `FOR NO KEY UPDATE` conflicts with every other writer's `FOR UPDATE` and
@@ -690,6 +701,9 @@ restore's existing sequence a violation for no gain.
 - `views.athlete_cell_write` — takes the `Plan` row first as of #562. It used to
   take the `Session` lock and then write the `Plan` row via `_touch_plan`, which
   inverted against the restore.
+- `views.athlete_log_session` and `settle.settle_log` — take `Plan` first, then
+  lock only the `Session` row with `of=("self",)` (#588). The latter clause
+  prevents `Session.Meta.ordering` from also locking the joined `SessionSlot`.
 - `views.cell_line_write` — takes the `Plan` row before its reclaim write as of
   #562. Its `existing.save(...)` made it the one path running
   `Prescription` → `Plan`.
@@ -701,54 +715,40 @@ restore's existing sequence a violation for no gain.
   without holding the batch lock first.
 - `agent.service._persist_result` / `_fail` — batch, then its children (#558).
 - `views.plan_create` — `CoachAthlete`, then `Plan`. Conforming as of #559,
-  which extended this order upward to cover it. Its `draft=1` path is the
-  exception: `_reserve_plan_draft` locks the coach's own `User` row *after* the
-  link and the new plan, which inverts. No cycle is constructible today (it
-  returns early for sandbox coaches, and the sandbox reap is the only path that
-  locks a coach's `User` row and then their links), and it is filed as #589.
-- `demo.clear_demo` and `sandbox.expire_sandboxes`, via
-  `demo.lock_cascade_parents`.
+  which extended this order upward to cover it. Its `draft=1` path takes the
+  coach's `User` row *first*, before the link: `_reserve_plan_draft` used to lock
+  it after the link and the new plan, which inverted, and stayed harmless only
+  while the sandbox reap was the one path locking a coach's `User` row and then
+  their links. #590 made `clear_demo` a second such path, so the draft now
+  reserves the coach up front (a later re-acquire in `_reserve_plan_draft` is a
+  no-op).
+- `views.template_use` / `plan_batch_deliver` lock their target links before
+  duplicating a plan; `roster_add_self` / `relationship_reinvite` take the
+  coach `User` first; `invite_claim` accept takes both participant `User` rows
+  ascending before its invite row (#596).
+- `demo.clear_demo` takes the coach mutex before reading its athlete set, then
+  uses `demo.lock_cascade_parents`; `sandbox.expire_sandboxes` safely re-locks
+  that same coach row inside its later delete transaction (#590).
+- `UserAdmin`, `CoachAthleteAdmin`, `PlanAdmin`, `AgentProposalBatchAdmin`, and
+  `merge_users` wrap their hard delete and the matching
+  `demo.lock_cascade_*` helper in one transaction (#587).
 
-### Known gaps, filed not fixed
+### Known gaps and deliberately unswept sites
 
-These are pre-existing and were surfaced by #559's adversarial review. None is
-introduced by #558/#559/#562, and none is fixed by them:
+The #587/#588/#589/#590/#596 reachable cycles above are closed. The remaining
+inventory is explicit rather than implied to conform:
 
-- **Hard deletes outside `demo.py`/`sandbox.py` take no parent locks at all**
-  (#587) —
-  the `User`, `CoachAthlete` and `Plan` admins, and
-  `users/management/commands/merge_users.py`. Each cascades exactly like
-  `clear_demo` and should call `lock_cascade_parents`.
-- **`views.athlete_log_session` and `settle.settle_log` skip the `Plan` level
-  while racing paths that do not respect the order** (#588). Both open with
-  `Session.objects.select_for_update()`, and that statement locks *two* tables,
-  not one: `Session.Meta.ordering` joins `meso_sessionslot`, and without
-  `of=("self",)` the joined row is locked too — `Session` → `SessionSlot`,
-  inverting this order. Against `restore_plan_snapshot`, which writes
-  `SessionSlot` before `Session`, that is a live cycle; neither path takes the
-  `Plan` lock that would serialize them. The same two paths also cycle with a
-  cascade delete at the `Session`/`SessionLog` level.
-- **`lock_cascade_parents` stops at `AgentProposalBatch`** (#588), so the levels below
-  it are still deleted children-first with nothing holding them. Safe today only
-  because the paths that would contend there are the two above, plus a demo
-  athlete who cannot log in — but see the sandbox coach's own self-plan.
-- **`_reserve_plan_draft` and `agent_propose` lock the coach's `User` row with
-  plain `FOR UPDATE`** (#589) where every sibling site uses `no_key=True`, and
-  `cell_line_write` / `batch_apply` / `record_plan_action` do the same on the
-  `Plan` row. No cycle is constructible from either today; both are needless
-  blocking of a deferred-FK `FOR KEY SHARE`, one statement away from being #560.
-- **`clear_demo` does not take `demo._lock(coach)`** (#590) although every segment
-  loader does, so a concurrent `load_demo` can re-create rows the cascade is
-  deleting.
-- **Several creator paths take no lock at any level** (#596) — `template_start`
-  and `plan_batch_deliver` (both via `Plan.duplicate_for`), `roster_add_self`,
-  and `CoachInvite` acceptance all insert a `Plan` or `CoachAthlete` while
-  holding nothing. They are what the rule above means by "a path that can race
-  one must take the `Plan` lock even if it does not otherwise need it":
-  `plan_create` cooperates by locking the link first, and these do not, so a row
-  they commit mid-delete is collected but never locked, and a third transaction
-  editing it can still close the cycle. `plan_create` is listed as conforming
-  above precisely because it is the exception among the creators, not the rule.
+- `UserAdmin` bulk delete of a coach together with one of that coach's demo
+  athletes can deadlock against a concurrent `clear_demo` — see the #590
+  exception above.
+- The #589 strength sweep intentionally did not change `Mesocycle`,
+  `CoachAthlete`, `CoachInvite`, `AgentProposalBatch`, `CoachSubscription`, or
+  `Prescription` locks. The plain `Prescription` locks in `history.py` are
+  deliberate: #584's purge must conflict with a commit-time `FOR KEY SHARE`.
+- Creator entry points `athlete_request_coach`, `CoachAthlete._open` /
+  `invite` / `request`, and the coach email-invite view were not swept by #596.
+  Any expansion of their reachable delete races must add parent locks at the
+  caller in this same order, not bury a `User` lock inside the model helper.
 
 ## Decision log
 
@@ -2921,23 +2921,15 @@ _(Append dated entries here as decisions land.)_
   EvalPlanQual recheck, docs §13.2). The re-check repeats it anyway, so
   "what spares a cell" is answered in one place, once the rows can no longer
   move.
-  **What actually serializes an athlete write today is the `Session` row
-  lock, not this one — and the adversarial review is what established that.**
-  A first draft of this entry claimed a `LoggedSet` insert holds `FOR KEY
-  SHARE` on the `Prescription` it references for the rest of its
-  transaction. That is false: Django emits these FKs `DEFERRABLE INITIALLY
-  DEFERRED`, so the constraint's own `FOR KEY SHARE` fires only at COMMIT,
-  and an in-flight insert holds nothing. What keeps the two apart is the
-  `session.save()` loop earlier in `restore_plan_snapshot`, which UPDATEs
-  every snapshotted `Session` row, while both athlete write paths
-  (`athlete_cell_write`, `athlete_log_session`) take
-  `Session.objects.select_for_update()` as their first statement — so the
-  two transactions cannot overlap at all. Verified by experiment, not by
-  argument: giving the regression test's athlete thread that Session lock
-  makes the cell survive **on `main`**, both for a writer that updates the
-  cell and for the `athlete_log_session` shape that never touches it. So
-  #584's own framing ("the two don't serialize against each other") is not
-  right for any writer that exists today.
+  **The serialization contract was strengthened after #584.** A first draft
+  of this entry claimed a `LoggedSet` insert holds `FOR KEY SHARE` on the
+  `Prescription` it references for the rest of its transaction. That is
+  false: Django emits these FKs `DEFERRABLE INITIALLY DEFERRED`, so the
+  constraint lock fires only at COMMIT. At #584's landing, the unconditional
+  `Session` lock/save on both sides supplied the real serialization. Since
+  #588, every athlete write takes the `Plan` mutex first and then
+  `Session ... FOR UPDATE OF self`, so Plan is now the documented outer
+  boundary and the Session lock remains the log-level boundary.
   **The lock is still worth taking, for a narrower reason:** it stops the
   purge depending on an incidental UPDATE in an unrelated earlier loop.
   Make that `session.save()` conditional — skip unchanged rows, a plausible
@@ -2960,31 +2952,28 @@ _(Append dated entries here as decisions land.)_
   But the `.delete()` this replaces carried its spare clauses inside its own
   qualifying SELECT, so it only ever locked the *doomed* rows, whereas this
   locks every snapshot-absent, non-athlete-authored stray and then spares
-  some. That widens a Prescription↔Plan cycle that already existed on this
-  path (`athlete_cell_write` is Prescription→Plan; a restore is
-  Plan→Prescription) rather than creating one — the same endpoint pair
-  already inverts on Session-vs-Plan per #562. Keeping `athlete_authored` in
-  the candidate filter is what stops the widening being far larger.
+  some. At #584's landing that widened the then-existing
+  Prescription↔Plan cycle. #562 subsequently moved `athlete_cell_write`'s
+  Plan lock ahead of Session/Prescription, closing that inversion; keeping
+  `athlete_authored` in the candidate filter still avoids taking needless
+  locks on the athlete's rows.
   **The collision-resolution delete above (#583) removes an occupant only
   when this purge itself would**, including the same soft-deleted-slot/week
   scoping AND the same split between what is filtered and what is
   re-checked, so the two halves cannot disagree about which cells are
-  protected. Its occupancy read is unlocked, and what stops a
-  concurrently-inserted occupant there is again the Session lock, not this
-  one.
+  protected. Its occupancy read is unlocked; today the outer Plan mutex on
+  every athlete write stops a concurrent occupant, rather than this lock.
   **The guard must never take `FOR UPDATE` on an athlete-authored occupant,
   and a review round caught it doing exactly that.** Both round-2 reviewers
   found it independently: the guard locked its candidates before testing
   them, which contradicted the purge's own argument one screen below for
   keeping `athlete_authored` in the FILTER. It is not theoretical —
-  `cell_line_write`'s reclaim writes that row
-  (`existing.save(update_fields=["athlete_authored"])`) *before*
-  `record_plan_action` takes the `Plan` lock, so it is Prescription→Plan
-  while a redo is Plan→Prescription, and #583's headline occupant IS an
-  athlete-authored cell, putting the cycle on the guard's main path. The
-  flag is now decided from the unlocked occupancy read and those occupants
-  are never locked; only the `LoggedSet` pointers are re-checked under the
-  lock.
+  at the time, `cell_line_write`'s reclaim wrote that row before
+  `record_plan_action` acquired Plan, making Prescription→Plan against a
+  redo's Plan→Prescription. #562 later added the explicit Plan lock above
+  that reclaim. The guard still decides the flag from the unlocked occupancy
+  read and never locks athlete-authored occupants; only the `LoggedSet`
+  pointers are re-checked under the lock.
   **A skipped cell is now logged.** Skipping is otherwise invisible — the
   endpoint answers `ok: true` and the line simply does not come back — so
   `history` logs the skipped pk, its coordinate and the occupant's pk. The
@@ -3001,12 +2990,10 @@ _(Append dated entries here as decisions land.)_
   nothing. Round 3 caught the new file missing from it; the list now carries
   a comment saying to add Postgres-only files in the commit that creates
   them.
-  **#562 is untouched and does not conflict.** It's a `Session`-vs-`Plan`
-  ordering issue on a different path entirely (`athlete_cell_write`'s
-  `Session` lock vs. `api_plan_undo`/`api_plan_redo`'s `Plan` lock) — no
-  `Session` row is locked anywhere in this fix, so there is nothing here for
-  that ordering to conflict with. #562 remains open and is not addressed by
-  this change.
+  **Historical scope note:** #584 did not address #562. #562 later moved
+  `athlete_cell_write` to Plan-first order, and #588 extended that same rule
+  to `athlete_log_session` and `settle_log`; those later decisions supersede
+  the Session-first assumptions recorded in the original #584 review.
   Tests: `test_restore_cell_collision.py` (the #583 reproduction through the
   real `api_cell_line_write` → `api_plan_undo` → `athlete_cell_write` →
   `api_plan_redo` sequence, an undo-leg counterpart constructed directly
@@ -3041,3 +3028,18 @@ _(Append dated entries here as decisions land.)_
   property of `_consume_carried_link` (every carried link names a cell some
   already-committed `LoggedSet` also names). Unverified and untested; noted
   on #578 rather than asserted here.
+- 2026-09-20 — **Row-lock cleanup #587/#588/#589/#590/#596:** parent mutexes
+  now default to `FOR NO KEY UPDATE`; all Plan mutexes and the two coach User
+  mutexes in scope were swept to that strength. `athlete_log_session` and
+  `settle_log` now take Plan before `Session ... FOR UPDATE OF self`, and a
+  vanished session loses with 404/`False`. `clear_demo` joins every loader on
+  the coach mutex before reading its demo-athlete set. Plan/link creators now
+  reserve their parent rows, invite acceptance reserves both User parents
+  ascending, and hard deletes in the four admins plus `merge_users` use shared
+  top-down `lock_cascade_*` helpers. `plan_create`'s draft path takes the coach
+  `User` before the link, because `clear_demo`'s new coach mutex would otherwise
+  have made the old link → User order in `_reserve_plan_draft` a reachable
+  deadlock (the codex review of this change caught that). The explicit
+  exceptions remain the coach+demo-athlete bulk admin delete above, the unswept
+  lock classes and creator entry points listed above, and #584's deliberately
+  plain Prescription locks.

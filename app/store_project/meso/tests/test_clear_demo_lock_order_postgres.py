@@ -576,7 +576,13 @@ def _lock_cascade_indices(queries):
     return {
         "user": _first_query_index(
             queries,
-            lambda low: 'from "users_user"' in low and "for no key update" in low,
+            # #590 adds a single-row coach mutex before the cascade. The
+            # cascade's demo-athlete User query is the ordered one.
+            lambda low: (
+                'from "users_user"' in low
+                and "for no key update" in low
+                and "order by" in low
+            ),
         ),
         "coachathlete": _first_query_index(
             queries,
@@ -606,7 +612,7 @@ def _lock_cascade_indices(queries):
 
 
 class TestClearDemoLockOrder:
-    """``clear_demo`` must lock all four levels, in order, before it deletes.
+    """After its coach mutex, clear locks all cascade levels before deleting.
 
     ``User``, then ``CoachAthlete``, then ``Plan``, then ``AgentProposalBatch``
     — each query ascending by pk (#558, #559, #562). This doesn't force any

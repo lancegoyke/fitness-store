@@ -63,9 +63,9 @@ assume which world (fixed or broken) is running:
 * **Fixed world:** the athlete's transaction already holds the ``Plan`` row
   (``FOR NO KEY UPDATE``, taken at the very top of ``athlete_cell_write``,
   before ``_touch_plan`` is ever reached) by the time thread B starts. B's
-  own ``Plan.objects.select_for_update()`` (plain ``FOR UPDATE`` — which DOES
-  conflict with a held ``FOR NO KEY UPDATE``, per ``docs/meso/decisions.md``)
-  blocks before B ever reaches ``restore_plan_snapshot`` — so ``b_reached``
+  own ``Plan.objects.select_for_update(no_key=True)`` also conflicts with a
+  held ``FOR NO KEY UPDATE``, per ``docs/meso/decisions.md``, and blocks
+  before B ever reaches ``restore_plan_snapshot`` — so ``b_reached``
   is never going to fire. The main thread does not just wait out a fixed
   sleep and declare victory (a slow CI runner could make that flaky in
   either direction); it polls PostgreSQL's own bookkeeping

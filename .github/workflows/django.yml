@@ -218,6 +218,9 @@ jobs:
       # one. THIS LIST IS THE ONLY PLACE THESE RUN
       # — every file here skips itself on SQLite, so one left off the list
       # executes in no CI job at all and looks green while testing nothing.
+      # The #587/#588/#589/#590/#596 files extend that same lock-order class
+      # across hard deletes, athlete sessions, parent lock strength, demo
+      # clear/load serialization, and creator paths.
       # Add a new Postgres-only file here in the same commit that creates it.
       - name: Run the PostgreSQL-only tests
         run: |
@@ -230,4 +233,9 @@ jobs:
             app/store_project/meso/tests/test_double_submit_postgres.py \
             app/store_project/meso/tests/test_undo_purge_postgres.py \
             app/store_project/meso/tests/test_athlete_undo_lock_order_postgres.py \
-            app/store_project/meso/tests/test_clear_demo_lock_order_postgres.py
+            app/store_project/meso/tests/test_clear_demo_lock_order_postgres.py \
+            app/store_project/meso/tests/test_lock_strength_postgres.py \
+            app/store_project/meso/tests/test_clear_load_demo_postgres.py \
+            app/store_project/meso/tests/test_athlete_session_lock_order_postgres.py \
+            app/store_project/meso/tests/test_creator_locks_postgres.py \
+            app/store_project/meso/tests/test_hard_delete_lock_order_postgres.py

@@ -9,11 +9,12 @@ The endpoint creates a ``drafting`` batch and ``dispatch_proposal`` enqueues
 ``run_proposal_job`` for the cluster to pick up; the request returns immediately
 and the frontend polls the batch's status endpoint until it resolves.
 
-``service.run_proposal_job`` is the unit of work — it never raises and always
-leaves the batch in a terminal state (``pending`` / ``failed``), so the queue
-wrapper stays thin. Only the batch id is enqueued: the worker is a separate
-process that reconstructs its own Claude client (``get_default_client``), and a
-client isn't picklable anyway.
+``service.run_proposal_job`` is the unit of work — it never raises, leaves an
+existing batch in a terminal state (``pending`` / ``failed``), and returns
+harmlessly if the batch was deleted before pickup, so the queue wrapper stays
+thin. Only the batch id is enqueued: the worker is a separate process that
+reconstructs its own Claude client (``get_default_client``), and a client isn't
+picklable anyway.
 
 ``MESO_AGENT_RUN_SYNC`` runs the job inline instead of enqueuing it (tests, and
 any environment that prefers a blocking, queue-free call) so behavior is
@@ -82,14 +83,23 @@ def _enqueue(batch_id):
 
 
 def _fail_unqueued(batch_id):
-    """Mark a batch ``failed`` when its job could not be queued (no worker will).
+    """Fail a still-drafting batch when its job could not be queued.
 
-    A bare ``update`` so it can't fail on a stale in-memory row and never widens
-    the change beyond the status the status-poll surfaces.
+    The broker failure belongs only to the unresolved run that enqueue was meant
+    to start. A coach or worker may have resolved the batch before this fallback
+    lands, so the filtered update must not overwrite that later truth (#591).
     """
     from .. import models
 
-    models.AgentProposalBatch.objects.filter(pk=batch_id).update(
+    updated = models.AgentProposalBatch.objects.filter(
+        pk=batch_id, status=models.AgentProposalBatch.Status.DRAFTING
+    ).update(
         status=models.AgentProposalBatch.Status.FAILED,
         error="The agent run could not be queued.",
     )
+    if not updated:
+        logger.info(
+            "Meso agent batch %s was already resolved or gone; enqueue failure "
+            "was discarded and nothing was overwritten.",
+            batch_id,
+        )

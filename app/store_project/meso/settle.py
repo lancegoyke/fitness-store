@@ -33,21 +33,16 @@ session/plan is still reachable by the athlete (an archived plan, a
 soft-deleted session, an ended coach link): the athlete did the work, and a
 later cleanup elsewhere is a separate concern from "did this count".
 
-**The lock contract.** ``settle_log`` takes
-``Session.objects.select_for_update()`` on the log's session — the *exact*
-row, in the *exact* place (before anything else is read), that both athlete
-write paths already lock first (``athlete_log_session`` and
-``athlete_cell_write``, views.py). That one shared lock is what lets all
-three writers (the two views and this sweep) treat "read the newest log,
-maybe create/update it" as atomic with respect to each other; without it, a
-sweep and a concurrent blur could each act on a state the other has since
-made stale. Because the sweep's candidate list is built *outside* any
-transaction (so one hourly run can iterate many logs without holding locks
-between them), ``settle_log`` re-reads the log and re-checks **every** rule
-above from scratch once the lock is held — a candidate selected a moment ago
-may no longer qualify (a blur bumped it, "Log session" already completed it,
-a newer log appeared, its sets were cleared) — and simply declines rather
-than acting on stale information.
+**The lock contract.** ``settle_log`` takes the log's ``Plan`` row first, then
+``Session.objects.select_for_update(of=("self",))`` on the exact session row,
+matching both athlete write paths (``athlete_log_session`` and
+``athlete_cell_write``, views.py). ``of=("self",)`` is load-bearing because
+``Session.Meta.ordering`` joins ``SessionSlot``; locking that joined row would
+invert the app-wide order against a restore. The shared Session lock lets all
+three writers treat "read the newest log, maybe create/update it" as atomic
+with respect to each other. Because the sweep's candidate list is built
+*outside* any transaction, ``settle_log`` re-reads the log and re-checks every
+rule once both locks are held; a stale candidate simply declines.
 
 **Deliberately NOT here** (follow-ups, not this slice):
 
@@ -75,6 +70,7 @@ from . import one_rm as meso_one_rm
 from . import tour as meso_tour
 from .models import ExerciseSlot
 from .models import LoggedSet
+from .models import Plan
 from .models import Session
 from .models import SessionLog
 from .models import newest_session_logs
@@ -124,21 +120,31 @@ def settle_log(pk, *, cutoff):
     from the caller's candidate list.
     """
     with transaction.atomic():
-        session_id = (
+        lock_ids = (
             SessionLog.objects.filter(pk=pk)
-            .values_list("session_id", flat=True)
+            .values_list("session_id", "session__week__mesocycle__plan_id")
             .first()
         )
-        if session_id is None:
+        if lock_ids is None:
             return False  # already gone (e.g. a history restore, an admin delete)
+        session_id, plan_id = lock_ids
 
-        # THE lock — see the module docstring. Same row, same "before anything
-        # else" ordering, as both athlete write paths (views.py's
-        # `athlete_log_session` and `athlete_cell_write`): whichever of the
-        # sweep or a concurrent blur/save gets here first makes the other
-        # wait, so the loser's re-read below always sees the winner's
-        # committed result rather than racing it.
-        Session.objects.select_for_update().filter(pk=session_id).first()
+        # LOCK ORDER (#588) — read both ids together above, then take Plan
+        # before Session, exactly like both athlete writers. A restore or hard
+        # delete that wins the Plan row may remove either row while this waits;
+        # treat that ordinary lost race as "nothing left to settle."
+        if (
+            Plan.objects.select_for_update(no_key=True).filter(pk=plan_id).first()
+            is None
+        ):
+            return False
+        if (
+            Session.objects.select_for_update(of=("self",))
+            .filter(pk=session_id)
+            .first()
+            is None
+        ):
+            return False
 
         # Re-read and re-verify EVERY settleable_logs() condition now that the
         # lock is held. The candidate list was built outside any transaction,

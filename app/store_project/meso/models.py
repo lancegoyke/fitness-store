@@ -480,16 +480,19 @@ class CoachAthlete(models.Model):
         """Either party ends an active link → ``ended``.
 
         Ending archives this coach's plans for the athlete (never deletes), and
-        leaves the athlete's other coaches untouched (D-c).
+        leaves the athlete's other coaches untouched (D-c). The relationship
+        and its plans move together, so a failed archive cannot leave an ended
+        link pointing at live plans (#592).
         """
         if self.status != self.Status.ACTIVE:
             raise InvalidTransition(f"Cannot end a link that is {self.status}.")
         self.status = self.Status.ENDED
         self.ended_at = timezone.now()
-        self.save(update_fields=["status", "ended_at"])
-        self.plans.exclude(status=Plan.Status.ARCHIVED).update(
-            status=Plan.Status.ARCHIVED
-        )
+        with transaction.atomic():
+            self.save(update_fields=["status", "ended_at"])
+            self.plans.exclude(status=Plan.Status.ARCHIVED).update(
+                status=Plan.Status.ARCHIVED
+            )
         return self
 
     @property
@@ -819,20 +822,29 @@ class CoachInvite(models.Model):
         if self.is_expired:
             # The link's TTL ran out; flip it to expired and refuse — never
             # materialize a link from a stale token (the claim view's backstop).
+            # Keep this OUTSIDE the materialization transaction below: the
+            # InvalidTransition must not roll this durable aging write back
+            # with the work it prevents (#592).
             self.expire()
             raise InvalidTransition("Cannot accept an invite that has expired.")
         if user == self.coach:
             raise InvalidTransition("A coach cannot accept their own invite.")
-        link = CoachAthlete.invite(coach=self.coach, athlete=user)
-        if link.is_pending:
-            link.accept()
-        self.status = self.Status.ACCEPTED
-        self.accepted_by = user
-        self.accepted_link = link
-        self.responded_at = timezone.now()
-        self.save(
-            update_fields=["status", "accepted_by", "accepted_link", "responded_at"]
-        )
+        with transaction.atomic():
+            link = CoachAthlete.invite(coach=self.coach, athlete=user)
+            if link.is_pending:
+                link.accept()
+            self.status = self.Status.ACCEPTED
+            self.accepted_by = user
+            self.accepted_link = link
+            self.responded_at = timezone.now()
+            self.save(
+                update_fields=[
+                    "status",
+                    "accepted_by",
+                    "accepted_link",
+                    "responded_at",
+                ]
+            )
         return link
 
     def decline(self):

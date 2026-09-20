@@ -1,5 +1,7 @@
 from django.contrib import admin
+from django.db import transaction
 
+from . import demo as meso_demo
 from .models import AgentProposalBatch
 from .models import AthleteOneRm
 from .models import AthleteProfile
@@ -21,6 +23,33 @@ from .models import SessionSlot
 from .models import TourEvent
 from .models import Week
 from .models import WeekDelivery
+
+
+class CascadeLockDeleteMixin:
+    """Pre-lock a hard delete's cascade parents in the app-wide order (#587)."""
+
+    cascade_lock_helper = None
+
+    def _lock_delete_roots(self, pks):
+        getattr(meso_demo, self.cascade_lock_helper)(pks)
+
+    def delete_model(self, request, obj):
+        # LOCK ORDER (#587) — admin delete_view already owns an outer atomic
+        # block, but keeping this boundary here also makes direct/custom admin
+        # calls hold every parent reservation through the actual cascade.
+        with transaction.atomic():
+            pks = [obj.pk]
+            self._lock_delete_roots(pks)
+            return super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        # LOCK ORDER (#587) — delete_selected calls this outside a transaction.
+        # Resolve the roots after entering atomic, then keep their top-down
+        # reservations until the queryset cascade has finished.
+        with transaction.atomic():
+            pks = list(queryset.order_by("pk").values_list("pk", flat=True))
+            self._lock_delete_roots(pks)
+            return super().delete_queryset(request, queryset)
 
 
 @admin.register(CoachProfile)
@@ -59,7 +88,8 @@ class ContraindicationAdmin(admin.ModelAdmin):
 
 
 @admin.register(CoachAthlete)
-class CoachAthleteAdmin(admin.ModelAdmin):
+class CoachAthleteAdmin(CascadeLockDeleteMixin, admin.ModelAdmin):
+    cascade_lock_helper = "lock_cascade_from_links"
     list_display = (
         "coach",
         "athlete",
@@ -125,7 +155,8 @@ class MesocycleInline(admin.TabularInline):
 
 
 @admin.register(Plan)
-class PlanAdmin(admin.ModelAdmin):
+class PlanAdmin(CascadeLockDeleteMixin, admin.ModelAdmin):
+    cascade_lock_helper = "lock_cascade_from_plans"
     list_display = ("title", "relationship", "status", "unit", "modified")
     list_filter = ("status", "unit")
     search_fields = (
@@ -323,7 +354,8 @@ class ProposedChangeInline(admin.TabularInline):
 
 
 @admin.register(AgentProposalBatch)
-class AgentProposalBatchAdmin(admin.ModelAdmin):
+class AgentProposalBatchAdmin(CascadeLockDeleteMixin, admin.ModelAdmin):
+    cascade_lock_helper = "lock_cascade_from_batches"
     list_display = (
         "__str__",
         "plan",
