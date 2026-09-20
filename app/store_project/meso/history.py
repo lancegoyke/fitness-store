@@ -330,13 +330,27 @@ def restore_plan_snapshot(plan, snapshot):
     # pointer: a structured copy a "Log session" left behind still names this
     # cell via ``reclaimed_line``, with no ``source_line`` of its own — a cell
     # a structured copy still answers to is athlete data pointing at it too.
+    #
+    # ``logged_sets`` (#577) closes the set: ``LoggedSet.prescription`` is the
+    # MOST direct of the three pointers — the line-0 cell every logged set is
+    # filed under, whatever its origin — and was the one left out. It is also
+    # the costliest to lose, because nothing downstream survives it: where a
+    # missing ``source_line`` merely strips a row of the protection its link
+    # carries, a NULL ``prescription`` drops the set from every derivation that
+    # reads it (``personal_records._live_logged_sets``,
+    # ``one_rm.derive_one_rm_values``, ``settle`` — all filter
+    # ``prescription__isnull=False``). The set stays in the database and stays
+    # on the athlete's page as its sub-line's text, while silently ceasing to
+    # count toward their estimated 1RM and their records, with nothing to say
+    # so. Those filters are right; the cell simply must not be deleted out from
+    # under them.
     models.Prescription.objects.filter(
         week__mesocycle__plan=plan,
         exercise_slot_id__in=live_exercise_slot_pks_in_snapshot,
         week_id__in=live_week_pks_in_snapshot,
     ).exclude(pk__in=cell_pks).exclude(athlete_authored=True).exclude(
         parsed_sets__isnull=False
-    ).exclude(reclaimed_sets__isnull=False).delete()
+    ).exclude(reclaimed_sets__isnull=False).exclude(logged_sets__isnull=False).delete()
 
 
 def record_plan_action(plan, label):

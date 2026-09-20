@@ -2628,10 +2628,22 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                     # identical rows on one source line, BOTH hidden by the
                     # restored text and both counted, overstating the workout
                     # with nothing on screen to show for it. Reuse the row.
+                    #
+                    # Scoped by ``prescription`` as well as ``source_line``
+                    # (#577), matching the ``mine`` delete above and the
+                    # ``reclaimed_line`` lookup below. A row whose
+                    # ``prescription`` went NULL (a purge hard-deleted its
+                    # line-0 cell) still matches ``source_line=cell``, and
+                    # adopting one would re-link this line to a row every
+                    # derivation ignores — an inert set, logged and invisible
+                    # to 1RM and PRs. Healthy rows always carry both links, so
+                    # this narrows nothing that should match.
                     existing = next(
                         (
                             row
-                            for row in log.sets.filter(source_line=cell)
+                            for row in log.sets.filter(
+                                source_line=cell, prescription=line_zero_cell
+                            )
                             if parsing.same_logged_set(
                                 (row.reps, row.load, row.rpe),
                                 (values["reps"], values["load"], values["rpe"]),
