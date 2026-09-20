@@ -2543,6 +2543,18 @@ _(Append dated entries here as decisions land.)_
   the status when an earlier write-ahead copy of the same save is still in the
   outbox — `writeQueue` is all-or-nothing, so a later `enqueue` can fail while
   that copy sits there due to flush.
+  **And one more the verification pass caught.** Splitting `flushLog` by
+  status dropped 403/409 with the rest, where `flushCell` returns "offline"
+  for those FIRST — they mean "not postable as this account right now" (a
+  rotated CSRF after a re-login; this page captures `csrf` once, at load), not
+  "refused". Dropping one destroys the only copy of a session logged offline,
+  since a queued log's set rows — unlike a sub-line's text — are never
+  restored into the grid on load. The guard is back, ahead of the split. The
+  same pass noted that a dropped log left the optimistic "Logged" badge up,
+  the very claim `save()`'s revert exists to stop, just reached via the flush:
+  `save()` now records what the status was before it queued, and the flush
+  refusal puts it back (only when it knows — an entry from a previous page
+  load carries none, and the next load reads the server anyway).
 - 2026-09-20 — **Fixed (#571): `athlete_cell_write` no longer claims a save
   the database didn't keep.** Found by the same adversarial review as #570.
   `_upsert_parsed_set` wraps its work in a nested savepoint and swallows

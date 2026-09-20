@@ -814,6 +814,48 @@ describe("flushQueue", () => {
     expect(c.error).toBe(false);
   });
 
+  // #570 round-3 verification: the refusal split must not swallow the two
+  // statuses that mean "not postable as this account right now". `csrf` is
+  // captured once at page load, so a re-login elsewhere rotates the token and
+  // the next flush 403s — and a queued LOG is the only copy of an offline
+  // session (unlike a sub-line, its set rows are never restored into the grid
+  // on load). Dropping it there would destroy the workout.
+  it.each([403, 409])("keeps this session's log queued on a %i", async (status) => {
+    const c = makeLogger();
+    c.enqueue({ status: "done", sets: [] });
+    c.queued = true;
+    global.fetch = vi.fn().mockResolvedValue(res({ ok: false, status }));
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(1);
+    expect(c.error).toBe(false);
+    expect(c.errorMessage).toBe("");
+  });
+
+  // ...and when the entry IS dropped for good, the optimistic badge goes with
+  // it: "Logged" with nothing on the server and nothing left to retry is the
+  // claim `save()`'s own revert exists to stop, just reached via the flush.
+  it("takes the optimistic status back off when a flushed log is refused", async () => {
+    const c = makeLogger();
+    c.status = "pending";
+    // The shape `save()` leaves behind when it queues offline.
+    global.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    await c.save(true);
+    expect(c.status).toBe("done"); // optimistic, and legitimately queued
+    expect(c.statusBeforeQueued).toBe("pending");
+
+    global.fetch = vi.fn().mockResolvedValue(
+      res({
+        ok: false,
+        status: 400,
+        body: { ok: false, error: "Too many sets logged for Box Squat." },
+      }),
+    );
+    await c.flushQueue();
+    expect(c.readQueue()).toHaveLength(0);
+    expect(c.status).toBe("pending"); // the badge no longer claims Logged
+    expect(c.errorMessage).toBe("Too many sets logged for Box Squat.");
+  });
+
   it("keeps ANOTHER session's refused log queued, with nothing here to show it", async () => {
     const c = makeLogger();
     c.writeQueue([

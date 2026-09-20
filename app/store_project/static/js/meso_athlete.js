@@ -227,6 +227,11 @@ function createLogger() {
     // response that named one — blank otherwise, in which case the template
     // falls back to the generic banner text.
     errorMessage: "",
+    // What `status` was before the save whose entry is still in the outbox
+    // flipped it optimistically — so a flush that the server later REFUSES
+    // can put the badge back (see `flushLog`). Empty once nothing of this
+    // page's is queued any more.
+    statusBeforeQueued: "",
     queued: false, // a save is stashed locally, waiting for the network
     lineError: false, // the log landed, but a line the server refused didn't
     newRecords: [], // PRs the last save beat (Phase 4c) — the celebration toast
@@ -517,7 +522,9 @@ function createLogger() {
       } catch (netErr) {
         // Network unreachable → queue it; the upsert endpoint is idempotent, so
         // replaying on reconnect is safe (latest save for a session wins).
-        if (!this.keepForLater(payload) && !this.holdsThisLog(sending)) {
+        if (this.keepForLater(payload) || this.holdsThisLog(sending)) {
+          this.statusBeforeQueued = previousStatus;
+        } else {
           this.status = previousStatus;
         }
         this.saving = false;
@@ -529,7 +536,9 @@ function createLogger() {
         // HTML). Don't lose it: queue for retry, where the next online flush
         // (after re-login) carries a fresh CSRF.
         if (res.redirected) {
-          if (!this.keepForLater(payload) && !this.holdsThisLog(sending)) {
+          if (this.keepForLater(payload) || this.holdsThisLog(sending)) {
+            this.statusBeforeQueued = previousStatus;
+          } else {
             this.status = previousStatus;
           }
           return;
@@ -556,6 +565,7 @@ function createLogger() {
         if (sending) this.dropEntry(sending);
         const data = await res.json();
         this.status = data.log.status;
+        this.statusBeforeQueued = ""; // the server has this save; nothing to put back
         // `payload` — not `sending`'s body-only shape, though they carry the
         // same `sets` here — is this save's own request body, exactly what
         // was actually posted (#567/#568 P1-E/F): `syncFromLog` needs it to
@@ -870,6 +880,15 @@ function createLogger() {
       // true for the login HTML but the log was never saved — keep it queued
       // so a real re-login + flush delivers it instead of dropping the workout.
       if (res.redirected) return "offline";
+      // BEFORE the refusal split below, and load-bearing: `isWrongAccount`
+      // covers 403 and 409, which say "not postable as this account right
+      // now" — a rotated CSRF token after a re-login (this page captures
+      // `csrf` once, at load), or a write belonging to someone else. They are
+      // not refusals of the payload, and dropping one would destroy the only
+      // copy of a session logged offline: unlike a sub-line, a queued log's
+      // set rows are never restored into the grid on load. `flushCell` makes
+      // this check first for the same reason.
+      if (isWrongAccount(res)) return "offline";
       if (isRetryableStatus(res.status)) return "kept";
       if (!res.ok) {
         // A refusal (#570's 400) won't change on retry, so keeping it queued
@@ -884,6 +903,15 @@ function createLogger() {
         // see it.
         if (item.url !== this.logUrl) return "kept";
         this.dropEntry(item);
+        // The badge goes back with it. `save()` flipped `status` to "done"
+        // optimistically before queuing this entry and recorded what it was
+        // before (`statusBeforeQueued`); now that the server has refused the
+        // entry and nothing is left to retry, leaving "Logged" up is the same
+        // claim the revert in `save()` exists to stop — just reached by the
+        // flush instead. Only when we still know the earlier value: an entry
+        // queued by a previous page load carries none, and guessing would be
+        // worse than leaving the next page load to say what the server holds.
+        if (this.statusBeforeQueued) this.status = this.statusBeforeQueued;
         this.error = true;
         this.errorMessage = await readErrorMessage(res);
         return "rejected";
