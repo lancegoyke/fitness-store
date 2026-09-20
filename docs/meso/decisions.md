@@ -2224,7 +2224,7 @@ _(Append dated entries here as decisions land.)_
   Not covered: copies made before this shipped have no link. A coach undo that
   puts the text back, rather than the athlete retyping it, still shows the set
   twice and tints the line "not logged as a set". The coach path never touches
-  `LoggedSet`, and the data holds one row (#561).
+  `LoggedSet`, and the data holds one row (#561, fixed on the read side below).
 - 2026-09-19 — **Client beacon and push notification ledger (#509, third slice).**
   `POST /meso/api/track/` records the three moments only the browser knows
   (`pwa_installed`, `push_permission`, `push_clicked`) behind login, CSRF, a
@@ -2260,3 +2260,49 @@ _(Append dated entries here as decisions land.)_
   send after the reaper nulls the user — `_notify_athlete_block_delivered`
   returns before notifying for a sandbox coach, and that is the only path to
   `_fan_out`, so the row can't exist.
+- 2026-09-19 — **Fixed (#561): a coach undo after "Log session" shows the
+  reclaimed set once.** The leftover from #541. The athlete types `225 x 5` on
+  sub-line 1, the coach rewrites that line, the athlete taps "Log session"
+  (which replaces the parsed row with a source-less copy carrying
+  `reclaimed_line`), and the coach then undoes the rewrite. The line reads
+  `225 x 5` again, so the athlete saw that performance twice — on the line and
+  as a filled Set row — and the line was tinted "not logged as a set". One
+  `LoggedSet` the whole time; only the page was wrong.
+  **Fixed on the read side.** A coach undo must never write athlete data and a
+  GET must not write, so nothing re-links here; the display predicates learn to
+  read the link "Log session" already recorded. `parsed_set_is_hidden` now
+  answers for a source-less copy too: the line named by `reclaimed_line` is
+  showing it when that line's text parses back to its values.
+  `sub_line_should_warn` and its own lookup follow, so the line isn't tinted.
+  No new field, no migration.
+  **A sub-line displays one performance.** New `line_displays(line, rows)` ranks
+  the rows a line's text could be showing — its own parsed row first, then the
+  older copy — and only the winner is hidden. Without the ranking, #541's
+  "correction on a line that was showing a set of its own" ends with a parsed
+  row and a copy holding the same values, and hiding both dropped a real logger
+  row off the page. The `source_line` branch returns before the ranking, so the
+  5a rule for parsed rows is unchanged (`_upsert_parsed_set` already refuses to
+  mint a same-valued twin on one line).
+  **The write side keys on the same predicate, so three places moved with it.**
+  The replace-delete computes hidden-ness over the whole log at once (the
+  ranking isn't answerable row by row) and so spares the copy. The twin absorb
+  now also covers a surviving row hidden through `reclaimed_line`, recomputed
+  after the delete — without it, a page loaded before the undo re-posts the Set
+  row it still shows and logs the performance a second time. And the
+  collision renumbering covers a hidden copy, which otherwise keeps the set
+  number the athlete's now-empty Set row 1 posts into; a later reclaim makes
+  both visible at one number and a single save can then delete both while
+  reposting one. `hidden_parsed_set_pks` is the set-wise form both sides use.
+  Not covered, still: a copy made before #541 shipped has no link, so a coach
+  undo of its reclaim shows it twice exactly as before. And the logger still
+  decides what a posted row MEANS by matching `(prescription, set_number,
+  values)`, which a hidden row's number cannot carry reliably — a tab left open
+  across the undo can re-create the performance as a second row if the copy was
+  renumbered in between, and a genuinely new set with the same numbers, typed
+  into the Set row the hidden copy invisibly occupies, is read as a restatement
+  and dropped. Both were reproduced on `main` with an ordinary hidden parsed row
+  and no `reclaimed_line` at all, so this fix gives a pre-existing defect a
+  second trigger rather than creating it; the payload cannot tell the two
+  meanings apart, and the real fix is to post each row's id back (#567). The
+  warn lookup's own database fallback is also unscoped by log, so a set from
+  another session can clear a line's tint (#568).

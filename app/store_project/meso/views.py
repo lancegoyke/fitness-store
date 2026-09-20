@@ -86,7 +86,8 @@ from .models import SessionLog
 from .models import SessionSlot
 from .models import Week
 from .models import WeekDelivery
-from .models import parsed_set_is_hidden
+from .models import display_line_id
+from .models import hidden_parsed_set_pks
 from .models import sub_line_should_warn
 from .parsing import parse_performed
 from .parsing import performed_reps_text
@@ -1604,10 +1605,19 @@ def athlete_log_session(request, pk):
         # retyping the sub-line would sever the link `_upsert_parsed_set` needs
         # to reuse the row instead of minting a twin.
         carried_links = []
-        for row in log.sets.filter(
-            prescription_id__in=[p.pk for p in session.trainable_cells()],
-        ).select_related("source_line"):
-            if parsed_set_is_hidden(row):
+        # Hidden is computed over the WHOLE log (#561), not filtered-then-per-row:
+        # a copy left behind by an earlier "Log session" only answers to its line
+        # through `reclaimed_line`, and the one-row-per-line ranking that decides
+        # whether it's the one showing needs every row that could be displayed by
+        # that same line — a query already scoped to this session's trainable
+        # cells can't see them all.
+        rows = list(log.sets.select_related("source_line", "reclaimed_line"))
+        hidden_pks = hidden_parsed_set_pks(rows)
+        trainable_pks = {p.pk for p in session.trainable_cells()}
+        for row in rows:
+            if row.prescription_id not in trainable_pks:
+                continue
+            if row.pk in hidden_pks:
                 continue
             if row.source_line_id is not None and not _client_held(row, cleaned_sets):
                 continue
@@ -1643,10 +1653,21 @@ def athlete_log_session(request, pk):
         # The client reports the number ``serialize_session_log`` gave it, so
         # the row it means still carries that number here (the renumbering
         # below runs after this).
+        #
+        # Also keeps a surviving row that is hidden through `reclaimed_line`
+        # (#561): after a coach undo the copy is hidden, so the replace above
+        # spares it, but a page loaded BEFORE the undo still shows it as a
+        # filled Set row and re-posts it — and letting that repost fall through
+        # to the create below would log one performance twice. Recomputed on
+        # the POST-DELETE rows on purpose: deleting the parsed row that used to
+        # outrank a copy is exactly what makes the copy the row a line is
+        # showing, so "hidden" can only be judged after the delete above runs.
+        surviving = list(log.sets.select_related("source_line", "reclaimed_line"))
+        hidden_pks = hidden_parsed_set_pks(surviving)
         available = [
             row
-            for row in log.sets.select_related("source_line")
-            if row.source_line_id is not None
+            for row in surviving
+            if row.source_line_id is not None or row.pk in hidden_pks
         ]
         keep = []
         for cs in cleaned_sets:
@@ -1682,9 +1703,16 @@ def athlete_log_session(request, pk):
         # sub-line 1 — and since such a row is now SPARED rather than deleted
         # (see `_client_held`), sparing it without renumbering simply moved the
         # collision one step later.
+        #
+        # Also covers a HIDDEN copy (#561, `display_line_id`): it keeps the set
+        # number the parsed row had, so the athlete's now-empty Set row 1
+        # collides with it too. The collision only bites later — a second
+        # reclaim makes both rows visible, and one save can then delete both
+        # while reposting one — which is the same hazard this loop already
+        # exists for.
         if posted:
-            for row in log.sets.select_related("source_line"):
-                if row.source_line_id is None:
+            for row in log.sets.select_related("source_line", "reclaimed_line"):
+                if display_line_id(row) is None:
                     continue
                 if (row.prescription_id, row.set_number) not in posted:
                     continue
@@ -1766,11 +1794,9 @@ def athlete_log_session(request, pk):
     # (``_upsert_parsed_set`` fires the optimistic toast), and it survives this
     # save untouched — so reporting it here congratulated the athlete a second
     # time for a record they had already seen, on a save that changed nothing.
-    hidden_set_pks = {
-        row.pk
-        for row in log.sets.select_related("source_line")
-        if parsed_set_is_hidden(row)
-    }
+    hidden_set_pks = hidden_parsed_set_pks(
+        log.sets.select_related("source_line", "reclaimed_line")
+    )
     new_records = [
         r for r in new_records_in(log) if r.logged_set_id not in hidden_set_pks
     ]
