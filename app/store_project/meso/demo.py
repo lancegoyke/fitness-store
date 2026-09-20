@@ -385,6 +385,10 @@ def _ensure_demo_log(athlete, plan, today):
                     LoggedSet(
                         session_log=log,
                         prescription=prescription,
+                        # #578 C1: written alongside `prescription`, not
+                        # instead of it — see `LoggedSet.exercise_slot`'s
+                        # model comment.
+                        exercise_slot_id=prescription.exercise_slot_id,
                         set_number=set_number,
                         reps=reps,
                         load=load,

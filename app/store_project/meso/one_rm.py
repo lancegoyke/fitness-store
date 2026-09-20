@@ -84,18 +84,28 @@ def derive_one_rm_values(athlete, *, keys=None, unit=None):
     for one lift would be unit-confused. The estimate is therefore derived (and
     stored) per unit.
     """
+    # #578 C1: `.anchored()` (not `prescription__isnull=False`) admits a set
+    # whose `prescription` went NULL (a hard-deleted line-0 cell, #577/#581)
+    # but whose `exercise_slot` survives — the same identity, resolved
+    # through the durable pointer instead of the one that can go stale.
     logged_sets = models.LoggedSet.objects.filter(
         session_log__athlete=athlete,
         session_log__status=models.SessionLog.Status.DONE,
-        prescription__isnull=False,
-    ).select_related("prescription")
+    ).anchored()
     if unit is not None:
         logged_sets = logged_sets.filter(
             session_log__session__week__mesocycle__plan__unit=unit
         )
     best = {}
     for ls in logged_sets:
-        key = key_str(ls.prescription.exercise_id, ls.prescription.name)
+        # `.anchored()` already guarantees `anchor_slot` resolves for every
+        # row this iterates — this check is belt only, never expected to
+        # fire, kept because the property's contract (may return `None`) is
+        # more general than what this particular query happens to produce.
+        slot = ls.anchor_slot
+        if slot is None:
+            continue
+        key = key_str(slot.exercise_id, slot.name)
         if keys is not None and key not in keys:
             continue
         est = epley_one_rm(ls.load, ls.reps)
@@ -118,20 +128,27 @@ def _quantize(value):
     return Decimal(str(round(float(value), 2)))
 
 
-def refresh_one_rms(athlete, prescriptions, unit):
-    """Recompute + persist ``athlete``'s 1RM for the lifts in ``prescriptions``.
+def refresh_one_rms(athlete, lifts, unit):
+    """Recompute + persist ``athlete``'s 1RM for the lifts in ``lifts``.
 
-    Called after a log save: for each lift identity among ``prescriptions``,
-    upsert the ``AthleteOneRm`` row to the freshly derived best Epley estimate
-    over *all* the athlete's completed logs for that lift (not just this session —
+    Called after a log save: for each lift identity among ``lifts``, upsert
+    the ``AthleteOneRm`` row to the freshly derived best Epley estimate over
+    *all* the athlete's completed logs for that lift (not just this session —
     the 1RM is a property of the athlete, not one plan). A lift with no usable
     logged set yet (no numeric load/reps anywhere) is left untouched rather than
     written as null. ``unit`` records what the stored value is denominated in.
+
+    ``lifts`` is anything carrying the B4 identity pair (``exercise_id``,
+    ``name``) — a ``Prescription`` cell or an ``ExerciseSlot`` (#578 C1:
+    ``settle.settle_log`` passes the latter, resolved off ``LoggedSet.
+    anchor_slot`` rather than a cell that may no longer exist). This function
+    only ever reads those two attributes off each element, never anything
+    cell-specific, so it doesn't care which.
     """
-    # One representative (exercise_id, name) per identity — a later prescription's
+    # One representative (exercise_id, name) per identity — a later lift's
     # name wins for display, harmless since they share the identity.
     reps_by_key = {}
-    for p in prescriptions:
+    for p in lifts:
         reps_by_key[key_str(p.exercise_id, p.name)] = (p.exercise_id, p.name)
     if not reps_by_key:
         return

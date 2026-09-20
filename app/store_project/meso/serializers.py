@@ -17,6 +17,7 @@ athlete actually did last time, per lift) is derived from real logged sets here
 from collections import Counter
 from collections import defaultdict
 
+from django.db.models import Prefetch
 from django.urls import reverse
 
 from . import models
@@ -521,7 +522,18 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
             session__week__mesocycle__plan=plan, athlete=plan.athlete
         )
         .select_related("session")
-        .prefetch_related("sets__prescription")
+        # #578 C1: one `Prefetch` joining both hops the anchor can resolve
+        # through, so `s.anchor_slot` below never fires an N+1 query either
+        # way — a plain `"sets__exercise_slot", "sets__prescription__exercise_slot"`
+        # lookup would cost three queries instead of one.
+        .prefetch_related(
+            Prefetch(
+                "sets",
+                queryset=models.LoggedSet.objects.select_related(
+                    "exercise_slot", "prescription__exercise_slot"
+                ),
+            )
+        )
         .order_by("-date", "-created_at")[:limit]
     )
     summary = []
@@ -533,7 +545,9 @@ def serialize_recent_logs(plan, *, limit=5, sets_cap=24):
                 "status": log.status,
                 "sets": [
                     {
-                        "exercise": s.prescription.name if s.prescription else "",
+                        "exercise": (
+                            s.anchor_slot.name if s.anchor_slot is not None else ""
+                        ),
                         "set": s.set_number,
                         "reps": s.reps,
                         "load": s.load,
@@ -620,13 +634,17 @@ def last_logged_labels(plan, prescriptions, unit):
     wanted = set(target_keys.values())
     if not wanted:
         return {}
+    # `.anchored()` (#578 C1), not a bare `select_related("prescription")` —
+    # admits a set whose `prescription` went NULL (a hard-deleted line-0
+    # cell, #577/#581) but whose `exercise_slot` survives.
     logged_sets = (
         models.LoggedSet.objects.filter(
             session_log__session__week__mesocycle__plan=plan,
             session_log__athlete=plan.athlete,
             session_log__status=models.SessionLog.Status.DONE,
         )
-        .select_related("session_log", "prescription")
+        .anchored()
+        .select_related("session_log")
         .order_by("-session_log__date", "-session_log__created_at", "set_number")
     )
     # ``logged_sets`` is newest-log-first; the first log that mentions a lift is
@@ -634,9 +652,8 @@ def last_logged_labels(plan, prescriptions, unit):
     best_log = {}
     sets_by_key = defaultdict(list)
     for ls in logged_sets:
-        if ls.prescription is None:
-            continue
-        key = _exercise_key(ls.prescription.exercise_id, ls.prescription.name)
+        slot = ls.anchor_slot
+        key = _exercise_key(slot.exercise_id, slot.name)
         if key not in wanted:
             continue
         best_log.setdefault(key, ls.session_log_id)

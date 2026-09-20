@@ -2646,6 +2646,14 @@ def newest_session_logs(session, athlete, *, status=None):
 MAX_LOGGED_SET_NUMBER = 50
 
 
+class LoggedSetQuerySet(models.QuerySet):
+    def anchored(self):
+        """The rows whose ``anchor_slot`` resolves, with both hops fetched."""
+        return self.filter(
+            models.Q(exercise_slot__isnull=False) | models.Q(prescription__isnull=False)
+        ).select_related("exercise_slot", "prescription__exercise_slot")
+
+
 class LoggedSet(models.Model):
     """A single set the athlete logged against a prescription."""
 
@@ -2655,6 +2663,35 @@ class LoggedSet(models.Model):
         related_name="sets",
         verbose_name=_("Session log"),
     )
+    # #578 C1: the durable identity a logged set is anchored to. Unlike
+    # ``prescription`` (below), app code only ever *soft*-deletes an
+    # ``ExerciseSlot`` (``deleted_at``) and never hard-deletes it, so this FK
+    # can't go stale the way ``prescription`` can (#577, #581). CASCADE is
+    # deliberate, not an oversight: ``Prescription.exercise_slot`` is already
+    # CASCADE, and deleting an ``ExerciseSlot`` means the whole exercise row is
+    # gone from every week — there is no partial state to preserve. Django's
+    # delete-confirmation page *lists* CASCADE consequences and says nothing
+    # about SET_NULL ones (#581), so CASCADE is the loud option; SET_NULL here
+    # would just reintroduce the silent detach this field exists to close.
+    #
+    # ``null=True`` is transitional, not permanent: it lets the column be added
+    # without a table rewrite and lets the backfill migration (0051) *report*
+    # rows it can't fill rather than guess. See ``anchor_slot`` below for the
+    # matching transitional read-side fallback.
+    exercise_slot = models.ForeignKey(
+        ExerciseSlot,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="logged_sets",
+        verbose_name=_("Exercise slot"),
+    )
+    # The line-0 cell this set was logged against. Kept — and still written on
+    # every create alongside ``exercise_slot`` — so a code rollback mid-deploy
+    # leaves the old ``prescription``-reading derivations working; C2 narrows
+    # the typed line's key and a later PR drops this pointer once the anchor
+    # above is the only reader. SET_NULL survives a hard delete (#577, #581),
+    # which is exactly the failure mode ``exercise_slot`` closes.
     prescription = models.ForeignKey(
         Prescription,
         on_delete=models.SET_NULL,
@@ -2710,6 +2747,8 @@ class LoggedSet(models.Model):
         verbose_name=_("Reclaimed line"),
     )
 
+    objects = LoggedSetQuerySet.as_manager()
+
     class Meta:
         ordering = ["set_number"]
         verbose_name = "Logged set"
@@ -2717,6 +2756,42 @@ class LoggedSet(models.Model):
 
     def __str__(self):
         return f"Set {self.set_number}"
+
+    @property
+    def anchor_slot_id(self):
+        """The durable identity this set counts toward, or ``None``.
+
+        Resolves ``exercise_slot_id`` first. The fallback to
+        ``prescription.exercise_slot_id`` is TRANSITIONAL, not a permanent
+        dual-read: a deploy runs ``migrate`` (which backfills ``exercise_slot``
+        on every row with a live ``prescription``) and only *then* does a
+        rolling restart, so old containers keep serving requests for a window
+        that spans the whole migrate-plus-restart. A ``LoggedSet`` a stale
+        container inserts during that window has ``exercise_slot = NULL`` —
+        without this fallback it would permanently stop counting toward 1RM
+        and PRs, which is exactly the bug class (#577, #581) this field
+        exists to close. The follow-up PR re-runs the backfill and deletes
+        this fallback along with the ``prescription`` field itself.
+        """
+        if self.exercise_slot_id is not None:
+            return self.exercise_slot_id
+        if self.prescription_id is not None:
+            return self.prescription.exercise_slot_id
+        return None
+
+    @property
+    def anchor_slot(self):
+        """The ``ExerciseSlot`` this set counts toward, or ``None``.
+
+        Same resolution order — and the same TRANSITIONAL fallback — as
+        ``anchor_slot_id``; see that property's docstring for why the
+        fallback exists and when it goes away.
+        """
+        if self.exercise_slot_id is not None:
+            return self.exercise_slot
+        if self.prescription_id is not None:
+            return self.prescription.exercise_slot
+        return None
 
 
 # ---------------------------------------------------------------------------

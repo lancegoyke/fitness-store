@@ -601,17 +601,30 @@ def restore_plan_snapshot(plan, snapshot):
     #
     # ``logged_sets`` (#577) closes the set: ``LoggedSet.prescription`` is the
     # MOST direct of the three pointers — the line-0 cell every logged set is
-    # filed under, whatever its origin — and was the one left out. It is also
-    # the costliest to lose, because nothing downstream survives it: where a
-    # missing ``source_line`` merely strips a row of the protection its link
-    # carries, a NULL ``prescription`` drops the set from every derivation that
-    # reads it (``personal_records._live_logged_sets``,
-    # ``one_rm.derive_one_rm_values``, ``settle`` — all filter
-    # ``prescription__isnull=False``). The set stays in the database and stays
-    # on the athlete's page as its sub-line's text, while silently ceasing to
-    # count toward their estimated 1RM and their records, with nothing to say
-    # so. Those filters are right; the cell simply must not be deleted out from
-    # under them.
+    # filed under, whatever its origin — and was the one left out.
+    #
+    # #578 C1 changed what's actually at stake here, so the claim this
+    # comment used to make is no longer true and is corrected rather than
+    # left to rot: a NULL ``prescription`` no longer silently drops a set
+    # from every derivation that reads it. ``personal_records.
+    # _live_logged_sets``, ``one_rm.derive_one_rm_values``, and ``settle``
+    # now read ``LoggedSet.exercise_slot`` (with a transitional fallback to
+    # ``prescription.exercise_slot`` — see ``LoggedSet.anchor_slot``), and
+    # ``exercise_slot`` is a separate FK straight to the ``ExerciseSlot``,
+    # untouched by hard-deleting the ``Prescription`` cell this purge is
+    # about — so the set keeps counting toward 1RM/PRs either way.
+    #
+    # The guard stays in the OR anyway, because sparing costs nothing (see
+    # below) and because the OTHER two pointers still carry protection the
+    # TYPED path actually depends on: a missing ``source_line`` is how a
+    # re-blur of a sub-line finds and replaces its own derived row rather
+    # than minting a twin, and a missing ``reclaimed_line`` loses #541's hint
+    # linking a structured "Log session" copy back to the sub-line it
+    # replaced. Losing either is a live bug in the write path itself, wholly
+    # apart from whether the set still counts — so this clause is defense in
+    # depth for ``logged_sets`` now, not the load-bearing one it was before
+    # C1, but there is no reason to narrow the OR just because one of its
+    # three reasons got weaker.
     #
     # Sparing has a visible cost, and it is accepted: a spared cell keeps the
     # text (and ``skipped``) it had when the snapshot was taken WITHOUT it, so

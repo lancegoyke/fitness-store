@@ -1657,7 +1657,19 @@ def athlete_log_session(request, pk):
         # claims.
         live_rows = {row.pk: row.prescription_id for row in rows}
         hidden_pks = hidden_parsed_set_pks(rows)
-        trainable_pks = {p.pk for p in session.trainable_cells()}
+        # Materialized once so the anchor map built for `bulk_create` below
+        # (#578 C1) can reuse this same read instead of re-querying
+        # `trainable_cells()` a second time.
+        trainable_cells = list(session.trainable_cells())
+        trainable_pks = {p.pk for p in trainable_cells}
+        # #578 C1: `LoggedSet.exercise_slot_id` for a posted set, keyed by the
+        # line-0 cell (`Prescription`) pk the payload names as
+        # `prescription_id`. `_clean_logged_sets` already refuses any set
+        # that doesn't reference a trainable cell in this session, so every
+        # `cs["prescription_id"]` below is a key this map holds — the
+        # `.get()` fallback to `None` at the `bulk_create` call is belt only,
+        # never expected to fire.
+        slot_id_by_cell_pk = {p.pk: p.exercise_slot_id for p in trainable_cells}
         for row in rows:
             if row.prescription_id not in trainable_pks:
                 continue
@@ -1945,6 +1957,11 @@ def athlete_log_session(request, pk):
                 LoggedSet(
                     session_log=log,
                     prescription_id=cs["prescription_id"],
+                    # #578 C1: written alongside `prescription_id`, not instead
+                    # of it — a code rollback mid-deploy must leave the old
+                    # `prescription`-reading derivations working. See
+                    # `LoggedSet.exercise_slot`'s model comment.
+                    exercise_slot_id=slot_id_by_cell_pk.get(cs["prescription_id"]),
                     set_number=cs["set_number"],
                     reps=cs["reps"],
                     load=cs["load"],
@@ -2606,13 +2623,27 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                     #
                     # Scoped by ``prescription`` as well as ``source_line``
                     # (#577), matching the ``mine`` delete above and the
-                    # ``reclaimed_line`` lookup below. A row whose
-                    # ``prescription`` went NULL (a purge hard-deleted its
-                    # line-0 cell) still matches ``source_line=cell``, and
-                    # adopting one would re-link this line to a row every
-                    # derivation ignores — an inert set, logged and invisible
-                    # to 1RM and PRs. Healthy rows always carry both links, so
-                    # this narrows nothing that should match.
+                    # ``reclaimed_line`` lookup below — unchanged by #578 C1.
+                    # A row whose ``prescription`` went NULL (a purge
+                    # hard-deleted its line-0 cell) still matches
+                    # ``source_line=cell``, but this filter refuses to adopt
+                    # it, same as before; the ``reclaimed_line`` lookup below
+                    # filters ``prescription=line_zero_cell`` too, so it
+                    # doesn't repair the row either — it falls through to the
+                    # CREATE branch further down. What C1 changes is the
+                    # consequence of that fall-through: the NULL-``prescription``
+                    # row is no longer inert. Its own ``exercise_slot``
+                    # (untouched by the ``Prescription`` delete) still counts
+                    # it toward 1RM and PRs, so the fresh row the CREATE
+                    # mints now counts *alongside* it — the same performance
+                    # double-counted, where before the orphan was silently
+                    # invisible and the fresh row was the only one that
+                    # counted. That's a pre-existing data-integrity artifact
+                    # of the hard-deleted cell (production has no such rows
+                    # today), left as-is for #578's later stages: narrowing
+                    # this filter to adopt the orphan, or widening it to
+                    # dedupe against ``exercise_slot``, is a write-path
+                    # decision that belongs to C2, not this comment fix.
                     existing = next(
                         (
                             row
@@ -2715,6 +2746,10 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
                             created = LoggedSet.objects.create(
                                 session_log=log,
                                 prescription=line_zero_cell,
+                                # #578 C1: written alongside `prescription`,
+                                # not instead of it — see
+                                # `LoggedSet.exercise_slot`'s model comment.
+                                exercise_slot_id=line_zero_cell.exercise_slot_id,
                                 source_line=cell,
                                 set_number=number,
                                 **values,

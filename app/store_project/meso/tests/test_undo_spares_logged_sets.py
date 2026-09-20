@@ -236,13 +236,21 @@ class TestRestoreAfterReclaimSparesANullPrescriptionRow:
 
     But a row #577 already damaged (its line-0 cell purged out from under it,
     ``prescription`` gone ``NULL`` via ``SET_NULL``) still matches
-    ``source_line=cell`` too, and reusing IT re-links the line to a set every
-    derivation (``one_rm``, ``personal_records``, ``settle``) filters out —
-    an inert, invisible "restore" instead of a fresh, countable set. Scoping
-    ``existing`` by ``prescription=line_zero_cell`` (matching the ``mine``
-    delete above it and the ``reclaimed_line`` fallback below it) closes
-    that: a NULL-prescription row can no longer satisfy either lookup, so the
-    upsert falls through to CREATE and mints a live row instead.
+    ``source_line=cell`` too. Scoping ``existing`` by
+    ``prescription=line_zero_cell`` (matching the ``mine`` delete above it
+    and the ``reclaimed_line`` fallback below it) refuses that row, same as
+    it refused before #578 C1: a NULL-prescription row can't satisfy either
+    lookup, so the upsert falls through to CREATE and mints a fresh row.
+
+    What C1 changes is *why* that fall-through matters. Reusing the damaged
+    row used to re-link the line to a set every derivation (``one_rm``,
+    ``personal_records``, ``settle``) filtered out by ``prescription`` — an
+    inert, invisible "restore". Since C1 those derivations resolve through
+    ``exercise_slot`` instead, so the damaged row is no longer inert: it
+    already counts on its own. The behaviour this test asserts (fall through
+    to CREATE, don't reuse the damaged row) is unchanged, but "reusing it
+    would be invisible" is no longer the reason it matters — "reusing it
+    would double-count alongside the fresh CREATE" is.
     """
 
     def test_the_restore_mints_a_fresh_row_not_the_null_prescription_survivor(

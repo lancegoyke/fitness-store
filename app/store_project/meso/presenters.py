@@ -19,6 +19,7 @@ from django.db.models import Count
 from django.db.models import Exists
 from django.db.models import Min
 from django.db.models import OuterRef
+from django.db.models import Prefetch
 from django.db.models import Q
 from django.db.models import Subquery
 from django.db.models.functions import Cast
@@ -1098,7 +1099,7 @@ def _exercise_result(prescription, logged_sets, unit, sub_lines_by_slot):
     return row, overshoot
 
 
-def _avg_rpe_delta(prescriptions, sets_by_prescription, sub_lines_by_slot):
+def _avg_rpe_delta(prescriptions, sets_by_slot, sub_lines_by_slot):
     """Mean (logged − target) RPE across comparable sets, signed; "—" if none.
 
     Target RPE is line 0's inline value if present, else recovered from a
@@ -1113,7 +1114,7 @@ def _avg_rpe_delta(prescriptions, sets_by_prescription, sub_lines_by_slot):
         )
         if target is None:
             continue
-        for s in sets_by_prescription.get(prescription.pk, []):
+        for s in sets_by_slot.get(prescription.exercise_slot_id, []):
             logged = _num(s.rpe)
             if logged is not None:
                 deltas.append(logged - target)
@@ -1155,20 +1156,37 @@ def session_results(session):
     sub_lines_by_slot = _coach_sub_lines_by_slot(session)
     # #579: shares the newest-log rule every other "current SessionLog for
     # this (session, athlete) pair" read uses — see models.newest_session_logs.
+    #
+    # `Prefetch("sets", ...select_related("prescription"))` (#578 C1), not a
+    # plain `"sets__prescription"` lookup: a set's `anchor_slot_id` falls back
+    # to `prescription.exercise_slot_id` when `exercise_slot_id` is NULL (the
+    # transitional dual-read), and `select_related` joins that in the same
+    # query that fetches `sets` instead of costing a second query.
     log = (
         newest_session_logs(session, athlete, status=SessionLog.Status.DONE)
-        .prefetch_related("sets")
+        .prefetch_related(
+            Prefetch("sets", queryset=LoggedSet.objects.select_related("prescription"))
+        )
         .first()
     )
-    sets_by_prescription = defaultdict(list)
+    # Keyed by ANCHOR SLOT id, not `prescription_id` (#578 C1): safe because
+    # ``unique_cell_slot_week_line`` makes ``(exercise_slot, week, line)``
+    # unique, so within this one session's week each slot has at most one
+    # line-0 cell — ``prescriptions`` (``session.trainable_cells()``) below
+    # therefore has distinct ``exercise_slot_id``s, and grouping logged sets
+    # by that id keys them exactly as uniquely as the old `prescription_id`
+    # did, while also catching a set whose `prescription` went NULL
+    # (#577/#581) but whose `exercise_slot` survives.
+    sets_by_slot = defaultdict(list)
     if log is not None:
         for s in log.sets.all():
-            if s.prescription_id is not None:
-                sets_by_prescription[s.prescription_id].append(s)
+            slot_id = s.anchor_slot_id
+            if slot_id is not None:
+                sets_by_slot[slot_id].append(s)
 
     results = [
         _exercise_result(
-            p, sets_by_prescription.get(p.pk, []), plan.unit, sub_lines_by_slot
+            p, sets_by_slot.get(p.exercise_slot_id, []), plan.unit, sub_lines_by_slot
         )
         for p in prescriptions
     ]
@@ -1190,7 +1208,7 @@ def session_results(session):
     prescribed_total = 0
     logged_total = 0
     for p in prescriptions:
-        logged_n = len(sets_by_prescription.get(p.pk, []))
+        logged_n = len(sets_by_slot.get(p.exercise_slot_id, []))
         prescribed_total += _prescribed_set_count(p) or logged_n
         logged_total += logged_n
     completion = (
@@ -1220,7 +1238,7 @@ def session_results(session):
             "logged": _logged_date(log),
             "completion": completion,
             "avg_rpe_delta": _avg_rpe_delta(
-                prescriptions, sets_by_prescription, sub_lines_by_slot
+                prescriptions, sets_by_slot, sub_lines_by_slot
             ),
             "flag": flag,
             "flag_count": len(flagged),
