@@ -442,15 +442,30 @@ def restore_plan_snapshot(plan, snapshot):
             # Spared WITHOUT being locked, and the omission is the point. The
             # purge below keeps ``athlete_authored`` in its candidate FILTER
             # precisely so it never takes ``FOR UPDATE`` on a cell the athlete
-            # owns, because ``cell_line_write``'s reclaim writes that row
+            # owns.
+            #
+            # THE ORIGINAL REASON IS GONE, and saying so matters more than
+            # leaving a tidy-looking comment: this used to read that
+            # ``cell_line_write``'s reclaim writes that row
             # (``existing.save(update_fields=["athlete_authored"])``) BEFORE
             # ``record_plan_action`` takes the ``Plan`` lock — Prescription
-            # then Plan, the exact inverse of this path. Locking it here would
-            # close that cycle on the guard's MAIN path, since #583's headline
-            # occupant IS an athlete-authored cell. So this decision is made
-            # from the unlocked read above, exactly as the purge makes it from
-            # its filter, and only the ``LoggedSet`` pointers are re-checked
-            # under the lock.
+            # then Plan, the exact inverse of this path — so locking an
+            # athlete-authored occupant here would close that cycle on the
+            # guard's MAIN path (#583's headline occupant IS an
+            # athlete-authored cell). #562 corrected both writers:
+            # ``cell_line_write`` and ``athlete_cell_write`` now take the
+            # ``Plan`` row FIRST, and this path holds it for the whole restore,
+            # so the ``Plan`` lock alone already excludes them and there is no
+            # Prescription↔Plan cycle left for this decision to avoid.
+            #
+            # The behaviour is unchanged anyway, on the reason that outlived
+            # the lock-order one: sparing an athlete-authored occupant is a
+            # DATA rule (an undo must never revert or hard-delete the
+            # athlete's own note), and keeping the flag out of the locking
+            # SELECT keeps the locked set small (see the purge's own note
+            # below). So this decision is still made from the unlocked read
+            # above, exactly as the purge makes it from its filter, and only
+            # the ``LoggedSet`` pointers are re-checked under the lock.
             colliding_pks_to_skip.add(pk)
             continue
         if occupant_pk in cell_pks:
@@ -712,14 +727,20 @@ def restore_plan_snapshot(plan, snapshot):
     # locked the DOOMED rows, whereas this locks every snapshot-absent,
     # non-athlete-authored stray — including ones a ``LoggedSet`` names, which
     # are then spared. Those extra rows can include a reclaimed sub-line an
-    # athlete is actively blurring, and ``athlete_cell_write`` takes
-    # Prescription before ``Plan`` (``cell.save`` then ``_touch_plan``) while
-    # this path holds ``Plan`` and wants Prescription. That is a widening of a
-    # cycle that already existed on this path, not a new one — the same
-    # endpoint pair already inverts on Session-vs-Plan (#562) — and keeping
-    # ``athlete_authored`` in the candidate filter below is what stops the
-    # widening from being far larger. #562 itself is untouched here, and its
-    # direction (pick one Session/Plan order) stays compatible either way.
+    # athlete is actively blurring.
+    #
+    # THE CYCLE THAT WIDENING USED TO WIDEN IS CLOSED (#562). This paragraph
+    # used to end: "``athlete_cell_write`` takes Prescription before ``Plan``
+    # (``cell.save`` then ``_touch_plan``) while this path holds ``Plan`` and
+    # wants Prescription... the same endpoint pair already inverts on
+    # Session-vs-Plan (#562)... #562 itself is untouched here." #562 has since
+    # landed, and it took the opposite decision to the one that sentence
+    # assumed: ``athlete_cell_write`` (and ``cell_line_write``) now take the
+    # ``Plan`` row as their FIRST statement, so this path's ``Plan`` lock
+    # excludes them outright and neither the Prescription↔Plan nor the
+    # Session↔Plan inversion remains. Keeping ``athlete_authored`` in the
+    # candidate filter below is therefore about lock VOLUME now, not about
+    # avoiding a cycle — see that note for the difference.
     #
     # ``athlete_authored`` STAYS in the candidate filter, and is re-checked
     # under the lock as well. Both halves are deliberate.
@@ -730,13 +751,21 @@ def restore_plan_snapshot(plan, snapshot):
     # athlete-authored cell in every live slot × live week of the plan a
     # candidate, and this ``FOR UPDATE`` would then lock all of them on every
     # single undo and redo. Those are precisely the rows a logging athlete is
-    # writing to, and ``athlete_cell_write`` takes its locks in the opposite
-    # order to this path (the sub-line ``Prescription`` via
-    # ``cell.save(...)``, THEN ``Plan`` via ``_touch_plan``, while an
-    # undo/redo holds ``Plan`` for the whole restore and reaches Prescription
-    # last), so locking the athlete's own cells here would turn a rare lock
-    # cycle into a routine one — a deadlock generator built by the fix for a
-    # different race.
+    # writing to, so an undo would routinely sit on the athlete's whole
+    # tracking stack while it ran.
+    #
+    # THAT IS NOW THE WHOLE REASON, and the change is worth stating rather
+    # than quietly dropping. This used to add that ``athlete_cell_write``
+    # takes its locks in the opposite order to this path (the sub-line
+    # ``Prescription`` via ``cell.save(...)``, THEN ``Plan`` via
+    # ``_touch_plan``), making a wider candidate set "a deadlock generator
+    # built by the fix for a different race". #562 removed that inversion:
+    # ``athlete_cell_write`` now takes the ``Plan`` row as its first statement,
+    # and an undo/redo holds ``Plan`` for the whole restore, so the two
+    # exclude each other on the ``Plan`` row before either reaches a
+    # ``Prescription``. Widening this filter would therefore cost lock volume,
+    # not correctness — still not worth paying, but no longer a deadlock
+    # argument.
     #
     # Keeping the exclusion costs nothing in correctness, because the flip the
     # re-check exists for is a concurrent UPDATE of one of these very rows

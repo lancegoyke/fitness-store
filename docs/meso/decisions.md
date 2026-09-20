@@ -620,6 +620,136 @@ page is slow yet. Add a nightly rollup only when a query measurably is.
 
 ---
 
+## Row-lock order (#558, #559, #562)
+
+**One order for the whole app, and it is this:**
+
+```
+User  →  CoachAthlete  →  Plan  →  AgentProposalBatch
+      →  Week / SessionSlot / ExerciseSlot  →  Session
+      →  Prescription  →  SessionLog / LoggedSet
+```
+
+and **ascending pk within a table** whenever a path locks more than one row of
+one table.
+
+Every path that takes two or more row locks takes them in that sequence,
+counting both `select_for_update` and the implicit exclusive lock an
+`UPDATE`/`DELETE` takes on the row it writes. A path may **skip** a level. What
+it may never do is take two of these in the reverse order. A total order plus
+"don't invert it" is what makes a lock cycle unconstructible, so PostgreSQL
+never has a deadlock to resolve by aborting somebody's request with a 500.
+
+**Skipping a level is safe only against other paths that respect the order.**
+This is the part that is easy to get wrong, so it is stated separately. A
+cascade delete runs the whole order *backwards* — `Collector.delete`
+fast-deletes children before it updates or deletes parents — and the only thing
+that makes it safe is holding the parent lock for the whole delete. So a path
+that skips `Plan` is fine against a designer save, and is **not** fine against a
+delete of that plan's tree: nothing is left to serialize them. Two consequences,
+both load-bearing:
+
+- a delete path must pre-lock **every level its cascade reaches**, not just the
+  top two (`demo.lock_cascade_parents`);
+- a path that can race one must take the `Plan` lock even if it does not
+  otherwise need it.
+
+**Strength, not just order.** Default to `select_for_update(no_key=True)`.
+`FOR NO KEY UPDATE` conflicts with every other writer's `FOR UPDATE` and
+`FOR NO KEY UPDATE`, so the exclusion this order needs is real, but it does
+**not** conflict with the `FOR KEY SHARE` a transaction takes on a parent row at
+COMMIT to check a deferred FK — Django emits every PostgreSQL FK `DEFERRABLE
+INITIALLY DEFERRED`, so that lock is taken at commit, *after* the transaction
+already holds its own rows, and therefore in an order no code can arrange. That
+is what makes it dangerous: a plain `FOR UPDATE` held across a later lock
+acquisition turns it from a hazard into a deadlock generator. #560 was that bug
+on a user row; #559's first attempt reintroduced it one level up by locking
+`User` with `FOR UPDATE` and then reaching for `CoachAthlete`.
+
+Take plain `FOR UPDATE` only when the path needs to conflict with exactly that
+commit-time `FOR KEY SHARE` — #584's purge, which must see a `LoggedSet` whose
+writer is already inside its COMMIT. "I am about to delete this row" is **not**
+a sufficient reason: the `DELETE` takes its own `FOR UPDATE` when it runs, and
+reserving the row earlier at that strength buys ordering you already have while
+blocking every deferred FK check in the meantime.
+
+**Why this order and not another.** Any total order prevents deadlock; this is
+the one the code already mostly followed. The coach's write paths open with the
+`Plan` row (`history.record_plan_action`, `api_plan_undo`, `api_plan_redo`), and
+`history.restore_plan_snapshot` walks down through `Week` → `SessionSlot` →
+`ExerciseSlot` → `Session` → `Prescription` (#584/#583 kept that sequence; it is
+adopted here as the app-wide one). `Week`, `SessionSlot` and `ExerciseSlot` sit
+at one level on purpose: every writer of them already holds the `Plan` row, so
+their relative order cannot produce a cycle, and pinning one would make the
+restore's existing sequence a violation for no gain.
+
+### What conforms today
+
+- `api_plan_undo` / `api_plan_redo` → `history.restore_plan_snapshot`, and every
+  designer endpoint through `history.record_plan_action`.
+- `views.athlete_cell_write` — takes the `Plan` row first as of #562. It used to
+  take the `Session` lock and then write the `Plan` row via `_touch_plan`, which
+  inverted against the restore.
+- `views.cell_line_write` — takes the `Plan` row before its reclaim write as of
+  #562. Its `existing.save(...)` made it the one path running
+  `Prescription` → `Plan`.
+- `views.batch_apply` — takes the `Plan` row before the batch as of #559. It ran
+  batch → `Plan` (via `record_plan_action`), which only became reachable once
+  `lock_cascade_parents` started going parent-first.
+- `views.change_set_status` — batch, then its `ProposedChange`. Skips `Plan`
+  legitimately: it never touches that row, and no delete path can race it
+  without holding the batch lock first.
+- `agent.service._persist_result` / `_fail` — batch, then its children (#558).
+- `views.plan_create` — `CoachAthlete`, then `Plan`. Conforming as of #559,
+  which extended this order upward to cover it. Its `draft=1` path is the
+  exception: `_reserve_plan_draft` locks the coach's own `User` row *after* the
+  link and the new plan, which inverts. No cycle is constructible today (it
+  returns early for sandbox coaches, and the sandbox reap is the only path that
+  locks a coach's `User` row and then their links), and it is filed as #589.
+- `demo.clear_demo` and `sandbox.expire_sandboxes`, via
+  `demo.lock_cascade_parents`.
+
+### Known gaps, filed not fixed
+
+These are pre-existing and were surfaced by #559's adversarial review. None is
+introduced by #558/#559/#562, and none is fixed by them:
+
+- **Hard deletes outside `demo.py`/`sandbox.py` take no parent locks at all**
+  (#587) —
+  the `User`, `CoachAthlete` and `Plan` admins, and
+  `users/management/commands/merge_users.py`. Each cascades exactly like
+  `clear_demo` and should call `lock_cascade_parents`.
+- **`views.athlete_log_session` and `settle.settle_log` skip the `Plan` level
+  while racing paths that do not respect the order** (#588). Both open with
+  `Session.objects.select_for_update()`, and that statement locks *two* tables,
+  not one: `Session.Meta.ordering` joins `meso_sessionslot`, and without
+  `of=("self",)` the joined row is locked too — `Session` → `SessionSlot`,
+  inverting this order. Against `restore_plan_snapshot`, which writes
+  `SessionSlot` before `Session`, that is a live cycle; neither path takes the
+  `Plan` lock that would serialize them. The same two paths also cycle with a
+  cascade delete at the `Session`/`SessionLog` level.
+- **`lock_cascade_parents` stops at `AgentProposalBatch`** (#588), so the levels below
+  it are still deleted children-first with nothing holding them. Safe today only
+  because the paths that would contend there are the two above, plus a demo
+  athlete who cannot log in — but see the sandbox coach's own self-plan.
+- **`_reserve_plan_draft` and `agent_propose` lock the coach's `User` row with
+  plain `FOR UPDATE`** (#589) where every sibling site uses `no_key=True`, and
+  `cell_line_write` / `batch_apply` / `record_plan_action` do the same on the
+  `Plan` row. No cycle is constructible from either today; both are needless
+  blocking of a deferred-FK `FOR KEY SHARE`, one statement away from being #560.
+- **`clear_demo` does not take `demo._lock(coach)`** (#590) although every segment
+  loader does, so a concurrent `load_demo` can re-create rows the cascade is
+  deleting.
+- **Several creator paths take no lock at any level** (#596) — `template_start`
+  and `plan_batch_deliver` (both via `Plan.duplicate_for`), `roster_add_self`,
+  and `CoachInvite` acceptance all insert a `Plan` or `CoachAthlete` while
+  holding nothing. They are what the rule above means by "a path that can race
+  one must take the `Plan` lock even if it does not otherwise need it":
+  `plan_create` cooperates by locking the link first, and these do not, so a row
+  they commit mid-delete is collected but never locked, and a third transaction
+  editing it can still close the cycle. `plan_create` is listed as conforming
+  above precisely because it is the exception among the creators, not the rule.
+
 ## Decision log
 
 _(Append dated entries here as decisions land.)_

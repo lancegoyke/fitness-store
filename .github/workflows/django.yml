@@ -208,7 +208,14 @@ jobs:
       # a double-submitted Apply/trial-start/coach-request must not both act.
       # test_undo_purge_postgres is row-lock serialization again (#584): a
       # coach undo's stray-cell purge must not delete a cell an athlete's set
-      # was committed against mid-race. THIS LIST IS THE ONLY PLACE THESE RUN
+      # was committed against mid-race.
+      # test_athlete_undo_lock_order_postgres and
+      # test_clear_demo_lock_order_postgres are a fourth class: LOCK ORDER
+      # (#562, #559). A deadlock needs two transactions taking the same two
+      # rows in opposite orders, which SQLite can't express at all — it has no
+      # row locks and its in-memory test DB isn't even shared across
+      # connections — so an inverted order there looks identical to a correct
+      # one. THIS LIST IS THE ONLY PLACE THESE RUN
       # — every file here skips itself on SQLite, so one left off the list
       # executes in no CI job at all and looks green while testing nothing.
       # Add a new Postgres-only file here in the same commit that creates it.
@@ -221,4 +228,6 @@ jobs:
             app/store_project/analytics/tests/test_track_postgres.py \
             app/store_project/meso/tests/test_billing_webhook_postgres.py \
             app/store_project/meso/tests/test_double_submit_postgres.py \
-            app/store_project/meso/tests/test_undo_purge_postgres.py
+            app/store_project/meso/tests/test_undo_purge_postgres.py \
+            app/store_project/meso/tests/test_athlete_undo_lock_order_postgres.py \
+            app/store_project/meso/tests/test_clear_demo_lock_order_postgres.py
