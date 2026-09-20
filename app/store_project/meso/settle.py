@@ -95,12 +95,22 @@ def settleable_logs(cutoff):
     "the newest log for this (session, athlete) pair" isn't a per-row join
     predicate at all — it's "no other row for the same pair has a later
     ``created_at``", which is naturally a correlated subquery.
+
+    #567/#568 P2: ``-pk`` tiebreaks a shared ``created_at`` the same
+    deterministic way every other "newest ``SessionLog`` for one (session,
+    athlete) pair" read does (``views.athlete_log_session``,
+    ``views._upsert_parsed_set``, ``views._cell_warn_or_false``,
+    ``presenters.athlete_session``, and ``settle_log`` below) — without it,
+    two logs sharing a ``created_at`` (precisely the split-log rows #568
+    exists for) sort ambiguously here, and this query could pick a different
+    one of the pair than those other reads do, settling a log the
+    athlete-facing surfaces never treat as current.
     """
     newest_pk_for_pair = (
         SessionLog.objects.filter(
             session=OuterRef("session"), athlete=OuterRef("athlete")
         )
-        .order_by("-created_at")
+        .order_by("-created_at", "-pk")
         .values("pk")[:1]
     )
     has_a_logged_set = LoggedSet.objects.filter(session_log=OuterRef("pk"))
@@ -157,11 +167,14 @@ def settle_log(pk, *, cutoff):
         )
         if log is None or log.session_id != session_id:
             return False
+        # #567/#568 P2: same ``-pk`` tiebreak as ``settleable_logs`` above and
+        # every other "newest log for this (session, athlete) pair" read —
+        # see that comment.
         newest = (
             SessionLog.objects.filter(
                 session_id=log.session_id, athlete_id=log.athlete_id
             )
-            .order_by("-created_at")
+            .order_by("-created_at", "-pk")
             .first()
         )
         if newest is None or newest.pk != log.pk:

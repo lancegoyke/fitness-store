@@ -2320,48 +2320,86 @@ _(Append dated entries here as decisions land.)_
   `id` (the `LoggedSet.pk` the client rendered in that grid row, handed out by
   `serialize_session_log` and now also by the presenter's `set_rows`) or
   `client_id` (a client-minted id, at most 64 characters, for a grid row with
-  no server row yet). `client_id` was chosen over an explicit "this row is
-  new" flag because it also names the row across a retry: `save()` builds the
-  payload twice and the offline outbox can replay either copy, and a
-  remembered client id keeps all three naming one row. The server echoes the
-  mapping back on the row it created (`log.sets[].client_id`), so the page
-  learns the real id without a reload. Three matches move onto it: the
-  replace-delete's `_client_held`, the twin absorb, and #541's carried reclaim
-  link. Nothing else changes — the renumbering, the wholesale replace, and
-  `parsed_set_is_hidden` are untouched.
+  no server row yet). A payload that carries both on one set, or that mixes
+  tagged and untagged sets, is a 400 — so `identified` is a validated property
+  of the whole payload, not an inferred one. `client_id` was chosen over an
+  explicit "this row is new" flag because it also names the row across a
+  retry: `save()` builds the payload twice and the offline outbox can replay
+  either copy, and a remembered client id keeps all three naming one row. The
+  server echoes the mapping back on the row it created
+  (`log.sets[].client_id`), so the page learns the real id without a reload.
+  **What an id is worth, in four cases.** The rule is the same at all three
+  match sites — the replace-delete's `_client_held`, the twin absorb, and
+  #541's carried reclaim link:
+  an **anchored** id (it names a row in `live_pks`, the snapshot of this log's
+  rows taken before this save deletes anything) matches on the pk, and must
+  agree on the prescription;
+  a **stale** id (tagged, but names no row this log still holds) falls back to
+  the positional `(prescription, set_number)` + values match — a stale id is
+  not weaker evidence, it is no evidence, and position is all that is left;
+  a **`client_id`** names no server row by construction, so it holds nothing,
+  absorbs nothing and claims no link — which is what stops the swallowed set;
+  an **untagged** payload is positional everywhere, byte-for-byte as before.
+  The stale case is the one the review had to teach us: the write-ahead outbox
+  replays a body whose first delivery committed but whose response was lost,
+  and that body names rows the first delivery already replaced under new pks.
+  Treating those ids as "no match" duplicated a performance and dropped
+  #541's link — worse than the guess it replaced, and a direct contradiction
+  of the client's own "replaying on reconnect is safe".
   **The rules the identity match makes expressible**, which position could
-  not: a restated row is the same row (the absorb matches on `id` *and* the
-  values); a new row with the same numbers is a new performance (a `client_id`
-  can never absorb anything); renumbering still prevents two rows at one
-  number. `_client_held` becomes a pure id test with no value check — the id
-  is stronger evidence than the values ever were — so an edit to a visible
-  parsed row now REPLACES it instead of being spared into a visible duplicate.
-  That is a deliberate change of the 5a rule, and only on the identified path.
+  not: a restated row is the same row; a new row with the same numbers is a
+  new performance; renumbering still prevents two rows at one number.
+  `_client_held` drops the value check on an anchored id — the id is stronger
+  evidence than the values ever were — so an edit to a visible parsed row now
+  REPLACES it instead of being spared into a visible duplicate. That is a
+  deliberate change of the 5a rule, and only on the anchored path. One
+  exception, because an id can be adopted rather than rendered: a wholly blank
+  posted set is not evidence the page was showing a row's values, so it never
+  holds a row that has any. `rowFilled` posts a row that is merely ticked, and
+  without that guard an all-empty row deleted a logged set and left nothing.
   **Old payloads still work.** An installed PWA can run cached JS and a tab
-  open since before the deploy posts no ids at all, so a payload where no set
-  carries either field falls back to today's positional match byte-for-byte.
-  Identified is a whole-payload property: a real client tags every row, so a
-  mixed payload can only mean a client that tags none. On that fallback path
-  both failures above remain exactly as reachable as they are on `main` — a
-  client that cannot name its rows cannot be told apart from one merely
-  re-describing a row it can already see — which is why `PWA_CACHE_VERSION`
-  goes to `meso-pwa-v6`, so installed clients drop the stale shell and pick up
-  the new logger. A stale tab's save also still deletes a set logged from
-  another device between its render and its post; that is the wholesale
-  replace, not the identity match, and it is out of scope here.
+  open since before the deploy posts no ids at all, so an untagged payload
+  falls back to the positional match byte-for-byte. On that path both failures
+  above remain exactly as reachable as they are on `main` — a client that
+  cannot name its rows cannot be told apart from one merely re-describing a
+  row it can already see — which is why `PWA_CACHE_VERSION` goes to
+  `meso-pwa-v6`, so installed clients drop the stale shell and pick up the new
+  logger. The client reconciles by `client_id` first and slot second, rather
+  than by `client_id` alone: during a rolling deploy an older container
+  ignores `client_id` and echoes none, and matching only on it left the row
+  it had just stored un-ticked, out of the next payload, and deleted. A stale
+  tab's save also still deletes a set logged from another device between its
+  render and its post; that is the wholesale replace, not the identity match,
+  and it is out of scope here.
   **#568, one rule and one scope.** `sub_line_should_warn`'s fallback query
   matched rows across every `SessionLog` in the database while its twin
   `parsed_set_is_hidden` scopes by log, so the blur response and the next page
   render could disagree. `_cell_warn_or_false` now reads the same newest log
-  the presenter reads and passes `backing_sets`, and it runs inside
-  `athlete_cell_write`'s atomic block under its own savepoint — a database
-  error there must not roll the athlete's already-committed text back, the
-  same reasoning `_upsert_parsed_set` documents. The fallback itself is scoped
-  to the cell's own day as a safety net; a cell names no athlete, so it can
-  never narrow further, and both real callers pass `backing_sets`.
+  the presenter reads and passes `backing_sets`. It stays OUTSIDE
+  `athlete_cell_write`'s transaction, where `main` had it: an attempt to move
+  it inside under a savepoint, by analogy with `_upsert_parsed_set`'s guard,
+  turned a database failure in that read into a silent full rollback returned
+  as a 200 — the athlete's committed text gone while the client recorded a
+  save. Reading after commit is what keeps a swallowed failure away from a
+  write that already succeeded. The four reads that answer "the athlete's
+  newest log for this session" now share a `-pk` tie-break so they cannot pick
+  different logs. The fallback query itself is scoped to the cell's own day as
+  a safety net; a cell names no athlete, so it can never narrow further, and
+  both real callers pass `backing_sets`.
   **The move case, decided:** after a coach moves an exercise to another day,
   a line whose set was logged on the old day reads as **unlogged** on the new
   one. The cell travels with the `ExerciseSlot` and the `LoggedSet` stays
   behind, so the scoped answer is the true one, and it is a behavior change
   for ordinary parsed rows too, not only `reclaimed_line` copies.
+  **A consequence the round-2 review surfaced, not fixed here.**
+  `prescription_move` re-points the `ExerciseSlot` block-wide, so one
+  cross-day drag tints every already-logged sub-line for that exercise in
+  *every week of the block*, not just the one week the coach dragged — the
+  move case above is really "one drag, many now-unlogged lines". And because
+  the client re-posts a warned line on blur (`_lineNeedsSending`), an athlete
+  who focuses and leaves one of those newly-tinted lines mints a SECOND
+  `LoggedSet` on the new day's log while the old day's row stays put — two
+  rows for one performance, on two different days. Both are pre-existing (the
+  presenter already tinted those lines on `main`, before #567/#568 touched
+  any of this) and are tracked separately, not fixed in this slice.
   No model change, no migration.

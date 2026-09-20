@@ -1549,11 +1549,19 @@ def athlete_log_session(request, pk):
         # ambiguously on ``-created_at`` alone, and Postgres gives no promise
         # of a stable order for ties: the same query can hand back either row
         # as "first" on different calls. This read, ``_upsert_parsed_set``'s,
-        # ``_cell_warn_or_false``'s, and ``presenters.athlete_session``'s all
-        # take the SAME secondary key so "the athlete's newest log for this
-        # session" is one deterministic thing everywhere it's asked — without
-        # it, two of these four reads could each pick a different log and
-        # never agree, reopening exactly the disagreement #568 closed.
+        # ``_cell_warn_or_false``'s, ``presenters.athlete_session``'s, and the
+        # 24h settle sweep's two reads (``settle.settleable_logs``,
+        # ``settle.settle_log`` — #567/#568 P2) all take the SAME secondary
+        # key, so "the newest ``SessionLog`` for one (session, athlete) pair"
+        # is one deterministic thing everywhere THAT QUESTION is asked —
+        # without it, any two of these reads could each pick a different log
+        # and never agree, reopening exactly the disagreement #568 closed. Two
+        # reads in ``adherence.py`` are deliberately NOT on this list: they
+        # answer a DIFFERENT question — the newest *done* log across a whole
+        # coach-athlete link (``link_last_trained``, many sessions, not one)
+        # and a plain list of several recent logs (``recent_logs``) — neither
+        # is "the newest log for one (session, athlete) pair", so there is no
+        # tie for a secondary key to break there.
         log = (
             SessionLog.objects.filter(session=session, athlete=request.user)
             .order_by("-created_at", "-pk")
@@ -1653,7 +1661,21 @@ def athlete_log_session(request, pk):
         # carries no information at all — see `_client_held` and
         # `_consume_carried_link`, which both fall back to today's positional
         # match for a stale id rather than treating it as "no match".
-        live_pks = {row.pk for row in rows}
+        #
+        # #567/#568 P1-G: a MAPPING (pk -> prescription_id), not a bare set of
+        # pks. "Anchored" used to mean "this id names a live pk" alone, with
+        # the prescription agreement checked separately at each of the three
+        # call sites — so an id that named a real, live row under the WRONG
+        # prescription (a crafted payload, or a genuine bug) was classified
+        # anchored, failed that separate check, and every site simply
+        # `continue`d without ever trying the positional fallback — degrading
+        # to "no match at all" instead of "stale id, try position", exactly
+        # the failure the stale-id rule exists to avoid. `_names_live_row`
+        # folds the agreement into the anchoring test itself so there is
+        # EXACTLY ONE place that decides it: an id anchors only when it names
+        # a live row AND that row's own prescription is the one the payload
+        # claims.
+        live_rows = {row.pk: row.prescription_id for row in rows}
         hidden_pks = hidden_parsed_set_pks(rows)
         trainable_pks = {p.pk for p in session.trainable_cells()}
         for row in rows:
@@ -1662,7 +1684,7 @@ def athlete_log_session(request, pk):
             if row.pk in hidden_pks:
                 continue
             if row.source_line_id is not None and not _client_held(
-                row, cleaned_sets, identified, live_pks
+                row, cleaned_sets, identified, live_rows
             ):
                 continue
             replaceable.append(row.pk)
@@ -1737,7 +1759,7 @@ def athlete_log_session(request, pk):
             #
             # #567/#568 P1-B: the pk match above only applies to an ANCHORED
             # id (``_names_live_row`` — it names a pk this log held before
-            # this save's delete, ``live_pks``). A STALE id names a row this
+            # this save's delete, ``live_rows``). A STALE id names a row this
             # log no longer holds at all (a write-ahead replay whose first
             # delivery already replaced that row under a new pk, say) and so
             # carries no identity information — it degrades to the exact
@@ -1751,19 +1773,23 @@ def athlete_log_session(request, pk):
             # which #567 B's own cleaned set never restates (it's a genuinely
             # new performance), so it still correctly finds no twin.
             #
-            # #567/#568 P2-A: an anchored match also requires the SAME
+            # #567/#568 P2-A/P1-G: an anchored match also requires the SAME
             # prescription as the row it names — a crafted payload can post a
             # real pk under the WRONG prescription, and pk equality alone
             # would let it absorb (or, via ``_client_held``/
             # ``_consume_carried_link``, spare or re-link) a row that belongs
-            # to a different lift entirely.
-            if identified and cs["id"] is not None and _names_live_row(cs, live_pks):
+            # to a different lift entirely. That agreement is now folded into
+            # ``_names_live_row`` itself (P1-G) — checking it again here would
+            # be redundant (once ``row.pk == cs["id"]`` and the id is
+            # anchored, ``live_rows`` already guarantees the prescriptions
+            # match) and this file no longer does, so there is exactly one
+            # place that decides it.
+            if identified and cs["id"] is not None and _names_live_row(cs, live_rows):
                 twin = next(
                     (
                         row
                         for row in available
                         if row.pk == cs["id"]
-                        and row.prescription_id == cs["prescription_id"]
                         and parsing.same_logged_set(
                             (row.reps, row.load, row.rpe),
                             (cs["reps"], cs["load"], cs["rpe"]),
@@ -1867,7 +1893,7 @@ def athlete_log_session(request, pk):
                     load=cs["load"],
                     rpe=cs["rpe"],
                     reclaimed_line_id=_consume_carried_link(
-                        carried_links, cs, identified, live_pks
+                        carried_links, cs, identified, live_rows
                     ),
                 )
                 for cs in cleaned_sets
@@ -2588,44 +2614,66 @@ def _upsert_parsed_set(session, athlete, line_zero_cell, cell, *, previous_text=
     return new_records
 
 
-def _names_live_row(cleaned_set, live_pks):
-    """Does ``cleaned_set["id"]`` name a row THIS log holds right now (#567/#568 P1-B)?
+def _names_live_row(cleaned_set, live_rows):
+    """Does ``cleaned_set["id"]`` ANCHOR to a row THIS log holds, under the SAME prescription (#567/#568 P1-B, P1-G)?
 
-    ``live_pks`` is the PRE-DELETE snapshot ``athlete_log_session`` takes
+    ``live_rows`` is the PRE-DELETE snapshot ``athlete_log_session`` takes
     before it deletes or renumbers anything this save — see the comment
-    there. An id in that snapshot is ANCHORED: real evidence about a row this
-    very save is looking at (even one it is about to replace, since the
-    payload naming it is exactly the payload doing the replacing). An id NOT
-    in that snapshot is STALE — the row it once named is already gone, most
-    plausibly because a write-ahead body is replaying after its first
-    delivery already committed and moved that row's data under a new pk — and
-    a stale id is not weaker evidence, it is NO evidence, indistinguishable
-    from an id the client made up. ``_client_held``, the twin absorb in
-    ``athlete_log_session``, and ``_consume_carried_link`` all fall back to
-    today's positional match for a stale id rather than treating it as "no
-    match", because position is the only evidence a stale id leaves behind —
-    exactly what the id-less path already runs on.
+    there — mapping each pk to that row's OWN ``prescription_id``. An id in
+    that snapshot, under the prescription its own row actually belongs to, is
+    ANCHORED: real evidence about a row this very save is looking at (even
+    one it is about to replace, since the payload naming it is exactly the
+    payload doing the replacing). Anything else is treated exactly the same
+    as "no live row at all":
+
+    * an id NOT in the snapshot is STALE — the row it once named is already
+      gone, most plausibly because a write-ahead body is replaying after its
+      first delivery already committed and moved that row's data under a new
+      pk — and a stale id is not weaker evidence, it is NO evidence,
+      indistinguishable from an id the client made up;
+    * an id that IS in the snapshot, but under a DIFFERENT prescription than
+      the one ``cleaned_set`` claims (#567/#568 P1-G), is likewise no
+      evidence for THIS claim — a crafted payload can pair a real, live pk
+      with the wrong lift, and pk equality alone must not let it borrow that
+      row's identity. Before this fold, that case was classified anchored,
+      failed a SEPARATE prescription check at each of the three call sites,
+      and simply ``continue``d without ever trying the positional fallback —
+      degrading to "no match at all" instead of "stale id, try position",
+      exactly the failure the stale-id rule exists to avoid. Folding the
+      agreement in here means an id under the wrong prescription now falls
+      through to the very same positional path a stale id does, with no
+      separate check needed at any call site.
+
+    ``_client_held``, the twin absorb in ``athlete_log_session``, and
+    ``_consume_carried_link`` all fall back to today's positional match
+    whenever this returns ``False``, rather than treating it as "no match",
+    because position is the only evidence left behind — exactly what the
+    id-less path already runs on.
     """
-    return cleaned_set["id"] is not None and cleaned_set["id"] in live_pks
+    row_id = cleaned_set["id"]
+    return (
+        row_id is not None and live_rows.get(row_id) == cleaned_set["prescription_id"]
+    )
 
 
-def _client_held(row, cleaned_sets, identified, live_pks):
+def _client_held(row, cleaned_sets, identified, live_rows):
     """Did this save's payload actually come from a page showing ``row``?
 
     Only asked of a VISIBLE parsed row — one a coach rewrite surfaced after the
     athlete's page had loaded. The replace-delete needs to know whether the
     client was looking at it, and the payload is the only evidence there is.
 
-    IDENTIFIED (#567), ANCHORED id (``_names_live_row``, #568 P1-B): pure id —
-    ``cs["id"] == row.pk`` — plus (P2-A) ``cs["prescription_id"] ==
-    row.prescription_id``, guarding against a crafted payload naming a real pk
-    under the wrong lift. The id is the client's own proof it rendered this
-    exact row (``serialize_session_log`` handed it out, and a current client
-    only ever posts one it was given), which is strictly stronger evidence
-    than the values match below — so there's nothing left for a value check to
-    rule out... with one exception (P1-A): a WHOLLY BLANK posted set (``reps``,
-    ``load`` and ``rpe`` all ``""``) is not evidence the client saw this row's
-    VALUES, because an empty, merely-checked grid row and a row a stale page
+    IDENTIFIED (#567), ANCHORED id (``_names_live_row``, #568 P1-B, P1-G):
+    pure id — ``cs["id"] == row.pk``. The prescription agreement (P2-A) is
+    already part of what "anchored" means (folded into ``_names_live_row``
+    itself, P1-G) — nothing further to check here. The id is the client's own
+    proof it rendered this exact row (``serialize_session_log`` handed it
+    out, and a current client only ever posts one it was given), which is
+    strictly stronger evidence than the values match below — so there's
+    nothing left for a value check to rule out... with one exception (P1-A):
+    a WHOLLY BLANK posted set (``reps``, ``load`` and ``rpe`` all ``""``) is
+    not evidence the client saw this row's VALUES, because an empty,
+    merely-checked grid row and a row a stale page
     never rendered at all post identically. Counting a blank id match as
     "held" let a bare id — adopted from a response the client's own stale page
     never asked for, see ``syncFromLog``'s "no match" comment — delete a row
@@ -2673,15 +2721,18 @@ def _client_held(row, cleaned_sets, identified, live_pks):
     """
     for cs in cleaned_sets:
         if identified and cs["id"] is not None:
-            if _names_live_row(cs, live_pks):
-                if cs["id"] != row.pk or cs["prescription_id"] != row.prescription_id:
+            if _names_live_row(cs, live_rows):
+                if cs["id"] != row.pk:
                     continue
                 row_blank = row.reps == "" and row.load == "" and row.rpe == ""
                 cs_blank = cs["reps"] == "" and cs["load"] == "" and cs["rpe"] == ""
                 if cs_blank and not row_blank:
                     continue  # P1-A: a blank id match is no match at all
                 return True
-            # STALE (P1-B): no live pk to trust — fall through to position.
+            # STALE (P1-B), or ANCHORED to a DIFFERENT row than `row` (an id
+            # naming some other live pk under the wrong prescription, P1-G,
+            # or under the RIGHT prescription but a DIFFERENT row entirely):
+            # no live pk we can trust for THIS row — fall through to position.
         elif identified:
             continue  # client_id: names no server row, so holds nothing
         if (cs["prescription_id"], cs["set_number"]) == (
@@ -2694,7 +2745,7 @@ def _client_held(row, cleaned_sets, identified, live_pks):
     return False
 
 
-def _consume_carried_link(carried_links, cleaned_set, identified, live_pks):
+def _consume_carried_link(carried_links, cleaned_set, identified, live_rows):
     """Claim the reclaim link a just-deleted row carried forward (#541), if any.
 
     ``carried_links`` (built in ``athlete_log_session``, right before the
@@ -2703,23 +2754,27 @@ def _consume_carried_link(carried_links, cleaned_set, identified, live_pks):
     parsed row) or a ``reclaimed_line`` it already carried in from an earlier
     save.
 
-    IDENTIFIED (#567), ANCHORED id (``_names_live_row``, #568 P1-B): a cleaned
-    set claims a link by the replaced row's own pk (``candidate["row_pk"]``)
-    rather than the slot it used to occupy — the renumbering elsewhere in this
-    same save can move a hidden row's slot out from under a stale repost, but
-    never its pk — plus (P2-A) the SAME prescription, else a crafted payload
-    could hang exercise A's sub-line link on a row under exercise B. The value
-    check stays regardless of mode: same as ``_client_held``'s call, an id
-    match with DIFFERENT values is an edit, not a restore, and #541's rule ("a
-    later save carries the link only when the posted row restates it
-    unchanged, and an edit drops it") means an edit must get no link.
+    IDENTIFIED (#567), ANCHORED id (``_names_live_row``, #568 P1-B, P1-G): a
+    cleaned set claims a link by the replaced row's own pk
+    (``candidate["row_pk"]``) rather than the slot it used to occupy — the
+    renumbering elsewhere in this same save can move a hidden row's slot out
+    from under a stale repost, but never its pk. The prescription agreement
+    (P2-A) is already part of what "anchored" means (folded into
+    ``_names_live_row`` itself, P1-G), so there's nothing further to check
+    here — a crafted payload naming a real pk under the WRONG prescription
+    never reaches this branch at all; it degrades to the positional branch
+    below, same as a stale id. The value check stays regardless of mode: same
+    as ``_client_held``'s call, an id match with DIFFERENT values is an edit,
+    not a restore, and #541's rule ("a later save carries the link only when
+    the posted row restates it unchanged, and an edit drops it") means an
+    edit must get no link.
 
-    STALE id (#568 P1-B) and Positional (id-less, unchanged from #541): a
-    cleaned set only inherits the link when it exactly restates the row it
-    replaced: same slot (``prescription``, ``set_number``) AND the same
-    values — the same test ``_client_held`` falls back to for a stale id or an
-    id-less payload. A ``client_id`` set (names no server row, #567 B) never
-    reaches this loop at all — see below.
+    STALE id (#568 P1-B, and P1-G's wrong-prescription case) and Positional
+    (id-less, unchanged from #541): a cleaned set only inherits the link when
+    it exactly restates the row it replaced: same slot (``prescription``,
+    ``set_number``) AND the same values — the same test ``_client_held``
+    falls back to for a stale id or an id-less payload. A ``client_id`` set
+    (names no server row, #567 B) never reaches this loop at all — see below.
 
     Mutates ``carried_links``, removing the entry it matches, so the same
     reclaim can never be handed to two different cleaned sets.
@@ -2730,12 +2785,10 @@ def _consume_carried_link(carried_links, cleaned_set, identified, live_pks):
         # client_id set can never accidentally claim a link by slot+value
         # alone — the very ambiguity #567 exists to remove.
         return None
-    anchored = identified and _names_live_row(cleaned_set, live_pks)
+    anchored = identified and _names_live_row(cleaned_set, live_rows)
     for index, candidate in enumerate(carried_links):
         if anchored:
             if candidate["row_pk"] != cleaned_set["id"]:
-                continue
-            if candidate["prescription_id"] != cleaned_set["prescription_id"]:
                 continue
         else:
             # Positional: id-less, unchanged from #541 — and (P1-B) a STALE
@@ -2814,6 +2867,26 @@ def _cell_warn_or_false(cell, line_zero_cell, *, session, athlete):
     concurrent write that could land in the gap between "the transaction that
     just committed" and "this read" — nothing here needs a savepoint's
     protection because there is nothing left in flight to protect.
+
+    #567/#568 P1-H — ``loggable`` is derived from a FRESH read of the line-0
+    row here, not from the caller's ``line_zero_cell`` instance.
+    ``athlete_cell_write`` builds that instance once, in ``line_zero``,
+    *before* its write transaction even opens; ``_upsert_parsed_set`` then
+    re-reads the SAME row under ``select_for_update`` and acts on THAT fresh
+    value. A coach's ``prescription_unskip`` landing inside this request's
+    window — after the stale snapshot was taken but before the locked reread
+    — makes this very request log a REAL set under a since-lifted skip, while
+    the caller's stale instance still says skipped. Reporting ``warn`` from
+    that stale instance then contradicts the set this same request just
+    wrote, and disagrees with the next render (the presenter), which reads
+    the row fresh. This function already queries the database once, right
+    above, for ``log`` — doing it again here, for the row, and only AFTER the
+    write's transaction has committed, is what puts this read at exactly the
+    same moment the presenter's own next read happens, which is what makes
+    the two surfaces agree. The caller's instance is kept only as a fallback
+    for the row having vanished entirely between then and now (a history
+    restore hard-deleting a stray cell) — see ``_upsert_parsed_set``'s own
+    identical fallback for that case.
     """
     try:
         log = (
@@ -2826,8 +2899,14 @@ def _cell_warn_or_false(cell, line_zero_cell, *, session, athlete):
             if log is not None
             else ()
         )
+        fresh_line_zero = Prescription.objects.filter(pk=line_zero_cell.pk).first()
+        skipped = (
+            fresh_line_zero.skipped
+            if fresh_line_zero is not None
+            else line_zero_cell.skipped
+        )
         return sub_line_should_warn(
-            cell, loggable=not line_zero_cell.skipped, backing_sets=backing_sets
+            cell, loggable=not skipped, backing_sets=backing_sets
         )
     except Exception:
         logger.exception(

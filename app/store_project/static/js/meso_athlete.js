@@ -469,7 +469,11 @@ function createLogger() {
         if (sending) this.dropEntry(sending);
         const data = await res.json();
         this.status = data.log.status;
-        this.syncFromLog(data.log);
+        // `payload` — not `sending`'s body-only shape, though they carry the
+        // same `sets` here — is this save's own request body, exactly what
+        // was actually posted (#567/#568 P1-E/F): `syncFromLog` needs it to
+        // tell a posted row from one this save never touched.
+        this.syncFromLog(data.log, payload);
         // Any lift this save beat. As of 5a the records read is LIVE — it counts
         // pending sets too — so a "Save progress" no longer comes back empty and
         // can legitimately surface a toast before the session is ever done.
@@ -768,7 +772,9 @@ function createLogger() {
       if (this.saving) return "mine";
       try {
         this.status = data.log.status;
-        this.syncFromLog(data.log);
+        // `item.body` is exactly what this queued entry posted (#567/#568
+        // P1-E/F) — same contract as `save()`'s own call above.
+        this.syncFromLog(data.log, item.body);
         this.newRecords = data.new_records || []; // a PR beaten offline still lands
       } catch (e) {
         /* a reply of an unexpected shape: synced server-side regardless */
@@ -781,28 +787,83 @@ function createLogger() {
     // that were sent because they carried data (but were never ticked) would
     // stay un-checked until a reload. The returned log is the source of truth.
     //
-    // Issue #567: reconcile by IDENTITY first, position second. A row that
-    // posted a `client_id` is matched by that client_id FIRST, and only
-    // falls back to its slot when the response echoes no `client_id` that
-    // matches it (#567/#568 P1-C). That fallback is sound, not a
-    // reintroduction of the ambiguity #567 removed: the server ALWAYS
-    // creates a `client_id` row at the exact slot it was posted under, two
-    // posted sets can never share a slot (the server 400s a duplicate
-    // `(prescription, set_number)`), and `athlete_log_session`'s collision
-    // renumbering moves every SPARED displayed row off a slot this request
-    // posted — so after the save, the only visible row left at a posted slot
-    // is the one created for that exact posted set. It exists for a rolling
-    // deploy: an OLD server build doesn't know `client_id` and never echoes
-    // it, and matching ONLY by `client_id` then left such a row un-ticked
-    // forever — `rowFilled` drops an unticked, empty-looking row from the
-    // NEXT save's payload, and that save deletes the very row the old server
-    // just created for it. A row with no `client_id` — the ordinary case, a
-    // grid row hydrated with a real server id — still reconciles by slot
-    // exactly as before; that path is unchanged and is what keeps old
-    // sessions/queued payloads from earlier saves working.
-    syncFromLog(log) {
+    // Issue #567: reconcile by IDENTITY first, position second — but ONLY for
+    // a grid row THIS PAYLOAD actually posted. `payload` is the request body
+    // this exact save sent (`save()` and `flushLog()` both thread through the
+    // one they actually posted — see their own calls below), and is now part
+    // of this method's contract, not an optional extra: a caller that cannot
+    // supply one treats NOTHING as posted, the strict reading, rather than
+    // silently treating everything as posted (which is the bug below).
+    //
+    // #567/#568 P1-E/F, THE ROOT CAUSE three independent reviewers traced
+    // back here: the slot fallback used to run over EVERY grid row, whether
+    // or not this payload posted it. A grid row this save left untouched
+    // (empty, unticked) has no business adopting ANYTHING from the response
+    // — but the response can still carry a set at that row's slot for a
+    // reason that has nothing to do with this save at all: a hidden parsed
+    // row a coach's rewrite just made VISIBLE, echoed back because it's
+    // visible now, happening to sit at a slot this stale page's own empty
+    // grid row shares. The old fallback ticked that grid row and PLANTED the
+    // visible row's real pk onto it, though its inputs stayed empty — and the
+    // very next ordinary edit into that same-looking-empty row then posted
+    // the planted id, letting the server delete a real, distinct performance
+    // this page never touched or even knew existed (see
+    // `athlete_log_session`'s docstring for the exact sequence). It was also
+    // simply unstable on its own terms: the spurious tick made `rowFilled`
+    // re-post that blank-looking row on every subsequent save, and each of
+    // those repeated posts renumbered the real survivor one `set_number`
+    // higher.
+    //
+    // The soundness argument that follows was ALWAYS scoped to slots this
+    // payload posted — it just wasn't enforced. The server always creates a
+    // posted set's row AT the exact slot it was posted under, two posted sets
+    // can never share a slot (the server 400s a duplicate `(prescription,
+    // set_number)`), and `athlete_log_session`'s collision renumbering moves
+    // every SPARED displayed row off a slot this request posted — so after
+    // the save, the only visible row left at a POSTED slot is the one created
+    // for that exact posted set. Applied to a slot nothing was posted at, the
+    // argument simply doesn't hold: nothing here guarantees the row sitting
+    // there is related to this save at all.
+    //
+    // Match order, for a grid row `r`, where "posted" means this payload's
+    // OWN `sets` list actually named `r`'s current `(prescription,
+    // set_number)`:
+    //   1. `r.client_id`, against the response's client_id map — the row the
+    //      server just created FOR this grid row. No posted-gate needed: the
+    //      server only ever echoes a client_id it just minted FROM this same
+    //      request's payload, so a match here is impossible unless this row
+    //      really was posted.
+    //   2. posted AND `r.id != null`, against the response's id map — exact
+    //      identity, for a row that already had a server id.
+    //   3. posted, against the slot map (first write wins, as before) — the
+    //      rolling-deploy fallback: an OLD server build doesn't know
+    //      `client_id` and never echoes it, so leg 1 fails for a client_id
+    //      row even though it truly was posted; matching ONLY by client_id
+    //      then left such a row un-ticked forever — `rowFilled` drops an
+    //      unticked, empty-looking row from the NEXT save's payload, and that
+    //      save deletes the very row the old server just created for it.
+    // A row with NO match — posted or not — gets `r.done = false` and
+    // NEITHER `r.id` NOR `r.client_id` touched:
+    //   * POSTED, no match: the server ABSORBED it (it restated a row hidden
+    //     from the logger, a twin the coach's rewrite created), so the
+    //     response carries no set for it. Clearing its id here would make
+    //     the NEXT save mint a fresh client_id and post it as a brand-new
+    //     row — creating the very duplicate #567 exists to prevent. Keeping
+    //     the id lets the server absorb it again next time, which is stable.
+    //   * UNPOSTED: this save never touched the row at all, so there is
+    //     nothing here to reconcile it against, whatever the response
+    //     happens to carry at its slot. A reload renders it properly from
+    //     `_set_rows` (values AND `done`), which is the only thing that
+    //     actually knows this row's true state.
+    syncFromLog(log, payload) {
       const sets = log.sets || [];
+      const posted = new Set(
+        (payload && Array.isArray(payload.sets) ? payload.sets : []).map(
+          (s) => `${s.prescription}:${s.set_number}`,
+        ),
+      );
       const byClientId = new Map();
+      const byId = new Map();
       const bySlot = new Map();
       for (const s of sets) {
         // Only an item the server just minted FROM a client_id carries one
@@ -810,6 +871,7 @@ function createLogger() {
         // including a pre-existing row posted by `id`) — so this map can
         // only ever match the one row that named it.
         if (s.client_id) byClientId.set(s.client_id, s);
+        if (s.id != null) byId.set(s.id, s);
         // P3: the FIRST entry wins a slot, not the last. Two response items
         // can only share a slot when the server is on an old build that
         // ignores `client_id` (see above) — the first is exactly the row
@@ -820,12 +882,13 @@ function createLogger() {
       }
       for (const e of this.exercises) {
         for (const r of e.set_rows) {
-          // #567/#568 P1-C: try identity first, slot second — never slot
-          // ONLY, never identity ONLY. See the comment above this method for
-          // why the slot fallback can't reintroduce the ambiguity #567 fixed.
+          const rowPosted = posted.has(`${e.id}:${r.set_number}`);
+          // #567/#568 P1-E/F: identity first, slot second, and NEVER for a
+          // row this payload didn't post — see the comment above this method.
           const match =
             (r.client_id && byClientId.get(r.client_id)) ||
-            bySlot.get(`${e.id}:${r.set_number}`);
+            (rowPosted && r.id != null && byId.get(r.id)) ||
+            (rowPosted && bySlot.get(`${e.id}:${r.set_number}`));
           r.done = !!match;
           if (match) {
             // P3: a response item can legitimately omit `id` (nothing to
@@ -839,17 +902,9 @@ function createLogger() {
             if (matchId != null) r.id = matchId;
             r.client_id = null;
           }
-          // NO match: leave r.id and r.client_id exactly as they are — do
-          // NOT clear them. This is the non-obvious part. A row with no
-          // match is one the server ABSORBED: it restated a row that's
-          // hidden from the logger (a twin the coach's rewrite created), so
-          // the response carries no set for it, and it comes back un-ticked
-          // while its values stay in the inputs. Clearing its id here would
-          // make the NEXT save mint a fresh client_id and post it as a
-          // brand-new row — creating the very duplicate #567 exists to
-          // prevent. Keeping the id lets the server absorb it again next
-          // time, which is stable: the same row, the same outcome, on every
-          // save, instead of a new orphan each time.
+          // NO match, POSTED or not: leave r.id and r.client_id exactly as
+          // they are — do NOT clear them. See the comment above this method
+          // for the two shapes this covers (absorbed vs. simply untouched).
         }
       }
     },

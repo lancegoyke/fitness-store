@@ -33,7 +33,9 @@ from django.urls import reverse
 from django.utils import timezone
 
 from store_project.meso import presenters
+from store_project.meso import views as meso_views
 from store_project.meso.models import LoggedSet
+from store_project.meso.models import Prescription
 from store_project.meso.models import SessionLog
 from store_project.meso.serializers import serialize_session_log
 from store_project.meso.tests._helpers import day
@@ -791,3 +793,438 @@ class TestMixedTaggedAndUntaggedPayloadIsMalformed:
             },
         )
         assert resp.status_code == 400
+
+
+# -- adversarial review round 2: P1-E/F, P1-G, P1-H, P3 ----------------------
+
+
+class TestOrdinaryTwoSetSaveNeverLetsAClientHeldIdReachAnUnrenderedRow:
+    """#567/#568 P1-E/F root cause: the client must never post an id for a row it never rendered.
+
+    And if it did, the server (correctly, by design) would trust it and
+    destroy the row that id names. Three independent reviewers traced the
+    same root cause to ``syncFromLog``'s slot fallback (client-side,
+    ``meso_athlete.js``): it used to run over EVERY grid row, including one
+    this payload never posted, and could silently plant a live row's own pk
+    onto an empty, never-rendered grid row. The next ordinary edit into that
+    grid row then posts the planted id, and the server -- correctly, since an
+    anchored id IS the client's strongest possible proof it is looking at a
+    row -- deletes the row that id actually names. The fix for that lives
+    entirely in ``meso_athlete.js``/``syncFromLog`` and is covered by the
+    vitest suite (frontend/meso_athlete.test.js); this class only has the
+    server half of the story:
+
+    1. a direct PIN that a payload carrying that mistaken id -- exactly what
+       the OLD ``syncFromLog`` bug would have made the client hold -- is
+       trusted by the server and DOES destroy the row it names. This is not
+       a server bug to fix; it is exactly why the fix has to live client-side.
+    2. the actual guarantee: when the SAME sequence's last save posts only
+       what a page that never learned about the hidden row would ever
+       render -- no id at all for the row it never saw -- the hidden row
+       survives, renumbered out of the way like any other survivor.
+    """
+
+    def _through_step_three(self, client, s):
+        """Steps 1-3 from the issue, shared by both scenarios below.
+
+        1. the athlete types "135 x 8" on sub-line 2 -> hidden parsed row P;
+        2. the coach rewrites sub-line 2 to a cue -> P becomes a VISIBLE Set
+           row at slot 2, but the athlete's open page never reloads to learn
+           it exists;
+        3. the athlete saves set 1 (a fresh ``client_id`` -- the only row
+           their stale page has anything typed into). P is untouched here,
+           spared by ``_client_held`` (a ``client_id`` set holds nothing).
+
+        Returns ``(p_pk, row1_pk)``.
+        """
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 2, "135 x 8")
+        p_pk = LoggedSet.objects.get(prescription=s.squat).pk
+
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="brace harder", line=2).status_code == 200
+
+        client.force_login(s.athlete)
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "pending",
+                "sets": [
+                    {
+                        "client_id": "grid-row-1",
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        log_sets = resp.json()["log"]["sets"]
+        assert {row["set_number"] for row in log_sets} == {1, 2}, (
+            "P must already be VISIBLE (unhidden by the coach's rewrite) and "
+            f"echoed in the response alongside the new row: {log_sets}"
+        )
+        row1_pk = next(
+            row["id"] for row in log_sets if row["client_id"] == "grid-row-1"
+        )
+        assert next(row["id"] for row in log_sets if row["set_number"] == 2) == p_pk
+        return p_pk, row1_pk
+
+    def test_a_client_held_mistaken_id_deletes_the_row_it_names(self, client):
+        """PIN, not a fix target -- documents exactly why the fix is client-side."""
+        s = seed()
+        p_pk, row1_pk = self._through_step_three(client, s)
+
+        # The id a buggy `syncFromLog` (matching an unposted grid row by slot
+        # alone) would have planted on grid row 2 -- P's own id.
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "done",
+                "sets": [
+                    {
+                        "id": row1_pk,
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    },
+                    {
+                        "id": p_pk,
+                        "prescription": s.squat.pk,
+                        "set_number": 2,
+                        "reps": "3",
+                        "load": "315",
+                        "rpe": "",
+                    },
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        assert not LoggedSet.objects.filter(pk=p_pk).exists(), (
+            "an anchored id IS trusted by the server -- this is exactly why "
+            "the client must never come to hold one for a row it didn't render"
+        )
+
+    def test_the_fixed_client_posting_only_what_it_rendered_spares_the_row(
+        self, client
+    ):
+        s = seed()
+        p_pk, row1_pk = self._through_step_three(client, s)
+        cell = sub_cell(s.squat, 2)
+
+        # The FIXED client's page still shows grid row 2 as empty (it never
+        # learned about P) -- so the second set typed there mints its OWN
+        # fresh client_id, never P's id.
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "done",
+                "sets": [
+                    {
+                        "id": row1_pk,
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    },
+                    {
+                        "client_id": "grid-row-2",
+                        "prescription": s.squat.pk,
+                        "set_number": 2,
+                        "reps": "3",
+                        "load": "315",
+                        "rpe": "",
+                    },
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+        rows = _squat_rows(s)
+        assert _row_tuples(rows) == [
+            (None, None, 1, "225", "5"),
+            (None, None, 2, "315", "3"),
+            (cell.pk, None, 3, "135", "8"),
+        ], (
+            "P must survive, renumbered off the slot the new set claimed, "
+            f"not be destroyed: {[(r.pk, *t) for r, t in zip(rows, _row_tuples(rows))]}"
+        )
+        assert LoggedSet.objects.get(pk=p_pk).set_number == 3
+
+
+class TestAnchoredIdUnderWrongPrescriptionDegradesToPositional:
+    """#567/#568 P1-G: an anchored id under the WRONG prescription must degrade to position.
+
+    It must never be treated as "no match at all" -- which is what let the
+    row it should have restated go unrecognized and get duplicated instead
+    of absorbed.
+    """
+
+    def _setup(self, client):
+        s = seed()
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.rdl, 1, "185 x 5")
+        x_pk = LoggedSet.objects.get(prescription=s.rdl).pk
+
+        client.force_login(s.coach)
+        resp = client.post(
+            reverse(
+                "meso:api_cell_line_write",
+                kwargs={"plan_id": s.plan.pk, "slot_id": s.rdl.exercise_slot.pk},
+            ),
+            data=json.dumps({"week_id": s.week.pk, "line": 1, "text": "keep tension"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        cell = sub_cell(s.squat, 1)
+
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="brace harder").status_code == 200
+
+        client.force_login(s.athlete)
+        return s, x_pk, cell
+
+    def test_degrades_to_positional_and_absorbs_the_row_it_restates(self, client):
+        s, x_pk, cell = self._setup(client)
+
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "done",
+                "sets": [
+                    {
+                        # X's real pk (live, under rdl) -- but claimed under
+                        # squat, a DIFFERENT prescription than X actually
+                        # belongs to. Restates squat's own visible parsed
+                        # row exactly.
+                        "id": x_pk,
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+        squat_rows = _squat_rows(s)
+        assert _row_tuples(squat_rows) == [(None, cell.pk, 1, "225", "5")], (
+            "a mismatched-prescription id must degrade to the positional "
+            "match and absorb the row it restates, not be treated as no "
+            "match at all (which duplicates it instead): "
+            f"{[(r.pk, *t) for r, t in zip(squat_rows, _row_tuples(squat_rows))]}"
+        )
+        assert LoggedSet.objects.filter(pk=x_pk).exists(), (
+            "X itself, under rdl, must be untouched"
+        )
+        x_row = LoggedSet.objects.get(pk=x_pk)
+        assert (x_row.load, x_row.reps) == ("185", "5")
+
+    def test_reaches_the_same_end_state_as_the_id_removed(self, client):
+        s, x_pk, cell = self._setup(client)
+
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "done",
+                "sets": [
+                    {
+                        "prescription": s.squat.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "225",
+                        "rpe": "",
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+        squat_rows = _squat_rows(s)
+        assert _row_tuples(squat_rows) == [(None, cell.pk, 1, "225", "5")], (
+            "the mismatched-id payload above must reach this SAME end state "
+            f"— it must degrade to exactly this positional path: "
+            f"{[(r.pk, *t) for r, t in zip(squat_rows, _row_tuples(squat_rows))]}"
+        )
+
+
+class TestCellWarnAgreesWithAFreshSkipRead:
+    """#567/#568 P1-H: ``loggable`` must come from a FRESH read, not a stale snapshot.
+
+    ``athlete_cell_write`` builds ``line_zero`` (the exercise's line-0 cell)
+    BEFORE the write transaction. ``_upsert_parsed_set`` re-reads it under
+    ``select_for_update`` and acts on THAT fresh value. If
+    ``_cell_warn_or_false`` instead reads the caller's stale pre-transaction
+    instance, the two disagree the moment a coach's ``prescription_unskip``
+    lands inside this same request's window: the request logs a REAL set
+    (fresh: unskipped) but the response reports ``warn=True`` from the stale
+    (skipped) snapshot -- contradicting the very set it just wrote, and a
+    live counterexample to the "one answer for the tint" invariant #568
+    exists to guarantee.
+    """
+
+    def test_warn_agrees_when_skip_is_lifted_mid_request(self, client, monkeypatch):
+        s = seed()
+        s.squat.skipped = True
+        s.squat.save(update_fields=["skipped"])
+        client.force_login(s.athlete)
+
+        real_upsert = meso_views._upsert_parsed_set
+
+        def unskip_then_upsert(session, athlete, line_zero_cell, cell, **kwargs):
+            # Simulates a coach's `prescription_unskip` landing INSIDE this
+            # request's window: after `athlete_cell_write` already snapshotted
+            # `line_zero` (stale: skipped=True) but before the fresh, locked
+            # re-read `_upsert_parsed_set` itself takes.
+            Prescription.objects.filter(pk=s.squat.pk).update(skipped=False)
+            return real_upsert(session, athlete, line_zero_cell, cell, **kwargs)
+
+        monkeypatch.setattr(meso_views, "_upsert_parsed_set", unskip_then_upsert)
+
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.status_code == 200
+        blur_warn = resp.json()["cell"]["warn"]
+
+        cell = sub_cell(s.squat, 1)
+        assert LoggedSet.objects.filter(source_line=cell).exists(), (
+            "the fresh (unskipped) read must have let this request log a real set"
+        )
+
+        ctx = presenters.athlete_session(s.session, s.athlete)
+        squat_ctx = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
+        render_warn = next(
+            line["warn"] for line in squat_ctx["sub_lines"] if line["line"] == 1
+        )
+
+        assert blur_warn == render_warn is False, (
+            "a set really was logged this request (fresh unskip) -- the "
+            "response must agree with the next render, not the caller's "
+            f"stale skipped snapshot (blur={blur_warn}, render={render_warn})"
+        )
+
+
+class TestMixedAnchoredAndStaleIdsInOneRequest:
+    """#567/#568 P3: one request can carry BOTH an anchored id and a stale one.
+
+    For two different rows -- and each must be judged by its own rule. Every
+    real write-ahead replay in which anything survived (a hidden row, a
+    spared parsed row) is exactly this shape: one id naming a spared/live row
+    (anchored) alongside one naming a row a first delivery already replaced
+    (stale). ``TestStaleIdReplayDegradesToPositionalNotNoMatch`` only ever
+    replayed single-set, all-stale bodies -- this exercises both match sites'
+    rules inside ONE request and asserts each row reaches the exact end state
+    it would reach alone.
+    """
+
+    def test_a_stale_squat_id_and_an_anchored_rdl_id_are_each_judged_correctly(
+        self, client
+    ):
+        s = seed()
+
+        # -- squat: STALE (the write-ahead-replay-after-a-retype shape from
+        # TestStaleIdReplayDegradesToPositionalNotNoMatch) --
+        client.force_login(s.athlete)
+        write_cell(client, s.session, s.squat, 1, "225 x 5")
+        squat_cell = sub_cell(s.squat, 1)
+
+        client.force_login(s.coach)
+        assert reclaim(client, s, text="brace harder").status_code == 200
+
+        client.force_login(s.athlete)
+        rendered = serialize_session_log(the_log(s.session, s.athlete))["sets"]
+        squat_row = next(row for row in rendered if row["prescription"] == s.squat.pk)
+        stale_squat_set = {
+            "id": squat_row["id"],
+            "prescription": squat_row["prescription"],
+            "set_number": squat_row["set_number"],
+            "reps": squat_row["reps"],
+            "load": squat_row["load"],
+            "rpe": squat_row["rpe"],
+        }
+        first_save = log_post(
+            client, s.session, {"status": "done", "sets": [stale_squat_set]}
+        )
+        assert first_save.status_code == 200
+        squat_rows = _squat_rows(s)
+        assert len(squat_rows) == 1
+        assert squat_rows[0].pk != stale_squat_set["id"], (
+            "the first save must replace the row under a NEW pk"
+        )
+
+        # The retype absorbs the carried copy back into being hidden again --
+        # `stale_squat_set["id"]` now names a row this log no longer holds.
+        resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
+        assert resp.status_code == 200
+        assert len(_squat_rows(s)) == 1
+
+        # -- rdl: ANCHORED (a currently-live, visible parsed row, restated
+        # exactly) --
+        write_cell(client, s.session, s.rdl, 1, "185 x 5")
+        rdl_cell = sub_cell(s.rdl, 1)
+        client.force_login(s.coach)
+        resp = client.post(
+            reverse(
+                "meso:api_cell_line_write",
+                kwargs={"plan_id": s.plan.pk, "slot_id": s.rdl.exercise_slot.pk},
+            ),
+            data=json.dumps({"week_id": s.week.pk, "line": 1, "text": "keep tension"}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        client.force_login(s.athlete)
+        rdl_pk = LoggedSet.objects.get(prescription=s.rdl).pk
+
+        # ONE request: squat's id is stale (its first delivery already
+        # replaced that row), rdl's id is live (anchored).
+        resp = log_post(
+            client,
+            s.session,
+            {
+                "status": "done",
+                "sets": [
+                    stale_squat_set,  # write-ahead replay of the FIRST save
+                    {
+                        "id": rdl_pk,
+                        "prescription": s.rdl.pk,
+                        "set_number": 1,
+                        "reps": "5",
+                        "load": "185",
+                        "rpe": "",
+                    },
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+        squat_rows = _squat_rows(s)
+        assert _row_tuples(squat_rows) == [(squat_cell.pk, None, 1, "225", "5")], (
+            "the stale squat id must still degrade to the positional absorb, "
+            "unaffected by the anchored rdl id sharing the request: "
+            f"{[(r.pk, *t) for r, t in zip(squat_rows, _row_tuples(squat_rows))]}"
+        )
+        rdl_rows = list(
+            LoggedSet.objects.filter(
+                session_log__session=s.session, prescription=s.rdl
+            ).order_by("set_number")
+        )
+        assert _row_tuples(rdl_rows) == [(None, rdl_cell.pk, 1, "185", "5")], (
+            "the anchored rdl id must still replace the row it restates, "
+            "unaffected by the stale squat id sharing the request: "
+            f"{[(r.pk, *t) for r, t in zip(rdl_rows, _row_tuples(rdl_rows))]}"
+        )

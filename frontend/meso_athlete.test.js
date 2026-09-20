@@ -133,15 +133,28 @@ describe("buildPayload", () => {
 });
 
 describe("syncFromLog", () => {
+  // #567/#568 P1-E/F: `syncFromLog` is now part of a two-argument contract —
+  // it reconciles the response against `payload`, the body THIS SAVE
+  // actually sent, not just against the response by itself. Every case below
+  // passes one, built either directly or via a real `buildPayload()` call.
   it("reconciles row check state to exactly what the server persisted", () => {
     const c = makeLogger();
     c.exercises[0].set_rows[1].done = true; // will be cleared (not in log)
-    c.syncFromLog({
+    const payload = {
       sets: [
         { prescription: 1, set_number: 1 },
         { prescription: 2, set_number: 1 },
       ],
-    });
+    };
+    c.syncFromLog(
+      {
+        sets: [
+          { prescription: 1, set_number: 1 },
+          { prescription: 2, set_number: 1 },
+        ],
+      },
+      payload,
+    );
     expect(c.exercises[0].set_rows[0].done).toBe(true);
     expect(c.exercises[0].set_rows[1].done).toBe(false);
     expect(c.exercises[1].set_rows[0].done).toBe(true);
@@ -156,10 +169,14 @@ describe("syncFromLog", () => {
     const c = makeLogger();
     c.exercises[0].set_rows[1].id = null; // never saved yet
     c.exercises[0].set_rows[1].reps = "5";
-    const clientId = c.buildPayload(false).sets[0].client_id;
-    c.syncFromLog({
-      sets: [{ prescription: 1, set_number: 2, id: 999, client_id: clientId }],
-    });
+    const payload = c.buildPayload(false);
+    const clientId = payload.sets[0].client_id;
+    c.syncFromLog(
+      {
+        sets: [{ prescription: 1, set_number: 2, id: 999, client_id: clientId }],
+      },
+      payload,
+    );
     const row = c.exercises[0].set_rows[1];
     expect(row.id).toBe(999);
     expect(row.client_id).toBeNull();
@@ -167,7 +184,8 @@ describe("syncFromLog", () => {
   });
 
   // The same round trip, driven through the real save() plumbing (stubbed
-  // fetch) rather than calling buildPayload/syncFromLog directly.
+  // fetch) rather than calling buildPayload/syncFromLog directly. save()
+  // itself threads the payload it actually sent through to syncFromLog.
   it("round-trips a new row's client_id through a full save()", async () => {
     const c = makeLogger();
     c.exercises[0].set_rows[1].id = null;
@@ -199,20 +217,24 @@ describe("syncFromLog", () => {
   // the response carries no set for it — comes back un-ticked but KEEPS its
   // id. Clearing it would make the next save mint a fresh client_id and post
   // it as a brand-new row, duplicating the performance (#567); keeping it
-  // lets the server absorb it again next time, which is stable.
+  // lets the server absorb it again next time, which is stable. This row
+  // WAS posted (it's filled), so the "un-posted" rule below does not apply
+  // to it — the id survives because it was posted-but-absorbed, not because
+  // it was never sent.
   it("keeps a row's id when the server doesn't return it (absorbed by a hidden twin)", () => {
     const c = makeLogger();
     const row = c.exercises[0].set_rows[0]; // has a server id (11)
     row.reps = "5"; // filled by content, independent of `done`
     row.done = true;
-    c.syncFromLog({ sets: [] });
+    const payload = c.buildPayload(false);
+    c.syncFromLog({ sets: [] }, payload);
     expect(row.done).toBe(false);
     expect(row.id).toBe(11);
     expect(row.client_id).toBeNull();
     // The next save posts the SAME id — not a freshly minted client_id.
-    const payload = c.buildPayload(false);
-    expect(payload.sets[0]).toMatchObject({ id: 11 });
-    expect(payload.sets[0].client_id).toBeUndefined();
+    const next = c.buildPayload(false);
+    expect(next.sets[0]).toMatchObject({ id: 11 });
+    expect(next.sets[0].client_id).toBeUndefined();
   });
 
   // #567/#568 P1-C: a rolling deploy can answer a client_id POST with an OLD
@@ -220,17 +242,22 @@ describe("syncFromLog", () => {
   // Matching ONLY by client_id then left the row un-ticked forever —
   // `rowFilled` drops an unticked, empty-looking row from the next save's
   // payload, and that save deletes the very row the old server just created
-  // for it. The fix falls back to the slot the response DOES carry.
+  // for it. The fix falls back to the slot the response DOES carry — but
+  // only because this row's own slot really was posted.
   it("ticks a client_id row by slot and adopts its id when the response echoes no client_id", () => {
     const c = makeLogger();
     c.exercises[0].set_rows[1].id = null; // never saved yet
     c.exercises[0].set_rows[1].reps = "5";
-    const clientId = c.buildPayload(false).sets[0].client_id;
+    const payload = c.buildPayload(false);
+    const clientId = payload.sets[0].client_id;
     expect(clientId).toBeTruthy(); // sanity: a client_id really was posted
-    c.syncFromLog({
-      // No `client_id` at all on the response item -- an old server's shape.
-      sets: [{ prescription: 1, set_number: 2, id: 999 }],
-    });
+    c.syncFromLog(
+      {
+        // No `client_id` at all on the response item -- an old server's shape.
+        sets: [{ prescription: 1, set_number: 2, id: 999 }],
+      },
+      payload,
+    );
     const row = c.exercises[0].set_rows[1];
     expect(row.id).toBe(999);
     expect(row.done).toBe(true);
@@ -248,9 +275,55 @@ describe("syncFromLog", () => {
     const c = makeLogger();
     const row = c.exercises[0].set_rows[0]; // has a server id (11)
     row.reps = "5";
-    c.syncFromLog({ sets: [{ prescription: 1, set_number: 1 }] }); // no id
+    const payload = c.buildPayload(false);
+    c.syncFromLog({ sets: [{ prescription: 1, set_number: 1 }] }, payload); // no id
     expect(row.done).toBe(true);
     expect(row.id).toBe(11); // unchanged, not clobbered to undefined
+  });
+
+  // #567/#568 P1-E/F, THE ROOT CAUSE three independent reviewers traced back
+  // here: the old slot fallback ran over EVERY grid row, including one this
+  // payload never posted at all — so a hidden parsed row a coach's rewrite
+  // just made visible (echoed in the response because it's visible now, at
+  // a slot this stale page's own empty grid row happens to share) got
+  // silently ticked, and its pk got planted onto that unposted grid row.
+  // The NEXT ordinary edit into that same-looking-empty row then posted the
+  // planted id and let the server delete a real, distinct performance the
+  // athlete never touched. A grid row this payload did not post must get NO
+  // match at all, full stop — not even from the slot table.
+  it("leaves an UNPOSTED grid row un-ticked, with id still null, when the response carries a set at its slot", () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[1].id = null; // never saved, and never posted below
+    c.exercises[0].set_rows[0].reps = "5"; // only row 0 (slot 1) is posted
+    const payload = c.buildPayload(false);
+    expect(payload.sets.map((s) => s.set_number)).toEqual([1]); // sanity: slot 2 unposted
+
+    // The response carries a set at slot 2 anyway -- e.g. a hidden parsed
+    // row a coach's rewrite just made visible, unrelated to this save.
+    c.syncFromLog(
+      {
+        sets: [
+          { prescription: 1, set_number: 1, id: 11 },
+          { prescription: 1, set_number: 2, id: 777 },
+        ],
+      },
+      payload,
+    );
+
+    const untouched = c.exercises[0].set_rows[1];
+    expect(untouched.done).toBe(false);
+    expect(untouched.id).toBeNull();
+    expect(untouched.client_id).toBeNull();
+
+    // The athlete now types their own, genuinely new set into that
+    // same-looking-empty row. It must mint its OWN client_id -- never post
+    // the planted `777`.
+    untouched.reps = "8";
+    untouched.load = "315";
+    const next = c.buildPayload(false);
+    const row2 = next.sets.find((s) => s.set_number === 2);
+    expect(row2.id).toBeUndefined();
+    expect(typeof row2.client_id).toBe("string");
   });
 });
 
