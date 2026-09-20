@@ -2306,3 +2306,62 @@ _(Append dated entries here as decisions land.)_
   meanings apart, and the real fix is to post each row's id back (#567). The
   warn lookup's own database fallback is also unscoped by log, so a set from
   another session can clear a line's tint (#568).
+- 2026-09-19 — **Fixed (#567, #568): "Log session" identifies rows by id, not
+  by set number.** Both failures were reproduced on `main` first, with an
+  ordinary hidden parsed row and no `reclaimed_line` involved. A hidden row
+  occupies a set number whose Set row renders empty, so the athlete's second
+  set of the same weight and reps, typed into that empty-looking row, was read
+  as a restatement of the hidden row and dropped — nothing created, no sets in
+  the response, and retyping could never persist it. And a stale tab reposting
+  its unchanged payload after renumbering had moved the hidden row missed the
+  absorb, so one performance became two rows. #561 gave the second failure a
+  further way in; neither was new.
+  **Row identity in the payload.** Each posted set now carries exactly one of
+  `id` (the `LoggedSet.pk` the client rendered in that grid row, handed out by
+  `serialize_session_log` and now also by the presenter's `set_rows`) or
+  `client_id` (a client-minted id, at most 64 characters, for a grid row with
+  no server row yet). `client_id` was chosen over an explicit "this row is
+  new" flag because it also names the row across a retry: `save()` builds the
+  payload twice and the offline outbox can replay either copy, and a
+  remembered client id keeps all three naming one row. The server echoes the
+  mapping back on the row it created (`log.sets[].client_id`), so the page
+  learns the real id without a reload. Three matches move onto it: the
+  replace-delete's `_client_held`, the twin absorb, and #541's carried reclaim
+  link. Nothing else changes — the renumbering, the wholesale replace, and
+  `parsed_set_is_hidden` are untouched.
+  **The rules the identity match makes expressible**, which position could
+  not: a restated row is the same row (the absorb matches on `id` *and* the
+  values); a new row with the same numbers is a new performance (a `client_id`
+  can never absorb anything); renumbering still prevents two rows at one
+  number. `_client_held` becomes a pure id test with no value check — the id
+  is stronger evidence than the values ever were — so an edit to a visible
+  parsed row now REPLACES it instead of being spared into a visible duplicate.
+  That is a deliberate change of the 5a rule, and only on the identified path.
+  **Old payloads still work.** An installed PWA can run cached JS and a tab
+  open since before the deploy posts no ids at all, so a payload where no set
+  carries either field falls back to today's positional match byte-for-byte.
+  Identified is a whole-payload property: a real client tags every row, so a
+  mixed payload can only mean a client that tags none. On that fallback path
+  both failures above remain exactly as reachable as they are on `main` — a
+  client that cannot name its rows cannot be told apart from one merely
+  re-describing a row it can already see — which is why `PWA_CACHE_VERSION`
+  goes to `meso-pwa-v6`, so installed clients drop the stale shell and pick up
+  the new logger. A stale tab's save also still deletes a set logged from
+  another device between its render and its post; that is the wholesale
+  replace, not the identity match, and it is out of scope here.
+  **#568, one rule and one scope.** `sub_line_should_warn`'s fallback query
+  matched rows across every `SessionLog` in the database while its twin
+  `parsed_set_is_hidden` scopes by log, so the blur response and the next page
+  render could disagree. `_cell_warn_or_false` now reads the same newest log
+  the presenter reads and passes `backing_sets`, and it runs inside
+  `athlete_cell_write`'s atomic block under its own savepoint — a database
+  error there must not roll the athlete's already-committed text back, the
+  same reasoning `_upsert_parsed_set` documents. The fallback itself is scoped
+  to the cell's own day as a safety net; a cell names no athlete, so it can
+  never narrow further, and both real callers pass `backing_sets`.
+  **The move case, decided:** after a coach moves an exercise to another day,
+  a line whose set was logged on the old day reads as **unlogged** on the new
+  one. The cell travels with the `ExerciseSlot` and the `LoggedSet` stays
+  behind, so the scoped answer is the true one, and it is a behavior change
+  for ordinary parsed rows too, not only `reclaimed_line` copies.
+  No model change, no migration.

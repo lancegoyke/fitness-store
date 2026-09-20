@@ -1604,6 +1604,13 @@ def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
     a freeform sub-line (5a) renders itself as that sub-line's text, so
     admitting it here too would double-display the same performed data as a
     phantom structured input row (plan §6).
+
+    Each row also carries ``id`` — the ``LoggedSet.pk`` visible at this
+    (prescription, set_number), or ``None`` for a blank/unlogged row (#567,
+    row identity). This is how the client learns the id it should post back
+    for a row it's editing, instead of the server having to infer which row a
+    save means from ``(prescription, set_number)`` alone — evidence that goes
+    stale the moment a hidden row's own number moves out from under it.
     """
     prescribed = _prescribed_set_count(prescription) or default
     logged_numbers = [n for (pid, n) in logged if pid == prescription.pk]
@@ -1619,6 +1626,7 @@ def _set_rows(prescription, logged, *, default=3, cap=12, hard_cap=60):
                 "load": s.load if s else "",
                 "rpe": s.rpe if s else "",
                 "done": s is not None,
+                "id": s.pk if s else None,
             }
         )
     return rows

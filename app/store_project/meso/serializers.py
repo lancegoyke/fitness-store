@@ -427,7 +427,7 @@ def diff_week_snapshots(current, previous):
     }
 
 
-def serialize_session_log(log):
+def serialize_session_log(log, client_ids=None):
     """The athlete's saved log for a session, in the shape the log endpoint returns.
 
     Echoes back what was persisted (status/date/notes + the logged sets) so the
@@ -449,11 +449,21 @@ def serialize_session_log(log):
     can leave a row displayed only through ``reclaimed_line``, and the
     one-row-per-line ranking that answers for a copy needs every row that
     could be displayed by the same line, not just this one.
+
+    ``client_ids`` (#567, row identity): an optional ``{LoggedSet.pk:
+    client_id}`` map for the rows THIS save created from a posted
+    ``client_id`` — a grid row the client minted locally because it had no
+    server row yet. Round-tripping it back is how that row learns the id it
+    must post from now on, without a full reload; every other read of this
+    serializer (a plain page load, a save that named the row by its own
+    existing ``id``) has nothing to report and leaves it ``None``, same as any
+    row this save's map doesn't mention.
     """
     rows = list(
         log.sets.select_related("source_line", "reclaimed_line").order_by("set_number")
     )
     hidden_pks = models.hidden_parsed_set_pks(rows)
+    client_ids = client_ids or {}
     return {
         "id": log.pk,
         "status": log.status,
@@ -467,6 +477,7 @@ def serialize_session_log(log):
                 "reps": s.reps,
                 "load": s.load,
                 "rpe": s.rpe,
+                "client_id": client_ids.get(s.pk),
             }
             for s in rows
             if s.pk not in hidden_pks

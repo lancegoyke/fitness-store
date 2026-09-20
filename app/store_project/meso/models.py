@@ -2486,6 +2486,35 @@ def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
     row is its own parsed one or a reclaim's copy — otherwise a line a coach
     undo restored was tinted "not logged as a set" while the set it was
     showing sat right there.
+
+    **The fallback query (no ``backing_sets``) is a safety net, not the real
+    answer.** A ``Prescription`` cell alone names an exercise × week × line —
+    not a ``SessionLog``, and not even an athlete — so there is no way to scope
+    it to "the one log this actually means". Both real callers
+    (``athlete_session``, ``_cell_warn_or_false``) always pass ``backing_sets``
+    from the one log they each already read; this branch exists only so a
+    future caller that forgets to isn't unboundedly wrong. #568: it used to
+    have NO scope at all (``LoggedSet.objects.filter(Q(source_line=cell) |
+    Q(source_line__isnull=True, reclaimed_line=cell))``), so it could match a
+    row on *any* ``SessionLog`` in the database — another athlete's, a stray
+    older log for the same (session, athlete) the real callers never see
+    (they always read the newest), or, after a coach moves the exercise to
+    another day (``prescription_move``), the day it moved FROM. Scoped now to
+    the cell's own day — the ``Session`` where ``week=cell.week`` and
+    ``session_slot=cell.exercise_slot.session_slot`` — via
+    ``session_log__session__week``/``session_log__session__session_slot_id``,
+    which at least confines a wrong answer to one plan's one day instead of
+    the whole database. It still can't narrow to one athlete's log, so a
+    caller that never passes ``backing_sets`` (none exists today) would still
+    read across every athlete training this same day.
+
+    Deliberate consequence of the day-scoping (#568): after a move, a line
+    whose set was logged on the OLD day now reads as unlogged/tinted on the
+    new one — true for every plain parsed row, not only a
+    ``reclaimed_line`` copy. The cell travels with the ``ExerciseSlot``; the
+    ``LoggedSet`` stays on the old day's log. That is the call this fix takes,
+    not an oversight: a set is either backed by THIS day's log or it isn't,
+    and "isn't" is what actually happened.
     """
     if parsing.cell_should_warn(cell.text, loggable=loggable):
         return True
@@ -2496,7 +2525,9 @@ def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
         if backing_sets is not None
         else LoggedSet.objects.filter(
             models.Q(source_line=cell)
-            | models.Q(source_line__isnull=True, reclaimed_line=cell)
+            | models.Q(source_line__isnull=True, reclaimed_line=cell),
+            session_log__session__week=cell.week,
+            session_log__session__session_slot_id=cell.exercise_slot.session_slot_id,
         )
     )
     return line_displays(cell, rows) is None

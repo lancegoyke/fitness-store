@@ -17,6 +17,11 @@ const LOG_URL = "/meso/api/me/session/42/log/";
 const ONE_RM_URL = "/meso/api/me/session/42/one-rm/";
 
 // A minimal logger with two exercises (one prescription each, two sets each).
+// Each row carries a server `id` (11/12/21), as init() would hydrate it from
+// an already-rendered log — the ordinary case, and the one where `buildPayload`
+// posts `id` rather than minting a `client_id` (#567). A test exercising a
+// brand-new, never-saved row clears a row's `id` back to `null` itself (see
+// the "#567" cases under `buildPayload` / `syncFromLog` below).
 function makeLogger(overrides = {}) {
   const c = createLogger();
   c.logUrl = LOG_URL;
@@ -26,13 +31,15 @@ function makeLogger(overrides = {}) {
     {
       id: 1,
       set_rows: [
-        { set_number: 1, reps: "", load: "", rpe: "", done: false },
-        { set_number: 2, reps: "", load: "", rpe: "", done: false },
+        { id: 11, client_id: null, set_number: 1, reps: "", load: "", rpe: "", done: false },
+        { id: 12, client_id: null, set_number: 2, reps: "", load: "", rpe: "", done: false },
       ],
     },
     {
       id: 2,
-      set_rows: [{ set_number: 1, reps: "", load: "", rpe: "", done: false }],
+      set_rows: [
+        { id: 21, client_id: null, set_number: 1, reps: "", load: "", rpe: "", done: false },
+      ],
     },
   ];
   return Object.assign(c, overrides);
@@ -74,8 +81,8 @@ describe("buildPayload", () => {
     // exercise 2's only row stays empty → excluded.
     const payload = c.buildPayload(false);
     expect(payload.sets).toEqual([
-      { prescription: 1, set_number: 1, reps: "", load: "", rpe: "" },
-      { prescription: 1, set_number: 2, reps: "5", load: "", rpe: "" },
+      { prescription: 1, set_number: 1, reps: "", load: "", rpe: "", id: 11 },
+      { prescription: 1, set_number: 2, reps: "5", load: "", rpe: "", id: 12 },
     ]);
   });
 
@@ -85,6 +92,43 @@ describe("buildPayload", () => {
     // Save-progress on an already-logged session must not downgrade it.
     const logged = makeLogger({ status: "done" });
     expect(logged.buildPayload(false).status).toBe("done");
+  });
+
+  // Issue #567: `athlete_log_session` used to decide what a posted row MEANT
+  // by matching `(prescription, set_number, values)` — but a hidden parsed
+  // row isn't on screen, so the client's `set_number` is only evidence about
+  // a render that can be several saves stale. The fix is row identity: a row
+  // that already has a server id posts that id; a row that doesn't mints its
+  // own `client_id` — never both.
+  it("posts id for a row with a server id, and client_id (never both) for one without", () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[0].done = true; // has a server id (11)
+    c.exercises[0].set_rows[1].id = null; // never saved yet
+    c.exercises[0].set_rows[1].reps = "5";
+    const payload = c.buildPayload(false);
+    const [saved, fresh] = payload.sets;
+    expect(saved.id).toBe(11);
+    expect(saved.client_id).toBeUndefined();
+    expect(fresh.id).toBeUndefined();
+    expect(typeof fresh.client_id).toBe("string");
+    expect(fresh.client_id.length).toBeGreaterThan(0);
+    expect(fresh.client_id.length).toBeLessThanOrEqual(64);
+  });
+
+  // The remembered client_id is the whole point: save() builds this payload
+  // TWICE (once before settleLines(), once after), and the offline outbox
+  // can replay a third copy later — the click-time `enqueue`, the actual
+  // `fetch`, and any replay all have to name the SAME not-yet-created row,
+  // or the server sees three different new rows instead of one retried
+  // write.
+  it("mints a client_id once and reuses it on the next buildPayload call", () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[1].id = null;
+    c.exercises[0].set_rows[1].reps = "5";
+    const first = c.buildPayload(false).sets[0];
+    const second = c.buildPayload(false).sets[0];
+    expect(first.client_id).toBeTruthy();
+    expect(second.client_id).toBe(first.client_id);
   });
 });
 
@@ -101,6 +145,74 @@ describe("syncFromLog", () => {
     expect(c.exercises[0].set_rows[0].done).toBe(true);
     expect(c.exercises[0].set_rows[1].done).toBe(false);
     expect(c.exercises[1].set_rows[0].done).toBe(true);
+  });
+
+  // Issue #567: a row that posted a client_id (a brand-new, never-saved row)
+  // is matched ONLY by that client_id, never by falling back to slot — a
+  // slot fallback here would be exactly the ambiguity #567 removes. Once
+  // matched, the row adopts the server's real id and drops the client_id: the
+  // next save posts `id`, not a client_id, for this row.
+  it("adopts the server id and clears client_id once a new row's client_id round-trips", () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[1].id = null; // never saved yet
+    c.exercises[0].set_rows[1].reps = "5";
+    const clientId = c.buildPayload(false).sets[0].client_id;
+    c.syncFromLog({
+      sets: [{ prescription: 1, set_number: 2, id: 999, client_id: clientId }],
+    });
+    const row = c.exercises[0].set_rows[1];
+    expect(row.id).toBe(999);
+    expect(row.client_id).toBeNull();
+    expect(row.done).toBe(true);
+  });
+
+  // The same round trip, driven through the real save() plumbing (stubbed
+  // fetch) rather than calling buildPayload/syncFromLog directly.
+  it("round-trips a new row's client_id through a full save()", async () => {
+    const c = makeLogger();
+    c.exercises[0].set_rows[1].id = null;
+    c.exercises[0].set_rows[1].reps = "5";
+    let sentClientId;
+    global.fetch = vi.fn().mockImplementation(async (_url, opts) => {
+      const body = JSON.parse(opts.body);
+      sentClientId = body.sets[0].client_id;
+      return res({
+        body: {
+          log: {
+            status: "pending",
+            sets: [
+              { prescription: 1, set_number: 2, id: 555, client_id: sentClientId },
+            ],
+          },
+        },
+      });
+    });
+    await c.save(false);
+    const row = c.exercises[0].set_rows[1];
+    expect(sentClientId).toBeTruthy();
+    expect(row.id).toBe(555);
+    expect(row.client_id).toBeNull();
+    expect(row.done).toBe(true);
+  });
+
+  // A row the server ABSORBED — it restated a row hidden from the logger, so
+  // the response carries no set for it — comes back un-ticked but KEEPS its
+  // id. Clearing it would make the next save mint a fresh client_id and post
+  // it as a brand-new row, duplicating the performance (#567); keeping it
+  // lets the server absorb it again next time, which is stable.
+  it("keeps a row's id when the server doesn't return it (absorbed by a hidden twin)", () => {
+    const c = makeLogger();
+    const row = c.exercises[0].set_rows[0]; // has a server id (11)
+    row.reps = "5"; // filled by content, independent of `done`
+    row.done = true;
+    c.syncFromLog({ sets: [] });
+    expect(row.done).toBe(false);
+    expect(row.id).toBe(11);
+    expect(row.client_id).toBeNull();
+    // The next save posts the SAME id — not a freshly minted client_id.
+    const payload = c.buildPayload(false);
+    expect(payload.sets[0]).toMatchObject({ id: 11 });
+    expect(payload.sets[0].client_id).toBeUndefined();
   });
 });
 
@@ -1896,8 +2008,11 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
   it("sends Set rows edited while it waited for the lines", async () => {
     vi.useFakeTimers();
     const c = cellLogger({ logUrl: LOG_URL });
+    // A real id (#567) — this test is about the outbox race, not identity,
+    // and a row with no id would mint a client_id and break the exact-shape
+    // assertion below.
     c.exercises[0].set_rows = [
-      { set_number: 1, reps: "", load: "", rpe: "", done: false },
+      { id: 31, set_number: 1, reps: "", load: "", rpe: "", done: false },
     ];
     let logBody;
     let land;
@@ -1919,7 +2034,7 @@ describe("edges: a warned line, a second tab, full storage (#527)", () => {
     land();
     await saving;
     expect(logBody.sets).toEqual([
-      { prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
+      { id: 31, prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
     ]);
   });
 
@@ -2446,8 +2561,11 @@ describe("Log session and an older log of the session (#527)", () => {
   it("keeps what it's sending in the outbox, not the log as it was at the tap", async () => {
     // The app closing mid-send must replay the newer log, not the older one.
     const c = cellLogger({ logUrl: LOG_URL });
+    // A real id (#567) — this test is about the outbox race, not identity,
+    // and a row with no id would mint a client_id and break the exact-shape
+    // assertion below.
     c.exercises[0].set_rows = [
-      { set_number: 1, reps: "", load: "", rpe: "", done: false },
+      { id: 41, set_number: 1, reps: "", load: "", rpe: "", done: false },
     ];
     c.exercises[0].sub_lines[0].text = "RPE 8";
     const { calls, fetchMock, answer, logReply } = controlled();
@@ -2461,7 +2579,7 @@ describe("Log session and an older log of the session (#527)", () => {
     await vi.waitFor(() => expect(calls).toHaveLength(2));
     const log = c.readQueue().find((i) => i.url === LOG_URL);
     expect(log.body.sets).toEqual([
-      { prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
+      { id: 41, prescription: 1, set_number: 1, reps: "5", load: "100", rpe: "" },
     ]);
     answer(1, logReply(calls[1].body));
     await saving;

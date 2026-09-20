@@ -75,6 +75,29 @@ function notifyTourRefresh() {
 // unbounded stack.
 const MAX_CELL_LINE = 20;
 
+// Issue #567: `athlete_log_session` used to decide what a posted Set row
+// MEANT by matching `(prescription, set_number, values)` — but a hidden
+// parsed row isn't on screen, so the client's `set_number` is only evidence
+// about a render that can be several saves stale, and the slot's own meaning
+// can have moved (a renumbering pass shifts a hidden row off the number this
+// page still shows) since this page last loaded. The fix is row identity in
+// the payload: a row that already has a server id posts that id; a row that
+// doesn't mints its own id CLIENT-SIDE so the server can tell "this is the
+// same not-yet-created row, retried" from "this is a second, genuinely new
+// performance" — something position alone can never say. `crypto.randomUUID`
+// covers every current browser (and this file's own test environment); the
+// fallback (an insecure context, or the Safari that shipped without it) only
+// has to be unique within one page's lifetime, so a counter salted with
+// `Math.random()` is enough. Kept well under the server's 64-char cap.
+let _clientIdSeq = 0;
+function newClientId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  _clientIdSeq += 1;
+  return "c" + _clientIdSeq.toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
 // The offline outbox (`meso-log-queue`) holds two kinds of write. A session
 // log is `{url, body}`, the shape it has always had, so a queue written before
 // #527 still replays. A typed line is `{kind: "cell", url, body: {exercise_id,
@@ -192,6 +215,23 @@ function createLogger() {
       // every reload. Filling 1..n by number does that; appending would walk
       // the numbers up on each visit. Lines the athlete has beyond the
       // prescription are always kept.
+      // Issue #567: normalize every rendered row's server identity ONCE,
+      // here, so the rest of the file never has to guess between `undefined`
+      // (a field the injected JSON happened to omit) and `null` (a row the
+      // server explicitly has no LoggedSet for): `r.id` is the LoggedSet pk
+      // this grid row is bound to right now, or `null`. `r.client_id` always
+      // starts `null` — it's minted lazily, once, the first time a row with
+      // no id is actually sent (see `buildPayload`), not here, since most
+      // rows already have a server id and never need one at all. (Alpine
+      // proxies these objects once mounted, so plain assignment is fine —
+      // this runs before that happens anyway.)
+      for (const ex of this.exercises) {
+        if (!Array.isArray(ex.set_rows)) ex.set_rows = [];
+        for (const r of ex.set_rows) {
+          r.id = r.id == null ? null : r.id;
+          r.client_id = null;
+        }
+      }
       for (const ex of this.exercises) {
         if (!Array.isArray(ex.sub_lines)) ex.sub_lines = [];
         const rows = Array.isArray(ex.set_rows) ? ex.set_rows.length : 0;
@@ -333,13 +373,32 @@ function createLogger() {
       for (const e of this.exercises) {
         for (const r of e.set_rows) {
           if (!this.rowFilled(r)) continue;
-          sets.push({
+          const set = {
             prescription: e.id,
             set_number: r.set_number,
             reps: r.reps || "",
             load: r.load || "",
             rpe: r.rpe || "",
-          });
+          };
+          // Issue #567: identity, not position, is what the server matches a
+          // posted row against — see the comment above `newClientId`. A row
+          // that already has a server id posts that id; a row that doesn't
+          // mints its OWN client_id the first time it's ever sent and
+          // REMEMBERS it on the row (assignment sticks whether or not Alpine
+          // has proxied it yet) — never both. That memoized id is what keeps
+          // three different sends of the same never-saved row — the click-
+          // time `enqueue`, the actual `fetch`, and any offline replay of
+          // either — naming the SAME row instead of minting a fresh one each
+          // time: `save()` calls `buildPayload` twice (once before
+          // `settleLines()`, once after), and the queued copy can outlive
+          // both if the page dies mid-request.
+          if (r.id != null) {
+            set.id = r.id;
+          } else {
+            if (!r.client_id) r.client_id = newClientId();
+            set.client_id = r.client_id;
+          }
+          sets.push(set);
         }
       }
       // "Log session" completes the session; "Save progress" keeps the current
@@ -721,13 +780,51 @@ function createLogger() {
     // circles and counter match the saved log immediately — without this, rows
     // that were sent because they carried data (but were never ticked) would
     // stay un-checked until a reload. The returned log is the source of truth.
+    //
+    // Issue #567: reconcile by IDENTITY first, position second. A row that
+    // posted a `client_id` gets matched ONLY by that client_id — never by
+    // slot as a fallback — because a slot match for such a row would be
+    // exactly the ambiguity #567 exists to remove: the server would have
+    // created (or not) a specific row for this client_id, and a different
+    // LoggedSet that happens to sit at the same `(prescription, set_number)`
+    // right now (a hidden row the renumbering just moved there, say) is not
+    // this row. A row with no `client_id` — the ordinary case, a grid row
+    // hydrated with a real server id — still reconciles by slot exactly as
+    // before; that path is unchanged and is what keeps old sessions/queued
+    // payloads from earlier saves working.
     syncFromLog(log) {
-      const saved = new Set(
-        (log.sets || []).map((s) => `${s.prescription}:${s.set_number}`),
-      );
+      const sets = log.sets || [];
+      const byClientId = new Map();
+      const bySlot = new Map();
+      for (const s of sets) {
+        // Only an item the server just minted FROM a client_id carries one
+        // back (the contract: `client_id` is null on every other item,
+        // including a pre-existing row posted by `id`) — so this map can
+        // only ever match the one row that named it.
+        if (s.client_id) byClientId.set(s.client_id, s);
+        bySlot.set(`${s.prescription}:${s.set_number}`, s);
+      }
       for (const e of this.exercises) {
         for (const r of e.set_rows) {
-          r.done = saved.has(`${e.id}:${r.set_number}`);
+          const match = r.client_id
+            ? byClientId.get(r.client_id)
+            : bySlot.get(`${e.id}:${r.set_number}`);
+          r.done = !!match;
+          if (match) {
+            r.id = match.id;
+            r.client_id = null;
+          }
+          // NO match: leave r.id and r.client_id exactly as they are — do
+          // NOT clear them. This is the non-obvious part. A row with no
+          // match is one the server ABSORBED: it restated a row that's
+          // hidden from the logger (a twin the coach's rewrite created), so
+          // the response carries no set for it, and it comes back un-ticked
+          // while its values stay in the inputs. Clearing its id here would
+          // make the NEXT save mint a fresh client_id and post it as a
+          // brand-new row — creating the very duplicate #567 exists to
+          // prevent. Keeping the id lets the server absorb it again next
+          // time, which is stable: the same row, the same outcome, on every
+          // save, instead of a new orphan each time.
         }
       }
     },
