@@ -3,6 +3,7 @@ from django.contrib.auth import admin as auth_admin
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext_lazy as _
 
+from store_project.meso.admin import CascadeLockDeleteMixin
 from store_project.users.forms import UserChangeForm
 from store_project.users.forms import UserCreationForm
 
@@ -10,7 +11,8 @@ User = get_user_model()
 
 
 @admin.register(User)
-class UserAdmin(auth_admin.UserAdmin):
+class UserAdmin(CascadeLockDeleteMixin, auth_admin.UserAdmin):
+    cascade_lock_helper = "lock_cascade_parents"
     form = UserChangeForm
     add_form = UserCreationForm
     readonly_fields = ("stripe_customer_id",)

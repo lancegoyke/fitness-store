@@ -30,28 +30,21 @@ without holding the plan's Session rows; it does NOT stand in for "the
 athlete's real write landing mid-undo", because neither real athlete write
 path takes a lock this way — see the next paragraph.
 
-**The Session row lock every real athlete writer actually takes.** Both
-``views.athlete_cell_write`` and ``views.athlete_log_session`` open with
-``Session.objects.select_for_update().filter(pk=...).first()`` as the very
-first statement inside their own ``transaction.atomic()`` block,
-unconditionally, before touching a cell or a ``LoggedSet`` at all. And
-``restore_plan_snapshot`` — running inside ``api_plan_undo``/
-``api_plan_redo``'s own ``Plan``-locked transaction — UPDATEs (``.save()``)
-every snapshotted ``Session`` row of the plan before it ever reaches the cell
-upsert loop, the coordinate-collision guard, or the purge. So in production,
-every real athlete write is ALREADY serialized against the whole restore by
-that Session row lock, well before either side's transaction gets anywhere
-near a ``Prescription`` row: the restore cannot reach the purge while an
-athlete transaction holds the plan's Session row, and an athlete transaction
-cannot start its write while the restore holds it. The purge's
+**The Plan-first lock pair every real athlete writer takes.** Both
+``views.athlete_cell_write`` and ``views.athlete_log_session`` now open with
+the Plan mutex and then ``Session ... FOR UPDATE OF self``, unconditionally,
+before touching a cell or ``LoggedSet``. ``restore_plan_snapshot`` runs inside
+the undo/redo Plan-locked transaction, so every real athlete write is
+serialized against the whole restore before either side reaches a
+``Prescription`` row. The purge's
 ``select_for_update(of=("self",))`` is therefore a local, explicit guarantee
 rather than the thing that closes the real-world race — it stops the purge
 depending on an incidental ``session.save()`` earlier in the same function
 continuing to exist, and it covers a writer that touches a cell without
 holding the plan's Session rows (exactly what the first test below stands in
 for). The second test below,
-``TestSessionLockSerializesARealAthleteWriteAgainstThePurge``, pins the
-Session-lock fact itself.
+``TestPlanLockSerializesARealAthleteWriteAgainstThePurge``, pins that outer
+Plan-lock fact itself.
 
 **Why this file exists separately.** ``select_for_update`` is a documented
 no-op on SQLite, and the default in-memory SQLite test database doesn't even
@@ -97,6 +90,7 @@ from django.test import Client
 from django.urls import reverse
 
 from store_project.meso.models import LoggedSet
+from store_project.meso.models import Plan
 from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
@@ -165,10 +159,10 @@ class TestPurgeSparesACellALoggedSetCommitsMidUndo:
 
         def athlete_write_then_log_and_commit():
             # Thread A: stands in for a writer that touches the stray cell
-            # WITHOUT holding the plan's `Session` row lock — deliberately
+            # WITHOUT holding the plan's Plan/Session lock pair — deliberately
             # NOT a simulation of a real athlete write landing mid-undo (see
             # the module docstring: both `athlete_cell_write` and
-            # `athlete_log_session` take that Session lock FIRST, before
+            # `athlete_log_session` take Plan first, then Session, before
             # touching anything else, which is what actually serializes a
             # real athlete write against this restore in production). What
             # this thread pins instead is the purge's own new
@@ -282,8 +276,8 @@ class TestPurgeSparesACellALoggedSetCommitsMidUndo:
         )
 
 
-class TestSessionLockSerializesARealAthleteWriteAgainstThePurge:
-    """The lock that actually protects a real athlete write in production today.
+class TestPlanLockSerializesARealAthleteWriteAgainstThePurge:
+    """The outer lock that protects a real athlete write in production today.
 
     This is a CHARACTERIZATION test, not a regression test — **it passes on
     ``main`` too**, before #584's purge-side fix exists at all. Neither the
@@ -292,19 +286,13 @@ class TestSessionLockSerializesARealAthleteWriteAgainstThePurge:
     predates both. Two facts, true independent of #584, already close this
     race in production:
 
-    1. ``restore_plan_snapshot`` UPDATEs (``.save()``) every snapshotted
-       ``Session`` row of the plan — unconditionally, one row at a time —
-       before it ever reaches the cell upsert loop, the collision guard, or
-       the purge.
-    2. Both real athlete write paths, ``views.athlete_cell_write`` and
-       ``views.athlete_log_session``, take
-       ``Session.objects.select_for_update().filter(pk=...).first()`` as the
-       very FIRST statement inside their own ``transaction.atomic()`` block,
-       before touching a cell or a ``LoggedSet``.
+    Both real athlete write paths take the Plan mutex before their self-only
+    Session lock, while undo/redo holds that same Plan mutex around the whole
+    restore.
 
     Put those together and a real athlete write and a coach's undo/redo can
     never interleave at the ``Prescription`` layer at all: whichever side
-    reaches the plan's ``Session`` row first holds it for its whole
+    reaches the plan's ``Plan`` row first holds it for its whole
     transaction, and the other blocks behind it until that transaction
     commits or rolls back. This test's job is not to prove a bug is fixed —
     there is no bug here to fix — but to PIN this incidental arrangement down
@@ -339,19 +327,22 @@ class TestSessionLockSerializesARealAthleteWriteAgainstThePurge:
         release = threading.Event()
         athlete_errors = []
 
-        def athlete_session_lock_then_log_and_commit():
-            # Thread A: the REAL shape this time — the `Session` row lock
-            # `athlete_cell_write`/`athlete_log_session` both take as their
-            # very first statement, held for the rest of the transaction,
-            # THEN the `LoggedSet` insert. This is `athlete_log_session`'s
+        def athlete_plan_then_session_lock_then_log_and_commit():
+            # Thread A: the REAL shape this time — Plan, then Session, then
+            # the `LoggedSet` insert. This is `athlete_log_session`'s
             # shape specifically: the cell itself is never written at all,
             # only pointed at by the set's `source_line`/`prescription` —
-            # proof that it's the Session lock doing the serializing here,
+            # proof that it's the outer Plan lock doing the serializing here,
             # not an incidental lock on the cell row itself (there isn't
             # one).
             try:
                 with transaction.atomic():
-                    Session.objects.select_for_update().filter(pk=s.session.pk).first()
+                    Plan.objects.select_for_update(no_key=True).filter(
+                        pk=s.plan.pk
+                    ).first()
+                    Session.objects.select_for_update(of=("self",)).filter(
+                        pk=s.session.pk
+                    ).first()
                     holding.set()
                     assert release.wait(timeout=5), (
                         "the main thread never released the athlete's commit"
@@ -369,10 +360,12 @@ class TestSessionLockSerializesARealAthleteWriteAgainstThePurge:
             finally:
                 connection.close()
 
-        holder = threading.Thread(target=athlete_session_lock_then_log_and_commit)
+        holder = threading.Thread(
+            target=athlete_plan_then_session_lock_then_log_and_commit
+        )
         holder.start()
         assert holding.wait(timeout=5), (
-            "the athlete thread never acquired the Session row lock"
+            "the athlete thread never acquired the Plan/Session lock pair"
         )
 
         undo_client = Client()
@@ -382,11 +375,8 @@ class TestSessionLockSerializesARealAthleteWriteAgainstThePurge:
         def run_the_coach_undo():
             # Thread B: the real endpoint. Unlike the sibling test above,
             # where B blocks at the PURGE's own lock near the end of
-            # `restore_plan_snapshot`, here B blocks much earlier — inside
-            # that function's Week/SessionSlot/ExerciseSlot/Session write
-            # loop, on the plain `session.save()` UPDATE for this plan's one
-            # `Session` row, which thread A is already holding under
-            # `select_for_update()`. The purge itself never gets a chance to
+            # `restore_plan_snapshot`, here B blocks before entering restore,
+            # on the Plan mutex. The purge itself never gets a chance to
             # race anything here: it only runs after that save, by which
             # point thread A's `LoggedSet` already exists (once released).
             try:
@@ -406,8 +396,8 @@ class TestSessionLockSerializesARealAthleteWriteAgainstThePurge:
 
         assert _wait_until_a_backend_is_lock_blocked(timeout=5.0), (
             "no backend was ever reported lock-blocked by pg_stat_activity — "
-            "the undo either raced ahead of the athlete's Session lock instead "
-            "of blocking on it, or never reached its own Session save at all"
+            "the undo either raced ahead of the athlete's Plan lock instead "
+            "of blocking on it, or never reached its own Plan mutex at all"
         )
         # The undo thread must still be running at this point — it reached
         # its own Session row save, found thread A's lock held, and is
@@ -415,7 +405,7 @@ class TestSessionLockSerializesARealAthleteWriteAgainstThePurge:
         # the first place).
         assert undoer.is_alive(), (
             "the undo thread finished before being released — it never "
-            "actually blocked on the athlete's Session lock"
+            "actually blocked on the athlete's Plan lock"
         )
 
         release.set()
@@ -434,7 +424,7 @@ class TestSessionLockSerializesARealAthleteWriteAgainstThePurge:
         assert stray_cell.text == "threatened", (
             "the purge deleted (or the restore otherwise overwrote) the cell "
             "the athlete's set was committed against mid-race, even though the "
-            "Session lock should have kept the two transactions from ever "
+            "Plan lock should have kept the two transactions from ever "
             "interleaving at the Prescription layer at all"
         )
         logged = LoggedSet.objects.get(session_log=log)

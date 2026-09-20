@@ -136,6 +136,13 @@ class Command(BaseCommand):
                 self.stdout.write("✓ Updated target user data")
 
                 # Delete source user
+                # LOCK ORDER (#587) — reserve every parent row this hard
+                # cascade reaches before Collector starts deleting children.
+                # Kept local to avoid coupling users' command imports to Meso
+                # during Django's app-loading phase.
+                from store_project.meso.demo import lock_cascade_parents
+
+                lock_cascade_parents([source_user.pk])
                 source_user.delete()
                 self.stdout.write(f"✓ Deleted source user {source_email}")
 

@@ -399,18 +399,14 @@ def restore_plan_snapshot(plan, snapshot):
     # so it cannot see a cell another transaction has inserted at one of these
     # coordinates but not yet committed. What keeps that from becoming a
     # unique-constraint violation is a lock this function takes for an
-    # unrelated reason — the ``session.save()`` loop above UPDATEs every
-    # snapshotted ``Session`` row, and both athlete write paths
-    # (``athlete_cell_write``, ``athlete_log_session``) take
-    # ``Session.objects.select_for_update()`` as their first statement, so an
-    # athlete transaction cannot overlap the part of this restore that
-    # follows that loop. (Precisely: the loop locks the SNAPSHOTTED sessions;
-    # a session created after the snapshot is locked a little later, by the
-    # soft-delete UPDATE below. A cell at a snapshotted coordinate implies a
-    # snapshot-era session, so the guard is covered either way.) A writer that
-    # holds neither that Session row nor the ``Plan`` row would reopen the
-    # window — ``cell_line_write`` already writes a ``Prescription`` before it
-    # takes either, though only ever at a coordinate it then keeps.
+    # unrelated reason — every athlete write path now takes the ``Plan`` row
+    # first (#588), and this restore's caller holds that same mutex throughout.
+    # The subsequent ``session.save()`` loop also UPDATEs every snapshotted
+    # ``Session`` row; athlete paths lock only that row with
+    # ``select_for_update(of=("self",))`` after Plan. A writer that holds
+    # neither the Session nor Plan row would reopen the window —
+    # ``cell_line_write`` already writes a ``Prescription`` before it takes
+    # either, though only ever at a coordinate it then keeps.
     coord_of_pk = {
         pk: (row["exercise_slot_id"], row["week_id"], row.get("line", 0))
         for pk, row in cell_rows.items()
@@ -675,20 +671,13 @@ def restore_plan_snapshot(plan, snapshot):
     #
     # WHAT ACTUALLY SERIALIZES AN ATHLETE WRITE TODAY — and it is not this
     # lock, so do not let this comment imply otherwise. An inserted
-    # ``LoggedSet`` takes NO lock at all on the ``Prescription`` it
-    # references while its transaction runs: Django emits these FKs
-    # ``DEFERRABLE INITIALLY DEFERRED`` on Postgres (confirmed against the
-    # live schema), so the constraint's own ``FOR KEY SHARE`` on the parent
-    # row fires only at COMMIT. The thing that keeps a racing athlete write
-    # and this purge apart is the ``session.save()`` loop earlier in this
-    # function: it UPDATEs every snapshotted ``Session`` row, and BOTH athlete
-    # write paths (``athlete_cell_write``, ``athlete_log_session``) take
-    # ``Session.objects.select_for_update()`` as their first statement — so an
-    # athlete transaction either commits entirely before this restore reaches
-    # that loop, or cannot start until this restore has committed. Verified:
-    # giving the regression test's athlete thread that Session lock makes the
-    # cell survive on ``main`` too, for a writer that updates the cell AND for
-    # the ``athlete_log_session`` shape that never touches it.
+    # ``LoggedSet`` takes NO lock at all on the ``Prescription`` it references
+    # while its transaction runs: Django emits these FKs ``DEFERRABLE
+    # INITIALLY DEFERRED`` on Postgres, so the constraint's own ``FOR KEY
+    # SHARE`` fires only at COMMIT. Every athlete writer now takes the Plan
+    # mutex first (#588), the same row this restore's caller already holds;
+    # the later ``Session ... FOR UPDATE OF self`` lock still serializes the
+    # log-level read/create/update work once Plan admits the writer.
     #
     # WHAT THIS LOCK ADDS, then, is that the guarantee stops depending on an
     # incidental UPDATE in an unrelated earlier loop. Make that Session save
@@ -718,7 +707,7 @@ def restore_plan_snapshot(plan, snapshot):
     # nothing and means the acquisition order is stated rather than incidental.
     #
     # LOCK ORDER. The sequence is unchanged: ``api_plan_undo``/``api_plan_redo``
-    # take ``Plan.objects.select_for_update()`` first, then this function
+    # take ``Plan.objects.select_for_update(no_key=True)`` first, then this function
     # writes Week -> SessionSlot -> ExerciseSlot -> Session -> Prescription
     # (the collision guard above, then this purge, last). What DID change is
     # the SIZE of the locked set, and it is worth being exact rather than
@@ -849,7 +838,7 @@ def record_plan_action(plan, label):
     ``unique_plan_action_seq``. (The undo/redo endpoints take the same lock,
     so recording also serializes against a concurrent restore.)
     """
-    models.Plan.objects.select_for_update().filter(pk=plan.pk).first()
+    models.Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
     # Labels often embed a row's free-text name (255 chars allowed) — clamp to
     # the column, or Postgres rejects the insert and the edit itself 500s.
     max_len = models.PlanAction._meta.get_field("label").max_length

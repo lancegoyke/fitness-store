@@ -72,20 +72,24 @@ def has_demo(coach):
 
 
 def _lock(coach):
-    """Serialize concurrent loads for this coach (double-submit protection).
+    """Serialize concurrent loads and clears for this coach.
 
     A per-coach row lock — real only inside a transaction, on a backend that
     supports it (Postgres); a no-op on the SQLite test DB, where requests
-    don't race anyway. Called at the top of **every** segment loader, not just
-    the aggregate: once the guided tour (Phase 2) wires each segment to its own
-    POST endpoint, a segment can be loaded on its own — with no ``load_demo``
-    call wrapping it — so it needs the same double-submit protection ``load_demo``
-    always had. Re-acquiring the same row lock from nested segment calls within
-    one transaction (e.g. ``load_log`` → ``load_delivery`` → ``load_program`` →
-    ``load_athletes``) is harmless — it's the same connection re-affirming a
-    lock it already holds, not a new wait.
+    don't race anyway. Called at the top of **every** segment loader and by
+    ``clear_demo``. Once the guided tour wires each segment to its own POST, a
+    segment can be loaded without ``load_demo`` wrapping it, so every entry
+    point needs the same mutex. Re-acquiring the row from nested segment calls
+    (or an outer caller) is harmless — the same connection is re-affirming a
+    lock it already holds, not starting a new wait.
+
+    ``no_key=True`` is deliberate: this row is a mutex, not a row whose
+    commit-time FK checks need excluding. ``FOR NO KEY UPDATE`` still
+    serializes every loader/clearer for one coach while allowing an unrelated
+    transaction that merely references the coach to finish its deferred
+    ``FOR KEY SHARE`` check instead of waiting behind the whole demo load.
     """
-    User.objects.select_for_update().get(pk=coach.pk)
+    User.objects.select_for_update(no_key=True).get(pk=coach.pk)
 
 
 def _demo_athlete_and_link(coach, slug):
@@ -214,6 +218,92 @@ def has_log(coach):
     return SessionLog.objects.filter(athlete__in=_demo_athletes(coach)).exists()
 
 
+def _lock_users(user_ids):
+    return list(
+        User.objects.select_for_update(no_key=True)
+        .filter(pk__in=user_ids)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+
+
+def _lock_links(*, user_ids=(), link_pks=None):
+    links = CoachAthlete.objects.select_for_update(no_key=True)
+    if link_pks is None:
+        links = links.filter(Q(athlete_id__in=user_ids) | Q(coach_id__in=user_ids))
+    else:
+        links = links.filter(pk__in=link_pks)
+    return list(links.order_by("pk").values_list("pk", flat=True))
+
+
+def _lock_plans(*, link_pks=(), user_ids=(), plan_pks=None):
+    plans = Plan.objects.select_for_update(no_key=True)
+    if plan_pks is None:
+        plans = plans.filter(Q(relationship_id__in=link_pks) | Q(owner_id__in=user_ids))
+    else:
+        plans = plans.filter(pk__in=plan_pks)
+    return list(plans.order_by("pk").values_list("pk", flat=True))
+
+
+def _lock_batches(*, plan_pks=(), user_ids=(), batch_pks=None):
+    batches = AgentProposalBatch.objects.select_for_update(no_key=True)
+    if batch_pks is None:
+        mesocycle_pks = list(
+            Mesocycle.objects.filter(plan_id__in=plan_pks).values_list("pk", flat=True)
+        )
+        batches = batches.filter(
+            Q(plan_id__in=plan_pks)
+            | Q(coach_id__in=user_ids)
+            | Q(mesocycle_id__in=mesocycle_pks)
+        )
+    else:
+        batches = batches.filter(pk__in=batch_pks)
+    return list(batches.order_by("pk").values_list("pk", flat=True))
+
+
+def lock_cascade_from_links(link_pks):
+    """Lock a CoachAthlete-rooted cascade, top-down and ascending by pk (#587).
+
+    Must run inside the caller's transaction immediately before the delete it
+    protects. Deliberately not ``@transaction.atomic`` so a standalone call
+    cannot release its locks before that delete begins. Every level uses
+    ``FOR NO KEY UPDATE``; see ``lock_cascade_parents`` for the strength rule.
+    """
+    link_pks = list(link_pks)
+    if not link_pks:
+        return
+    locked_link_pks = _lock_links(link_pks=link_pks)
+    plan_pks = _lock_plans(link_pks=locked_link_pks)
+    _lock_batches(plan_pks=plan_pks)
+
+
+def lock_cascade_from_plans(plan_pks):
+    """Lock a Plan-rooted cascade, top-down and ascending by pk (#587).
+
+    Must run inside the caller's transaction immediately before the delete it
+    protects. Deliberately not ``@transaction.atomic`` and ``no_key=True`` at
+    every level, matching ``lock_cascade_parents``.
+    """
+    plan_pks = list(plan_pks)
+    if not plan_pks:
+        return
+    locked_plan_pks = _lock_plans(plan_pks=plan_pks)
+    _lock_batches(plan_pks=locked_plan_pks)
+
+
+def lock_cascade_from_batches(batch_pks):
+    """Lock batch-rooted deletes in ascending pk order (#587).
+
+    Must run inside the caller's transaction immediately before the delete it
+    protects. Deliberately not ``@transaction.atomic`` and uses
+    ``FOR NO KEY UPDATE``, matching ``lock_cascade_parents``.
+    """
+    batch_pks = list(batch_pks)
+    if not batch_pks:
+        return
+    _lock_batches(batch_pks=batch_pks)
+
+
 def lock_cascade_parents(user_ids):
     """Take the app-wide parent row locks a cascade delete of ``user_ids`` will reach (#559).
 
@@ -333,29 +423,14 @@ def lock_cascade_parents(user_ids):
     if not user_ids:
         return
     # 1. The users themselves — the roots the cascade deletes last.
-    list(
-        User.objects.select_for_update(no_key=True)
-        .filter(pk__in=user_ids)
-        .order_by("pk")
-        .values_list("pk", flat=True)
-    )
+    _lock_users(user_ids)
     # 2. Their coach<->athlete links, as athlete OR as coach: reaping a sandbox
     #    coach deletes links where they are the coach, clearing demo data
     #    deletes links where the demo user is the athlete.
-    link_pks = list(
-        CoachAthlete.objects.select_for_update(no_key=True)
-        .filter(Q(athlete_id__in=user_ids) | Q(coach_id__in=user_ids))
-        .order_by("pk")
-        .values_list("pk", flat=True)
-    )
+    link_pks = _lock_links(user_ids=user_ids)
     # 3. The plans hanging off those links, plus any template plan these users
     #    own outright (``Plan.owner`` is its own CASCADE FK).
-    plan_pks = list(
-        Plan.objects.select_for_update(no_key=True)
-        .filter(Q(relationship_id__in=link_pks) | Q(owner_id__in=user_ids))
-        .order_by("pk")
-        .values_list("pk", flat=True)
-    )
+    plan_pks = _lock_plans(link_pks=link_pks, user_ids=user_ids)
     # 4. The batches. Three ways one is reached, not just the obvious one:
     #    through its ``plan``; through ``coach``, its own CASCADE FK to
     #    ``User``; and through ``mesocycle``, which is SET_NULL — the collector
@@ -369,19 +444,7 @@ def lock_cascade_parents(user_ids):
     #    deferred FK's ``FOR KEY SHARE`` on the ``Mesocycle`` row, not on the
     #    ``Plan``. It is safe because only an admin raw-id re-point can do it,
     #    and that write takes no other lock we hold, so no cycle follows.
-    mesocycle_pks = list(
-        Mesocycle.objects.filter(plan_id__in=plan_pks).values_list("pk", flat=True)
-    )
-    list(
-        AgentProposalBatch.objects.select_for_update(no_key=True)
-        .filter(
-            Q(plan_id__in=plan_pks)
-            | Q(coach_id__in=user_ids)
-            | Q(mesocycle_id__in=mesocycle_pks)
-        )
-        .order_by("pk")
-        .values_list("pk", flat=True)
-    )
+    _lock_batches(plan_pks=plan_pks, user_ids=user_ids)
 
 
 def clear_demo(coach):
@@ -394,6 +457,10 @@ def clear_demo(coach):
     concurrent coach edit on the same demo plan or batch waits instead of
     deadlocking with it — see ``lock_cascade_parents`` (#559).
 
+    The same coach mutex every loader takes is acquired before the athlete-set
+    read, so clear and load serialize for one coach (#590). It intentionally
+    precedes the demo athletes' User locks; see the inline lock-order comment.
+
     The ``with transaction.atomic()`` block replaces the ``@transaction.atomic``
     decorator this function used to carry — same transaction, stated where the
     reason can sit beside it, and not a place to tidy back into a decorator.
@@ -402,6 +469,11 @@ def clear_demo(coach):
     which would release every lock before the delete they exist to cover ran.
     """
     with transaction.atomic():
+        # LOCK ORDER (#590) — take the coach User row first, then the demo
+        # athletes' User rows inside lock_cascade_parents. That is deliberately
+        # not ascending pk across the two queries, but it is safe because every
+        # path that touches both takes this same coach mutex first.
+        _lock(coach)
         # Read the athlete set INSIDE the transaction that locks it, not before:
         # two statements in one transaction is still two snapshots under READ
         # COMMITTED, but a read taken outside it can be arbitrarily stale.

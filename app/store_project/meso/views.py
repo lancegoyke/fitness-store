@@ -27,6 +27,7 @@ from django.http import Http404
 from django.http import HttpResponse
 from django.http import HttpResponseBadRequest
 from django.http import HttpResponseForbidden
+from django.http import HttpResponseNotFound
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
@@ -789,7 +790,7 @@ def _reserve_plan_draft(request, plan):
     """
     if meso_sandbox.is_sandbox(request.user):
         return None
-    User.objects.select_for_update().filter(pk=request.user.pk).first()
+    User.objects.select_for_update(no_key=True).filter(pk=request.user.pk).first()
     if not billing_access.can_use_agent(request.user):
         messages.info(request, DRAFT_ALLOWANCE_MESSAGE)
         return None
@@ -1111,10 +1112,22 @@ def roster_add_self(request):
     adds it to every action form it builds), so the organic path isn't
     miscounted as tour engagement.
     """
-    # Like demo_load: adding yourself is an implicit "I'm coaching now", so make
-    # sure the CoachProfile exists rather than minting a coach via a side door.
-    CoachProfile.objects.get_or_create(user=request.user)
-    CoachAthlete.add_self(request.user)
+    with transaction.atomic():
+        # LOCK ORDER (#596) — a self-link has two User parents that happen to
+        # be the same row. Reserve that parent before CoachProfile/add_self can
+        # insert children, matching User-rooted cascade deletes.
+        locked_coach = (
+            User.objects.select_for_update(no_key=True)
+            .filter(pk=request.user.pk)
+            .first()
+        )
+        if locked_coach is None:
+            raise Http404("Unknown coach")
+        # Like demo_load: adding yourself is an implicit "I'm coaching now", so
+        # make sure the CoachProfile exists rather than minting a coach via a
+        # side door.
+        CoachProfile.objects.get_or_create(user=request.user)
+        CoachAthlete.add_self(request.user)
     messages.success(
         request,
         "You're on your roster — build a program for yourself like any athlete.",
@@ -1534,15 +1547,30 @@ def athlete_log_session(request, pk):
     identified = all(
         cs["id"] is not None or cs["client_id"] is not None for cs in cleaned_sets
     )
+    plan = session.week.mesocycle.plan
 
     with transaction.atomic():
+        # LOCK ORDER (#588) — every athlete write takes Plan before Session.
+        # A restore or pre-locked cascade delete therefore finishes first; the
+        # re-reads below then see a coherent surviving tree or fail cleanly.
+        locked_plan = (
+            Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
+        )
+        if locked_plan is None:
+            return HttpResponseNotFound("Unknown session")
         # Same lock `_upsert_parsed_set` takes, and it has to be BOTH sides to
         # work: `(session, athlete)` has no uniqueness, so an athlete who types
         # into a cell and immediately taps Save can have the blur POST and this
         # one both find no log and each create one. Locking only the blur path
         # leaves that race wide open. One workout split across two logs loses
         # the older one's sets from every later read, which takes the newest.
-        Session.objects.select_for_update().filter(pk=session.pk).first()
+        locked_session = (
+            Session.objects.select_for_update(of=("self",))
+            .filter(pk=session.pk)
+            .first()
+        )
+        if locked_session is None:
+            return HttpResponseNotFound("Unknown session")
         # The shared newest-log rule for one (session, athlete) pair — see
         # models.newest_session_logs for the ordering rationale, the full
         # list of reads that share it, and the reads that deliberately don't.
@@ -2233,7 +2261,7 @@ def athlete_cell_write(request, pk):
         # `no_key=True` deliberately. FOR NO KEY UPDATE is the exact strength
         # `_touch_plan`'s own UPDATE takes, so this adds no strength the path
         # didn't already need; it still conflicts with the undo/redo
-        # endpoints' plain FOR UPDATE, which is what makes the two genuinely
+        # endpoints' FOR NO KEY UPDATE, which is what makes the two genuinely
         # exclude each other; and it does NOT conflict with the FOR KEY SHARE
         # a concurrent insert of some other Plan child takes on its deferred
         # FK at commit time — the trap #560 hit on a user row.
@@ -2270,7 +2298,7 @@ def athlete_cell_write(request, pk):
         # promise chain orders one page's saves; only this orders the server.
         #
         # A no-op on SQLite (which serializes writers anyway), real on Postgres.
-        Session.objects.select_for_update().filter(pk=session.pk).first()
+        Session.objects.select_for_update(of=("self",)).filter(pk=session.pk).first()
         cell, created_cell = Prescription.objects.get_or_create(
             exercise_slot=slot, week=session.week, line=line
         )
@@ -3762,6 +3790,16 @@ def relationship_reinvite(request, token):
     same way the roster does instead of 500ing.
     """
     with transaction.atomic():
+        # LOCK ORDER (#596) — User precedes CoachAthlete. This must live here,
+        # not inside add_self, because the ordinary re-invite branch and its
+        # link lock need the same parent-first order too.
+        locked_coach = (
+            User.objects.select_for_update(no_key=True)
+            .filter(pk=request.user.pk)
+            .first()
+        )
+        if locked_coach is None:
+            raise Http404("Unknown coach")
         link = get_object_or_404(
             CoachAthlete.objects.select_for_update(),
             token=token,
@@ -4150,7 +4188,21 @@ def invite_claim(request, token):
         action = request.POST.get("action")
         if action not in ("accept", "decline"):
             return HttpResponseBadRequest("action must be 'accept' or 'decline'.")
+        invite_coach_id = invite.coach_id
         with transaction.atomic():
+            locked_user_ids = None
+            if action == "accept":
+                # LOCK ORDER (#596) — CoachAthlete has two User parents, so
+                # reserve both in ascending pk before the invite row. A User
+                # cascade takes its parent first and only then deletes the
+                # CoachInvite; matching it here removes the reverse edge.
+                expected_user_ids = {invite_coach_id, request.user.pk}
+                locked_user_ids = set(
+                    User.objects.select_for_update(no_key=True)
+                    .filter(pk__in=expected_user_ids)
+                    .order_by("pk")
+                    .values_list("pk", flat=True)
+                )
             # Lock by the *submitted token*, not the pk: a resend that rotated the
             # token out from under this in-flight claim must invalidate the old
             # link (Phase-3 "resend kills the previous token"), so a superseded
@@ -4158,6 +4210,11 @@ def invite_claim(request, token):
             invite = get_object_or_404(
                 CoachInvite.objects.select_for_update(), token=token
             )
+            if action == "accept" and (
+                invite.coach_id != invite_coach_id
+                or locked_user_ids != expected_user_ids
+            ):
+                raise Http404("Invite participants changed")
             if not invite.is_pending:
                 messages.info(request, "This invite has already been answered.")
                 return redirect("meso:athlete_home")
@@ -4591,7 +4648,7 @@ def session_add(request, plan_id):
         # Lock ordering: plan BEFORE any child row (undo/redo and the deletes,
         # e.g. week_delete, all lock the plan first, then touch weeks) — taking
         # the mesocycle lock first here could deadlock against them.
-        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
         Mesocycle.objects.select_for_update().filter(pk=meso.pk).first()
         # Mirrors ``week_add``'s own indexing (over ALL slots, deleted
         # included) so a soft-deleted day's number/order is never reused.
@@ -4724,7 +4781,7 @@ def session_reorder(request, plan_id, pk):
         # Lock ordering: plan first (see session_add) — the live id set is read
         # under this lock so a concurrent write to the same session's rows
         # can't slip in between the read and this reorder's write.
-        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
         live = list(session.cells())
         live_ids = [c.pk for c in live]
         if len(order) != len(live_ids) or set(order) != set(live_ids):
@@ -4874,7 +4931,7 @@ def week_add(request, plan_id):
         return HttpResponseBadRequest("This plan has no block to add a week to.")
     with transaction.atomic():
         # Lock ordering: plan first (see session_add).
-        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
         Mesocycle.objects.select_for_update().filter(pk=mesocycle.pk).first()
         # Mirrors ``Mesocycle.append_week``'s own indexing (over ALL weeks,
         # deleted included) so the recorded label matches the week it creates —
@@ -4917,7 +4974,7 @@ def week_delete(request, plan_id, week_id):
         Week, pk=week_id, mesocycle__plan=plan, deleted_at__isnull=True
     )
     with transaction.atomic():
-        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
         week.refresh_from_db()
         if week.deleted_at is not None:
             raise Http404("Week not found.")
@@ -4964,7 +5021,7 @@ def week_reorder_sessions(request, plan_id, week_id):
 
     with transaction.atomic():
         # Lock ordering: plan first (see session_add).
-        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
         live = list(week.sessions.filter(deleted_at__isnull=True))
         live_ids = [s.pk for s in live]
         if len(order) != len(live_ids) or set(order) != set(live_ids):
@@ -5022,7 +5079,7 @@ def api_plan_undo(request, plan_id):
         return bad
     try:
         with transaction.atomic():
-            Plan.objects.select_for_update().filter(pk=plan.pk).first()
+            Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
             popped = (
                 PlanAction.objects.filter(plan=plan, stack=PlanAction.Stack.UNDO)
                 .order_by("-seq")
@@ -5062,7 +5119,7 @@ def api_plan_redo(request, plan_id):
         return bad
     try:
         with transaction.atomic():
-            Plan.objects.select_for_update().filter(pk=plan.pk).first()
+            Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
             popped = (
                 PlanAction.objects.filter(plan=plan, stack=PlanAction.Stack.REDO)
                 .order_by("seq")
@@ -5163,7 +5220,7 @@ def prescription_move(request, plan_id, pk):
     target_slot = target_session.session_slot
     with transaction.atomic():
         # Lock ordering: plan first (see session_add).
-        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
         record_plan_action(plan, f"Moved {cell.name or 'exercise'}")
         es = cell.exercise_slot
         if target_slot.pk == source_slot.pk:
@@ -5373,7 +5430,7 @@ def cell_line_write(request, plan_id, slot_id):
         # It changes no WRITE order: the flag flip below still lands before
         # `record_plan_action` snapshots, which is what the next comment is
         # about.
-        Plan.objects.select_for_update().filter(pk=plan.pk).first()
+        Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
         existing = Prescription.objects.filter(
             exercise_slot=slot, week=week, line=line
         ).first()
@@ -5780,6 +5837,27 @@ def plan_batch_deliver(request, plan_id):
         return _back()
     delivered_names = []
     with transaction.atomic():
+        # LOCK ORDER (#596) — reserve every target CoachAthlete row in
+        # ascending pk before inserting a Plan beneath it. Re-qualify under
+        # the lock so a link ended or suspended while the form was open is
+        # dropped rather than receiving a new plan mid-cascade.
+        locked_target_pks = list(
+            CoachAthlete.objects.select_for_update(no_key=True)
+            .for_coach(request.user)
+            .active()
+            .filter(pk__in=[relationship.pk for relationship in targets])
+            .exclude(pk__in=billing_access.suspended_athlete_ids(request.user))
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        targets = list(
+            CoachAthlete.objects.filter(pk__in=locked_target_pks)
+            .select_related("athlete")
+            .order_by("athlete__name", "athlete__email")
+        )
+        if not targets:
+            messages.error(request, "No deliverable clients in that selection.")
+            return _back()
         for relationship in targets:
             copy = plan.duplicate_for(relationship, status=Plan.Status.ACTIVE)
             target_week = _target_week_for_batch_copy(
@@ -5852,6 +5930,23 @@ def template_use(request, plan_id):
         )
         return redirect("meso:template_library")
     with transaction.atomic():
+        # LOCK ORDER (#596) — the link is the parent of the Plan about to be
+        # inserted. Re-read every eligibility predicate while holding its
+        # no-key row lock so a concurrent cascade/closure wins cleanly.
+        relationship = (
+            CoachAthlete.objects.select_for_update(no_key=True)
+            .for_coach(request.user)
+            .active()
+            .filter(pk=rel_id)
+            .exclude(pk__in=billing_access.suspended_athlete_ids(request.user))
+            .select_related("athlete")
+            .first()
+        )
+        if relationship is None:
+            messages.error(
+                request, "Pick one of your active clients to start this template."
+            )
+            return redirect("meso:template_library")
         copy = plan.duplicate_for(relationship, status=Plan.Status.ACTIVE)
     track(
         EventName.TEMPLATE_IMPORTED,
@@ -6034,7 +6129,7 @@ def agent_propose(request, plan_id):
     # lock is a no-op; the real serialization is on Postgres in prod.) Early returns
     # below just commit an empty transaction — nothing is written on those paths.
     with transaction.atomic():
-        User.objects.select_for_update().filter(pk=request.user.pk).first()
+        User.objects.select_for_update(no_key=True).filter(pk=request.user.pk).first()
         # Agent gate (D4, flat plan D14): the Claude agent has real per-call cost,
         # so every tier is metered per month except comped. Over the cap → 402 (the
         # designer shows the CTA in place of the composer once exhausted). A *free*
@@ -6278,7 +6373,7 @@ def batch_apply(request, batch_id):
         # (``docs/meso/decisions.md``), and this path took the Plan lock a few
         # statements later anyway (via ``record_plan_action``), so hoisting it
         # costs nothing: that call now re-acquires a lock already held.
-        Plan.objects.select_for_update().filter(pk=batch.plan_id).first()
+        Plan.objects.select_for_update(no_key=True).filter(pk=batch.plan_id).first()
         batch = (
             AgentProposalBatch.objects.select_for_update().filter(pk=batch.pk).first()
         )
