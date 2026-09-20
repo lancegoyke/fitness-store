@@ -635,12 +635,16 @@ one table. `clear_demo` is the explicit #590 exception: it locks the coach's
 `User` row first as the per-coach mutex, then locks the demo athletes' `User`
 rows ascending. That combined User sequence is not globally pk-sorted. It is
 safe against every path that takes the coach row first — the segment loaders,
-`plan_create`'s draft path, the sandbox reap. It is **not** safe against a
-`UserAdmin` bulk delete whose selection contains both a coach and one of that
-coach's own demo athletes: `lock_cascade_parents` sorts the whole selection by
-pk, so an athlete whose UUID sorts below the coach is locked before the coach
-while `clear_demo` runs coach → athlete. Staff-only and contrived; filed rather
-than papered over.
+`plan_create`'s draft path, the sandbox reap — and, as of #610, `UserAdmin` and
+`merge_users`: those delete paths first lock every selected coach ascending,
+while holding no athlete row, then run the ordinary sorted cascade pass. If
+`clear_demo(C)` owns C, that first pass holds nothing it needs; if the delete
+owns C, clear cannot pass its first lock. When C is not selected, neither path
+wants it and both take their shared athletes ascending. No cycle can form —
+provided a demo athlete is never itself a coach. They are created with an
+unusable password and no request path gives one a `CoachProfile` or a link as
+coach, so only a staff-made row breaks that; a coach that sorts below its own
+owner would be locked first and reopen the cycle (#614).
 
 Every path that takes two or more row locks takes them in that sequence,
 counting both `select_for_update` and the implicit exclusive lock an
@@ -684,6 +688,18 @@ a sufficient reason: the `DELETE` takes its own `FOR UPDATE` when it runs, and
 reserving the row earlier at that strength buys ordering you already have while
 blocking every deferred FK check in the meantime.
 
+One thing `no_key` does not change: an `UPDATE` that rewrites a column in a
+unique index (a `token` rotation in `CoachAthlete._open` or
+`CoachInvite.resend`) takes `FOR UPDATE` on that row at write time regardless of
+the explicit lock. What the explicit `no_key` buys those paths is that the
+strong lock is taken only at the write, after their parents, instead of at the
+top of the transaction. It is safe for the same reason the rest of the order is:
+every `Plan` creator locks its link first (#596), so nothing is mid-insert
+against that link holding a pending `KEY SHARE` for the write to wait on. The
+#611 sweep applied this test to all fifteen plain sites and none needed to stay
+plain; the only plain `Prescription` locks left are `history.py`'s (#584) and
+`views._upsert_parsed_set`'s, whose strength #611 deliberately left alone.
+
 **Why this order and not another.** Any total order prevents deadlock; this is
 the one the code already mostly followed. The coach's write paths open with the
 `Plan` row (`history.record_plan_action`, `api_plan_undo`, `api_plan_redo`), and
@@ -710,6 +726,15 @@ restore's existing sequence a violation for no gain.
 - `views.batch_apply` — takes the `Plan` row before the batch as of #559. It ran
   batch → `Plan` (via `record_plan_action`), which only became reachable once
   `lock_cascade_parents` started going parent-first.
+- #611's strength sweep uses `FOR NO KEY UPDATE` for the row mutexes in
+  `CoachSubscription.start_trial_for`, `views.plan_create`,
+  `relationship_reinvite`, `athlete_request_coach`, the CoachInvite
+  revoke/resend/claim transitions, `session_add`, `week_add`, `batch_apply`,
+  `batch_dismiss`, `change_set_status`, `agent.service._still_resolvable`,
+  `billing.webhooks._lock_mirror`, and its invoice nudge. The querysets are
+  unjoined, so none needs `OF`; `_upsert_parsed_set` separately uses
+  `of=("self",)` on its deliberately plain Prescription lock so
+  `Prescription.Meta.ordering` cannot also lock the joined ExerciseSlot.
 - `views.change_set_status` — batch, then its `ProposedChange`. Skips `Plan`
   legitimately: it never touches that row, and no delete path can race it
   without holding the batch lock first.
@@ -725,30 +750,34 @@ restore's existing sequence a violation for no gain.
 - `views.template_use` / `plan_batch_deliver` lock their target links before
   duplicating a plan; `roster_add_self` / `relationship_reinvite` take the
   coach `User` first; `invite_claim` accept takes both participant `User` rows
-  ascending before its invite row (#596).
+  ascending before its invite row (#596); `athlete_request_coach` takes both
+  participant `User` rows ascending before its link, and `coach_invite` takes
+  the coach `User` row before opening an invite (#611).
 - `demo.clear_demo` takes the coach mutex before reading its athlete set, then
   uses `demo.lock_cascade_parents`; `sandbox.expire_sandboxes` safely re-locks
   that same coach row inside its later delete transaction (#590).
+- `demo.lock_coach_mutexes` identifies selected coaches through unjoined
+  subqueries and reserves their `User` mutex rows ascending before a multi-User
+  hard delete's sorted cascade pass (#610).
 - `UserAdmin`, `CoachAthleteAdmin`, `PlanAdmin`, `AgentProposalBatchAdmin`, and
   `merge_users` wrap their hard delete and the matching
-  `demo.lock_cascade_*` helper in one transaction (#587).
+  `demo.lock_cascade_*` helper in one transaction; the two User-rooted callers
+  take the #610 coach-mutex pre-pass first (#587).
 
 ### Known gaps and deliberately unswept sites
 
 The #587/#588/#589/#590/#596 reachable cycles above are closed. The remaining
 inventory is explicit rather than implied to conform:
 
-- `UserAdmin` bulk delete of a coach together with one of that coach's demo
-  athletes can deadlock against a concurrent `clear_demo` — see the #590
-  exception above.
-- The #589 strength sweep intentionally did not change `Mesocycle`,
-  `CoachAthlete`, `CoachInvite`, `AgentProposalBatch`, `CoachSubscription`, or
-  `Prescription` locks. The plain `Prescription` locks in `history.py` are
-  deliberate: #584's purge must conflict with a commit-time `FOR KEY SHARE`.
-- Creator entry points `athlete_request_coach`, `CoachAthlete._open` /
-  `invite` / `request`, and the coach email-invite view were not swept by #596.
-  Any expansion of their reachable delete races must add parent locks at the
-  caller in this same order, not bury a `User` lock inside the model helper.
+- The plain `Prescription` locks in `history.py` are deliberate: #584's purge
+  must conflict with a commit-time `FOR KEY SHARE`.
+- The `CoachAthlete._open` / `invite` / `request` / `add_self` and
+  `CoachInvite.open_for` model helpers stay lock-free by design; every
+  request-reachable caller now holds the required parent `User` rows first.
+  The remaining unlocked creators are `seed_meso_demo`, an offline management
+  command with no concurrent request surface, and `demo._ensure_demo_link`,
+  whose segment loader holds the coach `User` mutex and is `clear_demo`'s
+  documented #590 exception.
 
 ## Decision log
 

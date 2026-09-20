@@ -224,10 +224,12 @@ def _still_resolvable(batch, expect_status, *, discarding):
     LOCK ORDER (``docs/meso/decisions.md``): the batch, then its
     ``ProposedChange`` rows. No ``Plan`` lock — neither caller touches the
     ``Plan`` row, and skipping a level is allowed; taking two out of sequence
-    is not.
+    is not. The batch mutex is NO KEY (#611): it still excludes a second
+    resolver, without blocking a deferred ``ProposedChange.batch`` FK check at
+    commit.
     """
     locked = (
-        models.AgentProposalBatch.objects.select_for_update()
+        models.AgentProposalBatch.objects.select_for_update(no_key=True)
         .filter(pk=batch.pk)
         .first()
     )

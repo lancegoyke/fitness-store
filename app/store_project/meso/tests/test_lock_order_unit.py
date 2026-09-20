@@ -4,6 +4,7 @@ from unittest import mock
 
 import pytest
 from django.contrib import admin
+from django.contrib.messages import get_messages
 from django.core.management import call_command
 from django.urls import reverse
 
@@ -15,9 +16,11 @@ from store_project.meso.admin import PlanAdmin
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachInviteFactory
+from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachInvite
 from store_project.meso.models import Plan
 from store_project.users.admin import UserAdmin
 from store_project.users.factories import UserFactory
@@ -42,6 +45,8 @@ ADMIN_CASES = [
         "lock_cascade_from_batches",
     ),
 ]
+
+OTHER_ADMIN_CASES = ADMIN_CASES[1:]
 
 
 @pytest.mark.parametrize(
@@ -75,15 +80,86 @@ def test_admin_delete_queryset_locks_all_matching_cascade_roots(
     assert not model.objects.filter(pk__in=pks).exists()
 
 
+def test_user_admin_delete_model_locks_coach_mutexes_before_cascade():
+    user = UserFactory()
+    pk = user.pk
+    calls = mock.Mock()
+
+    with (
+        mock.patch.object(
+            demo, "lock_coach_mutexes", calls.lock_coach_mutexes, create=True
+        ),
+        mock.patch.object(demo, "lock_cascade_parents", calls.lock_cascade_parents),
+    ):
+        UserAdmin(User, admin.site).delete_model(None, user)
+
+    assert calls.mock_calls == [
+        mock.call.lock_coach_mutexes([pk]),
+        mock.call.lock_cascade_parents([pk]),
+    ]
+
+
+def test_user_admin_delete_queryset_locks_coach_mutexes_before_cascade():
+    users = [UserFactory(), UserFactory()]
+    pks = sorted(user.pk for user in users)
+    calls = mock.Mock()
+
+    with (
+        mock.patch.object(
+            demo, "lock_coach_mutexes", calls.lock_coach_mutexes, create=True
+        ),
+        mock.patch.object(demo, "lock_cascade_parents", calls.lock_cascade_parents),
+    ):
+        UserAdmin(User, admin.site).delete_queryset(
+            None, User.objects.filter(pk__in=pks)
+        )
+
+    assert calls.mock_calls == [
+        mock.call.lock_coach_mutexes(pks),
+        mock.call.lock_cascade_parents(pks),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("admin_class", "model", "factory", "helper_name"), OTHER_ADMIN_CASES
+)
+@pytest.mark.parametrize("delete_method", ["delete_model", "delete_queryset"])
+def test_non_user_admins_do_not_lock_coach_mutexes(
+    admin_class, model, factory, helper_name, delete_method
+):
+    obj = factory()
+    lock_coach_mutexes = mock.Mock()
+    with (
+        mock.patch.object(demo, "lock_coach_mutexes", lock_coach_mutexes, create=True),
+        mock.patch.object(demo, helper_name),
+    ):
+        model_admin = admin_class(model, admin.site)
+        if delete_method == "delete_model":
+            model_admin.delete_model(None, obj)
+        else:
+            model_admin.delete_queryset(None, model.objects.filter(pk=obj.pk))
+
+    lock_coach_mutexes.assert_not_called()
+
+
 def test_merge_users_locks_the_source_cascade_before_deleting(monkeypatch):
     source = UserFactory(email="source-merge@example.com")
     target = UserFactory(email="target-merge@example.com")
     monkeypatch.setattr("builtins.input", lambda prompt: "yes")
 
-    with mock.patch.object(demo, "lock_cascade_parents") as lock_helper:
+    calls = mock.Mock()
+    with (
+        mock.patch.object(
+            demo, "lock_coach_mutexes", calls.lock_coach_mutexes, create=True
+        ),
+        mock.patch.object(demo, "lock_cascade_parents", calls.lock_cascade_parents),
+    ):
         call_command("merge_users", source.email, target.email, verbosity=0)
 
-    lock_helper.assert_called_once_with([source.pk])
+    assert calls.mock_calls == [
+        mock.call.lock_coach_mutexes([source.pk]),
+        mock.call.lock_cascade_parents([source.pk]),
+    ]
     assert not User.objects.filter(pk=source.pk).exists()
     assert User.objects.filter(pk=target.pk).exists()
 
@@ -110,3 +186,43 @@ def test_invite_accept_404s_if_the_invite_coach_changes_before_lock(
     assert not CoachAthlete.objects.filter(
         coach=changed.coach, athlete=claimant
     ).exists()
+
+
+def test_athlete_request_coach_handles_coach_gone_before_user_locks(
+    client, monkeypatch
+):
+    coach = CoachProfileFactory().user
+    athlete = UserFactory()
+    client.force_login(athlete)
+    monkeypatch.setattr(
+        views.User.objects,
+        "select_for_update",
+        lambda **kwargs: User.objects.filter(pk=athlete.pk),
+    )
+
+    response = client.post(
+        reverse("meso:athlete_request_coach"), {"email": coach.email}
+    )
+
+    assert response.status_code == 302
+    assert response.url == reverse("meso:athlete_home")
+    assert not CoachAthlete.objects.filter(coach=coach, athlete=athlete).exists()
+    messages = [message.message for message in get_messages(response.wsgi_request)]
+    assert "We couldn't find a coach with that email." in messages
+
+
+def test_coach_invite_404s_if_the_coach_is_gone_before_lock(client, monkeypatch):
+    coach = UserFactory()
+    client.force_login(coach)
+    monkeypatch.setattr(
+        views.User.objects,
+        "select_for_update",
+        lambda **kwargs: User.objects.none(),
+    )
+
+    response = client.post(
+        reverse("meso:coach_invite"), {"email": "athlete@example.com"}
+    )
+
+    assert response.status_code == 404
+    assert not CoachInvite.objects.filter(coach=coach).exists()

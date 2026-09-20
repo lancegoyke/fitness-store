@@ -39,6 +39,7 @@ from .management.commands.seed_meso_demo import build_block
 from .models import AgentProposalBatch
 from .models import AthleteProfile
 from .models import CoachAthlete
+from .models import CoachProfile
 from .models import Contraindication
 from .models import LoggedSet
 from .models import Mesocycle
@@ -304,12 +305,45 @@ def lock_cascade_from_batches(batch_pks):
     _lock_batches(batch_pks=batch_pks)
 
 
+def lock_coach_mutexes(user_ids):
+    """Lock selected coaches' User mutex rows, ascending by pk (#610).
+
+    A coach is any selected User with a ``CoachProfile`` or referenced as a
+    ``CoachAthlete.coach``. Must run inside the caller's transaction immediately
+    before ``lock_cascade_parents`` and its delete. Deliberately not
+    ``@transaction.atomic`` for the same lock-lifetime reason as that helper.
+
+    The role checks stay in subqueries so the locking SELECT itself reads only
+    ``users_user``. A joined lock would also lock the role/link rows, breaking
+    the app-wide order, while ``DISTINCT`` cannot be combined with ``FOR UPDATE``.
+    """
+    user_ids = list(user_ids)
+    if not user_ids:
+        return []
+    profile_user_ids = CoachProfile.objects.filter(user_id__in=user_ids).values_list(
+        "user_id", flat=True
+    )
+    linked_coach_ids = CoachAthlete.objects.filter(coach_id__in=user_ids).values_list(
+        "coach_id", flat=True
+    )
+    return list(
+        User.objects.select_for_update(no_key=True)
+        .filter(Q(pk__in=profile_user_ids) | Q(pk__in=linked_coach_ids))
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+
+
 def lock_cascade_parents(user_ids):
     """Take the app-wide parent row locks a cascade delete of ``user_ids`` will reach (#559).
 
     Must run inside the caller's transaction, immediately BEFORE the
     ``.delete()`` it protects. Shared with ``sandbox.expire_sandboxes``, which
     reaps the sandbox coach's own rows the same way.
+
+    A multi-User selection must call ``lock_coach_mutexes`` first so a selected
+    coach is never locked after their lower-pk demo athlete (#610). ``UserAdmin``
+    and ``merge_users`` both make that pre-pass before calling this helper.
 
     Deliberately NOT ``@transaction.atomic``, and the omission is load-bearing:
     a decorator here would let a standalone call look like it worked — taking

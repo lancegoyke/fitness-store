@@ -13,6 +13,7 @@ User = get_user_model()
 @admin.register(User)
 class UserAdmin(CascadeLockDeleteMixin, auth_admin.UserAdmin):
     cascade_lock_helper = "lock_cascade_parents"
+    lock_delete_coach_mutexes = True
     form = UserChangeForm
     add_form = UserCreationForm
     readonly_fields = ("stripe_customer_id",)

@@ -17,7 +17,10 @@ from store_project.meso import settle
 from store_project.meso import views
 from store_project.meso.factories import LoggedSetFactory
 from store_project.meso.factories import SessionLogFactory
+from store_project.meso.models import ExerciseSlot
+from store_project.meso.models import LoggedSet
 from store_project.meso.models import Plan
+from store_project.meso.models import Prescription
 from store_project.meso.models import Session
 from store_project.meso.models import SessionLog
 from store_project.meso.models import SessionSlot
@@ -69,6 +72,103 @@ def _hold_row(model, pk, locked, release, errors):
         errors.append(exc)
     finally:
         connection.close()
+
+
+def _hold_row_no_key(model, pk, locked, release, errors):
+    try:
+        with transaction.atomic():
+            model.objects.select_for_update(no_key=True).get(pk=pk)
+            locked.set()
+            assert release.wait(timeout=8)
+    except Exception as exc:  # pragma: no cover - surfaced below
+        errors.append(exc)
+    finally:
+        connection.close()
+
+
+def _run_upsert_while_row_is_held(model, pk, seeded, cell):
+    locked = threading.Event()
+    release = threading.Event()
+    holder_errors = []
+    upsert_errors = []
+    holder = threading.Thread(
+        # NO KEY still conflicts with the accidental joined-row lock, but lets
+        # the upsert's LoggedSet child commit check its deferred FK (#611).
+        target=_hold_row_no_key,
+        args=(model, pk, locked, release, holder_errors),
+    )
+
+    def run_upsert():
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout = '750ms'")
+            with transaction.atomic():
+                views._upsert_parsed_set(
+                    seeded.session,
+                    seeded.athlete,
+                    seeded.squat,
+                    cell,
+                    previous_text="",
+                )
+        except Exception as exc:  # pragma: no cover - surfaced below
+            upsert_errors.append(exc)
+        finally:
+            connection.close()
+
+    worker = threading.Thread(target=run_upsert)
+    holder.start()
+    assert locked.wait(timeout=5)
+    worker.start()
+    worker.join(timeout=3)
+    release.set()
+    holder.join(timeout=5)
+    worker.join(timeout=5)
+    assert not holder.is_alive()
+    assert not worker.is_alive()
+    assert holder_errors == []
+    assert upsert_errors == []
+
+
+def test_upsert_parsed_set_locks_prescription_not_joined_exercise_slot():
+    joined_seed = seed()
+    joined_cell = Prescription.objects.create(
+        exercise_slot=joined_seed.squat.exercise_slot,
+        week=joined_seed.week,
+        line=1,
+        text="225 x 5",
+        athlete_authored=True,
+    )
+
+    _run_upsert_while_row_is_held(
+        ExerciseSlot,
+        joined_seed.squat.exercise_slot_id,
+        joined_seed,
+        joined_cell,
+    )
+
+    assert LoggedSet.objects.filter(source_line=joined_cell).exists(), (
+        "_upsert_parsed_set waited on the joined meso_exerciseslot row"
+    )
+
+    target_seed = seed()
+    target_cell = Prescription.objects.create(
+        exercise_slot=target_seed.squat.exercise_slot,
+        week=target_seed.week,
+        line=1,
+        text="225 x 5",
+        athlete_authored=True,
+    )
+
+    _run_upsert_while_row_is_held(
+        Prescription,
+        target_seed.squat.pk,
+        target_seed,
+        target_cell,
+    )
+
+    assert not LoggedSet.objects.filter(source_line=target_cell).exists(), (
+        "_upsert_parsed_set did not lock its meso_prescription row"
+    )
 
 
 def test_settle_session_lock_does_not_lock_the_joined_session_slot():
