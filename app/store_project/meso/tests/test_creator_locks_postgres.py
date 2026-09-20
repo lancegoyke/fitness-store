@@ -112,6 +112,38 @@ def test_template_use_waits_for_the_target_link_lock():
     assert relationship.plans.count() == 1
 
 
+def test_template_use_does_not_lock_the_athlete_user_row():
+    """The link lock is `OF SELF`, so it never locks the athlete's User row.
+
+    `select_related("athlete")` would join `users_user` and lock that row too —
+    CoachAthlete then User, the inversion of a User-rooted cascade
+    (`lock_cascade_parents` takes User first).
+    """
+    coach = UserFactory()
+    athlete = UserFactory()
+    relationship = CoachAthleteFactory(coach=coach, athlete=athlete)
+    template, _ = template_plan(coach, title="Joined-row template")
+
+    def post_template():
+        client = Client()
+        client.force_login(coach)
+        return client.post(
+            reverse("meso:template_use", kwargs={"plan_id": template.pk}),
+            {"relationship": relationship.pk},
+        )
+
+    blocked, holder_errors, request_errors, result, holder, worker = (
+        _run_while_rows_are_held(User, [athlete.pk], post_template)
+    )
+
+    assert not blocked, "template_use locked the athlete's User row via its join"
+    assert not holder.is_alive() and not worker.is_alive()
+    assert holder_errors == []
+    assert request_errors == []
+    assert result["response"].status_code == 302
+    assert relationship.plans.count() == 1
+
+
 def test_plan_batch_deliver_waits_for_all_target_link_locks():
     coach = comp(UserFactory())
     source, _ = seed_source(coach=coach)

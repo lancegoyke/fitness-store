@@ -5933,8 +5933,11 @@ def template_use(request, plan_id):
         # LOCK ORDER (#596) — the link is the parent of the Plan about to be
         # inserted. Re-read every eligibility predicate while holding its
         # no-key row lock so a concurrent cascade/closure wins cleanly.
+        # ``of=("self",)`` is load-bearing: ``select_related("athlete")`` would
+        # otherwise lock the athlete's ``User`` row too — CoachAthlete then
+        # User, the inversion of a User-rooted cascade (same trap as #588).
         relationship = (
-            CoachAthlete.objects.select_for_update(no_key=True)
+            CoachAthlete.objects.select_for_update(no_key=True, of=("self",))
             .for_coach(request.user)
             .active()
             .filter(pk=rel_id)
