@@ -3,7 +3,7 @@
 **Status:** review written 2026-09-20 · **read-only — nothing built, nothing
 decided** · grounded in a code read at `3f22a5c` (the head of `main` after
 [#576]) plus the eleven issues and five fix PRs of 2026-09-19/20 · companion
-issue: "Meso logging: consolidate the shared-cell model"
+issue: [#578] ("Meso logging: consolidate the shared-cell model")
 **Owner:** Lance
 **Prerequisite reading:** [`parse-at-commit-plan.md`](parse-at-commit-plan.md)
 (5a §4–§7, 5b), [`decisions.md`](decisions.md) (the 2026-09-19/20 entries, and
@@ -775,8 +775,9 @@ order `-created_at, -pk`. `SessionLog.date` is athlete-supplied
 one `(session, athlete)` — the split-log state #575 says is real — the coach's
 results screen and the athlete's own page can read different logs.
 
-Reachable only on split logs, and not reproduced. Filed as its own issue and
-linked from the consolidation issue; it belongs in stage 3, not on its own.
+Reachable only on split logs, and not reproduced. Filed as [#579]; it belongs
+in stage 3, not on its own — a lone `-pk` here would leave six rules where
+there are six today, just differently.
 
 **Also worth noting, without a separate issue:** #575 names two reads that
 skip `deleted_at`. There are at least six (§1.6) — `serializers.py:525` and
@@ -815,3 +816,5 @@ roster's recency. #575's scope should be widened rather than duplicated.
 [#569]: https://github.com/lancegoyke/fitness-store/pull/569
 [#573]: https://github.com/lancegoyke/fitness-store/pull/573
 [#576]: https://github.com/lancegoyke/fitness-store/pull/576
+[#578]: https://github.com/lancegoyke/fitness-store/issues/578
+[#579]: https://github.com/lancegoyke/fitness-store/issues/579
