@@ -17,14 +17,34 @@ Postgres picks loses with ``deadlock detected`` — a 500, not a 409/404.
 The two user-facing delete paths that reach a ``Plan``/``AgentProposalBatch``
 tree are ``demo.clear_demo`` ("Remove demo data") and the sandbox expiry sweep
 (``sandbox.expire_sandboxes``). The fix, ``demo.lock_cascade_parents``, takes
-the SAME row locks the cascade will eventually need — the ``Plan`` rows, then
-their ``AgentProposalBatch`` rows, both ascending by pk — up front, inside the
-same transaction as the ``.delete()`` that follows. That doesn't narrow the
-race window, it removes the cycle: whichever edit request arrives after
-``lock_cascade_parents`` has run simply waits on a lock the delete already
-holds, and once the delete commits, the edit re-reads and answers cleanly
-(404/409 for a row that's now gone) instead of racing the delete for the same
-two rows in opposite orders.
+the SAME row locks the cascade will eventually need, FOUR levels top-down —
+``User``, then ``CoachAthlete``, then ``Plan``, then ``AgentProposalBatch``,
+each ascending by pk — up front, inside the same transaction as the
+``.delete()`` that follows. That doesn't narrow the race window, it removes
+the cycle: whichever edit request arrives after ``lock_cascade_parents`` has
+run simply waits on a lock the delete already holds, and once the delete
+commits, the edit re-reads and answers cleanly (404/409 for a row that's now
+gone) instead of racing the delete for the same rows in opposite orders.
+
+**Why the top two levels, ``User`` and ``CoachAthlete``, are there at all.**
+Locking just ``Plan``/``AgentProposalBatch`` closes the CHILD-then-parent
+cycle above, but opens a second, narrower one: each lock query is one
+statement's snapshot, and under READ COMMITTED the delete's own later
+collector SELECTs take fresh ones. So a ``Plan`` row INSERTed and committed
+*after* the ``Plan``-locking query has already run is still collected by the
+cascade — nothing was ever holding its row lock — and the cascade then
+deletes that freshly-inserted plan's children before the plan itself: the
+same #559 shape, reopened through a door the ``Plan``/batch locks alone
+cannot close, because the row they'd need to see does not exist yet when
+they run. It's reachable, not hypothetical: ``views.plan_create`` locks only
+the ``CoachAthlete`` link before inserting a ``Plan``, so a coach who clicks
+"Remove demo data" in one tab and creates a program for a plan-less demo
+athlete in another can land in exactly that window. Locking the ``User``/
+``CoachAthlete`` rows FIRST — before the cascade's own read of which plans
+exist — closes it: ``plan_create`` then blocks on the link lock the delete
+already holds, and once the delete commits it finds the link gone and
+answers a clean 404, never a race. ``TestClearDemoRacesAConcurrentPlanCreate``
+below proves this one the same way as the headline scenario above.
 
 **Why this is only expressible on PostgreSQL.** ``select_for_update`` is a
 documented no-op on SQLite, and the default in-memory SQLite test database
@@ -124,7 +144,9 @@ from store_project.meso.factories import PlanFactory
 from store_project.meso.factories import ProposedChangeFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import Mesocycle
 from store_project.meso.models import Plan
+from store_project.meso.models import Prescription
 from store_project.meso.models import ProposedChange
 from store_project.meso.models import SandboxSession
 from store_project.users.factories import UserFactory
@@ -359,20 +381,242 @@ class TestClearDemoRacesAConcurrentApprove:
 
 
 # ---------------------------------------------------------------------------
+# The second headline scenario: a plan inserted mid-delete escapes the lock.
+# ---------------------------------------------------------------------------
+
+
+class TestClearDemoRacesAConcurrentPlanCreate:
+    """The gap the ``User``/``CoachAthlete`` levels close (#558, #562).
+
+    ``views.plan_create`` locks only the ``CoachAthlete`` link before
+    inserting a ``Plan`` — ordinary, correct behavior on its own. But
+    ``lock_cascade_parents``'s ``Plan`` query is one statement's snapshot:
+    under READ COMMITTED, a ``Plan`` row committed AFTER that snapshot is
+    still collected by the cascade's own later SELECTs, with nothing ever
+    having locked its row — so the cascade would delete that plan's freshly
+    inserted children before the plan itself, reopening the #559 cycle
+    through a door the ``Plan``/``AgentProposalBatch`` locks alone cannot
+    close (see the module docstring). Locking the ``CoachAthlete`` link FIRST
+    closes it: the concurrent ``plan_create`` then blocks on the very link
+    row ``clear_demo`` locked before it ever queried ``Plan``, and once the
+    delete commits it finds the link gone and answers a clean 404 instead of
+    inserting anything.
+
+    A demo athlete with no plan yet stands in for the reachable shape —
+    ``load_demo`` only builds a full plan tree for "maya" via
+    ``load_program``/``_ensure_demo_plan`` (confirmed below, not assumed), so
+    any of the other four demo athletes is plan-less by construction: exactly
+    the athlete a coach could click "+ New program" for while "Remove demo
+    data" is in flight in another tab. Proven the same way as the first
+    headline test above: a genuine ``pg_stat_activity`` block, never a sleep
+    — but the pause hook here wraps ``demo.lock_cascade_parents`` itself
+    (monkeypatched, calling through to the original before pausing) rather
+    than a ``post_delete`` signal, since the window this test needs sits
+    between two ordinary function calls in ``clear_demo``'s body — AFTER
+    ``lock_cascade_parents`` returns, BEFORE the ``.delete()`` that follows —
+    not inside the collector's cascade itself.
+    """
+
+    def test_a_plan_create_for_a_planless_demo_athlete_blocks_then_404s_not_500(
+        self, monkeypatch
+    ):
+        coach = _coach()
+        demo.load_demo(coach)
+        # Confirm "devon" is genuinely plan-less rather than assuming it —
+        # only "maya" gets a plan tree (``load_program``).
+        devon = User.objects.get(email=demo.demo_email(coach, "devon"))
+        assert not Plan.objects.filter(relationship__athlete=devon).exists()
+        demo_athlete_ids = list(
+            CoachAthlete.objects.filter(coach=coach, is_demo=True).values_list(
+                "athlete_id", flat=True
+            )
+        )
+        assert devon.pk in demo_athlete_ids
+
+        reached = threading.Event()
+        go = threading.Event()
+        original_lock_cascade_parents = demo.lock_cascade_parents
+
+        def _paused_lock_cascade_parents(user_ids):
+            # Run the REAL locking pass first — every one of the four levels'
+            # locks (including the `CoachAthlete` link this test cares about)
+            # is genuinely held by the time `reached` fires — then pause
+            # `clear_demo` in exactly the window the fix closes: after every
+            # lock is taken, before the `.delete()` that follows.
+            original_lock_cascade_parents(user_ids)
+            reached.set()
+            assert go.wait(timeout=5), (
+                "the main thread never released the paused "
+                "lock_cascade_parents — the test would hang forever otherwise"
+            )
+
+        monkeypatch.setattr(demo, "lock_cascade_parents", _paused_lock_cascade_parents)
+
+        clear_demo_errors = []
+
+        def run_clear_demo():
+            try:
+                demo.clear_demo(coach)
+            except Exception as exc:  # pragma: no cover - surfaced via the assert below
+                clear_demo_errors.append(exc)
+            finally:
+                connection.close()
+
+        plan_client = Client()
+        plan_client.force_login(coach)
+        plan_result = {}
+
+        def run_plan_create():
+            # The real endpoint, not a bare model call — exercises its own
+            # `select_for_update` on the `CoachAthlete` link, its Http404,
+            # and its own `transaction.atomic()` too.
+            try:
+                resp = plan_client.post(
+                    reverse("meso:plan_create", kwargs={"pk": devon.pk})
+                )
+                plan_result["status_code"] = resp.status_code
+                plan_result["content"] = resp.content
+            except Exception as exc:  # pragma: no cover - surfaced via the assert below
+                plan_result["error"] = exc
+            finally:
+                connection.close()
+
+        clearer = threading.Thread(target=run_clear_demo)
+        clearer.start()
+        assert reached.wait(timeout=5), (
+            "clear_demo never reached the paused lock_cascade_parents — "
+            "either it never got this far, or the monkeypatch never took"
+        )
+
+        creator = threading.Thread(target=run_plan_create)
+        creator.start()
+
+        assert _wait_until_a_backend_is_lock_blocked(timeout=5.0), (
+            "no backend was ever reported lock-blocked by pg_stat_activity — "
+            "plan_create either raced past the CoachAthlete lock instead of "
+            "blocking on it, or never reached its own select_for_update at all"
+        )
+        # Still running, not finished — it found the link lock held by
+        # clear_demo and is waiting there, not racing ahead of it.
+        assert creator.is_alive(), (
+            "plan_create finished before being released — it never actually "
+            "blocked on clear_demo's CoachAthlete lock"
+        )
+
+        go.set()
+        clearer.join(timeout=10)
+        creator.join(timeout=10)
+
+        assert not clearer.is_alive(), "clear_demo's thread never finished"
+        assert not creator.is_alive(), "the plan_create thread never finished"
+
+        assert clear_demo_errors == [], (
+            f"clear_demo raised (deadlock?): {clear_demo_errors}"
+        )
+        assert "error" not in plan_result, (
+            "plan_create raised instead of answering (deadlock?): "
+            f"{plan_result.get('error')}"
+        )
+        for exc in clear_demo_errors + (
+            [plan_result["error"]] if "error" in plan_result else []
+        ):
+            assert "deadlock" not in str(exc).lower(), (
+                f"PostgreSQL reported a deadlock: {exc}"
+            )
+
+        # `plan_create` re-reads the link under its own lock; by the time it
+        # wakes up, clear_demo has committed and the link is gone — a clean
+        # 404 (`Http404("Unknown athlete")`), never a 500, and never a plan.
+        assert plan_result.get("status_code") != 500, (
+            f"plan_create came back 500: {plan_result.get('content')}"
+        )
+        assert plan_result.get("status_code") == 404, (
+            "expected plan_create's Http404 for a link clear_demo had already "
+            f"removed, got {plan_result.get('status_code')}: "
+            f"{plan_result.get('content')}"
+        )
+
+        # No demo athlete escaped, and the race didn't leave a Plan (or any
+        # Mesocycle/Prescription orphaned under one) for the athlete
+        # `plan_create` raced to create it for.
+        assert demo.has_demo(coach) is False
+        assert not User.objects.filter(pk__in=demo_athlete_ids).exists()
+        assert not CoachAthlete.objects.filter(coach=coach).exists()
+        assert not Plan.objects.filter(relationship__coach=coach).exists()
+        assert not Mesocycle.objects.filter(plan__relationship__coach=coach).exists()
+        assert not Prescription.objects.filter(
+            week__mesocycle__plan__relationship__coach=coach
+        ).exists()
+
+
+def _first_query_index(queries, predicate):
+    """The index of the first captured SQL statement matching ``predicate``.
+
+    ``predicate`` receives the already-lowercased SQL. Raises with the full
+    query list on no match, rather than returning a sentinel, so a failure
+    shows exactly what WAS captured.
+    """
+    for i, sql in enumerate(queries):
+        if predicate(sql.lower()):
+            return i
+    raise AssertionError("no matching query among:\n" + "\n".join(queries))
+
+
+def _lock_cascade_indices(queries):
+    """First-index position of each ``lock_cascade_parents`` level's lock query.
+
+    Matches on the table's own quoted, delimited name — ``from "meso_plan"``
+    — never a bare substring. ``"meso_plan"`` (no trailing quote) is ALSO a
+    substring of ``"meso_planaction"``, the unrelated ``PlanAction`` model's
+    table, so a looser ``"meso_plan" in low`` check could be satisfied by a
+    ``PlanAction`` query instead of the ``Plan`` lock it's meant to find. The
+    same discipline is applied to every level for consistency, though only
+    ``meso_plan`` has a same-prefixed sibling table today.
+    """
+    return {
+        "user": _first_query_index(
+            queries, lambda low: 'from "users_user"' in low and "for update" in low
+        ),
+        "coachathlete": _first_query_index(
+            queries,
+            lambda low: 'from "meso_coachathlete"' in low and "for update" in low,
+        ),
+        "plan": _first_query_index(
+            queries, lambda low: 'from "meso_plan"' in low and "for update" in low
+        ),
+        "batch": _first_query_index(
+            queries,
+            lambda low: 'from "meso_agentproposalbatch"' in low and "for update" in low,
+        ),
+        "delete": _first_query_index(
+            queries, lambda low: low.strip().startswith("delete")
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Cheaper test 1 — the lock order + ascending-pk claim, pinned via SQL.
 # ---------------------------------------------------------------------------
 
 
 class TestClearDemoLockOrder:
-    """``clear_demo`` must lock Plans, then batches, then delete — never the reverse.
+    """``clear_demo`` must lock all four levels, in order, before it deletes.
 
-    Each query ascending by pk (#559). This doesn't force any interleaving; it just captures the SQL
-    ``clear_demo`` actually issues and asserts the sequence and shape the fix
-    promises. It survives even if the headline race above can never be
-    reliably forced on a given machine/CI runner.
+    ``User``, then ``CoachAthlete``, then ``Plan``, then ``AgentProposalBatch``
+    — each query ascending by pk (#558, #559, #562). This doesn't force any
+    interleaving; it just captures the SQL ``clear_demo`` actually issues and
+    asserts the sequence and shape the fix promises. It survives even if the
+    headline races above can never be reliably forced on a given
+    machine/CI runner. Pinning all four (not just ``Plan``/``AgentProposalBatch``)
+    matters because a regression that quietly dropped the top two levels —
+    reopening the plan-created-mid-delete window
+    ``TestClearDemoRacesAConcurrentPlanCreate`` covers — would otherwise still
+    pass a Plan-then-batch-only check.
     """
 
-    def test_locks_plans_then_batches_ascending_before_any_delete(self):
+    def test_locks_users_then_links_then_plans_then_batches_ascending_before_any_delete(
+        self,
+    ):
         coach = _coach()
         # Two of each, so "ascending by pk" has more than one row to actually
         # order — a single-row query would trivially satisfy any order.
@@ -385,26 +629,27 @@ class TestClearDemoLockOrder:
             demo.clear_demo(coach)
 
         queries = [q["sql"] for q in ctx.captured_queries]
+        idx = _lock_cascade_indices(queries)
 
-        def first_index(predicate):
-            for i, sql in enumerate(queries):
-                if predicate(sql.lower()):
-                    return i
-            raise AssertionError("no matching query among:\n" + "\n".join(queries))
+        assert (idx["user"] < idx["coachathlete"] < idx["plan"] < idx["batch"]) and idx[
+            "batch"
+        ] < idx["delete"], (
+            "expected User locked, then CoachAthlete, then Plan, then "
+            f"AgentProposalBatch, then the first DELETE (got {idx}):\n"
+            + "\n".join(queries)
+        )
 
-        plan_lock_idx = first_index(
-            lambda low: "meso_plan" in low and "for update" in low
-        )
-        batch_lock_idx = first_index(
-            lambda low: "meso_agentproposalbatch" in low and "for update" in low
-        )
-        first_delete_idx = first_index(lambda low: low.strip().startswith("delete"))
-
-        assert plan_lock_idx < batch_lock_idx < first_delete_idx, (
-            "expected Plan locked, then AgentProposalBatch locked, then the "
-            f"first DELETE (got indices {plan_lock_idx}, {batch_lock_idx}, "
-            f"{first_delete_idx}):\n" + "\n".join(queries)
-        )
+        # The rework dropped the join that used to make `of=("self",)`
+        # necessary on the Plan query — every filter is on a local column
+        # now. `Plan.relationship` is nullable, so a joined form promotes to
+        # a LEFT OUTER JOIN, and a bare `FOR UPDATE` over one of those is a
+        # hard PostgreSQL error, not a silent over-lock — so a regression
+        # back to a joined query wouldn't quietly over-lock, it would crash
+        # `clear_demo` outright. Pin the emitted clause itself: a plain
+        # `FOR UPDATE`, never `FOR UPDATE OF`.
+        plan_sql = queries[idx["plan"]].lower()
+        assert "for update of" not in plan_sql, plan_sql
+        assert "for update" in plan_sql, plan_sql
 
         # Ascending by pk, proven at the SQL level: `lock_cascade_parents`
         # relies on Postgres's LockRows node sitting ABOVE the sort (its own
@@ -412,11 +657,12 @@ class TestClearDemoLockOrder:
         # guarantees ascending acquisition order — inspecting which rows got
         # locked in which order isn't otherwise observable from outside the
         # transaction. Each query here selects only the pk column (``.values_list
-        # ("pk", flat=True)``), so Django's compiler emits a positional
+        # ("pk", flat=True)``), so Django's compiler may emit a positional
         # ``ORDER BY 1 ASC`` rather than naming the column — either form pins
         # the claim equally well, so this checks for "ascending" (``asc``
         # present, ``desc`` absent) rather than a literal column name.
-        for sql in (queries[plan_lock_idx], queries[batch_lock_idx]):
+        for level in ("user", "coachathlete", "plan", "batch"):
+            sql = queries[idx[level]]
             low = sql.lower()
             assert "order by" in low, sql
             order_clause = low.split("order by", 1)[1].split("for update")[0]
@@ -516,25 +762,29 @@ class TestLockCascadeParentsScope:
 
 
 class TestExpireSandboxesLockOrder:
-    """``expire_sandboxes`` locks the sandbox coach's own Plan/batch tree too.
+    """``expire_sandboxes`` locks the sandbox coach's own four-level tree too.
 
-    The same way ``clear_demo`` locks a demo athlete's (#559), before deleting
-    the coach. The reaping behavior itself (including the demo-athlete leak
-    trap) is ``test_sandbox.py``'s job; this only pins the locking half plus a
-    smoke check that the sweep still actually reaps.
+    The same way ``clear_demo`` locks a demo athlete's (#558, #559, #562),
+    before deleting the coach. The reaping behavior itself (including the
+    demo-athlete leak trap) is ``test_sandbox.py``'s job; this only pins the
+    locking half plus a smoke check that the sweep still actually reaps.
 
     The sandbox coach here has NO demo athletes at all, so `expire_sandboxes`'s
     own `demo.clear_demo(session.user)` call is a no-op (`_demo_athletes`
-    returns nothing) and issues no lock/delete queries of its own — the only
-    Plan/AgentProposalBatch lock queries captured come from the
-    `lock_cascade_parents([session.user_id])` call around the coach's own
-    delete, which is the half this test exists to pin. The plan is a
-    TEMPLATE (`owner=user`, no `relationship`) for the same reason: it's
+    returns nothing) and issues no lock/delete queries of its own — every
+    lock query captured here comes from the `lock_cascade_parents([session.
+    user_id])` call around the coach's own delete, which is the half this
+    test exists to pin. The `User` and `CoachAthlete` lock queries still run
+    and are still captured even though this coach has no links at all — the
+    `CoachAthlete` query matches zero rows, not zero statements. The plan is
+    a TEMPLATE (`owner=user`, no `relationship`) for the same reason: it's
     reachable only through the coach's own cascade, not through any
     `is_demo` athlete link.
     """
 
-    def test_locks_plan_then_batch_before_deleting_the_sandbox_coach(self):
+    def test_locks_users_then_links_then_plan_then_batch_before_deleting_the_sandbox_coach(
+        self,
+    ):
         user = sandbox.create_sandbox()
         template_plan = PlanFactory(
             relationship=None,
@@ -553,25 +803,14 @@ class TestExpireSandboxesLockOrder:
         assert reaped == 1
 
         queries = [q["sql"] for q in ctx.captured_queries]
+        idx = _lock_cascade_indices(queries)
 
-        def first_index(predicate):
-            for i, sql in enumerate(queries):
-                if predicate(sql.lower()):
-                    return i
-            raise AssertionError("no matching query among:\n" + "\n".join(queries))
-
-        plan_lock_idx = first_index(
-            lambda low: "meso_plan" in low and "for update" in low
-        )
-        batch_lock_idx = first_index(
-            lambda low: "meso_agentproposalbatch" in low and "for update" in low
-        )
-        first_delete_idx = first_index(lambda low: low.strip().startswith("delete"))
-
-        assert plan_lock_idx < batch_lock_idx < first_delete_idx, (
-            "expected Plan locked, then AgentProposalBatch locked, then the "
-            f"first DELETE (got indices {plan_lock_idx}, {batch_lock_idx}, "
-            f"{first_delete_idx}):\n" + "\n".join(queries)
+        assert (idx["user"] < idx["coachathlete"] < idx["plan"] < idx["batch"]) and idx[
+            "batch"
+        ] < idx["delete"], (
+            "expected User locked, then CoachAthlete, then Plan, then "
+            f"AgentProposalBatch, then the first DELETE (got {idx}):\n"
+            + "\n".join(queries)
         )
 
         # Smoke check: the sweep didn't just lock correctly, it still reaped.

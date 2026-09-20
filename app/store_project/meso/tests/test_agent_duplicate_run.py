@@ -386,3 +386,164 @@ class TestReturnValueSyncsToDatabaseOnDiscard:
         result_batch.refresh_from_db()
         assert result_batch.status == AgentProposalBatch.Status.APPLIED
         assert result_batch.changes.count() == 0
+
+
+class TestDuplicateRunThatFailsDoesNotClobberAResolvedBatch:
+    """The same guard on ``_fail``, the path a duplicate run most likely takes.
+
+    ``_persist_result`` is only reached by a duplicate run that got a RESULT
+    back from the provider. A duplicate run that fails first — no configured
+    client, a provider error, or any unexpected exception — lands in ``_fail``
+    instead, and that is the likelier shape by far: a retry exists because
+    something went wrong.
+
+    Before the guard, ``_fail`` saved ``status``/``error`` (plus ``model`` and
+    ``duration_ms``) unconditionally, so such a run turned an APPLIED batch
+    into a ``failed`` one. None of the coach's applied edits would be undone —
+    ``batch_apply`` still requires ``pending`` — but the batch row IS the
+    record of that apply: ``views.batch_status`` would start answering from its
+    error branch, and the designer's persisted chat thread would replace the
+    applied proposal's summary, changes and review link with an error bubble,
+    for a run that had in fact succeeded. The adversarial review of #558 found
+    this; the issue itself only named ``_persist_result``.
+    """
+
+    @staticmethod
+    def _applied_batch(presc, plan):
+        """A batch resolved the ordinary way and then applied by the coach."""
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
+        first_batch, _ = service.run_proposal_job(
+            batch.pk,
+            client=_ClientWithUsage(_first_run_result(presc), FIRST_RUN_USAGE),
+        )
+        agent_apply.apply_batch(first_batch)
+        first_batch.refresh_from_db()
+        assert first_batch.status == AgentProposalBatch.Status.APPLIED
+        return first_batch
+
+    def test_a_duplicate_run_with_no_configured_client_leaves_it_applied(
+        self, caplog, monkeypatch
+    ):
+        """``_fail``'s "not configured" path — a worker with no API key."""
+        plan, _, presc = make_plan()
+        applied = self._applied_batch(presc, plan)
+        before = {
+            "summary": applied.summary,
+            "error": applied.error,
+            "model": applied.model,
+            "duration_ms": applied.duration_ms,
+            "changes": applied.changes.count(),
+        }
+
+        # No client passed AND no default one available: exactly the shape of
+        # the existing test at ``test_agent_jobs.py``'s "not configured" case,
+        # and in production just a worker whose ``ANTHROPIC_API_KEY`` is unset.
+        monkeypatch.setattr(client_module, "get_default_client", lambda: None)
+        with caplog.at_level("WARNING", logger=SERVICE_LOGGER):
+            dup_batch, dup_rejected = service.run_proposal_job(applied.pk)
+
+        assert dup_rejected == []
+        # The returned instance agrees with the row, as on the discard path in
+        # ``_persist_result``.
+        assert dup_batch.status == AgentProposalBatch.Status.APPLIED
+        dup_batch.refresh_from_db()
+        assert dup_batch.status == AgentProposalBatch.Status.APPLIED
+        assert dup_batch.error == before["error"]
+        assert "not configured" not in dup_batch.error
+        assert dup_batch.summary == before["summary"]
+        assert dup_batch.changes.count() == before["changes"]
+        assert any(
+            f"batch {applied.pk}" in r.message
+            and "discarding a duplicate run's failure" in r.message
+            for r in caplog.records
+        )
+
+    def test_a_duplicate_run_whose_provider_raises_leaves_it_applied(self, caplog):
+        """``_fail``'s provider-error path, which also writes model/duration_ms.
+
+        The two extra columns matter on their own: ``model`` and
+        ``duration_ms`` are ``_apply_usage``'s to own, and overwriting them
+        with a discarded run's numbers is the ledger corruption the discard
+        path exists to prevent.
+        """
+        plan, _, presc = make_plan()
+        applied = self._applied_batch(presc, plan)
+        before_model = applied.model
+        before_duration = applied.duration_ms
+        before_error = applied.error
+
+        class BoomClient:
+            model = "claude-opus-4-8-DUPLICATE"
+
+            def propose(self, *, context, instruction):
+                raise RuntimeError("provider is down")
+
+        with caplog.at_level("WARNING", logger=SERVICE_LOGGER):
+            dup_batch, _ = service.run_proposal_job(applied.pk, client=BoomClient())
+
+        dup_batch.refresh_from_db()
+        assert dup_batch.status == AgentProposalBatch.Status.APPLIED
+        assert dup_batch.error == before_error
+        assert dup_batch.model == before_model
+        assert "DUPLICATE" not in dup_batch.model
+        assert dup_batch.duration_ms == before_duration
+
+    def test_a_first_failing_run_on_a_drafting_batch_still_fails_it(self):
+        """The control: ``_fail``'s guard must not swallow a genuine failure.
+
+        ``run_proposal_job``'s own contract is that it never leaves a batch
+        stuck ``drafting``. A guard that rejected every ``_fail`` would satisfy
+        the tests above while breaking that, so pin it here.
+        """
+        plan, _, _ = make_plan()
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
+
+        class BoomClient:
+            model = "claude-opus-4-8-test"
+
+            def propose(self, *, context, instruction):
+                raise RuntimeError("provider is down")
+
+        failed_batch, rejected = service.run_proposal_job(batch.pk, client=BoomClient())
+
+        assert rejected == []
+        failed_batch.refresh_from_db()
+        assert failed_batch.status == AgentProposalBatch.Status.FAILED
+        assert "provider is down" in failed_batch.error
+
+    def test_a_duplicate_failing_run_does_not_overwrite_an_earlier_failure(self):
+        """A batch already FAILED keeps the FIRST failure's reason.
+
+        ``failed`` is a resolved status too, and the first run's message is the
+        one that explains what actually happened.
+        """
+        plan, _, _ = make_plan()
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
+
+        class FirstBoom:
+            model = "claude-opus-4-8-test"
+
+            def propose(self, *, context, instruction):
+                raise RuntimeError("the original reason")
+
+        class SecondBoom:
+            model = "claude-opus-4-8-test"
+
+            def propose(self, *, context, instruction):
+                raise RuntimeError("a later, less useful reason")
+
+        service.run_proposal_job(batch.pk, client=FirstBoom())
+        batch.refresh_from_db()
+        assert "the original reason" in batch.error
+
+        service.run_proposal_job(batch.pk, client=SecondBoom())
+        batch.refresh_from_db()
+        assert batch.status == AgentProposalBatch.Status.FAILED
+        assert "the original reason" in batch.error
+        assert "less useful" not in batch.error

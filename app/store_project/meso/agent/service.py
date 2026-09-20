@@ -201,6 +201,50 @@ def _apply_usage(batch, usage, *, model, duration_ms):
     ]
 
 
+def _still_resolvable(batch, expect_status, *, discarding):
+    """Whether ``batch``'s row is STILL ``expect_status``, decided under a row lock (#558).
+
+    Shared by the two functions that RESOLVE a drafting batch —
+    ``_persist_result`` and ``_fail`` — so "may this run resolve this batch?" is
+    answered in one place. Must be called INSIDE the caller's transaction, and
+    the caller must do its writes in that same transaction: the lock taken here
+    is what stops a second, concurrent run from passing this check at the same
+    moment and both of them acting.
+
+    On a mismatch it logs ``discarding`` (the caller's description of what is
+    being thrown away, including any usage numbers that will now never reach
+    the ledger) and syncs ``batch.status`` to what the row actually holds, so
+    the instance the caller hands back does not claim a status the database
+    disagrees with. A row DELETED outright leaves ``batch.status`` alone: there
+    is no status meaning "gone", no caller distinguishes the two cases
+    (``jobs.dispatch_proposal`` discards the return value entirely), and
+    inventing one would be worse than the log line that already says which
+    happened.
+
+    LOCK ORDER (``docs/meso/decisions.md``): the batch, then its
+    ``ProposedChange`` rows. No ``Plan`` lock — neither caller touches the
+    ``Plan`` row, and skipping a level is allowed; taking two out of sequence
+    is not.
+    """
+    locked = (
+        models.AgentProposalBatch.objects.select_for_update()
+        .filter(pk=batch.pk)
+        .first()
+    )
+    if locked is not None and locked.status == expect_status:
+        return True
+    logger.warning(
+        "Meso agent batch %s is %s, not %s — discarding %s.",
+        batch.pk,
+        "gone" if locked is None else locked.status,
+        expect_status,
+        discarding,
+    )
+    if locked is not None:
+        batch.status = locked.status
+    return False
+
+
 def _persist_result(batch, result, *, model, duration_ms=None, expect_status=None):
     """Validate the model's candidates and persist the clean ones onto ``batch``.
 
@@ -236,46 +280,33 @@ def _persist_result(batch, result, *, model, duration_ms=None, expect_status=Non
     rejected = []
 
     with transaction.atomic():
-        if expect_status is not None:
-            # Lock and re-check FIRST, before a single ``ProposedChange`` is
-            # written — the same shape ``batch_apply`` uses for its own
-            # double-submit guard (#540) — so a discarded run leaves nothing
-            # behind to clean up. A filtered ``update(status=PENDING)`` at the
-            # end would work equally well for the status flip itself, but by
-            # then this function has already inserted the run's changes and
-            # would have to unwind them.
-            #
-            # LOCK ORDER (``docs/meso/decisions.md``): the batch, then its
-            # ``ProposedChange`` rows. No ``Plan`` lock — this function never
-            # touches the ``Plan`` row, and skipping a level is allowed; taking
-            # two out of sequence is not.
-            locked = (
-                models.AgentProposalBatch.objects.select_for_update()
-                .filter(pk=batch.pk)
-                .first()
-            )
-            if locked is None or locked.status != expect_status:
-                # Discard the whole run. The tokens it burned are lost to the
-                # usage ledger — writing them onto the batch would overwrite
-                # the numbers from the run the coach actually acted on — so log
-                # them, which is where a later reconciliation can find them.
-                logger.warning(
-                    "Meso agent batch %s is %s, not %s — discarding a duplicate "
-                    "run's result (model=%s, input=%s, output=%s, calls=%s).",
-                    batch.pk,
-                    "gone" if locked is None else locked.status,
-                    expect_status,
-                    model,
-                    normalized.usage.input_tokens,
-                    normalized.usage.output_tokens,
-                    normalized.usage.api_calls,
-                )
-                if locked is not None:
-                    # Don't hand the caller back an object claiming a status
-                    # the database disagrees with; ``run_proposal_job`` returns
-                    # this very instance.
-                    batch.status = locked.status
-                return rejected
+        # Check FIRST, before a single ``ProposedChange`` is written, so a
+        # discarded run leaves nothing behind to clean up. A filtered
+        # ``update(status=PENDING)`` at the end would work equally well for the
+        # status flip itself, but by then this function has already inserted the
+        # run's changes and would have to unwind them.
+        #
+        # The discarded run's tokens are lost to the usage ledger — writing them
+        # onto the batch would overwrite the numbers from the run the coach
+        # actually acted on — so every column ``_apply_usage`` would have
+        # written goes into the log line instead, which is where a later
+        # reconciliation can find them. All FOUR token counts, not just the
+        # plain two: cache-creation and cache-read tokens are priced separately
+        # (``agent_costs``), so dropping them would leave the reconciliation
+        # unable to reproduce the cost.
+        usage = normalized.usage
+        if expect_status is not None and not _still_resolvable(
+            batch,
+            expect_status,
+            discarding=(
+                f"a duplicate run's result (model={model}, "
+                f"input={usage.input_tokens}, output={usage.output_tokens}, "
+                f"cache_creation={usage.cache_creation_input_tokens}, "
+                f"cache_read={usage.cache_read_input_tokens}, "
+                f"calls={usage.api_calls}, duration_ms={duration_ms})"
+            ),
+        ):
+            return rejected
         batch.summary = summary
         batch.model = model
         usage_fields = _apply_usage(
@@ -304,24 +335,45 @@ def _persist_result(batch, result, *, model, duration_ms=None, expect_status=Non
     return rejected
 
 
-def _fail(batch, message, *, model="", duration_ms=None):
+def _fail(batch, message, *, model="", duration_ms=None, expect_status=None):
     """Mark a drafting batch ``failed`` with the reason for the status poll.
 
     Records ``model`` + ``duration_ms`` when known so a failed run still attributes
     in the usage report (U5). Token usage stays zero: a non-streaming call that
     raised before returning gave us no ``usage`` block to capture — the Anthropic
     invoice reconciliation (deferred) covers any tokens billed on such a drop.
+
+    ``expect_status`` (#558) carries the SAME guard ``_persist_result`` does, and
+    it matters here at least as much: this is the path a duplicate run is most
+    likely to take. An unconditional save here would let a second
+    ``run_proposal_job`` for one batch id — one whose provider call raises, or
+    that runs on a worker with no ``ANTHROPIC_API_KEY`` — overwrite an ALREADY
+    APPLIED batch to ``failed``, along with its ``model``/``duration_ms``. No
+    change the coach applied would be undone (``batch_apply`` still requires
+    ``pending``), but the batch is the record OF that apply: the status poll
+    (``views.batch_status``) would switch to its error branch and the designer's
+    persisted chat thread (``serializers``) would replace the applied
+    proposal's summary, changes and review link with an error bubble, for a run
+    that in fact succeeded. Every call site passes ``drafting``; there are no
+    other callers.
     """
-    batch.status = models.AgentProposalBatch.Status.FAILED
-    batch.error = (message or "The agent run failed.")[:2000]
-    fields = ["status", "error"]
-    if model:
-        batch.model = model
-        fields.append("model")
-    if duration_ms is not None:
-        batch.duration_ms = duration_ms
-        fields.append("duration_ms")
-    batch.save(update_fields=fields)
+    with transaction.atomic():
+        if expect_status is not None and not _still_resolvable(
+            batch,
+            expect_status,
+            discarding=f"a duplicate run's failure ({message!r})",
+        ):
+            return batch, []
+        batch.status = models.AgentProposalBatch.Status.FAILED
+        batch.error = (message or "The agent run failed.")[:2000]
+        fields = ["status", "error"]
+        if model:
+            batch.model = model
+            fields.append("model")
+        if duration_ms is not None:
+            batch.duration_ms = duration_ms
+            fields.append("duration_ms")
+        batch.save(update_fields=fields)
     return batch, []
 
 
@@ -334,10 +386,20 @@ def run_proposal_job(batch_id, *, client=None):
     batch = models.AgentProposalBatch.objects.select_related(
         "plan", "plan__relationship", "plan__relationship__athlete", "mesocycle"
     ).get(pk=batch_id)
+    # #558: the status this job is allowed to resolve FROM. Passed to BOTH
+    # resolvers below — ``_persist_result`` on success and ``_fail`` on every
+    # failure path — because either one flipping an already-applied or
+    # dismissed batch is the bug. Bound once here so a future fourth exit
+    # cannot quietly skip it.
+    drafting = models.AgentProposalBatch.Status.DRAFTING
     try:
         client = client or client_module.get_default_client()
         if client is None:
-            return _fail(batch, "The Meso agent is not configured (no API key).")
+            return _fail(
+                batch,
+                "The Meso agent is not configured (no API key).",
+                expect_status=drafting,
+            )
 
         model = getattr(client, "model", "")
         # Network call outside any DB transaction; wrap provider failures. Time it
@@ -355,6 +417,7 @@ def run_proposal_job(batch_id, *, client=None):
                 f"The agent request failed: {exc}",
                 model=model,
                 duration_ms=duration_ms,
+                expect_status=drafting,
             )
 
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -366,12 +429,14 @@ def run_proposal_job(batch_id, *, client=None):
             result,
             model=model,
             duration_ms=duration_ms,
-            expect_status=models.AgentProposalBatch.Status.DRAFTING,
+            expect_status=drafting,
         )
         return batch, rejected
     except Exception:  # never leave a batch stuck drafting
         logger.exception("Meso agent job crashed for batch %s", batch_id)
-        return _fail(batch, "The agent run failed unexpectedly.")
+        return _fail(
+            batch, "The agent run failed unexpectedly.", expect_status=drafting
+        )
 
 
 def propose_changes(

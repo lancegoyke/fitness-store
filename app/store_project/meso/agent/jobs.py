@@ -46,14 +46,22 @@ def dispatch_proposal(batch_id, *, client=None):
     # Enqueue on commit, not immediately — not because ATOMIC_REQUESTS wraps
     # the view (it never has; #571 deleted the dead module-level line that
     # used to claim otherwise, see the note in config/settings/base.py), but
-    # because a caller can be inside an explicit ``transaction.atomic()`` of
-    # its own. ``plan_create``'s draft path is: it calls this from INSIDE the
-    # block that creates the drafting batch, so the task must not land until
-    # that batch has durably committed (a worker in another process would
-    # otherwise race the row) and must not land at all if the block rolls
-    # back. ``agent_propose`` calls it just AFTER its own block closes, where
-    # ``on_commit`` runs the callable straight away — harmless, and it keeps
-    # one rule here instead of one per call site.
+    # because a caller COULD be inside an explicit ``transaction.atomic()`` of
+    # its own, and then the task must not land until the batch has durably
+    # committed (a worker in another process would otherwise race the row) and
+    # must not land at all if the block rolls back.
+    #
+    # No caller is, today. An earlier version of this comment claimed
+    # ``plan_create``'s draft path called this "from INSIDE the block that
+    # creates the drafting batch"; it does not — ``views.py``'s own comment
+    # there reads "Dispatch (and bump the plan) outside the lock, mirroring
+    # ``agent_propose``", and both call sites are after their block closes,
+    # where ``on_commit`` runs the callable straight away. The rule is kept
+    # anyway, as one rule here rather than one per call site, so a future
+    # caller that IS inside a transaction needs no change. It matters that this
+    # stays accurate: it is the only thing that would put
+    # ``_persist_result``/``_fail``'s row lock and early return (#558) inside a
+    # caller's transaction rather than one of their own.
     transaction.on_commit(lambda: _enqueue(batch_id))
 
 

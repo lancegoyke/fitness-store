@@ -214,13 +214,22 @@ def has_log(coach):
     return SessionLog.objects.filter(athlete__in=_demo_athletes(coach)).exists()
 
 
-@transaction.atomic
 def lock_cascade_parents(user_ids):
     """Take the app-wide parent row locks a cascade delete of ``user_ids`` will reach (#559).
 
     Must run inside the caller's transaction, immediately BEFORE the
     ``.delete()`` it protects. Shared with ``sandbox.expire_sandboxes``, which
     reaps the sandbox coach's own rows the same way.
+
+    Deliberately NOT ``@transaction.atomic``, and the omission is load-bearing:
+    a decorator here would let a standalone call look like it worked — taking
+    every lock, then committing and releasing all of them before the delete it
+    was meant to cover ever ran. Without one, such a call raises instead. (An
+    earlier revision of this function did carry the decorator, by accident: it
+    was inserted directly beneath ``clear_demo``'s own ``@transaction.atomic``
+    and took it over. ``clear_demo`` now states its transaction with an
+    explicit ``with`` block, where the comment explaining why it is required
+    can sit next to it.)
 
     Django's ``Collector.delete`` walks the tree CHILD-FIRST: it fast-deletes
     ``ProposedChange`` and ``Prescription`` rows (``DELETE ... WHERE
@@ -236,40 +245,88 @@ def lock_cascade_parents(user_ids):
     another and approves a change in the same instant.
 
     Locking the parents FIRST, in the app-wide order
-    (``docs/meso/decisions.md`` — ``Plan``, then its ``AgentProposalBatch``
-    rows, ascending pk within each table), removes the cycle instead of
-    narrowing it: an edit that arrives afterwards waits on the parent lock, and
-    once this delete commits it re-reads and answers cleanly (a 404/409 for a
-    row that is now gone) rather than dying in a deadlock.
+    (``docs/meso/decisions.md`` — ``User``, then ``CoachAthlete``, then
+    ``Plan``, then ``AgentProposalBatch``, ascending pk within each table),
+    removes the cycle instead of narrowing it: an edit that arrives afterwards
+    waits on the parent lock, and once this delete commits it re-reads and
+    answers cleanly (a 404/409 for a row that is now gone) rather than dying in
+    a deadlock.
 
-    ``of=("self",)`` on the plan query because it joins ``CoachAthlete`` to
-    find the plans — without it PostgreSQL would lock the joined link rows too,
-    which this function has no business holding. ``.order_by("pk")`` puts the
-    acquisition order in ascending pk: PostgreSQL's ``LockRows`` node sits
-    above the sort, so rows are locked in the order they come out.
+    IT HAS TO START AT ``User``/``CoachAthlete``, not at ``Plan``, and not only
+    because a cascade delete reaches those two levels as well. Each query below
+    is one statement's snapshot, and under READ COMMITTED the collector's own
+    later SELECTs take fresh ones — so a ``Plan`` INSERTed and committed after
+    the plan query runs is still COLLECTED by the delete while nothing holds its
+    row lock, and the delete then takes that plan's children before the plan
+    itself: the very cycle this function exists to remove, re-opened. It is
+    reachable: ``views.plan_create`` locks only the ``CoachAthlete`` link before
+    inserting a plan, so a coach who clicks "Remove demo data" in one tab and
+    creates a plan for a plan-less demo athlete in another gets exactly that
+    state. Locking the LINK rows first closes it — ``plan_create`` then waits on
+    the link it needs and, once this delete commits, finds it gone and answers
+    404 — which no amount of care in the plan query itself could do, because the
+    row it would need to see does not exist yet when that query runs.
 
-    The batch query needs no ``of``: ``plan_id`` and ``coach_id`` are both
-    local columns.
+    ``.order_by("pk")`` puts the acquisition order in ascending pk:
+    PostgreSQL's ``LockRows`` node sits above the sort, so rows are locked in
+    the order they come out.
+
+    Every filter below is on a LOCAL column — the link pks feed the plan query
+    rather than joining ``CoachAthlete``, and the mesocycle pks feed the batch
+    query rather than joining ``Mesocycle`` — so no query here needs
+    ``of=("self",)`` and none can lock a joined row by accident. That also
+    sidesteps a sharper edge: ``Plan.relationship`` is nullable, so a joined
+    form promotes to a LEFT OUTER JOIN, and a bare ``FOR UPDATE`` over one of
+    those is a hard PostgreSQL error rather than a silent over-lock.
     """
     user_ids = list(user_ids)
     if not user_ids:
         return
-    plan_pks = list(
-        Plan.objects.select_for_update(of=("self",))
-        .filter(
-            Q(relationship__athlete__in=user_ids)
-            | Q(relationship__coach__in=user_ids)
-            | Q(owner__in=user_ids)
-        )
+    # 1. The users themselves — the roots the cascade deletes last. Plain
+    #    ``FOR UPDATE``: these rows are about to be DELETEd, which takes a lock
+    #    of that strength anyway, so nothing is gained by asking for less.
+    list(
+        User.objects.select_for_update()
+        .filter(pk__in=user_ids)
         .order_by("pk")
         .values_list("pk", flat=True)
     )
-    # Both reachable roots, not just the plans': ``AgentProposalBatch.coach``
-    # is its own CASCADE FK to ``User``, so reaping a sandbox coach collects
-    # batches through it as well as through their plans.
+    # 2. Their coach<->athlete links, as athlete OR as coach: reaping a sandbox
+    #    coach deletes links where they are the coach, clearing demo data
+    #    deletes links where the demo user is the athlete.
+    link_pks = list(
+        CoachAthlete.objects.select_for_update()
+        .filter(Q(athlete_id__in=user_ids) | Q(coach_id__in=user_ids))
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+    # 3. The plans hanging off those links, plus any template plan these users
+    #    own outright (``Plan.owner`` is its own CASCADE FK).
+    plan_pks = list(
+        Plan.objects.select_for_update()
+        .filter(Q(relationship_id__in=link_pks) | Q(owner_id__in=user_ids))
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+    # 4. The batches. Three ways one is reached, not just the obvious one:
+    #    through its ``plan``; through ``coach``, its own CASCADE FK to
+    #    ``User``; and through ``mesocycle``, which is SET_NULL — the collector
+    #    UPDATEs those rows rather than deleting them, and an UPDATE takes an
+    #    exclusive row lock just the same. A batch normally has
+    #    ``mesocycle.plan_id == plan_id`` so that third clause is redundant,
+    #    but ``plan`` is a ``raw_id_field`` on both the mesocycle and batch
+    #    admins, so a staff re-point can separate them. Read unlocked: we hold
+    #    every one of these plans already.
+    mesocycle_pks = list(
+        Mesocycle.objects.filter(plan_id__in=plan_pks).values_list("pk", flat=True)
+    )
     list(
         AgentProposalBatch.objects.select_for_update()
-        .filter(Q(plan_id__in=plan_pks) | Q(coach_id__in=user_ids))
+        .filter(
+            Q(plan_id__in=plan_pks)
+            | Q(coach_id__in=user_ids)
+            | Q(mesocycle_id__in=mesocycle_pks)
+        )
         .order_by("pk")
         .values_list("pk", flat=True)
     )
@@ -283,15 +340,22 @@ def clear_demo(coach):
 
     The cascade's parents are row-locked first, in the app-wide order, so a
     concurrent coach edit on the same demo plan or batch waits instead of
-    deadlocking with it — see ``lock_cascade_parents`` (#559). The explicit
-    ``atomic`` is what makes that lock outlive the read: ``Collector.delete``
-    opens a transaction of its own when there isn't one, which would release
-    these locks before the delete it is meant to cover ever ran.
+    deadlocking with it — see ``lock_cascade_parents`` (#559).
+
+    The ``with transaction.atomic()`` block replaces the ``@transaction.atomic``
+    decorator this function used to carry — same transaction, stated where the
+    reason can sit beside it, and not a place to tidy back into a decorator.
+    That transaction is what makes the locks outlive the query that took them:
+    ``Collector.delete`` opens a transaction of its own when there isn't one,
+    which would release every lock before the delete they exist to cover ran.
     """
-    demo_user_ids = list(_demo_athletes(coach).values_list("pk", flat=True))
-    if not demo_user_ids:
-        return
     with transaction.atomic():
+        # Read the athlete set INSIDE the transaction that locks it, not before:
+        # two statements in one transaction is still two snapshots under READ
+        # COMMITTED, but a read taken outside it can be arbitrarily stale.
+        demo_user_ids = list(_demo_athletes(coach).values_list("pk", flat=True))
+        if not demo_user_ids:
+            return
         lock_cascade_parents(demo_user_ids)
         User.objects.filter(pk__in=demo_user_ids).delete()
 

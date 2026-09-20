@@ -2242,10 +2242,18 @@ def athlete_cell_write(request, pk):
         # path that never reaches `_touch_plan`. Deciding whether to lock would
         # mean reading the cell first, and the Session lock has to sit above
         # that read (next comment) — so the real choice is a Plan lock on
-        # every blur, or Session-before-Plan on some of them. The order is
-        # what matters, and a plan is one athlete's, so the contention this
-        # adds is between that athlete's own overlapping blurs (already
-        # serialized on the Session row) and their coach's designer edits.
+        # every blur, or Session-before-Plan on some of them, and the order is
+        # what matters.
+        #
+        # Be honest about the cost, which is latency on EVERY blur and not just
+        # on the ones that write: the template posts here on every focus change,
+        # most of those change nothing, and each now waits for any coach
+        # transaction holding this plan's row — including a designer save, whose
+        # Plan lock spans `serialize_plan_snapshot`'s whole-plan JSON build
+        # (`record_plan_action`). Lines replayed from the offline write-ahead
+        # queue (#529) queue behind the same lock. Accepted: a plan is one
+        # athlete's, so the wait is against their own coach editing that very
+        # plan, and the alternative is a deadlock that 500s one of them.
         Plan.objects.select_for_update(no_key=True).filter(pk=plan.pk).first()
         # Serialize the WHOLE write on the session row, before anything is read.
         #
