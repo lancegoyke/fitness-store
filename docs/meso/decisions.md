@@ -335,9 +335,162 @@ no `choices`, so adding a name needs no migration.
 - `block_delivered` fires at `_notify_athlete_block_delivered`, once per
   delivered block (`via=deliver`, or `via=batch` per client copy).
 
-**Not tracked yet.** `pwa_installed` and the other browser-only moments wait
-for the client beacon. A coach accepting an athlete's request, a relationship
+**The client beacon.** `POST /meso/api/track/`
+(`meso:track_beacon` → `analytics.views.track_beacon`) is the one door for
+facts no server request reveals. The URL sits under the Meso API because the
+Meso PWA is its only client; the view lives in `analytics` because the closed
+name set and the exclusion rules are analytics policy, not Meso's. Body is
+`{"name": …, "props": {…}}`. Guards, in order: an anonymous post gets a 204 and
+records nothing (that is the beacon's answer to #542's open question about
+anonymous actors — dropped, not kept); a body over 512 bytes, malformed JSON or
+a non-object is a 400; more than `ANALYTICS_BEACON_PER_USER_PER_HOUR` posts from
+one user in a rolling hour is a 429, cache-counted the way sandbox entry is
+counted per IP; and a name or prop outside the closed set is a 400. CSRF is
+Django's ordinary middleware — the beacon is not exempt. Accepted posts go
+through `track()` with `source=client`, so the sandbox and staff exclusion and
+the closed-name rule apply unchanged.
+
+The accepted set is in `analytics/beacon.py`, and every accepted prop is one
+short string from a closed set — no free-form values, no URLs, no user agent, so
+nothing a page can compute reaches the ledger:
+
+- `pwa_installed`, `via` ∈ {`appinstalled`, `standalone`}. Chromium fires
+  `appinstalled`; iOS never does, so there the only signal is the app running
+  in standalone display mode, which is true on *every* load once installed. A
+  `localStorage` flag makes a device report once, whichever signal comes
+  first. That flag is per browser profile, so the same person installing on a
+  phone and a laptop is two installs, and clearing site data can produce a
+  second one. Two rules the review added: the flag is written only once the
+  beacon has **landed** (writing it first lost the install for good the first
+  time an athlete opened the installed app with no signal — for a gym PWA, an
+  ordinary Tuesday), and when `localStorage` can't persist at all (private
+  mode, blocked site data, ITP eviction) the install is **not reported** at
+  all. `isDismissed` answers "not dismissed" when storage throws, which is
+  right for a card the athlete waved away and catastrophic here: on an
+  installed iOS device every load is standalone, so an inert flag would report
+  an install on every page view. Under-counting installs beats inventing them.
+- `push_permission`, `result` ∈ {`granted`, `denied`, `default`}. Recorded only
+  when the athlete actually answers: `meso_push.js` reads the permission
+  *before* asking and reports only if it was `default`, and holds an in-flight
+  guard so a second tap on the CTA — Chrome's prompt is a non-modal bubble, the
+  page stays live under it — can't report one answer twice. `default` is itself a
+  real answer — Chrome leaves the permission there when the prompt is
+  dismissed.
+- `push_clicked` is **not** beacon-postable, though it is one of the
+  browser-only names. The server writes it, from the notification's landing
+  URL (see below), with the default `source=server`: our own code observed
+  that request, the way it observes `session_opened`. Accepting it at the
+  beacon too was the original plan and the review killed it — nothing in the
+  app posts it, so it was pure inbound surface, and it would have cost the
+  thing that makes the number worth reading: today a `push_clicked` event
+  always has a `PushNotification` row behind it, and any signed-in browser
+  could otherwise have added events with no row.
+
+The beacon speaks JSON and only JSON — anything else is a 415, checked before
+the body is read. That isn't fussiness: `CsrfViewMiddleware` looks for
+`csrfmiddlewaretoken` in `request.POST` before falling back to the
+`X-CSRFToken` header, and for `multipart/form-data` that parse consumes the
+stream without stashing `_body`, so a later `request.body` raises
+`RawPostDataException` and the view 500s. The rate limit is checked first of
+all, so it counts every authenticated attempt rather than only the well-formed
+ones — otherwise malformed traffic, the kind most worth bounding, would cost
+no budget. It is a fixed window anchored at the hour's first post, not a
+sliding one, so a client spending its budget on either side of the boundary
+gets through about twice the limit in a short span; that is accepted for a
+courtesy limiter on tiny events.
+
+**Not tracked yet.** A coach accepting an athlete's request, a relationship
 re-invite and its acceptance, and the invite "Resend" button aren't events.
+Designer feature use (agent panel opened, drag reorder, keyboard fill) and the
+in-app toast have no beacon names yet.
+
+## Push notification ledger (#509)
+
+`notifications.PushNotification` is one row per push sent to one subscription —
+the push peer of `SentEmail`. Before this, `meso/push.py` sent and forgot: there
+was no way to answer "did the athlete get the block push" or "did anyone tap
+it".
+
+**A dedicated model, not a generic `Notification(channel=…)`.** The email half
+is already two purpose-shaped tables built around SES's message id and its
+event stream; a generic table would either duplicate them or force a migration
+of live email rows for nothing this slice needs. Push has exactly one send and
+at most one click, so one row carries the whole story, and each channel keeps
+the columns its transport actually produces. `PushKind`'s values mirror
+`EmailKind`'s deliberately, so the dashboard can line a push row up against the
+email row for the same moment.
+
+The primary key is a UUID because it travels in the notification's target URL,
+which the athlete's browser shows and could share; a sequential id would leak
+volume and let someone probe another row. `user` is `SET_NULL` like
+`SentEmail.user`, so counts survive a deleted account — and unlike
+`Event.actor` it keeps a real database constraint, because the row is written
+from the delivery's `on_commit` callback, outside the delivery's own
+transaction, so there is no commit-time lock to deadlock against.
+
+**Sent vs failed.** The row is opened *before* the push goes out, because its id
+has to be in that device's payload. An empty `error` means the push left; a
+non-empty one is what the push service said when it rejected the message. A
+404/410 still prunes the subscription, exactly as before. Every ledger
+operation is best-effort inside its own savepoint: a ledger that can't be
+written never costs the athlete their notification, and there's a test that
+makes the write raise and asserts the push still went.
+
+**Clicks are recorded on the landing page, not from the service worker.** The
+notification's URL carries `?n=<row id>`; when the row's own owner GETs that
+page, `notifications.push.record_push_click` stamps `clicked_at` and emits
+`push_clicked`. A service worker has no CSRF token and no session it can be
+trusted with, and a public click endpoint would be a free counter for anyone.
+The write is a conditional UPDATE on `clicked_at IS NULL` scoped to the
+requesting user, so a reload, a shared link, or two simultaneous loads count
+once; an id that is unknown, malformed, or someone else's is ignored in
+silence. An inline script drops the parameter from the address bar with
+`history.replaceState` once the server has counted it. A speculative fetch —
+`Sec-Purpose: prefetch`, or the older `Purpose: prefetch` an iOS link preview
+sends — is skipped, so a link the athlete never tapped can't burn the row's
+one shot. `/meso/me/` is the only URL a push targets today, so that is the only
+view that calls the helper.
+
+**What a per-send parameter did to the service worker.** Three separate things
+in `sw.js` assumed the notification's URL was a stable, bare `/meso/me/`, and
+all three broke quietly when it stopped being one; the review caught them and
+`PWA_CACHE_VERSION` went to `meso-pwa-v5` so installed clients pick up the fix.
+Cache reads and writes now go through an `n`-stripped key, because Cache
+Storage matches on the full URL: otherwise every tap stored a whole extra copy
+of the athlete home under a key nothing would ask for again, while the plain
+`/meso/me/` entry — the one the offline fallback looks for — went stale, so an
+offline tap landed on the offline page instead of the cached home. And
+`notificationclick` now matches an open window on **path** rather than on the
+whole URL (an open tab's URL can never contain a fresh `?n=`, so it spawned a
+second window every time beside the running PWA), then *navigates* that window
+to the full target rather than merely focusing it — a bare `focus()` would have
+shown the right page and counted nothing. `meso_track.js` also joined the
+precache list, beside the two athlete scripts that call it.
+
+What this can't see: a notification the athlete reads and swipes away is not a
+click, and neither is one tapped on a device that can't reach us. One row per
+device, so an athlete with two subscribed devices is two sent rows for one
+delivery — and *at most* one row, since a ledger insert that fails is swallowed
+and that push goes out without an id, untrackable but sent. The ledger's bias
+is optimistic in one more place: a blank `error` means "the push left", so a
+rejected push whose error we then failed to write reads as delivered. A third
+"unknown" state would fix it and isn't worth a column yet. For a staff or
+sandbox athlete the click UPDATE still lands while `track()` drops the event,
+so the row reads clicked and never yields its `push_clicked`; harmless, since
+the dashboard excludes the same people from both numbers.
+
+A sandbox coach never reaches any of this: `_notify_athlete_block_delivered`
+returns before it notifies when the plan's coach is a sandbox, and that is the
+only path to `_fan_out`. Worth stating because the Push table's exclusion is a
+read-time join to a user row the sandbox reaper deletes, so if a sandbox push
+ever *were* written, reaping would launder it into a real send — the same shape
+as the subject-match problem the dashboard slice hit. The gate upstream is what
+keeps that hypothetical.
+
+**Retention.** Push rows follow the same 13-month rule as `Event`, swept by the
+same daily `analytics-purge-expired-events` schedule — the
+`analytics_purge_events` command now sweeps both ledgers rather than a second
+schedule existing for one small table. `SentEmail`/`EmailEvent` are untouched.
 
 ## Product analytics dashboard (#509)
 
@@ -419,10 +572,21 @@ coach who subscribes during the trial and isn't charged until it ends),
 Subscription cancelled (event), Push notifications enabled
 (`PushSubscription`, athletes; an unsubscribed or rejected device's row is
 deleted, so this counts subscriptions still on record, dated by the device's
-first registration even if it later changed hands) and Session completed
-(event, athletes). A deleted account's events stay in "times" whatever plan
-they were about: the account's links, plans and logs go with it, so a
-self-coach's completions can't be told apart any more.
+first registration even if it later changed hands), Session completed
+(event, athletes), App installed (`pwa_installed` event) and Push permission
+granted (`push_permission` event with `result=granted`). A deleted account's
+events stay in "times" whatever plan they were about: the account's links,
+plans and logs go with it, so a self-coach's completions can't be told apart
+any more.
+
+The last two rows are the beacon's, and their "who" is **anyone**, not
+athletes. The beacon fires from the athlete surface, which a self-coaching
+coach uses too, and the event carries no subject to attribute, so there is
+nothing to split the roles on. Read them with the beacon's own counting rules
+in mind (see "First-party usage events"): one install per browser profile, so
+the same person on a phone and a laptop is two; and a permission answer only
+when the athlete actually answers a prompt, so a device that decided before
+this shipped is invisible.
 
 **Email.** The four Meso kinds (block_delivered, coach_invite,
 invite_reminder, coach_request), as a cohort: messages sent in the window
@@ -433,14 +597,26 @@ links there for detail. An open can be a mail client's privacy prefetch.
 Block delivered includes the email a self-coaching coach gets for their own
 block.
 
-**Retention.** Raw `Event` rows older than 13 months are deleted daily by the
-`analytics-purge-expired-events` schedule (`analytics.tasks`
-→ `analytics_purge_events` → `analytics.retention.purge_expired_events`),
-registered in `analytics.0002`. It deletes 1,000 rows per statement until none
-are left, so a large backlog never holds one long transaction, and reports
-the rows the deletes removed. There's no
-rollup table: nothing on the page is slow yet. Add a nightly rollup only when
-a query measurably is.
+**Push**, in the same card, as its own table — push has no delivery receipt
+and no open, so folding it into the email columns would have meant printing
+"—" in two of them and inviting the reader to compare numbers that aren't the
+same measurement. Columns are Sent, Failed, Clicked and click rate, over
+`PushNotification` rows sent in the window (see "Push notification ledger"):
+sent is the pushes the push service took, failed is the ones it rejected, and
+clicked is those whose link was opened at any time since. One row per device,
+so an athlete with two subscribed devices is two sent rows for one delivery,
+and a notification read and swiped away is not a click.
+
+**Retention.** Raw `Event` rows and `PushNotification` rows older than 13
+months are deleted daily by the `analytics-purge-expired-events` schedule
+(`analytics.tasks` → `analytics_purge_events` →
+`analytics.retention.purge_expired_events` and
+`notifications.retention.purge_expired_push_notifications`), registered in
+`analytics.0002`. Both ledgers ride the one schedule rather than push getting
+a second one for a much smaller table. It deletes 1,000 rows per statement
+until none are left, so a large backlog never holds one long transaction, and
+reports the rows the deletes removed. There's no rollup table: nothing on the
+page is slow yet. Add a nightly rollup only when a query measurably is.
 
 ---
 
@@ -2049,3 +2225,38 @@ _(Append dated entries here as decisions land.)_
   puts the text back, rather than the athlete retyping it, still shows the set
   twice and tints the line "not logged as a set". The coach path never touches
   `LoggedSet`, and the data holds one row (#561).
+- 2026-09-19 — **Client beacon and push notification ledger (#509, third slice).**
+  `POST /meso/api/track/` records the three moments only the browser knows
+  (`pwa_installed`, `push_permission`, `push_clicked`) behind login, CSRF, a
+  512-byte body cap and a per-user hourly rate limit, accepting a closed set of
+  names and closed sets of prop values — a page chooses among values we named,
+  it never computes one. Anonymous posts get a 204 and record nothing, which
+  settles #542's open question about the beacon and anonymous actors. Accepted
+  posts are `track(..., source=client)`, so the sandbox and staff exclusion
+  applies unchanged; `track()` gained a keyword-only `source` for it.
+  `notifications.PushNotification` is one row per push per subscription,
+  dedicated rather than a generic `Notification(channel=…)` because the email
+  half is already two tables shaped around SES's event stream. The row opens
+  before the send, since its id rides in that device's payload URL; clicks are
+  recorded by the owner's GET of the landing page (`?n=<id>` → a conditional
+  UPDATE on `clicked_at IS NULL`, then the parameter is stripped with
+  `history.replaceState`), not from the service worker, which has no CSRF token
+  and no session to trust. Every ledger write is best-effort in its own
+  savepoint. The dashboard gains a Push table (sent / failed / clicked per
+  kind) beside Email, and "App installed" and "Push permission granted" feature
+  rows whose "who" is *anyone* — the beacon fires from the athlete surface,
+  which a self-coaching coach uses too, and carries no subject. Push rows ride
+  the existing 13-month sweep. Migration `notifications.0003`.
+  `PWA_CACHE_VERSION` → `meso-pwa-v5`, because putting a per-send parameter in
+  the notification's URL broke three `sw.js` assumptions at once (see the push
+  ledger section). Not in this slice: designer feature beacons, the in-app
+  toast, migrating `TourEvent`, the GA property ids, and the privacy-page line.
+  The adversarial review before merge changed four decisions: `push_clicked`
+  left the beacon's accepted set, the beacon became JSON-only (a multipart post
+  made CSRF drain the stream and `request.body` 500), the rate limit moved
+  ahead of the other checks so it counts every attempt, and install reporting
+  learned to wait for the beacon to land and to stay silent when storage can't
+  remember. One finding was declined: a sandbox coach's push counting as a real
+  send after the reaper nulls the user — `_notify_athlete_block_delivered`
+  returns before notifying for a sandbox coach, and that is the only path to
+  `_fan_out`, so the row can't exist.

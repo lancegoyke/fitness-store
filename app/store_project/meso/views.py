@@ -44,6 +44,7 @@ from store_project.analytics.track import track
 from store_project.notifications.emails import send_block_delivered_email
 from store_project.notifications.emails import send_coach_invite_email
 from store_project.notifications.emails import send_coach_request_email
+from store_project.notifications.push import record_push_click
 
 from . import adherence as meso_adherence
 from . import demo as meso_demo
@@ -1353,6 +1354,22 @@ def _athlete_session_or_404(user, pk):
     return session
 
 
+def _is_prefetch(request):
+    """Whether the browser is fetching this speculatively rather than showing it.
+
+    A prefetch, a prerender or an iOS link preview is a real cookied GET, so
+    nothing else here can tell it apart from a tap — but a browser doing one
+    announces it: ``Sec-Purpose: prefetch`` (fetch metadata, current Chrome
+    and Firefox) or the older ``Purpose: prefetch`` (older Chrome, Safari's
+    preview). Used to keep a link the athlete never tapped from burning a
+    push notification's one-shot ``clicked_at`` (#509 slice 3).
+    """
+    purpose = (
+        f"{request.headers.get('sec-purpose', '')} {request.headers.get('purpose', '')}"
+    )
+    return "prefetch" in purpose.lower() or "prerender" in purpose.lower()
+
+
 class AthleteHomeView(LoginRequiredMixin, TemplateView):
     """The athlete's training home: their live programs, free navigation.
 
@@ -1370,6 +1387,15 @@ class AthleteHomeView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["active"] = "training"
+        # push_clicked (#509 slice 3): the block-delivered push deep-links
+        # here carrying its ledger id. Only a real GET counts — Django routes
+        # HEAD through get() (and so through this context build) too, and a
+        # browser that prefetches or previews the link announces itself
+        # (`Sec-Purpose: prefetch` per the fetch metadata spec, `Purpose:
+        # prefetch` from older Chrome and Safari's link preview). A tap the
+        # athlete never made must not burn the row's one-shot clicked_at.
+        if self.request.method == "GET" and not _is_prefetch(self.request):
+            record_push_click(self.request)
         try:
             focus_week_id = int(self.request.GET.get("week", ""))
         except (TypeError, ValueError):
@@ -2593,7 +2619,7 @@ def manifest_webmanifest(request):
 # v3: re-skinned meso.css to the shared steel-blue accent (design-system PR 3).
 # v4: meso_athlete.js queues lines typed offline (#527). Cached session pages
 #     still point at the old logger, which loses them; activation drops them.
-PWA_CACHE_VERSION = "meso-pwa-v4"
+PWA_CACHE_VERSION = "meso-pwa-v5"
 
 
 @require_GET

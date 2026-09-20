@@ -19,11 +19,13 @@ from io import StringIO
 import pytest
 from dateutil.relativedelta import relativedelta
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.utils import timezone
 from django_q.models import Schedule
 
 from store_project.analytics.events import EventName
 from store_project.analytics.models import Event
+from store_project.notifications.models import PushNotification
 
 pytestmark = pytest.mark.django_db
 
@@ -35,6 +37,10 @@ RETENTION = relativedelta(months=13)
 
 def _event(created):
     return Event.objects.create(name=EventName.PLAN_CREATED, created=created)
+
+
+def _push(sent_at):
+    return PushNotification.objects.create(sent_at=sent_at)
 
 
 class TestPurgeExpiredEvents:
@@ -114,6 +120,72 @@ class TestPurgeCommand:
         call_command("analytics_purge_events", stdout=out)
 
         assert "1" in out.getvalue()
+
+
+class TestPurgeCommandIndependence:
+    """One ledger's sweep failing must not starve the other's (#509 review, fix 3).
+
+    ``analytics_purge_events`` sweeps two ledgers (``Event`` and
+    ``PushNotification``) sequentially. Before this fix, an exception raised
+    by the first ``purge_fn`` propagated straight out of ``handle()``, so the
+    second sweep on the line right after it never ran — that day, and every
+    day after, for as long as the first ledger's cause persisted. Sharing one
+    command coupled the two ledgers' liveness, which was never the intent
+    (they're independent tables with independent failure modes). The command
+    must isolate each sweep and still exit non-zero when either one failed, so
+    a broken sweep is loud (a cron/monitoring failure) rather than a silent
+    no-op.
+    """
+
+    def test_push_sweep_still_runs_when_the_event_sweep_raises(self, monkeypatch):
+        from store_project.analytics.management.commands import (
+            analytics_purge_events as cmd_module,
+        )
+
+        def _boom(**kwargs):
+            raise RuntimeError("event sweep exploded")
+
+        monkeypatch.setattr(cmd_module, "purge_expired_events", _boom)
+
+        now = timezone.now()
+        old_push = _push(now - RETENTION - datetime.timedelta(days=1))
+
+        with pytest.raises(CommandError):
+            call_command("analytics_purge_events")
+
+        assert not PushNotification.objects.filter(pk=old_push.pk).exists()
+
+    def test_event_sweep_still_runs_when_the_push_sweep_raises(self, monkeypatch):
+        from store_project.analytics.management.commands import (
+            analytics_purge_events as cmd_module,
+        )
+
+        def _boom(**kwargs):
+            raise RuntimeError("push sweep exploded")
+
+        monkeypatch.setattr(cmd_module, "purge_expired_push_notifications", _boom)
+
+        now = timezone.now()
+        old_event = _event(now - RETENTION - datetime.timedelta(days=1))
+
+        with pytest.raises(CommandError):
+            call_command("analytics_purge_events")
+
+        assert not Event.objects.filter(pk=old_event.pk).exists()
+
+    def test_command_reports_which_sweep_failed(self, monkeypatch):
+        from store_project.analytics.management.commands import (
+            analytics_purge_events as cmd_module,
+        )
+
+        monkeypatch.setattr(
+            cmd_module,
+            "purge_expired_events",
+            lambda **kwargs: (_ for _ in ()).throw(RuntimeError("db is down")),
+        )
+
+        with pytest.raises(CommandError, match="db is down"):
+            call_command("analytics_purge_events")
 
 
 class TestPurgeTask:

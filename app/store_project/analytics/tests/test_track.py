@@ -160,3 +160,41 @@ def test_deleting_the_actor_nulls_it_and_keeps_the_row():
 
     event.refresh_from_db()
     assert event.actor is None
+
+
+def test_source_defaults_to_server():
+    track(EventName.PLAN_CREATED, actor=UserFactory())
+
+    assert Event.objects.get().source == Event.Source.SERVER
+
+
+def test_source_client_is_honoured():
+    track(EventName.PWA_INSTALLED, actor=UserFactory(), source=Event.Source.CLIENT)
+
+    assert Event.objects.get().source == Event.Source.CLIENT
+
+
+def test_a_prop_named_source_cannot_reach_the_props_column():
+    """A dict-spread ``**props`` entry named ``source`` binds to the parameter.
+
+    Python routes a keyword argument to a matching *named* parameter before
+    it ever reaches ``**kwargs`` — true whether that parameter is keyword-only
+    or not, and true whether the caller writes ``source=...`` directly or
+    spreads a dict that happens to contain a ``"source"`` key
+    (``track(name, actor=a, **{"source": "x"})`` behaves identically to
+    ``track(name, actor=a, source="x")``). So a would-be prop literally named
+    ``source`` can never land in the JSON ``props`` column as data — it is
+    always consumed as provenance instead. This pins that as the actual,
+    observable behaviour (not just the intent in the docstring), and it's
+    exactly why ``track_beacon`` never spreads a raw request dict at
+    ``track()``: it goes through ``beacon.validate`` first, whose closed prop
+    set has no name that collides with ``track()``'s own keyword arguments.
+    """
+    actor = UserFactory()
+    incoming = {"source": "google"}  # e.g. forwarded from somewhere else
+
+    track(EventName.PLAN_CREATED, actor=actor, **incoming)
+
+    event = Event.objects.get()
+    assert event.source == "google"  # captured as provenance, not data
+    assert event.props == {}  # never reached the props column

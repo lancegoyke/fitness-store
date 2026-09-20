@@ -11,6 +11,9 @@
  *  2. Coachmark dismissal: the first-log coachmarks are *shown* server-side
  *     (only until the athlete's first log lands), but a dismiss here persists in
  *     localStorage so a coachmark the athlete waved away stays gone on reload.
+ *  3. Install tracking (#509 slice 3): reports a fresh install through the
+ *     client beacon (window.mesoTrack) exactly once per device, off whichever
+ *     of `appinstalled` or the standalone check fires first.
  *
  * The decision logic is pure + unit-tested (frontend/meso_onboarding.test.js);
  * the DOM wiring is verified at the render level in the Django tests.
@@ -62,9 +65,26 @@
     }
   }
 
+  // Whether this load should report a fresh install to the beacon: only
+  // when the app is running standalone (it just got installed, or was
+  // installed before this device ever reported one) and this device hasn't
+  // already reported it. Pure + exported (#509 slice 3) — install tracking
+  // has just this one predicate, unlike installPromptState()'s richer
+  // decision, so it's kept separate rather than folded into that function.
+  function shouldTrackInstall(env) {
+    const e = env || {};
+    return !!e.standalone && !e.tracked;
+  }
+
   // ---- DOM wiring (browser only) ----
 
   const INSTALL_DISMISS_KEY = "meso-install-dismissed";
+
+  // localStorage flag so one device reports its install once. iOS never
+  // fires `appinstalled`, so the standalone check is the only signal there —
+  // and it is true on EVERY load once installed, which is exactly what the
+  // flag guards against.
+  const INSTALL_TRACKED_KEY = "meso-install-tracked";
 
   // Toggle visibility via inline `display` rather than the `hidden` attribute:
   // these cards carry an inline `display:flex` for layout, and an author inline
@@ -179,11 +199,79 @@
     render();
   }
 
+  // Report a fresh install to the beacon (window.mesoTrack, #509 slice 3),
+  // once per device. Two independent signals, either of which can fire
+  // first:
+  // Whether this browser can actually *remember* something, probed with a
+  // round trip rather than assumed. `isDismissed` answers "not dismissed"
+  // when storage throws (Safari private mode, blocked site data, ITP having
+  // evicted script-writable storage), which is the right default for a card
+  // the athlete waved away — showing it again is a small annoyance. It is
+  // the wrong default for install reporting: on an installed iOS device
+  // every load is standalone, so an inert flag would report an install on
+  // every single page view, unbounded. When we can't bound it, we don't
+  // report it — under-counting installs beats inventing them.
+  function storagePersists(storage) {
+    try {
+      const store = storage || root.localStorage;
+      if (!store) return false;
+      const probe = "meso-storage-probe";
+      store.setItem(probe, "1");
+      const ok = store.getItem(probe) === "1";
+      store.removeItem(probe);
+      return ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Report this device's install, at most once ever and at most once per page
+  // load. The flag is written only when the beacon actually LANDED: writing it
+  // first (and `mesoTrack` swallowing the failure) would lose the install for
+  // good the first time the athlete opens the app with no signal — which for
+  // a gym PWA is an ordinary Tuesday, not an edge case. A failed report just
+  // retries on the next load.
+  let installReportStarted = false;
+  function reportInstall(via) {
+    if (installReportStarted) return;
+    if (!root.mesoTrack) return;
+    if (!storagePersists()) return;
+    if (isDismissed(INSTALL_TRACKED_KEY)) return;
+    installReportStarted = true;
+    root.mesoTrack("pwa_installed", { via: via }).then(function (landed) {
+      if (landed) setDismissed(INSTALL_TRACKED_KEY);
+    });
+  }
+
+  //  - `appinstalled`: Chromium/Android's real event, fired once right after
+  //    the athlete accepts an install (this flow's prompt, or another one —
+  //    Chrome's omnibox icon, say).
+  //  - the standalone check, evaluated on every load: the only signal iOS
+  //    gives us (it never fires `appinstalled`), and also the fallback for
+  //    an install this page never saw the event for. It reads true on EVERY
+  //    load once installed, so it needs the flag to fire only once.
+  // Whichever wins writes INSTALL_TRACKED_KEY first, so the other is a no-op.
+  function initInstallTracking(doc) {
+    root.addEventListener("appinstalled", function () {
+      reportInstall("appinstalled");
+    });
+
+    if (
+      shouldTrackInstall({
+        standalone: readInstallEnv().standalone,
+        tracked: isDismissed(INSTALL_TRACKED_KEY),
+      })
+    ) {
+      reportInstall("standalone");
+    }
+  }
+
   function init() {
     const doc = root.document;
     if (!doc) return;
     initCoachmarks(doc);
     initInstallCard(doc);
+    initInstallTracking(doc);
   }
 
   if (typeof document !== "undefined" && document.addEventListener) {
@@ -196,6 +284,11 @@
 
   // Test hook for Node-based runners (vitest); skipped in the browser.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { installPromptState, isDismissed, detectIOS };
+    module.exports = {
+      installPromptState,
+      isDismissed,
+      detectIOS,
+      shouldTrackInstall,
+    };
   }
 })(typeof window !== "undefined" ? window : this);

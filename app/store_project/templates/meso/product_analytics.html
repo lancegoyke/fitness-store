@@ -149,6 +149,13 @@
         Push counts subscriptions still on record, by when the device was first registered: an
         unsubscribed or expired device is gone, and one that changes hands keeps its first date.
         A deleted account's events stay in times, whatever plan they were about.
+        App installed and push permission granted are "anyone", not "athletes": both fire from
+        the beacon on the athlete-facing surface, which a self-coaching coach also uses to train
+        themselves, and the event carries no subject to say whose client it was. A device reports
+        its install once (a <code>localStorage</code> flag), so the same person on a phone and a
+        laptop is two. A permission answer is recorded only when the athlete actually answers the
+        browser's prompt — a page load, or a second call after they already decided, reports
+        nothing.
       </p>
     </div>
 
@@ -202,6 +209,49 @@
         a client still counts, and so does a self-coaching coach's email about their own block. Some mail clients fetch images and links on their own, so an
         open or a click isn't always a person. Every kind and the raw events:
         <a href="{{ email_dashboard_url }}">Email deliverability</a>.
+      </p>
+
+      <h3 style="margin:18px 0 4px;font-size:13.5px;font-weight:700;">Push</h3>
+      <div style="overflow-x:auto;margin-top:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="text-align:left;color:var(--dim);">
+              <th style="padding:9px 16px;font-weight:650;">Kind</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Sent</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Failed</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Clicked</th>
+              <th style="padding:9px 16px;font-weight:650;text-align:right;">Click rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in push.rows %}
+              <tr style="border-top:1px solid var(--line-2);">
+                <td style="padding:9px 16px;">{{ row.label }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ row.sent }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ row.failed }}</td>
+                <td style="padding:9px 16px;text-align:right;">{{ row.clicked }}</td>
+                <td style="padding:9px 16px;text-align:right;">{% if row.click_rate is not None %}{{ row.click_rate }}%{% else %}—{% endif %}</td>
+              </tr>
+            {% endfor %}
+            <tr style="border-top:1px solid var(--line-2);font-weight:650;">
+              <td style="padding:9px 16px;">Totals</td>
+              <td style="padding:9px 16px;text-align:right;">{{ push.totals.sent }}</td>
+              <td style="padding:9px 16px;text-align:right;">{{ push.totals.failed }}</td>
+              <td style="padding:9px 16px;text-align:right;">{{ push.totals.clicked }}</td>
+              <td style="padding:9px 16px;text-align:right;">{% if push.totals.click_rate is not None %}{{ push.totals.click_rate }}%{% else %}—{% endif %}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="meso-muted" style="font-size:11.5px;margin-top:10px;">
+        Pushes sent in the window (<code>PushNotification</code>), whether the push service took
+        them, and how many were tapped. A tap is counted when the athlete opens the link the
+        notification carried, so one swiped away — or opened on a device that can't reach us —
+        isn't counted. One row per device, so an athlete with two subscribed devices is two rows
+        for one delivery. Click rate is of attempts (sent + failed), not sent alone: a push our
+        own send call recorded as failed can still be tapped — a timeout on our side, a delivery
+        on theirs — and a real tap is the strongest evidence a push arrived, whatever our send
+        call reported.
       </p>
     </div>
   </div>

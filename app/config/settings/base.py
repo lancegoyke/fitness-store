@@ -352,6 +352,15 @@ MESO_SETTLE_QUIET_HOURS = int(os.environ.get("MESO_SETTLE_QUIET_HOURS", "24"))
 MESO_SANDBOX_PER_IP_PER_HOUR = int(os.environ.get("MESO_SANDBOX_PER_IP_PER_HOUR", "5"))
 MESO_SANDBOX_MAX_CONCURRENT = int(os.environ.get("MESO_SANDBOX_MAX_CONCURRENT", "100"))
 
+# Client beacon (#509 slice 3) — how many browser-only events one signed-in
+# user may post per rolling hour before `analytics.views.track_beacon` starts
+# answering 429. Cache-counted per user, the same way sandbox entry is counted
+# per IP. A real session posts one or two (an install, a permission answer), so
+# this is a bound on a misbehaving or hostile page, not a budget anyone reaches.
+ANALYTICS_BEACON_PER_USER_PER_HOUR = int(
+    os.environ.get("ANALYTICS_BEACON_PER_USER_PER_HOUR", "60")
+)
+
 # Public walkthrough video (issue #415 follow-up to #388) — OFF by default
 # (issue #454). The recording's quality wasn't good enough and it was
 # confusing/repetitive with the other visuals already on the landing page

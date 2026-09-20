@@ -17,6 +17,8 @@ Together they are the source data for the staff deliverability dashboard —
 the second half of #507, built on top of this schema.
 """
 
+import uuid
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
@@ -179,3 +181,83 @@ class EmailEvent(models.Model):
 
     def __str__(self):
         return f"{self.get_event_type_display()} · {self.recipient}"
+
+
+class PushKind(models.TextChoices):
+    """What a push *is* — the push peer of ``EmailKind``.
+
+    Values mirror ``EmailKind``'s deliberately, so a staff reader (and the
+    dashboard, #509 slice 3) can line a push row up against the email row for
+    the same moment — the block-delivery nudge is sent through both channels
+    from the same coach action. Only one kind is sent today; ``OTHER`` is the
+    default so a future sender that forgets to name itself still gets a row
+    rather than failing to save one.
+    """
+
+    BLOCK_DELIVERED = "block_delivered", _("Block delivered")
+    OTHER = "other", _("Other")
+
+
+class PushNotification(models.Model):
+    """One web push sent to one subscription (#509 slice 3).
+
+    **Why a dedicated table, not a generic ``Notification`` with
+    ``channel=push``:** the email half of this app is already two
+    purpose-shaped tables (``SentEmail`` + ``EmailEvent``) built around SES's
+    own message id and its event stream. A generic table would either
+    duplicate that shape for no reason or force a migration of live email rows
+    for no gain in this slice. Push has exactly one send and at most one
+    click — one row per send carries the whole story — so there is no event
+    stream to model here the way ``EmailEvent`` models SES's; each channel
+    keeps only the columns its own transport actually produces.
+
+    **Why the primary key is a UUID, not the default auto-incrementing int:**
+    the id travels in the notification's own target URL (see
+    ``notifications.push.url_with_notification``), which the athlete's
+    browser shows in its address bar and could copy, bookmark, or share. A
+    sequential id would leak how many pushes we've ever sent and let anyone
+    guess a neighbouring row's id to probe it; a UUID doesn't.
+
+    **Why ``user`` is ``SET_NULL``, unlike ``Event.actor`` (which is a plain
+    FK with no ``on_delete`` override — see ``analytics.models.Event``):**
+    this row is written from ``transaction.on_commit``, *outside* the
+    delivery's own transaction (``notifications.push.log_push_sent``, called
+    from ``meso.push._fan_out``), so there is no open write for a real
+    ``ON DELETE`` constraint to deadlock against. ``SET_NULL`` lets counts
+    survive a deleted account, the same choice ``SentEmail.user`` makes.
+
+    ``error`` blank means the push left — handed to the push service without
+    it raising. A non-empty ``error`` means the push service rejected it:
+    ``notifications.push.log_push_error`` stores a short
+    ``"<status> <reason>"``-ish string, truncated to the field width, for a
+    dashboard/support glance, not for programmatic parsing.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    kind = models.CharField(
+        max_length=32,
+        choices=PushKind,
+        default=PushKind.OTHER,
+        db_index=True,
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="push_notifications",
+    )
+    sent_at = models.DateTimeField(default=timezone.now, db_index=True)
+    error = models.CharField(max_length=255, blank=True)
+    clicked_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        ordering = ["-sent_at"]
+        verbose_name = "Push notification"
+        verbose_name_plural = "Push notifications"
+        indexes = [models.Index(fields=["kind", "sent_at"])]
+
+    def __str__(self):
+        return (
+            f"{self.get_kind_display()} → {self.user} ({self.sent_at:%Y-%m-%d %H:%M})"
+        )

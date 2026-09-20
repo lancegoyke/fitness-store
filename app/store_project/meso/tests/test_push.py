@@ -287,7 +287,11 @@ class TestNotifyBlockDelivered:
         assert plan.coach.display_name() in payload["body"]
         assert plan.title in payload["body"]
         assert "3 weeks" in payload["body"]
-        assert payload["url"] == "http://testserver/meso/me/"
+        # The ledger (#509 slice 3) appends `?n=<row id>` to the home_url the
+        # caller passed in — the click's return path. See
+        # notifications.tests.test_push_ledger for the full id-per-device
+        # coverage; this pins the base path only.
+        assert payload["url"].startswith("http://testserver/meso/me/?n=")
         assert payload["tag"] == f"meso-block-{mesocycle.pk}"
 
     def test_singular_week_phrasing(self):
