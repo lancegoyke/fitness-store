@@ -3893,27 +3893,29 @@ def athlete_request_coach(request):
         return redirect("meso:athlete_home")
 
     with transaction.atomic():
-        # ``unique_coach_athlete`` stops a second row, but not a double submit's
-        # second ``coach_request_sent`` event and email, or a reopened link's
-        # token rotating twice (#540). Lock in ``billing.webhooks._lock_mirror``'s
-        # order: the link if it exists, else the athlete's user row, then re-read.
-        # STRENGTH (#611): both row mutexes use ``no_key``. Plain FOR UPDATE
-        # would block a deferred child-FK KEY SHARE at commit — e.g. an invite
-        # claim referencing this user — while NO KEY still excludes peers.
+        # LOCK ORDER (#611) — a CoachAthlete has two User parents. Reserve both
+        # in ascending pk before the link, matching invite_claim and every
+        # User-rooted cascade. This also preserves #540's same-athlete
+        # double-submit mutex. NO KEY excludes peer writers without blocking a
+        # deferred child-FK KEY SHARE at commit.
+        expected_user_ids = {coach.pk, request.user.pk}
+        locked_user_ids = set(
+            User.objects.select_for_update(no_key=True)
+            .filter(pk__in=expected_user_ids)
+            .order_by("pk")
+            .values_list("pk", flat=True)
+        )
+        if locked_user_ids != expected_user_ids:
+            # The coach can disappear after the email lookup but before the
+            # lock. Treat that window exactly like the original unknown lookup,
+            # rather than attempting an insert that fails its deferred FK.
+            messages.error(request, "We couldn't find a coach with that email.")
+            return redirect("meso:athlete_home")
         existing = (
             CoachAthlete.objects.select_for_update(no_key=True)
             .filter(coach=coach, athlete=request.user)
             .first()
         )
-        if existing is None:
-            User.objects.select_for_update(no_key=True).filter(
-                pk=request.user.pk
-            ).first()
-            existing = (
-                CoachAthlete.objects.select_for_update(no_key=True)
-                .filter(coach=coach, athlete=request.user)
-                .first()
-            )
         if existing and existing.is_active:
             messages.info(
                 request, f"You're already training with {coach.display_name()}."
@@ -4056,7 +4058,18 @@ def coach_invite(request):
     if not billing_access.can_add_athlete(request.user):
         messages.error(request, SEAT_LIMIT_MESSAGE)
         return redirect("meso:roster")
-    invite, created = CoachInvite.open_for(coach=request.user, email=email)
+    with transaction.atomic():
+        # LOCK ORDER (#611) — CoachInvite is a child of the coach User row.
+        # Reserve the parent before open_for can insert, matching a User-rooted
+        # cascade. Keep analytics and mail outside this short transaction.
+        locked_coach = (
+            User.objects.select_for_update(no_key=True)
+            .filter(pk=request.user.pk)
+            .first()
+        )
+        if locked_coach is None:
+            raise Http404("Unknown coach")
+        invite, created = CoachInvite.open_for(coach=request.user, email=email)
     track(EventName.INVITE_SENT, actor=request.user, subject=invite, new=created)
     accept_url = request.build_absolute_uri(
         reverse("meso:invite_claim", kwargs={"token": invite.token})

@@ -379,7 +379,10 @@ class CoachAthlete(models.Model):
 
     @classmethod
     def invite(cls, *, coach, athlete):
-        """Coach invites an athlete → ``pending_coach_invite`` (awaiting athlete)."""
+        """Coach invites an athlete → ``pending_coach_invite`` (awaiting athlete).
+
+        See ``_open`` for the caller-held parent-lock contract.
+        """
         return cls._open(
             coach=coach,
             athlete=athlete,
@@ -389,7 +392,10 @@ class CoachAthlete(models.Model):
 
     @classmethod
     def request(cls, *, athlete, coach):
-        """Athlete requests a coach → ``pending_athlete_request`` (awaiting coach)."""
+        """Athlete requests a coach → ``pending_athlete_request`` (awaiting coach).
+
+        See ``_open`` for the caller-held parent-lock contract.
+        """
         return cls._open(
             coach=coach,
             athlete=athlete,
@@ -408,6 +414,8 @@ class CoachAthlete(models.Model):
         at one self-link, an open one is returned unchanged, and a previously
         ended one reopens (its archived plans stay archived, like any re-invite).
         Never a billable seat (``billable()`` excludes ``is_self``).
+
+        See ``_open`` for the caller-held parent-lock contract.
         """
         link, created = cls.objects.get_or_create(
             coach=user,
@@ -433,6 +441,9 @@ class CoachAthlete(models.Model):
         ``unique(coach, athlete)`` means there is at most one row per pair, so a
         re-invite reopens the existing row with a fresh token and status. An
         already-active or already-pending link is returned unchanged.
+
+        CALLER MUST hold the parent ``User`` row locks (decisions.md § Row-lock
+        order); this helper does not take them, on purpose.
         """
         if coach == athlete:
             raise InvalidTransition("A user cannot coach themselves.")
@@ -749,6 +760,8 @@ class CoachInvite(models.Model):
         new token + reset clock); a still-live link is returned untouched. A
         previously *answered* invite (accepted/declined/revoked) does not block a
         fresh one.
+
+        See ``CoachAthlete._open`` for the caller-held parent-lock contract.
         """
         email = cls.normalize_email(email)
         invite = (

@@ -734,7 +734,9 @@ restore's existing sequence a violation for no gain.
 - `views.template_use` / `plan_batch_deliver` lock their target links before
   duplicating a plan; `roster_add_self` / `relationship_reinvite` take the
   coach `User` first; `invite_claim` accept takes both participant `User` rows
-  ascending before its invite row (#596).
+  ascending before its invite row (#596); `athlete_request_coach` takes both
+  participant `User` rows ascending before its link, and `coach_invite` takes
+  the coach `User` row before opening an invite (#611).
 - `demo.clear_demo` takes the coach mutex before reading its athlete set, then
   uses `demo.lock_cascade_parents`; `sandbox.expire_sandboxes` safely re-locks
   that same coach row inside its later delete transaction (#590).
@@ -752,10 +754,13 @@ inventory is explicit rather than implied to conform:
   exception above.
 - The plain `Prescription` locks in `history.py` are deliberate: #584's purge
   must conflict with a commit-time `FOR KEY SHARE`.
-- Creator entry points `athlete_request_coach`, `CoachAthlete._open` /
-  `invite` / `request`, and the coach email-invite view were not swept by #596.
-  Any expansion of their reachable delete races must add parent locks at the
-  caller in this same order, not bury a `User` lock inside the model helper.
+- The `CoachAthlete._open` / `invite` / `request` / `add_self` and
+  `CoachInvite.open_for` model helpers stay lock-free by design; every
+  request-reachable caller now holds the required parent `User` rows first.
+  The remaining unlocked creators are `seed_meso_demo`, an offline management
+  command with no concurrent request surface, and `demo._ensure_demo_link`,
+  whose segment loader holds the coach `User` mutex and is `clear_demo`'s
+  documented #590 exception.
 
 ## Decision log
 

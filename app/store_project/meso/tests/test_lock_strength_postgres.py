@@ -122,7 +122,7 @@ def test_athlete_request_coach_locks_use_no_key(client, monkeypatch):
         )
 
     assert response.status_code == 302
-    _assert_no_key_self_locks(queries.captured_queries, "meso_coachathlete", count=2)
+    _assert_no_key_self_locks(queries.captured_queries, "meso_coachathlete")
 
 
 def test_coach_invite_revoke_lock_uses_no_key(client):

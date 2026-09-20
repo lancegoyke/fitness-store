@@ -1,5 +1,6 @@
 """PostgreSQL regressions for Plan/CoachAthlete creator locks (#596)."""
 
+import re
 import threading
 import time
 
@@ -8,10 +9,14 @@ from django.db import DatabaseError
 from django.db import connection
 from django.db import transaction
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
+from store_project.meso import views
 from store_project.meso.factories import CoachAthleteFactory
+from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachInvite
 from store_project.meso.tests.test_batch_deliver import comp
 from store_project.meso.tests.test_batch_deliver import seed_source
 from store_project.meso.tests.test_template_plans import template_plan
@@ -25,6 +30,11 @@ pytestmark = [
         reason="PostgreSQL row locks are not observable on SQLite.",
     ),
 ]
+
+
+def _set_short_lock_timeout():
+    with connection.cursor() as cursor:
+        cursor.execute("SET lock_timeout = '750ms'")
 
 
 def _wait_until_a_backend_is_lock_blocked(timeout=3.0, interval=0.02):
@@ -71,6 +81,7 @@ def _run_while_rows_are_held(model, pks, request_call):
 
     def run_request():
         try:
+            _set_short_lock_timeout()
             result["response"] = request_call()
         except Exception as exc:  # pragma: no cover - surfaced below
             request_errors.append(exc)
@@ -257,4 +268,115 @@ def test_roster_add_self_waits_for_the_coach_user_lock():
     assert result["response"].status_code == 302
     assert CoachAthlete.objects.filter(
         coach=coach, athlete=coach, is_self=True
+    ).exists()
+
+
+# These tests hold the parent mutex instead of racing a live cascade, matching
+# #612's documented limit. A live-cascade race needs a synthetic production hook,
+# which is deliberately out of scope.
+
+
+def test_athlete_request_coach_waits_for_the_coach_user_lock(monkeypatch):
+    coach = CoachProfileFactory().user
+    athlete = UserFactory()
+    client = Client()
+    client.force_login(athlete)
+    monkeypatch.setattr(views, "send_coach_request_email", lambda **kwargs: True)
+
+    def post_request():
+        return client.post(
+            reverse("meso:athlete_request_coach"), {"email": coach.email}
+        )
+
+    blocked, holder_errors, request_errors, result, holder, worker = (
+        _run_while_rows_are_held(User, [coach.pk], post_request)
+    )
+
+    assert blocked, "athlete_request_coach did not take the coach User lock"
+    assert not holder.is_alive() and not worker.is_alive()
+    assert holder_errors == []
+    assert request_errors == []
+    assert result["response"].status_code == 302
+    assert CoachAthlete.objects.filter(coach=coach, athlete=athlete).exists()
+
+
+def test_athlete_request_coach_waits_for_the_athlete_user_lock(monkeypatch):
+    coach = CoachProfileFactory().user
+    athlete = UserFactory()
+    client = Client()
+    client.force_login(athlete)
+    monkeypatch.setattr(views, "send_coach_request_email", lambda **kwargs: True)
+
+    def post_request():
+        return client.post(
+            reverse("meso:athlete_request_coach"), {"email": coach.email}
+        )
+
+    blocked, holder_errors, request_errors, result, holder, worker = (
+        _run_while_rows_are_held(User, [athlete.pk], post_request)
+    )
+
+    assert blocked, "athlete_request_coach did not take the athlete User lock"
+    assert not holder.is_alive() and not worker.is_alive()
+    assert holder_errors == []
+    assert request_errors == []
+    assert result["response"].status_code == 302
+    assert CoachAthlete.objects.filter(coach=coach, athlete=athlete).exists()
+
+
+def test_athlete_request_coach_locks_both_users_before_the_link(monkeypatch):
+    coach = CoachProfileFactory().user
+    athlete = UserFactory()
+    client = Client()
+    client.force_login(athlete)
+    monkeypatch.setattr(views, "send_coach_request_email", lambda **kwargs: True)
+
+    with CaptureQueriesContext(connection) as queries:
+        response = client.post(
+            reverse("meso:athlete_request_coach"), {"email": coach.email}
+        )
+
+    locks = [
+        (index, query["sql"])
+        for index, query in enumerate(queries.captured_queries)
+        if re.search(r"\bFOR (?:NO KEY )?UPDATE\b", query["sql"])
+    ]
+    user_locks = [item for item in locks if 'FROM "users_user"' in item[1]]
+    link_locks = [item for item in locks if 'FROM "meso_coachathlete"' in item[1]]
+
+    assert response.status_code == 302
+    assert len(user_locks) == 1, f"expected one User lock, got: {user_locks}"
+    assert len(link_locks) == 1, f"expected one CoachAthlete lock, got: {link_locks}"
+    user_index, user_sql = user_locks[0]
+    link_index, link_sql = link_locks[0]
+    assert user_index < link_index, f"User lock must precede link lock: {locks}"
+    assert '"users_user"."id" IN (' in user_sql
+    assert coach.pk.hex in user_sql and athlete.pk.hex in user_sql
+    assert re.search(r'ORDER BY (?:"users_user"\."id"|1) ASC', user_sql)
+    assert "FOR NO KEY UPDATE" in user_sql and "FOR UPDATE" not in user_sql
+    assert "FOR NO KEY UPDATE" in link_sql and "FOR UPDATE" not in link_sql
+
+
+def test_coach_invite_waits_for_the_coach_user_lock(monkeypatch):
+    coach = UserFactory()
+    client = Client()
+    client.force_login(coach)
+    monkeypatch.setattr(views, "send_coach_invite_email", lambda **kwargs: True)
+
+    def post_invite():
+        return client.post(
+            reverse("meso:coach_invite"), {"email": "locked-athlete@example.com"}
+        )
+
+    blocked, holder_errors, request_errors, result, holder, worker = (
+        _run_while_rows_are_held(User, [coach.pk], post_invite)
+    )
+
+    assert blocked, "coach_invite did not take the coach User lock"
+    assert not holder.is_alive() and not worker.is_alive()
+    assert holder_errors == []
+    assert request_errors == []
+    assert result["response"].status_code == 302
+    assert CoachInvite.objects.filter(
+        coach=coach, email="locked-athlete@example.com"
     ).exists()

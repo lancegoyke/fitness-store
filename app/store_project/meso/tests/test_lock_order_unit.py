@@ -4,6 +4,7 @@ from unittest import mock
 
 import pytest
 from django.contrib import admin
+from django.contrib.messages import get_messages
 from django.core.management import call_command
 from django.urls import reverse
 
@@ -15,9 +16,11 @@ from store_project.meso.admin import PlanAdmin
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachAthleteFactory
 from store_project.meso.factories import CoachInviteFactory
+from store_project.meso.factories import CoachProfileFactory
 from store_project.meso.factories import PlanFactory
 from store_project.meso.models import AgentProposalBatch
 from store_project.meso.models import CoachAthlete
+from store_project.meso.models import CoachInvite
 from store_project.meso.models import Plan
 from store_project.users.admin import UserAdmin
 from store_project.users.factories import UserFactory
@@ -110,3 +113,43 @@ def test_invite_accept_404s_if_the_invite_coach_changes_before_lock(
     assert not CoachAthlete.objects.filter(
         coach=changed.coach, athlete=claimant
     ).exists()
+
+
+def test_athlete_request_coach_handles_coach_gone_before_user_locks(
+    client, monkeypatch
+):
+    coach = CoachProfileFactory().user
+    athlete = UserFactory()
+    client.force_login(athlete)
+    monkeypatch.setattr(
+        views.User.objects,
+        "select_for_update",
+        lambda **kwargs: User.objects.filter(pk=athlete.pk),
+    )
+
+    response = client.post(
+        reverse("meso:athlete_request_coach"), {"email": coach.email}
+    )
+
+    assert response.status_code == 302
+    assert response.url == reverse("meso:athlete_home")
+    assert not CoachAthlete.objects.filter(coach=coach, athlete=athlete).exists()
+    messages = [message.message for message in get_messages(response.wsgi_request)]
+    assert "We couldn't find a coach with that email." in messages
+
+
+def test_coach_invite_404s_if_the_coach_is_gone_before_lock(client, monkeypatch):
+    coach = UserFactory()
+    client.force_login(coach)
+    monkeypatch.setattr(
+        views.User.objects,
+        "select_for_update",
+        lambda **kwargs: User.objects.none(),
+    )
+
+    response = client.post(
+        reverse("meso:coach_invite"), {"email": "athlete@example.com"}
+    )
+
+    assert response.status_code == 404
+    assert not CoachInvite.objects.filter(coach=coach).exists()
