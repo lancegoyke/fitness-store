@@ -69,6 +69,7 @@ from store_project.analytics.models import Event
 from store_project.meso import sandbox as meso_sandbox
 from store_project.meso import views
 from store_project.meso.agent import apply as agent_apply
+from store_project.meso.agent import service as agent_service
 from store_project.meso.billing import access as billing_access
 from store_project.meso.factories import AgentProposalBatchFactory
 from store_project.meso.factories import CoachSubscriptionFactory
@@ -257,6 +258,185 @@ class TestBatchApplyRacesDismiss:
             assert added_rows == 0
         else:
             pytest.fail(f"unexpected batch status: {batch.status}")
+
+
+# ---------------------------------------------------------------------------
+# Agent result persistence races (#595)
+# ---------------------------------------------------------------------------
+
+
+def _agent_swap_result(prescription, name):
+    return {
+        "summary": f"Use {name}.",
+        "changes": [
+            {
+                "kind": "swap",
+                "prescription_id": prescription.pk,
+                "title": f"Back Squat → {name}",
+                "before": "Back Squat",
+                "after": name,
+                "rationale": "Scripted concurrency result.",
+                "introduces_exercise": name,
+            }
+        ],
+    }
+
+
+class _ScriptedAgentClient:
+    model = "claude-opus-4-8-test"
+
+    def __init__(self, result, called=None):
+        self.result = result
+        self.called = called
+
+    def propose(self, *, context, instruction):
+        if self.called is not None:
+            self.called.set()
+        return self.result
+
+
+class TestAgentResultPersistenceRaces:
+    def test_two_jobs_for_one_batch_serialize_and_only_one_result_lands(self):
+        plan, _session, prescription = make_plan()
+        batch = agent_service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
+        first_in_persist = threading.Event()
+        release_first = threading.Event()
+        second_provider_called = threading.Event()
+        second_done = threading.Event()
+        pause_lock = threading.Lock()
+        paused = False
+        results = {}
+        errors = []
+        original_clean = agent_service.validation.clean_change
+
+        def pause_first_persist(*args, **kwargs):
+            nonlocal paused
+            with pause_lock:
+                should_pause = not paused
+                paused = True
+            if should_pause:
+                first_in_persist.set()
+                if not release_first.wait(timeout=5):
+                    raise AssertionError("first persist was never released")
+            return original_clean(*args, **kwargs)
+
+        def run(label, client):
+            try:
+                results[label] = agent_service.run_proposal_job(batch.pk, client=client)
+            except Exception as exc:  # noqa: BLE001 - asserted below
+                errors.append(exc)
+            finally:
+                if label == "second":
+                    second_done.set()
+                connection.close()
+
+        first_client = _ScriptedAgentClient(
+            _agent_swap_result(prescription, "Box Squat")
+        )
+        second_client = _ScriptedAgentClient(
+            _agent_swap_result(prescription, "Goblet Squat"),
+            called=second_provider_called,
+        )
+        with mock.patch.object(
+            agent_service.validation, "clean_change", pause_first_persist
+        ):
+            first = threading.Thread(target=run, args=("first", first_client))
+            first.start()
+            assert first_in_persist.wait(timeout=5), "first job never began persisting"
+            second = threading.Thread(target=run, args=("second", second_client))
+            second.start()
+            assert second_provider_called.wait(timeout=5), "second provider never ran"
+            second_blocked = not second_done.wait(timeout=0.5)
+            release_first.set()
+            first.join(timeout=10)
+            second.join(timeout=10)
+
+        assert not first.is_alive(), "first job did not finish"
+        assert not second.is_alive(), "second job did not finish"
+        assert second_blocked, "second job did not block on the batch row lock"
+        assert errors == [], errors
+        assert "deadlock detected" not in " ".join(map(str, errors)).lower()
+        batch.refresh_from_db()
+        assert batch.status == AgentProposalBatch.Status.PENDING
+        assert list(batch.changes.values_list("title", flat=True)) == [
+            "Back Squat → Box Squat"
+        ]
+        second_batch, second_rejected = results["second"]
+        assert second_batch.status == AgentProposalBatch.Status.PENDING
+        assert second_rejected == []
+
+    def test_late_persist_waits_for_dismiss_and_discards_its_result(self):
+        plan, _session, _prescription, batch = _make_batch_with_add()
+        client = Client()
+        client.force_login(plan.coach)
+        dismiss_url = reverse("meso:api_batch_dismiss", kwargs={"batch_id": batch.pk})
+        dismiss_written = threading.Event()
+        release_dismiss = threading.Event()
+        late_attempting = threading.Event()
+        late_done = threading.Event()
+        errors = []
+        results = {}
+        original_dismiss = agent_apply.dismiss_batch
+
+        def pause_dismiss(locked_batch):
+            result = original_dismiss(locked_batch)
+            dismiss_written.set()
+            if not release_dismiss.wait(timeout=5):
+                raise AssertionError("dismiss was never released")
+            return result
+
+        def run_dismiss():
+            try:
+                results["dismiss"] = client.post(dismiss_url)
+            except Exception as exc:  # noqa: BLE001 - asserted below
+                errors.append(exc)
+            finally:
+                connection.close()
+
+        def run_late_persist():
+            try:
+                late_batch = AgentProposalBatch.objects.select_related(
+                    "plan__relationship__athlete", "mesocycle"
+                ).get(pk=batch.pk)
+                late_attempting.set()
+                rejected = agent_service._persist_result(
+                    late_batch,
+                    {"summary": "late result", "changes": []},
+                    model="claude-opus-4-8-test",
+                    expect_status=AgentProposalBatch.Status.DRAFTING,
+                )
+                results["late"] = (late_batch.status, rejected)
+            except Exception as exc:  # noqa: BLE001 - asserted below
+                errors.append(exc)
+            finally:
+                late_done.set()
+                connection.close()
+
+        with mock.patch.object(agent_apply, "dismiss_batch", pause_dismiss):
+            dismiss = threading.Thread(target=run_dismiss)
+            dismiss.start()
+            assert dismiss_written.wait(timeout=5), "dismiss never reached its write"
+            late = threading.Thread(target=run_late_persist)
+            late.start()
+            assert late_attempting.wait(timeout=5), "late persist never started"
+            late_blocked = not late_done.wait(timeout=0.5)
+            release_dismiss.set()
+            dismiss.join(timeout=10)
+            late.join(timeout=10)
+
+        assert not dismiss.is_alive(), "dismiss did not finish"
+        assert not late.is_alive(), "late persist did not finish"
+        assert late_blocked, "late persist did not block on the batch row lock"
+        assert errors == [], errors
+        assert "deadlock detected" not in " ".join(map(str, errors)).lower()
+        assert results["dismiss"].status_code == 200
+        assert results["late"] == (AgentProposalBatch.Status.DISMISSED, [])
+        batch.refresh_from_db()
+        assert batch.status == AgentProposalBatch.Status.DISMISSED
+        assert batch.summary != "late result"
+        assert batch.changes.count() == 1
 
 
 # ---------------------------------------------------------------------------

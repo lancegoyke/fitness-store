@@ -380,12 +380,23 @@ def _fail(batch, message, *, model="", duration_ms=None, expect_status=None):
 def run_proposal_job(batch_id, *, client=None):
     """Run the agent for an existing ``drafting`` batch (the background path).
 
-    Never raises — flips the batch to ``pending`` or ``failed``. Returns
-    ``(batch, rejected)``.
+    Never raises — flips an existing batch to ``pending`` or ``failed``. Returns
+    ``(batch, rejected)``, or ``(None, [])`` when the batch was deleted before
+    the job ran.
     """
-    batch = models.AgentProposalBatch.objects.select_related(
-        "plan", "plan__relationship", "plan__relationship__athlete", "mesocycle"
-    ).get(pk=batch_id)
+    try:
+        batch = models.AgentProposalBatch.objects.select_related(
+            "plan",
+            "plan__relationship",
+            "plan__relationship__athlete",
+            "mesocycle",
+        ).get(pk=batch_id)
+    except models.AgentProposalBatch.DoesNotExist:
+        logger.info(
+            "Meso agent batch %s was deleted before the job ran; nothing to resolve.",
+            batch_id,
+        )
+        return None, []
     # #558: the status this job is allowed to resolve FROM. Passed to BOTH
     # resolvers below — ``_persist_result`` on success and ``_fail`` on every
     # failure path — because either one flipping an already-applied or
@@ -400,6 +411,26 @@ def run_proposal_job(batch_id, *, client=None):
                 "The Meso agent is not configured (no API key).",
                 expect_status=drafting,
             )
+
+        # #595: this unlocked read only avoids paying for a provider call whose
+        # result is already known to be obsolete. The locked re-check in
+        # ``_still_resolvable`` remains the authority after the network call;
+        # do not weaken or bypass it, because the status can change in flight.
+        current_status = (
+            models.AgentProposalBatch.objects.filter(pk=batch.pk)
+            .values_list("status", flat=True)
+            .first()
+        )
+        if current_status != drafting:
+            logger.info(
+                "Meso agent batch %s is %s, not %s — skipping the provider call.",
+                batch.pk,
+                "gone" if current_status is None else current_status,
+                drafting,
+            )
+            if current_status is not None:
+                batch.status = current_status
+            return batch, []
 
         model = getattr(client, "model", "")
         # Network call outside any DB transaction; wrap provider failures. Time it

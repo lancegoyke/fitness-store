@@ -143,6 +143,48 @@ class TestRunProposalJob:
         assert result_batch.changes.count() == 0
         assert len(rejected) == 1
 
+    def test_missing_batch_returns_empty_without_calling_provider(self):
+        class NeverClient:
+            model = "must-not-run"
+
+            def __init__(self):
+                self.calls = 0
+
+            def propose(self, *, context, instruction):
+                self.calls += 1
+                return {"summary": "wrong", "changes": []}
+
+        client = NeverClient()
+        missing_pk = 999_999_999
+
+        result = service.run_proposal_job(missing_pk, client=client)
+
+        assert result == (None, [])
+        assert client.calls == 0
+
+    def test_deleted_batch_returns_empty_without_calling_provider(self):
+        plan, _, _ = make_plan()
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
+        batch_id = batch.pk
+        batch.delete()
+
+        class NeverClient:
+            model = "must-not-run"
+            calls = 0
+
+            def propose(self, *, context, instruction):
+                self.calls += 1
+                return {"summary": "wrong", "changes": []}
+
+        client = NeverClient()
+
+        result = service.run_proposal_job(batch_id, client=client)
+
+        assert result == (None, [])
+        assert client.calls == 0
+
 
 class TestDispatch:
     def test_dispatch_runs_inline_under_sync_setting(self, settings):
@@ -160,6 +202,29 @@ class TestDispatch:
         batch.refresh_from_db()
         assert batch.status == AgentProposalBatch.Status.PENDING
         assert batch.changes.count() == 1
+
+    def test_sync_dispatch_ignores_a_batch_deleted_before_pickup(self, settings):
+        settings.MESO_AGENT_RUN_SYNC = True
+        plan, _, _ = make_plan()
+        batch = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
+        batch_id = batch.pk
+        batch.delete()
+
+        class NeverClient:
+            model = "must-not-run"
+            calls = 0
+
+            def propose(self, *, context, instruction):
+                self.calls += 1
+                return {"summary": "wrong", "changes": []}
+
+        client = NeverClient()
+
+        jobs.dispatch_proposal(batch_id, client=client)
+
+        assert client.calls == 0
 
     def test_queued_dispatch_defers_enqueue_to_on_commit(
         self, settings, monkeypatch, django_capture_on_commit_callbacks
@@ -230,3 +295,53 @@ class TestDispatch:
         batch.refresh_from_db()
         assert batch.status == AgentProposalBatch.Status.FAILED
         assert batch.error
+
+    def test_enqueue_failure_only_resolves_a_drafting_batch(self, caplog):
+        plan, _, _ = make_plan()
+
+        def batch_with(*, status, error):
+            batch = service.create_drafting_batch(
+                plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+            )
+            batch.status = status
+            batch.error = error
+            batch.save(update_fields=["status", "error"])
+            return batch
+
+        drafting = batch_with(
+            status=AgentProposalBatch.Status.DRAFTING, error="old drafting error"
+        )
+        resolved = [
+            batch_with(status=status, error=f"keep {status}")
+            for status in (
+                AgentProposalBatch.Status.APPLIED,
+                AgentProposalBatch.Status.DISMISSED,
+                AgentProposalBatch.Status.PENDING,
+            )
+        ]
+        missing_pk = max(batch.pk for batch in [drafting, *resolved]) + 10_000
+
+        with caplog.at_level("INFO", logger="store_project.meso.agent.jobs"):
+            jobs._fail_unqueued(drafting.pk)
+            for batch in resolved:
+                jobs._fail_unqueued(batch.pk)
+            jobs._fail_unqueued(missing_pk)
+
+        drafting.refresh_from_db()
+        assert drafting.status == AgentProposalBatch.Status.FAILED
+        assert drafting.error == "The agent run could not be queued."
+        for batch in resolved:
+            expected_status = batch.status
+            expected_error = batch.error
+            batch.refresh_from_db()
+            assert batch.status == expected_status
+            assert batch.error == expected_error
+
+        messages = [record.message for record in caplog.records]
+        for batch_id in [*(batch.pk for batch in resolved), missing_pk]:
+            assert any(
+                f"batch {batch_id}" in message
+                and "already resolved or gone" in message
+                and "nothing was overwritten" in message
+                for message in messages
+            )

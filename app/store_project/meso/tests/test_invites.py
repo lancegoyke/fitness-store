@@ -105,6 +105,39 @@ class TestCoachInviteModel:
         assert link.pk == peer.pk
         assert link.is_active
 
+    def test_accept_is_atomic_without_rolling_back_expiry(self):
+        coach = UserFactory()
+        athlete = UserFactory()
+        peer = CoachAthlete.invite(coach=coach, athlete=athlete)
+        invite, _ = CoachInvite.open_for(coach=coach, email=athlete.email)
+
+        with (
+            mock.patch.object(
+                invite, "save", side_effect=RuntimeError("invite save failed")
+            ),
+            pytest.raises(RuntimeError, match="invite save failed"),
+        ):
+            invite.accept(athlete)
+
+        peer.refresh_from_db()
+        invite.refresh_from_db()
+        assert peer.status == CoachAthlete.Status.PENDING_COACH_INVITE
+        assert invite.status == CoachInvite.Status.PENDING
+        assert invite.accepted_by is None
+        assert invite.accepted_link is None
+
+        overdue, _ = CoachInvite.open_for(
+            coach=UserFactory(), email="overdue@example.com"
+        )
+        overdue.expires_at = overdue.created_at
+        overdue.save(update_fields=["expires_at"])
+
+        with pytest.raises(InvalidTransition, match="has expired"):
+            overdue.accept(UserFactory())
+
+        overdue.refresh_from_db()
+        assert overdue.status == CoachInvite.Status.EXPIRED
+
     def test_coach_cannot_accept_own_invite(self):
         coach = UserFactory()
         invite, _ = CoachInvite.open_for(coach=coach, email=coach.email)

@@ -149,7 +149,7 @@ class TestDuplicateRunAfterApplyIsDiscarded:
         # A duplicate run for the SAME batch id: the scenario #558 describes.
         # Nothing in the app is known to trigger this (see the module
         # docstring) — this pins what must happen if it ever did.
-        with caplog.at_level("WARNING", logger=SERVICE_LOGGER):
+        with caplog.at_level("INFO", logger=SERVICE_LOGGER):
             dup_batch, dup_rejected = service.run_proposal_job(
                 batch.pk,
                 client=_ClientWithUsage(
@@ -182,7 +182,7 @@ class TestDuplicateRunAfterApplyIsDiscarded:
         # though it writes nothing.
         messages = [r.message for r in caplog.records]
         assert any(
-            f"batch {batch.pk}" in m and "discarding a duplicate run's result" in m
+            f"batch {batch.pk}" in m and "skipping the provider call" in m
             for m in messages
         )
 
@@ -251,7 +251,7 @@ class TestDuplicateRunDoesNotReopenOtherResolvedStatuses:
         first_error = first_batch.error
         first_change_count = first_batch.changes.count()
 
-        with caplog.at_level("WARNING", logger=SERVICE_LOGGER):
+        with caplog.at_level("INFO", logger=SERVICE_LOGGER):
             dup_batch, dup_rejected = service.run_proposal_job(
                 batch.pk, client=FakeClient(_duplicate_run_result(presc))
             )
@@ -265,7 +265,7 @@ class TestDuplicateRunDoesNotReopenOtherResolvedStatuses:
 
         messages = [r.message for r in caplog.records]
         assert any(
-            f"batch {batch.pk}" in m and "discarding a duplicate run's result" in m
+            f"batch {batch.pk}" in m and "skipping the provider call" in m
             for m in messages
         )
 
@@ -294,6 +294,57 @@ class TestFirstRunOnADraftingBatchStillWorks:
         assert result_batch.status == AgentProposalBatch.Status.PENDING
         assert result_batch.summary == "First run: knee-safe swap."
         assert rejected == []
+        assert result_batch.changes.count() == 1
+
+
+class TestCheapResolvedBatchEarlyOut:
+    def test_resolved_batches_skip_the_provider_but_drafting_still_runs(self):
+        plan, _, presc = make_plan()
+
+        class CountingClient:
+            model = "claude-opus-4-8-test"
+
+            def __init__(self):
+                self.calls = 0
+
+            def propose(self, *, context, instruction):
+                self.calls += 1
+                return _duplicate_run_result(presc)
+
+        for status in (
+            AgentProposalBatch.Status.APPLIED,
+            AgentProposalBatch.Status.DISMISSED,
+        ):
+            batch = service.create_drafting_batch(
+                plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+            )
+            batch.status = status
+            batch.summary = f"keep {status}"
+            batch.error = f"keep {status} error"
+            batch.save(update_fields=["status", "summary", "error"])
+            client = CountingClient()
+
+            result_batch, rejected = service.run_proposal_job(batch.pk, client=client)
+
+            assert client.calls == 0
+            assert rejected == []
+            result_batch.refresh_from_db()
+            assert result_batch.status == status
+            assert result_batch.summary == f"keep {status}"
+            assert result_batch.error == f"keep {status} error"
+            assert result_batch.changes.count() == 0
+
+        drafting = service.create_drafting_batch(
+            plan, "go", coach=plan.coach, mesocycle=plan.mesocycles.first()
+        )
+        client = CountingClient()
+
+        result_batch, rejected = service.run_proposal_job(drafting.pk, client=client)
+
+        assert client.calls == 1
+        assert rejected == []
+        result_batch.refresh_from_db()
+        assert result_batch.status == AgentProposalBatch.Status.PENDING
         assert result_batch.changes.count() == 1
 
 
