@@ -22,6 +22,8 @@ from the snapshot is hard-deleted rather than soft-deleted — see
 mesocycle fields — undo must never touch delivery stamps or athlete data.
 """
 
+import logging
+
 from django.db.models import Exists
 from django.db.models import Max
 from django.db.models import OuterRef
@@ -29,6 +31,8 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from . import models
+
+logger = logging.getLogger(__name__)
 
 # History cap (Phase 1 spec): keep at most this many rows on a plan's undo
 # stack, trimming the oldest (lowest-seq) after each recording. The redo stack
@@ -310,6 +314,13 @@ def restore_plan_snapshot(plan, snapshot):
     # hard-deletes it below — so redo must be able to RECREATE the exact pk,
     # not just best-effort skip it (the old behavior, from when cells were
     # only ever created alongside a new slot/week).
+    # Read WITHOUT a lock, and the upsert loop's own ``athlete_authored``
+    # guard below therefore decides from a pre-lock flag. That is unchanged
+    # from before #584 and is safe for the same reason the occupancy read
+    # below is: an athlete transaction cannot overlap this part of the
+    # restore (see the guard's comment). It is called out here because the
+    # purge's comment argues for not DEPENDING on that incidental
+    # serialization — this one still does.
     existing_cells = {
         c.pk: c for c in models.Prescription.objects.filter(pk__in=cell_pks)
     }
@@ -374,21 +385,29 @@ def restore_plan_snapshot(plan, snapshot):
     # that, this block would hard-delete rows the purge protects, which is a
     # rule the two halves must not disagree about.
     #
-    # The delete takes the same lock-then-recheck as the purge (see its
-    # comment below for the full reasoning). Note what that lock does and does
-    # not do HERE: the occupancy read just below is NOT locked, so it cannot
-    # see a cell some other transaction has inserted at one of these
+    # The delete takes the same lock-then-recheck as the purge, down to the
+    # same split between what is FILTERED and what is RE-CHECKED:
+    # ``athlete_authored`` is decided from the unlocked read below and those
+    # occupants are never locked (see the branch that spares them for why
+    # locking one would deadlock against ``cell_line_write``), while the three
+    # ``LoggedSet`` pointers are re-read under the lock.
+    #
+    # What that lock does NOT do here: the occupancy read below is unlocked,
+    # so it cannot see a cell another transaction has inserted at one of these
     # coordinates but not yet committed. What keeps that from becoming a
-    # unique-constraint violation is a lock this function already takes for
-    # another reason entirely — the ``session.save()`` loop above UPDATEs
-    # every snapshotted ``Session`` row, and both athlete write paths
+    # unique-constraint violation is a lock this function takes for an
+    # unrelated reason — the ``session.save()`` loop above UPDATEs every
+    # snapshotted ``Session`` row, and both athlete write paths
     # (``athlete_cell_write``, ``athlete_log_session``) take
     # ``Session.objects.select_for_update()`` as their first statement, so an
-    # athlete transaction and this restore cannot overlap at all. Any FUTURE
-    # cell writer that holds neither that Session row nor the ``Plan`` row
-    # would reopen the window; ``agent/apply.py`` already bulk-creates cells
-    # without the ``Plan`` lock and is safe only because its coordinates are
-    # always brand new.
+    # athlete transaction cannot overlap the part of this restore that
+    # follows that loop. (Precisely: the loop locks the SNAPSHOTTED sessions;
+    # a session created after the snapshot is locked a little later, by the
+    # soft-delete UPDATE below. A cell at a snapshotted coordinate implies a
+    # snapshot-era session, so the guard is covered either way.) A writer that
+    # holds neither that Session row nor the ``Plan`` row would reopen the
+    # window — ``cell_line_write`` already writes a ``Prescription`` before it
+    # takes either, though only ever at a coordinate it then keeps.
     coord_of_pk = {
         pk: (row["exercise_slot_id"], row["week_id"], row.get("line", 0))
         for pk, row in cell_rows.items()
@@ -399,18 +418,38 @@ def restore_plan_snapshot(plan, snapshot):
     # in the very call that captured ``exercise_slots``/``weeks`` too — so
     # this query, scoped to the plan's own slots/weeks rather than the whole
     # database, is guaranteed to surface every possible occupant.
-    occupant_pk_by_coord = {
-        (slot_id, week_id, line): occupant_pk
-        for slot_id, week_id, line, occupant_pk in models.Prescription.objects.filter(
-            exercise_slot_id__in=exercise_slot_pks, week_id__in=week_pks
-        ).values_list("exercise_slot_id", "week_id", "line", "pk")
+    occupant_by_coord = {
+        (slot_id, week_id, line): (occupant_pk, authored)
+        for slot_id, week_id, line, occupant_pk, authored in (
+            models.Prescription.objects.filter(
+                exercise_slot_id__in=exercise_slot_pks, week_id__in=week_pks
+            ).values_list(
+                "exercise_slot_id", "week_id", "line", "pk", "athlete_authored"
+            )
+        )
     }
     colliding_pks_to_skip = set()
     stray_candidate_pks = set()
     for pk, coord in coord_of_pk.items():
-        occupant_pk = occupant_pk_by_coord.get(coord)
-        if occupant_pk is None or occupant_pk == pk:
+        occupant = occupant_by_coord.get(coord)
+        if occupant is None or occupant[0] == pk:
             continue  # coordinate free, or already correctly occupied by pk itself
+        occupant_pk, occupant_is_athlete_authored = occupant
+        if occupant_is_athlete_authored:
+            # Spared WITHOUT being locked, and the omission is the point. The
+            # purge below keeps ``athlete_authored`` in its candidate FILTER
+            # precisely so it never takes ``FOR UPDATE`` on a cell the athlete
+            # owns, because ``cell_line_write``'s reclaim writes that row
+            # (``existing.save(update_fields=["athlete_authored"])``) BEFORE
+            # ``record_plan_action`` takes the ``Plan`` lock — Prescription
+            # then Plan, the exact inverse of this path. Locking it here would
+            # close that cycle on the guard's MAIN path, since #583's headline
+            # occupant IS an athlete-authored cell. So this decision is made
+            # from the unlocked read above, exactly as the purge makes it from
+            # its filter, and only the ``LoggedSet`` pointers are re-checked
+            # under the lock.
+            colliding_pks_to_skip.add(pk)
+            continue
         if occupant_pk in cell_pks:
             # The occupant is ANOTHER snapshotted cell: this restore wants two
             # pks to trade coordinates (a 2-cycle) or to shuffle along a chain
@@ -449,14 +488,11 @@ def restore_plan_snapshot(plan, snapshot):
         locked_stray_pks = list(
             models.Prescription.objects.select_for_update(of=("self",))
             .filter(pk__in=stray_candidate_pks)
+            .exclude(athlete_authored=True)
             .order_by("pk")
             .values_list("pk", flat=True)
         )
-        spared_stray_pks = _cells_athlete_data_points_at(locked_stray_pks) | set(
-            models.Prescription.objects.filter(
-                pk__in=locked_stray_pks, athlete_authored=True
-            ).values_list("pk", flat=True)
-        )
+        spared_stray_pks = _cells_athlete_data_points_at(locked_stray_pks)
         doomed_stray_pks = [pk for pk in locked_stray_pks if pk not in spared_stray_pks]
         if doomed_stray_pks:
             # ``week__mesocycle__plan`` is redundant given where these pks came
@@ -472,11 +508,25 @@ def restore_plan_snapshot(plan, snapshot):
         # pk onto the same coordinate would hit the same unique constraint
         # this whole block exists to avoid.
         for pk, coord in coord_of_pk.items():
-            if occupant_pk_by_coord.get(coord) in spared_stray_pks:
+            occupant = occupant_by_coord.get(coord)
+            if occupant is not None and occupant[0] in spared_stray_pks:
                 colliding_pks_to_skip.add(pk)
 
     for pk, row in cell_rows.items():
         if pk in colliding_pks_to_skip:
+            # A skipped cell is a silent, invisible outcome otherwise: the
+            # endpoint answers ``ok: true``, that one line simply does not come
+            # back, and no later undo or redo can revive it either (every older
+            # snapshot meets the same occupant and takes the same branch). Say
+            # so in the log, with both pks, so "my redo lost a line" is
+            # answerable after the fact instead of being a mystery.
+            logger.info(
+                "meso.history: skipped restoring cell %s at %s — "
+                "occupied by cell %s, which athlete data holds",
+                pk,
+                coord_of_pk.get(pk),
+                (occupant_by_coord.get(coord_of_pk.get(pk)) or (None,))[0],
+            )
             continue
         cell = existing_cells.get(pk) or models.Prescription(pk=pk)
         # Never overwrite an athlete-authored cell (Phase 4a), even when an
@@ -620,10 +670,10 @@ def restore_plan_snapshot(plan, snapshot):
     # that was never contending with an FK reference; this is the opposite
     # case.
     #
-    # ``.order_by("pk")`` gives a deterministic lock-acquisition order among
-    # the candidates themselves — irrelevant to any lock this function's
-    # caller already holds, but keeps two concurrent restores that both reach
-    # this purge from fighting each other over lock order.
+    # ``.order_by("pk")`` is plain defensiveness, not a fix for anything
+    # reachable: two restores of one plan already serialize on the ``Plan``
+    # lock, and restores of different plans have disjoint candidates. It costs
+    # nothing and means the acquisition order is stated rather than incidental.
     #
     # LOCK ORDER. The sequence is unchanged: ``api_plan_undo``/``api_plan_redo``
     # take ``Plan.objects.select_for_update()`` first, then this function

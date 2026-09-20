@@ -2837,10 +2837,29 @@ _(Append dated entries here as decisions land.)_
   the candidate filter is what stops the widening being far larger.
   **The collision-resolution delete above (#583) removes an occupant only
   when this purge itself would**, including the same soft-deleted-slot/week
-  scoping, so the two halves cannot disagree about which cells are
+  scoping AND the same split between what is filtered and what is
+  re-checked, so the two halves cannot disagree about which cells are
   protected. Its occupancy read is unlocked, and what stops a
   concurrently-inserted occupant there is again the Session lock, not this
   one.
+  **The guard must never take `FOR UPDATE` on an athlete-authored occupant,
+  and a review round caught it doing exactly that.** Both round-2 reviewers
+  found it independently: the guard locked its candidates before testing
+  them, which contradicted the purge's own argument one screen below for
+  keeping `athlete_authored` in the FILTER. It is not theoretical —
+  `cell_line_write`'s reclaim writes that row
+  (`existing.save(update_fields=["athlete_authored"])`) *before*
+  `record_plan_action` takes the `Plan` lock, so it is Prescription→Plan
+  while a redo is Plan→Prescription, and #583's headline occupant IS an
+  athlete-authored cell, putting the cycle on the guard's main path. The
+  flag is now decided from the unlocked occupancy read and those occupants
+  are never locked; only the `LoggedSet` pointers are re-checked under the
+  lock.
+  **A skipped cell is now logged.** Skipping is otherwise invisible — the
+  endpoint answers `ok: true`, the line simply does not come back, and no
+  later undo or redo revives it, since every older snapshot meets the same
+  occupant and takes the same branch. `history` logs the skipped pk and the
+  occupant so "my redo lost a line" is answerable afterwards.
   **#562 is untouched and does not conflict.** It's a `Session`-vs-`Plan`
   ordering issue on a different path entirely (`athlete_cell_write`'s
   `Session` lock vs. `api_plan_undo`/`api_plan_redo`'s `Plan` lock) — no
