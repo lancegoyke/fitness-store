@@ -18,6 +18,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import models
+from django.db import router
 from django.db import transaction
 from django.db.models.functions import Now
 from django.utils import timezone
@@ -2417,12 +2418,18 @@ def parsed_set_is_hidden(logged_set, *, line_rows=None):
         # Parsed rows keep main's rule verbatim: no sibling tie-break needed,
         # because ``_upsert_parsed_set`` declines to mint a same-valued twin
         # ON ONE LINE, so two LIVE parsed rows can never both match this text.
-        # One exception, and it is inert (#577): the upsert's reuse lookups are
-        # scoped by ``prescription``, so a row whose ``prescription`` already
-        # went NULL is passed over and a fresh row minted beside it. Both then
-        # carry this ``source_line``, but the NULL one is invisible everywhere
-        # that counts — every derivation filters ``prescription__isnull=False``
-        # — so there is still only one row a tie-break could be about.
+        # One exception, and since #578 C1 it is NOT inert: the upsert's reuse
+        # lookups are scoped by ``prescription``, so a row whose
+        # ``prescription`` already went NULL is passed over and a fresh row
+        # minted beside it. Both rows carry this ``source_line`` and are hidden
+        # by the same text — this predicate never filtered on ``prescription``,
+        # and that part of main's rule is unchanged — but before C1 the NULL
+        # row was ALSO invisible to every derivation (each filtered
+        # ``prescription__isnull=False``), so the pair was an inert twin: one
+        # row shown, one row silently uncounted. C1 gave the NULL row its own
+        # ``exercise_slot``, so both rows now COUNT — the artifact is a
+        # double-count, not an inert twin, deferred to C2 (see ``views.py``'s
+        # matching comment in ``_upsert_parsed_set`` and ``presenters.py``).
         return _line_shows(line, logged_set)
     # #561: a coach undo restores the reclaimed line's text but never touches
     # ``LoggedSet`` (undo must not write athlete data, and a GET must not
@@ -2646,6 +2653,14 @@ def newest_session_logs(session, athlete, *, status=None):
 MAX_LOGGED_SET_NUMBER = 50
 
 
+class LoggedSetQuerySet(models.QuerySet):
+    def anchored(self):
+        """The rows whose ``anchor_slot`` resolves, with both hops fetched."""
+        return self.filter(
+            models.Q(exercise_slot__isnull=False) | models.Q(prescription__isnull=False)
+        ).select_related("exercise_slot", "prescription__exercise_slot")
+
+
 class LoggedSet(models.Model):
     """A single set the athlete logged against a prescription."""
 
@@ -2655,6 +2670,70 @@ class LoggedSet(models.Model):
         related_name="sets",
         verbose_name=_("Session log"),
     )
+    # #578 C1: the durable identity a logged set is anchored to. Unlike
+    # ``prescription`` (below), ORDINARY app code only ever *soft*-deletes an
+    # ``ExerciseSlot`` (``deleted_at``) — the designer's own delete/undo paths
+    # never hard-delete it — so this FK is far less likely to go stale the way
+    # ``prescription`` can (#577, #581). That premise isn't absolute, though:
+    # ``plan.mesocycles.all().delete()`` (the re-import rebuild in
+    # ``management/commands/meso_import_template.py`` and the demo-seed
+    # rebuild in ``seed_meso_demo.py``) hard-deletes the whole tree, cascading
+    # ``Mesocycle`` → ``SessionSlot`` → ``ExerciseSlot``. The CONCLUSION still
+    # holds, because that same cascade also takes ``Mesocycle`` → ``Week`` →
+    # ``Session`` → ``SessionLog`` → ``LoggedSet`` down the other branch, so no
+    # ``LoggedSet`` is left pointing at a slot whose whole tree is gone —
+    # nothing is orphaned by that path either.
+    #
+    # CASCADE is deliberate, not an oversight: ``Prescription.exercise_slot``
+    # is already CASCADE, and deleting an ``ExerciseSlot`` means the whole
+    # exercise row is gone from every week — there is no partial state to
+    # preserve, EXCEPT: ``prescription_move`` re-points ``ExerciseSlot.
+    # session_slot`` to a different day, block-wide, while leaving every
+    # ``LoggedSet`` row alone — a move only changes the slot's placement,
+    # never an athlete's logged history. So after a move, a slot that gets
+    # deleted can carry ``LoggedSet`` rows whose ``session_log`` belongs to a
+    # *different* day's still-live ``SessionLog`` than the day the slot now
+    # sits on — CASCADE then removes those sets along with the slot, which is
+    # still the right call (the exercise row truly is gone), just not for the
+    # "whole day disappears together" reason the simple case suggests.
+    #
+    # Django's delete-confirmation page *lists* CASCADE consequences and says
+    # nothing about SET_NULL ones (#581) — but that is only true of the
+    # MODELS' OWN admin pages (``ExerciseSlotAdmin``, ``SessionSlotAdmin``),
+    # which is why an admin *inline* delete of one of these is refused
+    # (``can_delete = False`` on ``ExerciseSlotInline``/``SessionSlotInline``,
+    # below): ``BaseModelFormSet.save_existing_objects()`` calls
+    # ``obj.delete()`` directly from an inline Save, with no confirmation page
+    # at all. SET_NULL here would just reintroduce the silent detach this
+    # field exists to close.
+    #
+    # One more edge, worth stating rather than discovering by incident: after
+    # a code ROLLBACK with migration 0050 still applied, old code's delete
+    # collector doesn't know about this FK at all. An admin hard-delete of an
+    # ``ExerciseSlot`` with surviving ``LoggedSet`` rows then fails LOUDLY at
+    # COMMIT on this deferred constraint, rather than silently corrupting
+    # anything — the opposite of ``reclaimed_line`` just below, which is
+    # deliberately ``db_constraint=False`` so old code CAN write through it
+    # without knowing it exists.
+    #
+    # ``null=True`` is transitional, not permanent: it lets the column be added
+    # without a table rewrite and lets the backfill migration (0051) *report*
+    # rows it can't fill rather than guess. See ``anchor_slot`` below for the
+    # matching transitional read-side fallback.
+    exercise_slot = models.ForeignKey(
+        ExerciseSlot,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="logged_sets",
+        verbose_name=_("Exercise slot"),
+    )
+    # The line-0 cell this set was logged against. Kept — and still written on
+    # every create alongside ``exercise_slot`` — so a code rollback mid-deploy
+    # leaves the old ``prescription``-reading derivations working; C2 narrows
+    # the typed line's key and a later PR drops this pointer once the anchor
+    # above is the only reader. SET_NULL survives a hard delete (#577, #581),
+    # which is exactly the failure mode ``exercise_slot`` closes.
     prescription = models.ForeignKey(
         Prescription,
         on_delete=models.SET_NULL,
@@ -2710,6 +2789,8 @@ class LoggedSet(models.Model):
         verbose_name=_("Reclaimed line"),
     )
 
+    objects = LoggedSetQuerySet.as_manager()
+
     class Meta:
         ordering = ["set_number"]
         verbose_name = "Logged set"
@@ -2717,6 +2798,135 @@ class LoggedSet(models.Model):
 
     def __str__(self):
         return f"Set {self.set_number}"
+
+    def save(self, *args, **kwargs):
+        """Keep ``exercise_slot`` mirroring ``prescription.exercise_slot``.
+
+        The invariant is: while there IS a ``prescription``, ``exercise_slot``
+        mirrors ``prescription.exercise_slot`` — not merely "fill it once if
+        it's blank" — and it outlives ``prescription`` once that FK goes NULL
+        (a hard delete, #577/#581). A fill-when-blank guard converges once and
+        then silently diverges the moment ``prescription`` is RE-POINTED at a
+        different slot on an already-anchored row — e.g. a staffer opens
+        ``LoggedSetInline``, retypes the row's ``prescription`` raw-id from one
+        slot to another, and Saves: the old guard was False (the anchor was
+        already set) and the row would commit with two pointers permanently
+        disagreeing. Re-deriving whenever ``prescription`` is live is what
+        makes that re-point correctly re-file the set, rather than requiring
+        ``prescription`` to be treated as frozen once set.
+
+        #578 C1's own lesson generally: per-call-site discipline about setting
+        ``exercise_slot`` alongside ``prescription`` does not converge — three
+        defects in one recent PR on these same files were traced to exactly
+        that kind of stale, site-local assumption. A ``LoggedSet`` that knows
+        its ``prescription`` also knows its slot (``prescription.exercise_slot``
+        is non-nullable), so that derivation belongs here, as a model
+        invariant, not repeated at every ``.save()`` call site.
+
+        Resolved with a plain ``.filter(pk=...).values_list(...).first()``
+        query rather than by dereferencing ``self.prescription`` — this fires
+        on every ordinary save of a row whose ``prescription`` may have been
+        hard-deleted concurrently (#577/#581), and ``self.prescription`` would
+        raise ``Prescription.DoesNotExist`` out of ``save()`` in exactly that
+        case, where the old fill-when-blank guard was inert. With ``.first()``
+        a vanished prescription simply leaves the anchor alone. The write (and
+        the addition to ``update_fields``) only happens when the resolved
+        value actually differs from what the instance already holds, so an
+        ordinary save of an already-correctly-anchored row stays a no-op query
+        plus no write, not an extra UPDATE.
+
+        This does NOT cover ``bulk_create`` — Django never calls ``save()``
+        per row for a bulk insert, so the four ``bulk_create`` sites
+        (``views.athlete_log_session``, ``demo.py``'s sample-log seeder, and
+        ``seed_meso_demo.py``'s two sample-log seeders) still set
+        ``exercise_slot_id`` themselves. It DOES cover ``_upsert_parsed_set``'s
+        re-link of a reclaimed row (``existing.save(update_fields=["source_line",
+        "reclaimed_line"])``) and ``athlete_log_session``'s collision-renumbering
+        walk (``row.save(update_fields=["set_number"])``) — that walk is
+        bounded and rare (``MAX_LOGGED_SET_NUMBER``), so the one extra
+        lightweight query this adds there is an acceptable price for the
+        invariant holding everywhere, not just at creation. It also does NOT
+        cover ``save(raw=True)`` — the path ``DeserializedObject.save()`` uses
+        for ``loaddata`` — which calls ``Model.save_base(..., raw=True)``
+        directly and never reaches this override at all. Latent only: the repo
+        has no ``fixtures/`` directory and no ``loaddata`` call anywhere.
+
+        ``update_fields=[]`` (an explicit, non-``None`` EMPTY iterable) is
+        Django's own signal to skip the write entirely — ``Model.save()``
+        returns before touching the database when ``update_fields is not None
+        and not update_fields``. The mutation of ``self.exercise_slot_id``
+        below is guarded the same way, not just the "add it to update_fields"
+        step further down: without that guard, ``row.save(update_fields=[])``
+        would re-anchor the IN-MEMORY instance while ``super().save()`` writes
+        nothing, leaving the Python object and the database permanently
+        disagreeing about a save that was supposed to be a no-op.
+
+        The derivation query also honors the caller's own ``using`` (or, absent
+        one, ``router.db_for_write``) rather than always reading ``default`` —
+        matching what ``super().save(**kwargs)`` already does with the same
+        kwarg. Unreachable today (one ``default`` alias, no database routers),
+        but a caller doing ``LoggedSet.objects.using(alias).create(...)``
+        writes through ``alias``; a hardcoded ``default`` read here would
+        silently derive the anchor from a different database than the one
+        being written to.
+        """
+        update_fields = kwargs.get("update_fields")
+        if self.prescription_id is not None and (
+            update_fields is None or update_fields
+        ):
+            db_alias = kwargs.get("using") or router.db_for_write(
+                type(self), instance=self
+            )
+            resolved_slot_id = (
+                Prescription.objects.using(db_alias)
+                .filter(pk=self.prescription_id)
+                .values_list("exercise_slot_id", flat=True)
+                .first()
+            )
+            if (
+                resolved_slot_id is not None
+                and resolved_slot_id != self.exercise_slot_id
+            ):
+                self.exercise_slot_id = resolved_slot_id
+                if update_fields:
+                    kwargs["update_fields"] = set(update_fields) | {"exercise_slot"}
+        super().save(*args, **kwargs)
+
+    @property
+    def anchor_slot_id(self):
+        """The durable identity this set counts toward, or ``None``.
+
+        Resolves ``exercise_slot_id`` first. The fallback to
+        ``prescription.exercise_slot_id`` is TRANSITIONAL, not a permanent
+        dual-read: a deploy runs ``migrate`` (which backfills ``exercise_slot``
+        on every row with a live ``prescription``) and only *then* does a
+        rolling restart, so old containers keep serving requests for a window
+        that spans the whole migrate-plus-restart. A ``LoggedSet`` a stale
+        container inserts during that window has ``exercise_slot = NULL`` —
+        without this fallback it would permanently stop counting toward 1RM
+        and PRs, which is exactly the bug class (#577, #581) this field
+        exists to close. The follow-up PR re-runs the backfill and deletes
+        this fallback along with the ``prescription`` field itself.
+        """
+        if self.exercise_slot_id is not None:
+            return self.exercise_slot_id
+        if self.prescription_id is not None:
+            return self.prescription.exercise_slot_id
+        return None
+
+    @property
+    def anchor_slot(self):
+        """The ``ExerciseSlot`` this set counts toward, or ``None``.
+
+        Same resolution order — and the same TRANSITIONAL fallback — as
+        ``anchor_slot_id``; see that property's docstring for why the
+        fallback exists and when it goes away.
+        """
+        if self.exercise_slot_id is not None:
+            return self.exercise_slot
+        if self.prescription_id is not None:
+            return self.prescription.exercise_slot
+        return None
 
 
 # ---------------------------------------------------------------------------

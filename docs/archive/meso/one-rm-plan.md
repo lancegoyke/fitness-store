@@ -66,6 +66,11 @@ already in place is never clobbered.
   for the lifts in a session. Called from the **log endpoint** after a *done*
   save, so the estimate tracks what the athlete actually did (a heavier set
   raises it; an edit that drops the PR lowers it — it recomputes from scratch).
+
+  > **Superseded by #578 C1** — the parameter is now `lifts`, not
+  > `prescriptions`, and may be `ExerciseSlot` rows as well as `Prescription`
+  > cells (`settle.settle_log` passes the former, resolved off `LoggedSet.
+  > anchor_slot`). Left as design-time prose above; not rewritten.
 - `one_rm_values(athlete, prescriptions, unit)` — read the stored rows for a
   batch of prescriptions (one query, by identity so the same lift surfaces
   against every prescription of it), for the two display surfaces.

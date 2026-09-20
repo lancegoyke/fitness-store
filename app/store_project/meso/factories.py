@@ -213,6 +213,12 @@ try:
 
         session_log = factory.SubFactory(SessionLogFactory)
         prescription = factory.SubFactory(PrescriptionFactory)
+        # #578 C1: derived from `prescription`, not an independent
+        # SubFactory, so a factory-built row carries both — matching what
+        # every real write site now does (writes `exercise_slot` alongside
+        # `prescription`) — and every existing test that builds a
+        # `LoggedSet` through this factory gets the anchor for free.
+        exercise_slot = factory.LazyAttribute(lambda o: o.prescription.exercise_slot)
         set_number = factory.Sequence(lambda n: n + 1)
         reps = "10"
         load = "60"

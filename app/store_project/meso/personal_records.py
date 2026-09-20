@@ -97,7 +97,7 @@ class NewRecord:
 
 
 def _live_logged_sets(athlete, *, unit):
-    """The athlete's LIVE, prescription-linked logged sets, scoped to ``unit``.
+    """The athlete's LIVE, anchor-linked logged sets, scoped to ``unit``.
 
     Unlike ``one_rm.derive_one_rm_values``'s query (which this used to mirror
     exactly, DONE-only), this one is deliberately **not** status-filtered
@@ -107,12 +107,20 @@ def _live_logged_sets(athlete, *, unit):
     persisted, confirmed ``AthleteOneRm``. A bare logged load is still
     denominated in its plan's unit, so kg and lb sets for one lift must never
     pool — that scoping is unchanged.
+
+    ``.anchored()`` (#578 C1), not ``prescription__isnull=False``: admits a
+    set whose ``prescription`` went NULL (a hard-deleted line-0 cell,
+    #577/#581) but whose ``exercise_slot`` survives, so a stray hard delete
+    no longer silently detaches an otherwise-live set from this scan.
     """
-    return models.LoggedSet.objects.filter(
-        session_log__athlete=athlete,
-        session_log__session__week__mesocycle__plan__unit=unit,
-        prescription__isnull=False,
-    ).select_related("prescription__exercise_slot", "session_log")
+    return (
+        models.LoggedSet.objects.filter(
+            session_log__athlete=athlete,
+            session_log__session__week__mesocycle__plan__unit=unit,
+        )
+        .anchored()
+        .select_related("session_log")
+    )
 
 
 def _performed_sets(logged_sets, *, unit):
@@ -122,14 +130,19 @@ def _performed_sets(logged_sets, *, unit):
     ``one_rm.key_str`` (``serializers._exercise_key``), estimate via
     ``one_rm.epley_one_rm``. A set whose load/reps aren't a usable number ("BW",
     "AMRAP", "") yields ``None`` from Epley and is dropped (never a crash).
+
+    Keyed off ``ls.anchor_slot`` (#578 C1), not ``ls.prescription`` — the same
+    durable-identity resolution ``_live_logged_sets``'s ``.anchored()`` filter
+    already guarantees resolves for every row this iterates.
     """
     for ls in logged_sets:
         est = epley_one_rm(ls.load, ls.reps)
         if est is None:
             continue
+        slot = ls.anchor_slot
         yield _PerformedSet(
-            key=key_str(ls.prescription.exercise_id, ls.prescription.name),
-            name=ls.prescription.name,
+            key=key_str(slot.exercise_id, slot.name),
+            name=slot.name,
             unit=unit,
             reps=ls.reps,
             load=ls.load,
@@ -234,9 +247,14 @@ def new_records_in(session_log):
     with no usable set yields nothing.
     """
     unit = _session_unit(session_log)
-    this_sets = models.LoggedSet.objects.filter(
-        session_log=session_log, prescription__isnull=False
-    ).select_related("prescription__exercise_slot", "session_log")
+    # `.anchored()` (#578 C1), not `prescription__isnull=False` — see
+    # `_live_logged_sets`, which this mirrors so `_performed_sets` can rely on
+    # `anchor_slot` resolving for every row from either query.
+    this_sets = (
+        models.LoggedSet.objects.filter(session_log=session_log)
+        .anchored()
+        .select_related("session_log")
+    )
     this_best = _best_per_lift(_performed_sets(this_sets, unit=unit))
     if not this_best:
         return []

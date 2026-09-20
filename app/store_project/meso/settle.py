@@ -73,8 +73,8 @@ from store_project.analytics.track import track
 
 from . import one_rm as meso_one_rm
 from . import tour as meso_tour
+from .models import ExerciseSlot
 from .models import LoggedSet
-from .models import Prescription
 from .models import Session
 from .models import SessionLog
 from .models import newest_session_logs
@@ -183,18 +183,21 @@ def settle_log(pk, *, cutoff):
         # — refresh exactly the lifts they reference, not the whole session
         # (which could pull in unrelated already-DONE history unnecessarily,
         # though harmlessly; scoping it is simply precise about what changed).
-        prescription_ids = (
-            log.sets.exclude(prescription__isnull=True)
-            .values_list("prescription_id", flat=True)
-            .distinct()
-        )
-        prescriptions = list(
-            Prescription.objects.filter(pk__in=prescription_ids).select_related(
-                "exercise_slot"
-            )
-        )
+        #
+        # #578 C1: collected via ``anchor_slot_id``, not ``prescription_id`` —
+        # a set whose ``prescription`` went NULL (a hard-deleted line-0 cell,
+        # #577/#581) but whose ``exercise_slot`` survives must still have its
+        # lift refreshed. ``select_related("prescription")`` makes the
+        # fallback hop (``anchor_slot_id``'s read of ``prescription.
+        # exercise_slot_id``) free instead of one query per set.
+        anchor_slot_ids = {
+            ls.anchor_slot_id
+            for ls in log.sets.select_related("prescription")
+            if ls.anchor_slot_id is not None
+        }
+        lifts = list(ExerciseSlot.objects.filter(pk__in=anchor_slot_ids))
         meso_one_rm.refresh_one_rms(
-            log.athlete, prescriptions, log.session.week.mesocycle.plan.unit
+            log.athlete, lifts, log.session.week.mesocycle.plan.unit
         )
 
     # Outside the atomic block, like `athlete_log_session`'s own call to this:

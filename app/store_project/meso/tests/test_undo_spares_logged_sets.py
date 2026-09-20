@@ -6,9 +6,12 @@ at — but for two of the three pointers only: ``parsed_sets``
 #541). ``logged_sets`` (``LoggedSet.prescription``, ``SET_NULL``) — the most
 direct of the three, the line-0 cell every logged set is filed under — was left
 out, so an undo could hard-delete a cell an ordinary structured row names. The
-row survived with ``prescription = NULL``, and every derivation filters that
-out: the set stayed on the athlete's page as text while silently ceasing to
-count toward their estimated 1RM and their records.
+row survived with ``prescription = NULL``, and before #578 C1 every
+derivation filtered that out: the set stayed on the athlete's page as text
+while silently ceasing to count toward their estimated 1RM and their
+records. Since C1, that same row keeps counting through its own
+``exercise_slot`` — see ``TestRestoreAfterReclaimSparesANullPrescriptionRow``
+below for what changed and what didn't.
 
 ON REACHING THE PRECONDITION. The purge only fires on a cell absent from the
 snapshot whose slot *and* week are both live in it. No real endpoint produces
@@ -236,13 +239,21 @@ class TestRestoreAfterReclaimSparesANullPrescriptionRow:
 
     But a row #577 already damaged (its line-0 cell purged out from under it,
     ``prescription`` gone ``NULL`` via ``SET_NULL``) still matches
-    ``source_line=cell`` too, and reusing IT re-links the line to a set every
-    derivation (``one_rm``, ``personal_records``, ``settle``) filters out —
-    an inert, invisible "restore" instead of a fresh, countable set. Scoping
-    ``existing`` by ``prescription=line_zero_cell`` (matching the ``mine``
-    delete above it and the ``reclaimed_line`` fallback below it) closes
-    that: a NULL-prescription row can no longer satisfy either lookup, so the
-    upsert falls through to CREATE and mints a live row instead.
+    ``source_line=cell`` too. Scoping ``existing`` by
+    ``prescription=line_zero_cell`` (matching the ``mine`` delete above it
+    and the ``reclaimed_line`` fallback below it) refuses that row, same as
+    it refused before #578 C1: a NULL-prescription row can't satisfy either
+    lookup, so the upsert falls through to CREATE and mints a fresh row.
+
+    What C1 changes is *why* that fall-through matters. Reusing the damaged
+    row used to re-link the line to a set every derivation (``one_rm``,
+    ``personal_records``, ``settle``) filtered out by ``prescription`` — an
+    inert, invisible "restore". Since C1 those derivations resolve through
+    ``exercise_slot`` instead, so the damaged row is no longer inert: it
+    already counts on its own. The behaviour this test asserts (fall through
+    to CREATE, don't reuse the damaged row) is unchanged, but "reusing it
+    would be invisible" is no longer the reason it matters — "reusing it
+    would double-count alongside the fresh CREATE" is.
     """
 
     def test_the_restore_mints_a_fresh_row_not_the_null_prescription_survivor(
@@ -276,7 +287,11 @@ class TestRestoreAfterReclaimSparesANullPrescriptionRow:
         live = LoggedSet.objects.get(source_line=cell, prescription__isnull=False)
         assert live.pk != original.pk, (
             "the restore adopted the NULL-prescription row instead of "
-            "minting a fresh, countable one"
+            "minting a fresh row — since #578 C1 the NULL-prescription "
+            "survivor already counts on its own via exercise_slot, so "
+            "adopting it here would leave the restored performance "
+            "double-counted (both rows live and both anchored) rather than "
+            "invisible"
         )
         assert live.prescription_id == s.squat.pk
         assert (live.load, live.reps) == ("225", "5")

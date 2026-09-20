@@ -1258,6 +1258,9 @@ def _logged_sets_from_cells(log, prescriptions):
                 LoggedSet(
                     session_log=log,
                     prescription=prescription,
+                    # #578 C1: written alongside `prescription`, not instead
+                    # of it — see `LoggedSet.exercise_slot`'s model comment.
+                    exercise_slot_id=prescription.exercise_slot_id,
                     set_number=set_number,
                     reps=reps_text,
                     load=load,
@@ -1674,6 +1677,10 @@ class Command(BaseCommand):
                         LoggedSet(
                             session_log=log,
                             prescription=prescription,
+                            # #578 C1: written alongside `prescription`, not
+                            # instead of it — see `LoggedSet.exercise_slot`'s
+                            # model comment.
+                            exercise_slot_id=prescription.exercise_slot_id,
                             set_number=set_number,
                             reps=reps,
                             load=load,
