@@ -1489,7 +1489,11 @@ class TestVisibilityFollowsTheDisplayedText:
 
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        assert row["sub_lines"] == [{"line": 1, "text": "225 x 5", "warn": False}]
+        # `warn_reason` (#572) is the companion key to `warn` — "" whenever
+        # there is no warning at all.
+        assert row["sub_lines"] == [
+            {"line": 1, "text": "225 x 5", "warn": False, "warn_reason": ""}
+        ]
         assert all(r["load"] == "" for r in row["set_rows"]), (
             "the sub-line still displays this set, so showing it again in "
             "set_rows double-displays one performance"
@@ -2241,7 +2245,9 @@ class TestTheWarnReadCannotBreakTheResponse:
         def boom(*args, **kwargs):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr("store_project.meso.views.sub_line_should_warn", boom)
+        # #572 renamed the warn read to `sub_line_warn_reason` — same
+        # function, same call site, it just returns a reason now.
+        monkeypatch.setattr("store_project.meso.views.sub_line_warn_reason", boom)
         resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
 
         assert resp.status_code == 200, "a warn failure must not 500 the blur"

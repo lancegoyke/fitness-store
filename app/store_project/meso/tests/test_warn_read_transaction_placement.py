@@ -1,7 +1,7 @@
 """#567/#568 P1-D: the warn read must run outside the write's transaction.
 
 The warn read must not be able to touch a write that already committed. A
-prior version of the #568 fix moved ``_cell_warn_or_false`` from the
+prior version of the #568 fix moved ``_cell_warn_reason_or_blank`` from the
 response construction into ``athlete_cell_write``'s ``transaction.atomic()``
 block, as its LAST statement, wrapped in its OWN nested ``transaction
 .atomic()`` savepoint (mirroring ``_upsert_parsed_set``'s "load-bearing, not
@@ -61,7 +61,10 @@ def test_a_failing_warn_read_does_not_roll_back_the_write(client, monkeypatch):
         # the bug this test is for.
         raise OperationalError("simulated connection failure")
 
-    monkeypatch.setattr("store_project.meso.views.sub_line_should_warn", boom)
+    # #572 renamed the warn read to `sub_line_warn_reason` (it now returns
+    # WHY a line is tinted, not just whether) — same function, same place in
+    # `_cell_warn_reason_or_blank`, so this injection point is unchanged.
+    monkeypatch.setattr("store_project.meso.views.sub_line_warn_reason", boom)
     monkeypatch.setattr(connection, "savepoint_rollback", failing_savepoint_rollback)
 
     resp = write_cell(client, s.session, s.squat, 1, "225 x 5")
@@ -76,7 +79,7 @@ def test_a_failing_warn_read_does_not_roll_back_the_write(client, monkeypatch):
     cell = sub_cell(s.squat, 1)
     assert cell.text == "225 x 5", (
         "the athlete's cell text was rolled back by a failed warn read -- "
-        "_cell_warn_or_false must run OUTSIDE athlete_cell_write's write "
+        "_cell_warn_reason_or_blank must run OUTSIDE athlete_cell_write's write "
         "transaction, not inside it under a savepoint of its own"
     )
     assert LoggedSet.objects.filter(source_line=cell).exists(), (

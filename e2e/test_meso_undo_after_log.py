@@ -26,7 +26,7 @@ lands in the fixed state, not just the data behind it. The sequence:
 
 Before the fix, the athlete then saw ``225 x 5`` on the line AND the same
 225/5 in Set row 1 at once, with the line tinted "not logged as a set" —
-``sub_line_should_warn`` looked only for a row whose ``source_line`` was that
+``sub_line_warn_reason`` looked only for a row whose ``source_line`` was that
 cell, and the copy has none. After the fix the line shows it once, the Set row
 is empty, and there is no tint — one ``LoggedSet`` throughout.
 """

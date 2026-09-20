@@ -152,6 +152,38 @@ function isRetryableStatus(status) {
   return status >= 500 || status === 408 || status === 429;
 }
 
+// #570: a non-retryable refusal (`athlete_log_session`'s 400, "Too many sets
+// logged for Box Squat.") names the exercise, and the generic "try again"
+// banner would tell the athlete to retry a save that can never succeed — so
+// the server's own message has to reach them.
+//
+// Only a JSON body carrying an `error` string qualifies, which is the shape
+// that endpoint uses for exactly one refusal. Its OTHER 400s are bare
+// `HttpResponseBadRequest`s whose text is developer-facing ("Duplicate id in
+// sets.", "status must be 'pending' or 'done'."): reading the body as plain
+// text would put those in front of an athlete who can do nothing about them,
+// and would also render whatever a proxy or load balancer answered with.
+// Opting in per-message beats guessing from the body's shape. Truncated
+// rather than dropped when long — an exercise name can be 255 characters, and
+// a clipped message still names the lift, where no message at all doesn't.
+async function readErrorMessage(res) {
+  let data;
+  try {
+    data = await res.json();
+  } catch (e) {
+    return "";
+  }
+  // `ok: false` as well as `error`, because a proxy or WAF can answer a 4xx
+  // with JSON of its own (`{"error": "Forbidden"}`) and this value is shown
+  // to the athlete verbatim. Both keys together are this endpoint's shape,
+  // not a generic one.
+  const named =
+    data && data.ok === false && typeof data.error === "string"
+      ? data.error.trim()
+      : "";
+  return named.slice(0, 200);
+}
+
 // How long a logging write may take before it counts as offline (#527). fetch
 // has no timeout of its own, and gym wifi that connects but never answers would
 // hold a write open forever — and "Log session" with it, since it waits for the
@@ -190,6 +222,16 @@ function createLogger() {
     saving: false,
     saved: false,
     error: false,
+    // #570: the refusal's own message ("Too many sets logged for Box
+    // Squat."), when the last save's `error` came from a non-retryable
+    // response that named one — blank otherwise, in which case the template
+    // falls back to the generic banner text.
+    errorMessage: "",
+    // What `status` was before the save whose entry is still in the outbox
+    // flipped it optimistically — so a flush that the server later REFUSES
+    // can put the badge back (see `flushLog`). Empty once nothing of this
+    // page's is queued any more.
+    statusBeforeQueued: "",
     queued: false, // a save is stashed locally, waiting for the network
     lineError: false, // the log landed, but a line the server refused didn't
     newRecords: [], // PRs the last save beat (Phase 4c) — the celebration toast
@@ -438,9 +480,16 @@ function createLogger() {
       this.saving = true;
       this.saved = false;
       this.error = false;
+      this.errorMessage = "";
       this.queued = false;
       this.lineError = false;
       this.newRecords = []; // clear any prior toast; this save recomputes it
+      // #570: what to put back if this save is REFUSED (a non-retryable
+      // response, below) rather than merely delayed — the database kept
+      // nothing, so the optimistic flip right below has to come back off
+      // too, and it can only do that if the value it's overwriting was
+      // captured first.
+      const previousStatus = this.status;
       // Reflect the intended status locally right away so the UI is responsive
       // whether the request lands now or after a sync.
       if (markDone) this.status = "done";
@@ -473,7 +522,11 @@ function createLogger() {
       } catch (netErr) {
         // Network unreachable → queue it; the upsert endpoint is idempotent, so
         // replaying on reconnect is safe (latest save for a session wins).
-        this.keepForLater(payload);
+        if (this.keepForLater(payload) || this.holdsThisLog(sending)) {
+          this.statusBeforeQueued = previousStatus;
+        } else {
+          this.status = previousStatus;
+        }
         this.saving = false;
         return;
       }
@@ -483,13 +536,36 @@ function createLogger() {
         // HTML). Don't lose it: queue for retry, where the next online flush
         // (after re-login) carries a fresh CSRF.
         if (res.redirected) {
-          this.keepForLater(payload);
+          if (this.keepForLater(payload) || this.holdsThisLog(sending)) {
+            this.statusBeforeQueued = previousStatus;
+          } else {
+            this.status = previousStatus;
+          }
           return;
         }
-        if (!res.ok) throw new Error("Request failed: " + res.status);
+        if (!res.ok) {
+          if (!isRetryableStatus(res.status)) {
+            // #570: a refusal (e.g. "Too many sets logged for Box Squat.")
+            // is deterministic — retrying the same payload can only fail
+            // again — so the optimistic "done" above comes back off (the
+            // database kept nothing) and the server's own message, naming
+            // what actually went wrong, replaces the generic banner text.
+            // A retryable status (5xx/408/429) falls through untouched: the
+            // write might yet land, so neither the status nor the message
+            // changes here — same as a network failure above.
+            // Message first, THEN the revert: the body read is bounded by
+            // `postJson`'s own timeout, and flipping the status back before
+            // it resolves would leave the page showing neither "Logged" nor
+            // a reason for up to that long.
+            this.errorMessage = await readErrorMessage(res);
+            this.status = previousStatus;
+          }
+          throw new Error("Request failed: " + res.status);
+        }
         if (sending) this.dropEntry(sending);
         const data = await res.json();
         this.status = data.log.status;
+        this.statusBeforeQueued = ""; // the server has this save; nothing to put back
         // `payload` — not `sending`'s body-only shape, though they carry the
         // same `sets` here — is this save's own request body, exactly what
         // was actually posted (#567/#568 P1-E/F): `syncFromLog` needs it to
@@ -534,6 +610,16 @@ function createLogger() {
         this.lineError = true;
         return;
       }
+      // A refusal outranks a tick. An earlier save of THIS page's grid that
+      // the server refused is still refused — nothing retries it, since a
+      // refusal drops its outbox entry — so "Saved ✓" would be a plain lie,
+      // and clearing the refusal to make room for the tick (which an earlier
+      // version of this did) states it even more confidently. The flush that
+      // brings us here may well have landed a log queued by ANOTHER tab on
+      // the same session: `flushedMine` means a log for this URL landed, not
+      // that this page's did. `save()` clears both at the top of the next
+      // real attempt, which is the moment the claim stops being true.
+      if (this.error) return;
       this.saved = true;
       setTimeout(() => {
         this.saved = false;
@@ -631,9 +717,28 @@ function createLogger() {
 
     // Queue this session's log and say so — or, when storage refused it, say
     // it didn't save.
+    // Whether `entry` — the write-ahead copy `save()` made before the request
+    // went out — is still in the outbox for this session. `writeQueue` is
+    // all-or-nothing, so a LATER `enqueue` of the same save can fail while
+    // that earlier copy sits there perfectly intact and due to flush: the
+    // save is queued, not lost, and saying "couldn't save" (or taking the
+    // status back off) would under-claim what the page actually holds.
+    holdsThisLog(entry) {
+      return !!entry && this.readQueue().some((item) => item.id === entry.id);
+    },
+
+    // True when the outbox took it. False means storage refused (a full or
+    // blocked store), and then NOTHING holds this save — not the server, not
+    // the queue — so the caller must not leave the optimistic "done" badge up
+    // (#570, round 2): "Logged" with no log anywhere and no retry pending is
+    // the worst version of the claim this whole slice exists to stop.
     keepForLater(payload) {
-      if (this.enqueue(payload)) this.queued = true;
-      else this.error = true;
+      if (this.enqueue(payload)) {
+        this.queued = true;
+        return true;
+      }
+      this.error = true;
+      return false;
     },
 
     // Returns the entry as stored, or null when storage refused it.
@@ -775,7 +880,42 @@ function createLogger() {
       // true for the login HTML but the log was never saved — keep it queued
       // so a real re-login + flush delivers it instead of dropping the workout.
       if (res.redirected) return "offline";
-      if (!res.ok) return "kept";
+      // BEFORE the refusal split below, and load-bearing: `isWrongAccount`
+      // covers 403 and 409, which say "not postable as this account right
+      // now" — a rotated CSRF token after a re-login (this page captures
+      // `csrf` once, at load), or a write belonging to someone else. They are
+      // not refusals of the payload, and dropping one would destroy the only
+      // copy of a session logged offline: unlike a sub-line, a queued log's
+      // set rows are never restored into the grid on load. `flushCell` makes
+      // this check first for the same reason.
+      if (isWrongAccount(res)) return "offline";
+      if (isRetryableStatus(res.status)) return "kept";
+      if (!res.ok) {
+        // A refusal (#570's 400) won't change on retry, so keeping it queued
+        // promises a sync that can never happen: the outbox re-POSTs the same
+        // doomed payload on every `online` event while the footer says "will
+        // sync". Drop it and say what went wrong instead — the same split
+        // `flushCell` makes, which this function simply never had.
+        //
+        // Only for THIS session's log, for `flushCell`'s reason: another
+        // session's log has nothing on this page to report it on, so it stays
+        // queued and is refused again on its own page, where the athlete can
+        // see it.
+        if (item.url !== this.logUrl) return "kept";
+        this.dropEntry(item);
+        // The badge goes back with it. `save()` flipped `status` to "done"
+        // optimistically before queuing this entry and recorded what it was
+        // before (`statusBeforeQueued`); now that the server has refused the
+        // entry and nothing is left to retry, leaving "Logged" up is the same
+        // claim the revert in `save()` exists to stop — just reached by the
+        // flush instead. Only when we still know the earlier value: an entry
+        // queued by a previous page load carries none, and guessing would be
+        // worse than leaving the next page load to say what the server holds.
+        if (this.statusBeforeQueued) this.status = this.statusBeforeQueued;
+        this.error = true;
+        this.errorMessage = await readErrorMessage(res);
+        return "rejected";
+      }
       this.dropEntry(item);
       if (item.url !== this.logUrl) return "saved";
       let data;
@@ -1191,6 +1331,20 @@ function createLogger() {
     // unknown (a response that couldn't be read or had gone stale), and then
     // the line always posts.
     //
+    // ...but not EVERY warned one (#572). A tint says the line has no set
+    // backing it HERE, and the repost above is the repair only when the reason
+    // is that no set exists at all. `warn_reason === "elsewhere"` means the
+    // opposite: the athlete already logged this performance, on the day the
+    // coach has since dragged the exercise off, and the cell travelled with the
+    // `ExerciseSlot` while the `LoggedSet` stayed behind (#568's decision). For
+    // that reason a repost isn't a repair — `_upsert_parsed_set` writes against
+    // the NEW day's log and mints a SECOND row for one performance, with the
+    // old one still counting toward results, 1RM and the agent's grounding. So
+    // merely focusing and leaving such a line duplicated the set. Any other
+    // reason — including "" from a server that doesn't send one yet, mid
+    // rolling deploy — keeps the old behavior, which is the safe direction: a
+    // needless repost is idempotent, a missing one loses the set.
+    //
     // And a line this page has an entry queued for always posts: a blur made
     // while an earlier save of it ran queued text that hasn't been sent. The
     // line as it is now replaces it — or that older text would replay later,
@@ -1200,7 +1354,7 @@ function createLogger() {
         entry.savedText === undefined ||
         text !== entry.savedText ||
         entry.queued ||
-        entry.warn
+        (entry.warn && entry.warn_reason !== "elsewhere")
       ) {
         return true;
       }
@@ -1336,6 +1490,11 @@ function createLogger() {
       }
       entry.savedText = text;
       entry.warn = !!(data.cell && data.cell.warn);
+      // WHY it's tinted, not just whether (#572) — `_lineNeedsSending` treats
+      // one reason as a repair to re-post and one as a duplicate to leave
+      // alone. Derive-on-read like `warn` itself, so a reason that stops
+      // applying clears on the next blur. "" when the server sent none.
+      entry.warn_reason = (data.cell && data.cell.warn_reason) || "";
       // Optimistic PR (5a §7), marked ON THE LINE THAT EARNED IT rather than in
       // `newRecords`. That card renders at the top of the page, which is right
       // for `save()` — "Log session" is a whole-session act — but wrong here: a

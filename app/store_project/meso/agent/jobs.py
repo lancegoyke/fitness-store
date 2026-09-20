@@ -43,10 +43,17 @@ def dispatch_proposal(batch_id, *, client=None):
     if getattr(settings, "MESO_AGENT_RUN_SYNC", False):
         service.run_proposal_job(batch_id, client=client)
         return
-    # ATOMIC_REQUESTS wraps the view in a transaction. Enqueue on commit so the
-    # task lands only once the drafting batch has durably committed (a worker in
-    # another process would otherwise race the row) and never if the request rolls
-    # back.
+    # Enqueue on commit, not immediately — not because ATOMIC_REQUESTS wraps
+    # the view (it never has; #571 deleted the dead module-level line that
+    # used to claim otherwise, see the note in config/settings/base.py), but
+    # because a caller can be inside an explicit ``transaction.atomic()`` of
+    # its own. ``plan_create``'s draft path is: it calls this from INSIDE the
+    # block that creates the drafting batch, so the task must not land until
+    # that batch has durably committed (a worker in another process would
+    # otherwise race the row) and must not land at all if the block rolls
+    # back. ``agent_propose`` calls it just AFTER its own block closes, where
+    # ``on_commit`` runs the callable straight away — harmless, and it keeps
+    # one rule here instead of one per call site.
     transaction.on_commit(lambda: _enqueue(batch_id))
 
 

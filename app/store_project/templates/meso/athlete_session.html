@@ -155,7 +155,8 @@
       <div class="meso-spacer"></div>
       <span class="meso-row-meta" style="color:var(--ok);" x-show="saved" x-cloak>Saved &#10003;</span>
       <span class="meso-row-meta" style="color:var(--dim);" x-show="queued" x-cloak>Saved offline — will sync when you&#8217;re back.</span>
-      <span class="meso-row-meta" style="color:var(--warn);" x-show="error" x-cloak>Couldn&#8217;t save — try again.</span>
+      {# #570: errorMessage carries a refusal's own text (e.g. "Too many sets logged for Box Squat.") when the last save failed with one; blank otherwise, and the fallback below is today's static text. #}
+      <span class="meso-row-meta" style="color:var(--warn);" x-show="error" x-cloak x-text="errorMessage || 'Couldn’t save — try again.'"></span>
       <span class="meso-row-meta" data-testid="session-line-error" style="color:var(--warn);" x-show="lineError" x-cloak>A line above couldn&#8217;t save.</span>
       <div class="meso-log-actions-buttons">
         <button type="button" data-testid="session-save" class="meso-btn" @click="save(false)" :disabled="saving">Save progress</button>

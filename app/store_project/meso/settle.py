@@ -99,7 +99,7 @@ def settleable_logs(cutoff):
     #567/#568 P2: ``-pk`` tiebreaks a shared ``created_at`` the same
     deterministic way every other "newest ``SessionLog`` for one (session,
     athlete) pair" read does (``views.athlete_log_session``,
-    ``views._upsert_parsed_set``, ``views._cell_warn_or_false``,
+    ``views._upsert_parsed_set``, ``views._cell_warn_reason_or_blank``,
     ``presenters.athlete_session``, and ``settle_log`` below) — without it,
     two logs sharing a ``created_at`` (precisely the split-log rows #568
     exists for) sort ambiguously here, and this query could pick a different

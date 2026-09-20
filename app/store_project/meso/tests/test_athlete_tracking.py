@@ -478,13 +478,18 @@ class TestSubLinePresenter:
         sub_line(s.squat, "RPE 8")  # a line-1 cell beneath the squat row
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        # "RPE 8" isn't a set attempt (5a §8) — warn is False.
-        assert row["sub_lines"] == [{"line": 1, "text": "RPE 8", "warn": False}]
+        # "RPE 8" isn't a set attempt (5a §8) — warn is False. `warn_reason`
+        # (#572) rides alongside it, "" when there is no warning.
+        assert row["sub_lines"] == [
+            {"line": 1, "text": "RPE 8", "warn": False, "warn_reason": ""}
+        ]
 
         payload = presenters.athlete_log_payload(ctx)
         assert payload["cell_url"] == cell_url(s.session)
         pr = next(e for e in payload["exercises"] if e["id"] == s.squat.pk)
-        assert pr["sub_lines"] == [{"line": 1, "text": "RPE 8", "warn": False}]
+        assert pr["sub_lines"] == [
+            {"line": 1, "text": "RPE 8", "warn": False, "warn_reason": ""}
+        ]
 
     def test_athlete_session_sub_lines_warn_only_on_unresolved_set(self, client):
         # 5a §8: derive-on-read warn — a fat-fingered set attempt warns; a
@@ -564,8 +569,11 @@ class TestSubLinePresenter:
         )
         ctx = presenters.athlete_session(s.session, s.athlete)
         row = next(e for e in ctx["exercises"] if e["id"] == s.squat.pk)
-        # The parsed set shows once, as sub_lines text...
-        assert row["sub_lines"] == [{"line": 1, "text": "225 x 5", "warn": False}]
+        # The parsed set shows once, as sub_lines text... (`warn_reason` is
+        # #572's companion key; "" whenever `warn` is False.)
+        assert row["sub_lines"] == [
+            {"line": 1, "text": "225 x 5", "warn": False, "warn_reason": ""}
+        ]
         # ...and never a second time as a filled/"done" structured set row.
         assert all(not r["done"] for r in row["set_rows"])
         assert all(r["reps"] == "" and r["load"] == "" for r in row["set_rows"])

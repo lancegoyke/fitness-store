@@ -2462,20 +2462,40 @@ def hidden_parsed_set_pks(rows):
     }
 
 
-def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
-    """Should this athlete sub-line be tinted (5a §8)?
+def sub_line_warn_reason(
+    cell, *, loggable=True, backing_sets=None, elsewhere_sets=None
+):
+    """WHY this athlete sub-line should be tinted (5a §8), or ``None``.
 
-    Three reasons, and every surface has to give the same answer or the tint
+    Four reasons, and every surface has to give the same answer or the tint
     flickers — the cell-write response clearing it only for a reload to put it
     back:
 
-    1. the text is shaped like a set attempt but won't resolve (``225 x``);
-    2. it resolves but can't be stored — too long, or ``loggable`` is False
-       because the row isn't accepting sets at all;
-    3. it resolves and SHOULD have a row, but none exists. Asking after the row
-       covers every cause at once (skipped when typed and later unskipped, a
-       coach line that was never parsed, a database error the tolerance guard
-       swallowed) where checking any single cause covers only that one.
+    1. ``"unresolved"`` — the text is shaped like a set attempt but won't
+       resolve (``225 x``);
+    2. ``"skipped"``/``"too-long"`` — it resolves but can't be stored, because
+       ``loggable`` is False (the row isn't accepting sets at all) or a value
+       is longer than the column;
+    3. ``"unlogged"`` — it resolves and SHOULD have a row, but none exists
+       anywhere. Asking after the row covers every cause at once (skipped when
+       typed and later unskipped, a coach line that was never parsed, a
+       database error the tolerance guard swallowed) where checking any single
+       cause covers only that one;
+    4. ``"elsewhere"`` (#572) — it resolves, no row backs it on THIS day, but
+       one of ``elsewhere_sets`` does: the performance is already logged, on
+       the day this exercise was moved away from. The tint is the same; the
+       reason is not, and the CLIENT has to tell them apart.
+       ``_lineNeedsSending`` re-posts a warned line whose text hasn't changed
+       — that is how set-shaped text typed while the row was skipped gets its
+       set once the coach un-skips — but doing it for this reason posts a line
+       whose performance already exists, and ``_upsert_parsed_set`` mints a
+       SECOND ``LoggedSet`` for it on the new day while the old day's row
+       stays. So merely focusing and leaving a line tinted by a coach's
+       cross-day drag duplicated the set. ``elsewhere_sets`` is the athlete's
+       rows for this cell on any OTHER session; callers that don't pass it get
+       ``"unlogged"``, which is the reason that keeps today's repost — the
+       safe default, since a repost that mints a missing row is the behavior
+       this rule exists for.
 
     ``backing_sets`` lets a caller pass rows it already has in memory; without
     it the row is looked up (also finding a copy through ``reclaimed_line``,
@@ -2491,7 +2511,7 @@ def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
     answer.** A ``Prescription`` cell alone names an exercise × week × line —
     not a ``SessionLog``, and not even an athlete — so there is no way to scope
     it to "the one log this actually means". Both real callers
-    (``athlete_session``, ``_cell_warn_or_false``) always pass ``backing_sets``
+    (``athlete_session``, ``_cell_warn_reason_or_blank``) always pass ``backing_sets``
     from the one log they each already read; this branch exists only so a
     future caller that forgets to isn't unboundedly wrong. #568: it used to
     have NO scope at all (``LoggedSet.objects.filter(Q(source_line=cell) |
@@ -2516,10 +2536,11 @@ def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
     not an oversight: a set is either backed by THIS day's log or it isn't,
     and "isn't" is what actually happened.
     """
-    if parsing.cell_should_warn(cell.text, loggable=loggable):
-        return True
+    reason = parsing.cell_warn_reason(cell.text, loggable=loggable)
+    if reason is not None:
+        return reason
     if not parsing.performed_is_set(cell.text):
-        return False
+        return None
     rows = (
         backing_sets
         if backing_sets is not None
@@ -2530,7 +2551,29 @@ def sub_line_should_warn(cell, *, loggable=True, backing_sets=None):
             session_log__session__session_slot_id=cell.exercise_slot.session_slot_id,
         )
     )
-    return line_displays(cell, rows) is None
+    if line_displays(cell, rows) is not None:
+        return None
+    # Same one-row-per-line ranking, asked of the rows this cell left behind on
+    # another day. Not a bare "does any row exist": the line has to still be
+    # SHOWING that performance for a re-post to be a duplicate of it, which is
+    # exactly what ``line_displays`` tests.
+    if elsewhere_sets and line_displays(cell, list(elsewhere_sets)) is not None:
+        return "elsewhere"
+    return "unlogged"
+
+
+# A generous ceiling on a set's number — no real session has this many sets.
+# #570: lives HERE, not in views.py, because three places must agree on one
+# number and ``presenters.py`` cannot import from ``views.py`` (views already
+# imports presenters — a cycle). ``views._clean_logged_sets`` rejects a posted
+# ``set_number`` above it, ``athlete_log_session``'s collision-renumbering walk
+# is bounded by it (a save is refused, see there, rather than climbing past
+# it), and ``presenters._set_rows``'s ``hard_cap`` renders exactly this many
+# rows — so the grid never shows a row the endpoint would reject. ``views.py``
+# re-exports this under its old name (``from .models import
+# MAX_LOGGED_SET_NUMBER``) so existing callers and tests that spell it
+# ``views.MAX_LOGGED_SET_NUMBER`` keep working.
+MAX_LOGGED_SET_NUMBER = 50
 
 
 class LoggedSet(models.Model):

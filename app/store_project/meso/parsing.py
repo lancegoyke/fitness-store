@@ -533,8 +533,8 @@ def parse_performed(text):
 MAX_LOGGED_FIELD = 32
 
 
-def cell_should_warn(text, *, loggable=True):
-    """Derive-on-read ``warn`` (5a, plan §8): should this cell be tinted?
+def cell_warn_reason(text, *, loggable=True):
+    """WHY this cell should be tinted (5a, plan §8), or ``None``.
 
     A tiny wrapper around ``parse_performed`` shared by every surface that
     needs to color a cell — the athlete presenter (the sub-line stack) and the
@@ -544,26 +544,38 @@ def cell_should_warn(text, *, loggable=True):
 
     Two reasons to warn, and they must be the same two the write path acts on:
 
-    1. ``unresolved-set`` — text shaped like a logging attempt that won't
+    1. ``"unresolved"`` — text shaped like a logging attempt that won't
        resolve (``225 x``). ``skip``/``swap``/``note``/``duration`` and an empty
        cell are all successful classifications and never warn.
-    2. a set that resolves but WON'T BE STORED. Either it is too long — the
-       upsert declines a value past ``MAX_LOGGED_FIELD`` — or ``loggable`` is
-       False because the row isn't accepting sets at all (the coach skipped it
-       while the athlete had the page open). Both cases used to report no
-       warning, leaving the athlete looking at ordinary-looking text that
-       silently never counted toward their records.
+    2. a set that resolves but WON'T BE STORED — ``"skipped"`` when
+       ``loggable`` is False because the row isn't accepting sets at all (the
+       coach skipped it while the athlete had the page open), or
+       ``"too-long"`` when the upsert would decline a value past
+       ``MAX_LOGGED_FIELD``. Both cases used to report no warning, leaving the
+       athlete looking at ordinary-looking text that silently never counted
+       toward their records.
+
+    #572: the reason is returned, not just a boolean, because the CLIENT acts
+    on it differently — ``_lineNeedsSending`` re-posts a warned line whose text
+    hasn't changed, and whether that re-post is the repair or the bug depends
+    entirely on which reason fired. The bare-bool wrapper this used to feed
+    (``cell_should_warn``) was deleted once every caller wanted the reason
+    instead — see ``models.sub_line_warn_reason`` and
+    ``views._cell_warn_reason_or_blank``.
     """
     parsed = parse_performed(text)
     if not parsed:
-        return False
+        return None
     if parsed.get("kind") == "unresolved-set":
-        return True
+        return "unresolved"
     if parsed.get("kind") != "set":
-        return False
+        return None
+    # Ordered before the length test on purpose: a skipped row stores nothing
+    # whatever the values are, so "the row isn't taking sets" is the truer
+    # reason of the two, and it's the one the un-skip repost keys on.
     if not loggable:
-        return True
-    return any(
+        return "skipped"
+    too_long = any(
         len(value) > MAX_LOGGED_FIELD
         for value in (
             performed_reps_text(parsed),
@@ -571,6 +583,7 @@ def cell_should_warn(text, *, loggable=True):
             str(parsed.get("rpe", "")),
         )
     )
+    return "too-long" if too_long else None
 
 
 def performed_reps_text(parsed):

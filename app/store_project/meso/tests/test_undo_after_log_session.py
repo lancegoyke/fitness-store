@@ -98,7 +98,7 @@ class TestTheUndoneReclaimShowsTheSetOnce:
         assert all(r["done"] is False for r in squat["set_rows"])
 
     def test_the_line_is_not_tinted(self, client):
-        """``sub_line_should_warn`` claimed the line logged nothing."""
+        """``sub_line_warn_reason`` claimed the line logged nothing."""
         s = seed()
         _undo_the_reclaim(client, s)
 
