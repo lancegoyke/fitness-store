@@ -575,18 +575,24 @@ def _lock_cascade_indices(queries):
     """
     return {
         "user": _first_query_index(
-            queries, lambda low: 'from "users_user"' in low and "for update" in low
+            queries,
+            lambda low: 'from "users_user"' in low and "for no key update" in low,
         ),
         "coachathlete": _first_query_index(
             queries,
-            lambda low: 'from "meso_coachathlete"' in low and "for update" in low,
+            lambda low: (
+                'from "meso_coachathlete"' in low and "for no key update" in low
+            ),
         ),
         "plan": _first_query_index(
-            queries, lambda low: 'from "meso_plan"' in low and "for update" in low
+            queries,
+            lambda low: 'from "meso_plan"' in low and "for no key update" in low,
         ),
         "batch": _first_query_index(
             queries,
-            lambda low: 'from "meso_agentproposalbatch"' in low and "for update" in low,
+            lambda low: (
+                'from "meso_agentproposalbatch"' in low and "for no key update" in low
+            ),
         ),
         "delete": _first_query_index(
             queries, lambda low: low.strip().startswith("delete")
@@ -645,11 +651,24 @@ class TestClearDemoLockOrder:
         # a LEFT OUTER JOIN, and a bare `FOR UPDATE` over one of those is a
         # hard PostgreSQL error, not a silent over-lock — so a regression
         # back to a joined query wouldn't quietly over-lock, it would crash
-        # `clear_demo` outright. Pin the emitted clause itself: a plain
-        # `FOR UPDATE`, never `FOR UPDATE OF`.
+        # `clear_demo` outright. Pin the emitted clause itself: never
+        # `FOR UPDATE OF`.
         plan_sql = queries[idx["plan"]].lower()
         assert "for update of" not in plan_sql, plan_sql
-        assert "for update" in plan_sql, plan_sql
+
+        # And pin the STRENGTH, on every level. `FOR NO KEY UPDATE`, not
+        # `FOR UPDATE`, is what keeps these locks from conflicting with the
+        # commit-time `FOR KEY SHARE` a deferred FK check takes on a parent
+        # row — and holding `FOR UPDATE` across a later lock acquisition here
+        # is a deadlock generator, not merely a wider lock (see
+        # `lock_cascade_parents`' docstring for the cycle it produced against
+        # a concurrent `demo_load` segment). A silent regression to plain
+        # `FOR UPDATE` reintroduces that, so assert the emitted clause rather
+        # than trusting the call site.
+        for level in ("user", "coachathlete", "plan", "batch"):
+            sql = queries[idx[level]]
+            low = sql.lower()
+            assert "for no key update" in low, sql
 
         # Ascending by pk, proven at the SQL level: `lock_cascade_parents`
         # relies on Postgres's LockRows node sitting ABOVE the sort (its own
@@ -665,7 +684,7 @@ class TestClearDemoLockOrder:
             sql = queries[idx[level]]
             low = sql.lower()
             assert "order by" in low, sql
-            order_clause = low.split("order by", 1)[1].split("for update")[0]
+            order_clause = low.split("order by", 1)[1].split("for no key update")[0]
             assert "desc" not in order_clause, sql
             assert "asc" in order_clause, sql
 

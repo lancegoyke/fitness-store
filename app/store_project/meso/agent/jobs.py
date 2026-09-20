@@ -58,10 +58,17 @@ def dispatch_proposal(batch_id, *, client=None):
     # ``agent_propose``", and both call sites are after their block closes,
     # where ``on_commit`` runs the callable straight away. The rule is kept
     # anyway, as one rule here rather than one per call site, so a future
-    # caller that IS inside a transaction needs no change. It matters that this
-    # stays accurate: it is the only thing that would put
-    # ``_persist_result``/``_fail``'s row lock and early return (#558) inside a
-    # caller's transaction rather than one of their own.
+    # caller that IS inside a transaction is covered on the QUEUED path.
+    #
+    # It is NOT covered on the sync path above: ``MESO_AGENT_RUN_SYNC`` is a
+    # real production setting (``config/settings/base.py``), and that branch
+    # calls ``run_proposal_job`` inline, bypassing ``on_commit`` entirely. So a
+    # caller that runs this inside its own ``transaction.atomic()`` with sync
+    # dispatch on would put ``_persist_result``/``_fail``'s row lock and early
+    # return (#558) inside that caller's transaction rather than one of their
+    # own — which is safe (both are guarded re-checks that write nothing on a
+    # mismatch) but is the kind of thing to know before adding such a caller.
+    # No caller does either today.
     transaction.on_commit(lambda: _enqueue(batch_id))
 
 

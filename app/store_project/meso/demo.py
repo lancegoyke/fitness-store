@@ -252,6 +252,14 @@ def lock_cascade_parents(user_ids):
     answers cleanly (a 404/409 for a row that is now gone) rather than dying in
     a deadlock.
 
+    That clean answer is a promise about paths taking an EXPLICIT lock, which
+    is what makes them re-read after the wait. A path that merely INSERTs a row
+    referencing one of these — ``agent_propose`` → ``create_drafting_batch``
+    never locks the ``Plan`` — does all its work, waits at COMMIT on the
+    deferred FK instead, and then raises ``IntegrityError`` against a ``Plan``
+    that no longer exists: a 500, not a 404. Removing the deadlock does not
+    make every loser graceful.
+
     IT HAS TO START AT ``User``/``CoachAthlete``, not at ``Plan``, and not only
     because a cascade delete reaches those two levels as well. Each query below
     is one statement's snapshot, and under READ COMMITTED the collector's own
@@ -266,6 +274,39 @@ def lock_cascade_parents(user_ids):
     the link it needs and, once this delete commits, finds it gone and answers
     404 — which no amount of care in the plan query itself could do, because the
     row it would need to see does not exist yet when that query runs.
+
+    ``no_key=True`` ON EVERY LEVEL, even though these rows are about to be
+    DELETEd and a DELETE takes ``FOR UPDATE`` anyway. Nothing here is deleting
+    yet — this function only RESERVES the rows, in order, ahead of a
+    ``.delete()`` that takes its own stronger locks when it runs. ``FOR NO KEY
+    UPDATE`` gives exactly the exclusion the ordering needs: it conflicts with
+    every other writer's ``FOR UPDATE`` and ``FOR NO KEY UPDATE``, so a
+    concurrent edit still waits.
+
+    What it deliberately does NOT conflict with is the ``FOR KEY SHARE`` a
+    transaction takes on a parent row at COMMIT to check a deferred FK — Django
+    emits every PostgreSQL FK ``DEFERRABLE INITIALLY DEFERRED`` — and holding
+    ``FOR UPDATE`` across a later lock acquisition here made that a deadlock
+    generator rather than a hazard. The concrete cycle, which plain
+    ``FOR UPDATE`` on step 1 really did produce: a coach loads a demo segment
+    (``load_log``) in one tab, which takes ``_lock(coach)`` and then
+    ``CoachAthlete.objects.update_or_create`` — itself a
+    ``select_for_update().get_or_create()`` — and holds that link while it
+    INSERTs a ``SessionLog`` and an ``AthleteOneRm`` for the demo athlete;
+    "Remove demo data" in another tab then locks that athlete's ``User`` row
+    (unheld: the loader's FK check is deferred), blocks on the link at step 2,
+    and the loader's COMMIT then wants ``FOR KEY SHARE`` on the very ``User``
+    row step 1 holds. That cycle does not exist without a lock at all, so it
+    would have been introduced BY this fix. ``no_key=True`` removes it while
+    leaving every ordering property intact. This is #560's lesson, one level
+    up: the strength that matters is the one a deferred FK check will want.
+
+    The cost, stated rather than glossed: a child row INSERTed concurrently by
+    such a transaction can be missed by the collector's own SELECT and leave the
+    delete to fail its deferred FK check at commit. That is exactly what
+    happens today with no lock at all, so it is not a regression — and a
+    deadlock aborts somebody's request either way, while this one at worst
+    aborts the delete that chose to run.
 
     ``.order_by("pk")`` puts the acquisition order in ascending pk:
     PostgreSQL's ``LockRows`` node sits above the sort, so rows are locked in
@@ -282,11 +323,9 @@ def lock_cascade_parents(user_ids):
     user_ids = list(user_ids)
     if not user_ids:
         return
-    # 1. The users themselves — the roots the cascade deletes last. Plain
-    #    ``FOR UPDATE``: these rows are about to be DELETEd, which takes a lock
-    #    of that strength anyway, so nothing is gained by asking for less.
+    # 1. The users themselves — the roots the cascade deletes last.
     list(
-        User.objects.select_for_update()
+        User.objects.select_for_update(no_key=True)
         .filter(pk__in=user_ids)
         .order_by("pk")
         .values_list("pk", flat=True)
@@ -295,7 +334,7 @@ def lock_cascade_parents(user_ids):
     #    coach deletes links where they are the coach, clearing demo data
     #    deletes links where the demo user is the athlete.
     link_pks = list(
-        CoachAthlete.objects.select_for_update()
+        CoachAthlete.objects.select_for_update(no_key=True)
         .filter(Q(athlete_id__in=user_ids) | Q(coach_id__in=user_ids))
         .order_by("pk")
         .values_list("pk", flat=True)
@@ -303,7 +342,7 @@ def lock_cascade_parents(user_ids):
     # 3. The plans hanging off those links, plus any template plan these users
     #    own outright (``Plan.owner`` is its own CASCADE FK).
     plan_pks = list(
-        Plan.objects.select_for_update()
+        Plan.objects.select_for_update(no_key=True)
         .filter(Q(relationship_id__in=link_pks) | Q(owner_id__in=user_ids))
         .order_by("pk")
         .values_list("pk", flat=True)
@@ -315,13 +354,17 @@ def lock_cascade_parents(user_ids):
     #    exclusive row lock just the same. A batch normally has
     #    ``mesocycle.plan_id == plan_id`` so that third clause is redundant,
     #    but ``plan`` is a ``raw_id_field`` on both the mesocycle and batch
-    #    admins, so a staff re-point can separate them. Read unlocked: we hold
-    #    every one of these plans already.
+    #    admins, so a staff re-point can separate them. The mesocycle pks
+    #    themselves are read UNLOCKED, and holding the plans is NOT the reason
+    #    that is safe — a write re-pointing a batch INTO this set takes its
+    #    deferred FK's ``FOR KEY SHARE`` on the ``Mesocycle`` row, not on the
+    #    ``Plan``. It is safe because only an admin raw-id re-point can do it,
+    #    and that write takes no other lock we hold, so no cycle follows.
     mesocycle_pks = list(
         Mesocycle.objects.filter(plan_id__in=plan_pks).values_list("pk", flat=True)
     )
     list(
-        AgentProposalBatch.objects.select_for_update()
+        AgentProposalBatch.objects.select_for_update(no_key=True)
         .filter(
             Q(plan_id__in=plan_pks)
             | Q(coach_id__in=user_ids)

@@ -654,15 +654,24 @@ both load-bearing:
 - a path that can race one must take the `Plan` lock even if it does not
   otherwise need it.
 
-**Strength, not just order.** Take `select_for_update(no_key=True)` where the
-path's real intent is an `UPDATE` of a non-key column — `athlete_cell_write`'s
-Plan lock stands in for `_touch_plan`'s own `UPDATE`. `FOR NO KEY UPDATE` still
-conflicts with another writer's `FOR UPDATE`, so the mutual exclusion is real,
-but it does **not** conflict with the `FOR KEY SHARE` a concurrent insert of a
-child row takes on its deferred FK at commit time — the deadlock #560 hit on a
-user row. Take plain `FOR UPDATE` when the path intends to `DELETE` the row
-(`lock_cascade_parents`), or when it needs to conflict with exactly that
-commit-time `FOR KEY SHARE` (#584's purge).
+**Strength, not just order.** Default to `select_for_update(no_key=True)`.
+`FOR NO KEY UPDATE` conflicts with every other writer's `FOR UPDATE` and
+`FOR NO KEY UPDATE`, so the exclusion this order needs is real, but it does
+**not** conflict with the `FOR KEY SHARE` a transaction takes on a parent row at
+COMMIT to check a deferred FK — Django emits every PostgreSQL FK `DEFERRABLE
+INITIALLY DEFERRED`, so that lock is taken at commit, *after* the transaction
+already holds its own rows, and therefore in an order no code can arrange. That
+is what makes it dangerous: a plain `FOR UPDATE` held across a later lock
+acquisition turns it from a hazard into a deadlock generator. #560 was that bug
+on a user row; #559's first attempt reintroduced it one level up by locking
+`User` with `FOR UPDATE` and then reaching for `CoachAthlete`.
+
+Take plain `FOR UPDATE` only when the path needs to conflict with exactly that
+commit-time `FOR KEY SHARE` — #584's purge, which must see a `LoggedSet` whose
+writer is already inside its COMMIT. "I am about to delete this row" is **not**
+a sufficient reason: the `DELETE` takes its own `FOR UPDATE` when it runs, and
+reserving the row earlier at that strength buys ordering you already have while
+blocking every deferred FK check in the meantime.
 
 **Why this order and not another.** Any total order prevents deadlock; this is
 the one the code already mostly followed. The coach's write paths open with the
@@ -692,7 +701,11 @@ restore's existing sequence a violation for no gain.
   without holding the batch lock first.
 - `agent.service._persist_result` / `_fail` — batch, then its children (#558).
 - `views.plan_create` — `CoachAthlete`, then `Plan`. Conforming as of #559,
-  which extended this order upward to cover it.
+  which extended this order upward to cover it. Its `draft=1` path is the
+  exception: `_reserve_plan_draft` locks the coach's own `User` row *after* the
+  link and the new plan, which inverts. No cycle is constructible today (it
+  returns early for sandbox coaches, and the sandbox reap is the only path that
+  locks a coach's `User` row and then their links), and it is filed as #589.
 - `demo.clear_demo` and `sandbox.expire_sandboxes`, via
   `demo.lock_cascade_parents`.
 
